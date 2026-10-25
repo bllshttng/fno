@@ -13,20 +13,22 @@ description: >
 runs:
   using: composite
   steps:
-    # The test sandbox, and the cargo build dir pinned inside it, live under
-    # /tmp. Newer runner images mount /tmp as a tmpfs with a per-user quota,
-    # and a cold fno lib-test build there died with "Disk quota exceeded"
-    # (errno 122) while / had 106G free. Back /tmp with the root disk. The
-    # path stays /tmp, so socket paths keep their length.
-    - name: Back /tmp with the runner disk
+    # The test sandbox comes from tempfile.mkdtemp, and the cargo build dir
+    # is pinned inside it. Newer runner images mount /tmp as a tmpfs with a
+    # per-user quota, and a cold fno lib-test build there died with "Disk
+    # quota exceeded" (errno 122) while / had 106G free. Point TMPDIR at a
+    # root-disk directory instead. Mounting over a live /tmp would hide
+    # files the runner holds open there. /ft is shorter than /tmp, so
+    # socket paths stay under the AF_UNIX limit.
+    - name: Put TMPDIR on the runner disk
       if: runner.os == 'Linux'
       shell: bash
       run: |
         findmnt -T /tmp -o TARGET,SOURCE,FSTYPE,SIZE,AVAIL,OPTIONS
         if [[ "$(findmnt -n -o FSTYPE -T /tmp)" == tmpfs ]]; then
-          sudo install -d -m 1777 /var/tmp/fno-tmp
-          sudo mount --bind /var/tmp/fno-tmp /tmp
-          findmnt -T /tmp -o TARGET,SOURCE,FSTYPE,SIZE,AVAIL,OPTIONS
+          sudo install -d -m 1777 /ft
+          echo "TMPDIR=/ft" >> "$GITHUB_ENV"
+          findmnt -T /ft -o TARGET,SOURCE,FSTYPE,SIZE,AVAIL,OPTIONS
         fi
 
     - name: Set up Python
