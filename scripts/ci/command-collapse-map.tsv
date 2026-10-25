@@ -427,9 +427,6 @@ restart	KEEP	restart	17	single-leaf group
 resume receipt show	T1	resume receipt show	1
 resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2
-retro drain-postmortems	T1	retro drain-postmortems	2
-retro run	T1	retro run	23
-retro sweep-carveouts	T1	retro sweep-carveouts	3
 roles ls	T1	roles ls	1
 route env	T1	route env	4
 route init	T1	route init	0

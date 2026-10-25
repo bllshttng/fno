@@ -44,37 +44,6 @@ def test_backlog_new_writes_difficulty(tmp_graph):
     assert row["difficulty_history"][-1]["source"] == "filed"
 
 
-def test_retro_severity_maps_to_difficulty():
-    from fno.retro.classify import severity_to_difficulty
-
-    assert severity_to_difficulty("critical") == "high"
-    assert severity_to_difficulty("high") == "high"
-    assert severity_to_difficulty("medium") == "medium"
-    assert severity_to_difficulty("low") == "low"
-    assert severity_to_difficulty(None) == "medium"
-
-
-def test_retro_default_create_attributes_history_to_retro(tmp_graph, tmp_path, monkeypatch):
-    import fno.graph.cli as graph_cli
-    from fno.retro.land import _default_create
-
-    monkeypatch.setattr(graph_cli, "_graph_path", lambda: tmp_graph)
-    node_id = _default_create(
-        title="retro work",
-        details="body",
-        priority="p1",
-        difficulty="high",
-        project="fno",
-        cwd=str(tmp_path),
-    )
-
-    row = next(
-        row for row in read_graph_strict(tmp_graph) if row["id"] == node_id
-    )
-    assert row["difficulty"] == "high"
-    assert row["difficulty_history"][-1]["source"] == "retro"
-
-
 def test_no_difficulty_dispatch_receipt_is_named():
     from fno.route_resolve import resolve_dispatch_model
 
