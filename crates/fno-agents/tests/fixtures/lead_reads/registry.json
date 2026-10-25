@@ -1,0 +1,6 @@
+{"schema_version":43,"agents":[
+{"name":"lead-live","short_id":"lead-live-id","harness":"claude","harness_session_id":"sess-lead","cwd":"/tmp","log_path":"/tmp/lead-live.log","created_at":"2026-10-24T09:00:00Z","status":"busy","role_level":2,"role_scope":"epic-y","role_grantor":"human"},
+{"name":"lead-exited","short_id":"lead-exited-id","harness":"claude","harness_session_id":"sess-exited","cwd":"/tmp","log_path":"/tmp/lead-exited.log","created_at":"2026-10-24T09:01:00Z","status":"exited","role_level":2,"role_scope":"epic-y","role_grantor":"human"},
+{"name":"worker-plain","short_id":"worker-plain-id","harness":"claude","harness_session_id":"sess-plain","cwd":"/tmp","log_path":"/tmp/worker-plain.log","created_at":"2026-10-24T09:02:00Z","status":"busy"},
+{"name":"lead-bare","short_id":"lead-bare-id","harness":"codex","harness_session_id":"sess-bare","cwd":"/tmp","log_path":"/tmp/lead-bare.log","created_at":"2026-10-24T09:03:00Z","status":"busy","role_level":2,"role_scope":"epic-z","role_grantor":"human"}
+]}

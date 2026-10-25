@@ -26,7 +26,7 @@
 # -----------------------
 #   Two scopes, because the four classes do not share one:
 #
-#   prose scope: docs/, agents/, commands/, and the top-level AGENTS.md /
+#   prose scope: docs/, mintlify/, agents/, commands/, and the top-level AGENTS.md /
 #   README.md / CLAUDE.md / GEMINI.md - the user-facing prose surfaces.
 #   Both prose classes (internal-path, node-id) scan here.
 #
@@ -162,7 +162,7 @@ REPORT=""
 # Capture the file lists first so a git failure (not a repo, git unavailable)
 # is a loud error, not a vacuous "no violations" pass: the `done < <(git ...)`
 # process-substitution form hides git's exit status from `set -e`. (review #503, gemini)
-if ! files_prose=$(git ls-files -- 'docs/' 'agents/' 'commands/' 'AGENTS.md' 'README.md' 'CLAUDE.md' 'GEMINI.md'); then
+if ! files_prose=$(git ls-files -- 'docs/' 'mintlify/' 'agents/' 'commands/' 'AGENTS.md' 'README.md' 'CLAUDE.md' 'GEMINI.md'); then
     echo "check-no-internal-refs: 'git ls-files' failed (not a git repo or git unavailable)" >&2
     exit 1
 fi

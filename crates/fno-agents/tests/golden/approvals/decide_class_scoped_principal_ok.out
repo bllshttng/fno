@@ -1,0 +1,4 @@
+approved by intern
+  authority   config.approvals.authorized_principals
+  effect      not executed - approval is not execution
+  delivery    not acknowledged - only the destination can acknowledge

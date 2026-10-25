@@ -91,12 +91,12 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     # moved-spellings block no longer renders, so the row teaches
     # nothing and exists only for the release clock.
     "approvals": (
-        "fno.approvals.cli:approvals_app",
+        "fno.approvals_cli:approvals_app",
         "Inspect and decide pending approvals for consequential effects.",
         {"hidden": True},
     ),
     "delivery": (
-        "fno.delivery.cli:delivery_app",
+        "fno.do_cli:delivery_app",
         "Evaluate generic delivery evidence.",
         {"hidden": True},
     ),
@@ -128,24 +128,14 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "bundle": ("fno.bundle:bundle_app", "Skill bundle build + lint.", {"hidden": True}),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
     "claim": ("fno.claims.cli:cli", "Work-claim coordination primitive", {"hidden": True}),
-    "project": (
-        "fno.project:project_app",
-        "Isolated per-project fno environments (now `fno config project`).",
-        {"hidden": True},
-    ),
     "resume": (
-        "fno.resume.cli:cli",
+        "fno.resume_receipt_cli:cli",
         "Durable typed resume receipts (evidence, never write authority)",
         {"hidden": True},
     ),
     "carveout": (
         "fno.carveout:carveout_app",
         "Capture left-out work (deferred decisions, out-of-scope bugs) for retro-triage.",
-        {"hidden": True},
-    ),
-    "outstanding": (
-        "fno.outstanding:outstanding_app",
-        "What is waiting on a human: unharvested carve-outs and open questions.",
         {"hidden": True},
     ),
     "annotate": (
@@ -210,11 +200,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "loops": (
         "fno.loops:loops_app",
         "Loop level config + pause-all kill switch (pause-all/resume-all/status/ls)",
-        {"hidden": True},
-    ),
-    "skill-diff": (
-        "fno.skill_diff.cli:skill_diff_app",
-        "Skill-diff proposer: observer failure patterns -> cited SKILL.md diff -> PR (tick/reconcile).",
         {"hidden": True},
     ),
     # Individual commands (plain functions wrapped as single-command apps) -
@@ -295,7 +280,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "roles": set(),
     "route": set(),
     "setup": set(),
-    "skill-diff": set(),
     "state": set(),
     "stub-manifest": set(),
     "target": set(),
@@ -358,8 +342,7 @@ def _check_migration() -> None:
     """Fast-path stat check; runs migration on first invocation post-upgrade.
 
     The try/except Exception: pass is intentional - this migration is a
-    best-effort startup convenience, not load-bearing.  Hard-fail path
-    remains ``fno config setup migrate-paths`` (called explicitly).
+    best-effort startup convenience, not load-bearing.
 
     Guarded by FNO_SKIP_MIGRATION=1 (explicit opt-out) or PYTEST_CURRENT_TEST
     (pytest sets this automatically in all test processes) for isolation.

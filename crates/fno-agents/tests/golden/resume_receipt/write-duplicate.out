@@ -1,0 +1,2 @@
+1
+{"ok": false, "reason": "already_exists", "error": "resume receipt already exists for ReceiptIdentity(node='x-1', session='sess-1', phase='do', generation=1, candidate_sha='02a5dd7474c2'): /privateFIXTURE/write-hp/repo/.fno/artifacts/handoff/receipt-x-1-do-g1-02a5dd7474c2.json (completed receipts are immutable)"}

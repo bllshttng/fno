@@ -29,6 +29,7 @@ pub mod cli_args;
 pub mod client;
 pub mod clipboard;
 pub mod config_defaults;
+pub mod config_schema;
 pub mod connections_view;
 pub mod context_used;
 pub mod digest_overlay;
@@ -53,6 +54,7 @@ pub mod keys;
 pub mod lane_colors_panel;
 pub(crate) mod lattice;
 pub mod law_cli;
+pub mod lead_reads_route;
 pub mod lead_refresh_canon;
 pub mod link;
 pub mod lint_cli;
@@ -105,6 +107,7 @@ pub mod setup_autowire;
 #[cfg(test)]
 #[path = "setup_autowire_tests.rs"]
 mod setup_autowire_tests;
+pub mod setup_cmds;
 pub mod setup_detect;
 pub mod setup_profile;
 pub mod setup_run;

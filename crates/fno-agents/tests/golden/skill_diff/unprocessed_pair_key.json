@@ -1,0 +1,43 @@
+{
+ "expected": {
+  "blueprint": [],
+  "review": [
+   "shared"
+  ]
+ },
+ "input": [
+  {
+   "data": {
+    "failure_ranking": [
+     {
+      "dimension": "structural_validity",
+      "fail_count": 2
+     }
+    ],
+    "run_id": "shared",
+    "skill_id": "fno:blueprint"
+   },
+   "type": "skill_eval_run_complete"
+  },
+  {
+   "data": {
+    "failure_ranking": [
+     {
+      "dimension": "structural_validity",
+      "fail_count": 2
+     }
+    ],
+    "run_id": "shared",
+    "skill_id": "fno:review"
+   },
+   "type": "skill_eval_run_complete"
+  },
+  {
+   "data": {
+    "run_id": "shared",
+    "skill_id": "fno:blueprint"
+   },
+   "type": "skill_diff_proposed"
+  }
+ ]
+}

@@ -4,11 +4,15 @@
 
 ## Write-once rule
 
-`fno do target init` writes the manifest once at session start. After init, the file is immutable. The only legal post-init mutation is first-fill of an empty `plan_path` via:
+`fno do target init` writes the manifest once at session start. After init, the file is immutable for agent tools (Edit, Write, Bash). Exactly two native, claim-scoped mutations stay legal.
+
+First-fill of an empty `plan_path`:
 
 ```bash
 fno do state set --field plan_path --value "<path>"
 ```
+
+The second is the claim-handover refresh. When a `--handover-from` acquire completes for the manifest's own node, the native layer drops the stale `target_claim_blocked_reason` line. It appends the real `target_claim_key`, `target_claim_holder`, and `target_claim_ttl` lines. It also consumes the init-authored `.target-cancelled` sentinel (`crates/fno-agents/src/claim_cli/manifest_refresh.rs`). A manifest refused at init but claimed by a later handover must not keep refusing the stop gate's watching tags.
 
 Any other field write exits with code 5 and logs a `state_write_refused` event referencing.
 
