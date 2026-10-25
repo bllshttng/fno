@@ -43,6 +43,16 @@ class Kind(str, Enum):
 VALID_KINDS = AUTHORED_MAIL_KINDS
 
 
+class BusLockTimeout(TimeoutError):
+    """The append door's sidecar lock stayed contended past its wait.
+
+    The door reports the timeout as a ``CommandUnavailable`` whose text names
+    it; converting here keeps the durable floor's failure an OSError, which is
+    the contract the send path catches to render the exit-12 refusal instead of
+    the agent chat lock's queue-and-exit-14 tier.
+    """
+
+
 class DurableOwner(str, Enum):
     """Who drains a durable thread (the four-terminal invariant, US6).
 
@@ -280,7 +290,15 @@ def _append_to_bus(
     if meta:
         row["meta"] = meta
     row["body"] = body
-    rust_binary.chats_command(["bus-append", str(paths.bus_dir() / "messages.jsonl")], row)
+    try:
+        rust_binary.chats_command(["bus-append", str(paths.bus_dir() / "messages.jsonl")], row)
+    except rust_binary.CommandUnavailable as exc:
+        # The door's lock timeout must stay a distinct refusal tier: the send
+        # flow treats a bare RuntimeError naming a lock as the agent chat lock
+        # and queues with exit 14, while the bus lock refuses with exit 12.
+        if "bus lock timeout" in str(exc):
+            raise BusLockTimeout(str(exc)) from exc
+        raise
 
 
 def _mark_control_pending(recipient: str) -> None:
