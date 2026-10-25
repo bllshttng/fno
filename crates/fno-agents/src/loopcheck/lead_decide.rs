@@ -4,10 +4,11 @@
 
 use super::*;
 
-/// Per-phase elapsed clock for one lead fire. The x-a6d6 kills (260-297ms
-/// margins) were spent BEFORE the drain and no row recorded where. The
-/// receipt emits immediately before the drain read, so a mid-drain kill
-/// still leaves the row that names the spender.
+/// Per-phase elapsed clock for one lead fire. The earlier drain-message fix
+/// told the truth about the drain's slice, but the kills it reported
+/// (260-297ms margins) were spent BEFORE the drain and no row recorded
+/// where. The receipt emits immediately before the drain read, so a
+/// mid-drain kill still leaves the row that names the spender.
 pub(crate) struct PhaseClock {
     started: std::time::Instant,
     phases: Vec<(&'static str, u64)>,
