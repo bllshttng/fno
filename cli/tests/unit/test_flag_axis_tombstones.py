@@ -30,10 +30,10 @@ def _is_cargo_build_artifact(path: Path) -> bool:
     """True only for `crates/<crate>/target/**` (cargo's build dir).
 
     Deliberately NOT a bare `"target" in path.parts`: `cli/src/fno/target/`
-    is a real runtime package (it holds `orient.py`, the target orienter), so
-    the unanchored form silently drops five Python files from this scan - the
-    same over-exclusion trap the AGENTS.md pitfall corpus records, which this
-    guard fell into while fixing a different decorative guard.
+    is a real runtime package (it holds `manifest.py` and `denominator.py`),
+    so the unanchored form silently drops its Python files from this scan -
+    the same over-exclusion trap the AGENTS.md pitfall corpus records, which
+    this guard fell into while fixing a different decorative guard.
     """
     try:
         rel = path.relative_to(_REPO / "crates")
@@ -58,7 +58,7 @@ def test_no_runtime_string_promises_a_0_4_0_removal():
     # Positive control on the exclusion itself: the runtime package whose name
     # collides with cargo's build dir must be IN scope.
     assert any(
-        p.name == "orient.py" and p.parent.name == "target" for p in sources
+        p.name == "manifest.py" and p.parent.name == "target" for p in sources
     ), "cli/src/fno/target/ was excluded; the exclusion is over-broad again"
     offenders = [
         f"{path.relative_to(_REPO)}:{n}"

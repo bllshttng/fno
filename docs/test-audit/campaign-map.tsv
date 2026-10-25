@@ -784,7 +784,6 @@ K5	cli/tests/unit/test_mail_status_unclaimed.py	py	5
 K5	cli/tests/unit/test_maintain.py	py	135
 K5	cli/tests/unit/test_node_id_sh.py	py	4
 K5	cli/tests/unit/test_operator_capture.py	py	13
-K5	cli/tests/unit/test_orient_done_when.py	py	27
 K5	cli/tests/unit/test_planned_unclaimed.py	py	13
 K5	cli/tests/unit/test_promise_gate.py	py	36
 K5	cli/tests/unit/test_quota_lock.py	py	6
@@ -1139,7 +1138,6 @@ K6	crates/fno/src/event_store_recovery.rs	rs	1
 K7	cli/src/fno/plan/test_boundary.py	py	21
 K7	cli/src/fno/plan/test_folder_audit.py	py	8
 K7	cli/src/fno/target/test_blast.py	py	25
-K7	cli/src/fno/target/test_orient.py	py	42
 K7	cli/src/fno/test_cost.py	py	20
 K7	cli/src/fno/test_target_init_blast.py	py	18
 K7	cli/src/fno/test_target_init_plan_backfill.py	py	17
