@@ -523,10 +523,20 @@ fn a_decision_owes_one_event_and_lands_in_the_events_file() {
     let owed: i64 = conn
         .query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get(0))
         .unwrap();
-    let events = fs::read_to_string(root.join("events.jsonl")).unwrap_or_default();
+    // The sqlite store is the write boundary, so the journal path only names
+    // the store; read the event back through it.
+    let landed = fno_agents::event_store::query_events(
+        &root.join("events.jsonl"),
+        &fno_agents::event_store::EventQuery {
+            types: vec!["approval_decided".to_string()],
+            ..Default::default()
+        },
+    )
+    .map(|rows| rows.len())
+    .unwrap_or(0);
     assert!(
-        owed == 0 && events.contains("approval_decided") || owed == 1,
-        "the event is drained or still owed, never lost: owed={owed} events={events:?}"
+        owed == 0 && landed == 1 || owed == 1,
+        "the event is drained or still owed, never lost: owed={owed} landed={landed}"
     );
     let _ = fs::remove_dir_all(&root);
 }
