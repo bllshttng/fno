@@ -2185,8 +2185,14 @@ fn run_bus_read(args: &[String]) -> i32 {
             0
         }
         "sets" => {
-            let withdrawn = crate::mail_control_drain::withdrawn_ids(&rows);
-            let landed = crate::mail_control_drain::landed_ids(&rows);
+            let mut withdrawn: Vec<String> = crate::mail_control_drain::withdrawn_ids(&rows)
+                .into_iter()
+                .collect();
+            withdrawn.sort();
+            let mut landed: Vec<String> = crate::mail_control_drain::landed_ids(&rows)
+                .into_iter()
+                .collect();
+            landed.sort();
             for w in &warnings {
                 eprintln!("{w}");
             }
