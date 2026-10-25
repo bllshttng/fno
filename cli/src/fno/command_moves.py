@@ -77,7 +77,6 @@ COMMAND_MOVES: dict[str, Move] = {
     "mcp": Move(kind="deprecated", to="agents mcp"),
     "notify": Move(kind="deprecated", to="inbox notify"),
     "observer": Move(kind="deprecated", to="doctor observer"),
-    "outstanding": Move(kind="deprecated", to="inbox outstanding"),
     "paths": Move(kind="deprecated", to="config paths"),
     "phase": Move(kind="deprecated", to="do phase"),
     "plugins": Move(kind="deprecated", to="config plugins"),

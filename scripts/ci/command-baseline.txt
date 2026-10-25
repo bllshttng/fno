@@ -110,10 +110,6 @@ mcp send
 mux
 notify
 observer
-outstanding ask
-outstanding clear !--origin
-outstanding mine do
-outstanding reindex
 paths
 phase kill-check
 plan
