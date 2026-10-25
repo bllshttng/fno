@@ -50,11 +50,7 @@ pub(crate) fn truthy_value(value: &Value) -> bool {
 /// The config candidates walk for one nested key, first hit wins. Best-effort:
 /// a missing or unparseable file contributes nothing.
 fn config_flag(keys: &[&str]) -> Option<Value> {
-    flag_in(super::settings::config_candidates(), keys)
-}
-
-fn flag_in(docs: Vec<Value>, keys: &[&str]) -> Option<Value> {
-    for doc in docs {
+    for doc in super::settings::config_candidates() {
         let mut cur = &doc;
         let mut found = true;
         for key in keys {
@@ -80,15 +76,6 @@ pub(crate) fn think_spawn_resolve(get: &impl Fn(&str) -> Option<String>) -> (boo
     think_spawn_resolve_with(get, &config_flag)
 }
 
-/// [`think_spawn_resolve`] over the config a process in `cwd` reads.
-pub(crate) fn think_spawn_resolve_at(
-    get: &impl Fn(&str) -> Option<String>,
-    cwd: &Path,
-) -> (bool, &'static str) {
-    let docs = super::settings::config_candidates_at(cwd);
-    think_spawn_resolve_with(get, &|keys: &[&str]| flag_in(docs.clone(), keys))
-}
-
 fn think_spawn_resolve_with(
     get: &impl Fn(&str) -> Option<String>,
     config: &impl Fn(&[&str]) -> Option<Value>,
@@ -109,19 +96,7 @@ fn think_spawn_resolve_with(
 
 /// The blast-radius cap from config, fail-safe to 5.
 pub(crate) fn max_per_run() -> usize {
-    cap_from(config_flag(&["think_spawn", "max_per_run"]))
-}
-
-/// [`max_per_run`] over the config a process in `cwd` reads.
-pub(crate) fn max_per_run_at(cwd: &Path) -> usize {
-    cap_from(flag_in(
-        super::settings::config_candidates_at(cwd),
-        &["think_spawn", "max_per_run"],
-    ))
-}
-
-fn cap_from(value: Option<Value>) -> usize {
-    match value {
+    match config_flag(&["think_spawn", "max_per_run"]) {
         Some(Value::Number(n)) => n.as_u64().map(|v| v as usize).unwrap_or(5),
         _ => 5,
     }

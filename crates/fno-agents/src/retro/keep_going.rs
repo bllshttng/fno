@@ -76,12 +76,36 @@ pub fn classify_followup(candidate: &Candidate) -> &'static str {
     }
 }
 
-/// `fno do think dispatch <node>`, in process. It bumps the shared counter
-/// itself on a real spawn, so only a `spawned` decision counts as a
-/// dispatch: `noop`, `skipped` and a refusal bump nothing.
+/// `fno do think dispatch <node> --json` as a child of this binary, run in
+/// the node's cwd so the graph, work map and config it reads are that
+/// project's. It bumps the shared counter itself on a real spawn, so only a
+/// `spawned` decision counts as a dispatch: exit 0 also covers `noop` and
+/// `skipped`, which bump nothing.
 fn dispatch_think(node_id: &str, cwd: Option<&str>) -> bool {
-    crate::think_dispatch::dispatch_node(node_id, cwd).is_some_and(|r| r.decision == "spawned")
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["think-dispatch", "--json", "--", node_id]);
+    if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
+        cmd.current_dir(dir);
+    }
+    let Ok(out) = crate::bounded_cmd::output_with_timeout_result(cmd, THINK_TIMEOUT_SECS) else {
+        return false;
+    };
+    out.status.success()
+        && serde_json::from_slice::<Value>(&out.stdout)
+            .ok()
+            .and_then(|v| {
+                v.get("decision")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .as_deref()
+            == Some("spawned")
 }
+
+const THINK_TIMEOUT_SECS: u64 = 600;
 
 /// A detached `/target --no-merge <node>` worker. The env carrier backs the
 /// flag, so a worker that loses it after compaction still folds the

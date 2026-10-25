@@ -785,9 +785,7 @@ fn dispatch_live(
             _ => std::env::var(name).ok(),
         }
     };
-    // Config reads follow the anchor: keep_going acts for a node in another
-    // project, as the subprocess it replaced did from that project's cwd.
-    let (armed, rank) = birth::think_spawn_resolve_at(&get, anchor);
+    let (armed, rank) = birth::think_spawn_resolve(&get);
     let root = crate::accounts::records::resolve_repo_root(anchor);
     let events = std::env::var_os("FNO_EVENTS_PATH")
         .filter(|v| !v.is_empty())
@@ -802,7 +800,7 @@ fn dispatch_live(
     let seams = TailSeams {
         armed,
         rank,
-        max_per_run: birth::max_per_run_at(anchor),
+        max_per_run: birth::max_per_run(),
         day_cap: crate::think_daily::daily_cap(Some(root.as_path())),
         presence: &presence,
         transcript: &transcript,
@@ -1128,12 +1126,7 @@ pub fn run_with(
     (code, Some(result))
 }
 
-fn run_live(
-    argv: &[String],
-    anchor: &Path,
-    out: &dyn Fn(&str),
-    err: &dyn Fn(&str),
-) -> (i32, Option<DispatchResult>) {
+fn run_live(argv: &[String], anchor: &Path, out: &dyn Fn(&str), err: &dyn Fn(&str)) -> i32 {
     let (session_id, harness, cwd, _, _, _) =
         crate::backlog::create_cli::session_provenance(anchor, None, None);
     let entries = || {
@@ -1156,6 +1149,7 @@ fn run_live(
     run_with(argv, &env, &|node: &Value, pre: &Preflight| {
         dispatch_live(node, pre, anchor, err)
     })
+    .0
 }
 
 /// `fno-agents think-dispatch <argv after "fno do think dispatch">`.
@@ -1163,20 +1157,7 @@ pub fn run(args: &[String]) -> i32 {
     let anchor = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let out = |line: &str| println!("{line}");
     let err = |line: &str| eprintln!("{line}");
-    run_live(args, &anchor, &out, &err).0
-}
-
-/// The command in process for a caller that already holds a node id, as if
-/// run from `cwd` (else the process cwd). Prints nothing; None when the
-/// command refused before any dispatch.
-pub fn dispatch_node(node: &str, cwd: Option<&str>) -> Option<DispatchResult> {
-    let anchor = match cwd.filter(|c| !c.is_empty()) {
-        Some(c) => std::fs::canonicalize(c).unwrap_or_else(|_| PathBuf::from(c)),
-        None => std::env::current_dir().ok()?,
-    };
-    let quiet = |_: &str| {};
-    let argv = vec!["--json".to_string(), "--".to_string(), node.to_string()];
-    run_live(&argv, &anchor, &quiet, &quiet).1
+    run_live(args, &anchor, &out, &err)
 }
 
 #[cfg(test)]
