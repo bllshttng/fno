@@ -1035,7 +1035,12 @@ fn record_refusal_body(
         0
     };
     ledger.refusal_kind = kind.to_string();
-    let shift = ledger.backoff_step.min(4) as u32;
+    // The clamp is load-bearing, not tidy: this shift runs on the admit
+    // path of every gh call, and a negative step in the ledger (a torn or
+    // hand-edited write) wrapped `as u32` into a shift past the type width
+    // and panicked the whole process on CI. A corrupt step degrades to the
+    // base window - the module's fail-open rule - it never panics.
+    let shift = ledger.backoff_step.clamp(0, 4) as u32;
     let backoff = (BASE_BACKOFF_MS << shift).min(MAX_BACKOFF_MS);
     ledger.backoff_until_ms = now + backoff;
     ledger.last_refusal_ms = now;
@@ -1194,8 +1199,15 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
             0
         },
         core_seen_age_s,
+        // Fresh means the reading still describes THIS bucket: recent AND
+        // taken against a reset that is still in the future - the same
+        // currency the core gate requires. A reading whose window has
+        // rolled over describes a bucket that no longer exists; trusting
+        // its positivity near a boundary would downgrade a real core
+        // refusal in the new window.
         core_reading_fresh: ledger.core_seen_ms > 0
-            && now - ledger.core_seen_ms <= CORE_READING_FRESH_MS,
+            && now - ledger.core_seen_ms <= CORE_READING_FRESH_MS
+            && now < ledger.core_reset_ms,
         core_reserve: core_reserve(),
     }
 }
@@ -2017,6 +2029,39 @@ mod tests {
         let s = snapshot(&empty, now);
         assert_eq!(s.core_seen_age_s, -1);
         assert!(!s.core_reading_fresh);
+        // A recent reading against a window that has already rolled over
+        // describes a bucket that no longer exists: never fresh, no matter
+        // how young it is (the boundary-downgrade finding).
+        let rolled = tmp.path().join("rolled.json");
+        record_core_at(&rolled, 4706, now / 1000 - 100, now);
+        let s = snapshot(&rolled, now + 1_000);
+        assert_eq!(s.core_seen_age_s, 1);
+        assert!(
+            !s.core_reading_fresh,
+            "a past-reset reading vouches for nothing"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_negative_backoff_step_degrades_to_the_base_window() {
+        // The shift on the admit path must be panic-free for ANY stored
+        // step: a negative one wrapped `as u32` past the type width and
+        // killed the process on CI. The clamp reads it as the base window.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let t0 = 1_760_000_000_000i64;
+        std::fs::write(
+            &path,
+            r#"{"stamps":[],"backoff_until_ms":0,"backoff_step":-1,"refusal_kind":"unknown","last_refusal_ms":1759999990000,"last_half_open_ms":0}"#,
+        )
+        .unwrap();
+        record_refusal(&path, t0, "secondary").unwrap();
+        let (ledger, _) = read_ledger(&path);
+        assert_eq!(
+            ledger.backoff_until_ms,
+            t0 + 60_000,
+            "a corrupt step opens the base window, no shift"
+        );
     }
 
     // --- the guard against a new bare gh spawn ------------------------------
