@@ -585,24 +585,8 @@ fn mail_reply_matches_captured_goldens() {
     }
 }
 
-fn dir_named(root: &Path, name: &str) -> Option<PathBuf> {
-    for entry in std::fs::read_dir(root).ok()?.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        if path.file_name().is_some_and(|n| n == name) {
-            return Some(path);
-        }
-        if let Some(found) = dir_named(&path, name) {
-            return Some(found);
-        }
-    }
-    None
-}
-
 #[test]
-fn reply_to_a_system_arm_sender_writes_its_durable_floor() {
+fn reply_to_a_system_arm_sender_lands_on_the_bus() {
     let root = temp_root("system-arm");
     seed_bus(
         &root,
@@ -621,11 +605,21 @@ fn reply_to_a_system_arm_sender_writes_its_durable_floor() {
         !output.contains("path separators"),
         "the slash in the arm name must not reach the traversal guard: {output}"
     );
-    let floor = dir_named(&root, "fno.quiet-recovery").expect("the arm's floor directory exists");
-    let threads = std::fs::read_dir(floor.join("inbox"))
-        .expect("floor inbox readable")
-        .flatten()
-        .count();
-    assert_eq!(threads, 1, "the reply landed as one thread: {output}");
+    let log = std::fs::read_to_string(root.join("bus").join("messages.jsonl")).unwrap();
+    let replies: Vec<serde_json::Value> = log
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|r| r["id"] != "msg-caparm")
+        .collect();
+    assert_eq!(
+        replies.len(),
+        1,
+        "the reply landed as one bus row: {output}"
+    );
+    let to = replies[0]["to"].as_str().unwrap_or_default();
+    assert!(
+        to.contains("quiet-recovery"),
+        "the reply goes to the arm: {to}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
