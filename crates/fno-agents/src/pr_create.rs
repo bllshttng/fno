@@ -271,9 +271,10 @@ pub fn run_pr_create_command(argv: &[String]) -> i32 {
 }
 
 /// One JSON request on stdin (the argv form starts with `{`): the shape
-/// `command_call("pr-create", {...})` sends. The twin scan only - the argv
-/// form's owners and unknowns gates are create-leg gates, and the worker
-/// duplicate check never ran them (it read only the exit-3 stderr).
+/// `command_call("pr-create", {...})` sends. The twin scan, then the sibling
+/// gate over the payload's `body`, so the worker ship path meets the same
+/// one-PR-per-epic rule as the argv create leg. The owners and unknowns gates
+/// stay create-leg gates.
 fn run_stdin_check_only(payload: &str) -> i32 {
     let parsed: Value = match serde_json::from_str(payload) {
         Ok(v) => v,
@@ -329,6 +330,14 @@ fn run_stdin_check_only(payload: &str) -> i32 {
             )
         }
         _ => String::new(),
+    };
+    let body = parsed.get("body").and_then(Value::as_str).unwrap_or("");
+    let refusal = match (refusal.is_empty(), branch.as_deref()) {
+        (true, Some(b)) => {
+            sibling_gate(&cwd, body, b, &slug, &|path| gh_api("gh", &cwd, path, &[]))
+                .unwrap_or_default()
+        }
+        _ => refusal,
     };
     println!("{}", json!({"refusal": refusal, "title": title}));
     0
@@ -556,14 +565,14 @@ fn merged_prs(slug: &str, gh: Gh) -> Result<Vec<SiblingPr>, String> {
         .collect())
 }
 
-/// The sibling gate: one PR per epic at a time. Returns `Some(7)` with the
-/// refusal on stderr. No manifest, no bound node, or any graph or GitHub read
-/// that fails passes with a warning: the gate refuses on evidence only.
-fn sibling_gate_refusal(a: &Args, branch: &str, slug: &str, gh: Gh) -> Option<i32> {
-    let manifest = crate::target_orient::read_manifest(&a.cwd)?;
+/// The sibling gate: one PR per epic at a time. Returns the refusal text;
+/// the argv door prints it and exits 7, the stdin door returns it as its
+/// `refusal`. No manifest, no bound node, or any graph or GitHub read that
+/// fails passes with a warning: the gate refuses on evidence only.
+fn sibling_gate(cwd: &Path, body: &str, branch: &str, slug: &str, gh: Gh) -> Option<String> {
+    let manifest = crate::target_orient::read_manifest(cwd)?;
     let node = manifest.get("graph_node_id").filter(|n| !n.is_empty())?;
-    let body = std::fs::read_to_string(&a.body_file).unwrap_or_default();
-    if says_separate_pr(&body) {
+    if says_separate_pr(body) {
         return None;
     }
     let entries = match crate::graph_store::read_rows_strict(&crate::backlog::settings::graph_path())
@@ -597,9 +606,7 @@ fn sibling_gate_refusal(a: &Args, branch: &str, slug: &str, gh: Gh) -> Option<i3
         Ok(merged) => prs.extend(merged),
         Err(e) => eprintln!("pr-create: warning: sibling gate read no merged PRs: {e}"),
     }
-    let refusal = sibling_refusal(node, &entries, &body, branch, &prs, chrono::Utc::now())?;
-    eprintln!("{refusal}");
-    Some(7)
+    sibling_refusal(node, &entries, body, branch, &prs, chrono::Utc::now())
 }
 
 fn run(a: &Args, gh: Gh) -> i32 {
@@ -674,8 +681,10 @@ fn run(a: &Args, gh: Gh) -> i32 {
             if let Some(code) = unknowns_gate_refusal(&a) {
                 return code;
             }
-            if let Some(code) = sibling_gate_refusal(a, &branch, &slug, gh) {
-                return code;
+            let body = std::fs::read_to_string(&a.body_file).unwrap_or_default();
+            if let Some(refusal) = sibling_gate(&a.cwd, &body, &branch, &slug, gh) {
+                eprintln!("{refusal}");
+                return 7;
             }
             if a.check_only {
                 return 0;
