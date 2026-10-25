@@ -131,7 +131,7 @@ def test_cmd_send_reply_to_carries_parent_id(isolated, runner) -> None:
         "appended reply",
     )
     assert result.exit_code == 0, result.output
-    assert [m["in_reply_to"] for m in _rows("acme-docs")][-1] == root
+    assert [m.get("in_reply_to") for m in _rows("acme-docs")][-1] == root
 
 
 def test_cmd_send_ref_flags_ride_in_thread(isolated, runner) -> None:
