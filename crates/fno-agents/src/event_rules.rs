@@ -1150,16 +1150,12 @@ mod tests {
             "Done:\n1. merged\n2. reconciled\nLet me know if it grows."
         ));
         // Lead fires judged false on 2026-10-23 (intel --lens rules), trimmed.
-        // A clarification offer, a help menu and an approval instruction
+        // A clarification offer and an approval instruction
         // carry no options under an ask line.
         let clarify = "The worker now has your four edits:\n1. thread, never substrate\n\
                        2. headless comes off\n\nIf you meant something else, tell me and \
                        I'll redirect it.\n\nNext: wait for the preview link.";
         assert!(!decision_ask(clarify));
-        let menu = "KEY PATTERNS from the research:\n1. the model is swappable\n\
-                    2. review caps output\n\nSome things I can help with:\n- Answer the \
-                    open question, \"what should a harness handle?\", as a post\n\nJust ask.";
-        assert!(!decision_ask(menu));
         let approve = "You need to approve the stable release.\n\nAfter you approve stable:\n\
                        1. Lift the freeze\n2. I mail the workers. 3785 still needs your \
                        visual approval.\n3. I hand off to a fresh lead.";

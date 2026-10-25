@@ -40,12 +40,10 @@ pub fn parse_labels(text: &str) -> Result<HashMap<String, bool>, String> {
         .filter(|(_, l)| !l.trim().is_empty())
     {
         let v: Value = serde_json::from_str(line).unwrap_or(Value::Null);
-        let verdict = match v.get("verdict").and_then(Value::as_str) {
-            Some("true") => Some(true),
-            Some("false") => Some(false),
-            _ => None,
-        };
-        match (v.get("span_id").and_then(Value::as_str), verdict) {
+        let verdict = v["verdict"]
+            .as_str()
+            .filter(|s| ["true", "false"].contains(s));
+        match (v["span_id"].as_str(), verdict.map(|s| s == "true")) {
             (Some(span), Some(verdict)) => out.insert(span.to_string(), verdict),
             _ => {
                 return Err(format!(

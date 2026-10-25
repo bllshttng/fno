@@ -1009,12 +1009,9 @@ pub fn run_intel(args: &[String]) -> i32 {
              (who mails whom, unanswered tails, hops that relay a ruling id), and\n\
              the compliance limit: uncontested is no recorded counter-evidence,\n\
              never proven obedience.\n\n\
-             --lens rules counts every event-rule fire in the window per rule: fires,\n\
-             sessions, the last 7 days, and a sample (--sample N or all, default 5,\n\
-             unlabeled fires first) with the reply tail each span kept. --labels <file>\n\
-             reads one {{\"span_id\",\"verdict\":\"true\"|\"false\"}} line per judged fire and\n\
-             prints each rule's false-fire count and rate. A rule that fires wrongly\n\
-             gets fixed or turned off (event_rules.<id> = false).\n"
+             --lens rules counts each event rule's fires and samples them with the reply\n\
+             tail (--sample N or all, default 5). --labels <file> of judged fires prints\n\
+             each rule's false-fire rate. See docs/architecture/event-rules.md.\n"
         );
         return 0;
     }
