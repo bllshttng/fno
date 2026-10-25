@@ -35,6 +35,9 @@ def _no_projects(tmp_path, monkeypatch):
     stub.write_text(
         "#!/bin/sh\n"
         'if [ "$2" = "project" ]; then\n'
+        '  if [ "$3" = "map" ]; then\n'
+        "    echo '{}'; exit 0\n"
+        "  fi\n"
         "  exit 1\n"
         "fi\n" + fallback,
         encoding="utf-8",

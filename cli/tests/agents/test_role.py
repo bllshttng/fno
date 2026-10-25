@@ -361,6 +361,10 @@ def _prepare_role_cli(monkeypatch, tmp_path, rows) -> None:
     stub.write_text(
         "#!/bin/sh\n"
         'if [ "$2" = "project" ]; then\n'
+        '  if [ "$3" = "map" ]; then\n'
+        "    echo '{\"alpha\":\"alpha\",\"a\":\"alpha\",\"beta\":\"beta\"}'\n"
+        "    exit 0\n"
+        "  fi\n"
         '  case "$4" in\n'
         "    alpha|a) echo alpha; exit 0;;\n"
         "    beta) echo beta; exit 0;;\n"

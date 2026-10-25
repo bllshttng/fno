@@ -37,11 +37,32 @@ pub fn run(args: &[String]) -> i32 {
     match args.split_first() {
         Some((cmd, rest)) if cmd == "init" => cmd_init(rest),
         Some((cmd, rest)) if cmd == "resolve" => cmd_resolve(rest),
+        Some((cmd, _rest)) if cmd == "map" => cmd_map(),
         _ => {
             eprintln!(
-                "usage: fno config project init <ID> [--repo-root <path>]\n       fno config project resolve <name>"
+                "usage: fno config project init <ID> [--repo-root <path>]\n       fno config project resolve <name>\n       fno config project map"
             );
             2
+        }
+    }
+}
+
+/// `project map`: the whole alias registry as one JSON object, the machine
+/// answer the rivals scanner consumes (the deleted Python module's cache
+/// dump, carried by the binary that owns the registry now).
+fn cmd_map() -> i32 {
+    match load_registry() {
+        Ok(map) => {
+            let object = serde_json::Map::from_iter(
+                map.iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))),
+            );
+            println!("{}", serde_json::Value::Object(object));
+            0
+        }
+        Err(message) => {
+            eprint!("{message}");
+            1
         }
     }
 }

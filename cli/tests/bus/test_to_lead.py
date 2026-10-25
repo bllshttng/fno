@@ -80,6 +80,9 @@ def test_a_portfolio_role_does_not_answer_for_one_of_its_projects(env, monkeypat
     stub.write_text(
         "#!/bin/sh\n"
         'if [ "$2" = "project" ]; then\n'
+        '  if [ "$3" = "map" ]; then\n'
+        "    echo '{\"alpha\":\"alpha\",\"beta\":\"beta\"}'; exit 0\n"
+        "  fi\n"
         '  case "$4" in\n'
         "    alpha) echo alpha; exit 0;;\n"
         "    beta) echo beta; exit 0;;\n"
