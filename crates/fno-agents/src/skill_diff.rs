@@ -66,7 +66,7 @@ const LEVELS: [&str; 3] = ["report", "assisted", "unattended"];
 
 /// One synthesized edit. `old_text == ""` is a pure addition; a non-empty
 /// old_text is a modification applied by literal replacement.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Hunk {
     pub file: String,
     pub old_text: String,

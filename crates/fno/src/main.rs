@@ -183,9 +183,9 @@ enum Role {
     DoctorEvent(Vec<OsString>),
     DoctorCost(Vec<OsString>),
     /// `fno doctor skill-diff tick|reconcile` and the deprecated root `fno
-    /// skill-diff`: the whole verb execs the native `fno-agents loops`
+    /// skill-diff`: the whole command execs the native `fno-agents loops`
     /// skill-diff ops. The tail (op word + flags) rides byte-verbatim; a
-    /// bare verb or --help answers native help inside the op door.
+    /// bare command or --help answers native help inside the op door.
     DoctorSkillDiff(Vec<OsString>),
     /// `fno doctor lint style ...`: the native style check, exec'd through
     /// the sibling fno-agents `style-check` command. Args from the check name
@@ -587,7 +587,7 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
 
 /// `fno doctor skill-diff ...` and the deprecated root `fno skill-diff ...`:
 /// the tail (op word + flags) rides byte-verbatim to the native ops door.
-/// A bare verb and --help claim too (the Python leg dies in this port); an
+/// A bare command and --help claim too (the Python leg dies in this port); an
 /// unknown op word refuses inside the op door.
 fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
     let rest: &[OsString] = match args.first()?.to_str()? {
