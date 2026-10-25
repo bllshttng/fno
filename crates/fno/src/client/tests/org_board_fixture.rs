@@ -147,10 +147,10 @@ fn graph_boxes_every_seat_under_its_lead_and_health_reads_not_sampled() {
     };
     assert_eq!(
         col("im-5") - 3,
-        col("\u{2261} no lead@im"),
+        col("\u{2261} no lead@iMac2D2"),
         "a box sits under its lead"
     );
-    assert_eq!(col("im-1") - 3, col("\u{2261} mb-00@im"));
+    assert_eq!(col("im-1") - 3, col("\u{2261} mb-00@iMac2D2"));
     b.tab = OrgTab::Health;
     let health = text(&b.frame(None, 200, 200, now()).right);
     assert!(health.contains("health not sampled"), "{health}");

@@ -515,8 +515,8 @@ remote = [
      "status": "unknown", "age_s": None, "rss_mb": None, "parent": None},
 ]
 fleet = {"fresh_s": 300, "machines": [
-    machine("demo-mb", "macbook", True, 4, local),
-    machine("demo-im", "imac", False, 21, remote),
+    machine("demo-bb16", "bb16", True, 4, local),
+    machine("demo-imac2d2", "imac2d2", False, 21, remote),
 ]}
 open(out, "w").write(json.dumps(fleet))
 PY

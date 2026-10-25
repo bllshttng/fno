@@ -139,9 +139,9 @@ pub(crate) fn model(s: &Seat) -> String {
         .map(|m| m.trim_start_matches("claude-").to_string())
         .unwrap_or_else(|| "not published".into())
 }
-/// Two letters naming a machine in a lead label: `rowan@im`.
-pub(crate) fn host_tag(host: &str) -> String {
-    host.chars().take(2).collect::<String>().to_lowercase()
+/// `1 session`, `2 sessions`.
+pub(crate) fn count(n: usize, word: &str) -> String {
+    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
 
 pub(crate) fn rule(title: &str, width: usize) -> Line {
@@ -194,8 +194,8 @@ pub(crate) fn scope<'a>(fleet: &'a Fleet, item: &Item) -> Vec<Row<'a>> {
 fn summary(rows: &[Row]) -> String {
     let n = |w: &str| rows.iter().filter(|r| r.s.status == w).count();
     format!(
-        "{} sessions \u{b7} {} writing \u{b7} {} parked \u{b7} {} no status",
-        rows.len(),
+        "{} \u{b7} {} writing \u{b7} {} parked \u{b7} {} no status",
+        count(rows.len(), "session"),
         n("writing"),
         n("parked"),
         n("unknown")
@@ -349,7 +349,7 @@ pub(crate) fn header(fleet: &Fleet, item: &Item, tab: crate::view_store::OrgTab)
 }
 
 pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_lead: bool) -> Vec<Line> {
-    const W: [usize; 6] = [12, 14, 10, 14, 9, 7];
+    const W: [usize; 6] = [18, 14, 10, 14, 9, 7];
     let fixed: usize = W.iter().sum::<usize>() + 1;
     let now_w = width.saturating_sub(fixed).max(8);
     let mut out = vec![
@@ -383,7 +383,7 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_lead: bo
             } else if in_lead {
                 r.p.name.clone()
             } else {
-                format!("{}@{}", r.p.name, host_tag(&r.m.host))
+                format!("{}@{}", r.p.name, r.m.host)
             };
             let age = epoch(r.s.started_at.as_deref())
                 .map(|t| dur(now as i64 - t))
@@ -547,10 +547,9 @@ pub(crate) fn overview(
         kv(
             "shape",
             format!(
-                "{} lead{} \u{b7} {} sessions \u{b7} {} with a role",
-                groups.len(),
-                if groups.len() == 1 { "" } else { "s" },
-                rows.len(),
+                "{} \u{b7} {} \u{b7} {} with a role",
+                count(groups.len(), "lead"),
+                count(rows.len(), "session"),
                 rows.iter().filter(|r| r.s.role.is_some()).count()
             ),
             BRole::Body,
@@ -593,7 +592,7 @@ pub(crate) fn overview(
                     .s("   \u{25a0} ", BRole::Meta)
                     .s(fit(&g[0].p.name, 16), BRole::Body)
                     .s(fit(&g[0].m.host, 12), BRole::Meta)
-                    .s(fit(&format!("{} sessions", g.len()), 14), BRole::Body)
+                    .s(fit(&count(g.len(), "session"), 14), BRole::Body)
                     .s(
                         if w > 0 {
                             format!("{w} writing")
@@ -619,7 +618,7 @@ pub(crate) fn graph(
     sel: &str,
     width: usize,
 ) -> Vec<Line> {
-    const BW: usize = 15;
+    const BW: usize = 18;
     const COLW: usize = BW + 2;
     const CAP: usize = 6;
     let ncol = (width.saturating_sub(5) / COLW).max(1);
@@ -643,7 +642,7 @@ pub(crate) fn graph(
     let mut cols: Vec<Vec<Cell>> = Vec::new();
     for g in leads(rows) {
         let pkey = lead_key(g[0].m, g[0].p);
-        let label = format!("{}@{}", g[0].p.name, host_tag(&g[0].m.host));
+        let label = format!("{}@{}", g[0].p.name, g[0].m.host);
         for (c, chunk) in g.chunks(CAP).enumerate() {
             let head = if c == 0 {
                 format!("\u{2261} {label}")
@@ -707,9 +706,7 @@ pub(crate) fn graph(
         " \u{2514}{}",
         "\u{2500}".repeat(width.saturating_sub(3))
     )));
-    out.push(meta(
-        " @ma: the machine's first two letters \u{b7} tap a box to open its seat",
-    ));
+    out.push(meta(" tap a box to open its seat"));
     out
 }
 
