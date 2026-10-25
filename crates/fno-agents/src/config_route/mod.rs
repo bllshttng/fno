@@ -17,7 +17,7 @@ pub mod plan_write;
 pub mod settings;
 pub mod table;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::path::Path;
 
 // The routing-table constants, ported verbatim from
@@ -34,14 +34,11 @@ pub(crate) const AUTO_ASSIGNED_BY: [(&str, &str); 3] = [
     ("build", "/target bg + fno backlog advance"),
 ];
 pub(crate) const PROTECTED_ROLE_NOTE: [(&str, &str); 2] = [
-    (
-        "implement",
-        "protected name; delivery routes via 'build'",
-    ),
+    ("implement", "protected name; delivery routes via 'build'"),
     (
         "review-verdict",
         "protected name; no dispatch surface declares it",
-   ),
+    ),
 ];
 pub(crate) const PROTECTED_ROLE_HINT: [(&str, &str); 2] = [
     (
@@ -106,7 +103,9 @@ pub fn run_capture(args: &[String]) -> (i32, String, String) {
 /// The `model_routing` block, deep-merged across the config tiers the way
 /// the Python loader folds them. Unset reads as the empty block.
 pub(crate) fn config_block(cwd: &Path) -> Value {
-    crate::agents_config::config_value_deep(cwd, &["model_routing"]).unwrap_or_else(|| json!({}))
+    crate::agents_config::config_value_deep(cwd, &["model_routing"])
+        .map(|block| serde_json::to_value(&block).expect("TOML serializes"))
+        .unwrap_or_else(|| json!({}))
 }
 
 /// Built-in routed roles (-> the default provider+model) overlaid with the
@@ -122,7 +121,10 @@ pub(crate) fn effective_roles(block: &Value) -> serde_json::Map<String, Value> {
     }
     if let Some(roles) = block.get("roles").and_then(Value::as_object) {
         for (k, v) in roles {
-            eff.insert(k.trim().to_lowercase(), json!(v.as_str().unwrap_or_default()));
+            eff.insert(
+                k.trim().to_lowercase(),
+                json!(v.as_str().unwrap_or_default()),
+            );
         }
     }
     eff
@@ -150,9 +152,7 @@ pub(crate) fn parse_target(raw: &str) -> Option<(String, String)> {
     if provider.is_empty() || model.is_empty() {
         return None;
     }
-    if provider.chars().any(char::is_whitespace)
-        || model.chars().any(char::is_whitespace)
-    {
+    if provider.chars().any(char::is_whitespace) || model.chars().any(char::is_whitespace) {
         return None;
     }
     Some((provider.to_lowercase(), model.to_string()))

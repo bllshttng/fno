@@ -136,7 +136,8 @@ fn configured_mode(payload: &Value) -> Value {
     let profile = crate::agents_config::config_value_deep(
         &cwd,
         &["agents", "profiles", profile_key.as_str()],
-    );
+    )
+    .map(|v| serde_json::to_value(&v).expect("TOML serializes"));
     let stage = profile
         .as_ref()
         .and_then(|p| p.get("provider"))
@@ -152,6 +153,7 @@ fn configured_mode(payload: &Value) -> Value {
         .trim()
         .to_string();
     let legacy = crate::agents_config::config_value_deep(&cwd, &["dispatch"])
+        .and_then(|d| serde_json::to_value(&d).ok())
         .and_then(|d| d.get("harness").and_then(Value::as_str).map(str::to_string))
         .unwrap_or_default()
         .trim()
