@@ -1,7 +1,6 @@
 # campaign	path	lang	declarations_at_0d421fbc04
 K1	cli/benchmarks/test_measure_fno.py	py	7
 K1	cli/src/fno/paths_testing.py	py	1
-K1	cli/src/fno/setup/test_recommended_rules.py	py	5
 K1	cli/src/fno/test_worktree_paths.py	py	11
 K1	cli/tests/agents/test_command_answer_blueprint_floor.py	py	4
 K1	cli/tests/goldens/test_advance_golden.py	py	3
@@ -1143,7 +1142,6 @@ K6	crates/fno-agents/tests/task_context_journey.rs	rs	1
 K6	crates/fno/src/event_store_recovery.rs	rs	1
 K7	cli/src/fno/plan/test_boundary.py	py	21
 K7	cli/src/fno/plan/test_folder_audit.py	py	8
-K7	cli/src/fno/setup/test_starship.py	py	10
 K7	cli/src/fno/target/test_blast.py	py	25
 K7	cli/src/fno/target/test_orient.py	py	42
 K7	cli/src/fno/test_cost.py	py	20

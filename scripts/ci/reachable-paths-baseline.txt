@@ -186,7 +186,6 @@ A	http://www.apple.com/dtds/propertylist-1.0.dtd	py=cli/src/fno/pr_watch/_instal
 A	https://api.anthropic.com/api/oauth/profile	py=cli/src/fno/adapters/providers/managed.py;rs=crates/fno-agents/src/claude_vault.rs	# CLASSIFY protocol|msg-twin|data
 A	https://api.z.ai/api/anthropic	py=evals/harness-fit/run/footnote_agent.py|evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/footnote_harness/tests.rs|crates/fno-agents/src/model_env_scrub.rs|crates/fno-agents/src/route_settings.rs|crates/fno-agents/src/spawn_overlay.rs|crates/fno/src/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
 A	https://api.z.ai/api/coding/paas/v4	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/codex_route.rs|crates/fno/src/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
-A	https://github.com/bllshttng/fno	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs	# CLASSIFY protocol|msg-twin|data
 A	https://github.com/{slug}/pull/{pr}	py=cli/src/fno/graph/_reconcile.py|cli/src/fno/retro/cli.py;rs=crates/fno-agents/src/backlog/pr_link.rs	# CLASSIFY protocol|msg-twin|data
 A	idea-status nodes accumulating	py=cli/src/fno/health_monitor.py;rs=crates/fno-agents/src/backlog/triage_health.rs	# CLASSIFY protocol|msg-twin|data
 A	improperly formed request	py=cli/src/fno/adapters/providers/error_taxonomy.py;rs=crates/fno-agents/src/accounts/error_class.rs	# CLASSIFY msg-twin: the error taxonomy port keeps the Python rule text, refusal text and stamp pattern until the adapters package is deleted
@@ -305,7 +304,6 @@ A	shipped (pr #{pr} merged)	py=cli/src/fno/target/orient.py;rs=crates/fno-agents
 A	shipped (pr #{pr}, awaiting merge)	py=cli/src/fno/target/orient.py;rs=crates/fno-agents/src/target_orient.rs	# CLASSIFY protocol|msg-twin|data byte-matched orient render vocabulary; the python status command still renders it until that port lands
 A	single_flight_join_budget_seconds	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/accounts/records.rs|crates/fno-agents/src/agents_config.rs	# CLASSIFY protocol|msg-twin|data
 A	single_flight_ttl_seconds	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/accounts/records.rs|crates/fno-agents/src/agents_config.rs	# CLASSIFY protocol|msg-twin|data
-A	skills-dir; no `claude plugin update`	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs|crates/fno/src/setup_autowire_tests.rs	# CLASSIFY protocol|msg-twin|data
 A	stale >30d, drained by maintain	py=cli/src/fno/graph/_constants.py;rs=crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
 A	stale-quarantine (guard)	py=cli/src/fno/graph/_constants.py;rs=crates/fno-agents/src/backlog/maintenance.rs|crates/fno-agents/src/backlog/patch.rs	# CLASSIFY protocol|msg-twin|data
 A	stale-verdict-fresher-event	py=cli/src/fno/agents/row_contradiction.py;rs=crates/fno-agents/src/daemon/list_rows.rs	# CLASSIFY protocol|msg-twin|data
@@ -333,7 +331,6 @@ A	unknown (not in graph) | {resolve}	py=cli/src/fno/target/orient.py;rs=crates/f
 A	unknown (plan unreadable: graph unreadable)	py=cli/src/fno/target/orient.py;rs=crates/fno-agents/src/target_orient.rs	# CLASSIFY protocol|msg-twin|data byte-matched orient render vocabulary; the python status command still renders it until that port lands
 A	unknown (plan unreadable: {exc})	py=cli/src/fno/plan/reconcile.py;rs=crates/fno-agents/src/target_orient.rs	# CLASSIFY protocol|msg-twin|data byte-matched orient render vocabulary; the python status command still renders it until that port lands
 A	unknown | resolve: set your repo's test command	py=cli/src/fno/target/orient.py;rs=crates/fno-agents/src/target_orient.rs	# CLASSIFY protocol|msg-twin|data byte-matched orient render vocabulary; the python status command still renders it until that port lands
-A	unreadable install receipt	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs	# CLASSIFY protocol|msg-twin|data
 A	unresolved:no-harness-session	py=cli/src/fno/cost/_register.py;rs=crates/fno-agents/src/ledger_axes.rs|crates/fno/src/agents_history.rs	# CLASSIFY protocol|msg-twin|data
 A	unsupported strategy has executable data	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
 A	usage: fno agents mail send --to-lead <scope> <message>	py=cli/src/fno/mail/cli.py;rs=crates/fno-agents/src/mail_cli/send/lanes.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
@@ -354,7 +351,6 @@ A	{one_line} - run `fno agents mail drain-self`	py=cli/src/fno/mail/receipts.py;
 A	{skipped_no_sid} row(s) carried no session id, unmeasurable, skipped	py=cli/src/fno/agents/watchdog.py;rs=crates/fno-agents/src/backlog/worked.rs	# CLASSIFY protocol|msg-twin|data
 A	{task_id} is already done	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
 A	{ts} {kind} {sender} -> {recipient} rid={rid} caller={ck}	py=cli/src/fno/agents/trace_cli.py;rs=crates/fno-agents/src/client_commands.rs	# CLASSIFY protocol|msg-twin|data
-A	{} file(s) (footnote {}) -> {}	py=cli/src/fno/setup/integration.py;rs=crates/fno/src/setup_autowire.rs	# CLASSIFY protocol|msg-twin|data
 A	--model must not be empty	py=cli/src/fno/dispatch_flags.py;rs=crates/fno-agents/src/backlog/advance_cli.rs	# Shared flag refusal on the retained Python dispatch-pin parser and native advance door.
 A	--monitor happy currently supports only the zai provider	py=cli/src/fno/agents/cli.py;rs=crates/fno-agents/src/spawn_axes.rs	# CLASSIFY protocol|msg-twin|data row 9 pins the pane lane's zai golden as a Rust constant; the pane spawn stays Python until row 10
 A	--output-format supports only 'json' on claude headless spawns	py=cli/src/fno/agents/cli.py|cli/src/fno/agents/dispatch.py;rs=crates/fno-agents/src/spawn_axes.rs	# CLASSIFY protocol|msg-twin|data row 9 pins the output-format golden; the python stub serves python mode until row 10

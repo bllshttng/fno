@@ -102,23 +102,6 @@ def cli_hooks_codex_cmd(
     )
 
 
-@app.command("github-cli")
-def github_cli_cmd() -> None:
-    """Install or refresh the `gh` proxy used by Footnote workers."""
-    from fno.setup.github_cli import ensure_proxy
-
-    try:
-        result = ensure_proxy()
-    except (FileNotFoundError, OSError, RuntimeError) as exc:
-        typer.echo(f"github-cli error: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    action = "installed" if result.changed else "verified"
-    backup = f" backup={result.backup}" if result.backup else ""
-    typer.echo(
-        f"github-cli {action}: proxy={result.proxy} delegate={result.delegate}{backup}"
-    )
-
-
 def _install_cli_hooks(
     *,
     codex: bool,
@@ -257,62 +240,6 @@ def _install_cli_hooks(
     return None
 
 
-def offer_cli_hooks(
-    *,
-    confirm_fn: Callable[[str], bool],
-    install_fn: Callable[..., None] = _install_cli_hooks,
-) -> bool:
-    """Offer the combined user-level hook installer."""
-    if not confirm_fn(
-        "Wire footnote hooks into your Codex, Gemini, and Claude user config?"
-    ):
-        return False
-
-    install_fn(
-        codex=True,
-        gemini=True,
-        gemini_settings=None,
-        codex_config=None,
-        codex_hooks_json=None,
-        migrate_legacy_hooks_json=False,
-        claude=True,
-        claude_settings=None,
-    )
-    return True
-
-
-def report_machine_blockers(*, echo_fn: Callable[[str], None]) -> list[str]:
-    """Run the machine doctor at the end of first run and name what blocks.
-
-    The wizard configures PREFERENCES; `fno doctor` knows the MACHINE. Nothing
-    connected them, so a new user met every environmental hurdle later as an
-    unattributable mid-loop failure. Composition of two commands that both exist.
-
-    Calls `fno.doctor.build_report()` and `fno.doctor._blockers()` in process
-    -- never shells out. A subprocess resolves the DEPLOYED binary on PATH,
-    not this source, so on the exact stale install that is itself blocker #1
-    the wizard would run the wrong bytes to report it.
-
-    Never raises and never fails the wizard: a machine finding the user has
-    just been told about must not look like setup failing.
-    """
-    try:
-        from fno.doctor import _blockers, _emit_blockers, build_report
-
-        result = build_report()
-        blockers = _blockers(result)
-    except Exception as exc:
-        echo_fn(f"fno doctor: could not run ({exc}); skipping machine check.")
-        return []
-
-    if blockers:
-        echo_fn("")
-        _emit_blockers(blockers, echo_fn=echo_fn)
-    else:
-        echo_fn("\nfno doctor: this machine looks clean.")
-    return blockers
-
-
 @app.command("plan")
 def plan_cmd(
     advanced: bool = typer.Option(
@@ -334,122 +261,6 @@ def plan_cmd(
     if not advanced:
         raw["fields"] = [f for f in raw["fields"] if f.get("tier") == "always"]
     typer.echo(json.dumps(raw, indent=2))
-
-
-def offer_recommended_rules(
-    *,
-    confirm_fn: Callable[[str], bool],
-    echo_fn: Callable[[str], None] = lambda _m: None,
-    source_dir: Optional[Path] = None,
-    target_dir: Optional[Path] = None,
-) -> dict:
-    """Opt-in offer to install footnote's recommended claude-code rules.
-
-    Interactive-agnostic core (the CLI passes typer confirm/echo). Prompts once,
-    default No; installs only on explicit yes. ``source_dir`` defaults to the
-    shipped plugin ``rules/`` dir and ``target_dir`` to ``~/.claude/rules/`` -
-    both overridable for tests. Returns ``{"installed": bool, "results": [...]}``.
-    """
-    import os
-
-    from fno.setup.recommended_rules import (
-        default_rules_source,
-        install_recommended_rules,
-        summarize,
-    )
-
-    src = source_dir or default_rules_source()
-    if src is None or not Path(src).is_dir():
-        # No pack resolvable anywhere: nothing to offer, say nothing.
-        return {"installed": False, "results": []}
-
-    if not confirm_fn(
-        "Install footnote's recommended claude-code rules into ~/.claude/rules/?"
-    ):
-        return {"installed": False, "results": []}
-
-    # os.path.expanduser (not Path.home()) so a headless / sandboxed setup run
-    # with an unset HOME degrades instead of raising RuntimeError (PR #146 gemini).
-    tgt = target_dir or (Path(os.path.expanduser("~")) / ".claude" / "rules")
-    results = install_recommended_rules(Path(src), Path(tgt))
-    echo_fn(summarize(results))
-    return {"installed": True, "results": results}
-
-
-def offer_prompt_provenance(
-    *,
-    confirm_fn: Callable[[str], bool],
-    echo_fn: Callable[[str], None] = lambda _m: None,
-    snippet_path: Optional[Path] = None,
-    target_toml: Optional[Path] = None,
-    shell_snippet_path: Optional[Path] = None,
-    shell_rc: Optional[Path] = None,
-) -> dict:
-    """Opt-in offer to render fno pane provenance in the user's prompt.
-
-    Two renderers, each prompted separately (default No), so the feature never
-    assumes starship: a starship custom module AND a portable bash/zsh ``$PS1``
-    segment. Both append idempotently and never rewrite the user's files. On
-    decline the snippet path is printed for manual use. (fno's own mux status
-    row is the config-free surface - a separate follow-up, not offered here.)
-    Interactive-agnostic (the CLI passes typer confirm/echo). Returns
-    ``{"starship": StarshipResult | None, "shell": StarshipResult | None}``."""
-    from fno.setup.starship import (
-        default_shell_rc,
-        default_shell_snippet_source,
-        default_snippet_source,
-        default_starship_config,
-        install_shell_source_line,
-        install_starship_module,
-        summarize as starship_summarize,
-        summarize_shell,
-    )
-
-    out: dict = {"starship": None, "shell": None}
-
-    # Starship users: append the custom module.
-    star_src = snippet_path or default_snippet_source()
-    if star_src is not None and Path(star_src).is_file():
-        if confirm_fn("Add fno provenance to your starship prompt (starship.toml)?"):
-            res = install_starship_module(
-                Path(star_src), Path(target_toml or default_starship_config())
-            )
-            echo_fn(starship_summarize(res))
-            out["starship"] = res
-        else:
-            echo_fn(f"  starship: skipped - module at {star_src}")
-
-    # Everyone else: the portable shell-rc segment (no prompt engine).
-    sh_src = shell_snippet_path or default_shell_snippet_source()
-    if sh_src is not None and Path(sh_src).is_file():
-        if confirm_fn(
-            "Or add a portable provenance segment to your bash/zsh prompt (no starship)?"
-        ):
-            res = install_shell_source_line(
-                Path(sh_src), Path(shell_rc or default_shell_rc())
-            )
-            echo_fn(summarize_shell(res))
-            out["shell"] = res
-        else:
-            echo_fn(f"  shell prompt: skipped - snippet at {sh_src} (source it to use)")
-
-    return out
-
-
-@app.command("wizard")
-def wizard_cmd() -> None:
-    """Retired: the one setup command is ``fno config setup run``.
-
-    Both layers (global and project) run from one step table there; the
-    terminal wizard this command used to drive is deleted. ``--yes`` (or a
-    non-TTY stdin, or an agent session env) takes every recommended default
-    without prompting; ``/fno:setup`` asks the same steps in chat.
-    """
-    typer.echo(
-        "fno config setup wizard is retired: run `fno config setup run` "
-        "(add --yes for the no-prompt path, or use /fno:setup in chat)."
-    )
-    raise typer.Exit(0)
 
 
 @app.command("migrate-paths")

@@ -1,13 +1,11 @@
 //! `fno config setup auto-wire`: wire the fno plugin into every agent CLI on
 //! PATH, no questions asked. `fno.sh` runs it right after a verified install,
 //! so the CLI and the plugin arrive together and the first agent session
-//! starts whole. The wizard (`fno config setup wizard`) stays for anyone who
-//! wants to choose.
+//! starts whole. The wizard (`fno do wizard`) stays for anyone who wants to
+//! choose.
 //!
-//! Per-harness semantics mirror cli/src/fno/setup/integration.py, which stays
-//! the wizard's engine. opencode, pi and agy install through the same
-//! fno-agents doors the Python adapters call. Codex stays on the Python
-//! converge engine (ship-phase ruling): the front door reaches it through the
+//! opencode, pi and agy install through fno-agents doors. Codex stays on the
+//! Python converge engine (ship-phase ruling): the front door reaches it through the
 //! wheel's fno-py, adding no Python of its own. Every outcome prints; nothing
 //! is silent. Best-effort by design: a harness that fails to wire never fails
 //! the CLI install that already succeeded, so the command always exits 0.
@@ -21,9 +19,7 @@ use serde_json::Value;
 
 use crate::process_admission::{std_command, std_spawn};
 
-/// The marketplace / repo the integrations install from. Mirrors
-/// _MARKETPLACE / _REPO_URL in cli/src/fno/setup/integration.py.
-/// `#stable` pins the add to the `stable` branch (781 files, ~4s); the bare
+/// The marketplace / repo the integrations install from. `#stable` pins the add to the `stable` branch (781 files, ~4s); the bare
 /// repo clones `main` (7,949 files, 80s+) and can exceed Claude Desktop's
 /// 120s "Add marketplace" timeout.
 const MARKETPLACE: &str = "bllshttng/fno#stable";
@@ -255,7 +251,7 @@ fn codex_wire() -> Outcome {
 // --- opencode ---------------------------------------------------------------
 
 /// The opencode receipt's `status` decides: installed/partial count as
-/// installed (mirrors _opencode_install in integration.py). Pure.
+/// installed. Pure.
 pub fn parse_opencode_receipt(out: &str) -> Outcome {
     let Ok(v) = serde_json::from_str::<Value>(out.trim()) else {
         return Outcome::Failed("unreadable install receipt".into());
