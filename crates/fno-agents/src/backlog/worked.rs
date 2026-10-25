@@ -906,8 +906,39 @@ pub(crate) fn classify_node_workers(rows: &[FleetRow]) -> (Vec<&FleetRow>, Vec<&
 
 pub(crate) const UNMEASURABLE_LABEL_MARK: &str = "(unmeasurable:";
 
+/// The node's open execute rows in the graph, newest last, by session id.
+/// The spawn gate's worker-row refusal names these: its evidence is this
+/// row at least as often as the roster row it crosschecked, and a row a
+/// bare `claim release` left open is exactly the stale state an operator
+/// has to close by hand.
+pub(crate) fn open_execute_row_ids(node_id: &str) -> Vec<String> {
+    let graph = super::settings::graph_path();
+    let Ok(entries) = crate::graph_store::read_rows_strict(&graph) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for entry in &entries {
+        if entry.get("id").and_then(Value::as_str) != Some(node_id) {
+            continue;
+        }
+        for row in entry
+            .get("sessions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if is_open_phase_row(row, "execute") {
+                if let Some(sid) = row.get("session_id").and_then(Value::as_str) {
+                    out.push(sid.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// One graph session row: a valid, unfinished window of `phase`.
-fn is_open_phase_row(row: &Value, phase: &str) -> bool {
+pub(crate) fn is_open_phase_row(row: &Value, phase: &str) -> bool {
     row.get("phase").and_then(Value::as_str) == Some(phase)
         && row
             .get("harness")
@@ -1296,5 +1327,45 @@ mod tests {
             .find(|w| w.contains("row(s) carried no session id"))
             .expect("the skip is named");
         assert!(summary.starts_with(ADVISORY), "{summary}");
+    }
+
+    /// The spawn gate's refusal names the node's open execute rows, so the
+    /// reader must see exactly those: an open execute row lists, a closed
+    /// one and an open ship row do not, and another node's rows stay out.
+    #[test]
+    fn open_execute_row_ids_reads_the_node_open_execute_rows() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("worked-open-rows-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let db = root.join("db/graph.db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let entry = serde_json::json!({
+            "id": "x-openrows",
+            "title": "open rows",
+            "status": "ready",
+            "project": "fno",
+            "slug": "open-rows",
+            "sessions": [
+                {"session_id": "sess-open-1", "phase": "execute", "harness": "claude",
+                 "started_at": "2026-10-25T00:00:00Z", "ended_at": null},
+                {"session_id": "sess-done", "phase": "execute", "harness": "claude",
+                 "started_at": "2026-10-25T00:00:00Z", "ended_at": "2026-10-25T01:00:00Z"},
+                {"session_id": "sess-ship", "phase": "ship", "harness": "claude",
+                 "started_at": "2026-10-25T00:00:00Z", "ended_at": null}
+            ]
+        });
+        crate::graph_store::seed_rows(&db, &[entry]).expect("seed graph");
+        let backup = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", &root);
+        let rows = open_execute_row_ids("x-openrows");
+        match backup {
+            Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+            None => std::env::remove_var("FNO_STATE_DIR"),
+        }
+        assert_eq!(rows, vec!["sess-open-1".to_string()]);
+        assert!(open_execute_row_ids("x-absent").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

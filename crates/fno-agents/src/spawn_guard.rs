@@ -194,10 +194,14 @@ fn blocked(
         && seen.verdict != "foreign_live"
     {
         // The worker ROW is the occupant whenever the claim is not, so the
-        // receipt names the row and the remedy peeks it.
+        // receipt names the row and the remedy peeks it. The evidence the
+        // overlay read first is the node's open graph execute row, so the
+        // refusal names that row too: a bare `claim release` leaves it open,
+        // and the roster row it crosschecks can outlive the work by hours.
         let token = worker_token(&seen.worker);
         let first = token.split(',').next().unwrap_or_default();
         let unmeasured = seen.worker.contains(UNMEASURABLE_LABEL_MARK);
+        let rows = crate::backlog::worked::open_execute_row_ids(req.node_id);
         let mut remedy =
             format!("fno agents peek {first}; if its run is finished, fno agents stop {first}");
         if unmeasured {
@@ -207,12 +211,25 @@ fn blocked(
                 req.node_id
             ));
         }
+        if !rows.is_empty() {
+            remedy.push_str(&format!(
+                "; the occupied row is the node's open graph execute row {}. \
+                 A bare `fno agents claim release` leaves it open; close it with \
+                 `fno backlog session add {} --phase execute --require-session <sid> \
+                 --ended-at <utc-now>`",
+                rows.join(", "),
+                req.node_id
+            ));
+        }
         out.insert("verdict".into(), json!("already-running"));
         out.insert("reason".into(), json!("worker-row"));
         out.insert("worker".into(), json!(seen.worker));
         out.insert("truth_status".into(), json!(seen.truth_status));
         if unmeasured {
             out.insert("worker_unmeasured".into(), json!(true));
+        }
+        if !rows.is_empty() {
+            out.insert("graph_execute_rows".into(), json!(rows));
         }
         out.insert("remedy".into(), json!(remedy));
         return Value::Object(out);
