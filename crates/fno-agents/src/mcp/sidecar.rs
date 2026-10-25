@@ -521,7 +521,7 @@ async fn handle_client(state: Arc<SidecarState>, stream: UnixStream) {
 /// The send_to_channel outcome: delivered, or the two failure shapes the
 /// Python leg distinguished.
 #[derive(Clone, Copy, PartialEq)]
-enum PushOutcome {
+pub enum PushOutcome {
     Delivered,
     NotRegistered,
     WriteFailed,
