@@ -48,6 +48,13 @@ const MAX_BACKOFF_MS: i64 = 900_000;
 /// queueing the merge path behind a stalled holder.
 const LOCK_RETRY_MAX_TRIES: u32 = 20;
 const LOCK_RETRY_SLEEP_MS: u64 = 100;
+/// How old the stored core reading may be and still vouch for the bucket.
+/// The bucket is account-wide, so a reading goes stale the moment the OTHER
+/// machine (or any plain read whose headers nobody sees) spends it: the
+/// 2026-10-25 outage ran five hours on a reading stamped early in the
+/// window while the true count sat at 0. A quarter of the one-hour window
+/// bounds how far a positive reading may bless refusals and downgrades.
+pub(crate) const CORE_READING_FRESH_MS: i64 = 900_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerState {
@@ -130,6 +137,14 @@ pub struct Snapshot {
     pub core_remaining: i64,
     /// Seconds until the stored core reading resets; 0 when unknown or past.
     pub core_reset_in_s: i64,
+    /// Seconds since the stored core reading was observed; -1 never. A
+    /// positive reading this old is a memory of a bucket other spenders
+    /// have long since drained, never a present answer.
+    pub core_seen_age_s: i64,
+    /// Whether the stored reading is young enough to vouch for the bucket
+    /// ([`CORE_READING_FRESH_MS`]). A refusal classifier consults this
+    /// before trusting `core_remaining`.
+    pub core_reading_fresh: bool,
     /// The active reserve; 0 disables the reserve refusals.
     pub core_reserve: u32,
 }
@@ -1115,6 +1130,33 @@ pub(crate) fn core_recording_armed() -> bool {
     !(cfg!(test) && std::env::var_os("FNO_GH_BUDGET_TEST_ARMED").is_none())
 }
 
+/// The core bucket of a `gh api rate_limit` payload, as (remaining, reset
+/// epoch s): the account-wide reading the exempt probe already paid for.
+pub(crate) fn core_from_rate_limit(payload: &Value) -> Option<(i64, i64)> {
+    let core = payload.pointer("/resources/core")?;
+    let remaining = core.get("remaining")?.as_i64()?;
+    let reset = core.get("reset")?.as_i64()?;
+    Some((remaining, reset))
+}
+
+/// One core reading lands in the ledger from an exempt `rate_limit` answer:
+/// the probe the GraphQL broker runs before every discretionary call, the
+/// spend report, and the failure classifiers all fetch this payload, and
+/// each fetch is a fresh account-wide observation. Without it the ledger's
+/// core bucket only moved at conditional-read moments, and a positive
+/// reading stamped early in the hour held calls open while the true count
+/// sat at 0 (the 2026-10-25 five-hour outage). The same arming and
+/// no-op-under-a-unit-test-build rule as [`record_core_observation`].
+pub(crate) fn record_core_from_rate_limit(payload: &Value) {
+    let Some((remaining, reset)) = core_from_rate_limit(payload) else {
+        return;
+    };
+    if !core_recording_armed() {
+        return;
+    }
+    record_core_real(remaining, reset, now_ms());
+}
+
 /// Read-only projection for status surfaces and the loop gate's pre-read.
 pub fn snapshot(path: &Path, now: i64) -> Snapshot {
     let (ledger, state) = read_ledger(path);
@@ -1134,6 +1176,11 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
         ledger.refusal_kind.clone()
     };
     let until = ledger.backoff_until_ms.max(shared_until);
+    let core_seen_age_s = if ledger.core_seen_ms > 0 {
+        ((now - ledger.core_seen_ms).max(0)) / 1000
+    } else {
+        -1
+    };
     Snapshot {
         points_60s: window_points(&ledger, now),
         cap: cap_from_env(),
@@ -1146,6 +1193,9 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
         } else {
             0
         },
+        core_seen_age_s,
+        core_reading_fresh: ledger.core_seen_ms > 0
+            && now - ledger.core_seen_ms <= CORE_READING_FRESH_MS,
         core_reserve: core_reserve(),
     }
 }
@@ -1212,6 +1262,8 @@ fn print_status() {
             "refusal_kind": s.refusal_kind,
             "core_remaining": s.core_remaining,
             "core_reset_in_s": s.core_reset_in_s,
+            "core_seen_age_s": s.core_seen_age_s,
+            "core_reading_fresh": s.core_reading_fresh,
             "core_reserve": s.core_reserve,
         })
     );
@@ -1283,7 +1335,15 @@ fn dispatch_op(payload: &Value) -> i32 {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                Some(crate::gh_spend::rate_limit_probe())
+                // The probe the report is about to print is a fresh
+                // account-wide reading; the diagnostic also feeds the
+                // ledger, so a status read right after names the truth it
+                // just observed.
+                let probe = crate::gh_spend::rate_limit_probe();
+                if let Ok(reading) = &probe {
+                    record_core_from_rate_limit(reading);
+                }
+                Some(probe)
             } else {
                 None
             };
@@ -1894,6 +1954,69 @@ mod tests {
         record_core_at(&path3, 0, now / 1000 - 100, now);
         let v = admit(&path3, &core_read, now, 450);
         assert!(v.admitted, "a passed reset ignores core state: {v:?}");
+    }
+
+    #[test]
+    fn a_rate_limit_payload_stamps_the_core_bucket_and_engages_the_gate() {
+        // The exempt probe's payload names both buckets; the core half is a
+        // fresh account-wide reading. Parse: remaining and reset come off
+        // /resources/core, and a payload without the bucket reads None.
+        let reset_s = now_ms() / 1000 + 600;
+        let payload = json!({
+            "resources": {
+                "core": {"limit": 5000, "used": 5000, "remaining": 0, "reset": reset_s},
+                "graphql": {"remaining": 4900, "reset": reset_s},
+            }
+        });
+        assert_eq!(core_from_rate_limit(&payload), Some((0, reset_s)));
+        assert_eq!(core_from_rate_limit(&json!({"resources": {}})), None);
+
+        // The full entry under the real ledger: disarmed (the unit-test
+        // default) it writes nothing anywhere; armed over a staged state
+        // dir it stamps the ledger, and the gate holds the next core read.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _state = DoorEnvGuard::set("FNO_STATE_DIR", tmp.path().as_os_str());
+        let ledger = ledger_path();
+        record_core_from_rate_limit(&payload);
+        assert!(!ledger.exists(), "a disarmed stamp writes nothing");
+
+        let _armed = DoorEnvGuard::set("FNO_GH_BUDGET_TEST_ARMED", std::ffi::OsStr::new("1"));
+        record_core_from_rate_limit(&payload);
+        let (stamped, _) = read_ledger(&ledger);
+        assert_eq!(stamped.core_remaining, 0);
+        assert_eq!(stamped.core_reset_ms, reset_s * 1000);
+        let v = admit_with(
+            None,
+            &argv(&["api", "repos/o/r/pulls/1"]),
+            stamped.core_seen_ms,
+            450,
+        );
+        assert!(!v.admitted, "the fresh exhaustion holds the next core read");
+        assert_eq!(v.cause, Some("core"));
+    }
+
+    #[test]
+    fn the_snapshot_reports_the_core_reading_age_and_freshness() {
+        // AC: a positive reading past the freshness bound stops vouching
+        // for the bucket, and a never-seen ledger reads unknown, never
+        // fresh. This is the field the refusal downgrade consults.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let now = 1_760_000_000_000i64;
+        record_core_at(&path, 4706, now / 1000 + 3_000, now);
+        let s = snapshot(&path, now + 1_000);
+        assert!(s.core_reading_fresh, "a just-stamped reading is fresh");
+        assert_eq!(s.core_seen_age_s, 1);
+        let s = snapshot(&path, now + CORE_READING_FRESH_MS + 2_000);
+        assert!(!s.core_reading_fresh, "an old positive vouches for nothing");
+        assert_eq!(s.core_seen_age_s, (CORE_READING_FRESH_MS + 2_000) / 1000);
+        let empty = tmp.path().join("empty.json");
+        let s = snapshot(&empty, now);
+        assert_eq!(s.core_seen_age_s, -1);
+        assert!(!s.core_reading_fresh);
     }
 
     // --- the guard against a new bare gh spawn ------------------------------

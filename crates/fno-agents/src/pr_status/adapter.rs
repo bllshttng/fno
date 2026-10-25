@@ -148,7 +148,16 @@ impl AdapterRunner {
                 };
             }
             return match run(&argv, cwd, Some(env), timeout) {
-                Ok(out) => out,
+                Ok(out) => {
+                    // A plain read GitHub refused records the refusal the
+                    // same way the broker's own post-run arm does; without
+                    // it a 403 on this path left no trace in the ledger and
+                    // nothing held the next read back.
+                    if out.returncode != 0 {
+                        quota::record_refusal(&out.stderr);
+                    }
+                    out
+                }
                 Err(error) => run_error_result(&error),
             };
         }
