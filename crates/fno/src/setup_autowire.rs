@@ -5,8 +5,8 @@
 //! choose.
 //!
 //! opencode, pi and agy install through fno-agents doors. Codex stays on the
-//! Python converge engine (ship-phase ruling): the front door reaches it through the
-//! wheel's fno-py, adding no Python of its own. Every outcome prints; nothing
+//! Python converge engine (ship-phase ruling): the front door reaches it
+//! through the wheel's fno-py, adding no Python of its own. Every outcome prints; nothing
 //! is silent. Best-effort by design: a harness that fails to wire never fails
 //! the CLI install that already succeeded, so the command always exits 0.
 
@@ -19,9 +19,10 @@ use serde_json::Value;
 
 use crate::process_admission::{std_command, std_spawn};
 
-/// The marketplace / repo the integrations install from. `#stable` pins the add to the `stable` branch (781 files, ~4s); the bare
-/// repo clones `main` (7,949 files, 80s+) and can exceed Claude Desktop's
-/// 120s "Add marketplace" timeout.
+/// The marketplace / repo the integrations install from. `#stable` pins the
+/// add to the `stable` branch (781 files, ~4s); the bare repo clones `main`
+/// (7,949 files, 80s+) and can exceed Claude Desktop's 120s "Add marketplace"
+/// timeout.
 const MARKETPLACE: &str = "bllshttng/fno#stable";
 const REPO_URL: &str = "https://github.com/bllshttng/fno";
 /// The skills-dir fallback drop's directory name under ~/.claude/skills.
