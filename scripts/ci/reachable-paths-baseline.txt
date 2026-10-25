@@ -253,6 +253,7 @@ A	pid_unavailable requires a ttl claim	py=cli/src/fno/claims/core.py|cli/src/fno
 A	plan_path_owner_conflict	py=cli/src/fno/graph/store.py;rs=crates/fno-agents/src/graph_keeper.rs	# CLASSIFY protocol|msg-twin|data
 A	placement:{session}:global	py=cli/src/fno/agents/mux_spawn.py;rs=crates/fno-agents/src/pane_spawn/mod.rs	# CLASSIFY data the placement lease key format both legs write to the same claims store
 A	plist unchanged; not re-registered ({caller})	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/pr_watch/refresh.rs	# CLASSIFY protocol|msg-twin|data
+A	post_merge.parking_lot_path	py=cli/src/fno/config/registry.py;rs=crates/fno/src/setup_cmds.rs	# CLASSIFY protocol|msg-twin|data the registry owns the key; the native setup scaffold writes it through fno config set
 A	post_merge_noninteractive	py=cli/src/fno/hermetic.py;rs=crates/fno-agents/src/post_merge/ritual.rs	# CLASSIFY protocol|msg-twin|data one env-var name read by both the forwarder and the native arm
 A	provider unknown, non-anthropic, or keyless	py=cli/src/fno/agents/cli.py;rs=crates/fno-agents/src/spawn_route.rs	# CLASSIFY protocol|msg-twin|data the --route refusal reason: the Python leg serves pane and account-composed routes until row 2b ports them
 A	route requires auth=api_key	py=cli/src/fno/adapters/providers/model.py;rs=crates/fno-agents/src/accounts/records.rs	# CLASSIFY msg-twin: the account records port keeps the Python loader's refusal text and reserved keys until the adapters package is deleted
