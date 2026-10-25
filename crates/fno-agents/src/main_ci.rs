@@ -175,7 +175,7 @@ fn main_ci_token_from_pages<'a>(
                     > created
         })
     };
-    let stale: Vec<Value> = older
+    let mut stale: Vec<Value> = older
         .iter()
         .filter_map(|(_, _, completed)| *completed)
         .filter(|run| crate::pr_push::rest_bucket(run) == "fail")
