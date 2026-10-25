@@ -1018,10 +1018,13 @@ fn run_ask(args: &[String]) -> i32 {
             eprintln!("error: provide the question once - inline or as a file, not both");
             return 1;
         }
-        (None, None) => {
+        // Template mode needs no text: nothing is recorded, the intake
+        // ignores the field.
+        (None, None) if !template => {
             eprintln!("error: provide the question - positionally or --question-file");
             return 2;
         }
+        (None, None) => String::new(),
         (Some(q), None) => q.clone(),
         (None, Some(file)) => {
             if file == "-" {
