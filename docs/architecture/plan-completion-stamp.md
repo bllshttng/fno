@@ -92,9 +92,9 @@ A plan that fixes a lasting symptom declares `recheck_probes:` in frontmatter. T
 - runs the list through `fno-agents probe-run --key recheck_probes`, the same runner as the two gates above
 - counts only a FAIL verdict. BLOCKED, SKIP and an unreadable plan read `undeterminable` and file nothing
 - runs a failing list a second time. A pass on the retry reads `flaky` and files nothing
-- files one bug node for a second fail, `regression: <title>`, with `caused_by` naming the original
+- files one bug node for a second fail, `regression: <title>`, with `source_node_id` naming the original
 - files it under the original's nearest epic, if one exists
-- files nothing while an open node already carries `caused_by` for that original
+- files nothing while an open regression names that original, or an open node carries `caused_by` for it
 
 The idea cap (`backlog.max_open_ideas`) still applies. The cap counts per epic, so the nearest epic gives the filing that epic's room. When the cap refuses, the result row keeps the regression with a `file_error`, and the tick detail counts it as `unfiled`. The recheck does not reopen the original. `fno backlog reopen` refuses a node whose PR merged, and its refusal says to file the remaining work as a new node.
 

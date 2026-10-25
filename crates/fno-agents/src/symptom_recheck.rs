@@ -4,7 +4,7 @@
 //! inventory at merge, not that it still holds. A plan that names a lasting
 //! symptom declares `recheck_probes:`, and this walk re-runs that list for
 //! every done node on the daemon's cadence. A list that fails twice in one
-//! pass files a bug node with `caused_by` naming the original.
+//! pass files a bug node whose `source_node_id` names the original.
 //!
 //! Not `close_probes`: a close probe is free to read a window (`--since 24h`)
 //! or a surface that later retires. Measured 2026-10-25, 13 of 21 done nodes'
@@ -56,12 +56,13 @@ fn nearest_epic(row: &Value, rows: &[Value]) -> Option<String> {
     None
 }
 
-/// Done rows whose plan file exists and declares the key.
-pub fn candidates(rows: &[Value]) -> Vec<Candidate> {
-    let marker = format!("\n{RECHECK_KEY}:");
+/// The rows that carry a plan. The caller passes only done rows. The plan
+/// file is never read here: the probe runner answers `declared: false` for a
+/// plan with no `recheck_probes`, and the walk skips it.
+pub fn candidates(rows: &[&Value], all: &[Value]) -> Vec<Candidate> {
     rows.iter()
-        .filter(|r| text(r, "status") == "done")
-        .filter_map(|r| {
+        .filter(|r| !text(r, "plan_path").is_empty())
+        .map(|r| {
             // A repo-relative plan_path reads against the node's cwd, as
             // decide_probe_run does, never the daemon's.
             let raw = std::path::Path::new(text(r, "plan_path").split('#').next().unwrap_or(""));
@@ -71,19 +72,18 @@ pub fn candidates(rows: &[Value]) -> Vec<Candidate> {
             } else {
                 raw.to_path_buf()
             };
-            let body = std::fs::read_to_string(&plan).ok()?;
-            body.contains(&marker).then(|| Candidate {
+            Candidate {
                 id: text(r, "id").to_string(),
                 title: text(r, "title").to_string(),
                 plan: plan.to_string_lossy().into_owned(),
                 cwd: text(r, "cwd").to_string(),
-                epic: nearest_epic(r, rows),
-            })
+                epic: nearest_epic(r, all),
+            }
         })
         .collect()
 }
 
-fn one_run(c: &Candidate, run: Runner) -> (i32, bool, String) {
+fn one_run(c: &Candidate, run: Runner) -> (i32, bool, String, bool) {
     let mut args: Vec<String> = ["--plan", &c.plan, "--key", RECHECK_KEY, "--json"]
         .map(String::from)
         .into();
@@ -96,78 +96,61 @@ fn one_run(c: &Candidate, run: Runner) -> (i32, bool, String) {
         .as_array()
         .is_some_and(|r| r.iter().any(|row| row["verdict"] == "FAIL"));
     let reason = body["reason"].as_str().unwrap_or("no reason").to_string();
-    (code, code == 1 && fail, reason)
+    (code, code == 1 && fail, reason, body["declared"] == false)
 }
 
-/// `pass`, `flaky` (failed, then passed on the retry), `regressed` or
-/// `undeterminable`, with the runner's reason.
+/// `absent` (the plan declares no recheck_probes), `pass`, `flaky` (failed,
+/// then passed on the retry), `regressed` or `undeterminable`, with the
+/// runner's reason.
 pub fn judge(c: &Candidate, run: Runner) -> (&'static str, String) {
     match one_run(c, run) {
-        (0, _, _) => return ("pass", String::new()),
-        (_, false, why) => return ("undeterminable", why),
+        (_, _, _, true) => return ("absent", String::new()),
+        (0, _, _, _) => return ("pass", String::new()),
+        (_, false, why, _) => return ("undeterminable", why),
         _ => {}
     }
     match one_run(c, run) {
-        (0, _, why) => ("flaky", why),
-        (_, true, why) => ("regressed", why),
-        (_, false, why) => ("undeterminable", why),
+        (0, _, why, _) => ("flaky", why),
+        (_, true, why, _) => ("regressed", why),
+        (_, false, why, _) => ("undeterminable", why),
     }
 }
 
-fn fno(args: &[&str]) -> Result<std::process::Output, String> {
-    std::process::Command::new(crate::scrape::fno_bin())
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("fno {}: {e}", args[..2].join(" ")))
-}
-
-/// The filing door. An unattended `idea` needs `--separate`, or a fold
-/// candidate answers `choice_required` and mints nothing.
+/// The filing door, in process: the same parse and birth path `fno backlog
+/// idea` runs, so the title gate and the idea cap still hold. Calling
+/// `create_node` directly skips the fold offer, as `--separate` does. The
+/// node's `source_node_id` names the original at birth, and that link is
+/// what the dedupe reads.
 pub fn file_regression(c: &Candidate, reason: &str) -> Result<String, String> {
     let title = format!("regression: {}", c.title);
     let details = format!(
         "The recheck_probes of done node {} failed twice in one pass.\n\nplan: {}\nprobe: {reason}",
         c.id, c.plan
     );
-    let fixed = "--separate --difficulty medium --type bug --source-kind from_observation --json";
-    let mut args = vec![
-        "backlog",
-        "idea",
-        &title,
-        "--related",
-        &c.id,
-        "--source-node",
-        &c.id,
-    ];
-    args.extend(["--origin-evidence", &c.plan, "--details", &details]);
-    args.extend(fixed.split(' '));
+    let mut args: Vec<String> = [&title, "--related", &c.id, "--source-node", &c.id]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    args.extend(["--origin-evidence", &c.plan, "--details", &details].map(String::from));
+    let fixed = "--difficulty medium --type bug --source-kind from_observation";
+    args.extend(fixed.split(' ').map(String::from));
     if !c.cwd.is_empty() {
-        args.extend(["--cwd", &c.cwd]);
+        args.extend(["--cwd".to_string(), c.cwd.clone()]);
     }
     if let Some(epic) = &c.epic {
-        args.extend(["--parent", epic]);
+        args.extend(["--parent".to_string(), epic.clone()]);
     }
-    let out = fno(&args)?;
-    let body: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
-    let Some(id) = body["id"].as_str() else {
-        return Err(format!(
-            "fno backlog idea minted nothing (exit {}): {}",
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+    use crate::backlog::create_cli::{create_node, parse_idea, ParsedIdea};
+    let ParsedIdea::Args(idea) = parse_idea(&args) else {
+        return Err("the regression filing did not parse".to_string());
     };
-    if !fno(&["backlog", "update", id, &format!("caused_by={}", c.id)])?
-        .status
-        .success()
-    {
-        return Err(format!("filed {id} but caused_by did not land"));
-    }
-    Ok(id.to_string())
+    create_node(&idea.add, &|_| None)
+        .map(|born| born.id)
+        .map_err(|r| format!("no node was filed: {}", r.message))
 }
 
 /// One pass. Probes and filing are parameters so tests need no shell and no
-/// live graph. An open node whose `caused_by` names the original stops a
+/// live graph. An open regression or `caused_by` link to the original stops a
 /// second filing. A refused filing (the idea cap, most often) stays on the
 /// row as `file_error` and counts as `unfiled`.
 /// The first candidate of pass `window`. Over the cap, each pass starts 40
@@ -191,8 +174,8 @@ pub fn walk(
         .iter()
         .filter(|r| !matches!(text(r, "status"), "done" | "superseded"))
         .filter_map(|r| {
-            // source_node_id lands at birth, caused_by one call later: a
-            // filing whose second call failed must still stop a refile.
+            // A recheck filing names its original in source_node_id; a node a
+            // person linked by caused_by tracks it just as well.
             let orig = match text(r, "caused_by") {
                 "" if text(r, "title").starts_with("regression: ") => text(r, "source_node_id"),
                 linked => linked,
@@ -200,11 +183,23 @@ pub fn walk(
             (!orig.is_empty()).then(|| (orig, text(r, "id")))
         })
         .collect();
-    let all = candidates(rows);
+    let done: Vec<&Value> = rows
+        .iter()
+        .filter(|r| text(r, "status") == "done")
+        .collect();
+    let all = candidates(&done, rows);
     let mut results = Vec::new();
     let start = batch_start(all.len(), window);
-    for c in all.iter().cycle().skip(start).take(all.len().min(NODE_CAP)) {
+    let mut scanned = 0;
+    for c in all.iter().cycle().skip(start).take(all.len()) {
+        if results.len() == NODE_CAP {
+            break;
+        }
+        scanned += 1;
         let (verdict, reason) = judge(c, run);
+        if verdict == "absent" {
+            continue;
+        }
         let mut row = json!({"node": c.id, "verdict": verdict, "reason": reason});
         if verdict == "regressed" {
             match open.get(c.id.as_str()) {
@@ -229,7 +224,7 @@ pub fn walk(
         "undeterminable": count("verdict", "undeterminable"),
         "filed": has("filed"),
         "unfiled": has("file_error"),
-        "over_cap": all.len().saturating_sub(NODE_CAP),
+        "over_cap": all.len() - scanned,
         "results": results,
     })
 }
@@ -353,7 +348,7 @@ mod tests {
         assert_eq!(body["results"][1]["regression"], "x-new");
         assert_eq!(body["filed"], 0);
 
-        // A filing whose caused_by write failed still stops a refile.
+        // A recheck filing links by source_node_id alone.
         rows.pop();
         rows.push(json!({"id": "x-half", "title": "regression: x-f", "status": "idea", "source_node_id": "x-f"}));
         let body = walk(&rows, 0, true, &decide_probe_run, &mut never);
