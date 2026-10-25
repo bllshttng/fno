@@ -16,7 +16,7 @@
 
 use serde_json::{json, Map, Value};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1348,6 +1348,7 @@ fn command_call(command: &str, payload: &Value, timeout: Duration) -> Result<Val
     let wire = payload.to_string();
     let mut child = Command::new(&bin)
         .arg(command)
+        .env(crate::authorized_merge::step_timer::TRACE_ENV, "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1362,18 +1363,42 @@ fn command_call(command: &str, payload: &Value, timeout: Duration) -> Result<Val
         let mut stdin = child.stdin.take().expect("piped stdin");
         let _ = stdin.write_all(wire.as_bytes());
     }
+    // Drain both pipes while the child runs: a child that fills one pipe's
+    // buffer blocks on the write and spends the whole bound doing nothing.
+    // stderr lands in a shared buffer so a timeout reads what arrived without
+    // waiting on a grandchild that still holds the pipe.
+    let stdout_reader = {
+        let pipe = child.stdout.take();
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_string(&mut text);
+            }
+            text
+        })
+    };
+    let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let stderr_reader = {
+        let pipe = child.stderr.take();
+        let buf = std::sync::Arc::clone(&stderr_buf);
+        std::thread::spawn(move || {
+            let Some(pipe) = pipe else { return };
+            for line in std::io::BufReader::new(pipe).lines().map_while(Result::ok) {
+                if let Ok(mut text) = buf.lock() {
+                    text.push_str(&line);
+                    text.push('\n');
+                }
+            }
+        })
+    };
+    let stderr_so_far = || stderr_buf.lock().map(|t| t.clone()).unwrap_or_default();
     let start = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let mut stdout = String::new();
-                let mut stderr = String::new();
-                if let Some(mut pipe) = child.stdout.take() {
-                    let _ = pipe.read_to_string(&mut stdout);
-                }
-                if let Some(mut pipe) = child.stderr.take() {
-                    let _ = pipe.read_to_string(&mut stderr);
-                }
+                let stdout = stdout_reader.join().unwrap_or_default();
+                let _ = stderr_reader.join();
+                let stderr = trace_free(&stderr_so_far());
                 let rc = status.code().unwrap_or(-1);
                 if rc != 0 {
                     return Err(CommandErr {
@@ -1393,9 +1418,12 @@ fn command_call(command: &str, payload: &Value, timeout: Duration) -> Result<Val
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let at = crate::authorized_merge::step_timer::unfinished(&stderr_so_far())
+                        .map(|step| format!(" inside step {step}"))
+                        .unwrap_or_default();
                     return Err(CommandErr {
                         message: format!(
-                            "fno-agents {command} failed: timed out after {}s",
+                            "fno-agents {command} failed: timed out after {}s{at}",
                             timeout.as_secs()
                         ),
                         returncode: None,
@@ -1411,6 +1439,16 @@ fn command_call(command: &str, payload: &Value, timeout: Duration) -> Result<Val
             }
         }
     }
+}
+
+/// The child's stderr without the step-trace lines, so a failure detail
+/// capped at 200 chars still carries the child's own message.
+fn trace_free(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|line| !line.starts_with("authorized-merge: step "))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `shutil.which("gh")`: a PATH scan for an executable file named `gh`.
