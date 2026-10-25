@@ -97,6 +97,16 @@ fn run_leg(
         }
     };
     cmd.current_dir(cwd.unwrap_or(&repo_root()));
+    // A temp cwd's git walk stops at its parent, so "not a git repository"
+    // reads the same whether or not the runner mounts /tmp separately.
+    if let Some(parent) = cwd.and_then(|c| {
+        std::fs::canonicalize(c)
+            .ok()?
+            .parent()
+            .map(Path::to_path_buf)
+    }) {
+        cmd.env("GIT_CEILING_DIRECTORIES", parent);
+    }
     // The pin is the test hook both legs would otherwise inherit from the
     // ambient shell; a test run must resolve the repo the way the caller's
     // cwd says.
