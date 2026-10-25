@@ -11,7 +11,7 @@ pub mod door;
 pub mod model;
 pub mod revalidate;
 
-/// The argv entry: `fno-agents resume-receipt <verb> [options]`.
+/// The argv entry: `fno-agents resume-receipt <command> [options]`.
 pub fn run(args: &[String]) -> i32 {
     door::run(args)
 }
