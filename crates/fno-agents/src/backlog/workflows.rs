@@ -2987,10 +2987,12 @@ mod tests {
             "the recorded outcome travels with the history row"
         );
 
-        // A second reopen of the same node must not duplicate the row.
+        // A second reopen of the same node must not duplicate the row: the
+        // primary is set again (a new ship stamped it) and the history row
+        // already carries that number.
         row.as_object_mut()
             .unwrap()
-            .insert("pr_number".into(), Value::Null);
+            .insert("pr_number".into(), json!(3728));
         row.as_object_mut()
             .unwrap()
             .insert("additional_prs".into(), json!([extras[0].clone()]));
