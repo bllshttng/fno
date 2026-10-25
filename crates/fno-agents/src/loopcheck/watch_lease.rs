@@ -189,9 +189,9 @@ pub(super) fn claim_pair(manifest: &str) -> Option<(String, String)> {
 /// will help, arms one on every stop, and never idles once.
 pub(super) const NO_CLAIM_REFUSAL: &str =
     "watching ignored: this session recorded no node claim at init, so no watch lease can \
-ever renew, and arming another watcher will not change that. Get the claim back with \
-`fno do target start <node>` from inside this worktree, then resume; or hand the PR to \
-a session that holds the claim.";
+ever renew, and arming another watcher will not change that. The manifest is write-once, \
+so rerunning `fno do target start` cannot restore the claim. Hand the PR to a session \
+that holds the claim.";
 
 /// The lead of the arm-and-tag hint. One literal, shared by the writer (the
 /// Step-5 continue message) and the idle-refusal tests, so the cut can never

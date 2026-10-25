@@ -1,0 +1,176 @@
+[
+  {
+    "label": "init gives a fresh checkout its own state root",
+    "argv": [
+      "init",
+      "web"
+    ],
+    "file_golden": ".fno/config.toml"
+  },
+  {
+    "label": "init twice with the same id rewrites cleanly",
+    "argv": [
+      "init",
+      "web"
+    ],
+    "reuse": true
+  },
+  {
+    "label": "init lowercases the id before anything derives from it",
+    "argv": [
+      "init",
+      "WEB"
+    ]
+  },
+  {
+    "label": "init keeps an explicit trailing dash",
+    "argv": [
+      "init",
+      "web-"
+    ]
+  },
+  {
+    "label": "init refuses to move a pinned state dir",
+    "root_files": {
+      ".fno/config.toml": "# my own state root\nstate_dir = \"~/.fno/elsewhere\"\n"
+    },
+    "argv": [
+      "init",
+      "other"
+    ],
+    "file_golden": ".fno/config.toml"
+  },
+  {
+    "label": "init refuses an id that fails the prefix shape",
+    "argv": [
+      "init",
+      "has space"
+    ]
+  },
+  {
+    "label": "init refuses a reserved prefix",
+    "argv": [
+      "init",
+      "cv"
+    ]
+  },
+  {
+    "label": "init accepts a seven alnum id",
+    "argv": [
+      "init",
+      "abcdefg"
+    ],
+    "file_golden": ".fno/config.toml"
+  },
+  {
+    "label": "init accepts a trailing dash on a seven alnum id",
+    "argv": [
+      "init",
+      "abcdefg-"
+    ]
+  },
+  {
+    "label": "init refusal echoes the normalized spelling",
+    "argv": [
+      "init",
+      "WEB X"
+    ]
+  },
+  {
+    "label": "init rewrites an existing project config and keeps its keys",
+    "root_files": {
+      ".fno/config.toml": "# perf tweak\nbacklog.staleness_days = 21\n"
+    },
+    "argv": [
+      "init",
+      "web"
+    ]
+  },
+  {
+    "label": "resolve returns the canonical name for itself",
+    "home_files": {
+      ".fno/config.toml": "work = { workspaces = { ws1 = { projects = [ {name = \"example-pipeline\", short_name = \"etl\"}, {name = \"acme-web\", short_name = \"web\"} ] } } }\n"
+    },
+    "argv": [
+      "resolve",
+      "example-pipeline"
+    ]
+  },
+  {
+    "label": "resolve maps a short name to its canonical",
+    "home_files": {
+      ".fno/config.toml": "work = { workspaces = { ws1 = { projects = [ {name = \"example-pipeline\", short_name = \"etl\"}, {name = \"acme-web\", short_name = \"web\"} ] } } }\n"
+    },
+    "argv": [
+      "resolve",
+      "etl"
+    ]
+  },
+  {
+    "label": "resolve reads a config wrapped toml shape",
+    "home_files": {
+      ".fno/config.toml": "config = { work = { workspaces = { ws1 = { projects = [ {name = \"alpha\", short_name = \"a\"} ] } } } }\n"
+    },
+    "argv": [
+      "resolve",
+      "a"
+    ]
+  },
+  {
+    "label": "resolve reads the legacy config wrapped shape",
+    "home_files": {
+      ".fno/settings.yaml": "config:\n  work:\n    workspaces:\n      main:\n        projects:\n          - name: example-pipeline\n            short_name: etl\n"
+    },
+    "argv": [
+      "resolve",
+      "etl"
+    ]
+  },
+  {
+    "label": "resolve reads a flat legacy settings file",
+    "home_files": {
+      ".fno/settings.yaml": "work:\n  workspaces:\n    ws1:\n      projects:\n        - name: example-pipeline\n          short_name: etl\n"
+    },
+    "argv": [
+      "resolve",
+      "etl"
+    ]
+  },
+  {
+    "label": "resolve names the known canonicals on an unknown name",
+    "home_files": {
+      ".fno/config.toml": "work = { workspaces = { ws1 = { projects = [ {name = \"example-pipeline\", short_name = \"etl\"}, {name = \"acme-web\", short_name = \"web\"} ] } } }\n"
+    },
+    "argv": [
+      "resolve",
+      "nope"
+    ]
+  },
+  {
+    "label": "resolve refuses a duplicate short name at load",
+    "home_files": {
+      ".fno/settings.yaml": "work:\n  workspaces:\n    ws1:\n      projects:\n        - name: project-alpha\n          short_name: shared-alias\n    ws2:\n      projects:\n        - name: project-beta\n          short_name: shared-alias\n"
+    },
+    "argv": [
+      "resolve",
+      "anything"
+    ]
+  },
+  {
+    "label": "resolve names the missing config file",
+    "argv": [
+      "resolve",
+      "anything"
+    ]
+  },
+  {
+    "label": "resolve degrades a malformed config to unknown",
+    "home_files": {
+      ".fno/config.toml": "not toml at all [[[\n"
+    },
+    "argv": [
+      "resolve",
+      "anything"
+    ]
+  }
+]

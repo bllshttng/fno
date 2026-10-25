@@ -1152,8 +1152,6 @@ K7	cli/tests/observer/test_fold.py	py	23
 K7	cli/tests/observer/test_judge.py	py	5
 K7	cli/tests/schemas/test_target_state_types.py	py	34
 K7	cli/tests/test_plan_schema_drift.py	py	8
-K7	cli/tests/unit/approvals/test_cli.py	py	15
-K7	cli/tests/unit/approvals/test_store.py	py	56
 K7	cli/tests/unit/company/test_contracts.py	py	9
 K7	cli/tests/unit/delivery/test_delivery_cli.py	py	21
 K7	cli/tests/unit/delivery/test_evaluator.py	py	27
@@ -1618,7 +1616,6 @@ K10	cli/tests/agents/test_pane_journeys.py	py	2
 K10	cli/tests/integration/test_birth_hook_wiring.py	py	2
 K10	cli/tests/integration/test_consolidation_audit.py	py	10
 K10	cli/tests/integration/test_defer.py	py	30
-K10	cli/tests/integration/test_effect_idempotency.py	py	4
 K10	cli/tests/integration/test_first_run_documentation.py	py	5
 K10	cli/tests/integration/test_health_monitor.py	py	37
 K10	cli/tests/integration/test_list_misscoped.py	py	3
