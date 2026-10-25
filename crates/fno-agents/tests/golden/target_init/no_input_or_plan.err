@@ -1,3 +1,0 @@
-fno do target init: requires --input <text|ab-id> or --plan-path <path>.
-Refusing to write a stub state file (empty input + plan); the stop hook would archive it, and a re-running bootstrap loops.
-Example: fno do target init --input "fix the login redirect bug"

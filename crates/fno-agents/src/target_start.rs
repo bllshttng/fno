@@ -6,9 +6,10 @@
 //! included, which the Python command never carried (the driver set
 //! `TARGET_TURN_MODE` inline; ruling d-b7ef7d2d puts the flag here).
 //!
-//! The parity contract is `tests/golden/target_start/`, captured from the
-//! Python leg before its deletion, asserted by `tests/target_start_parity.rs`
-//! through the `target-start` door. Every receipt, refusal and timeout keeps
+//! The parity contract was `tests/golden/target_start/`, captured from the
+//! Python leg, asserted by `tests/target_start_parity.rs` until the
+//! orienter's python twin deleted and the suite went with it. Every receipt,
+//! refusal and timeout keeps
 //! the Python text; the 540s deadline and its per-stage grace keep their
 //! values. The claim-acquiring leg stays the init helper's (one acquire per
 //! session, unchanged); this module only reads claims, plus the one

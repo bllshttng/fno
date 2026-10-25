@@ -162,3 +162,6 @@ fno agents term-ledger|fno agents org chart rundown|the agents fold
 # The setup dead-code deletion: the old wizard stub and the gh-proxy command.
 config setup wizard|fno do wizard|the setup dead-code deletion
 config setup github-cli|nothing: every worker spawn refreshes the gh proxy itself|the setup dead-code deletion
+# The two one-shot migrations: the loader converts settings.yaml and first run writes config.toml.
+config setup migrate-config|nothing: the config loader converts a legacy settings.yaml on first read|the setup migrate retirement
+config setup migrate-paths|fno do wizard|the setup migrate retirement

@@ -1,0 +1,42 @@
+---
+created: 2026-10-03T09:00:00Z
+lead: gavin
+session: s-three
+scope: fno
+---
+
+# Where do goldens come from?
+
+## Answer
+
+The live Python leg, before deletion.
+
+## Specimen
+
+x-c435, 2026-10-24
+
+## Exit
+
+The port lands.
+---
+---
+created: 2026-10-01T09:00:00Z
+lead: gavin
+session: s-one
+scope: fno
+---
+
+# Why does merge hold on a ready PR?
+
+## Answer
+
+The pr-worktree lookup timed out.
+
+## Specimen
+
+PR 3854, 2026-10-24
+
+## Exit
+
+The gh shim stops queueing on the budget lock.
+---

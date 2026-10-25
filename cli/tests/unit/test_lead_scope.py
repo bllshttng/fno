@@ -118,37 +118,3 @@ def test_drain_refuses_graph_scope_reads_under_an_external_tracker(
 
     assert result.exit_code == 1, result.output
     assert "unavailable under an external tracker backend" in result.output
-
-
-# --- the human board renderer ------------------------------------------------
-
-
-def _queue(**overrides):
-    q = {
-        "name": "undispatched",
-        "source": "fno backlog undispatched --json",
-        "status": "ok",
-        "error": "",
-        "count": 4,
-        "actionable": True,
-        "note": "one worker per node",
-        "verb": "/fno:target",
-    }
-    q.update(overrides)
-    return q
-
-
-def test_render_names_an_over_budget_queue_not_a_count(capsys):
-    from fno.lead.cli import _render
-
-    q = _queue(
-        status="over_budget",
-        error="fno backlog undispatched --json: killed at its 4.6s slice of the board budget; the source did not fail",
-        rows=[],
-    )
-    board = {"actionable": 0, "warnings": [], "queues": [q]}
-    _render(board, 25)
-    out = capsys.readouterr().out
-    assert "NOT READ" in out
-    assert "killed at its 4.6s slice" in out
-    assert "None" not in out

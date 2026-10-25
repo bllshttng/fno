@@ -21,9 +21,10 @@ docs/harnesses/capability-matrix.md	crates/fno-agents/src/harness_capabilities.t
 docs/harnesses/command-matrix.md	crates/fno-agents/src/harness_capabilities.toml and skills/*/SKILL.md frontmatter	cd cli && uv run fno-py doctor harness-matrix --write
 skills/agent/references/launch-*.md	docs/harnesses/launch/launch-*.md and docs/harnesses/help/*.txt	cd cli && uv run fno-py doctor harness-matrix --write
 .codex/agents/*.toml	agents/*.md	python3 scripts/sync-codex-agents.py
-docs/configuration-guide.md	SettingsModel and cli/src/fno/config/registry.py	cd cli && uv run fno-py config schema --markdown --write
-docs/config.example.toml	SettingsModel and cli/src/fno/config/registry.py	cd cli && uv run fno-py config schema --toml --write
-crates/fno/config.example.toml	SettingsModel and cli/src/fno/config/registry.py	cd cli && uv run fno-py config schema --toml --write
+crates/fno/config_schema.json	SettingsModel and cli/src/fno/config/registry.py	cd cli && uv run python -m fno.config.schema_gen --write
+docs/configuration-guide.md	crates/fno/config_schema.json	fno config schema --markdown --write
+docs/config.example.toml	crates/fno/config_schema.json	fno config schema --toml --write
+crates/fno/config.example.toml	crates/fno/config_schema.json	fno config schema --toml --write
 *Cargo.lock	the sibling Cargo.toml	cargo build in that crate
 docs/loops.md	crates/fno-agents/src/tick_ledger.rs KNOWN_ARMS	cargo run --manifest-path crates/fno-agents/Cargo.toml -- loops table --markdown > docs/loops.md
 crates/fno/src/otel_read.rs	crates/fno-agents/src/otel_read.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
@@ -32,3 +33,4 @@ docs/reference/otel-schema.md	crates/fno-agents/src/otel_schema.sql	python3 scri
 crates/fno/src/role_migration.rs	crates/fno-agents/src/role_migration.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 docs/architecture/help-routing.md	crates/fno-agents/src/help_router.rs	cargo test -p fno-agents help_router -- --ignored bless_help_routing
 crates/fno/src/model_reach.toml	crates/fno-agents/src/model_reach.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/tests/golden/config_schema/*.stdout	crates/fno/config_schema.json	fno config schema --<mode> > crates/fno/tests/golden/config_schema/<mode>.stdout (crates/fno/tests/config_schema_parity.rs names each mode)
