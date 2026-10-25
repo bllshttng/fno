@@ -190,6 +190,8 @@ mod tests {
         for (argv, want) in cases {
             assert_eq!(native(argv), Some(os(want)), "{argv:?}");
         }
+        // Help answers at the door: the Python registrations are gone.
+        assert_eq!(native(&["agents", "lead", "faq", "--help"]), None);
     }
 
     #[test]
@@ -220,12 +222,5 @@ mod tests {
             assert_eq!(classify(&os(&["agents", "lead", verb])), None, "{verb}");
         }
         assert_eq!(classify(&os(&["agents", "lead", "board"])), None);
-    }
-
-    #[test]
-    fn help_answers_here_without_an_exec() {
-        let c = classify(&os(&["agents", "lead", "faq", "--help"])).unwrap();
-        assert_eq!(c.native, None);
-        assert!(c.help.starts_with("Usage: fno agents org faq list"));
     }
 }

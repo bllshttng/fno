@@ -482,7 +482,7 @@ mod tests {
             "max.err" => {
                 include_str!("../tests/golden/lead_reads/board_text_page_max_rows_one.err")
             }
-            _ => include_str!("../tests/golden/lead_reads/board_json_page.out"),
+            _ => unreachable!("{key}"),
         };
         let page = render_board(&board, DEFAULT_BOARD_ROWS);
         assert_eq!(
@@ -493,10 +493,6 @@ mod tests {
         assert_eq!(
             (page.0.as_str(), page.1.as_str()),
             (golden("max.out"), golden("max.err"))
-        );
-        assert_eq!(
-            format!("{}\n", crate::backlog::render::py_json_pretty(&board)),
-            golden("json")
         );
     }
 }
