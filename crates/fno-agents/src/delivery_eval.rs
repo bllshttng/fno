@@ -656,18 +656,18 @@ fn created_date(created: &str) -> Result<Option<chrono::NaiveDate>, String> {
     let mut parts = created.split('-');
     let year: i32 = match parts.next().and_then(|p| p.parse().ok()) {
         Some(year) => year,
-        None => return refused().map(|_| None),
+        None => return refused().map(|_: String| None),
     };
     let month: u32 = match parts.next().and_then(|p| p.parse().ok()) {
         Some(month) => month,
-        None => return refused().map(|_| None),
+        None => return refused().map(|_: String| None),
     };
     let rest = match parts.next() {
         Some(rest) => rest,
-        None => return refused().map(|_| None),
+        None => return refused().map(|_: String| None),
     };
     let (day_text, tail) = match rest.len() {
-        0 => return refused().map(|_| None),
+        0 => return refused().map(|_: String| None),
         _ => match rest.find(|c: char| !c.is_ascii_digit()) {
             Some(position) => (&rest[..position], &rest[position..]),
             None => (rest, ""),
@@ -675,7 +675,7 @@ fn created_date(created: &str) -> Result<Option<chrono::NaiveDate>, String> {
     };
     let day: u32 = match day_text.parse().ok() {
         Some(day) => day,
-        None => return refused().map(|_| None),
+        None => return refused().map(|_: String| None),
     };
     if !tail.is_empty() && !tail.starts_with('T') && !tail.starts_with(' ') {
         return Ok(None);
@@ -758,9 +758,10 @@ fn parse_company_work(value: &Value) -> Result<CompanyWork, String> {
 }
 
 /// One duplicate check for the cross-reference validators. A plain fn, not a
-/// closure: elision names the returned lifetime across its reference args,
-/// where a closure's inferred type cannot.
-fn check_duplicate(existing: &mut Vec<&str>, id: &str, kind: &str) -> Result<(), String> {
+/// closure: the push ties the id's lifetime to the vec's element lifetime,
+/// which needs a named parameter, and a closure's inferred type cannot name
+/// one.
+fn check_duplicate<'a>(existing: &mut Vec<&'a str>, id: &'a str, kind: &str) -> Result<(), String> {
     if existing.contains(&id) {
         return Err(format!("duplicate {kind} id {id}"));
     }
