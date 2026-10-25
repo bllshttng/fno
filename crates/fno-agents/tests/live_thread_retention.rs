@@ -110,6 +110,7 @@ fn live_thread_identity_survives_store_gc_and_sideline_facts() {
         peer_drives_pr: false,
         pr_settled: false,
         origin_corpse: false,
+        bg_fno_invoked: false,
         registry_terminal: false,
         open_work_retire_s: fno_agents::agents_config::DEFAULT_OPEN_WORK_RETIRE_SECS as i64,
         live_claim: None,
