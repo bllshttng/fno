@@ -555,7 +555,7 @@ mod release_stamp_tests {
             &db,
             serde_json::json!([
                 {"session_id": "sess-r", "phase": "execute", "harness": "claude",
-                 "started_at": "2026-10-25T00:00:00Z", "ended_at": null},
+                 "started_at": "2026-10-25T00:00:00Z"},
             ]),
         );
         stamp_do_on_release("node:rel-fill", &fill_claim(), "target-session:sess-r");
