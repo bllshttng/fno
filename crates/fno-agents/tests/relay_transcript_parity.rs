@@ -91,7 +91,7 @@ fn the_transcript_door_matches_the_captured_leg_and_keeps_its_extra_strength() {
     for (index, case) in cases.iter().enumerate() {
         let case_root = root.path().join(format!("case-{index:02}"));
         std::fs::create_dir_all(&case_root).unwrap();
-        let projects = plant(&case_root, case.files);
+        let projects = plant(&case_root, &case.files);
         let (code, stdout) = run_door(&projects, case.id);
         let key = format!(
             "{}.out",
@@ -116,7 +116,10 @@ fn the_transcript_door_matches_the_captured_leg_and_keeps_its_extra_strength() {
     // resolver is the one native answer.
     let case_root = root.path().join("case-prefix");
     std::fs::create_dir_all(&case_root).unwrap();
-    let projects = plant(&case_root, &[(PROJ_DIR, &format!("{CASE_UUID}.jsonl"))]);
+    let projects = plant(
+        &case_root,
+        &[(PROJ_DIR.to_string(), format!("{CASE_UUID}.jsonl"))],
+    );
     let (code, stdout) = run_door(&projects, "d8996f9b");
     assert_eq!(code, 0);
     let masked = stdout.replace(case_root.to_str().unwrap(), "<CASE>");
