@@ -1293,7 +1293,7 @@ pub fn run_session_cost(args: &[String]) -> i32 {
             "--backfill" => backfill = true,
             "--branches" => branches_mode = true,
             "--by-provider" => by_provider = true,
-            "--json" => as_json = true,
+            "--json" | "-J" => as_json = true,
             "--dry-run" => dry_run = true,
             "--branch" => match rest.next() {
                 Some(v) => branch_filter = Some(v.to_string()),
