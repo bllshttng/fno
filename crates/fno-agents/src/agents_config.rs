@@ -2182,6 +2182,9 @@ mod tests {
 
     fn clear_config_env() {
         std::env::remove_var("FNO_CONFIG");
+        // `fno doctor test rust` runs under fno.hermetic.neutralise, which
+        // drops the canonical candidate the linked-worktree test reads.
+        std::env::remove_var("FNO_NO_CANONICAL_CONFIG");
         // Point the global tier at an empty directory rather than unsetting it:
         // an unset FNO_GLOBAL_SETTINGS_PATH falls back to the REAL
         // $HOME/.fno/config.toml, so every "absent key -> default" assertion
