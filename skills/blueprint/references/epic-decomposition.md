@@ -25,7 +25,7 @@ execution unit; a group bundles 1+ waves. See
 A **non-epic** doc with no `group`/`max_prs:` keeps the single-doc lean mutation
 unchanged - auto-group only changes the default for `scope: epic` inputs.
 
-**Resolve the ceiling `N`.** `config.blueprint.max_prs_per_epic` (default 4) is a hard ceiling on the PRs one plan or epic may open. A project raises it in its own `.fno/config.toml`. Every other cap may only tighten it. Decompose resolves the cap the same way, so blueprint's `N` and the `--max-prs` it forwards never disagree.
+**Resolve the ceiling `N`.** `config.blueprint.max_prs_per_epic` (default 4) is a hard ceiling on the PRs one plan or epic can open. A project raises it in its own `.fno/config.toml`. Every other cap can only tighten it. Decompose resolves the cap the same way, so blueprint's `N` and the `--max-prs` it forwards never disagree.
 
 Let `explicit` = the `group N` arg if present, else the per-plan `max_prs:`
 frontmatter if present, else unset. Let `mc` = the epic doc's `max_children` if
@@ -54,11 +54,7 @@ Read the config floor with:
 ```bash
 N=$(fno config get config.blueprint.max_prs_per_epic 2>/dev/null || echo 4)
 ```
-If `fno config get` is unavailable, default to 4. **Auto-group MUST degrade to
-today's single-doc behavior (not error) if the config read fails** - treat an
-unreadable ceiling as 4, never abort the blueprint. An epic that needs
-`max_children: 6` under a default of 4 needs the project ceiling raised to 6
-first.
+If `fno config get` is unavailable, default to 4. **Auto-group MUST degrade to today's single-doc behavior (not error) if the config read fails** - treat an unreadable ceiling as 4, never abort the blueprint. An epic with `max_children: 6` and a default of 4 must raise the project ceiling to 6 first.
 
 `N` is a **ceiling, not a quota** (Locked Decision #3): cohesive work uses
 fewer groups; never pad to `N`. This guardrail applies identically to
@@ -68,7 +64,7 @@ it in `## Delivery Groups`, never force a split). Reject `group 0` / negative
 `N` with a non-zero exit and the message `group N must be >= 1` (AC1-ERR),
 creating nothing.
 
-**Bundle leaves into one PR.** A group bundles several leaves. Adopt (contain) each leaf under the group child (step 5b), and one worker ships the group. Its PR body closes the owner and each contained leaf on one `Fixes` line, which `fno do pr closure-trailer <group-child>` prints. `fno do pr create` refuses (exit 7) a second PR while another node of the same epic is on an open PR, or on one merged in the last two hours. Add the work to that PR. A deliberate split writes `Separate PR: <reason>` in the body.
+**Bundle leaves into one PR.** A group bundles several leaves. Adopt (contain) each leaf under the group child (step 5b), and one worker ships the group. Its PR body closes the owner and each contained leaf on one `Fixes` line, which `fno do pr closure-trailer <group-child>` prints. `fno do pr create` refuses a second PR with exit 7 while a sibling node is on an open PR. A sibling PR merged in the last two hours also refuses it. Add the work to that PR. A deliberate split writes `Separate PR: <reason>` in the body.
 
 **Procedure** (after the epic node is intaken in step 3b, so `EPIC_ID`
 is known):
