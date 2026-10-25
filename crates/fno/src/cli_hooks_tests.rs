@@ -193,6 +193,7 @@ fn the_flags_parse_and_gemini_merges_once() {
     assert!(o.codex && !o.gemini && !o.claude && o.migrate_legacy_hooks_json);
     assert!(parse_opts(&oss(&["--repair-only"]), true).is_err());
     assert!(parse_opts(&oss(&["--codex-config"]), false).is_err());
+    assert!(parse_opts(&oss(&["--codex=false"]), false).is_err());
     assert_eq!(parse_opts(&oss(&["--help"]), false).unwrap(), None);
 
     let dir = tempfile::tempdir().unwrap();

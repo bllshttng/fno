@@ -802,6 +802,14 @@ pub fn parse_opts(tail: &[OsString], codex_only: bool) -> Result<Option<Opts>, S
             Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
             _ => (arg, None),
         };
+        // `--codex=false` must refuse, not read as `--codex`.
+        let takes_value = matches!(
+            flag,
+            "--codex-config" | "--codex-hooks-json" | "--gemini-settings" | "--claude-settings"
+        );
+        if inline.is_some() && !takes_value {
+            return Err(format!("{flag} takes no value"));
+        }
         let mut value = || -> Result<PathBuf, String> {
             if let Some(v) = inline.clone() {
                 return Ok(PathBuf::from(v));
