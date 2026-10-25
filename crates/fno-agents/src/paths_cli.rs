@@ -382,8 +382,8 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
         // The doc for a scope belongs to the scope's project: the newest
         // registry row carrying this exact role_scope names it (project_root,
         // else its cwd). Resolving from the caller's cwd minted
-        // `internal/<basename>/` strays whenever a crown's shell had cd'd
-        // once, so a scope with no row refuses instead.
+        // `internal/<basename>/` strays whenever a promoted session's shell
+        // had cd'd once, so a scope with no row refuses instead.
         let root = scope_project_root(&scope, home).ok_or_else(|| {
             format!(
                 "no registry row carries role_scope {scope:?}; refusing to key the handoff dir on the cwd basename"
@@ -447,8 +447,9 @@ fn render_handoff(directory: &Path, filename: &str, name_only: bool) -> String {
 /// The scope's project root: the newest registry row carrying this exact
 /// `role_scope`, its `project_root` falling back to its cwd. A scope's
 /// handoff doc belongs to the scope's project, never to wherever the
-/// caller's shell happens to sit, so a crown cd'd elsewhere still resolves
-/// its canon doc instead of minting a stray `internal/<basename>/` tree.
+/// caller's shell happens to sit, so a promoted session cd'd elsewhere
+/// still resolves its canon doc instead of minting a stray
+/// `internal/<basename>/` tree.
 fn scope_project_root(scope: &str, home: Option<&Path>) -> Option<String> {
     let agents_home = match home {
         Some(h) => crate::paths::AgentsHome::ambient_from(h.as_os_str()),
@@ -1128,13 +1129,14 @@ mod tests {
         let (project_cwd, home) = handoff_fixture("scope-project");
         let scope = "fno";
         seed_scope_row(&home, scope, &project_cwd);
-        // The crown's shell cd'd once: the caller sits in a dir outside the
-        // project whose basename would name a junk vault tree.
+        // The promoted session's shell cd'd once: the caller sits in a dir
+        // outside the project whose basename would name a junk vault tree.
         let cwd = project_cwd.parent().unwrap().join("mail-hold");
         std::fs::create_dir_all(&cwd).unwrap();
         let full = handoff_out(&["--scope".into(), scope.into()], &cwd, Some(&home)).unwrap();
+        let project = project_cwd.to_string_lossy().to_string();
         assert!(
-            full.contains(&project_cwd) && !full.contains("mail-hold"),
+            full.contains(project.as_str()) && !full.contains("mail-hold"),
             "the scope doc must resolve under the row's project, got {full}"
         );
         let _ = std::fs::remove_dir_all(project_cwd.parent().unwrap());
