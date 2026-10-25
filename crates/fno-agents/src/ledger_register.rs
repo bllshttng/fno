@@ -1232,10 +1232,9 @@ mod tests {
         assert_eq!(entry["status"], "aborted");
         assert_eq!(entry["reason"], "unspecified");
 
-        // TARGET_ABORT_REASON overrides the manifest.
-        let lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // TARGET_ABORT_REASON overrides the manifest. The EntryEnv guard
+        // above already holds the env lock, and a std Mutex is not
+        // re-entrant: set the var directly instead of taking it again.
         std::env::set_var("TARGET_ABORT_REASON", "operator-cancelled");
         let entry = build_entry(dir.path(), &state, "tid", None, None);
         std::env::remove_var("TARGET_ABORT_REASON");
