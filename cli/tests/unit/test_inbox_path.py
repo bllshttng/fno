@@ -4,9 +4,7 @@ Covers AC5-HP (resolves from settings, template vars expanded) and
 AC5-EDGE (symlinked vault path resolves to the canonical target so
 sibling worktrees share one file).
 
-inbox_path() is the backlog *capture-tier* file resolver. It is distinct
-from inbox_dir() (cross-project messaging) — see Domain Pitfalls in the
-design doc.
+inbox_path() is the backlog *capture-tier* file resolver.
 """
 from __future__ import annotations
 

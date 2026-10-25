@@ -845,7 +845,7 @@ fn cmd_status(_args: &[String]) -> i32 {
     match store_path() {
         StorePath::Primary(remote) => {
             if let Err(e) = mail_bus::ensure_schema(&remote) {
-                eprintln!("fno agents mail status: {e}");
+                eprintln!("fno-agents mail-remote status: {e}");
                 return 1;
             }
             let host = mail_bus::normalize_host(&crate::claims::hostname());
@@ -857,20 +857,20 @@ fn cmd_status(_args: &[String]) -> i32 {
                     0
                 }
                 Err(e) => {
-                    eprintln!("fno agents mail status: {e}");
+                    eprintln!("fno-agents mail-remote status: {e}");
                     1
                 }
             }
         }
         StorePath::None => {
             eprintln!(
-                "fno agents mail status: no shared store configured; sends a \
+                "fno-agents mail-remote status: no shared store configured; sends a \
 cross-host target answered over the ssh fallback leave no bus rows"
             );
             2
         }
         StorePath::Malformed(e) => {
-            eprintln!("fno agents mail status: {e}");
+            eprintln!("fno-agents mail-remote status: {e}");
             2
         }
     }

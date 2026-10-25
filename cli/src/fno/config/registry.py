@@ -55,7 +55,6 @@ FIELD_META: dict[str, Meta] = {
     "paths.cargo_targets_base": Meta("never", "Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries."),
     "paths.memory_dir": Meta("never", "Override path to the memory dir."),
     "paths.hook_logs_dir": Meta("never", "Override path to hook logs."),
-    "paths.inbox_dir": Meta("never", "Override path to the cross-project messaging inbox dir."),
     "paths.inbox_path": Meta("never", "Override path to the capture-tier inbox/parking-lot file."),
     "paths.chats": Meta("never", "Override root dir for the per-chat message store (default ~/.fno/chats)."),
     "paths.handoffs_dir": Meta("never", "Override path to the handoffs dir."),
@@ -67,7 +66,7 @@ FIELD_META: dict[str, Meta] = {
     # --- config.inbox.* ---
     "inbox.unclaimed_ttl": Meta(
         "advanced",
-        "Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (turn-boundary nudge + `fno agents mail status`).",
+        "Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (the turn-boundary nudge).",
         default_source="default",
     ),
     "inbox.landed_abandon_ttl": Meta(
