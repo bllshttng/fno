@@ -1,4 +1,4 @@
-//! Front verbs for the Rust route family. Config mutations keep the validated writer.
+//! Front commands for the Rust route family. Config mutations keep the validated writer.
 
 use serde_json::Value;
 use std::ffi::OsString;
