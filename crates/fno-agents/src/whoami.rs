@@ -1993,10 +1993,14 @@ fn read_bus_rows(bus: &Path) -> Result<Vec<Value>, String> {
     }
     let mut rows: Vec<Value> = Vec::new();
     for seg in segments {
-        let Ok(text) = std::fs::read_to_string(&seg) else {
+        // Streamed line by line: the bus log can grow and the orientation
+        // path reads it on every render.
+        use std::io::BufRead;
+        let Ok(file) = std::fs::File::open(&seg) else {
             continue;
         };
-        for line in text.lines() {
+        for line in std::io::BufReader::new(file).lines() {
+            let Ok(line) = line else { continue };
             let line = line.trim();
             if line.is_empty() {
                 continue;
