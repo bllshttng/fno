@@ -437,8 +437,6 @@ setup cli-hooks	T1	setup cli-hooks	8
 setup cli-hooks-codex	T1	setup cli-hooks-codex	4
 config plugin	T1	config plugin	0
 doctor reclaim	T1	doctor reclaim	0
-skill-diff reconcile	T1	skill-diff reconcile	1
-skill-diff tick	T1	skill-diff tick	4
 state archive	T1	state archive	1
 state init	T1	state init	3
 state set	T1	state set	20

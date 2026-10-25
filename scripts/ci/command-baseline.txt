@@ -125,7 +125,6 @@ roles
 route
 scoreboard
 setup
-skill-diff
 state
 status
 status-fanout tick
