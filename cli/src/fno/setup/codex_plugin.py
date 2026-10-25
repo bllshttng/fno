@@ -30,12 +30,10 @@ DEV_PLUGIN_ID = PLUGIN_ID
 LEGACY_DEV_MARKETPLACE = "footnote-dev"
 LEGACY_DEV_PLUGIN_ID = "fno@footnote-dev"
 LEGACY_PLUGIN_ID = "fno@footnote-local"
-# The marketplace name before the rename to "fno"; install migrates it.
-LEGACY_RELEASE_MARKETPLACE = "footnote"
-LEGACY_RELEASE_PLUGIN_ID = "fno@footnote"
-LEGACY_MARKETPLACES = frozenset({LEGACY_DEV_MARKETPLACE, LEGACY_RELEASE_MARKETPLACE})
+# "footnote" is the marketplace name before the rename to "fno"; install migrates it.
+LEGACY_MARKETPLACES = frozenset({LEGACY_DEV_MARKETPLACE, "footnote"})
 OWNED_MARKETPLACES = frozenset({MARKETPLACE, *LEGACY_MARKETPLACES})
-LEGACY_PLUGIN_IDS = frozenset({LEGACY_DEV_PLUGIN_ID, LEGACY_PLUGIN_ID, LEGACY_RELEASE_PLUGIN_ID})
+LEGACY_PLUGIN_IDS = frozenset({LEGACY_DEV_PLUGIN_ID, LEGACY_PLUGIN_ID, "fno@footnote"})
 OWNED_PLUGIN_IDS = frozenset({PLUGIN_ID, *LEGACY_PLUGIN_IDS})
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -845,26 +843,10 @@ def inspect_freshness(
         or len(owned_marketplaces) > 1
         or any(marketplace.name == LEGACY_DEV_MARKETPLACE for marketplace in owned_marketplaces)
     )
-    legacy_release = (
-        len(installed) <= 1
-        and len(owned_marketplaces) <= 1
-        and all(plugin.plugin_id == LEGACY_RELEASE_PLUGIN_ID for plugin in installed)
-        and all(
-            marketplace.name == LEGACY_RELEASE_MARKETPLACE for marketplace in owned_marketplaces
-        )
-        and bool(installed or owned_marketplaces)
-    )
-    if legacy_release:
-        # An install from before the rename still loads fno. Install moves it.
-        legacy_channel = str(marker.get("channel", "release")) if marker else "release"
-        return {
-            "channel": legacy_channel,
-            "installed_plugin_ids": [p.plugin_id for p in installed],
-            "enabled_plugin_ids": [p.plugin_id for p in enabled],
-            "status": "stale",
-            "issue": "legacy-marketplace",
-            "remedy": _remedy(legacy_channel),
-        }
+    if [p.plugin_id for p in installed] == ["fno@footnote"] and len(owned_marketplaces) <= 1:
+        # An install from before the rename still loads fno; install moves it.
+        channel = str(marker.get("channel", "release")) if marker else "release"
+        return {"status": "stale", "issue": "legacy-marketplace", "remedy": _remedy(channel)}
     if ambiguous:
         conflict_channel = str(marker.get("channel", "unknown")) if marker else "unknown"
         return {
@@ -1064,11 +1046,8 @@ def converge(
             and marker.get("source") == marketplace_source
             and marker.get("ref") == marketplace_ref
         )
-        legacy_cache_present = any(
-            (home / "plugins" / "cache" / name).exists()
-            or (home / "plugins" / "cache" / name).is_symlink()
-            for name in LEGACY_MARKETPLACES
-        )
+        legacy_caches = [home / "plugins" / "cache" / name for name in LEGACY_MARKETPLACES]
+        legacy_cache_present = any(p.exists() or p.is_symlink() for p in legacy_caches)
         no_op = (
             channel_stable
             and marker_matches

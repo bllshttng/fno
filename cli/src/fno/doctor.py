@@ -191,11 +191,7 @@ def _plugin_file_report(active_path: Path) -> dict[str, Any]:
     }
     if stale and _is_claude_plugin_cache(active_path):
         # A cache under the pre-rename "footnote" marketplace updates by its old id.
-        parts = active_path.parts
-        legacy = any(
-            parts[i : i + 4] == (".claude", "plugins", "cache", "footnote")
-            for i in range(len(parts))
-        )
+        legacy = "/.claude/plugins/cache/footnote/" in active_path.as_posix()
         plugin_id = "fno@footnote" if legacy else "fno@fno"
         report["detail"] = (
             f"active Claude plugin bytes are stale; run `claude plugin update "
@@ -1658,8 +1654,7 @@ def _silent_switch_report(
                 finding["cause"] = (
                     f"deployed plugin cache is stale ({sha}, {when}); likely "
                     "predates the auto_merge_source writer. Fix: claude plugin "
-                    "update fno@fno (fno@footnote on an install from before the "
-                    "rename; not fno doctor update), then restart"
+                    "update fno@fno (or fno@footnote; not fno doctor update), then restart"
                 )
         findings.append(finding)
     return {"findings": findings, "posture": _read_posture_stamp()}
