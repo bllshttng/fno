@@ -96,7 +96,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "delivery": (
-        "fno.delivery.cli:delivery_app",
+        "fno.do_cli:delivery_app",
         "Evaluate generic delivery evidence.",
         {"hidden": True},
     ),
