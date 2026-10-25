@@ -64,22 +64,22 @@ fn local_row() -> AgentRow {
 }
 
 #[test]
-fn keys_walk_the_tabs_and_go_up_from_a_pod() {
+fn keys_walk_the_tabs_and_go_up_from_a_lead() {
     let mut view = opened(fleet_json(), Vec::new());
-    view.org_board.as_mut().unwrap().select("pod/m-bb16/fno");
+    view.org_board.as_mut().unwrap().select("lead/m-bb16/mb-00");
     press(&mut view, b"\r");
     let b = view.org_board.as_ref().unwrap();
     assert_eq!(
-        b.key, "seat/m-bb16/fno/mb-00",
-        "enter on a pod opens its first seat"
+        b.key, "seat/m-bb16/mb-00/mb-00",
+        "enter on a lead opens its first seat, the lead's own"
     );
     press(&mut view, b"u");
-    // TABLE, RECENT, OVERVIEW, GRAPH: three steps right reach GRAPH.
+    // Table, Recent, Overview, Graph: three steps right reach Graph.
     press(&mut view, b"lll");
     press(&mut view, b"u");
     let b = view.org_board.as_ref().unwrap();
     assert_eq!(b.tab, OrgTab::Graph);
-    assert_eq!(b.key, "host/m-bb16", "u from a pod selects its machine");
+    assert_eq!(b.key, "host/m-bb16", "u from a lead selects its machine");
     press(&mut view, b"h2");
     assert_eq!(view.org_board.as_ref().unwrap().tab, OrgTab::Recent);
 }
@@ -102,7 +102,7 @@ fn a_remote_seat_names_its_attach_command_and_no_action_key() {
     }
     let mut view = opened(map, vec![local_row()]);
     let b = view.org_board.as_mut().unwrap();
-    b.select("seat/m-imac/unassigned/im-0");
+    b.select("seat/m-imac/mb-00/im-0");
     let footer = b.footer(true, 200, now());
     for key in ["enter", "space", "x stop", "P portal"] {
         assert!(
@@ -121,7 +121,7 @@ fn a_remote_seat_names_its_attach_command_and_no_action_key() {
     }
     let last = page.lines().skip_while(|l| !l.contains("LAST MESSAGE"));
     assert!(last.skip(1).next().unwrap().contains("not published"));
-    b.select("seat/m-bb16/fno/mb-03");
+    b.select("seat/m-bb16/mb-00/mb-03");
     let footer = b.footer(true, 200, now());
     assert!(
         footer.contains("enter attach") && footer.contains("x stop"),
@@ -130,7 +130,7 @@ fn a_remote_seat_names_its_attach_command_and_no_action_key() {
 }
 
 #[test]
-fn graph_boxes_every_seat_under_its_pod_and_health_reads_not_sampled() {
+fn graph_boxes_every_seat_under_its_lead_and_health_reads_not_sampled() {
     let mut view = opened(fleet_json(), Vec::new());
     let b = view.org_board.as_mut().unwrap();
     b.tab = OrgTab::Graph;
@@ -147,13 +147,13 @@ fn graph_boxes_every_seat_under_its_pod_and_health_reads_not_sampled() {
     };
     assert_eq!(
         col("im-5") - 3,
-        col("\u{2261} fno-books@im"),
-        "a box sits under its pod"
+        col("\u{2261} no lead@im"),
+        "a box sits under its lead"
     );
-    assert_eq!(col("im-1") - 3, col("\u{2261} fno@im"));
+    assert_eq!(col("im-1") - 3, col("\u{2261} mb-00@im"));
     b.tab = OrgTab::Health;
     let health = text(&b.frame(None, 200, 200, now()).right);
-    assert!(health.contains("NOT SAMPLED"), "{health}");
+    assert!(health.contains("health not sampled"), "{health}");
     assert_eq!(
         health.matches("healthy").count(),
         health.matches("not a healthy verdict").count(),
@@ -207,7 +207,7 @@ fn a_failed_read_keeps_the_last_good_fleet_and_names_the_failure() {
 #[test]
 fn a_tap_selects_and_a_second_tap_on_a_joined_seat_attaches() {
     let mut view = opened(fleet_json(), vec![local_row()]);
-    view.org_board.as_mut().unwrap().select("pod/m-bb16/fno");
+    view.org_board.as_mut().unwrap().select("lead/m-bb16/mb-00");
     // The board fills the terminal less its status row; the bottom bar
     // takes one more.
     let body_h = view.term.0 as usize - 2;
@@ -217,7 +217,7 @@ fn a_tap_selects_and_a_second_tap_on_a_joined_seat_attaches() {
         .unwrap()
         .frame(None, 200, body_h, now());
     let header = frame.right[1].line.text.clone();
-    let graph_col = header.find("GRAPH").unwrap() + 35;
+    let graph_col = header.find("Graph").unwrap() + 35;
     let seat_row = frame
         .explorer
         .iter()
@@ -243,7 +243,7 @@ fn a_tap_selects_and_a_second_tap_on_a_joined_seat_attaches() {
         mouse(&mut view, tap(seat_row, 5), &mut sock).await.unwrap();
         assert_eq!(
             view.org_board.as_ref().unwrap().key,
-            "seat/m-bb16/fno/mb-03",
+            "seat/m-bb16/mb-00/mb-03",
             "a tap selects"
         );
         assert!(sock.is_empty());

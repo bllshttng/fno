@@ -2,7 +2,7 @@
 //! SYSTEM's machine table. A field with no reading names its basis.
 
 use super::backlog_style::BRole;
-use super::org_seats::{Fleet, Machine, Pod, Seat};
+use super::org_seats::{Fleet, Lead, Machine, Seat};
 use super::org_tabs::{
     ago, blank, dur, epoch, fit, glyph, kv, meta, not_sampled, rule, sampled, status_role, Lb, Line,
 };
@@ -19,7 +19,7 @@ pub(crate) fn attach_command(s: &Seat) -> String {
     format!("fno agents session attach {}", s.short)
 }
 
-pub(crate) fn seat(m: &Machine, p: &Pod, s: &Seat, width: usize, now: u64) -> Vec<Line> {
+pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> Vec<Line> {
     let inner = width.saturating_sub(17);
     let mut out = vec![
         Lb::default()
@@ -44,7 +44,7 @@ pub(crate) fn seat(m: &Machine, p: &Pod, s: &Seat, width: usize, now: u64) -> Ve
     out.push(if s.local.is_some() {
         Lb::default()
             .s(format!("   {}", fit("terminal:", 12)), BRole::Meta)
-            .s("enter attaches here \u{b7} ", BRole::Label)
+            .s("enter attaches here \u{b7} ", BRole::Head)
             .s(attach_command(s), BRole::Body)
             .done()
     } else {
@@ -132,7 +132,8 @@ pub(crate) fn seat(m: &Machine, p: &Pod, s: &Seat, width: usize, now: u64) -> Ve
     out.push(blank());
     out.push(rule("SEAT", width));
     out.push(kv("machine", format!("{} ({})", m.host, m.id), BRole::Body));
-    out.push(kv("pod", p.project.clone(), BRole::Body));
+    out.push(kv("lead", p.name.clone(), BRole::Body));
+    out.push(kv("project", or_np(s.project.as_deref()), BRole::Body));
     out.push(kv("session", or_np(s.session_id.as_deref()), BRole::Body));
     out.push(kv(
         "model",
@@ -158,13 +159,13 @@ pub(crate) fn seat(m: &Machine, p: &Pod, s: &Seat, width: usize, now: u64) -> Ve
     out.push(blank());
     out.push(meta(match (&s.local, m.local) {
         (Some(_), _) => {
-            "   enter attaches \u{b7} space peeks \u{b7} x stops \u{b7} P portals \u{b7} u goes up to the pod"
+            "   enter attaches \u{b7} space peeks \u{b7} x stops \u{b7} P portals \u{b7} u goes up to the lead"
         }
         (None, true) => {
-            "   no pane here carries this session: run the terminal command \u{b7} u goes up to the pod"
+            "   no pane here carries this session: run the terminal command \u{b7} u goes up to the lead"
         }
         (None, false) => {
-            "   this seat runs on another machine: attach there \u{b7} u goes up to the pod"
+            "   this seat runs on another machine: attach there \u{b7} u goes up to the lead"
         }
     }));
     out
@@ -172,11 +173,9 @@ pub(crate) fn seat(m: &Machine, p: &Pod, s: &Seat, width: usize, now: u64) -> Ve
 
 pub(crate) fn feed(fold: Option<&crate::needs_overlay::QuestionsFold>, width: usize) -> Vec<Line> {
     let mut out = vec![
-        Lb::default()
-            .s(" FEED \u{b7} fleet / the user", BRole::Body)
-            .done(),
+        Lb::default().s(" fleet / the user", BRole::Meta).done(),
         blank(),
-        Lb::default().s(" Human requests", BRole::Body).done(),
+        Lb::default().s(" Human requests", BRole::Head).done(),
     ];
     match fold {
         None => out.push(meta("   questions not read yet")),
@@ -196,7 +195,7 @@ pub(crate) fn feed(fold: Option<&crate::needs_overlay::QuestionsFold>, width: us
                 out.push(
                     Lb::default()
                         .s("  \u{25a0} ", BRole::Meta)
-                        .s(format!("[{kind}] "), BRole::Pill)
+                        .s(format!("[{kind}] "), BRole::Meta)
                         .s(
                             fit(title, width.saturating_sub(kind.chars().count() + 8))
                                 .trim_end()
@@ -225,22 +224,20 @@ pub(crate) fn feed(fold: Option<&crate::needs_overlay::QuestionsFold>, width: us
 
 pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {
     let mut out = vec![
-        Lb::default()
-            .s(" SYSTEM \u{b7} machines", BRole::Body)
-            .done(),
+        Lb::default().s(" machines", BRole::Meta).done(),
         blank(),
         Lb::default()
             .s(
                 format!(
                     " {}{}{}{}{}{}CPU",
-                    fit("HOST", 12),
-                    fit("STATE", 9),
-                    fit("BEAT", 8),
-                    fit("WORK", 6),
-                    fit("CAP", 15),
-                    fit("MEM", 13)
+                    fit("Host", 12),
+                    fit("State", 9),
+                    fit("Beat", 8),
+                    fit("Work", 6),
+                    fit("Cap", 15),
+                    fit("Memory", 13)
                 ),
-                BRole::Label,
+                BRole::Head,
             )
             .done(),
     ];
@@ -250,7 +247,7 @@ pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {
                 .s(format!(" {}", fit(&m.host, 12)), BRole::Body)
                 .s(
                     fit(if m.fresh { "online" } else { "stale" }, 9),
-                    if m.fresh { BRole::Body } else { BRole::Pill },
+                    if m.fresh { BRole::Body } else { BRole::Head },
                 )
                 .s(fit(&dur(m.age_s), 8), BRole::Meta)
                 .s(fit(if m.takes_work { "yes" } else { "no" }, 6), BRole::Meta)
@@ -312,9 +309,9 @@ pub(crate) fn keys_help() -> Vec<Line> {
         "",
         "   j/k or arrows    move in the explorer",
         "   h/l or arrows    change tab \u{b7} 1-5 pick a tab",
-        "   u or backspace   go up: seat, pod, machine, fleet",
+        "   u or backspace   go up: seat, lead, machine, fleet",
         "   PageUp/PageDown  scroll the right pane",
-        "   enter            open a pod \u{b7} attach a seat on this machine",
+        "   enter            open a lead \u{b7} attach a seat on this machine",
         "   space x P        peek, stop or portal a seat on this machine",
         "   F full screen \u{b7} V cycle views \u{b7} ? keys \u{b7} esc close",
     ]

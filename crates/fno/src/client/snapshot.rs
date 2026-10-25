@@ -811,7 +811,7 @@ shoot from a host where the lanes command answers"
             };
             let first = b.fleet.as_ref().and_then(|f| {
                 f.machines.iter().find_map(|m| {
-                    m.pods
+                    m.leads
                         .iter()
                         .find_map(|p| p.seats.first().map(|s| super::org_board::seat_key(m, p, s)))
                 })

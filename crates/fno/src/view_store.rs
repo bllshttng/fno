@@ -317,11 +317,11 @@ impl OrgTab {
     ];
     pub fn word(self) -> &'static str {
         match self {
-            Self::Table => "TABLE",
-            Self::Recent => "RECENT",
-            Self::Overview => "OVERVIEW",
-            Self::Graph => "GRAPH",
-            Self::Health => "HEALTH",
+            Self::Table => "Table",
+            Self::Recent => "Recent",
+            Self::Overview => "Overview",
+            Self::Graph => "Graph",
+            Self::Health => "Health",
         }
     }
     /// One step along the tab strip, wrapping at both ends.

@@ -1,11 +1,11 @@
 //! The org view: the fleet command center. The explorer on the left lists
-//! the fleet, its machines, each machine's pods and the open pod's seats;
+//! the fleet, its machines, the leads on each machine and the open lead's seats;
 //! the right pane shows a tab over the selection, or a seat, FEED or SYSTEM
 //! page. Every seat comes from the fleet map, so the other machine's seats
 //! show beside this one's.
 
 use super::backlog_style::{BLine, BRole};
-use super::org_seats::{Fleet, FleetInputs, Machine, Pod, Seat};
+use super::org_seats::{Fleet, FleetInputs, Lead, Machine, Seat};
 use super::org_tabs::{Entry, Lb, Line};
 use super::*;
 use crate::view_store::{OrgTab, SidelineView};
@@ -31,7 +31,7 @@ const MIN_SPLIT: usize = 80;
 pub(crate) enum Item {
     Root,
     Host(usize),
-    Pod(usize, usize),
+    Lead(usize, usize),
     Seat(usize, usize, usize),
     Feed,
     System,
@@ -40,21 +40,21 @@ pub(crate) enum Item {
 pub(crate) fn host_key(m: &Machine) -> String {
     format!("host/{}", m.id)
 }
-pub(crate) fn pod_key(m: &Machine, p: &Pod) -> String {
-    format!("pod/{}/{}", m.id, p.project)
+pub(crate) fn lead_key(m: &Machine, p: &Lead) -> String {
+    format!("lead/{}/{}", m.id, p.name)
 }
-pub(crate) fn seat_key(m: &Machine, p: &Pod, s: &Seat) -> String {
-    format!("seat/{}/{}/{}", m.id, p.project, s.name)
+pub(crate) fn seat_key(m: &Machine, p: &Lead, s: &Seat) -> String {
+    format!("seat/{}/{}/{}", m.id, p.name, s.name)
 }
 
 pub(crate) struct OrgBoard {
     pub(crate) fleet: Option<Fleet>,
     /// The last failed read and when it failed; the last good fleet stays.
     pub(crate) error: Option<(String, u64)>,
-    /// The selected explorer key: `root`, `host/..`, `pod/..`, `seat/..`,
+    /// The selected explorer key: `root`, `host/..`, `lead/..`, `seat/..`,
     /// `feed` or `system`.
     pub(crate) key: String,
-    /// The one pod whose seats the explorer lists.
+    /// The one lead whose seats the explorer lists.
     pub(crate) expanded: String,
     pub(crate) tab: OrgTab,
     /// The right pane's first body line.
@@ -85,7 +85,7 @@ fn title(text: &str, width: usize) -> Line {
     let head = format!("\u{2500} {text} ");
     let rest = width.saturating_sub(head.chars().count());
     Lb::default()
-        .s(head, BRole::Label)
+        .s(head, BRole::Head)
         .s("\u{2500}".repeat(rest), BRole::Meta)
         .done()
 }
@@ -107,7 +107,7 @@ impl OrgBoard {
         }
     }
 
-    /// Where `key` sits in the fleet, whether or not its pod is open.
+    /// Where `key` sits in the fleet, whether or not its lead is open.
     fn locate(&self, key: &str) -> Option<Item> {
         match key {
             "root" => return Some(Item::Root),
@@ -120,9 +120,9 @@ impl OrgBoard {
             if host_key(m) == key {
                 return Some(Item::Host(mi));
             }
-            for (pi, p) in m.pods.iter().enumerate() {
-                if pod_key(m, p) == key {
-                    return Some(Item::Pod(mi, pi));
+            for (pi, p) in m.leads.iter().enumerate() {
+                if lead_key(m, p) == key {
+                    return Some(Item::Lead(mi, pi));
                 }
                 for (si, s) in p.seats.iter().enumerate() {
                     if seat_key(m, p, s) == key {
@@ -145,10 +145,10 @@ impl OrgBoard {
         if let Some(f) = &self.fleet {
             for (mi, m) in f.machines.iter().enumerate() {
                 out.push(entry(host_key(m), Item::Host(mi), 1));
-                for (pi, p) in m.pods.iter().enumerate() {
-                    let key = pod_key(m, p);
+                for (pi, p) in m.leads.iter().enumerate() {
+                    let key = lead_key(m, p);
                     let open = key == self.expanded;
-                    out.push(entry(key, Item::Pod(mi, pi), 2));
+                    out.push(entry(key, Item::Lead(mi, pi), 2));
                     if open {
                         for (si, s) in p.seats.iter().enumerate() {
                             out.push(entry(seat_key(m, p, s), Item::Seat(mi, pi, si), 3));
@@ -162,13 +162,13 @@ impl OrgBoard {
         out
     }
 
-    /// Select `key`. A pod opens; a seat opens its pod.
+    /// Select `key`. A lead opens; a seat opens its lead.
     pub(crate) fn select(&mut self, key: &str) {
         let Some(item) = self.locate(key) else {
             return;
         };
-        if let (Some(f), Item::Pod(m, p) | Item::Seat(m, p, _)) = (&self.fleet, item) {
-            self.expanded = pod_key(&f.machines[m], &f.machines[m].pods[p]);
+        if let (Some(f), Item::Lead(m, p) | Item::Seat(m, p, _)) = (&self.fleet, item) {
+            self.expanded = lead_key(&f.machines[m], &f.machines[m].leads[p]);
         }
         self.key = key.to_string();
         self.scroll = 0;
@@ -184,8 +184,8 @@ impl OrgBoard {
 
     pub(crate) fn up(&mut self) {
         let key = match (self.current(), &self.fleet) {
-            (Item::Seat(m, p, _), Some(f)) => pod_key(&f.machines[m], &f.machines[m].pods[p]),
-            (Item::Pod(m, _), Some(f)) => host_key(&f.machines[m]),
+            (Item::Seat(m, p, _), Some(f)) => lead_key(&f.machines[m], &f.machines[m].leads[p]),
+            (Item::Lead(m, _), Some(f)) => host_key(&f.machines[m]),
             _ => "root".into(),
         };
         self.select(&key);
@@ -197,13 +197,13 @@ impl OrgBoard {
         crate::view_store::save_org_tab(tab);
     }
 
-    pub(crate) fn seat(&self) -> Option<(&Machine, &Pod, &Seat)> {
+    pub(crate) fn seat(&self) -> Option<(&Machine, &Lead, &Seat)> {
         let (Item::Seat(m, p, s), Some(f)) = (self.current(), &self.fleet) else {
             return None;
         };
         let machine = &f.machines[m];
-        let pod = &machine.pods[p];
-        Some((machine, pod, &pod.seats[s]))
+        let lead = &machine.leads[p];
+        Some((machine, lead, &lead.seats[s]))
     }
 
     /// The selected seat's registry row on this mux, when it has one.
@@ -246,10 +246,10 @@ impl OrgBoard {
             ),
             Item::Seat(m, p, s) => {
                 let machine = &f.machines[m];
-                let pod = &machine.pods[p];
+                let lead = &machine.leads[p];
                 (
                     vec![title("SEAT", width)],
-                    super::org_pages::seat(machine, pod, &pod.seats[s], width, now),
+                    super::org_pages::seat(machine, lead, &lead.seats[s], width, now),
                 )
             }
             _ => {
@@ -257,7 +257,7 @@ impl OrgBoard {
                 let rows = t::scope(f, &item);
                 let body = match self.tab {
                     OrgTab::Table => {
-                        t::table(&rows, &self.key, width, now, matches!(item, Item::Pod(..)))
+                        t::table(&rows, &self.key, width, now, matches!(item, Item::Lead(..)))
                     }
                     OrgTab::Recent => t::recent(&rows, width, now),
                     OrgTab::Overview => t::overview(f, &item, &rows, width, now),
@@ -325,29 +325,30 @@ impl OrgBoard {
             Item::System => "system \u{b7} machines".into(),
             Item::Root => "topology \u{b7} fleet".into(),
             Item::Host(m) => format!("topology \u{b7} fleet \u{2192} {}", f.machines[m].host),
-            Item::Pod(m, p) => format!(
+            Item::Lead(m, p) => format!(
                 "topology \u{b7} fleet \u{2192} {} \u{2192} {}",
-                f.machines[m].host, f.machines[m].pods[p].project
+                f.machines[m].host, f.machines[m].leads[p].name
             ),
             Item::Seat(m, p, s) => format!(
                 "topology \u{b7} fleet \u{2192} {} \u{2192} {} \u{2192} {}",
                 f.machines[m].host,
-                f.machines[m].pods[p].project,
-                f.machines[m].pods[p].seats[s].name
+                f.machines[m].leads[p].name,
+                f.machines[m].leads[p].seats[s].name
             ),
         }
     }
 
-    /// The bottom bar: the breadcrumb, then only the keys that act on the
-    /// selection, then the read state.
+    /// The bottom bar as one string: [`Self::footer_parts`] joined.
+    #[cfg(test)]
     pub(crate) fn footer(&self, focused: bool, width: usize, now: u64) -> String {
+        let (keys, state) = self.footer_parts(focused, width, now);
+        format!("{keys}{state}")
+    }
+
+    /// The key bar, then where the cursor is and the read state. The keys
+    /// lead and paint in body text, as every other fno view's key bar does.
+    pub(crate) fn footer_parts(&self, focused: bool, width: usize, now: u64) -> (String, String) {
         let item = self.current();
-        let host = match (item, &self.fleet) {
-            (Item::Host(m) | Item::Pod(m, _) | Item::Seat(m, _, _), Some(f)) => {
-                f.machines[m].host.as_str()
-            }
-            _ => "fleet",
-        };
         let mut keys = vec!["j/k move"];
         if width >= MIN_SPLIT {
             keys.push("h/l tab");
@@ -356,19 +357,18 @@ impl OrgBoard {
             Item::Seat(..) if self.joined().is_some() => {
                 keys.extend(["enter attach", "space peek", "x stop", "P portal"])
             }
-            Item::Root | Item::Host(_) | Item::Pod(..) => keys.push("enter open"),
+            Item::Root | Item::Host(_) | Item::Lead(..) => keys.push("enter open"),
             _ => {}
         }
-        if matches!(item, Item::Host(_) | Item::Pod(..) | Item::Seat(..)) {
+        if matches!(item, Item::Host(_) | Item::Lead(..) | Item::Seat(..)) {
             keys.push("u up");
         }
         keys.extend(["F full", "? keys", "esc close"]);
-        let mut out = format!(
-            "{}[{host}] {} \u{b7} {}",
-            if focused { "" } else { "tap to focus \u{b7} " },
-            self.crumb(),
-            keys.join(" \u{b7} ")
-        );
+        let mut keys = keys.join(" \u{b7} ");
+        if !focused {
+            keys = format!("tap to focus \u{b7} {keys}");
+        }
+        let mut out = format!("  \u{b7}  {}", self.crumb());
         if width < MIN_SPLIT {
             out.push_str(" \u{b7} F full screen for tabs");
         }
@@ -387,7 +387,7 @@ impl OrgBoard {
             (None, None) if self.inflight => out.push_str(" \u{b7} reading fleet"),
             (None, None) => out.push_str(" \u{b7} fleet not read"),
         }
-        out
+        (keys, out)
     }
 
     /// The key a tap at (row, col) of the board's rect selects.
@@ -560,7 +560,14 @@ pub(crate) fn paint(
         body_h,
         width,
         1,
-        &[BLine::meta(b.footer(focused, width, now))],
+        &[{
+            let (keys, state) = b.footer_parts(focused, width, now);
+            Lb::default()
+                .s(keys, BRole::Body)
+                .s(state, BRole::Meta)
+                .done()
+                .line
+        }],
         None,
         &view.theme,
     );

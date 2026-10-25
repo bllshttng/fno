@@ -1,11 +1,11 @@
 //! The command center fold: the fleet map, the backlog rows and this mux's
-//! agent rows become machines, pods (one project on one machine) and seats.
+//! agent rows become machines, the leads on each machine, and seats.
 
 use crate::backlog_model::Inputs;
 use crate::proto::AgentRow;
 use serde_json::Value;
 
-/// The status words on the wire, in the order a pod lists its seats.
+/// The status words on the wire, in the order a lead lists its seats.
 pub(crate) const STATUS_ORDER: [&str; 4] = ["writing", "parked", "quiet", "unknown"];
 
 pub(crate) struct FleetInputs {
@@ -39,6 +39,8 @@ pub(crate) struct Seat {
     pub(crate) last_message_at: Option<String>,
     pub(crate) cwd: Option<String>,
     pub(crate) role: Option<String>,
+    /// The published project, else the node's graph project.
+    pub(crate) project: Option<String>,
     pub(crate) context_pct: Option<i64>,
     pub(crate) status: &'static str,
     pub(crate) status_age_s: Option<i64>,
@@ -49,9 +51,44 @@ pub(crate) struct Seat {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Pod {
-    pub(crate) project: String,
+/// The seats on one machine that report to one lead. `name` is the lead's
+/// seat name, or [`NO_LEAD`].
+pub(crate) struct Lead {
+    pub(crate) name: String,
     pub(crate) seats: Vec<Seat>,
+}
+
+/// The group of seats whose spawner chain reaches no seat with a role.
+pub(crate) const NO_LEAD: &str = "no lead";
+
+/// One fleet session, as the lead walk reads it.
+struct Link {
+    name: String,
+    session_id: Option<String>,
+    parent: Option<String>,
+    role: Option<String>,
+}
+
+/// The lead a session reports to: itself when it holds a role, else the
+/// first seat with a role up its spawner chain. `parent` is the spawner's
+/// session id prefix. The walk stops after 8 steps, so a loop reads as no
+/// lead.
+fn lead_of(s: &Value, links: &[Link]) -> Option<String> {
+    if text(s, "role").is_some() {
+        return text(s, "name");
+    }
+    let mut parent = text(s, "parent");
+    for _ in 0..8 {
+        let p = parent?;
+        let up = links
+            .iter()
+            .find(|l| l.session_id.as_deref().is_some_and(|id| id.starts_with(&p)))?;
+        if up.role.is_some() {
+            return Some(up.name.clone());
+        }
+        parent = up.parent.clone();
+    }
+    None
 }
 
 #[derive(Debug, Clone, Default)]
@@ -66,7 +103,7 @@ pub(crate) struct Machine {
     pub(crate) mem_used: Option<f64>,
     pub(crate) cap: Option<i64>,
     pub(crate) takes_work: bool,
-    pub(crate) pods: Vec<Pod>,
+    pub(crate) leads: Vec<Lead>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -82,7 +119,7 @@ impl Fleet {
     pub(crate) fn seats(&self) -> impl Iterator<Item = &Seat> {
         self.machines
             .iter()
-            .flat_map(|m| &m.pods)
+            .flat_map(|m| &m.leads)
             .flat_map(|p| &p.seats)
     }
 }
@@ -151,9 +188,23 @@ fn work_of(backlog: &Inputs, id: &str) -> Work {
     }
 }
 
-/// The pure fold. A seat's pod is its published project, else its node's
-/// graph project, else `unassigned`.
+/// The pure fold. A seat sits under the lead it reports to, on its own
+/// machine; a lead on another machine still names the group.
 pub(crate) fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_at: u64) -> Fleet {
+    let links: Vec<Link> = map["machines"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|m| m["sessions"].as_array().into_iter().flatten())
+        .filter_map(|s| {
+            Some(Link {
+                name: text(s, "name")?,
+                session_id: text(s, "session_id"),
+                parent: text(s, "parent"),
+                role: text(s, "role"),
+            })
+        })
+        .collect();
     let mut machines: Vec<Machine> = map["machines"]
         .as_array()
         .into_iter()
@@ -161,7 +212,7 @@ pub(crate) fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_
         .map(|m| {
             let host = text(m, "host").unwrap_or_else(|| "unknown host".into());
             let id = text(m, "machine_id").unwrap_or_else(|| host.clone());
-            let mut pods: Vec<Pod> = Vec::new();
+            let mut leads: Vec<Lead> = Vec::new();
             for s in m["sessions"].as_array().into_iter().flatten() {
                 let harness = text(s, "harness");
                 if is_shell(harness.as_deref()) {
@@ -172,13 +223,12 @@ pub(crate) fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_
                 };
                 let node = text(s, "node");
                 let work = node.as_deref().map(|n| work_of(backlog, n));
-                let project = text(s, "project")
-                    .or_else(|| {
-                        node.as_deref()
-                            .and_then(|n| crate::backlog_model::resolve_row(backlog, n))
-                            .and_then(|row| text(row, "project"))
-                    })
-                    .unwrap_or_else(|| "unassigned".into());
+                let project = text(s, "project").or_else(|| {
+                    node.as_deref()
+                        .and_then(|n| crate::backlog_model::resolve_row(backlog, n))
+                        .and_then(|row| text(row, "project"))
+                });
+                let lead = lead_of(s, &links).unwrap_or_else(|| NO_LEAD.into());
                 let session_id = text(s, "session_id");
                 let short = text(s, "session")
                     .or_else(|| session_id.as_ref().map(|id| id.chars().take(8).collect()))
@@ -203,26 +253,24 @@ pub(crate) fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_
                     last_message_at: text(s, "last_message_at"),
                     cwd: text(s, "cwd"),
                     role: text(s, "role"),
+                    project,
                     context_pct: s.get("context_pct").and_then(Value::as_i64),
                     status,
                     status_age_s: s.get("age_s").and_then(Value::as_i64),
                     work,
                     local,
                 };
-                match pods.iter_mut().find(|p| p.project == project) {
-                    Some(pod) => pod.seats.push(seat),
-                    None => pods.push(Pod {
-                        project,
+                match leads.iter_mut().find(|l| l.name == lead) {
+                    Some(group) => group.seats.push(seat),
+                    None => leads.push(Lead {
+                        name: lead,
                         seats: vec![seat],
                     }),
                 }
             }
-            pods.sort_by(|a, b| {
-                (a.project == "unassigned", &a.project)
-                    .cmp(&(b.project == "unassigned", &b.project))
-            });
-            for pod in &mut pods {
-                pod.seats.sort_by_key(|s| {
+            leads.sort_by(|a, b| (a.name == NO_LEAD, &a.name).cmp(&(b.name == NO_LEAD, &b.name)));
+            for lead in &mut leads {
+                lead.seats.sort_by_key(|s| {
                     (
                         s.role.is_none(),
                         STATUS_ORDER.iter().position(|o| *o == s.status),
@@ -241,7 +289,7 @@ pub(crate) fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_
                 mem_used: m["mem_used"].as_f64(),
                 cap: m["cap"].as_i64(),
                 takes_work: m["takes_work"].as_bool().unwrap_or(false),
-                pods,
+                leads,
             }
         })
         .collect();

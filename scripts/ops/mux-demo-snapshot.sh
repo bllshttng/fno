@@ -468,7 +468,10 @@ PY
 
 # The fleet map the org view reads: this machine and a second one. Three
 # local seats carry the pane sessions above, so they join their registry
-# rows. One remote seat comes from an old daemon and publishes no seat facts.
+# rows. Each seat's parent is its spawner's session id prefix: rowan (the mux
+# lead) and wren (the fleet lead) spawned the rest, and reviewer was spawned
+# by archer, so it walks up to wren. One remote seat comes from an old daemon,
+# publishes no seat facts and reaches no lead.
 python3 - "$ROOT/fleet-top.json" "${SIDS[@]}" "${IDS[@]}" <<'PY'
 import json, sys, datetime
 out = sys.argv[1]
@@ -477,10 +480,13 @@ ids = sys.argv[5:]
 now = datetime.datetime.now(datetime.timezone.utc)
 def ts(mins_ago):
     return (now - datetime.timedelta(minutes=mins_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
-def seat(name, harness, model, project, status, mins, sid=None, node=None, role=None, short=None):
+MUX_LEAD = "a0d1e2f3-demo-mux-lead"
+FLEET_LEAD = "b1e2f3a4-demo-fleet-lead"
+def seat(name, harness, model, project, status, mins, sid=None, node=None, role=None, short=None, parent=None):
     return {
         "name": name, "session": short or (sid or name)[:8], "harness": harness, "node": node,
-        "status": status, "age_s": mins * 60, "rss_mb": 410.0, "parent": None,
+        "status": status, "age_s": mins * 60, "rss_mb": 410.0,
+        "parent": parent[:8] if parent else None,
         "session_id": sid, "model": model, "model_basis": "registry",
         "started_at": ts(mins + 95), "last_message_at": ts(mins), "cwd": "~/code/checkout",
         "project": project, "role": role, "context_pct": 38, "parent_at": None,
@@ -494,17 +500,17 @@ def machine(mid, host, local, age, sessions):
         "sessions": sessions,
     }
 local = [
-    seat("rowan", "claude", "opus", "payments", "quiet", 12, role="lead", short="demo-ld1"),
-    seat("scout", "claude", "opus", "payments", "writing", 1, sid=sids[0], node=ids[0]),
-    seat("pager", "pi", "glm-5", "payments", "parked", 150, node=ids[4], short="demo-pg1"),
-    seat("wren", "codex", "gpt-6-sol", "search", "quiet", 30, role="lead", short="demo-ld2"),
-    seat("archer", "codex", "gpt-6-sol", "search", "writing", 2, sid=sids[1], node=ids[1]),
-    seat("reviewer", "opencode", "zen", "search", "parked", 9, sid=sids[2], node=ids[2]),
+    seat("rowan", "claude", "opus", "payments", "quiet", 12, sid=MUX_LEAD, role="lead", short="demo-ld1"),
+    seat("scout", "claude", "opus", "payments", "writing", 1, sid=sids[0], node=ids[0], parent=MUX_LEAD),
+    seat("pager", "pi", "glm-5", "payments", "parked", 150, node=ids[4], short="demo-pg1", parent=MUX_LEAD),
+    seat("wren", "codex", "gpt-6-sol", "search", "quiet", 30, sid=FLEET_LEAD, role="lead", short="demo-ld2"),
+    seat("archer", "codex", "gpt-6-sol", "search", "writing", 2, sid=sids[1], node=ids[1], parent=FLEET_LEAD),
+    seat("reviewer", "opencode", "zen", "search", "parked", 9, sid=sids[2], node=ids[2], parent=sids[1]),
 ]
 remote = [
-    seat("kestrel", "claude", "sonnet", "payments", "writing", 3, sid="4a1b2c3d-remote-0001", node=ids[6]),
-    seat("heron", "codex", "gpt-6-sol", "payments", "quiet", 44, sid="5b2c3d4e-remote-0002", node=ids[8]),
-    seat("ibis", "opencode", "zen", "search", "writing", 5, sid="6c3d4e5f-remote-0003", node=ids[3]),
+    seat("kestrel", "claude", "sonnet", "payments", "writing", 3, sid="4a1b2c3d-remote-0001", node=ids[6], parent=MUX_LEAD),
+    seat("heron", "codex", "gpt-6-sol", "payments", "quiet", 44, sid="5b2c3d4e-remote-0002", node=ids[8], parent=FLEET_LEAD),
+    seat("ibis", "opencode", "zen", "search", "writing", 5, sid="6c3d4e5f-remote-0003", node=ids[3], parent=MUX_LEAD),
     {"name": "plover", "session": "7d4e5f60", "harness": "claude", "node": None,
      "status": "unknown", "age_s": None, "rss_mb": None, "parent": None},
 ]

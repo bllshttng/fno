@@ -3,8 +3,8 @@
 //! a tap routes to what the frame drew.
 
 use super::backlog_style::{BLine, BRole, BSeg};
-use super::org_board::{host_key, pod_key, seat_key, Item};
-use super::org_seats::{Fleet, Machine, Pod, Seat, STATUS_ORDER};
+use super::org_board::{host_key, lead_key, seat_key, Item};
+use super::org_seats::{Fleet, Lead, Machine, Seat, STATUS_ORDER};
 use std::ops::Range;
 
 /// One painted line plus the column ranges a tap on it selects.
@@ -121,13 +121,13 @@ pub(crate) fn glyph(status: &str) -> &'static str {
 pub(crate) fn status_role(status: &str) -> BRole {
     match status {
         "writing" => BRole::Head,
-        "parked" => BRole::Pill,
+        "parked" => BRole::Body,
         _ => BRole::Meta,
     }
 }
 pub(crate) fn name_role(s: &Seat) -> BRole {
     if s.role.is_some() {
-        BRole::Label
+        BRole::Head
     } else {
         BRole::Body
     }
@@ -139,7 +139,7 @@ pub(crate) fn model(s: &Seat) -> String {
         .map(|m| m.trim_start_matches("claude-").to_string())
         .unwrap_or_else(|| "not published".into())
 }
-/// Two letters naming a machine in a pod label: `fno@im`.
+/// Two letters naming a machine in a lead label: `rowan@im`.
 pub(crate) fn host_tag(host: &str) -> String {
     host.chars().take(2).collect::<String>().to_lowercase()
 }
@@ -158,11 +158,11 @@ pub(crate) fn kv(key: &str, value: impl Into<String>, role: BRole) -> Line {
         .s(value, role)
         .done()
 }
-/// One seat in scope, with the machine and pod it sits in.
+/// One seat in scope, with the machine and lead it sits under.
 #[derive(Clone, Copy)]
 pub(crate) struct Row<'a> {
     pub(crate) m: &'a Machine,
-    pub(crate) p: &'a Pod,
+    pub(crate) p: &'a Lead,
     pub(crate) s: &'a Seat,
 }
 
@@ -172,16 +172,16 @@ impl Row<'_> {
     }
 }
 
-/// The seats an explorer selection covers: the fleet, one machine, one pod
-/// or the pod a seat sits in.
+/// The seats an explorer selection covers: the fleet, one machine, one lead
+/// or the lead a seat sits under.
 pub(crate) fn scope<'a>(fleet: &'a Fleet, item: &Item) -> Vec<Row<'a>> {
     let mut rows = Vec::new();
     for (mi, m) in fleet.machines.iter().enumerate() {
-        for (pi, p) in m.pods.iter().enumerate() {
+        for (pi, p) in m.leads.iter().enumerate() {
             let keep = match item {
                 Item::Root | Item::Feed | Item::System => true,
                 Item::Host(h) => *h == mi,
-                Item::Pod(h, q) | Item::Seat(h, q, _) => *h == mi && *q == pi,
+                Item::Lead(h, q) | Item::Seat(h, q, _) => *h == mi && *q == pi,
             };
             if keep {
                 rows.extend(p.seats.iter().map(|s| Row { m, p, s }));
@@ -202,13 +202,13 @@ fn summary(rows: &[Row]) -> String {
     )
 }
 
-/// Pods in scope, in fleet order, each with its rows.
-fn pods<'a>(rows: &[Row<'a>]) -> Vec<Vec<Row<'a>>> {
+/// Leads in scope, in fleet order, each with its rows.
+fn leads<'a>(rows: &[Row<'a>]) -> Vec<Vec<Row<'a>>> {
     let mut out: Vec<Vec<Row>> = Vec::new();
     for r in rows {
         match out
             .iter_mut()
-            .find(|g| g[0].m.id == r.m.id && g[0].p.project == r.p.project)
+            .find(|g| g[0].m.id == r.m.id && g[0].p.name == r.p.name)
         {
             Some(g) => g.push(*r),
             None => out.push(vec![*r]),
@@ -224,8 +224,8 @@ pub(crate) struct Entry {
     pub(crate) depth: usize,
 }
 
-/// The explorer: TOPOLOGY's tree (fleet, machines, pods, the expanded
-/// pod's seats), then FEED and SYSTEM.
+/// The explorer: the topology tree (fleet, machines, leads, the expanded
+/// lead's seats), then feed and system.
 pub(crate) fn explorer(
     fleet: Option<&Fleet>,
     entries: &[Entry],
@@ -235,8 +235,8 @@ pub(crate) fn explorer(
     width: usize,
 ) -> Vec<Line> {
     let mut out = vec![
-        Lb::default().s(" { EXPLORER }", BRole::Label).done(),
-        Lb::default().s(" TOPOLOGY", BRole::Head).done(),
+        Lb::default().s(" EXPLORER", BRole::Head).done(),
+        Lb::default().s(" Topology", BRole::Body).done(),
     ];
     let tree: Vec<&Entry> = entries
         .iter()
@@ -272,34 +272,30 @@ pub(crate) fn explorer(
                 let m = &f.machines[*m];
                 (
                     format!("\u{25a0} {}", m.host),
-                    Some(m.pods.iter().map(|p| p.seats.len()).sum::<usize>()),
+                    Some(m.leads.iter().map(|p| p.seats.len()).sum::<usize>()),
                     BRole::Body,
                     None,
                 )
             }
-            (Item::Pod(m, p), Some(f)) => {
-                let pod = &f.machines[*m].pods[*p];
+            (Item::Lead(m, p), Some(f)) => {
+                let lead = &f.machines[*m].leads[*p];
                 let ex = e.key == expanded;
                 (
-                    format!(
-                        "{} {}",
-                        if ex { "\u{25be}" } else { "\u{203a}" },
-                        pod.project
-                    ),
-                    Some(pod.seats.len()),
+                    format!("{} {}", if ex { "\u{25be}" } else { "\u{203a}" }, lead.name),
+                    Some(lead.seats.len()),
                     if ex { BRole::Body } else { BRole::Meta },
                     None,
                 )
             }
             (Item::Seat(m, p, s), Some(f)) => {
-                let seat = &f.machines[*m].pods[*p].seats[*s];
+                let seat = &f.machines[*m].leads[*p].seats[*s];
                 (seat.name.clone(), None, name_role(seat), Some(seat))
             }
             _ => continue,
         };
         let used = 1 + pre.chars().count() + if seat.is_some() { 2 } else { 0 };
         let mut lb = Lb::default()
-            .s(if on { "\u{25b6}" } else { " " }, BRole::Label)
+            .s(if on { "\u{25b6}" } else { " " }, BRole::Head)
             .s(pre, BRole::Meta);
         if let Some(seat) = seat {
             lb = lb.s(format!("{} ", glyph(seat.status)), status_role(seat.status));
@@ -312,13 +308,13 @@ pub(crate) fn explorer(
     }
     out.push(blank());
     for (key, label, count) in [
-        ("feed", "FEED", feed_count),
-        ("system", "SYSTEM", fleet.map(|f| f.machines.len())),
+        ("feed", "Feed", feed_count),
+        ("system", "System", fleet.map(|f| f.machines.len())),
     ] {
         let on = sel == key;
         out.push(
             Lb::default()
-                .s(if on { "\u{25b6}" } else { " " }, BRole::Label)
+                .s(if on { "\u{25b6}" } else { " " }, BRole::Head)
                 .s(fit(label, width.saturating_sub(5)), BRole::Body)
                 .s(
                     count.map_or_else(|| "  ? ".to_string(), |n| format!("{n:>3} ")),
@@ -337,47 +333,43 @@ pub(crate) fn explorer(
 pub(crate) fn header(fleet: &Fleet, item: &Item, tab: crate::view_store::OrgTab) -> Line {
     let mut lb = Lb::default().s(" ", BRole::Meta);
     for (i, t) in crate::view_store::OrgTab::ALL.into_iter().enumerate() {
-        let label = if t == tab {
-            format!("[ {} ]", t.word())
-        } else {
-            format!("  {}  ", t.word())
-        };
+        let label = format!(" {} ", t.word());
         let role = if t == tab { BRole::Tab } else { BRole::Meta };
         lb = lb.k(label, role, &format!("tab/{i}")).s(" ", BRole::Meta);
     }
     let scope = match item {
         Item::Host(m) => format!("machine {}", fleet.machines[*m].host),
-        Item::Pod(m, p) | Item::Seat(m, p, _) => format!(
-            "pod {} on {}",
-            fleet.machines[*m].pods[*p].project, fleet.machines[*m].host
+        Item::Lead(m, p) | Item::Seat(m, p, _) => format!(
+            "lead {} on {}",
+            fleet.machines[*m].leads[*p].name, fleet.machines[*m].host
         ),
         _ => "fleet \u{b7} every machine".into(),
     };
     lb.s(format!("  {scope}"), BRole::Body).done()
 }
 
-pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_pod: bool) -> Vec<Line> {
-    const W: [usize; 6] = [12, 14, 4, 14, 9, 7];
+pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_lead: bool) -> Vec<Line> {
+    const W: [usize; 6] = [12, 14, 10, 14, 9, 7];
     let fixed: usize = W.iter().sum::<usize>() + 1;
     let now_w = width.saturating_sub(fixed).max(8);
     let mut out = vec![
         Lb::default()
             .s(
                 format!(
-                    " {}{}{}{}{}{}NOW",
-                    fit("POD", W[0]),
-                    fit("SEAT", W[1]),
-                    fit("RT", W[2]),
-                    fit("MODEL", W[3]),
-                    fit("STATE", W[4]),
-                    fit("AGE", W[5])
+                    " {}{}{}{}{}{}Now",
+                    fit("Lead", W[0]),
+                    fit("Seat", W[1]),
+                    fit("Runtime", W[2]),
+                    fit("Model", W[3]),
+                    fit("State", W[4]),
+                    fit("Age", W[5])
                 ),
-                BRole::Label,
+                BRole::Head,
             )
             .done(),
         meta(format!(" {}", "\u{2500}".repeat(width.saturating_sub(2)))),
     ];
-    for (gi, group) in pods(rows).into_iter().enumerate() {
+    for (gi, group) in leads(rows).into_iter().enumerate() {
         if gi > 0 {
             out.push(meta(format!(
                 " {}",
@@ -386,12 +378,12 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_pod: boo
         }
         for (i, r) in group.iter().enumerate() {
             let key = r.key();
-            let pod = if i > 0 {
+            let lead = if i > 0 {
                 String::new()
-            } else if in_pod {
-                r.p.project.clone()
+            } else if in_lead {
+                r.p.name.clone()
             } else {
-                format!("{}@{}", r.p.project, host_tag(&r.m.host))
+                format!("{}@{}", r.p.name, host_tag(&r.m.host))
             };
             let age = epoch(r.s.started_at.as_deref())
                 .map(|t| dur(now as i64 - t))
@@ -400,20 +392,14 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_pod: boo
                 Some(a) => format!("not published \u{b7} last turn {a}"),
                 None => "not published".into(),
             };
-            let rt: String =
-                r.s.harness
-                    .as_deref()
-                    .unwrap_or("?")
-                    .chars()
-                    .take(2)
-                    .collect();
+            let runtime = r.s.harness.as_deref().unwrap_or("not published");
             out.push(
                 Lb::default()
                     .s(" ", BRole::Meta)
-                    .s(format!("{} ", fit(&pod, W[0] - 1)), BRole::Meta)
+                    .s(format!("{} ", fit(&lead, W[0] - 1)), BRole::Meta)
                     .s(format!("{} ", glyph(r.s.status)), status_role(r.s.status))
                     .s(fit(&r.s.name, W[1] - 2), name_role(r.s))
-                    .s(fit(&rt, W[2]), BRole::Meta)
+                    .s(format!("{} ", fit(runtime, W[2] - 1)), BRole::Meta)
                     .s(format!("{} ", fit(&model(r.s), W[3] - 1)), BRole::Meta)
                     .s(fit(r.s.status, W[4]), status_role(r.s.status))
                     .s(format!("{} ", fit(&age, W[5] - 1)), BRole::Body)
@@ -426,7 +412,7 @@ pub(crate) fn table(rows: &[Row], sel: &str, width: usize, now: u64, in_pod: boo
     }
     out.push(blank());
     out.push(meta(format!(
-        " {} \u{b7} Enter on a seat opens it",
+        " {} \u{b7} enter on a seat opens it",
         summary(rows)
     )));
     out
@@ -439,7 +425,7 @@ pub(crate) fn recent(rows: &[Row], width: usize, now: u64) -> Vec<Line> {
         .collect();
     seen.sort_by(|a, b| b.0.cmp(&a.0));
     let mut out = vec![
-        meta(" RECENT \u{b7} last turn per session \u{b7} newest first \u{b7} tap to open"),
+        meta(" last turn per session \u{b7} newest first \u{b7} tap to open"),
         blank(),
     ];
     for (i, (_, r)) in seen.iter().enumerate() {
@@ -463,13 +449,14 @@ pub(crate) fn recent(rows: &[Row], width: usize, now: u64) -> Vec<Line> {
         out.push(
             Lb::default()
                 .s("   ", BRole::Meta)
-                .s(format!("{}@{}", r.s.name, r.p.project), name_role(r.s))
+                .s(r.s.name.clone(), name_role(r.s))
                 .s(" \u{b7} ", BRole::Meta)
                 .s(r.s.status, status_role(r.s.status))
                 .s(
                     format!(
-                        " \u{b7} {} \u{b7} {}",
+                        " \u{b7} {} \u{b7} lead {} \u{b7} {}",
                         r.m.host,
+                        r.p.name,
                         ago(r.s.last_message_at.as_deref(), now).unwrap_or_default()
                     ),
                     BRole::Meta,
@@ -527,7 +514,7 @@ pub(crate) fn overview(
     now: u64,
 ) -> Vec<Line> {
     let title = match item {
-        Item::Pod(..) | Item::Seat(..) => "pod",
+        Item::Lead(..) | Item::Seat(..) => "lead",
         Item::Host(_) => "machine",
         _ => "fleet",
     };
@@ -545,7 +532,7 @@ pub(crate) fn overview(
             )
         })
         .collect();
-    let groups = pods(rows);
+    let groups = leads(rows);
     let mut out = vec![
         rule(title, width),
         kv(
@@ -560,7 +547,7 @@ pub(crate) fn overview(
         kv(
             "shape",
             format!(
-                "{} pod{} \u{b7} {} sessions \u{b7} {} with a role",
+                "{} lead{} \u{b7} {} sessions \u{b7} {} with a role",
                 groups.len(),
                 if groups.len() == 1 { "" } else { "s" },
                 rows.len(),
@@ -571,7 +558,7 @@ pub(crate) fn overview(
         state_counts(rows),
         blank(),
     ];
-    if matches!(item, Item::Pod(..) | Item::Seat(..)) {
+    if matches!(item, Item::Lead(..) | Item::Seat(..)) {
         out.push(rule("seats", width));
         for r in rows {
             let title =
@@ -598,13 +585,13 @@ pub(crate) fn overview(
             );
         }
     } else {
-        out.push(rule("pods", width));
+        out.push(rule("leads", width));
         for g in groups {
             let w = g.iter().filter(|r| r.s.status == "writing").count();
             out.push(
                 Lb::default()
                     .s("   \u{25a0} ", BRole::Meta)
-                    .s(fit(&g[0].p.project, 16), BRole::Body)
+                    .s(fit(&g[0].p.name, 16), BRole::Body)
                     .s(fit(&g[0].m.host, 12), BRole::Meta)
                     .s(fit(&format!("{} sessions", g.len()), 14), BRole::Body)
                     .s(
@@ -615,7 +602,7 @@ pub(crate) fn overview(
                         },
                         if w > 0 { BRole::Head } else { BRole::Meta },
                     )
-                    .whole(&pod_key(g[0].m, g[0].p))
+                    .whole(&lead_key(g[0].m, g[0].p))
                     .done(),
             );
         }
@@ -623,7 +610,7 @@ pub(crate) fn overview(
     out
 }
 
-/// One column per pod (a pod over 6 seats wraps into a `↳` column), boxed
+/// One column per lead (a lead over 6 seats wraps into a `↳` column), boxed
 /// seats with the seat's name and model, the columns banded to the width.
 pub(crate) fn graph(
     fleet: &Fleet,
@@ -637,26 +624,26 @@ pub(crate) fn graph(
     const CAP: usize = 6;
     let ncol = (width.saturating_sub(5) / COLW).max(1);
     let title = match item {
-        Item::Host(m) => format!("MACHINE {}", fleet.machines[*m].host),
-        Item::Pod(m, p) | Item::Seat(m, p, _) => {
-            format!("POD {}", fleet.machines[*m].pods[*p].project)
+        Item::Host(m) => format!("machine {}", fleet.machines[*m].host),
+        Item::Lead(m, p) | Item::Seat(m, p, _) => {
+            format!("lead {}", fleet.machines[*m].leads[*p].name)
         }
-        _ => "FLEET".into(),
+        _ => "fleet".into(),
     };
     let mut out = vec![Lb::default()
-        .s(" \u{25a0} ", BRole::Label)
-        .s(title, BRole::Body)
+        .s(" ", BRole::Meta)
+        .s(title, BRole::Head)
         .s(
-            "  one column per pod (project on a machine) \u{b7} roles on top \u{b7} big pods wrap",
+            "  one column per lead \u{b7} leads on top \u{b7} big groups wrap",
             BRole::Meta,
         )
         .done()];
     // A column is a list of cells; a cell is (text, role, tap key).
     type Cell = Vec<(String, BRole, String)>;
     let mut cols: Vec<Vec<Cell>> = Vec::new();
-    for g in pods(rows) {
-        let pkey = pod_key(g[0].m, g[0].p);
-        let label = format!("{}@{}", g[0].p.project, host_tag(&g[0].m.host));
+    for g in leads(rows) {
+        let pkey = lead_key(g[0].m, g[0].p);
+        let label = format!("{}@{}", g[0].p.name, host_tag(&g[0].m.host));
         for (c, chunk) in g.chunks(CAP).enumerate() {
             let head = if c == 0 {
                 format!("\u{2261} {label}")
@@ -670,11 +657,7 @@ pub(crate) fn graph(
             )]];
             for r in chunk {
                 let key = r.key();
-                let edge = if key == sel {
-                    BRole::Label
-                } else {
-                    BRole::Meta
-                };
+                let edge = if key == sel { BRole::Head } else { BRole::Meta };
                 let bar = "\u{2500}".repeat(BW - 2);
                 col.push(vec![(format!("\u{250c}{bar}\u{2510}"), edge, key.clone())]);
                 col.push(vec![
@@ -725,7 +708,7 @@ pub(crate) fn graph(
         "\u{2500}".repeat(width.saturating_sub(3))
     )));
     out.push(meta(
-        " pod suffix: the machine's first two letters \u{b7} tap a box to open its seat",
+        " @ma: the machine's first two letters \u{b7} tap a box to open its seat",
     ));
     out
 }
@@ -737,8 +720,8 @@ pub(crate) fn sampled(m: &Machine) -> Option<&str> {
 
 pub(crate) fn not_sampled() -> Line {
     Lb::default()
-        .s(" HEALTH ", BRole::Body)
-        .s("NOT SAMPLED", BRole::Pill)
+        .s(" health ", BRole::Body)
+        .s("not sampled", BRole::Head)
         .s(
             " \u{b7} no health check runs on this snapshot; not a healthy verdict",
             BRole::Meta,
@@ -758,8 +741,8 @@ pub(crate) fn health(
         .iter()
         .enumerate()
         .filter(|(i, m)| match item {
-            Item::Host(h) | Item::Pod(h, _) | Item::Seat(h, _, _) => h == i,
-            _ => rows.iter().any(|r| r.m.id == m.id) || m.pods.is_empty(),
+            Item::Host(h) | Item::Lead(h, _) | Item::Seat(h, _, _) => h == i,
+            _ => rows.iter().any(|r| r.m.id == m.id) || m.leads.is_empty(),
         })
         .map(|(_, m)| m)
         .collect();
