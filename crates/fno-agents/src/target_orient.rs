@@ -362,8 +362,11 @@ fn worktree_line(project_root: &Path, node_id: Option<&str>) -> String {
     } else if branch == "HEAD" {
         // --abbrev-ref answers HEAD on a detached checkout; git_out's None
         // (git absent or not a repo) lands here too. "unknown branch" stays
-        // honest about both.
-        format!("on canonical (unknown branch) -- create with: fno do target start {hint}")
+        // honest about both, and the line names the command that resolves it,
+        // the way the python twin's error path did.
+        format!(
+            "on canonical (unknown branch; resolve: git rev-parse --abbrev-ref HEAD) -- create with: fno do target start {hint}"
+        )
     } else {
         format!("on canonical {branch} -- create with: fno do target start {hint}")
     }
