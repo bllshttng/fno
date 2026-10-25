@@ -5,29 +5,36 @@
 //! door: `fno agents mcp send` (and the menu spelling `fno agents mail
 //! admin mcp send`, which the menu already rewrites here) claims and execs
 //! `fno-agents-worker --mcp-exec send` with the tail byte-verbatim. The
-//! deprecated root spelling `fno mcp send` prints its move notice and runs
-//! the same door. One verb, one PR (d-450caaeb).
+//! deprecated root spelling `fno mcp send` claims here too, printing its
+//! move notice and running the same door; nothing routes through the
+//! deleted Python fold. One verb, one PR (d-450caaeb).
 
 use std::ffi::OsString;
 use std::process::Command;
 
-/// Classify the verb: `fno agents mcp send ...` (the deprecated root
-/// `fno mcp send` already printed its move notice in the Python move table
-/// and re-entered as `agents mcp send`). Only `send` claims, one verb per
-/// PR (d-450caaeb); an unknown sub-word forwards to Python, which refuses
-/// it as unknown like any other dead leaf.
-pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
+/// Classify the verb: `fno agents mcp send ...` or the deprecated root
+/// `fno mcp send ...` (the bool is the root spelling; its move notice
+/// prints before the same exec). Only `send` claims, one verb per PR
+/// (d-450caaeb); an unknown sub-word forwards, which refuses as unknown
+/// like any other dead leaf.
+pub fn classify(args: &[OsString]) -> Option<(bool, Vec<OsString>)> {
     let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
     match words.as_slice() {
-        ["agents", "mcp", "send", ..] => Some(args[2..].to_vec()),
+        ["mcp", "send", ..] => Some((true, args[2..].to_vec())),
+        ["agents", "mcp", "send", ..] => Some((false, args[3..].to_vec())),
         _ => None,
     }
 }
 
 /// Exec the worker's `--mcp-exec send` lane; stdout, stderr and the exit
-/// code pass through. A missing worker is a refusal (exit 3), never an
-/// empty answer, matching the paths door's posture.
-pub fn run(args: &[OsString]) -> i32 {
+/// code pass through. The root spelling prints the move notice the Python
+/// move table used to print, byte-identical, on stderr before the same
+/// exec. A missing worker is a refusal (exit 3), never an empty answer,
+/// matching the paths door's posture.
+pub fn run(root_alias: bool, args: &[OsString]) -> i32 {
+    if root_alias {
+        eprintln!("fno mcp is now fno agents mcp");
+    }
     let Some(binary) = crate::store_client::worker_binary() else {
         eprintln!(
             "fno agents mcp: refused: the fno-agents-worker binary is unavailable \
@@ -58,15 +65,18 @@ mod tests {
     }
 
     #[test]
-    fn the_front_claims_the_agents_mcp_send_spelling() {
-        let rest = classify(&oss(&["agents", "mcp", "send", "--session-id", "s"])).unwrap();
+    fn the_front_claims_both_mcp_send_spellings() {
+        let (root, rest) = classify(&oss(&["agents", "mcp", "send", "--session-id", "s"])).unwrap();
+        assert!(!root);
         assert_eq!(
             rest,
             vec![OsString::from("--session-id"), OsString::from("s")]
         );
-        assert!(
-            classify(&oss(&["mcp", "send"])).is_none(),
-            "the root spelling resolves through the move table into agents mcp"
+        let (root, rest) = classify(&oss(&["mcp", "send", "--session-id", "s"])).unwrap();
+        assert!(root, "the root spelling claims here, notice and all");
+        assert_eq!(
+            rest,
+            vec![OsString::from("--session-id"), OsString::from("s")]
         );
         assert!(classify(&oss(&["agents", "mcp", "status"])).is_none());
         assert!(classify(&oss(&["agents", "mcp"])).is_none());

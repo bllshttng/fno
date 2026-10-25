@@ -29,7 +29,7 @@ pub fn run_mcp_exec(args: &[String]) -> i32 {
     };
     match args.get(idx + 1).map(String::as_str) {
         Some("send") => run_send(args.get(idx + 2..).unwrap_or(&[])),
-        Some("status") => run_status(),
+        Some("status") => run_status(args.get(idx + 2..).unwrap_or(&[])),
         Some("serve") => run_serve(args.get(idx + 2..).unwrap_or(&[])),
         Some("sidecar") => sidecar::run_sidecar(sidecar::DEFAULT_IDLE_EXIT_SECONDS),
         _ => usage_refusal(),
@@ -82,8 +82,15 @@ const SEND_USAGE: &str = "Usage: fno agents mcp send [OPTIONS]";
 /// `status`: the sidecar status JSON on stdout, exit 0; an unreachable
 /// sidecar notes the reason on stderr, exit 1. The reachability probe's
 /// native door.
-fn run_status() -> i32 {
-    match client::status(None, client::DEFAULT_TIMEOUT) {
+fn run_status(rest: &[String]) -> i32 {
+    // The caller's budget carries through: the reachability probe is a
+    // bounded liveness check (250 ms by default), not a five-second wait
+    // per agent in reconcile's sequential walk.
+    let timeout = flag_value(rest, "--timeout-secs")
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(std::time::Duration::from_secs_f64)
+        .unwrap_or(client::DEFAULT_TIMEOUT);
+    match client::status(None, timeout) {
         Ok(reply) => {
             println!("{reply}");
             0

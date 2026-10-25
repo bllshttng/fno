@@ -1530,14 +1530,16 @@ def release_session_writer_claim(
 # liveness scan.
 
 
-def _mcp_status_argv() -> list[str]:
+def _mcp_status_argv(timeout: float) -> list[str]:
     """Argv for the native sidecar status door: the fno-agents-worker
     binary beside the resolved fno-agents binary, else PATH. The probe's
-    one subprocess (the claims-forward shape).
+    one subprocess (the claims-forward shape); the caller's budget rides
+    through as --timeout-secs so a wedged sidecar cannot stretch a
+    250 ms probe into five seconds.
     """
     from fno import rust_binary
 
-    argv_tail = ["--mcp-exec", "status"]
+    argv_tail = ["--mcp-exec", "status", "--timeout-secs", repr(timeout)]
     agents_bin = rust_binary.resolve_binary()
     if agents_bin is not None:
         worker = agents_bin.parent / "fno-agents-worker"
@@ -1579,7 +1581,7 @@ def mcp_channel_reachable(
     import subprocess
 
     completed = subprocess.run(
-        _mcp_status_argv(),
+        _mcp_status_argv(timeout),
         capture_output=True,
         text=True,
         timeout=timeout + 5.0,

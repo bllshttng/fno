@@ -318,9 +318,9 @@ pub(crate) async fn bind_and_serve(
                         "sidecar idle for {}s with {} channels; exiting",
                         state.last_activity_secs(),
                         state.channel_count()
-                    )
+                    );
+                    break;
                 }
-                break;
             }
         }
     }
