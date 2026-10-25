@@ -159,11 +159,7 @@ pub(crate) fn run_lens(
         crate::intel_insights::SampleRequest::All => None,
     };
     let report = fold(&rows, &labels, now_ms, sample);
-    let total: usize = report.iter().map(|r| r.fires).sum();
-    println!(
-        "rule lens (days {days}): {} rule(s), {total} fire(s)",
-        report.len()
-    );
+    println!("rule lens (days {days}): {} rule(s)", report.len());
     println!(
         "  {:<26} {:<7} {:>6} {:>8} {:>6} {:>7} {:>6}",
         "rule", "kind", "fires", "sessions", "last7d", "labeled", "false"
@@ -181,10 +177,8 @@ pub(crate) fn run_lens(
     for r in report.iter().filter(|r| !r.sample.is_empty()) {
         println!("sample {} ({}):", r.rule, r.kind);
         for f in &r.sample {
-            let excerpt = f.excerpt.as_deref().map(|e| e.replace('\n', " / "));
-            let excerpt = excerpt
-                .as_deref()
-                .unwrap_or("(no excerpt: fired before spans kept one)");
+            let none = "(no excerpt: fired before spans kept one)";
+            let excerpt = f.excerpt.as_deref().unwrap_or(none).replace('\n', " / ");
             println!("  {} {} {}: {excerpt}", f.span_id, f.ts, f.session);
         }
     }
