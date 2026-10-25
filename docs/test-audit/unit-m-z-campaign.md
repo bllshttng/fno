@@ -264,7 +264,7 @@ Each kept entry reads `contract | credible failure that turns it red`.
 | `test_prod_tripwire.py` | 2 | 1 | find_leaks names marked entries, honors sandboxes / leak missed |
 | `test_pytest_timeout_configured.py` | 2 | 1 | ini timeout 120, no fork Pool / hang eats shard cap |
 | `test_rust_front_handoff.py` | 2 | 2 | recursive handoff refuses / process explosion; handoff sets marker for child / recursion guard never armed |
-| `test_setup_cli.py` | 2 | 1 | migrate-paths passes active state_dir / writes to default root |
+| `test_setup_cli.py` | 2 | 0 | Deleted with the retired migrate-paths command. |
 | `test_setup_id.py` | 2 | 2 | invalid id_prefix refused, nothing written / bad prefix persisted; out-of-range hex width refused / bad width persisted |
 | `test_state_path_lint.py` | 2 | 1 | lint flags hardcoded .fno state path / raw path passes lint |
 | `test_termination_event.py` | 2 | 1 | unknown termination reason fails loud / typo reason accepted |

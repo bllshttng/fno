@@ -1,7 +1,7 @@
 """CLI surface for setup commands (`fno config setup ...`).
 
 Lives next to paths_cli.py for consistency; implementation lives in
-the setup/ package (setup/migrate_paths.py etc.).
+the setup/ package.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import typer
 
 import fno.paths as _paths
 
-app = typer.Typer(help="Setup commands (migration, doctor, etc.)")
+app = typer.Typer(help="Setup commands (hooks, wizard plan, post-merge).")
 
 
 @app.callback(invoke_without_command=True)
@@ -261,41 +261,6 @@ def plan_cmd(
     if not advanced:
         raw["fields"] = [f for f in raw["fields"] if f.get("tier") == "always"]
     typer.echo(json.dumps(raw, indent=2))
-
-
-@app.command("migrate-paths")
-def migrate_paths_cmd(
-    force: bool = typer.Option(False, "--force", "-F", help="Re-run even if sentinel exists"),
-) -> None:
-    """Run path migration. Idempotent via ~/.fno/.path-migration-done sentinel."""
-    from fno.setup.migrate_paths import run_migration
-
-    raise typer.Exit(run_migration(force=force, settings_root=_paths.state_dir()))
-
-
-@app.command("migrate-config")
-def migrate_config_cmd() -> None:
-    """Convert legacy settings.yaml -> flat config.toml (hard cut).
-
-    Walks the settings candidate chain (worktree, canonical, global), writes an
-    equivalent flat config.toml sibling for each settings.yaml, and deletes the
-    yaml only after the toml is durably written (atomic temp+rename). Idempotent:
-    a location that already has a config.toml is left untouched. Comments in a
-    hand-tuned settings.yaml are NOT carried across the round-trip.
-    """
-    from fno.config import run_config_migration
-
-    results = run_config_migration()
-    migrated = [p for p, action in results if action == "migrated"]
-    for p, action in results:
-        if action == "migrated":
-            typer.echo(f"migrated -> {p} (comments not carried over)")
-        elif action == "already-migrated":
-            typer.echo(f"already migrated: {p}")
-    if not migrated:
-        typer.echo("nothing to migrate (already on config.toml).")
-    else:
-        typer.echo(f"migrated {len(migrated)} config file(s).")
 
 
 def scaffold_post_merge(
