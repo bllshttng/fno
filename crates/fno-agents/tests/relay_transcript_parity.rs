@@ -142,6 +142,7 @@ fn the_transcript_door_matches_the_captured_leg_and_keeps_its_extra_strength() {
         answered.get("path").and_then(|p| p.as_str()),
         Some(
             projects
+                .join(PROJ_DIR)
                 .join(format!("{CASE_UUID}.jsonl"))
                 .to_str()
                 .unwrap()
