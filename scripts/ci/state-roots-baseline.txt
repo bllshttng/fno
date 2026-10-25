@@ -47,7 +47,6 @@ A	cli/src/fno/observer/cli.py	ledger.json	unowned	call the resolver STATE_FILES 
 A	cli/src/fno/observer/isolation.py	events.jsonl	unowned	Python journal site surviving PR 1252; fix is fno.paths.project_events_json().
 A	cli/src/fno/observer/isolation.py	ledger.json	unowned	call the resolver STATE_FILES names for this file.
 A	cli/src/fno/observer/isolation.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
-A	cli/src/fno/outstanding/cli.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/phase/cli.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/pr_watch/cli.py	events.jsonl	unowned	Python journal site surviving PR 1252; fix is fno.paths.project_events_json().
 A	cli/src/fno/provenance/spawn_think.py	events.jsonl	unowned	Python journal site surviving PR 1252; fix is fno.paths.project_events_json().

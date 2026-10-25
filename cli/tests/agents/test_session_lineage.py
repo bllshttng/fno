@@ -78,6 +78,27 @@ def _transition_events(tmp_path: Path) -> list[dict]:
     return event_rows(path)
 
 
+def _open_questions() -> list[dict]:
+    """The open operator questions the append door wrote, folded ask-minus-
+    close over the machine index through the store reader: the same identity
+    fold the native listing runs."""
+    from fno import paths
+    from tests._event_rows import event_rows
+
+    asked: dict = {}
+    closed: set = set()
+    for rec in event_rows(paths.questions_jsonl()):
+        data = rec.get("data") or {}
+        qid = data.get("question_id")
+        if not qid:
+            continue
+        if rec.get("type") == "operator_question":
+            asked[qid] = rec
+        elif rec.get("type") == "operator_question_closed":
+            closed.add(qid)
+    return [rec for qid, rec in asked.items() if qid not in closed]
+
+
 # ---------------------------------------------------------------------------
 # Registry-level classification (record_session_observation)
 # ---------------------------------------------------------------------------
@@ -246,18 +267,16 @@ def test_main_claude_branch_records_the_two_option_operator_question(
     touches no claim lockfile at all."""
     use_tmpdir(monkeypatch, tmp_path)
     _isolate_daemon_log(monkeypatch, tmp_path)
-    from fno.outstanding.core import read_open_questions
-
     _spawned_row()
     assert _main(
         monkeypatch, tmp_path, REMINT, _reading("reachable", "transcript"),
         "target-x-f0c2",
     ) == 0
 
-    questions = read_open_questions(tmp_path / ".fno")
-    branch_qs = [q for q in questions if "session-transition-branch" in q.question]
+    questions = _open_questions()
+    branch_qs = [q for q in questions if "session-transition-branch" in q["data"].get("question", "")]
     assert len(branch_qs) == 1, "exactly one durable question"
-    assert list(branch_qs[0].options) == ["inherit node and claim", "start clean"]
+    assert list(branch_qs[0]["data"].get("options") or []) == ["inherit node and claim", "start clean"]
 
     claims_dir = tmp_path / ".fno" / "claims"
     assert not claims_dir.exists() or not any(claims_dir.iterdir()), (
@@ -269,8 +288,8 @@ def test_main_claude_branch_records_the_two_option_operator_question(
         monkeypatch, tmp_path, REMINT, _reading("reachable", "transcript"),
         "target-x-f0c2",
     ) == 0
-    questions = read_open_questions(tmp_path / ".fno")
-    branch_qs = [q for q in questions if "session-transition-branch" in q.question]
+    questions = _open_questions()
+    branch_qs = [q for q in questions if "session-transition-branch" in q["data"].get("question", "")]
     assert len(branch_qs) == 1, "the fork edge is asked once"
 
 
@@ -282,7 +301,6 @@ def test_main_claude_deferred_emits_the_deferred_event_and_asks_nothing(
     use_tmpdir(monkeypatch, tmp_path)
     _isolate_daemon_log(monkeypatch, tmp_path)
     from fno.agents.registry import load_registry
-    from fno.outstanding.core import read_open_questions
 
     _spawned_row()
     assert _main(
@@ -296,7 +314,7 @@ def test_main_claude_deferred_emits_the_deferred_event_and_asks_nothing(
     assert deferred[0]["data"]["predecessor_session_id"] == BIRTH
     assert deferred[0]["data"]["successor_session_id"] == REMINT
     assert load_registry()[0].harness_session_id == BIRTH, "A is not overwritten"
-    assert not read_open_questions(tmp_path / ".fno"), "unknown asks no question"
+    assert not _open_questions(), "unknown asks no question"
 
 
 # -- one name store: the session-names fold ----------------------------------

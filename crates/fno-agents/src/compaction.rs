@@ -331,7 +331,7 @@ pub fn run_compaction(args: &[String]) -> i32 {
         }
         _ => {
             eprintln!(
-                "usage: compaction outstanding [--json] | mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]] | ack <turn> --outcome <o> [--why <w>] [--session <id>] [--capture-dir <dir>] | inbox-peers [--json]"
+                "usage: compaction outstanding [--json|-J] | outstanding mine|ask|clear|reindex ... | mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]] | ack <turn> --outcome <o> [--why <w>] [--session <id>] [--capture-dir <dir>] | inbox-peers [--json]"
             );
             2
         }
