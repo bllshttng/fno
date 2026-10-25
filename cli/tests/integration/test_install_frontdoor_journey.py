@@ -223,8 +223,7 @@ def test_authorized_target_init_journey(clean_machine):
     node = json.loads(proc.stdout)["id"]
 
     # 2. Setup answers before init: `config setup plan` (the wizard's
-    #    scriptable twin, served by the native front) returns a
-    #    schema-derived question plan.
+    #    scriptable twin, native in the front) returns the question plan.
     plan = _run_front_door(front, repo, "config", "setup", "plan")
     assert plan.returncode == 0, plan.stderr
     assert json.loads(plan.stdout)["fields"], plan.stdout

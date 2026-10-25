@@ -68,10 +68,13 @@ enum Role {
     /// `config setup run` composes on. Native, so the inventory answers
     /// beside the setup command that reads it.
     ConfigDefaults(Vec<OsString>),
-    ConfigSchema(fno::config_schema::Claim),
+    ConfigSchema(Vec<String>),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
+    /// `fno config setup plan|post-merge` and the root `fno setup` twins:
+    /// the wizard question plan and the post-merge scaffold.
+    SetupCmd(fno::setup_cmds::Cmd),
     /// `fno do wizard`: the interactive terminal host for the wizard flow.
     /// Native, because it owns the raw-mode terminal and must run before any
     /// Python wheel exists on a fresh machine.
@@ -979,6 +982,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::setup_run::classify(args) {
         return Role::SetupRun(rest);
     }
+    if let Some(cmd) = fno::setup_cmds::classify(args) {
+        return Role::SetupCmd(cmd);
+    }
     if args.first().and_then(|a| a.to_str()) == Some("do")
         && args.get(1).and_then(|a| a.to_str()) == Some("wizard")
     {
@@ -990,8 +996,8 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::config_defaults::classify(args) {
         return Role::ConfigDefaults(rest);
     }
-    if let Some(claim) = fno::config_schema::classify(args) {
-        return Role::ConfigSchema(claim);
+    if let Some(rest) = fno::config_schema::classify(args) {
+        return Role::ConfigSchema(rest);
     }
     match cli_args::classify(args) {
         FrontDoor::Forward => Role::Forward,
@@ -1242,8 +1248,9 @@ fn main() {
         Role::Uninstall(opts) => std::process::exit(fno::uninstall::run_uninstall(opts)),
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
-        Role::ConfigSchema(claim) => std::process::exit(fno::config_schema::run(&claim)),
+        Role::ConfigSchema(rest) => std::process::exit(fno::config_schema::run(&rest)),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
+        Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
         Role::MuxLs(json) => exit_mux(mux_cli::ls(json)),
         Role::MuxKill(kill_req) => {
@@ -1828,6 +1835,11 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["do", "wizard", "--json"]), false),
             Role::Wizard(os(&["--json"]))
+        );
+        // So do the wizard plan and the post-merge scaffold.
+        assert_eq!(
+            decide_role(&os(&["config", "setup", "plan", "--advanced"]), false),
+            Role::SetupCmd(fno::setup_cmds::Cmd::Plan(os(&["--advanced"])))
         );
     }
 

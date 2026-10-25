@@ -1,8 +1,9 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.config.schema_gen.render_markdown
 //!
-//! Characterization for `fno config schema` and `fno config setup plan`, now
-//! rendered natively from crates/fno/config_schema.json. The goldens under
+//! Characterization for `fno config schema` and the `fno config setup plan`
+//! it feeds, both rendered natively from crates/fno/config_schema.json. The
+//! goldens under
 //! tests/golden/config_schema/ were captured from the Python commands before
 //! their renderers were deleted (step 2 of the port protocol,
 //! docs/architecture/dual-implementation-inventory.md). The `setup plan`
@@ -79,21 +80,10 @@ fn config_schema_matches_the_python_goldens() {
         }
     }
 
-    // `--advanced` and the moved `fno setup plan` spelling.
     let (code, stdout, _) = run(&["config", "setup", "plan", "--advanced"]);
     assert_eq!(code, 0);
     assert!(
         stdout == golden("setup_plan_advanced.stdout"),
         "--advanced stdout differs from its golden"
-    );
-    let (code, stdout, stderr) = run(&["setup", "plan"]);
-    assert_eq!(code, 0);
-    assert!(
-        stdout == golden("setup_plan.stdout"),
-        "moved spelling stdout differs from its golden"
-    );
-    assert!(
-        stderr.contains("fno setup is now fno config setup"),
-        "moved spelling names its home: {stderr}"
     );
 }

@@ -1,5 +1,6 @@
-//! `fno config schema` and `fno config setup plan`: every config artifact,
-//! rendered from the committed schema table.
+//! `fno config schema`: every config artifact, rendered from the committed
+//! schema table. `fno config setup plan` (setup_cmds) prints its wizard plan
+//! through [`wizard_plan`].
 //!
 //! `config_schema.json` is generated from the pydantic `SettingsModel` plus
 //! its presentation registry (`cd cli && uv run python -m
@@ -15,42 +16,24 @@ use std::path::{Path, PathBuf};
 
 const TABLE: &str = include_str!("../config_schema.json");
 
-/// Which argv this module answers.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Claim {
-    Schema(Vec<String>),
-    /// The bool marks the moved `fno setup plan` spelling, which names its
-    /// new home on stderr the way the Python move table did.
-    SetupPlan(Vec<String>, bool),
-}
-
-/// Claim `config schema ...`, `config setup plan ...` and the moved
-/// `setup plan ...` lexically, before clap. Every other argv forwards
-/// untouched.
-pub fn classify(args: &[OsString]) -> Option<Claim> {
+/// Claim `config schema ...` lexically, before clap. Every other argv
+/// forwards untouched.
+pub fn classify(args: &[OsString]) -> Option<Vec<String>> {
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
     if words.len() != args.len() {
         return None;
     }
-    let rest = |n: usize| -> Vec<String> { words[n..].iter().map(|w| w.to_string()).collect() };
     match words.as_slice() {
-        ["config", "schema", ..] => Some(Claim::Schema(rest(2))),
-        ["config", "setup", "plan", ..] => Some(Claim::SetupPlan(rest(3), false)),
-        ["setup", "plan", ..] => Some(Claim::SetupPlan(rest(2), true)),
+        ["config", "schema", rest @ ..] => Some(rest.iter().map(|w| w.to_string()).collect()),
         _ => None,
     }
 }
 
-pub fn run(claim: &Claim) -> i32 {
-    match claim {
-        Claim::Schema(rest) => run_schema(rest),
-        Claim::SetupPlan(rest, moved) => {
-            if *moved {
-                eprintln!("fno setup is now fno config setup");
-            }
-            run_setup_plan(rest)
-        }
-    }
+/// The wizard question plan as `json.dumps(..., indent=2)` printed it: the
+/// `always` tier, or every asked field with `advanced`.
+pub fn wizard_plan(advanced: bool) -> String {
+    let plan = wizard_fields(&table(), |tier| advanced || tier == "always");
+    py_dumps(&plan, Some(2), false)
 }
 
 /// One leaf row of the committed table.
@@ -398,16 +381,6 @@ Options:
   --help         Show this message and exit.
 ";
 
-const PLAN_USAGE: &str = "Usage: fno config setup plan [OPTIONS]
-
-  Emit the wizard question plan as JSON. By default only the always fields;
-  --advanced also includes the advanced fields.
-
-Options:
-  --advanced  Include the 'advanced' tier, not just 'always'.
-  --help      Show this message and exit.
-";
-
 fn usage_error(usage: &str, message: &str) -> i32 {
     let first = usage.lines().next().unwrap_or("");
     eprintln!(
@@ -449,7 +422,7 @@ fn write_atomic(target: &Path, text: &str) -> std::io::Result<()> {
     })
 }
 
-fn run_schema(rest: &[String]) -> i32 {
+pub fn run(rest: &[String]) -> i32 {
     let (mut json_schema, mut markdown, mut wizard, mut toml, mut write, mut check) =
         (false, false, false, false, false, false);
     for arg in rest {
@@ -528,23 +501,5 @@ fn run_schema(rest: &[String]) -> i32 {
         return 0;
     }
     println!("{rendered}");
-    0
-}
-
-fn run_setup_plan(rest: &[String]) -> i32 {
-    let mut advanced = false;
-    for arg in rest {
-        match arg.as_str() {
-            "--advanced" => advanced = true,
-            "--help" | "-h" => {
-                print!("{PLAN_USAGE}");
-                return 0;
-            }
-            other => return usage_error(PLAN_USAGE, &format!("No such option: {other}")),
-        }
-    }
-    let table = table();
-    let plan = wizard_fields(&table, |tier| advanced || tier == "always");
-    println!("{}", py_dumps(&plan, Some(2), false));
     0
 }
