@@ -37,7 +37,7 @@ mkdir -p "$GOLDENS" "$FIXBASE/state" "$FIXBASE/wtbase"
 # (evals-trend, evals-attempt, evals-macro). find_dev_binary needs a build in
 # THIS checkout, which the capture never performs, so the deployed binary is
 # the door that resolves.
-AGENTS_BIN="$(command -v fno-agents || true)"
+AGENTS_BIN="${FNO_CAPTURE_AGENTS_BIN:-$(command -v fno-agents || true)}"
 
 # The leaf, driven through the source tree. Hermetic: the fixture settings
 # file is the only config, state lands in FIXBASE, and the canonical config
@@ -59,6 +59,7 @@ fno_leaf() {
 # stamp (the fold echoes its window bounds, which move with the clock).
 mask_bytes() {
   sed -E -e "s,$FIXBASE,FIXTURE,g" \
+      -e "s,/privateFIXTURE,FIXTURE,g" \
       -e "s,[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})?,<TS>,g"
 }
 
@@ -171,6 +172,15 @@ write_settings
 # Warm the project venv before the first case: uv's first run creates the
 # environment and its bootstrap lines would otherwise land in a golden.
 uv run --project "$ROOT/cli" fno-py --help > /dev/null 2>&1 || true
+
+# Warm the fixture env too: the CLI's first-run path-migration line under a
+# fresh state dir would otherwise land in the first case's stderr.
+( cd "$ROOT" && env -u FNO_TASK_CONTEXT_FILE -u FNO_CLAIMS_ROOT -u FNO_EVENTS_PATH \
+    -u FNO_HOME -u FNO_REPO_ROOT \
+    FNO_CONFIG="$FIXBASE/settings.yaml" \
+    FNO_STATE_DIR="$FIXBASE/state" \
+    FNO_NO_CANONICAL_CONFIG=1 \
+    uv run --project "$ROOT/cli" fno-py doctor evals --help > /dev/null 2>&1 ) || true
 
 ## ── run: refusals ─────────────────────────────────────────────────────────
 
