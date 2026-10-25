@@ -11,7 +11,6 @@ and every spelling stays invocable one release out.
 """
 from __future__ import annotations
 
-import io
 import sys
 
 import typer
