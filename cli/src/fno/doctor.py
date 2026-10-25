@@ -4332,10 +4332,17 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
     result["archive_id_collisions"] = _archive_id_collisions()
     result["post_merge_sync"] = _post_merge_sync_health()
     try:
-        from fno.evals.report import evals_health_summary
+        from fno.config import load_settings
         from fno.paths import evals_history
+        from fno.rust_binary import command_call
 
-        result["evals"] = evals_health_summary(evals_history())
+        stale_days = int(getattr(load_settings().evals, "stale_days", 7) or 7)
+        # The native health projection (evals-trend op health): one
+        # denominator authority; Python never re-folds.
+        result["evals"] = command_call(
+            "evals-trend",
+            {"op": "health", "history": str(evals_history()), "stale_days": stale_days},
+        )
     except Exception:  # noqa: BLE001 - an alarm that crashes doctor helps nobody
         result["evals"] = None
     result["source_checkout_sync"] = _source_checkout_sync(src)

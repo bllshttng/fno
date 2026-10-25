@@ -99,10 +99,10 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
     }
     let grade_list = map.get(serde_yaml_ng::Value::String("grade".into()));
     let Some(grade_raw) = grade_list.and_then(|v| v.as_sequence()) else {
-        return Err(BankError(format!("task '{id}' ({0}): 'grade' must be a non-empty list of mechanical checks (a task with no runnable grade is invalid)", path.display())));
+        return Err(BankError(format!("task '{id}' ({where_}): 'grade' must be a non-empty list of mechanical checks (a task with no runnable grade is invalid)")));
     };
     if grade_raw.is_empty() {
-        return Err(BankError(format!("task '{id}' ({0}): 'grade' must be a non-empty list of mechanical checks (a task with no runnable grade is invalid)", path.display())));
+        return Err(BankError(format!("task '{id}' ({where_}): 'grade' must be a non-empty list of mechanical checks (a task with no runnable grade is invalid)")));
     };
     let mut checks: Vec<GradeCheck> = Vec::new();
     for (i, item) in grade_raw.iter().enumerate() {
@@ -149,7 +149,8 @@ fn parse_check(
     path: &std::path::Path,
     index: usize,
 ) -> Result<GradeCheck, BankError> {
-    let where_prefix = format!("task '{task_id}' ({0}) grade[{index}]", path.display());
+    let where_ = path.display().to_string();
+    let where_prefix = format!("task '{task_id}' ({where_}) grade[{index}]");
     let Some(map) = raw.as_mapping() else {
         return Err(BankError(format!(
             "{where_prefix}: each grade check must be a mapping"
@@ -265,12 +266,74 @@ pub fn discover_bank(bank_dir: &std::path::Path) -> Result<Vec<TaskSpec>, BankEr
                 .map(|t| t.source_path.display().to_string())
                 .unwrap_or_default();
             return Err(BankError(format!(
-                "duplicate bank task id '{id}': {first} and {0}",
-                task.id,
-                yaml_path.display()
+                "duplicate bank task id '{id}': {first} and {second}",
+                first = first,
+                second = yaml_path.display().to_string(),
             )));
         }
         tasks.insert(task.id.clone(), task);
     }
     Ok(tasks.into_values().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_task(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    #[test]
+    fn a_task_without_a_grade_refuses_naming_id_and_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_task(
+            dir.path(),
+            "t.yaml",
+            "id: no-grade\ntier: regression\ngrade: []\ntimeout_minutes: 1\n",
+        );
+        let err = load_task(&p).unwrap_err();
+        assert!(err.0.contains("task 'no-grade'"), "{0}", err.0);
+        assert!(
+            err.0.contains("(a) no runnable grade is invalid"),
+            "{0}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn a_trivial_exit_only_grade_warns_and_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write_task(
+            dir.path(),
+            "d.yaml",
+            "id: decoy\ntier: capability\ngrade:\n  - kind: exit\n    command: \"true\"\ntimeout_minutes: 1\n",
+        );
+        let task = load_task(&p).unwrap();
+        assert_eq!(task.grade.len(), 1);
+        // The warning prints to stderr; the task still loads (a warning,
+        // not an error).
+    }
+
+    #[test]
+    fn discover_skips_cohorts_and_sorts_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        write_task(
+            dir.path(),
+            "b.yaml",
+            "id: beta\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\n",
+        );
+        write_task(
+            dir.path(),
+            "a.yaml",
+            "id: alpha\ntier: capability\ngrade:\n  - kind: file-exists\n    path: x\n",
+        );
+        std::fs::write(dir.path().join("cohorts.yaml"), "train: []\n").unwrap();
+        let tasks = discover_bank(dir.path()).unwrap();
+        let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["alpha", "beta"]);
+    }
 }

@@ -47,9 +47,41 @@ pub fn graduate_task_file(task_path: &std::path::Path) -> Result<(), String> {
         Regex::new(r"(?m)^([ \t]*tier:[ \t]*)capability([ \t]*(?:#.*)?)$").expect("static regex");
     let count = re.find_iter(&text).count();
     if count == 0 {
-        return Err(format!("{0}: no `tier: capability` line to graduate (already regression, or non-standard formatting)", task_path.display()));
+        let shown = task_path.display().to_string();
+        return Err(format!("{shown}: no `tier: capability` line to graduate (already regression, or non-standard formatting)"));
     }
     let new_text = re.replace_all(&text, "${1}regression${2}").into_owned();
     std::fs::write(task_path, new_text).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_rewrite_keeps_comments_and_formatting() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.yaml");
+        std::fs::write(
+            &p,
+            "id: t\ntier: capability   # the reviewed retag target\ngrade: []\n",
+        )
+        .unwrap();
+        graduate_task_file(&p).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            text.contains("tier: regression   # the reviewed retag target"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_already_regression_task_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.yaml");
+        std::fs::write(&p, "id: t\ntier: regression\n").unwrap();
+        let err = graduate_task_file(&p).unwrap_err();
+        assert!(err.contains("no `tier: capability` line"), "{err}");
+    }
 }

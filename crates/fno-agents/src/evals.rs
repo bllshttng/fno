@@ -324,8 +324,8 @@ fn run_verb(rest: &[String]) -> i32 {
             "FAIL"
         };
         println!(
-            "  {:<11} {} [{}]: {}/{} pass  (pass^{repeat}={passk})",
-            task.tier, task.id, variant, passes, repeat
+            "  {:<11} {} [{}]: {}/{} pass  (pass^{}={})",
+            task.tier, task.id, variant, passes, repeat, repeat, passk
         );
         for r in &results {
             if !r.passed {

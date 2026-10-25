@@ -112,15 +112,19 @@ def _stub_signals(
     # cannot leak a STALE line into full-output assertions.
     monkeypatch.setattr("fno.paths.evals_history", lambda: Path("/evals/h.jsonl"))
     monkeypatch.setattr(
-        "fno.evals.report.evals_health_summary",
-        lambda _path, **_kw: {
-            "regression_pass_rate": 1.0,
-            "flake_count": 0,
-            "regression_alarm": [],
-            "age_days": 1.0,
-            "stale": False,
-            "never_ran": False,
-        },
+        "fno.rust_binary.command_call",
+        lambda _cmd, payload, *a, **kw: (
+            {
+                "regression_pass_rate": 1.0,
+                "flake_count": 0,
+                "regression_alarm": [],
+                "age_days": 1.0,
+                "stale": False,
+                "never_ran": False,
+            }
+            if payload.get("op") == "health"
+            else {}
+        ),
     )
 
 

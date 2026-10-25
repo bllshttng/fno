@@ -242,7 +242,10 @@ fn default_spawn(
             let last = tail.trim().lines().last().unwrap_or("").to_string();
             SpawnResult {
                 ok: false,
-                reason: format!("spawn exit {}: {last}", out.status.code().unwrap_or(-1)),
+                reason: {
+                    let code = out.status.code().unwrap_or(-1);
+                    format!("spawn exit {code}: {last}")
+                },
                 worker_name: name,
                 timed_out: false,
                 lane_note: String::new(),

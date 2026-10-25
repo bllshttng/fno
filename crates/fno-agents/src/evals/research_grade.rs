@@ -379,3 +379,88 @@ fn read_sources(path: &std::path::Path) -> Result<Vec<Source>, String> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(
+        name: &str,
+        brief: &str,
+        golden: &str,
+        sidecar: &str,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let brief_p = dir.path().join("brief.md");
+        let golden_p = dir.path().join("golden.md");
+        let sidecar_p = dir.path().join(name);
+        std::fs::write(&brief_p, brief).unwrap();
+        std::fs::write(&golden_p, golden).unwrap();
+        std::fs::write(&sidecar_p, sidecar).unwrap();
+        (dir, brief_p, golden_p, sidecar_p)
+    }
+
+    #[test]
+    fn a_cited_live_claimed_brief_grades_green() {
+        let (dir, b, g, s) = fixture(
+            "side.jsonl",
+            "## Findings\n\n- the fold is native [S1]\n\n## Sources\n\n[S1]: https://example.test/x\n",
+            "## Findings\n\n- fold natively\n",
+            "{\"url\": \"https://example.test/x\", \"verified\": true}\n",
+        );
+        let res = grade(
+            b.to_str().unwrap(),
+            g.to_str().unwrap(),
+            s.to_str().unwrap().into(),
+        )
+        .unwrap();
+        assert!(res.green(), "{res:?}");
+    }
+
+    #[test]
+    fn an_uncited_claim_names_the_section() {
+        let (dir, b, g, s) = fixture(
+            "side.jsonl",
+            "## Findings\n\n- no citation here\n",
+            "## Findings\n\n- fold\n",
+            "{\"url\": \"https://example.test/x\", \"verified\": true}\n",
+        );
+        let res = grade(
+            b.to_str().unwrap(),
+            g.to_str().unwrap(),
+            s.to_str().unwrap().into(),
+        )
+        .unwrap();
+        assert_eq!(res.uncited_claims, 1);
+        assert!(
+            res.detail[0].contains("uncited claim in 'Findings'"),
+            "{res:?}"
+        );
+    }
+
+    #[test]
+    fn a_dead_source_counts_and_names_the_url() {
+        let (dir, b, g, s) = fixture(
+            "side.jsonl",
+            "## Findings\n\n- cited [S1]\n\n[S1]: https://example.test/dead\n",
+            "## Findings\n\n- fold\n",
+            "{\"url\": \"https://example.test/dead\", \"verified\": false, \"reason\": \"fetch failed\"}\n",
+        );
+        let res = grade(
+            b.to_str().unwrap(),
+            g.to_str().unwrap(),
+            s.to_str().unwrap().into(),
+        )
+        .unwrap();
+        assert_eq!(res.dead_urls, 1);
+        assert!(
+            res.detail[0].contains("dead source: https://example.test/dead (fetch failed)"),
+            "{res:?}"
+        );
+    }
+}
