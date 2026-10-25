@@ -19,10 +19,14 @@ use std::process::Command;
 /// positions and shapes stay pinned. (Fixture paths themselves are already
 /// masked to FIXTURE by the capture script at freeze time.)
 fn mask(text: &str) -> String {
+    // The macOS realpath prefix: Path.resolve on the capture host answered
+    // /private/tmp, so the frozen echoes read /privateFIXTURE where a Linux
+    // run reads FIXTURE. A machine byte, not a contract byte.
+    let normalized = text.replace("/privateFIXTURE", "FIXTURE");
     let re64 = Regex::new(r"[0-9a-f]{64}").expect("compiles");
     let re40 = Regex::new(r"[0-9a-f]{40}").expect("compiles");
     let re12 = Regex::new(r"[0-9a-f]{12}").expect("compiles");
-    let masked64 = re64.replace_all(text, "<SHA64>");
+    let masked64 = re64.replace_all(&normalized, "<SHA64>");
     let masked40 = re40.replace_all(&masked64, "<SHA40>");
     re12.replace_all(&masked40, "<CAND12>").into_owned()
 }
