@@ -587,7 +587,6 @@ mod tests {
         let sock = dir.path().join("s.sock");
         std::fs::write(&sock, b"").unwrap();
         assert!(sock.exists());
-        let state = Arc::new(SidecarState::new(1800));
         assert!(matches!(prepare_socket_path(&sock), PrepareOutcome::Ready));
         assert!(!sock.exists(), "the stale artifact was removed");
     }
