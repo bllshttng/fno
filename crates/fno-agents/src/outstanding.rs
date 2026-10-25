@@ -1091,6 +1091,11 @@ fn prove_it_rows() -> Result<Vec<Value>, String> {
 
 /// `fno-agents compaction outstanding [--json|-J]`, the native `fno inbox outstanding`.
 pub fn run_outstanding(args: &[String]) -> i32 {
+    if let Some((word, rest)) = args.split_first() {
+        if let Some(code) = crate::outstanding_cmds::dispatch(word, rest) {
+            return code;
+        }
+    }
     let mut as_json = false;
     for a in args {
         match a.as_str() {
