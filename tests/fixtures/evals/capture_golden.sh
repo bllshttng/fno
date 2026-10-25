@@ -51,6 +51,7 @@ fno_leaf() {
       FNO_NO_CANONICAL_CONFIG=1 \
       FNO_AGENTS_BIN="${AGENTS_BIN:-/nonexistent-fno-agents}" \
       PYTHONWARNINGS=always \
+      PYTHONHASHSEED=0 \
       uv run --project "$ROOT/cli" fno-py doctor evals "$@" )
 }
 
@@ -80,7 +81,8 @@ case_run() {
     printf '%s\n' "$rc"
     cat "$out"
   } | mask_bytes > "$GOLDENS/$name.out"
-  mask_bytes < "$err" | sed -e "s|^[^ ]*bank\.py:[0-9]+: UserWarning: |WARNING: |" \
+  mask_bytes < "$err" | sed -E -e "s|^[^ ]*bank\.py:[0-9]+: UserWarning: |WARNING: |" \
+      -e "/^  [a-z_]+\(/d" \
       > "$GOLDENS/$name.err"
   rm -f "$out" "$err"
   printf '%s\n' "$rc" > "$GOLDENS/$name.exit"
