@@ -1110,17 +1110,24 @@ fn done_when_line(manifest_raw: &Option<BTreeMap<String, String>>, project_root:
 // ── assembly + render ─────────────────────────────────────────────────────────
 
 /// Resolve all eight orientation lines. Read-only; never raises.
-pub fn report(project_root: &Path) -> String {
+/// The report lines, shared by the render and the `target-status` transport
+/// door. The overrides carry the python `load_orientation` contract: an
+/// explicit node or plan wins over the manifest's own.
+fn orient_lines(
+    project_root: &Path,
+    node_override: Option<String>,
+    plan_override: Option<String>,
+) -> Vec<(&'static str, String)> {
     let manifest_raw = read_manifest(project_root);
-    let node_id = {
+    let node_id = node_override.or_else(|| {
         let nid = manifest_str(&manifest_raw, "graph_node_id");
         (!nid.is_empty() && nid != "null").then_some(nid)
-    };
-    let plan_path = {
+    });
+    let plan_path = plan_override.or_else(|| {
         let pp = manifest_str(&manifest_raw, "plan_path");
         let pp = pp.trim_matches(['"', '\'']).to_string();
         (!pp.is_empty() && pp != "null").then_some(pp)
-    };
+    });
     // boundary-reconcile reads the SAME binding the plan line does; a graph
     // read error degrades to the constant the Python twin renders.
     let (bound_plan, plan_text) = match bound_plan_path(plan_path.as_deref(), node_id.as_deref()) {
@@ -1134,7 +1141,7 @@ pub fn report(project_root: &Path) -> String {
             "unknown (plan unreadable: graph unreadable)".to_string(),
         ),
     };
-    let lines: Vec<(&str, String)> = vec![
+    vec![
         ("node", node_line(node_id.as_deref(), &manifest_raw)),
         ("attended", attended_line(&manifest_raw)),
         ("worktree", worktree_line(project_root, node_id.as_deref())),
@@ -1146,13 +1153,59 @@ pub fn report(project_root: &Path) -> String {
         ),
         ("manifest-live", manifest_live_line(&manifest_raw)),
         ("done-when", done_when_line(&manifest_raw, project_root)),
-    ];
+    ]
+}
+
+pub fn report(project_root: &Path) -> String {
+    let lines = orient_lines(project_root, None, None);
     let width = lines.iter().map(|(l, _)| l.len()).max().unwrap_or(0) + 2;
     lines
         .iter()
         .map(|(label, value)| format!("{:<width$} {}", format!("{label}:"), value))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The `target-status` transport door: one `command_call` round-trip for the
+/// python `fno do target status` verb. Request: `{"root": path, "node": id?,
+/// "plan_path": path?}`; answer: `{"lines": [["label", "value"], ...]}` in
+/// report order, so the caller renders text or `--json` byte-exactly as its
+/// twin did. Exit 3 names a bad request on stderr.
+pub fn run_status(args: &[String]) -> i32 {
+    let _ = args; // the payload rides stdin, like every command_call door
+    let mut input = String::new();
+    use std::io::Read as _;
+    if std::io::stdin().read_to_string(&mut input).is_err() {
+        eprintln!("target-status: stdin read failed");
+        return 3;
+    }
+    let req: serde_json::Value = match serde_json::from_str(&input) {
+        Ok(v) => v,
+        Err(error) => {
+            eprintln!("target-status: bad payload: {error}");
+            return 3;
+        }
+    };
+    let Some(root) = req.get("root").and_then(|v| v.as_str()).map(PathBuf::from) else {
+        eprintln!("target-status: payload has no root");
+        return 3;
+    };
+    let node = req
+        .get("node")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let plan = req
+        .get("plan_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let lines: Vec<(String, String)> = orient_lines(&root, node, plan)
+        .into_iter()
+        .map(|(label, value)| (label.to_string(), value))
+        .collect();
+    println!("{}", serde_json::json!({ "lines": lines }));
+    0
 }
 
 #[cfg(test)]

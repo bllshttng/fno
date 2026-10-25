@@ -4,9 +4,10 @@
 //! helper environment, run the helper, propagate its exit, and print the
 //! orientation report.
 //!
-//! The parity contract is `tests/golden/target_init/`, frozen from the
-//! Python leg before its deletion and asserted by
-//! `tests/target_init_parity.rs` through the `target-init` door. The
+//! The parity contract was `tests/golden/target_init/`, frozen from the
+//! Python leg and asserted by `tests/target_init_parity.rs` until the
+//! python `status` verb repointed to this orienter and both deleted
+//! (the orienter is now the one implementation). The
 //! review-capability, dispatch-hold, and containment preflights are NOT
 //! ported: when a node resolves they stay unset-stamped, so the helper's own
 //! `fno do target check-*` gate calls (the one Python implementation) refuse
