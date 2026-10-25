@@ -577,7 +577,7 @@ It resolves the node's merged PR and merge commit, then reads the newest complet
 
 ### recheck_probes: the symptom stays fixed
 
-A close probe proves the fix at close time. It may read a window (`--since 24h`) or a surface that retires later. A plan that fixes a lasting symptom also declares `recheck_probes:`. That is a promise that the probe holds forever. The daemon re-runs it on every done node every 6 hours. A probe that fails twice in one pass files a bug node with `caused_by` set to the original node.
+A close probe proves the fix at close time. It can read a window (`--since 24h`) or a surface that retires later. A plan that fixes a lasting symptom also declares `recheck_probes:`. That is a promise that the probe holds forever. The daemon re-runs it on every done node every 6 hours. A probe that fails twice in one pass files a bug node with `caused_by` set to the original node.
 
 ```yaml
 recheck_probes:

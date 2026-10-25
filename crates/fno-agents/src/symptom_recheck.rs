@@ -1,21 +1,17 @@
 //! `fno-agents probe-run recheck`: re-run a closed node's symptom probe.
 //!
-//! A node closes on "PR merged, CI green". That proves the fix held against
-//! the inventory that existed at merge, not that it still holds. A plan that
-//! names a lasting symptom declares it under `recheck_probes:`, and this walk
-//! re-runs that list for every done node on the daemon's cadence. A probe
-//! that fails twice in one pass files a bug node with `caused_by` naming the
-//! original, so the regression is open work instead of a later surprise.
+//! A node closes on "PR merged, CI green". That proves the fix against the
+//! inventory at merge, not that it still holds. A plan that names a lasting
+//! symptom declares `recheck_probes:`, and this walk re-runs that list for
+//! every done node on the daemon's cadence. A list that fails twice in one
+//! pass files a bug node with `caused_by` naming the original.
 //!
-//! Why a key of its own and not `close_probes`: a close probe proves the fix
-//! at close time and is free to read a window (`--since 24h`) or a surface
-//! that later retires. Measured 2026-10-25, 13 of 21 done nodes' close probes
-//! failed for those reasons alone. `recheck_probes` is the plan's promise
-//! that the probe holds forever.
+//! Not `close_probes`: a close probe is free to read a window (`--since 24h`)
+//! or a surface that later retires. Measured 2026-10-25, 13 of 21 done nodes'
+//! close probes failed for those reasons alone.
 //!
-//! The probes run through `decide_probe_run`, the one runner both gates use.
-//! Only a FAIL verdict counts. BLOCKED, SKIP and an unreadable plan read as
-//! undeterminable and file nothing.
+//! Only a FAIL verdict counts. BLOCKED (the gh budget refused), SKIP and an
+//! unreadable plan read `undeterminable` and file nothing.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -30,53 +26,43 @@ pub const RECHECK_INTERVAL_S: u64 = 21_600;
 /// Each probe can spend the runner's 60 s timeout twice, so a pass is bounded.
 const NODE_CAP: usize = 40;
 
+type Runner<'a> = &'a dyn Fn(&[String]) -> (i32, String);
+
 pub struct Candidate {
     pub id: String,
     pub title: String,
     pub plan: String,
     pub cwd: String,
-    /// The nearest epic above the node: the idea cap counts per epic, so a
-    /// regression filed there gets that epic's room.
+    /// The idea cap counts per epic, so a regression filed under the
+    /// original's nearest epic gets that epic's room.
     pub epic: Option<String>,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Verdict {
-    Pass,
-    /// Failed once, passed on the retry: reported, never filed.
-    Flaky(String),
-    Regressed(String),
-    Undeterminable(String),
 }
 
 fn text<'a>(row: &'a Value, key: &str) -> &'a str {
     row.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
-/// Done rows whose plan file exists and declares the key.
 fn nearest_epic(row: &Value, rows: &[Value]) -> Option<String> {
-    let mut parent = text(row, "parent").to_string();
+    let mut parent = text(row, "parent");
     for _ in 0..64 {
         let up = rows
             .iter()
             .find(|r| !parent.is_empty() && text(r, "id") == parent)?;
         if text(up, "type") == "epic" {
-            return Some(parent);
+            return Some(parent.to_string());
         }
-        parent = text(up, "parent").to_string();
+        parent = text(up, "parent");
     }
     None
 }
 
+/// Done rows whose plan file exists and declares the key.
 pub fn candidates(rows: &[Value]) -> Vec<Candidate> {
     let marker = format!("\n{RECHECK_KEY}:");
     rows.iter()
         .filter(|r| text(r, "status") == "done")
         .filter_map(|r| {
             let plan = text(r, "plan_path").split('#').next().unwrap_or("");
-            if plan.is_empty() {
-                return None;
-            }
             let body = std::fs::read_to_string(plan).ok()?;
             body.contains(&marker).then(|| Candidate {
                 id: text(r, "id").to_string(),
@@ -89,206 +75,165 @@ pub fn candidates(rows: &[Value]) -> Vec<Candidate> {
         .collect()
 }
 
-/// The open regression already filed for each original, keyed by `caused_by`.
-fn open_regressions(rows: &[Value]) -> std::collections::HashMap<String, String> {
-    rows.iter()
-        .filter(|r| !matches!(text(r, "status"), "done" | "superseded"))
-        .filter(|r| !text(r, "caused_by").is_empty())
-        .map(|r| (text(r, "caused_by").to_string(), text(r, "id").to_string()))
-        .collect()
-}
-
-fn one_run(c: &Candidate, run: &dyn Fn(&[String]) -> (i32, String)) -> (i32, Value) {
-    let mut args = vec![
-        "--plan".to_string(),
-        c.plan.clone(),
-        "--key".to_string(),
-        RECHECK_KEY.to_string(),
-        "--json".to_string(),
-    ];
+fn one_run(c: &Candidate, run: Runner) -> (i32, bool, String) {
+    let mut args: Vec<String> = ["--plan", &c.plan, "--key", RECHECK_KEY, "--json"]
+        .map(String::from)
+        .into();
     if !c.cwd.is_empty() {
-        args.push("--cwd".to_string());
-        args.push(c.cwd.clone());
+        args.extend(["--cwd".to_string(), c.cwd.clone()]);
     }
     let (code, out) = run(&args);
-    (code, serde_json::from_str(&out).unwrap_or(Value::Null))
-}
-
-fn has_fail(body: &Value) -> bool {
-    body["results"]
+    let body: Value = serde_json::from_str(&out).unwrap_or(Value::Null);
+    let fail = body["results"]
         .as_array()
-        .is_some_and(|r| r.iter().any(|row| row["verdict"] == "FAIL"))
-}
-
-pub fn judge(c: &Candidate, run: &dyn Fn(&[String]) -> (i32, String)) -> Verdict {
-    let (code, body) = one_run(c, run);
+        .is_some_and(|r| r.iter().any(|row| row["verdict"] == "FAIL"));
     let reason = body["reason"].as_str().unwrap_or("no reason").to_string();
-    match code {
-        0 => return Verdict::Pass,
-        1 if has_fail(&body) => {}
-        _ => return Verdict::Undeterminable(reason),
+    (code, code == 1 && fail, reason)
+}
+
+/// `pass`, `flaky` (failed, then passed on the retry), `regressed` or
+/// `undeterminable`, with the runner's reason.
+pub fn judge(c: &Candidate, run: Runner) -> (&'static str, String) {
+    match one_run(c, run) {
+        (0, _, _) => return ("pass", String::new()),
+        (_, false, why) => return ("undeterminable", why),
+        _ => {}
     }
-    let (code, again) = one_run(c, run);
-    match code {
-        0 => Verdict::Flaky(reason),
-        1 if has_fail(&again) => {
-            Verdict::Regressed(again["reason"].as_str().unwrap_or(&reason).to_string())
-        }
-        _ => Verdict::Undeterminable(again["reason"].as_str().unwrap_or(&reason).to_string()),
+    match one_run(c, run) {
+        (0, _, why) => ("flaky", why),
+        (_, true, why) => ("regressed", why),
+        (_, false, why) => ("undeterminable", why),
     }
 }
 
-/// The filing door: an unattended `idea` needs `--separate`, or a fold
+fn fno(args: &[&str]) -> Result<std::process::Output, String> {
+    std::process::Command::new(crate::scrape::fno_bin())
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("fno {}: {e}", args[..2].join(" ")))
+}
+
+/// The filing door. An unattended `idea` needs `--separate`, or a fold
 /// candidate answers `choice_required` and mints nothing.
 pub fn file_regression(c: &Candidate, reason: &str) -> Result<String, String> {
-    let fno = crate::scrape::fno_bin();
     let title = format!("regression: {}", c.title);
     let details = format!(
         "The recheck_probes of done node {} failed twice in one pass.\n\nplan: {}\nprobe: {reason}",
         c.id, c.plan
     );
-    let mut idea = std::process::Command::new(&fno);
-    idea.args([
+    let mut args = vec![
         "backlog",
         "idea",
         &title,
         "--separate",
         "--difficulty",
         "medium",
-    ])
-    .args(["--type", "bug", "--related", &c.id, "--source-node", &c.id])
-    .args([
+        "--type",
+        "bug",
+        "--related",
+        &c.id,
+        "--source-node",
+        &c.id,
         "--source-kind",
         "from_observation",
         "--origin-evidence",
         &c.plan,
-    ])
-    .args(["--details", &details, "--json"])
-    .stdin(std::process::Stdio::null());
+        "--details",
+        &details,
+        "--json",
+    ];
     if !c.cwd.is_empty() {
-        idea.args(["--cwd", &c.cwd]);
+        args.extend(["--cwd", &c.cwd]);
     }
     if let Some(epic) = &c.epic {
-        idea.args(["--parent", epic]);
+        args.extend(["--parent", epic]);
     }
-    let out = idea
-        .output()
-        .map_err(|e| format!("fno backlog idea: {e}"))?;
+    let out = fno(&args)?;
     let body: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
     let Some(id) = body["id"].as_str() else {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(format!(
-            "fno backlog idea minted nothing (exit {}): {stderr}",
+            "fno backlog idea minted nothing (exit {}): {}",
             out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr).trim()
         ));
     };
-    let link = std::process::Command::new(&fno)
-        .args(["backlog", "update", id, &format!("caused_by={}", c.id)])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("fno backlog update: {e}"))?;
-    if !link.status.success() {
+    if !fno(&["backlog", "update", id, &format!("caused_by={}", c.id)])?
+        .status
+        .success()
+    {
         return Err(format!("filed {id} but caused_by did not land"));
     }
     Ok(id.to_string())
 }
 
-/// One pass over the rows. Probes and filing are parameters so tests drive
-/// both without a shell or the live graph.
+/// One pass. Probes and filing are parameters so tests need no shell and no
+/// live graph. An open node whose `caused_by` names the original stops a
+/// second filing. A refused filing (the idea cap, most often) stays on the
+/// row as `file_error` and counts as `unfiled`.
 pub fn walk(
     rows: &[Value],
     apply: bool,
-    run: &dyn Fn(&[String]) -> (i32, String),
+    run: Runner,
     file: &mut dyn FnMut(&Candidate, &str) -> Result<String, String>,
 ) -> Value {
-    let open = open_regressions(rows);
+    let open: std::collections::HashMap<&str, &str> = rows
+        .iter()
+        .filter(|r| !matches!(text(r, "status"), "done" | "superseded"))
+        .filter(|r| !text(r, "caused_by").is_empty())
+        .map(|r| (text(r, "caused_by"), text(r, "id")))
+        .collect();
     let all = candidates(rows);
-    let skipped = all.len().saturating_sub(NODE_CAP);
     let mut results = Vec::new();
-    let (mut passed, mut failed, mut undeterminable, mut filed) = (0, 0, 0, 0);
-    // A refused filing (the idea cap, most often) is still a regression: it
-    // stays on the result row and the tick detail, never silent.
-    let mut unfiled = 0;
     for c in all.iter().take(NODE_CAP) {
-        let (verdict, reason) = match judge(c, run) {
-            Verdict::Pass => {
-                passed += 1;
-                ("pass", String::new())
-            }
-            Verdict::Flaky(r) => {
-                passed += 1;
-                ("flaky", r)
-            }
-            Verdict::Undeterminable(r) => {
-                undeterminable += 1;
-                ("undeterminable", r)
-            }
-            Verdict::Regressed(r) => {
-                failed += 1;
-                ("regressed", r)
-            }
-        };
+        let (verdict, reason) = judge(c, run);
         let mut row = json!({"node": c.id, "verdict": verdict, "reason": reason});
         if verdict == "regressed" {
-            if let Some(existing) = open.get(&c.id) {
-                row["regression"] = json!(existing);
-            } else if apply {
-                match file(c, &reason) {
-                    Ok(id) => {
-                        filed += 1;
-                        row["regression"] = json!(id);
-                    }
-                    Err(e) => {
-                        unfiled += 1;
-                        row["file_error"] = json!(e);
-                    }
-                }
+            match open.get(c.id.as_str()) {
+                Some(existing) => row["regression"] = json!(existing),
+                None if apply => match file(c, &reason) {
+                    Ok(id) => row["filed"] = json!(id),
+                    Err(e) => row["file_error"] = json!(e),
+                },
+                None => {}
             }
         }
         results.push(row);
     }
+    let count = |k: &str, v: &str| results.iter().filter(|r| r[k] == v).count();
+    let has = |k: &str| results.iter().filter(|r| !r[k].is_null()).count();
     json!({
         "key": RECHECK_KEY,
         "apply": apply,
         "checked": results.len(),
-        "passed": passed,
-        "failed": failed,
-        "undeterminable": undeterminable,
-        "filed": filed,
-        "unfiled": unfiled,
-        "over_cap": skipped,
+        "passed": count("verdict", "pass") + count("verdict", "flaky"),
+        "failed": count("verdict", "regressed"),
+        "undeterminable": count("verdict", "undeterminable"),
+        "filed": has("filed"),
+        "unfiled": has("file_error"),
+        "over_cap": all.len().saturating_sub(NODE_CAP),
         "results": results,
     })
-}
-
-/// `fno-agents probe-run recheck [--apply] [--json]`. Without `--apply` it
-/// files nothing. Exit 0 when nothing regressed, 1 when something did, 2
-/// when the graph is unreadable. stdout is always one JSON object.
-pub fn run(args: &[String]) -> i32 {
-    let apply = args.iter().any(|a| a == "--apply");
-    let (code, body) = pass(apply);
-    println!("{body}");
-    code
 }
 
 fn pass(apply: bool) -> (i32, Value) {
     let graph = crate::backlog::settings::graph_path();
     let rows = match crate::graph_store::read_rows(&graph) {
         Ok(rows) => rows,
-        Err(e) => {
-            return (
-                2,
-                json!({"key": RECHECK_KEY, "error": format!("graph unreadable: {e}")}),
-            )
-        }
+        Err(e) => return (2, json!({"error": format!("graph unreadable: {e}")})),
     };
-    let body = walk(
-        &rows,
-        apply,
-        &crate::acceptance_evidence::decide_probe_run,
-        &mut file_regression,
-    );
-    (i32::from(body["failed"].as_u64().unwrap_or(0) > 0), body)
+    let decide = crate::acceptance_evidence::decide_probe_run;
+    let body = walk(&rows, apply, &decide, &mut file_regression);
+    (i32::from(body["failed"] != 0), body)
+}
+
+/// `fno-agents probe-run recheck [--apply] [--json]`. Without `--apply` it
+/// files nothing. Exit 0 when nothing regressed, 1 when something did, 2 when
+/// the graph is unreadable. stdout is always one JSON object.
+pub fn run(args: &[String]) -> i32 {
+    let (code, body) = pass(args.iter().any(|a| a == "--apply"));
+    println!("{body}");
+    code
 }
 
 /// The daemon arm: a cadence stamp plus a one-in-flight gate.
@@ -298,31 +243,10 @@ pub struct Arm {
     in_flight: Arc<AtomicBool>,
 }
 
-fn tick_row(body: &Value) -> (u64, Option<String>, String) {
-    if let Some(e) = body["error"].as_str() {
-        return (0, Some("error".to_string()), e.to_string());
-    }
-    let n = |k: &str| body[k].as_u64().unwrap_or(0);
-    (
-        n("filed"),
-        None,
-        format!(
-            "checked {} passed {} regressed {} undeterminable {} filed {} unfiled {}",
-            n("checked"),
-            n("passed"),
-            n("failed"),
-            n("undeterminable"),
-            n("filed"),
-            n("unfiled")
-        ),
-    )
-}
-
 pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
-    let interval = Duration::from_secs(RECHECK_INTERVAL_S);
     {
         let mut last = arm.last_tick.lock().unwrap_or_else(|e| e.into_inner());
-        if last.is_some_and(|t| t.elapsed() < interval)
+        if last.is_some_and(|t| t.elapsed() < Duration::from_secs(RECHECK_INTERVAL_S))
             || arm.in_flight.swap(true, Ordering::SeqCst)
         {
             return;
@@ -332,22 +256,22 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
     let flag = Arc::clone(&arm.in_flight);
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
-        // Probes may read GitHub; inside the backoff they only spend refusals.
-        let backoff_s = if crate::gh_budget::admission_armed() {
-            crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), crate::gh_budget::now_ms())
-                .backoff_remaining_s
-        } else {
-            0
-        };
-        let (acted, skip, detail) = if backoff_s > 0 {
-            (
-                0,
-                Some("rate_limited".to_string()),
-                format!("GitHub rate limit backoff, {backoff_s}s left; the recheck waits"),
-            )
-        } else {
-            tick_row(&pass(true).1)
-        };
+        let (_, body) = pass(true);
+        let n = |k: &str| body[k].as_u64().unwrap_or(0);
+        let detail = body["error"]
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                format!(
+                    "checked {} regressed {} undeterminable {} filed {} unfiled {}",
+                    n("checked"),
+                    n("failed"),
+                    n("undeterminable"),
+                    n("filed"),
+                    n("unfiled")
+                )
+            });
+        let skip = body["error"].is_string().then_some("error");
         let journal = crate::loop_runtime::Journal::new_raw(
             home.events_jsonl(),
             crate::daemon::global_events_path(&home),
@@ -356,8 +280,8 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
             &journal,
             "symptom_recheck",
             crate::tick_ledger::SCHED_DAEMON,
-            acted,
-            skip.as_deref(),
+            n("filed"),
+            skip,
             Some(&detail),
             RECHECK_INTERVAL_S,
         );
@@ -367,113 +291,67 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
+    use crate::acceptance_evidence::decide_probe_run;
 
-    fn plan(dir: &std::path::Path, name: &str, probes: &str) -> String {
-        let p = dir.join(name);
-        std::fs::write(&p, format!("---\ntitle: t\n{probes}\n---\n\n# doc\n")).unwrap();
-        p.to_string_lossy().into_owned()
-    }
-
-    fn done(id: &str, plan: &str) -> Value {
-        json!({"id": id, "title": format!("{id} title"), "status": "done", "plan_path": plan, "cwd": ""})
-    }
-
-    fn no_file(_: &Candidate, _: &str) -> Result<String, String> {
-        panic!("nothing may be filed")
+    fn done(dir: &std::path::Path, id: &str, probes: &str) -> Value {
+        let plan = dir.join(format!("{id}.md"));
+        std::fs::write(&plan, format!("---\ntitle: t\n{probes}\n---\n")).unwrap();
+        json!({"id": id, "title": id, "status": "done", "plan_path": plan, "cwd": ""})
     }
 
     #[test]
-    fn symptom_recheck_reads_only_the_recheck_key_on_done_nodes() {
+    fn symptom_recheck_files_one_regression_and_reads_only_its_key() {
         let tmp = tempfile::tempdir().unwrap();
-        let declared = plan(tmp.path(), "a.md", "recheck_probes:\n  - \"echo ok\"");
-        let close_only = plan(tmp.path(), "b.md", "close_probes:\n  - \"exit 1\"");
-        let mut open = done("x-c", &declared);
+        let mut open = done(tmp.path(), "x-o", "recheck_probes:\n  - \"exit 1\"");
         open["status"] = json!("in_review");
-        let rows = vec![done("x-a", &declared), done("x-b", &close_only), open];
-        let body = walk(
-            &rows,
-            true,
-            &crate::acceptance_evidence::decide_probe_run,
-            &mut no_file,
-        );
-        assert_eq!(body["checked"], 1);
-        assert_eq!(body["results"][0]["node"], "x-a");
-        assert_eq!(body["results"][0]["verdict"], "pass");
-    }
-
-    #[test]
-    fn symptom_recheck_files_once_on_a_double_fail_and_dedupes_on_caused_by() {
-        let tmp = tempfile::tempdir().unwrap();
-        let failing = plan(tmp.path(), "f.md", "recheck_probes:\n  - \"exit 3\"");
-        let mut rows = vec![done("x-f", &failing)];
+        let mut rows = vec![
+            done(tmp.path(), "x-p", "recheck_probes:\n  - \"echo ok\""),
+            done(tmp.path(), "x-c", "close_probes:\n  - \"exit 1\""),
+            done(tmp.path(), "x-f", "recheck_probes:\n  - \"exit 3\""),
+            open,
+        ];
         let mut filed = Vec::new();
         let mut file = |c: &Candidate, _: &str| {
             filed.push(c.id.clone());
             Ok("x-new".to_string())
         };
-        let body = walk(
-            &rows,
-            true,
-            &crate::acceptance_evidence::decide_probe_run,
-            &mut file,
+        let body = walk(&rows, true, &decide_probe_run, &mut file);
+        assert_eq!(
+            (body["checked"].as_u64(), body["passed"].as_u64()),
+            (Some(2), Some(1))
         );
-        assert_eq!(body["results"][0]["verdict"], "regressed");
-        assert_eq!(body["filed"], 1);
+        assert_eq!(body["results"][1]["verdict"], "regressed");
         assert_eq!(filed, vec!["x-f".to_string()]);
 
-        // The filed node is open and names the original: the next pass skips.
+        // The filed node is open and names the original: the next pass skips it.
         rows.push(json!({"id": "x-new", "status": "idea", "caused_by": "x-f"}));
-        let body = walk(
-            &rows,
-            true,
-            &crate::acceptance_evidence::decide_probe_run,
-            &mut no_file,
-        );
-        assert_eq!(body["filed"], 0);
-        assert_eq!(body["results"][0]["regression"], "x-new");
-
-        // A dry run reports the regression and files nothing.
-        let body = walk(
-            &rows[..1],
-            false,
-            &crate::acceptance_evidence::decide_probe_run,
-            &mut no_file,
-        );
-        assert_eq!(body["failed"], 1);
+        let mut never = |_: &Candidate, _: &str| -> Result<String, String> { panic!("refiled") };
+        let body = walk(&rows, true, &decide_probe_run, &mut never);
+        assert_eq!(body["results"][1]["regression"], "x-new");
         assert_eq!(body["filed"], 0);
     }
 
     #[test]
     fn symptom_recheck_never_files_on_flaky_or_undeterminable() {
-        let tmp = tempfile::tempdir().unwrap();
-        let declared = plan(tmp.path(), "a.md", "recheck_probes:\n  - \"echo ok\"");
         let c = Candidate {
-            epic: None,
             id: "x-a".into(),
             title: String::new(),
-            plan: declared,
+            plan: String::new(),
             cwd: String::new(),
+            epic: None,
         };
-        let fail = r#"{"reason":"`p` exited 1","results":[{"verdict":"FAIL"}]}"#;
-        let calls = Cell::new(0);
+        let fail = r#"{"reason":"exited 1","results":[{"verdict":"FAIL"}]}"#;
+        let calls = std::cell::Cell::new(0);
         let flaky = |_: &[String]| {
             calls.set(calls.get() + 1);
-            if calls.get() == 1 {
-                (1, fail.to_string())
-            } else {
-                (0, "{}".to_string())
-            }
+            (if calls.get() == 1 { 1 } else { 0 }, fail.to_string())
         };
-        assert!(matches!(judge(&c, &flaky), Verdict::Flaky(_)));
-        let blocked = |_: &[String]| {
-            (
-                1,
-                r#"{"reason":"BLOCKED","results":[{"verdict":"BLOCKED"}]}"#.to_string(),
-            )
-        };
-        assert!(matches!(judge(&c, &blocked), Verdict::Undeterminable(_)));
-        let unreadable = |_: &[String]| (2, r#"{"reason":"plan unreadable"}"#.to_string());
-        assert!(matches!(judge(&c, &unreadable), Verdict::Undeterminable(_)));
+        assert_eq!(judge(&c, &flaky).0, "flaky");
+        let blocked = |_: &[String]| (1, r#"{"results":[{"verdict":"BLOCKED"}]}"#.to_string());
+        assert_eq!(judge(&c, &blocked).0, "undeterminable");
+        assert_eq!(
+            judge(&c, &|_: &[String]| (2, "{}".to_string())).0,
+            "undeterminable"
+        );
     }
 }

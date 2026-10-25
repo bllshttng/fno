@@ -92,12 +92,13 @@ A plan that fixes a lasting symptom declares `recheck_probes:` in frontmatter. T
 - runs the list through `fno-agents probe-run --key recheck_probes`, the same runner as the two gates above
 - counts only a FAIL verdict. BLOCKED, SKIP and an unreadable plan read `undeterminable` and file nothing
 - runs a failing list a second time. A pass on the retry reads `flaky` and files nothing
-- files one bug node for a second fail, `regression: <title>`, with `caused_by` naming the original, under the original's nearest epic when it has one
+- files one bug node for a second fail, `regression: <title>`, with `caused_by` naming the original
+- files it under the original's nearest epic, if one exists
 - files nothing while an open node already carries `caused_by` for that original
 
 The idea cap (`backlog.max_open_ideas`) still applies. The cap counts per epic, so the nearest epic gives the filing that epic's room. When the cap refuses, the result row keeps the regression with a `file_error`, and the tick detail counts it as `unfiled`. The recheck does not reopen the original. `fno backlog reopen` refuses a node whose PR merged, and its refusal says to file the remaining work as a new node.
 
-Each pass writes one `control_plane_tick` row with `arm: symptom_recheck`. Run `fno-agents probe-run recheck --json` for a dry run that files nothing. It exits 1 when a node regressed.
+Each pass writes one `control_plane_tick` row with `arm: symptom_recheck`. Run `fno-agents probe-run recheck --json` for a dry run that files nothing. If a node regressed, it exits 1.
 
 `close_probes` is not re-run. Measured 2026-10-25: 13 of 21 done nodes' close probes failed for reasons that were not regressions. Those reasons were expired event windows and retired files. A plan-less node has no probe to re-run, so the recheck does not cover it.
 
