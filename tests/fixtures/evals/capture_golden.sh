@@ -366,7 +366,11 @@ ROWHOLD='{"ts": "2026-01-01T00:03:00Z", "task_id": "holdout", "tier": "regressio
 } > "$ROWS"
 
 case_run export-no-out "$CQ/repo" - export --bank "$CQ/repo/evals/bank"
-case_run export-hp "$CQ/repo" - export --bank "$CQ/repo/evals/bank" --out "$FIXBASE/state/train.jsonl"
+# --history is explicit on the two row-reading cases: the rows contract is
+# pinned by flag because the native config reader's documented surface is
+# TOML-only, and this fixture pins a YAML config the Python leg read but the
+# native dispatch must not have to parse.
+case_run export-hp "$CQ/repo" - export --bank "$CQ/repo/evals/bank" --history "$ROWS" --out "$FIXBASE/state/train.jsonl"
 
 # A bank with no cohorts.yaml refuses the export outright.
 NS="$FIXBASE/no-split"
@@ -375,7 +379,7 @@ bank_grade_only "$NS"
 case_run export-no-split "$NS/repo" - export --bank "$NS/repo/evals/bank" --out "$FIXBASE/state/x.jsonl"
 
 case_run qualify-no-split "$NS/repo" - qualify --bank "$NS/repo/evals/bank"
-case_run qualify-hp "$CQ/repo" - qualify --bank "$CQ/repo/evals/bank"
+case_run qualify-hp "$CQ/repo" - qualify --bank "$CQ/repo/evals/bank" --history "$ROWS"
 
 ## ── the native folds through the leaf ─────────────────────────────────────
 
