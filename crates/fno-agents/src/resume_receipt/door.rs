@@ -463,7 +463,13 @@ fn run_validate(args: &[String]) -> i32 {
         (String::new(), String::new())
     };
     let claims_root: Option<PathBuf> = value_of(&pairs, "--claims-root").map(expand_tilde);
-    let (state, record) = claims::status(&format!("node:{node}"), claims_root.as_deref());
+    // The quiet read: the printing `status` wrapper would put a diagnostic on
+    // stderr where the Python leg printed nothing (the frozen golden).
+    let (state, record) =
+        match claims::status_checked(&format!("node:{node}"), claims_root.as_deref()) {
+            Ok(pair) => pair,
+            Err(_) => (ClaimState::Corrupted, None),
+        };
     // Fail CLOSED on a corrupted lockfile: an unreadable claim cannot confirm
     // ownership, so it must not collapse to "free" and grant an ok verdict.
     if state == ClaimState::Corrupted {
