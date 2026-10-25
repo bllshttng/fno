@@ -55,6 +55,12 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 }
 cd "$repo_root" || exit 2
 
+# The smoke sandbox pins the cargo build-dir inside its throwaway HOME under
+# TMPDIR, and a runner's /tmp carries a size quota a full dependency-graph
+# debug build exceeds (os error 122 mid-build). The workspace target dir rides
+# the main disk; the smoke shards pin the same way for their journey builds.
+export CARGO_BUILD_BUILD_DIR="$repo_root/target"
+
 # A dirty tree cannot be pinned to a sha, so the trials would measure something
 # nobody can name. That is a reason to stand down, NOT a reason to go red: this
 # file is auto-discovered by `fno doctor test smoke` (the scripts/tests/*.sh

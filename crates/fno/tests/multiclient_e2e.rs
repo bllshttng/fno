@@ -693,10 +693,19 @@ fn multiclient_mux_ls_reports_live_counts_and_heals_a_corpse() {
                 .collect()
         })
         .unwrap_or_default();
+    // The store's dead-letter names the commit error a finally-lost row died
+    // of; unreadable reads as a placeholder so the assert never masks itself.
+    let lost = std::fs::read_to_string(
+        journal
+            .parent()
+            .expect("journal has a parent")
+            .join("events.db.lost.jsonl"),
+    )
+    .unwrap_or_else(|e| format!("unreadable: {e}"));
     assert!(
         healed.contains("mux_session_healed") && healed.contains("dead.sock"),
         "the heal journals one row naming the session; got: {healed:?}; \
-         checked: {checked:?}; store dir: {listing:?}"
+         checked: {checked:?}; store dir: {listing:?}; lost: {lost:?}"
     );
     assert!(
         stdout.contains("odd: alive (unqueryable"),
