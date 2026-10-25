@@ -1745,6 +1745,9 @@ pub(crate) struct ReconcileDeps<'a> {
     pub pr_merged: Box<dyn Fn(i64) -> Option<bool> + 'a>,
     pub merge_sha: Box<dyn Fn(i64) -> Option<String> + 'a>,
     pub run_replay: Box<dyn Fn(&str, &str, &str) -> i32 + 'a>,
+    /// The after-run id minter: a seam so a test can pin the id its canned
+    /// re-read rows carry (the real one stamps the wall clock).
+    pub mint_after: Box<dyn Fn(&str) -> String + 'a>,
     pub reread: Box<dyn Fn() -> Vec<Value> + 'a>,
     pub lines: Vec<String>,
 }
@@ -1769,6 +1772,7 @@ fn reconcile(cwd: &Path, pr_number: Option<i64>) -> i32 {
         pr_merged: Box::new(move |pr| pr_merged(&merged_root, pr)),
         merge_sha: Box::new(move |pr| merge_sha(&sha_root, pr)),
         run_replay: Box::new(move |ci, rref, rid| run_replay(&replay_root, ci, rref, rid)),
+        mint_after: Box::new(mint_run_id),
         reread: {
             let journals = journals.clone();
             Box::new(move || read_events(&journals[0]))
@@ -1930,7 +1934,7 @@ fn reeval_pr(
     }
 
     let merge_sha = (deps.merge_sha)(pr).unwrap_or_else(|| "origin/main".to_string());
-    let run_id_after = mint_run_id(&skill_id);
+    let run_id_after = (deps.mint_after)(&skill_id);
     for corpus_item in &replay_set {
         (deps.run_replay)(corpus_item, &merge_sha, &run_id_after);
     }
@@ -2142,6 +2146,7 @@ mod tests {
             pr_merged: Box::new(|_| Some(true)),
             merge_sha: Box::new(|_| Some("mergesha12345".to_string())),
             run_replay: Box::new(|_, _, _| 1),
+            mint_after: Box::new(|skill| format!("obs-{skill}-x")),
             reread: Box::new(Vec::new),
             lines: Vec::new(),
         }
@@ -2456,6 +2461,14 @@ mod tests {
 
         // Filing the node fails: NO terminal event posture - the retry word.
         let mut deps = dry_tick_deps(base(), "assisted");
+        deps.synthesize = Box::new(|_| {
+            Ok(Proposal {
+                verdict: "propose_pr".into(),
+                hunks: vec![hunk(&[])],
+                justification: None,
+                no_diff_reason: None,
+            })
+        });
         deps.file_node = Box::new(|_, _, _| None);
         assert_eq!(tick_core(&mut deps, &[], "blueprint", "fno:blueprint"), 0);
         assert!(deps.lines[0].contains("will retry next tick"));
@@ -2578,7 +2591,7 @@ mod tests {
         let after: Vec<Value> = vec![
             ev(
                 "skill_eval_finding",
-                json!({"run_id": "after", "skill_id": "fno:blueprint",
+                json!({"run_id": "obs-fno:blueprint-x", "skill_id": "fno:blueprint",
                 "dimension": "collision_free", "verdict": "pass", "corpus_item_id": "r1-item"}),
             ),
             receipt,
