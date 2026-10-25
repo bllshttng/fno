@@ -419,6 +419,12 @@ pub(crate) fn bg_fno_invocation(session_id: &str) -> bool {
         return false;
     };
     for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        // Every invocation form carries the `/fno:` token, and a sweep
+        // rescans negative rows each pass, so most lines must skip the
+        // serde parse, not pay it.
+        if !line.contains("/fno:") {
+            continue;
+        }
         let Ok(event) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
