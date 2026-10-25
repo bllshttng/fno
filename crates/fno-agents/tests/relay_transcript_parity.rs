@@ -90,6 +90,7 @@ fn the_transcript_door_matches_the_captured_leg_and_keeps_its_extra_strength() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/relay_transcript");
     let root = tempfile::tempdir().unwrap();
     for (index, case) in cases.iter().enumerate() {
+        let label = case.label;
         let case_root = root.path().join(format!("case-{index:02}"));
         std::fs::create_dir_all(&case_root).unwrap();
         let projects = plant(&case_root, &case.files);
@@ -138,7 +139,7 @@ fn the_transcript_door_matches_the_captured_leg_and_keeps_its_extra_strength() {
     let answered: serde_json::Value = serde_json::from_str(stdout.trim())
         .unwrap_or_else(|e| panic!("door stdout is not JSON: {e}"));
     assert_eq!(
-        answered["path"].and_then(|p| p.as_str()),
+        answered.get("path").and_then(|p| p.as_str()),
         Some(
             projects
                 .join(format!("{CASE_UUID}.jsonl"))
