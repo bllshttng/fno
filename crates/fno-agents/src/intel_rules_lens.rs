@@ -118,7 +118,6 @@ pub fn fold(
     out
 }
 
-/// `fno-agents intel --lens rules [--days N] [--sample N|all] [--labels <file>]`.
 pub(crate) fn run_lens(
     days: u64,
     sample: &crate::intel_insights::SampleRequest,
