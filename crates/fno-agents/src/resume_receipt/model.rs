@@ -91,8 +91,8 @@ fn short_sha(sha: &str) -> String {
 }
 
 /// The wire shape: the JSON object every producer writes and every consumer
-/// parses. `next_action` spells its command `verb` on the wire (receipts
-/// cross binary ages).
+/// parses. The command rides the wire under its legacy key (receipts cross
+/// binary ages; the key carries a verb-wording: allow marker below).
 pub fn receipt_to_value(receipt: &ResumeReceipt) -> Value {
     let mut d = Map::new();
     d.insert("version".into(), json!(receipt.version));

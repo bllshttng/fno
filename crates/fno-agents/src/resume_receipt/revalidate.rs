@@ -479,7 +479,10 @@ mod tests {
     #[test]
     fn unparsed_timestamps_sort_first_and_never_supersede() {
         let undated = json!({"type": "termination", "node_id": "x-1"});
-        let dated = vec![undated, ev("2026-10-24T10:00:00Z", "delegated", "x-1")];
+        let dated = vec![
+            undated.clone(),
+            ev("2026-10-24T10:00:00Z", "delegated", "x-1"),
+        ];
         let canon = canonicalize_node_events(&dated);
         assert_eq!(event_kind(&canon[0]), Some("termination"));
         // And an undated late event never supersedes a dated receipt.
