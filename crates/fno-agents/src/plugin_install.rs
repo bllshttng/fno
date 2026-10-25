@@ -992,11 +992,11 @@ fn install_claude(stage: &Path, force: bool) -> Result<String, String> {
         ],
         None,
     )?;
-    let plugin = |verb: &str| -> Vec<String> {
+    let plugin = |action: &str| -> Vec<String> {
         vec![
             "claude".into(),
             "plugin".into(),
-            verb.into(),
+            action.into(),
             PLUGIN_ID.into(),
         ]
     };
