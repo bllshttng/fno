@@ -138,7 +138,7 @@ def _transcript_path(harness: str, session_id: str) -> Optional[Path]:
 def _landed_map(msgs: list[dict], budget_s: float | None = None) -> dict[str, bool | None]:
     """Per-message landed verdict, one transcript read per recipient session.
     ``None`` when coordinates are missing, self-send, or unreadable."""
-    out: dict[str, Optional[bool]] = dict.fromkeys((m.get("id") for m in msgs))
+    out: dict[str, Optional[bool]] = dict.fromkeys((str(m.get("id")) for m in msgs))
     by_store: dict[tuple[str, str], list[dict]] = {}
     for m in msgs:
         if _is_self_send(m):
@@ -165,7 +165,7 @@ def landed_states(
 ) -> dict[str, Optional[bool]]:
     """Landed tri-state for ``msgs``: durable proof first, then a transcript read."""
     to_check = [m for m in msgs if m.get("id") not in already_landed]
-    out: dict[str, Optional[bool]] = dict.fromkeys((m.get("id") for m in msgs), True)
+    out: dict[str, Optional[bool]] = dict.fromkeys((str(m.get("id")) for m in msgs), True)
     out.update(_landed_map(to_check, budget_s))
     return out
 
