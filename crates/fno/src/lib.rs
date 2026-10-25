@@ -105,6 +105,7 @@ pub mod setup_autowire;
 #[cfg(test)]
 #[path = "setup_autowire_tests.rs"]
 mod setup_autowire_tests;
+pub mod setup_cmds;
 pub mod setup_detect;
 pub mod setup_profile;
 pub mod setup_run;
