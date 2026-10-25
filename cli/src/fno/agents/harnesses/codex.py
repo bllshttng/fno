@@ -240,11 +240,10 @@ def git_writable_config_args(cwd: Path) -> list[str]:
     # variable is unset, and the argv-parity tests would (correctly) fail.
     from fno.agents.writable_dirs import published_worker_writable_dirs
 
-    roots = [
-        root
-        for root in (_git_common_dir(cwd), _resolve_plan_dir(cwd))
-        if root
-    ]
+    roots = [*_git_write_roots(cwd)]
+    plan_dir = _resolve_plan_dir(cwd)
+    if plan_dir:
+        roots.append(plan_dir)
     for extra in published_worker_writable_dirs():
         if extra not in roots:
             roots.append(extra)
@@ -261,6 +260,34 @@ def _git_common_dir(cwd: Path) -> str:
     return str(common) if common else ""
 
 
+def _git_write_roots(cwd: Path) -> list[str]:
+    """The git dirs a commit from ``cwd`` writes: the common dir, then, in a
+    linked worktree, its own gitdir ``<repo>/.git/worktrees/<name>``.
+
+    codex marks the gitdir named by the cwd's ``.git`` pointer file read-only
+    inside every writable root, so the common dir alone leaves a linked
+    worktree unable to take ``index.lock`` (measured on codex-cli 0.164.0).
+    Mirror of ``provider.rs::git_write_roots``.
+    """
+    import subprocess
+
+    common = _git_common_dir(cwd)
+    if not common:
+        return []
+    roots = [common]
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--absolute-git-dir"],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return roots
+    own = out.stdout.strip() if out.returncode == 0 else ""
+    if own and "\n" not in own and Path(own).resolve() != Path(common).resolve():
+        roots.append(own)
+    return roots
+
+
 def _resolve_plan_dir(cwd: Path) -> str:
     """Absolute configured plan directory for ``cwd``; ``""`` on failure."""
     try:
@@ -272,7 +299,7 @@ def _resolve_plan_dir(cwd: Path) -> str:
 
 
 def git_writable_args(cwd: Path) -> list[str]:
-    """Return ``--add-dir <git-common-dir>`` so a bounded worker can commit.
+    """Return ``--add-dir`` git grants so a bounded worker can commit.
 
     codex's ``workspace-write`` policy marks ``<project_root>/.git`` read-only,
     so a sandboxed worker cannot take ``index.lock`` and every commit fails
@@ -281,17 +308,16 @@ def git_writable_args(cwd: Path) -> list[str]:
     ``<repo>/.git/worktrees/<name>/``, outside the workspace entirely, and the
     resulting "wrong path" error has been misread as data loss.
 
-    The git COMMON dir covers both shapes in one token: it is ``<repo>/.git``
-    either way, and it contains the per-worktree gitdir alongside the shared
-    ``objects/`` and ``refs/`` a commit also writes. ``--add-dir`` is repeatable
-    and additive, so this composes with a caller's own ``--add-dir`` instead of
-    clobbering it the way ``-c sandbox_workspace_write.writable_roots`` would.
+    The grant is :func:`_git_write_roots`: the common dir, plus a linked
+    worktree's own gitdir, which codex keeps read-only inside the common dir.
+    ``--add-dir`` is repeatable and additive, so this composes with a caller's
+    own ``--add-dir`` instead of clobbering it the way
+    ``-c sandbox_workspace_write.writable_roots`` would.
 
     Returns ``[]`` outside a repo, or on any git failure - a grant we cannot
     resolve must never break the spawn.
     """
-    common = _git_common_dir(cwd)
-    return ["--add-dir", common] if common else []
+    return [tok for root in _git_write_roots(cwd) for tok in ("--add-dir", root)]
 
 
 def plan_writable_args(cwd: Path) -> list[str]:
