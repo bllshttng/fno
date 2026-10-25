@@ -487,6 +487,19 @@ fn approvals_match_the_python_commands() {
     }
 }
 
+fn events_stores(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(events_stores(&path));
+        } else if path.file_name().is_some_and(|n| n == "events.db") {
+            found.push(path);
+        }
+    }
+    found
+}
+
 #[test]
 fn a_decision_owes_one_event_and_lands_in_the_events_file() {
     let mut root = std::env::temp_dir();
@@ -523,17 +536,20 @@ fn a_decision_owes_one_event_and_lands_in_the_events_file() {
     let owed: i64 = conn
         .query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get(0))
         .unwrap();
-    // The sqlite store is the write boundary, so the journal path only names
-    // the store; read the event back through it.
-    let landed = fno_agents::event_store::query_events(
-        &root.join("events.jsonl"),
-        &fno_agents::event_store::EventQuery {
-            types: vec!["approval_decided".to_string()],
-            ..Default::default()
-        },
-    )
-    .map(|rows| rows.len())
-    .unwrap_or(0);
+    // The sqlite store is the write boundary and the state root decides where
+    // it sits, so count the event in whichever events.db the run created.
+    let landed: i64 = events_stores(&root)
+        .iter()
+        .filter_map(|store| fno_agents::event_store::open_read(store).ok())
+        .filter_map(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM events WHERE type = 'approval_decided'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .ok()
+        })
+        .sum();
     assert!(
         owed == 0 && landed == 1 || owed == 1,
         "the event is drained or still owed, never lost: owed={owed} landed={landed}"
