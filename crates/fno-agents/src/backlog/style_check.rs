@@ -1801,6 +1801,16 @@ diff --git a/n.md b/n.md
         ] {
             assert_eq!(glue(body), 0, "must stay clean: {body:?}");
         }
+        // A junk run of one repeated character cannot split: the list holds
+        // no tiling entries.
+        let runs = "x".repeat(600);
+        assert_eq!(
+            check(&runs, "mail", None)
+                .iter()
+                .filter(|v| v.rule == 9)
+                .count(),
+            0
+        );
         // The rule rides the capped surfaces with the word cap.
         let pr = check("Staticprogress proves the gate here.\n", "pr-body", None);
         assert!(pr.iter().all(|v| v.rule != 9));
