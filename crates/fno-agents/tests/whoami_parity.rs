@@ -148,6 +148,7 @@ fn whoami_matches_the_python_goldens() {
         cmd.args(["spawn-overlay", "whoami"]);
         cmd.args(&rest);
         child_env(&mut cmd, root, case);
+        cmd.envs(fno_agents::test_run::self_owner_env());
         cmd.current_dir(root.join("project"));
         let out = cmd.output().expect("the native binary runs");
         let exit = out.status.code();
