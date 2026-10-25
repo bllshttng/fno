@@ -971,20 +971,18 @@ fn mint_run_id(skill_id: &str) -> String {
 }
 
 fn pr_merged(repo_root: &Path, pr: i64) -> Option<bool> {
-    let out = crate::gh_budget::output(
-        Command::new("gh")
-            .args([
-                "pr",
-                "view",
-                &pr.to_string(),
-                "--json",
-                "state",
-                "-q",
-                ".state",
-            ])
-            .current_dir(repo_root),
-    )
-    .ok()?;
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "pr",
+        "view",
+        &pr.to_string(),
+        "--json",
+        "state",
+        "-q",
+        ".state",
+    ])
+    .current_dir(repo_root);
+    let out = crate::gh_budget::output(cmd).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -993,20 +991,18 @@ fn pr_merged(repo_root: &Path, pr: i64) -> Option<bool> {
 
 /// Best-effort merge commit SHA; None falls back to origin/main at the caller.
 fn merge_sha(repo_root: &Path, pr: i64) -> Option<String> {
-    let out = crate::gh_budget::output(
-        Command::new("gh")
-            .args([
-                "pr",
-                "view",
-                &pr.to_string(),
-                "--json",
-                "mergeCommit",
-                "-q",
-                ".mergeCommit.oid",
-            ])
-            .current_dir(repo_root),
-    )
-    .ok()?;
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "pr",
+        "view",
+        &pr.to_string(),
+        "--json",
+        "mergeCommit",
+        "-q",
+        ".mergeCommit.oid",
+    ])
+    .current_dir(repo_root);
+    let out = crate::gh_budget::output(cmd).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -1389,18 +1385,17 @@ fn apply_and_open_pr(args: &OpenArgs) -> Result<(Option<i64>, String), OpenError
         std::fs::create_dir_all(parent).map_err(|e| OpenError::Transient(e.to_string()))?;
     }
     std::fs::write(&body_file, body).map_err(|e| OpenError::Transient(e.to_string()))?;
-    let pr = crate::gh_budget::output(
-        Command::new("gh")
-            .args([
-                "pr",
-                "create",
-                "--title",
-                &format!("skill-diff: {skill_id} (run {short_run})"),
-                "--body-file",
-            ])
-            .arg(&body_file)
-            .current_dir(repo_root),
-    );
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "pr",
+        "create",
+        "--title",
+        &format!("skill-diff: {skill_id} (run {short_run})"),
+        "--body-file",
+    ])
+    .arg(&body_file)
+    .current_dir(repo_root);
+    let pr = crate::gh_budget::output(cmd);
     let _ = std::fs::remove_file(&body_file);
     let out = pr.map_err(|e| OpenError::Transient(e.to_string()))?;
     if !out.status.success() {
