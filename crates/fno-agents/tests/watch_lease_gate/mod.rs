@@ -115,11 +115,21 @@ fn watching_ignored_names_a_missing_claim_as_permanent() {
         "the refusal must stop the re-arm loop it caused: {}",
         d.message
     );
+    // The no-claim case has no self-service way back: the manifest is
+    // write-once, so a rerun cannot restore a pair it never recorded. The
+    // refusal names the hand-off and never promises a rerun.
     assert!(
-        d.message.contains("fno do target start <node>"),
+        d.message
+            .contains("Hand the PR to a session that holds the claim"),
         "the refusal must name the way back, not only the dead end: {}",
         d.message
     );
+    assert!(
+        !d.message.contains("Get the claim back"),
+        "the rerun remedy is a lie for a missing claim pair: {}",
+        d.message
+    );
+    assert!(d.message.contains("write-once"));
     assert!(!d.message.contains("Arm a harness-tracked watcher"));
     assert!(d.message.contains("CI still running on PR #17"));
 }
