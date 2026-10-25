@@ -4408,7 +4408,7 @@ mod tests {
             assert_eq!(
                 derive_change(Some(&previous), &data, ""),
                 expected,
-                "leg {name}: {data}"
+                "leg {name}: {data:?}"
             );
         }
     }
