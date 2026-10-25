@@ -29,9 +29,9 @@ pub fn run(args: &[String]) -> i32 {
         "macro" => crate::evals_arm::run_evals_arm(&macro_argv(rest)),
         "grade" => crate::evals::research_grade::run(rest),
         "graduate" => crate::evals::graduate::run(rest),
-        "run" => run_verb(rest),
-        "export" => export_verb(rest),
-        "qualify" => qualify_verb(rest),
+        "run" => run_command(rest),
+        "export" => export_command(rest),
+        "qualify" => qualify_command(rest),
         // The remainder lands with the port's later commits; the skeleton
         // answers every spelling so the dispatch shape compiles first.
         _ => {
@@ -210,7 +210,7 @@ fn agents_home() -> std::path::PathBuf {
 /// above 20 total runs, the cohort split validation, the sweep, and the
 /// per-task loop. The exit codes are the leaf's: 0 graded, 1 refusal, 2 a
 /// load-time discipline violation.
-fn run_verb(rest: &[String]) -> i32 {
+fn run_command(rest: &[String]) -> i32 {
     let repeat: u32 = match flag_lookup(rest, "--repeat")
         .or_else(|| flag_lookup(rest, "-k"))
         .and_then(|v| v.parse().ok())
@@ -531,7 +531,7 @@ fn cohort_setup(rest: &[String], bank_dir: &std::path::Path) -> Result<Vec<Strin
 /// The export command: train-cohort history for prompt tuning. ONLY train
 /// rows, so held-out trajectories never enter a tuning view. Exit 0
 /// exported / 1 no declared split / 2 refused or setup error.
-fn export_verb(rest: &[String]) -> i32 {
+fn export_command(rest: &[String]) -> i32 {
     let Some(out_path) = flag_lookup(rest, "--out") else {
         eprintln!("Error: export requires --out FILE");
         return 2;
@@ -586,7 +586,7 @@ fn export_verb(rest: &[String]) -> i32 {
 /// coverage only, never a held-out prompt or trace. Reports
 /// {"qualified": false, "reason"} (exit 0) when the split is absent,
 /// refused, stale, or empty. Exit 2 = setup error.
-fn qualify_verb(rest: &[String]) -> i32 {
+fn qualify_command(rest: &[String]) -> i32 {
     let bank_dir = resolve_bank_dir(flag_lookup(rest, "--bank"));
     if !bank_dir.join("cohorts.yaml").exists() {
         println!(
