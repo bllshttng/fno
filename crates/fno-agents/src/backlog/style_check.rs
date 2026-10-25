@@ -735,11 +735,17 @@ fn check_message_length(masked: &str, count: usize, cap: usize) -> Vec<Violation
     }]
 }
 
-/// The glue wordlist: google-10000-english (MIT) filtered to ASCII words of
-/// 3+ letters, minus morphology-only entries that would carry prefix and
-/// suffix splits, plus a tech and fleet supplement. The list is closed; the
-/// rebuild script and the measurement record live in docs/style-rules.md.
+/// The glue wordlists. The split tier (`style_words.txt`) validates split
+/// PARTS: google-10000-english (MIT) filtered to ASCII words of 3+ letters,
+/// minus morphology-only entries that would carry prefix and suffix splits,
+/// plus a tech and fleet supplement. The protection tier
+/// (`style_protect.txt`) covers the WHOLE token: dwyl english-words (public
+/// domain) entries at least 10 letters long or frequency-attested, so an
+/// established compound never fires while obscure junk that shields
+/// fabricated glue stays outside. Both lists are closed; the rebuild script
+/// and the measurement record live in docs/style-rules.md.
 static GLUE_WORDLIST: &str = include_str!("style_words.txt");
+static GLUE_PROTECT: &str = include_str!("style_protect.txt");
 
 const GLUE_MIN_TOKEN: usize = 8;
 const GLUE_MIN_PART: usize = 3;
@@ -748,6 +754,11 @@ const GLUE_MIN_DIGIT_RUN: usize = 4;
 fn dictionary() -> &'static BTreeSet<&'static str> {
     static SET: OnceLock<BTreeSet<&'static str>> = OnceLock::new();
     SET.get_or_init(|| GLUE_WORDLIST.split_whitespace().collect())
+}
+
+fn protection() -> &'static BTreeSet<&'static str> {
+    static SET: OnceLock<BTreeSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| GLUE_PROTECT.split_whitespace().collect())
 }
 
 /// True when a light inflection of `token` is a listed word, so "backfilled"
@@ -875,7 +886,10 @@ fn check_glue(masked: &str) -> Vec<Violation> {
             detail,
         };
         if low.bytes().all(|b| b.is_ascii_alphabetic()) {
-            if low.len() >= GLUE_MIN_TOKEN && !dict.contains(low.as_str()) && !stem_hit(&low, dict)
+            if low.len() >= GLUE_MIN_TOKEN
+                && !protection().contains(low.as_str())
+                && !dict.contains(low.as_str())
+                && !stem_hit(&low, dict)
             {
                 if let Some(parts) = greedy_split(&low, dict) {
                     let detail = if parts.len() == 2 {
@@ -1779,6 +1793,9 @@ diff --git a/n.md b/n.md
             "well-formed ids and PR 3430 both moved.\n",
             "the `Staticprogress` token is quoted, so it passes.\n",
             "ownership of the footnote moved meanwhile.\n",
+            "handle this beforehand and report alongside.\n",
+            "the bottleneck bookkeeping aftermath is concurrent.\n",
+            "rebasing broke the basename matchers again.\n",
         ] {
             assert_eq!(glue(body), 0, "must stay clean: {body:?}");
         }
