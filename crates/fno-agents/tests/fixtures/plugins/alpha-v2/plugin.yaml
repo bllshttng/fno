@@ -1,0 +1,14 @@
+id: alpha
+version: 1.1.0
+footnote_compat: {minimum: 0.1.0, maximum: "99.0"}
+roles:
+  - role: {id: editor, function_id: docs}
+    function: {id: docs}
+    mission: Edit drafts
+    deliverable_kinds: [edit]
+    authority_ceiling: advisory
+    review_policy: {}
+    delivery_policy: {}
+    default_topology: direct
+evaluators:
+  - {id: check, command: bash evaluators/check.sh, required: false}

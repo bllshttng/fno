@@ -161,6 +161,7 @@ pub mod decide_door;
 pub mod decision_index;
 pub mod decision_trace;
 pub mod delivery_completion;
+pub mod delivery_eval;
 pub mod digest;
 pub mod dispatch_credit;
 pub mod disposition_gate;
@@ -276,6 +277,7 @@ pub mod lead_history;
 pub mod lead_hygiene;
 pub mod lead_mail;
 pub mod lead_pushback;
+pub mod lead_reads;
 pub mod lead_settle;
 pub mod lead_state;
 pub mod lead_term;
@@ -398,6 +400,7 @@ pub mod planning_lane;
 pub mod plans_dirs;
 pub mod plans_path;
 pub mod plugin_install;
+pub mod plugins;
 pub mod post_merge;
 pub mod pr_admission;
 pub mod pr_base_check;
@@ -466,6 +469,7 @@ pub mod resume_receipt;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
+pub mod retro;
 pub mod review_capability;
 pub mod review_doors;
 pub mod review_findings;
@@ -590,6 +594,7 @@ pub mod test_delta;
 pub mod test_hold;
 pub mod test_run;
 mod test_run_journal;
+pub mod think_daily;
 pub mod thread_host;
 pub mod tick_ledger;
 pub mod tool_activity;
@@ -1635,7 +1640,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "orphan_test_binary_reaped",
     "orphan_owner_server_reaped",
     // One local test run through `fno doctor test`: a started and a finished
-    // row joined by run_id (test_run_journal.rs).
+    // row joined by run_id, plus a refused row when the door refuses before
+    // spawning (test_run_journal.rs).
     "test_run",
     // Late bind (daemon-emitted, task 2): a pane-hosted codex row whose
     // spawn-time bind window expired got its `harness_session_id` resolved on

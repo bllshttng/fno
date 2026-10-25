@@ -1,8 +1,0 @@
-fno do target init: no plan bound, so the deliverables count is derived from the node's own details: 1. Pass --deliverables N to declare a different count.
-target: premise: unmeasured:no cited repo path - no cited path exists on main
-config file at <TMP>/linked/.fno/config.toml is missing; using defaults
-config file at <TMP>/linked/.fno/settings.yaml is missing; using defaults
-config file at <TMP_REPO>/.fno/config.toml is missing; using defaults
-config file at <TMP_REPO>/.fno/settings.yaml is missing; using defaults
-config file at <TMP>/home/.fno/settings.yaml is missing; using defaults
-cd <TMP>/linked to continue the pipeline.

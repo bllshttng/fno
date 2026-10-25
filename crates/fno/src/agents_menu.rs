@@ -112,12 +112,12 @@ const MAIL: &[Node] = &[
     command("send", &["mail", "send"], "Send a message to a registered agent or a project."),
     command("reply", &["mail", "reply"], "Reply to a message, routed by the answered message's lane."),
     command("unread", &["mail", "unread"], "Show unread bus messages addressed to a name."),
-    command("list", &["mail", "list"], "List threads in this inbox (default: unread only)."),
     command("show", &["mail", "show"], "Print one message."),
     command("ack", &["mail", "ack"], "Advance a read cursor to a message id."),
-    command("drain", &["mail", "drain"], "Drain unread threads."),
-    command("status", &["mail", "status"], "One-screen health snapshot for this project's inbox."),
-    command("triage", &["mail", "triage"], "LLM triage of a heads-up thread into a JSON action plan."),
+    command("list", &["mail", "list"], "Retired: prints its replacement, unread."),
+    command("drain", &["mail", "drain"], "Retired: prints its replacement, drain-self."),
+    command("status", &["mail", "status"], "Retired: prints its replacement, unread."),
+    command("triage", &["mail", "triage"], "Retired: prints its replacement, show."),
     command("ask", &["ask"], "Send a follow-up message to a registered agent."),
     command("announce", &["announce"], "Fleet announcements on one scope."),
     group("admin", "Mailbox upkeep: holds, sends, retractions, lessons.", MAIL_ADMIN),
@@ -150,6 +150,7 @@ const ORG_CHART: &[Node] = &[
 const ORG: &[Node] = &[
     command("init", &["lead", "init"], "Write the role manifest (step 1 of the lead skill)."),
     command("checkin", &["lead", "checkin"], "One lead beat: gather, print, diff, journal."),
+    command("refresh-canon", &["lead", "refresh-canon"], "Refresh the beat's canon doc, resolving the plugin root itself."),
     command("done", &["lead", "done"], "Expire this role: vacate the row and clear the manifest."),
     command("cancel", &["lead", "cancel"], "Set or clear the cancel signal beside a role manifest."),
     command("escalate", &["lead", "escalate"], "Escalate to the presiding role with work pending."),
@@ -653,6 +654,11 @@ mod tests {
         assert_eq!(
             run(&["org", "-J"]),
             Some((Agents::Run(osv(&["agents", "team", "-J"])), None))
+        );
+        // The canon-refresh row forwards to its lead-family door.
+        assert_eq!(
+            run(&["org", "refresh-canon"]),
+            Some((Agents::Run(osv(&["agents", "lead", "refresh-canon"])), None))
         );
         let rundown = walk(&ROOT)
             .into_iter()

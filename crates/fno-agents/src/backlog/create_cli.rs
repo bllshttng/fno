@@ -665,7 +665,7 @@ fn archive_json_ids(path: &Path) -> std::collections::BTreeSet<String> {
 /// read-only archive open.
 fn archive_db_ids(path: &Path) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
-    let Some(conn) = crate::graph_store::open_archive_conn(path) else {
+    let Some(conn) = crate::graph_store::open_read_only_wal_safe(path) else {
         return out;
     };
     for sql in [
@@ -836,7 +836,7 @@ fn plan_frontmatter_ids_in(dir: &Path) -> std::collections::BTreeSet<String> {
 
 /// The dedup net: score the just-born node against every live node plus the
 /// archived residents. Warn-only; stderr keeps stdout machine-readable.
-fn warn_similar_nodes(node: &Value, entries: &[Value], minted_id: &str) {
+pub(crate) fn warn_similar_nodes(node: &Value, entries: &[Value], minted_id: &str) {
     let candidates = relatedness::similar_nodes(node, entries, 3, None);
     if candidates.is_empty() {
         return;

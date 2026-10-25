@@ -4,7 +4,14 @@
 
 use super::*;
 
-pub(super) fn lead_decide(parsed: &LoopCheckArgs) -> (i32, String) {
+pub(super) fn lead_decide(
+    parsed: &LoopCheckArgs,
+    // The registry the session-binding gate already loaded on the Team
+    // route: the board's driver feed reuses it instead of paying a second
+    // store read inside the board's budgeted slice. The bare `--driver lead`
+    // hook never loaded one and passes None.
+    registry: Option<crate::state::Registry>,
+) -> (i32, String) {
     // The drain reserve arms HERE, on the shared lead entry, and not at the
     // fire stamp: both lead routes (the `--driver lead` hook and the bound
     // Team row) converge on this function, so the route into it, not the
@@ -205,7 +212,12 @@ pub(super) fn lead_decide(parsed: &LoopCheckArgs) -> (i32, String) {
         return blind_block(&gate_reading, &gate_message, 0, dry);
     }
 
-    let board = match read_org_board(&parsed.fno_bin, &parsed.cwd, &parsed.state_path) {
+    let board = match read_org_board(
+        &parsed.fno_bin,
+        &parsed.cwd,
+        &parsed.state_path,
+        registry.as_ref(),
+    ) {
         Ok(b) => b,
         Err(e) => {
             // Blind is not clean. Block on exit 2, but bounded: a board
@@ -629,7 +641,7 @@ fn stale_doc_block(
     (
         crate::lead_escalation::reading_stale_team_doc(),
         format!(
-            "the team's handoff doc for {scope} is {age} and this lead is past its compaction ceiling ({boundaries} > {ceiling}); refresh it: bash \"$PLUGIN_ROOT/hooks/precompact-canon-doc.sh\" < /dev/null"
+            "the team's handoff doc for {scope} is {age} and this lead is past its compaction ceiling ({boundaries} > {ceiling}); refresh it: fno agents org refresh-canon (runs the precompact-canon-doc.sh hook)"
         ),
     )
 }
@@ -671,7 +683,7 @@ mod stale_team_doc_tests {
             harness_session: None,
         };
         super::stopgate_stamp_fire(0, std::time::Instant::now() + Duration::from_secs(50), 0);
-        let (code, out) = lead_decide(&parsed);
+        let (code, out) = lead_decide(&parsed, None);
         assert_eq!(code, 0);
         assert!(out.contains("no lead manifest"), "{out}");
         // The reserve is armed despite the driver-blind stamp: pre-drain

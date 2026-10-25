@@ -60,7 +60,6 @@ from fno.config._attention import AttentionBlock
 from fno.config._telemetry import TelemetryBlock
 from fno.config._test import TestBlock
 from fno.config._watchdog import WatchdogBlock
-from fno.config_io import _apply_search_ceiling as _apply_search_ceiling
 from fno.config_io import _deep_merge as _deep_merge
 from fno.config_io import _global_settings_path as _global_settings_path
 from fno.config_io import _load_raw as _load_raw
@@ -123,7 +122,6 @@ class PathsBlock(BaseModel):
     cargo_targets_base: Optional[str] = None
     memory_dir: Optional[str] = None
     hook_logs_dir: Optional[str] = None
-    inbox_dir: Optional[str] = None
     inbox_path: Optional[str] = None
     handoffs_dir: Optional[str] = None
     retro_pending_dir: Optional[str] = None
@@ -143,7 +141,6 @@ class PathsBlock(BaseModel):
         "cargo_targets_base",
         "memory_dir",
         "hook_logs_dir",
-        "inbox_dir",
         "inbox_path",
         "handoffs_dir",
         "retro_pending_dir",
@@ -2565,7 +2562,7 @@ class KeepGoingBlock(BaseModel):
     ``config.think_spawn.daily_cap`` (the same per-install per-day counter
     ``fno do think dispatch`` bumps) so think + target dispatches share ONE budget -
     a single ceiling on total autonomous fan-out per day. The classify + dispatch
-    logic lives in :mod:`fno.retro.keep_going`.
+    logic lives in the native retro keep-going engine (crates/fno-agents/src/retro/keep_going.rs).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -3641,6 +3638,14 @@ class MuxBlock(BaseModel):
     open_with: Literal["inmux", "obsidian", "system"] = "inmux"
     # The in-mux file viewer's shape: docked panel or centered modal.
     viewer: Literal["panel", "modal"] = "panel"
+    # Lines one wheel notch scrolls a pane whose app does NOT own the mouse;
+    # the Rust reader clamps 1..=50. A notch here is one cell of trackpad
+    # travel, so the default stays 1.
+    wheel_lines: int = Field(default=1, ge=1, le=50)
+    # Wheel ticks forwarded per 100ms window to a pane whose app DOES own the
+    # mouse; the Rust reader clamps 1..=100. The app scrolls its own step per
+    # forwarded tick, so this caps how fast a trackpad flick moves it.
+    wheel_passthrough_rate: int = Field(default=3, ge=1, le=100)
 
     @field_validator("shell_integration", mode="before")
     @classmethod
@@ -4380,46 +4385,6 @@ def _migrate_yaml_to_toml(
     return toml_path
 
 
-def run_config_migration(
-    locations: Optional[list[Path]] = None,
-) -> list[tuple[Path, str]]:
-    """Convert every legacy settings.yaml (+ its settings.local.yaml) in the
-    candidate chain to a flat config.toml, returning ``(toml_path, action)`` per
-    file for the CLI to report. ``action`` is ``migrated`` | ``already-migrated``
-    | ``absent``. The explicit ``fno config setup migrate-config`` command over the same
-    one-shot conversion the loader runs, so a deployed install converts on demand
-    (comments are NOT carried across the round-trip). Idempotent + atomic.
-    """
-    out: list[tuple[Path, str]] = []
-    seen: set[str] = set()
-    for yaml_path in locations if locations is not None else _settings_yaml_locations():
-        if yaml_path.name != "settings.yaml":
-            continue
-        real = (
-            Path(os.path.realpath(yaml_path)) if yaml_path.is_symlink() else yaml_path
-        )
-        for src, toml_name in (
-            (yaml_path, "config.toml"),
-            (real.with_name("settings.local.yaml"), "config.local.toml"),
-        ):
-            toml_path = real.with_name(toml_name)
-            if str(toml_path) in seen:
-                continue
-            seen.add(str(toml_path))
-            # settings.local.yaml is a real per-worktree file; skip a symlinked one.
-            if toml_name == "config.local.toml" and (
-                not src.is_file() or src.is_symlink()
-            ):
-                continue
-            if toml_path.exists():
-                out.append((toml_path, "already-migrated"))
-            elif _migrate_yaml_to_toml(src, toml_name) is not None:
-                out.append((toml_path, "migrated"))
-            else:
-                out.append((toml_path, "absent"))
-    return out
-
-
 def _ensure_migrated(locations: list[Path]) -> None:
     """Convert every legacy settings.yaml (+ its settings.local.yaml) in
     ``locations`` to a flat config.toml, once. The load-time hard-cut safety net:
@@ -4497,7 +4462,7 @@ def _settings_yaml_locations(root: Optional[Path] = None) -> list[Path]:
     if canonical_candidate not in candidates and not suppress_canonical:
         candidates.append(canonical_candidate)
     candidates.append(_global_settings_path())
-    return _apply_search_ceiling(candidates)
+    return candidates
 
 
 def _candidate_paths(root: Optional[Path] = None) -> list[Path]:

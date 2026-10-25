@@ -329,6 +329,19 @@ stop_strategy = "registry-noop"
 remove_strategy = "codex-session-index"
 session_binding = { strategy = "rollout-fd-or-daemon", required = true, timeout_ms = 60000 }
 
+# THE COMPOSER READ-BACK (pane send --harness codex). After the submit key
+# the verb reads the pane and drives the measured recovery: `tab to queue
+# message` beside the payload means the composer still holds it, and one Tab
+# queues it (one slot only); `queued` near the payload reports the queue;
+# anything else resident after one deciding key reads unconfirmed, never a
+# claimed submit. Measured 2026-08-25 on panes 211, 212 and 202: a 1221-char
+# payload printed submitted and stranded; a busy pane refused submit with the
+# affordance; a 470-char multi-line payload stranded with no placeholder.
+queue_affordance_marker = "tab to queue message"
+queued_markers = ["queued"]
+composer_clear_keys = ["\u0001", "\u000b"]
+composer_empty_marker = "Ask Codex to do anything"
+
 [harness.codex.state_root_grant]
 # pane/headless spend `--add-dir` (writable_dirs.ADD_DIR_PROVIDERS). The thread
 # lane builds NO argv - it sends JSON-RPC to a shared app-server - so its only
@@ -430,6 +443,10 @@ tokens = ["/model", "{model}", "{effort_label}"]
 effort_labels = { low = "Low", medium = "Medium (default)", high = "High", xhigh = "Extra high", max = "More reasoning…" }
 status_command = "/status"
 status_pattern = 'Model:\s+(?P<model>\S+).*?reasoning\s+(?P<effort>minimal|low|medium|high|xhigh|max)'
+# A narrow pane truncates the /status line (measured across four panes:
+# `Model: gpt-5.6` and nothing more, which reads like a failed switch). The
+# status bar carries the same pair and survives the truncation.
+status_bar_pattern = '(?P<model>gpt-[0-9.]+-[a-z]+)\s+(?P<effort>minimal|low|medium|high|xhigh|max)'
 
 # FEATURES. All three states are measured. spawn: the second journey-proven
 # thread lane. review: `review_verbs` above map onto the app-server daemon's

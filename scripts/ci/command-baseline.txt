@@ -92,8 +92,6 @@ lead done
 lead drain
 lead escalate
 lead init
-lead manifest-path
-lead shape
 lead term
 lint
 loops
@@ -107,13 +105,10 @@ observer
 paths
 phase kill-check
 plan
-plugins
 pr-watch
 project init
 research
-restart
 resume
-retro
 roles
 route
 scoreboard

@@ -49,7 +49,7 @@ impl RoleLayer {
 const STATUSES: [&str; 3] = ["valid", "invalid", "unreadable"];
 const AUTHORITY: [&str; 3] = ["advisory", "internal", "external"];
 const APPROVAL: [&str; 3] = ["none", "principal", "founder"];
-const CONTEXT_KINDS: [&str; 6] = [
+pub(crate) const CONTEXT_KINDS: [&str; 6] = [
     "plan",
     "brief",
     "graph-node",
@@ -214,7 +214,7 @@ impl DefinitionSource {
     }
 }
 
-type Obj = Map<String, Value>;
+pub(crate) type Obj = Map<String, Value>;
 
 pub(crate) fn object<'a>(value: &'a Value, at: &str) -> Result<&'a Obj, String> {
     value
@@ -222,7 +222,7 @@ pub(crate) fn object<'a>(value: &'a Value, at: &str) -> Result<&'a Obj, String> 
         .ok_or_else(|| format!("{at}: input should be an object"))
 }
 
-fn only_fields(obj: &Obj, allowed: &[&str], at: &str) -> Result<(), String> {
+pub(crate) fn only_fields(obj: &Obj, allowed: &[&str], at: &str) -> Result<(), String> {
     match obj.keys().find(|k| !allowed.contains(&k.as_str())) {
         Some(extra) => Err(format!("{at}.{extra}: extra inputs are not permitted")),
         None => Ok(()),
@@ -235,7 +235,7 @@ fn present<'a>(obj: &'a Obj, key: &str) -> Option<&'a Value> {
     obj.get(key)
 }
 
-fn non_empty(value: &Value, at: &str) -> Result<String, String> {
+pub(crate) fn non_empty(value: &Value, at: &str) -> Result<String, String> {
     let text = value
         .as_str()
         .ok_or_else(|| format!("{at}: input should be a valid string"))?
@@ -246,14 +246,14 @@ fn non_empty(value: &Value, at: &str) -> Result<String, String> {
     Ok(text.to_string())
 }
 
-fn required_str(obj: &Obj, key: &str, at: &str) -> Result<String, String> {
+pub(crate) fn required_str(obj: &Obj, key: &str, at: &str) -> Result<String, String> {
     match present(obj, key) {
         Some(value) => non_empty(value, &format!("{at}.{key}")),
         None => Err(format!("{at}.{key}: field required")),
     }
 }
 
-fn optional_str(obj: &Obj, key: &str, at: &str) -> Result<Option<String>, String> {
+pub(crate) fn optional_str(obj: &Obj, key: &str, at: &str) -> Result<Option<String>, String> {
     match present(obj, key) {
         None | Some(Value::Null) => Ok(None),
         Some(value) => non_empty(value, &format!("{at}.{key}")).map(Some),
@@ -296,7 +296,7 @@ pub(crate) fn choice(
 
 /// Pydantic's lax bool: a bool, 0 or 1 as an int or float, or one of its
 /// fixed words in any case (never trimmed).
-fn lax_bool(obj: &Obj, key: &str, default: bool, at: &str) -> Result<bool, String> {
+pub(crate) fn lax_bool(obj: &Obj, key: &str, default: bool, at: &str) -> Result<bool, String> {
     let at = format!("{at}.{key}");
     let bad = || format!("{at}: input should be a valid boolean");
     match present(obj, key) {
@@ -445,7 +445,7 @@ fn unique(items: &[String], at: &str, field: &str) -> Result<(), String> {
 }
 
 /// A `RoleManifest`.
-fn check_manifest(value: &Value, at: &str) -> Result<Manifest, String> {
+pub(crate) fn check_manifest(value: &Value, at: &str) -> Result<Manifest, String> {
     let obj = object(value, at)?;
     only_fields(
         obj,

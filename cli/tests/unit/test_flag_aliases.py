@@ -28,7 +28,7 @@ def test_direct_call_optioninfo_defaults_treated_as_not_passed(capsys) -> None:
     """Direct (non-Click) calls of a Typer command leave unfilled params
     holding their OptionInfo declaration defaults. Those must behave like
     None: no warning, no both-passed error, coerced to None on return.
-    Regression for tests/integration/test_retro_pr_scope.py-style callers."""
+    Regression for callers that pass both spellings."""
     import typer
 
     oi = typer.Option(None, "--pr", hidden=True)

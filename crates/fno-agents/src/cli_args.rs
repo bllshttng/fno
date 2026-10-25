@@ -382,8 +382,8 @@ mod tests {
 
     #[test]
     fn restart_parses_the_python_adapter_invocation() {
-        // this exact argv (post-command) is what cli/src/fno/restart.py
-        // spawns; the dispatch strips the command before the parser runs.
+        // this exact argv (post-command) is what `fno agents restart` passes
+        // on; the dispatch strips the command before the parser runs.
         let a = RestartArgs::try_parse_from(["--json"]).expect("--json parses");
         assert!(a.json.json);
         assert!(!a.force);

@@ -34,7 +34,7 @@ One JSON object per line (`fno.bus.log.Envelope`):
 
 `word_count` stores the authored body's send-time count under the pure Rule 7 masking rules. It is never recomputed from a stored `<fno_mail>` wrapper.
 
-`meta` carries `refs`, `persist_to_memory`, and `render_path` without polluting address or correlation fields. Optional fields are omitted so legacy rows parse and lines stay scannable. The body is written last.
+`meta` carries `refs` and `persist_to_memory` without polluting address or correlation fields. Optional fields are omitted so legacy rows parse and lines stay scannable. The body is written last.
 
 A root message threads under its own id. A reply sets `in_reply_to`.
 
@@ -154,7 +154,7 @@ The legacy copy command `fno agents mail migrate-bus` copied old markdown thread
 
 ## What is NOT in this group
 
-The triage drain is now `fno agents mail drain`. It routes heads-up to triage, question to wake-signal, and fyi to memory or log. In Group 3 it still reads the markdown render. Group 4 owns four moves: the drain reads the bus cursor, the register-existing-session hooks, the internal call-site migration, and the end of the `fno inbox` alias. One known follow-up remains. An owner-authored reply on `append_to_thread` mirrors with `to == thread-owner`. Once the drain reads the bus cursor, Group 4 must revisit that address.
+The markdown render and its triage drain are gone. The bus delivers, the chats store records, and a reply reads its parent from the chats store, so it goes back to the parent's sender.
 
 ## Addressed delivery (Group 1)
 
@@ -193,7 +193,7 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 **Boundaries.** Claude: `inject-announce.sh` on SessionStart and UserPromptSubmit, with a SessionStart source of `compact` mapped to the compact boundary. Codex: UserPromptSubmit, PostCompact, and section 6a of `session-start.sh`. The target loop reads natively in `nudge.rs` at its block paths. opencode reads in `experimental.chat.system.transform`. pi reads in `before_agent_start`, the pre-turn event whose returned message is injected into the session. A plain Stop is not a delivery boundary (the turn is over). Urgent wake for idle sessions is wave 4 and waits on the wake-lane fix it depends on.
 
 
-**Projection.** The whole-log `fno inbox view` projection is removed, and no command replaces it one for one. Two reads cover its uses. `fno agents mail list --all [--from P] [--json]` lists a project's threads. `fno agents mail unread [-n NAME] [--json]` shows the bus rows addressed to one name after its ack cursor. The bus log file is created `0o600`, because it holds message bodies. The mode is set at create only, so an older log keeps its prior mode.
+**Projection.** The whole-log `fno inbox view` projection is removed, and no command replaces it one for one. `fno agents mail unread [-n NAME] [--json]` shows the bus rows addressed to one name after its ack cursor. The bus log file is created `0o600`, because it holds message bodies. The mode is set at create only, so an older log keeps its prior mode.
 
 ## Code map
 
@@ -203,10 +203,9 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 | Per-agent cursors + sender-exclusion (`exclude_from`) | `cli/src/fno/bus/cursor.py` |
 | Loop-boundary addressed drain + self-name resolver | `cli/src/fno/agents/nudge.py` |
 | `bus_dir` resolver | `cli/src/fno/paths.py`, `config.paths.bus_dir` |
-| Store dual-write | `cli/src/fno/inbox/store.py` |
+| Store bus write | `cli/src/fno/inbox/store.py` |
 | `--to-project` resolver + dispatch | `cli/src/fno/agents/dispatch.py` |
 | `inbox` / `ack` / `send --to-project` commands | `cli/src/fno/agents/cli.py` |
-| `mail drain` command | `cli/src/fno/mail/cli.py` |
 | peer-project hint reader | `crates/fno-agents/src/inbox_peers.rs` |
 
-See also [cross-project-inbox.md](cross-project-inbox.md) (the inbox this converges) and [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md) (the addressing authority).
+See also [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md) (the addressing authority).

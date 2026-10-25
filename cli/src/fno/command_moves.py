@@ -79,7 +79,6 @@ COMMAND_MOVES: dict[str, Move] = {
     "observer": Move(kind="deprecated", to="doctor observer"),
     "paths": Move(kind="deprecated", to="config paths"),
     "phase": Move(kind="deprecated", to="do phase"),
-    "plugins": Move(kind="deprecated", to="config plugins"),
     "project": Move(kind="deprecated", to="config project"),
     "plan": Move(kind="deprecated", to="do plan"),
     "pr": Move(
@@ -93,7 +92,9 @@ COMMAND_MOVES: dict[str, Move] = {
     # muscle-memory spelling, so it forwards silently, no move notice.
     "restart": Move(kind="alias", to="agents restart"),
     "resume": Move(kind="deprecated", to="do resume"),
-    "retro": Move(kind="deprecated", to="backlog retro"),
+    # Served natively now; the Python backlog app it forwarded into no
+    # longer mounts retro, so the old spelling fails loud with the new one.
+    "retro": Move(kind="leaf-alias", to="backlog retro"),
     "review": Move(kind="deprecated", to="do review"),
     "roles": Move(kind="deprecated", to="agents roles"),
     "route": Move(kind="deprecated", to="config route"),

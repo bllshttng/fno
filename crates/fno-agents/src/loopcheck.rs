@@ -89,6 +89,10 @@ pub enum TerminationReason {
     /// the same still-open question, so the loop terminates instead of
     /// re-asking. The journal (not the fingerprint) carries the held state.
     /// Terminal, NOT a ship reason: the operator answers, a later run ships.
+    /// The same shape covers the dispatch hold: a run whose every dispatch is
+    /// refused on a cap (lead share, provider) while the node reads
+    /// undispatched blocks once naming the hold, then terminates here instead
+    /// of re-waking into the same refusal until budget.
     HeldOnQuestion,
     Interrupted,
     Aborted,
@@ -131,6 +135,7 @@ mod attestation_journal;
 mod authorship;
 mod awaiting_merge;
 mod coverage_receipt;
+mod held_refusal;
 mod holds;
 mod lead_decide;
 mod range_tiling;
@@ -435,7 +440,7 @@ pub(crate) fn decide_with_payload(
     }
     // The lead uses a separate manifest and decision path.
     if parsed.driver == "lead" {
-        return lead_decide::lead_decide(&parsed);
+        return lead_decide::lead_decide(&parsed, None);
     }
 
     // Session binding: when the caller names the harness session that asked,
@@ -1082,7 +1087,13 @@ pub(crate) fn decide_with_payload(
             }
             None => false,
         };
-        if can_idle && renewed && routable == Ok(true) {
+        // An unclaimed session may still idle on a LOCAL watch: its wake is
+        // its own harness-tracked task exit, and it holds no node claim a
+        // renewal could keep alive. A PR wait still requires the renewed
+        // lease.
+        let claimless_local =
+            watch_lease::local_watch_without_claim(claim.is_some(), reason, task_id.as_deref());
+        if can_idle && (renewed || claimless_local) && routable == Ok(true) {
             let (blocker, pr_number) = watch_target(reason, pr.as_deref());
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1137,7 +1148,7 @@ pub(crate) fn decide_with_payload(
                 );
             }
             watching_codex_refusal = Some((EMIT_FAILED_REFUSAL, "emit_failed"));
-        } else if can_idle && renewed && routable != Ok(true) {
+        } else if can_idle && (renewed || claimless_local) && routable != Ok(true) {
             // A codex session that could idle except for the channel: the
             // routability refusal, not the generic harness text. Only when
             // the lease ALSO failed does the generic path keep the more
@@ -2095,6 +2106,95 @@ pub(crate) fn decide_with_payload(
                         .missing_bots
                         .iter()
                         .any(|b| b == SAME_MODEL_PEER_SENTINEL);
+
+                // ── The undispatched-node hold ──────────────────────────────
+                // A run whose every dispatch is refused on a cap (lead share,
+                // provider) while the node reads undispatched can neither act
+                // nor stop: the ordinary block below never clears. When the
+                // freshest cap refusal for THIS node is inside the hold
+                // window, the promise block classifies as held: the first
+                // fire blocks once naming the refusal and the clears (the
+                // marker rides this fire's loop_check row), the second
+                // terminates HeldOnQuestion with the held help, so a run at
+                // its share stops instead of re-waking into the same refusal
+                // until budget. Sits BEFORE the backstop: a held run is not a
+                // progress-less one, and the truthful verdict should reach
+                // the journal first.
+                if intent == Intent::Promise
+                    && matches!(pr_info.state, PrState::None)
+                    && node_id.is_some()
+                {
+                    let node = node_id.as_deref().unwrap_or_default();
+                    let mut hold_journals = vec![project_events.clone(), global_events.clone()];
+                    if let Some(canon) = crate::paths::canonical_repo_root(&cwd) {
+                        let canonical_journal = crate::paths::events_path(&canon);
+                        if !hold_journals.contains(&canonical_journal) {
+                            hold_journals.push(canonical_journal);
+                        }
+                    }
+                    if let Some(home) = crate::paths::AgentsHome::from_env_opt() {
+                        let home_journal = home.events_jsonl();
+                        if !hold_journals.contains(&home_journal) {
+                            hold_journals.push(home_journal);
+                        }
+                    }
+                    match held_refusal::held_gate(
+                        &hold_journals,
+                        fire_rows.as_deref(),
+                        &session_id,
+                        node,
+                        now,
+                    ) {
+                        held_refusal::HeldRefusalStop::None => {}
+                        held_refusal::HeldRefusalStop::Block { reason, marker } => {
+                            fire_row(
+                                "block",
+                                "promise",
+                                false,
+                                serde_json::json!({
+                                    "done_probes": probe_results,
+                                    "held_refusal": marker,
+                                }),
+                            );
+                            return (
+                                0,
+                                allow_output("block", None, &reason, this_fire, Some(fingerprint)),
+                            );
+                        }
+                        held_refusal::HeldRefusalStop::Terminate { message } => {
+                            // The held help routes off-session to the holder;
+                            // best-effort, never a verdict input.
+                            let _ = crate::distress::emit_help_distress_blocked(
+                                &project_events,
+                                &global_events,
+                                &cwd,
+                                &session_id,
+                                node_id.as_deref(),
+                                harness.as_deref(),
+                                &crate::distress::help_distress_held(message.clone(), None),
+                                "held-refusal",
+                                harness_session.as_deref(),
+                            );
+                            term_row("HeldOnQuestion", &message);
+                            fire_row(
+                                "allow",
+                                "promise",
+                                false,
+                                serde_json::json!({
+                                    "held_refusal": {
+                                        "node": node,
+                                        "terminal": true,
+                                    },
+                                }),
+                            );
+                            return terminal(
+                                "allow",
+                                Some(TerminationReason::HeldOnQuestion),
+                                &message,
+                            );
+                        }
+                    }
+                }
                 // `probe_block.is_some()` keeps a probe that can never pass in
                 // this environment on the NoProgress escape rather than looping
                 // to the budget ceiling: PR+CI+review all hold, so without it

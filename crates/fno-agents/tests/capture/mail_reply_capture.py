@@ -247,19 +247,18 @@ def seed_torn_registry(root: Path) -> None:
 
 
 def seed_project_thread(root: Path, env: dict) -> str:
-    """One existing thread under web's inbox; returns its msg id.
+    """One self-addressed parent message from web on the bus; returns its id.
 
     Runs in a venv-python subprocess: the driver's bare interpreter lacks the
-    venv's site-packages (yaml), and the store import needs it. The child env
+    venv's site-packages, and the store import needs it. The child env
     carries the fixture's FNO_INBOX_ROOT pin.
     """
     code = (
         f"import sys; sys.path.insert(0, {str(CLI_SRC)!r})\n"
         "from fno.inbox.store import write_new_thread\n"
-        # Self-addressed: the thread's from names web, so the reply's recipient
-        # (read off that frontmatter) re-finds the same file and appends.
-        "h = write_new_thread(recipient='web', sender='web', kind='send', body='parent ping')\n"
-        "print(h.thread_id)\n"
+        # Self-addressed: the parent's from names web, so the reply goes back
+        # to web and joins the parent's thread.
+        "print(write_new_thread(recipient='web', sender='web', kind='send', body='parent ping'))\n"
     )
     proc = subprocess.run(
         [venv_python(), "-c", code],

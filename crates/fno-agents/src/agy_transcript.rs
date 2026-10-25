@@ -39,8 +39,14 @@ pub(crate) fn agy_stores() -> (PathBuf, PathBuf, PathBuf) {
 }
 
 fn open_read_only(path: &Path) -> Result<rusqlite::Connection, String> {
-    let conn = rusqlite::Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let conn = match rusqlite::Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(conn) => conn,
+        // A daemon's clean exit can leave the header WAL with the -shm sidecar
+        // gone; the plain read-only open refuses that state and the immutable
+        // retry reads the checkpointed file.
+        Err(e) => crate::graph_store::open_read_only_wal_safe(path)
+            .ok_or_else(|| format!("{}: {e}", path.display()))?,
+    };
     conn.busy_timeout(std::time::Duration::from_secs(2))
         .map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(conn)
@@ -193,4 +199,36 @@ fn render(raw: &str, session_id: &str) -> String {
         push_user_row(&mut out, ts, text);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summaries_reader_reads_a_wal_store_whose_shm_is_gone() {
+        // The exact state a daemon's clean exit leaves: the header stays WAL
+        // while the checkpoint removed the -wal and -shm sidecars. A plain
+        // read-only open refuses it; the immutable retry must answer.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("conversation_summaries.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;\n\
+             CREATE TABLE conversation_summaries (conversation_id TEXT, workspace_uris TEXT);\n\
+             INSERT INTO conversation_summaries VALUES ('c-1', '[]');\n\
+             PRAGMA wal_checkpoint(TRUNCATE);",
+        )
+        .unwrap();
+        drop(conn);
+        assert!(!dir.path().join("conversation_summaries.db-shm").exists());
+        let conn =
+            open_read_only(&db).expect("the immutable retry must open the checkpointed store");
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM conversation_summaries", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 1);
+    }
 }

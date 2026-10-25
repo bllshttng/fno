@@ -8,91 +8,13 @@ refuses to write a stub, plus a redirect on the substitution-prone
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
 
-import json
-from types import SimpleNamespace
 
-import pytest
-import typer
 from typer.testing import CliRunner
 
 from fno.cli import app
 from fno import target_cli
 
 runner = CliRunner()
-
-
-def _retro_dispatch_node(tmp_path, *, source_pr=555, evidence=None):
-    details = (
-        f"Source: PR #{source_pr}, https://github.com/o/r/pull/{source_pr}#discussion_r123\n"
-        f"<!-- retro-triage source_pr={source_pr} finding_hash=deadbeef -->"
-    )
-    node = {"id": "x-retro", "details": details, "cwd": str(tmp_path)}
-    if evidence is not None:
-        node["evidence"] = evidence
-    return node
-
-
-def test_retro_dispatch_preflight_tier1_refuses_and_supersedes(tmp_path, capsys):
-    node = _retro_dispatch_node(tmp_path)
-    closed = []
-
-    def scan(entries, **kwargs):
-        assert kwargs["include_planned"] is True
-        return [SimpleNamespace(signal="resolved/outdated thread")]
-
-    with pytest.raises(typer.Exit) as exc:
-        target_cli._retro_dispatch_preflight(
-            node,
-            scan_fn=scan,
-            supersede_fn=lambda node_id, reason: closed.append((node_id, reason)) or True,
-        )
-    assert exc.value.exit_code == 3
-    assert closed and closed[0][0] == "x-retro"
-    assert "source PR #555" in capsys.readouterr().err
-
-
-def test_retro_dispatch_preflight_tier2_scopes_and_warns_on_overlap(tmp_path, capsys):
-    node = _retro_dispatch_node(
-        tmp_path, evidence={"items": {"git:merged-region:cli/src/fno/target_cli.py": "region"}}
-    )
-    calls = []
-
-    def gh(args):
-        calls.append(args)
-        if args[:2] == ["pr", "view"]:
-            return 0, json.dumps({"mergedAt": "2026-07-01T00:00:00Z"}), ""
-        return 0, json.dumps([
-            {
-                "number": 568,
-                "title": "selector fix",
-                "mergedAt": "2026-07-02T00:00:00Z",
-                "files": [{"path": "cli/src/fno/target_cli.py"}],
-            }
-        ]), ""
-
-    target_cli._retro_dispatch_preflight(
-        node,
-        scan_fn=lambda entries, **kwargs: [],
-        gh_runner=gh,
-        unattended=True,
-    )
-    output = capsys.readouterr().err
-    assert "Tier 2 sibling PR #568" in output
-    assert "cli/src/fno/target_cli.py" in output
-    assert all(args[args.index("--repo") + 1] == "o/r" for args in calls)
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_state_init_redirects_target_bootstrap():

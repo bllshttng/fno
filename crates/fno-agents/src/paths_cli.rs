@@ -142,10 +142,6 @@ pub fn emit_paths_sh_defaults() -> String {
         "export PLANS_DIR={}",
         bash_quote("$REPO_ROOT/.fno/plans")
     ));
-    lines.push(format!(
-        "export INBOX_DIR={}",
-        bash_quote("$REPO_ROOT/.fno/inbox")
-    ));
     // Defaults mode: no handoffs override, obsidian off, project.id unset --
     // the literal fallback line keeps the stub machine-stable; the basename
     // resolves at source-time from the consumer's repo.
@@ -168,11 +164,6 @@ fn functions_lines() -> Vec<String> {
         "paths_plan_file() {",
         "  local name=\"$1\"",
         "  echo \"${PLANS_DIR}/${name}\"",
-        "}",
-        "",
-        "paths_inbox_thread() {",
-        "  local thread=\"$1\"",
-        "  echo \"${INBOX_DIR}/${thread}\"",
         "}",
         "",
         "# Mirrors fno.paths.project_log(): <repo>/.fno/<name>, anchored to",
@@ -371,7 +362,6 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
-    let directory = resolve_handoffs_dir(None, None, cwd, home);
     if let Some(scope) = scope {
         if session_id.is_some() || slug.is_some() {
             return Err("--scope cannot be combined with --session-id/--slug".into());
@@ -380,6 +370,17 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
         if key == "role-" {
             return Err("a role scope is required (--scope)".into());
         }
+        // The doc for a scope belongs to the scope's project: the newest
+        // registry row carrying this exact role_scope names it (project_root,
+        // else its cwd). Resolving from the caller's cwd minted
+        // `internal/<basename>/` strays whenever a promoted session's shell
+        // had cd'd once, so a scope with no row refuses instead.
+        let root = scope_project_root(&scope, home).ok_or_else(|| {
+            format!(
+                "no registry row carries role_scope {scope:?}; refusing to key the handoff dir on the cwd basename"
+            )
+        })?;
+        let directory = resolve_handoffs_dir(None, None, Path::new(&root), home);
         let suffix = format!("-{key}.md");
         let mut best: Option<(std::time::SystemTime, String)> = None;
         if let Ok(rd) = std::fs::read_dir(&directory) {
@@ -408,6 +409,7 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
             .unwrap_or_else(|| format!("{}-{key}.md", local_date()));
         return Ok(render_handoff(&directory, &filename, name_only));
     }
+    let directory = resolve_handoffs_dir(None, None, cwd, home);
     let Some(session_id) = session_id else {
         return Err("a session id is required (--session-id), or a role scope (--scope)".into());
     };
@@ -431,6 +433,42 @@ fn render_handoff(directory: &Path, filename: &str, name_only: bool) -> String {
     } else {
         directory.join(filename).display().to_string()
     }
+}
+
+/// The scope's project root: the newest registry row carrying this exact
+/// `role_scope`, its `project_root` falling back to its cwd. A scope's
+/// handoff doc belongs to the scope's project, never to wherever the
+/// caller's shell happens to sit, so a promoted session cd'd elsewhere
+/// still resolves its canon doc instead of minting a stray
+/// `internal/<basename>/` tree.
+fn scope_project_root(scope: &str, home: Option<&Path>) -> Option<String> {
+    let agents_home = match home {
+        Some(h) => crate::paths::AgentsHome::ambient_from(h.as_os_str()),
+        None => crate::paths::AgentsHome::from_env(),
+    };
+    let registry = crate::state::load_registry(&agents_home.registry_json()).ok()?;
+    let mut best: Option<(&crate::state::RegistryEntry, &str)> = None;
+    for entry in &registry.entries {
+        if entry.role_scope.as_deref() != Some(scope) {
+            continue;
+        }
+        let root: &str = if entry.project_root.is_empty() {
+            entry.cwd.as_str()
+        } else {
+            entry.project_root.as_str()
+        };
+        if root.is_empty() {
+            continue;
+        }
+        let newer = match best {
+            None => true,
+            Some((previous, _)) => entry.created_at > previous.created_at,
+        };
+        if newer {
+            best = Some((entry, root));
+        }
+    }
+    best.map(|(_, root)| root.to_string())
 }
 
 fn run_handoff(args: &[String], cwd: &Path, home: Option<&Path>) -> i32 {
@@ -664,13 +702,6 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
         plans.to_string()
     };
     lines.push(format!("export PLANS_DIR={}", bash_quote(&plans_tmpl)));
-
-    // INBOX_DIR: project-relative by default.
-    let inbox_tmpl = match cfg_str(cwd, &["paths", "inbox_dir"]) {
-        Some(raw) => resolve_override(&raw)?,
-        None => "$REPO_ROOT/.fno/inbox".to_string(),
-    };
-    lines.push(format!("export INBOX_DIR={}", bash_quote(&inbox_tmpl)));
 
     // HANDOFFS_DIR: override, else the vault placement, else the state-dir
     // fallback -- mirrors paths.handoffs_dir() resolution.
@@ -935,6 +966,30 @@ mod tests {
         )
     }
 
+    /// Seeds one registry row so a `--scope` lookup resolves its project
+    /// root. The scope-project resolution reads `<home>/.fno/agents/`
+    /// registry.json through `AgentsHome::ambient_from`.
+    fn seed_scope_row(home: &Path, scope: &str, project_root: &Path) {
+        let dir = home.join(".fno").join("agents");
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc = serde_json::json!({
+            "schema_version": 4,
+            "agents": [{
+                "name": format!("row-{scope}"),
+                "session_id": format!("sess-{scope}"),
+                "role_scope": scope,
+                "project_root": project_root.display().to_string(),
+                "cwd": project_root.display().to_string(),
+                "created_at": "2026-10-24T00:00:00Z",
+            }]
+        });
+        std::fs::write(
+            dir.join("registry.json"),
+            serde_json::to_string(&doc).unwrap(),
+        )
+        .unwrap();
+    }
+
     use crate::claims::EnvVarGuard;
 
     #[test]
@@ -1037,6 +1092,7 @@ mod tests {
         let (_lock, _env) = handoff_env_guards();
         let (cwd, home) = handoff_fixture("scope-mint");
         let scope = "x-1234abcd";
+        seed_scope_row(&home, scope, &cwd);
         let out = handoff_out(
             &["--scope".into(), scope.into(), "--name-only".into()],
             &cwd,
@@ -1049,6 +1105,42 @@ mod tests {
             "{out}"
         );
         assert_eq!(rest, format!("role-{scope}.md"));
+        let _ = std::fs::remove_dir_all(cwd.parent().unwrap());
+    }
+
+    #[test]
+    fn handoff_scope_resolves_the_row_project_not_the_cwd_basename() {
+        let (_lock, _env) = handoff_env_guards();
+        let (project_cwd, home) = handoff_fixture("scope-project");
+        let scope = "fno";
+        seed_scope_row(&home, scope, &project_cwd);
+        // The promoted session's shell cd'd once: the caller sits in a dir
+        // outside the project whose basename would name a junk vault tree.
+        let cwd = project_cwd.parent().unwrap().join("mail-hold");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let full = handoff_out(&["--scope".into(), scope.into()], &cwd, Some(&home)).unwrap();
+        // The fixture repo has no git and no project id, so the row's root
+        // resolves to its basename. The dir must key on THAT, never on the
+        // caller's cwd basename.
+        let project = project_cwd
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            full.contains(&format!("handoffs/{project}")) && !full.contains("mail-hold"),
+            "the scope doc must key on the row's project, got {full}"
+        );
+        let _ = std::fs::remove_dir_all(project_cwd.parent().unwrap());
+    }
+
+    #[test]
+    fn handoff_scope_with_no_registry_row_refuses() {
+        let (_lock, _env) = handoff_env_guards();
+        let (cwd, home) = handoff_fixture("scope-refuse");
+        let err =
+            handoff_out(&["--scope".into(), "x-00000000".into()], &cwd, Some(&home)).unwrap_err();
+        assert!(err.contains("no registry row carries role_scope"), "{err}");
         let _ = std::fs::remove_dir_all(cwd.parent().unwrap());
     }
 

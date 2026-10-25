@@ -152,6 +152,21 @@ pub fn project_root(project: &str) -> Option<String> {
     None
 }
 
+/// Every registered project path, in candidate then declaration order,
+/// first occurrence kept.
+pub fn project_roots() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for path in candidates() {
+        for (_, raw) in work_pairs(&read_flat(&path)) {
+            let root = expand_home(&raw);
+            if !out.contains(&root) {
+                out.push(root);
+            }
+        }
+    }
+    out
+}
+
 /// The configured node-id hex width, or the legacy 8. Fail-open like the
 /// prefix: an absent key resolves to 8.
 pub fn node_id_hex_width() -> usize {

@@ -6,8 +6,9 @@ registered at the top level, so `fno inbox approvals ls` etc. reach the same
 commands `fno approvals ls` did. The lead board LEAF joins them too (ruling
 d-8c62113b: a leaf places by its own meaning); the lead root itself stays put
 here and folds into agents in a later unit, so `board_cmd` is registered under
-both `lead` and `inbox` rather than moved. outstanding and its day relay are
-the Rust front's nested commands: no Python mount.
+both `lead` and `inbox` rather than moved. The board read answers at the Rust
+front door; this mount serves only `--last-run`. outstanding and its day relay
+are the Rust front's nested commands: no Python mount.
 
  (d-add90c60): the human-authority commands join the human-facing group.
 `decisions` and the whole `law` app are the Rust front's nested commands (no

@@ -5,7 +5,7 @@ Plays the case tables against the live Python leg (`fno agents mail send`,
 the typer command) and freezes `tests/golden/mail_send/` in the `assert_golden`
 on-disk format: `<key>.exit` ("<code>\\n"), `<key>.out`, `<key>.err`. The
 `mail_send_parity.rs` tables mirror these cases; keep them in lockstep when a
-case is added (the same rule target_capture.py records in its header).
+case is added.
 
 Captured before the Python body deletes, per step 2 of the port protocol
 (docs/architecture/dual-implementation-inventory.md). The hermetic temp root

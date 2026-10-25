@@ -59,7 +59,7 @@ The user said it on 2026-09-27: "i think of workspaces as an object that houses 
 | Project | one repo, named by `project.id` through git. It is the default workspace for a thread nobody placed. | No. |
 | Project group | the config key `work.workspaces.<name>.projects[]` and the `mux.board_scope = workspace:<name>` value. Called a project group in prose. | No. The key keeps its spelling and its data: it is already in users' config.toml, the same call this page makes for `routing.operator_*`. Migration: none. |
 | `fno agents workspace` | the worktree-lifecycle command group, unrelated to the mux object. `.claude/rules/worktrees.md` names it. | No. |
-| Squad (company topology) | `direct, loop, squad, pipeline` in `cli/src/fno/company/topology.py`: a group of workers as an org shape. | Homonym, like the shell `operator`. Out of scope. |
+| Squad (company topology) | `direct, loop, squad, pipeline` in `crates/fno-agents/src/plugins/verify.rs` `TOPOLOGIES`: a group of workers as an org shape. | Homonym, like the shell `operator`. Out of scope. |
 
 ## Before you run sed
 

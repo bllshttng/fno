@@ -1144,9 +1144,16 @@ def _target_projects_dir(provider_id: str, repo_root: Optional[str]) -> Path:
 def _transcript_visible(session_uuid: str, projects_dir: Path) -> bool:
     """Is ``<session_uuid>.jsonl`` present under ``projects_dir``? (AC3/AC4-FR)."""
     try:
-        from fno.relay.registry import transcript_path_for
+        from fno.rust_binary import call_binary_json
 
-        return transcript_path_for(session_uuid, projects_dir=projects_dir) is not None
+        err, payload = call_binary_json(
+            "provider-cap",
+            ["claude-transcript", "--projects", str(projects_dir), session_uuid],
+            timeout=30,
+        )
+        if err or not isinstance(payload, dict):
+            return False
+        return payload.get("path") is not None
     except Exception:  # noqa: BLE001 - unreadable -> treat as not visible (notify)
         return False
 

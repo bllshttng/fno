@@ -71,6 +71,9 @@ enum Role {
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
+    /// `fno config setup plan|post-merge` and the root `fno setup` twins:
+    /// the wizard question plan and the post-merge scaffold.
+    SetupCmd(fno::setup_cmds::Cmd),
     /// `fno do wizard`: the interactive terminal host for the wizard flow.
     /// Native, because it owns the raw-mode terminal and must run before any
     /// Python wheel exists on a fresh machine.
@@ -191,6 +194,11 @@ enum Role {
     DoctorUpdate(Vec<OsString>),
     /// `fno agents history ... --graph ...`: the native session-card reader.
     AgentsHistory(Vec<OsString>),
+    /// `fno agents lead refresh-canon` (the front's rewrite of
+    /// `fno agents org refresh-canon`): the beat's canon-doc refresh. The
+    /// carried tail is empty by contract; the door resolves the plugin root
+    /// itself and refuses naming every source it tried.
+    AgentsLeadRefreshCanon(Vec<OsString>),
     /// `fno agents transcript ...`: the native session-bundle transfer.
     AgentsTranscript(Vec<OsString>),
     /// `fno agents claim backlog|export ...`: the shared-store commands, run
@@ -242,6 +250,9 @@ enum Role {
     /// `fno agents top ...`: the native worker table (`fno-agents census
     /// --workers`), claimed here because the Python front alone cost seconds.
     AgentsTop(Vec<OsString>),
+    /// `fno agents restart ...` and root `fno restart ...`: exec'd as
+    /// `fno-agents restart`, the one implementation.
+    AgentsRestart(Vec<OsString>),
     /// `fno agents status ...`: the read command hooks and wait loops spend,
     /// exec'd natively for the same reason as agents_top: the Python front
     /// only turned around and exec'd the same binary. The argv passes
@@ -317,7 +328,15 @@ enum Role {
     /// paths commands still forward to Python (one command per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
+    /// `fno agents org` history, verdict, faq, `chart shape`, `chart
+    /// manifest-path`, and `fno inbox board`: the lead read commands, exec'd as
+    /// arguments of existing fno-agents actions. Their Python legs are gone.
+    LeadRead(fno::lead_reads_route::Claim),
     AccountsCli(Vec<OsString>),
+    /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
+    /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
+    /// The bool is the moved spelling, which prints its one stderr note.
+    PluginsCli(Vec<OsString>, bool),
     /// `fno backlog ...`: the whole backlog namespace execs the sibling Rust
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
@@ -492,8 +511,33 @@ fn classify_agents_transcript(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_agents_command(args, "transcript")
 }
 
+/// `fno agents org refresh-canon` arrives here as `agents lead
+/// refresh-canon` (the front's rewrite of the org row): the beat's
+/// canon-doc refresh, claimed natively so the door resolves the plugin root
+/// itself. The door takes no deeper words; the tail forwards so the usage
+/// refusal names what was typed.
+fn classify_agents_lead_refresh_canon(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "agents"
+        || args[1].to_str()? != "lead"
+        || args[2].to_str()? != "refresh-canon"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
 fn classify_agents_command(args: &[OsString], command: &str) -> Option<Vec<OsString>> {
     classify_group_command(args, "agents", command)
+}
+
+/// `fno agents restart ...` and its permanent root alias `fno restart ...`:
+/// the command is `fno-agents restart`, so the front door execs it directly.
+fn classify_agents_restart(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.first().and_then(|a| a.to_str()) == Some("restart") {
+        return Some(args[1..].to_vec());
+    }
+    classify_agents_command(args, "restart")
 }
 
 /// `fno agents status ...`: claimed natively like agents_top. The one
@@ -542,6 +586,14 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
         return None;
     }
     Some(args[2..].to_vec())
+}
+
+/// `fno config plugins ...` or `fno plugins ...`: the args after the group.
+fn classify_plugins(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
+    if args.first()?.to_str()? == "plugins" {
+        return Some((args[1..].to_vec(), true));
+    }
+    classify_group_command(args, "config", "plugins").map(|rest| (rest, false))
 }
 
 /// `fno agents claim backlog|export ...`: the shared-store commands live only
@@ -791,8 +843,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::paths_route::classify(args) {
         return Role::PathsCli(rest);
     }
+    if let Some(claim) = fno::lead_reads_route::classify(args) {
+        return Role::LeadRead(claim);
+    }
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
+    }
+    if let Some((rest, moved)) = classify_plugins(args) {
+        return Role::PluginsCli(rest, moved);
     }
     if let Some(rest) = fno::doctor_update::classify(args) {
         return Role::DoctorUpdate(rest);
@@ -802,6 +860,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
+    }
+    if let Some(rest) = classify_agents_lead_refresh_canon(args) {
+        return Role::AgentsLeadRefreshCanon(rest);
     }
     if let Some(rest) = classify_agents_transcript(args) {
         return Role::AgentsTranscript(rest);
@@ -842,6 +903,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_agents_command(args, "top") {
         return Role::AgentsTop(rest);
+    }
+    if let Some(rest) = classify_agents_restart(args) {
+        return Role::AgentsRestart(rest);
     }
     if let Some(rest) = classify_agents_status(args) {
         return Role::AgentsStatus(rest);
@@ -930,6 +994,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::setup_run::classify(args) {
         return Role::SetupRun(rest);
+    }
+    if let Some(cmd) = fno::setup_cmds::classify(args) {
+        return Role::SetupCmd(cmd);
     }
     if args.first().and_then(|a| a.to_str()) == Some("do")
         && args.get(1).and_then(|a| a.to_str()) == Some("wizard")
@@ -1192,6 +1259,7 @@ fn main() {
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
+        Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
         Role::MuxLs(json) => exit_mux(mux_cli::ls(json)),
         Role::MuxKill(kill_req) => {
@@ -1229,13 +1297,27 @@ fn main() {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
+        Role::LeadRead(claim) => std::process::exit(fno::lead_reads_route::run(&claim)),
         Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],
             &rest,
         )),
+        Role::PluginsCli(rest, moved) => {
+            if moved {
+                eprintln!("fno plugins is now fno config plugins");
+            }
+            std::process::exit(fno_agents_exec(
+                "fno config plugins",
+                &["spawn-overlay", "plugins"],
+                &rest,
+            ))
+        }
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
+        Role::AgentsLeadRefreshCanon(rest) => {
+            std::process::exit(fno::lead_refresh_canon::run(&rest))
+        }
         Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),
         Role::MailShow(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail show",
@@ -1307,6 +1389,9 @@ fn main() {
             &["census", "--workers"],
             &rest,
         )),
+        Role::AgentsRestart(rest) => {
+            std::process::exit(fno_agents_exec("fno agents restart", &["restart"], &rest))
+        }
         Role::AgentsRoles(rest) => std::process::exit(fno_agents_exec(
             "fno agents roles",
             &["spawn-overlay", "roles"],
@@ -1595,6 +1680,20 @@ mod tests {
             decide_role(&os(&["agents", "history", "--help"]), false),
             Role::Forward
         );
+        // The canon-refresh door claims the front's rewrite exactly; the
+        // sibling lead commands stay on the compat leg.
+        assert_eq!(
+            decide_role(&os(&["agents", "lead", "refresh-canon"]), false),
+            Role::AgentsLeadRefreshCanon(os(&[]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "lead", "refresh-canon", "--extra"]), false),
+            Role::AgentsLeadRefreshCanon(os(&["--extra"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "lead", "checkin"]), false),
+            Role::Forward
+        );
         // The mail reader claims its command and refuses the renamed one by
         // name; the send port claims local sends, while @host and plain
         // names stay the relay's.
@@ -1750,6 +1849,11 @@ mod tests {
             decide_role(&os(&["do", "wizard", "--json"]), false),
             Role::Wizard(os(&["--json"]))
         );
+        // So do the wizard plan and the post-merge scaffold.
+        assert_eq!(
+            decide_role(&os(&["config", "setup", "plan", "--advanced"]), false),
+            Role::SetupCmd(fno::setup_cmds::Cmd::Plan(os(&["--advanced"])))
+        );
     }
 
     #[test]
@@ -1866,6 +1970,15 @@ mod tests {
             decide_role(&os(&["agents", "top", "--json", "--subagents"]), false),
             Role::AgentsTop(os(&["--json", "--subagents"]))
         );
+        // `restart` answers natively in both spellings, flags carried.
+        assert_eq!(
+            decide_role(&os(&["agents", "restart", "--mux", "--json"]), false),
+            Role::AgentsRestart(os(&["--mux", "--json"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["restart", "--force"]), false),
+            Role::AgentsRestart(os(&["--force"]))
+        );
         // Every `roles` op is the Rust door's in every spelling, group
         // options carried; an unknown op forwards.
         assert_eq!(
@@ -1891,6 +2004,19 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["agents", "roles", "promote"]), false),
             Role::Forward
+        );
+        // The function-pack group is native whole, under both spellings.
+        assert_eq!(
+            decide_role(&os(&["config", "plugins", "-J", "ls"]), false),
+            Role::PluginsCli(os(&["-J", "ls"]), false)
+        );
+        assert_eq!(
+            decide_role(&os(&["plugins", "verify", "p"]), false),
+            Role::PluginsCli(os(&["verify", "p"]), true)
+        );
+        assert_ne!(
+            decide_role(&os(&["config", "plugin", "claude"]), false),
+            Role::PluginsCli(os(&["claude"]), false)
         );
     }
 

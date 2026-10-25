@@ -6,8 +6,8 @@ crates/fno/src/harness_capabilities.toml	crates/fno-agents/src/harness_capabilit
 crates/fno/src/event_store.rs	crates/fno-agents/src/event_store.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/event_store/observation.rs	crates/fno-agents/src/event_store/observation.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/event_store/validate.rs	crates/fno-agents/src/event_store/validate.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
-crates/fno-agents/src/event_store/events_schema.json	cli/src/fno/events/schema.yaml	cargo build --manifest-path crates/fno-agents/Cargo.toml
-crates/fno/src/event_store/events_schema.json	crates/fno-agents/src/event_store/events_schema.json	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno-agents/src/event_store/events_schema.json	cli/src/fno/events/schema.yaml	FNO_SYNC_EVENTS_SCHEMA=1 cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/event_store/events_schema.json	crates/fno-agents/src/event_store/events_schema.json	FNO_SYNC_EVENTS_SCHEMA=1 cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/live_store_fence.rs	crates/fno-agents/src/live_store_fence.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/store_conn.rs	crates/fno-agents/src/store_conn.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/provider_key.rs	crates/fno-agents/src/provider_key.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
@@ -32,3 +32,4 @@ docs/reference/otel-schema.md	crates/fno-agents/src/otel_schema.sql	python3 scri
 crates/fno/src/role_migration.rs	crates/fno-agents/src/role_migration.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 docs/architecture/help-routing.md	crates/fno-agents/src/help_router.rs	cargo test -p fno-agents help_router -- --ignored bless_help_routing
 crates/fno/src/model_reach.toml	crates/fno-agents/src/model_reach.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/wizard-plan.json	SettingsModel and cli/src/fno/config/registry.py	cd cli && uv run fno-py config schema --wizard-plan > ../crates/fno/wizard-plan.json

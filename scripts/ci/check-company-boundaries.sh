@@ -115,7 +115,6 @@ fi
 
 python3 - "$ROOT" "$MODE" "$BASELINE_FILE" <<'PY'
 import ast
-import os
 import re
 import sys
 from pathlib import Path
@@ -167,19 +166,9 @@ LAYERS = (
             "fno.claims",
             "fno.plan",
             "fno.approvals",
-            "fno.delivery",
         ),
     ),
     (2, "roles", ("fno.roles",)),
-    (
-        3,
-        "composition",
-        (
-            "fno.company.topology",
-            "fno.company.execution",
-        ),
-    ),
-    (4, "plugins", ("fno.plugins",)),
     (5, "runtime", ("fno.runtime", "fno.agents")),
 )
 
@@ -204,10 +193,6 @@ def module_name(path: Path) -> str:
 
 
 def layer_for(module: str):
-    if os.environ.get("FNO_BOUNDARY_TEST_COMPANY_PACKAGE_CORE") == "1" and (
-        module == "fno.company" or module.startswith("fno.company.")
-    ):
-        return 1, "core"
     matches = []
     for number, name, prefixes in LAYERS:
         for prefix in prefixes:

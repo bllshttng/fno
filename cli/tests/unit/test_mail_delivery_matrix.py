@@ -299,11 +299,11 @@ def test_cell6b_retired_form_read_off_a_stored_record_is_migrated(
 
     result = runner.invoke(
         app,
-        ["mail", "reply", "--to", inbound.thread_id, "--body", "ack", "--from", "lead"],
+        ["mail", "reply", "--to", inbound, "--body", "ack", "--from", "lead"],
     )
 
     assert result.exit_code == 14, result.output
-    replies = [m for m in iter_messages() if m.in_reply_to == inbound.thread_id]
+    replies = [m for m in iter_messages() if m.in_reply_to == inbound]
     # The write-ahead stage row and the durable recovery row share one id.
     assert len(replies) == 2
     assert replies[0].id == replies[-1].id

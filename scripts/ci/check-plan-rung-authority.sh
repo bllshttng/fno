@@ -384,6 +384,7 @@ crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/backlog/update_cli.rs
 crates/fno-agents/src/blueprint_judge.rs
 crates/fno-agents/src/delivery_completion.rs
+crates/fno-agents/src/delivery_eval.rs
 crates/fno-agents/src/hook/diff_budget.rs
 crates/fno-agents/src/kill_criteria.rs
 crates/fno-agents/src/merge_hold.rs
@@ -422,6 +423,11 @@ crates/fno-agents/src/verify_advise.rs"
 # hook/diff_budget.rs reads only the plan frontmatter `diff_budget` scalar
 # (the commit-time budget line); it never extracts a plan status, so the
 # shelling rule does not apply to it.
+# delivery_eval.rs reads the plan document only to validate its frontmatter
+# shape before evaluating (the validation the Python plan model ran before
+# the port): the status scalar is alias-normalized and membership-checked
+# against the shared plan_doc vocabulary, then dropped, so the delivery
+# verdict never classifies a rung.
 # The plan-doc writer writes the status line the graph decides (stamp,
 # graduate, projection). It reads status only to keep its writes forward-only,
 # so it is exempt from both scans; readiness stays with `fno do plan rung`.
@@ -545,6 +551,19 @@ while IFS= read -r reader; do
         matches="$(
             printf '%s\n' "$matches" \
                 | grep -vE '"status":[[:space:]]*"in_progress"' \
+                || true
+        )"
+    fi
+    if [ "$reader" = "crates/fno-agents/src/delivery_eval.rs" ]; then
+        # delivery_eval's plan-frontmatter read validates the status scalar
+        # against the shared vocabulary and drops it (it classifies nothing);
+        # the other two literals are the response envelope's own status field
+        # (evaluated/undeterminable), the merge_hold graph-row precedent.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '\.get\("status"\)' \
+                | grep -vE 'str_field\(response, "status"\)' \
+                | grep -vE '"status": status,' \
                 || true
         )"
     fi
