@@ -48,6 +48,9 @@ ALLOW_FILES+='|^(docs/harnesses/command-matrix\.md|docs/loops\.md|docs/architect
 ALLOW_FILES+='|^crates/fno-agents/tests/fixtures/lead/lead-2026-08-05\.json$'
 # The v3 graph schema a migration test replays: the column it names is history.
 ALLOW_FILES+='|^crates/fno-agents/tests/fixtures/graph_db_schema_v3\.sql$'
+# The config-route settings golden: the deleted python leg spelled the slot
+# key "verb", and the frozen bytes replay it until both legs rename together.
+ALLOW_FILES+='|^crates/fno-agents/tests/golden/config_route/cases\.json$'
 
 scan() {
     # stdin: path:line:text rows (git grep -n). stdout: the refused rows.

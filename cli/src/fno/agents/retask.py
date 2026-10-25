@@ -191,7 +191,8 @@ def resolve_target_coordinate(
             route_model = None
     resolved_model = model or _flag_value(resolved, "--model", "-m") or route_model
     return RetaskCoordinate(
-        harness=harness,
+        # No door and a null answer both read unset downstream.
+        harness=harness or "",
         provider=provider,
         model=resolved_model,
         effort=effort or _flag_value(resolved, "--effort"),
