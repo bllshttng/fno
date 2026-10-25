@@ -991,6 +991,7 @@ mod tests {
         let doc = serde_json::json!({
             "schema_version": 4,
             "agents": [{
+                "name": format!("row-{scope}"),
                 "session_id": format!("sess-{scope}"),
                 "role_scope": scope,
                 "project_root": project_root.display().to_string(),
