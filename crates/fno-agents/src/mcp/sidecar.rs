@@ -233,7 +233,8 @@ enum PrepareOutcome {
 }
 
 /// Run the sidecar on a fresh current-thread runtime: the worker lane's
-/// entry. Returns the process exit code.
+/// entry. Returns the process exit code. The idle window is the module
+/// default (30 minutes).
 pub fn run_sidecar(idle_exit_seconds: u64) -> i32 {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -245,23 +246,23 @@ pub fn run_sidecar(idle_exit_seconds: u64) -> i32 {
             return 2;
         }
     };
-    rt.block_on(serve_process())
+    rt.block_on(serve_process(idle_exit_seconds))
 }
 
-async fn serve_process() -> i32 {
+async fn serve_process(idle_exit_seconds: u64) -> i32 {
     let sock_path = socket_path();
     match prepare_socket_path(&sock_path) {
         PrepareOutcome::AlreadyRunning => {
             eprintln!("sidecar already running at {}", sock_path.display());
-            0
+            return 0;
         }
         PrepareOutcome::Failed(reason) => {
             eprintln!("sidecar bind preparation failed: {reason}");
-            2
+            return 2;
         }
         PrepareOutcome::Ready => {}
     }
-    let state = Arc::new(SidecarState::new(DEFAULT_IDLE_EXIT_SECONDS));
+    let state = Arc::new(SidecarState::new(idle_exit_seconds));
     match bind_and_serve(Arc::clone(&state), &sock_path).await {
         Ok(()) => 0,
         Err(e) => {
@@ -336,7 +337,7 @@ async fn handle_client(state: Arc<SidecarState>, stream: UnixStream) {
     state.touch();
     let conn_id = state.next_conn_id();
     let (reader, writer) = stream.into_split();
-    let writer = Arc::new(Mutex::new(writer));
+    let writer = Arc::new(AsyncMutex::new(writer));
     let mut my_sessions: Vec<String> = Vec::new();
     let mut reader = BufReader::new(reader);
     let mut raw = Vec::new();

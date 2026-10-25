@@ -155,11 +155,8 @@ pub fn validate_envelope(envelope: &Value) -> Result<(), String> {
     if !content.is_string() {
         return Err("content_not_string".to_string());
     }
-    let Some(meta) = params
-        .get("meta")
-        .unwrap_or(&Value::Object(Map::new()))
-        .as_object()
-    else {
+    let empty_meta = Value::Object(Map::new());
+    let Some(meta) = params.get("meta").unwrap_or(&empty_meta).as_object() else {
         return Err("meta_not_dict".to_string());
     };
     for (k, v) in meta {

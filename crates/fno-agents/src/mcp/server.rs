@@ -215,6 +215,10 @@ async fn sidecar_forward_loop(
             stderr_line(&format!("sidecar unavailable ({other:?})"));
             return;
         }
+        Err(_) => {
+            stderr_line("sidecar lazy-start task failed");
+            return;
+        }
     };
     let mut reader = match tokio::net::UnixStream::connect(&sock_path).await {
         Ok(s) => BufReader::new(s),

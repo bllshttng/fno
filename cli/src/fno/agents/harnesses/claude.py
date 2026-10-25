@@ -1600,3 +1600,16 @@ def mcp_channel_reachable(
         ) from exc
 
     channels = resp.get("channels") or []
+    if not isinstance(channels, list):
+        # Garbled sidecar response — treat as inconclusive, not orphaned.
+        raise ReachabilityProbeError(
+            provider="claude",
+            reason="mcp_channel_disconnected",
+        )
+
+    for entry in channels:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("session_id") == mcp_channel_id:
+            return True
+    return False

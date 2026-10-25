@@ -52,7 +52,7 @@ pub fn state_path() -> PathBuf {
 fn rpc_once(sock_path: &Path, request: &Value, timeout: Duration) -> Result<Value, ClientError> {
     let mut stream = match UnixStream::connect(sock_path) {
         Ok(s) => s,
-        Err(e) => return Err(unreachable_from_connect(sock_path, e)),
+        Err(e) => return Err(unreachable_from_connect(e)),
     };
     stream
         .set_read_timeout(Some(timeout))
@@ -105,7 +105,7 @@ fn rpc_once(sock_path: &Path, request: &Value, timeout: Duration) -> Result<Valu
 /// a missing socket file is `socket_missing`, a live socket with no
 /// listener is `server_not_listening`, anything else is
 /// `connect_error:{errno}`.
-fn unreachable_from_connect(sock_path: &Path, e: std::io::Error) -> ClientError {
+fn unreachable_from_connect(e: std::io::Error) -> ClientError {
     if e.kind() == std::io::ErrorKind::NotFound {
         return ClientError::Unreachable {
             reason: "socket_missing".to_string(),
@@ -159,6 +159,7 @@ fn spawn_detached_sidecar(sock_path: &Path) -> Option<()> {
         .append(true)
         .open(&log_path)
         .ok()?;
+    let log_err = log.try_clone().ok()?;
     let mut env: Vec<(String, String)> = std::env::vars_os()
         .filter_map(|(k, v)| {
             let k = k.to_string_lossy().into_owned();
@@ -171,26 +172,29 @@ fn spawn_detached_sidecar(sock_path: &Path) -> Option<()> {
         "FNO_SIDECAR_SOCKET".to_string(),
         sock_path.to_string_lossy().into_owned(),
     ));
-    std::process::Command::new(exe)
+    let mut command = std::process::Command::new(exe);
+    command
         .arg("--mcp-exec")
         .arg("sidecar")
         .stdin(std::process::Stdio::null())
         .stdout(log)
-        .stderr(log)
+        .stderr(log_err)
         .env_clear()
-        .envs(env)
-        // Detached: a new session so the lazy-started sidecar survives its
-        // parent, mirroring the Python leg's `start_new_session=True`.
-        // SAFETY: setsid(2) is async-signal-safe.
-        .pre_exec(|| {
+        .envs(env);
+    // Detached: a new session so the lazy-started sidecar survives its
+    // parent, mirroring the Python leg's `start_new_session=True`.
+    // SAFETY: setsid(2) is async-signal-safe and runs between fork and
+    // exec in the child.
+    unsafe {
+        command.pre_exec(|| {
+            // SAFETY: setsid(2) is async-signal-safe.
             if libc::setsid() < 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
-        })
-        .spawn()
-        .ok()
-        .map(|_| ())
+        });
+    }
+    command.spawn().ok().map(|_| ()).spawn().ok().map(|_| ())
 }
 
 /// The sidecar's log path: `$XDG_STATE_HOME/fno/sidecar.log`, default
