@@ -62,12 +62,20 @@ pub fn candidates(rows: &[Value]) -> Vec<Candidate> {
     rows.iter()
         .filter(|r| text(r, "status") == "done")
         .filter_map(|r| {
-            let plan = text(r, "plan_path").split('#').next().unwrap_or("");
-            let body = std::fs::read_to_string(plan).ok()?;
+            // A repo-relative plan_path reads against the node's cwd, as
+            // decide_probe_run does, never the daemon's.
+            let raw = std::path::Path::new(text(r, "plan_path").split('#').next().unwrap_or(""));
+            let cwd = text(r, "cwd");
+            let plan = if raw.is_relative() && !cwd.is_empty() {
+                std::path::Path::new(cwd).join(raw)
+            } else {
+                raw.to_path_buf()
+            };
+            let body = std::fs::read_to_string(&plan).ok()?;
             body.contains(&marker).then(|| Candidate {
                 id: text(r, "id").to_string(),
                 title: text(r, "title").to_string(),
-                plan: plan.to_string(),
+                plan: plan.to_string_lossy().into_owned(),
                 cwd: text(r, "cwd").to_string(),
                 epic: nearest_epic(r, rows),
             })
@@ -162,8 +170,19 @@ pub fn file_regression(c: &Candidate, reason: &str) -> Result<String, String> {
 /// live graph. An open node whose `caused_by` names the original stops a
 /// second filing. A refused filing (the idea cap, most often) stays on the
 /// row as `file_error` and counts as `unfiled`.
+/// The first candidate of pass `window`. Over the cap, each pass starts 40
+/// further on, so every candidate is checked within ceil(len / 40) passes.
+pub fn batch_start(len: usize, window: usize) -> usize {
+    if len > NODE_CAP {
+        window.wrapping_mul(NODE_CAP) % len
+    } else {
+        0
+    }
+}
+
 pub fn walk(
     rows: &[Value],
+    window: usize,
     apply: bool,
     run: Runner,
     file: &mut dyn FnMut(&Candidate, &str) -> Result<String, String>,
@@ -183,7 +202,8 @@ pub fn walk(
         .collect();
     let all = candidates(rows);
     let mut results = Vec::new();
-    for c in all.iter().take(NODE_CAP) {
+    let start = batch_start(all.len(), window);
+    for c in all.iter().cycle().skip(start).take(all.len().min(NODE_CAP)) {
         let (verdict, reason) = judge(c, run);
         let mut row = json!({"node": c.id, "verdict": verdict, "reason": reason});
         if verdict == "regressed" {
@@ -221,7 +241,11 @@ fn pass(apply: bool) -> (i32, Value) {
         Err(e) => return (2, json!({"error": format!("graph unreadable: {e}")})),
     };
     let decide = crate::acceptance_evidence::decide_probe_run;
-    let body = walk(&rows, apply, &decide, &mut file_regression);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let window = (now / RECHECK_INTERVAL_S) as usize;
+    let body = walk(&rows, window, apply, &decide, &mut file_regression);
     (i32::from(body["failed"] != 0), body)
 }
 
@@ -314,7 +338,7 @@ mod tests {
             filed.push(c.id.clone());
             Ok("x-new".to_string())
         };
-        let body = walk(&rows, true, &decide_probe_run, &mut file);
+        let body = walk(&rows, 0, true, &decide_probe_run, &mut file);
         assert_eq!(
             (body["checked"].as_u64(), body["passed"].as_u64()),
             (Some(2), Some(1))
@@ -325,14 +349,14 @@ mod tests {
         // The filed node is open and names the original: the next pass skips it.
         rows.push(json!({"id": "x-new", "status": "idea", "caused_by": "x-f"}));
         let mut never = |_: &Candidate, _: &str| -> Result<String, String> { panic!("refiled") };
-        let body = walk(&rows, true, &decide_probe_run, &mut never);
+        let body = walk(&rows, 0, true, &decide_probe_run, &mut never);
         assert_eq!(body["results"][1]["regression"], "x-new");
         assert_eq!(body["filed"], 0);
 
         // A filing whose caused_by write failed still stops a refile.
         rows.pop();
         rows.push(json!({"id": "x-half", "title": "regression: x-f", "status": "idea", "source_node_id": "x-f"}));
-        let body = walk(&rows, true, &decide_probe_run, &mut never);
+        let body = walk(&rows, 0, true, &decide_probe_run, &mut never);
         assert_eq!(body["results"][1]["regression"], "x-half");
     }
 
@@ -358,5 +382,9 @@ mod tests {
             judge(&c, &|_: &[String]| (2, "{}".to_string())).0,
             "undeterminable"
         );
+
+        // Over the cap, consecutive passes start 40 further on and wrap.
+        let starts = (batch_start(100, 1), batch_start(100, 3), batch_start(5, 7));
+        assert_eq!(starts, (40, 20, 0));
     }
 }
