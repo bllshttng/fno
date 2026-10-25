@@ -1,0 +1,50 @@
+{
+ "expected": [
+  {
+   "dimension": "alpha",
+   "fail_count": 2
+  },
+  {
+   "dimension": "zeta",
+   "fail_count": 1
+  }
+ ],
+ "input": [
+  {
+   "data": {
+    "dimension": "zeta",
+    "run_id": "r1",
+    "skill_id": "fno:blueprint",
+    "verdict": "fail"
+   },
+   "type": "skill_eval_finding"
+  },
+  {
+   "data": {
+    "dimension": "alpha",
+    "run_id": "r1",
+    "skill_id": "fno:blueprint",
+    "verdict": "fail"
+   },
+   "type": "skill_eval_finding"
+  },
+  {
+   "data": {
+    "dimension": "zeta",
+    "run_id": "r1",
+    "skill_id": "fno:blueprint",
+    "verdict": "pass"
+   },
+   "type": "skill_eval_finding"
+  },
+  {
+   "data": {
+    "dimension": "alpha",
+    "run_id": "r1",
+    "skill_id": "fno:blueprint",
+    "verdict": "fail"
+   },
+   "type": "skill_eval_finding"
+  }
+ ]
+}
