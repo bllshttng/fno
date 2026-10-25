@@ -2025,7 +2025,10 @@ refusing to assume no review is running"
         cwd: &Path,
         args: &[String],
     ) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String> {
-        let _step = step_timer::step(format!("fno {}", args.iter().take(3).cloned().collect::<Vec<_>>().join(" ")));
+        let _step = step_timer::step(format!(
+            "fno {}",
+            args.iter().take(3).cloned().collect::<Vec<_>>().join(" ")
+        ));
         Self::fno_strings(cwd, args)
     }
 
@@ -2066,7 +2069,10 @@ refusing to assume no review is running"
     }
 
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String> {
-        let _step = step_timer::step(format!("gh {}", args.iter().take(3).cloned().collect::<Vec<_>>().join(" ")));
+        let _step = step_timer::step(format!(
+            "gh {}",
+            args.iter().take(3).cloned().collect::<Vec<_>>().join(" ")
+        ));
         // The decide path is polled, so it admits: a hold refuses in process
         // and reads as the failed read it is, never a verdict about the PR.
         let mut cmd = Command::new("gh");
