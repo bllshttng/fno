@@ -154,6 +154,24 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
         .unwrap(),
     )
     .unwrap();
+    // An explicitly marked history row sinks whatever its number: state,
+    // not number order, decides for rows the reopen demotion wrote.
+    crate::backlog::save_aggregate(
+        &conn2,
+        &crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": "x-marked", "slug": "marked", "title": "K", "type": "bug",
+            "status": "in_progress", "priority": "p2", "domain": "code",
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "pr_number": 900,
+            "pr_url": "https://github.com/o/r/pull/900",
+            "merge_status": "merged",
+            "additional_prs": [
+                {"number": 970, "url": "https://github.com/o/r/pull/970", "history": true},
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 
     assert_eq!(
         manifest_node_pr_selector(&cwd, Some("x-multi")).as_deref(),
@@ -166,6 +184,12 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
     assert_eq!(
         manifest_node_pr_selector(&cwd, Some("x-reolder")).as_deref(),
         Some("960")
+    );
+    // A marked history row sinks even NEWER than the stamp: the explicit
+    // state beats number order.
+    assert_eq!(
+        manifest_node_pr_selector(&cwd, Some("x-marked")).as_deref(),
+        Some("900")
     );
     assert_eq!(
         manifest_node_pr_selector(&cwd, Some("x-reopen")).as_deref(),

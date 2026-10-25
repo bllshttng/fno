@@ -377,7 +377,15 @@ pub(crate) fn apply_completion_fields(node: &mut Value, merge_status: bool) {
 
 /// Undo a close (the _clear_completion_fields twin). `status` is the
 /// plan-rung ladder's answer for this row, computed by the caller.
-fn clear_completion_fields(node: &mut Value, reason: &str, status: &str) {
+/// `evidence_merge_status` is the reopen command's own gh verdict for the
+/// primary ("MERGED") when it read one; the cascade passes None because it
+/// never resolves ancestor evidence.
+fn clear_completion_fields(
+    node: &mut Value,
+    reason: &str,
+    status: &str,
+    evidence_merge_status: Option<&str>,
+) {
     let obj = node.as_object_mut().expect("row is an object");
     obj.insert("completed_at".into(), Value::Null);
     obj.insert("completion_note".into(), Value::Null);
@@ -393,11 +401,19 @@ fn clear_completion_fields(node: &mut Value, reason: &str, status: &str) {
     // into additional_prs with its recorded outcome and clear the primary
     // scalars. Left in place, pr_number keeps the store recompute deriving
     // in_review over the rung status this write just set, and the patch
-    // door holds every later status move on it.
+    // door holds every later status move on it. The history mark keeps the
+    // promise and evidence gates from reading the dead row as a promised
+    // split ship, and stamps it terminal when the reopen's own gh read
+    // answered MERGED and the row carried no stamp of its own.
     let number = obj.get("pr_number").and_then(Value::as_i64);
     if let Some(number) = number {
         let url = obj.get("pr_url").cloned().unwrap_or(Value::Null);
-        let merge_status = obj.get("merge_status").cloned().unwrap_or(Value::Null);
+        let mut merge_status = obj.get("merge_status").cloned().unwrap_or(Value::Null);
+        if merge_status.is_null() {
+            if let Some(state) = evidence_merge_status {
+                merge_status = Value::String(state.to_string());
+            }
+        }
         if obj
             .get("additional_prs")
             .map(Value::is_null)
@@ -417,6 +433,7 @@ fn clear_completion_fields(node: &mut Value, reason: &str, status: &str) {
                     "number": number,
                     "url": url,
                     "merge_status": merge_status,
+                    "history": true,
                 }));
             }
         }
@@ -1177,7 +1194,18 @@ pub fn run_reopen(tail: &[String]) -> i32 {
                 .get(&canonical_id)
                 .cloned()
                 .unwrap_or_else(|| "idea".into());
-            clear_completion_fields(&mut rows[idx], &reason_text, &status);
+            // Only the MERGED verdict stamps: merge_status carries terminal
+            // outcomes, so OPEN and UNKNOWN leave the row unstamped.
+            clear_completion_fields(
+                &mut rows[idx],
+                &reason_text,
+                &status,
+                if pr_state.as_deref() == Some("MERGED") {
+                    Some("merged")
+                } else {
+                    None
+                },
+            );
         }
         let (reopened, warned_ids) = cascade_reopen_parents(rows, &canonical_id, &task_id, &rungs);
         cascade.replace(reopened);
@@ -1428,6 +1456,7 @@ fn cascade_reopen_parents(
             &mut entries[idx],
             &format!("child {node_id} reopened"),
             &status,
+            None,
         );
         reopened.push(pid.clone());
         cur = entries[idx]
@@ -2973,7 +3002,7 @@ mod tests {
             "pr_url": "https://github.com/o/r/pull/3728",
             "merge_status": "MERGED",
         });
-        clear_completion_fields(&mut row, "work remains", "idea");
+        clear_completion_fields(&mut row, "work remains", "idea", None);
         assert_eq!(row.get("pr_number").and_then(Value::as_i64), None);
         assert_eq!(row.get("pr_url").and_then(Value::as_str), None);
         assert_eq!(row.get("merge_status").and_then(Value::as_str), None);
@@ -2986,17 +3015,23 @@ mod tests {
             Some("MERGED"),
             "the recorded outcome travels with the history row"
         );
+        assert_eq!(
+            extras[0].get("history").and_then(Value::as_bool),
+            Some(true),
+            "the row is marked history, not a promised ship"
+        );
 
         // A second reopen of the same node must not duplicate the row: the
         // primary is set again (a new ship stamped it) and the history row
         // already carries that number.
+        let history = extras[0].clone();
         row.as_object_mut()
             .unwrap()
             .insert("pr_number".into(), json!(3728));
         row.as_object_mut()
             .unwrap()
-            .insert("additional_prs".into(), json!([extras[0].clone()]));
-        clear_completion_fields(&mut row, "work remains", "idea");
+            .insert("additional_prs".into(), json!([history]));
+        clear_completion_fields(&mut row, "work remains", "idea", None);
         let extras = row.get("additional_prs").and_then(Value::as_array).unwrap();
         assert_eq!(extras.len(), 1);
     }
@@ -3011,7 +3046,7 @@ mod tests {
             "pr_url": "https://github.com/o/r/pull/41",
             "additional_prs": null,
         });
-        clear_completion_fields(&mut row, "work remains", "ready");
+        clear_completion_fields(&mut row, "work remains", "ready", None);
         let extras = row.get("additional_prs").and_then(Value::as_array).unwrap();
         assert_eq!(extras.len(), 1);
         assert_eq!(extras[0].get("number").and_then(Value::as_i64), Some(41));
@@ -3021,6 +3056,40 @@ mod tests {
             "an unstamped primary demotes as unstamped"
         );
         assert_eq!(row.get("pr_number").and_then(Value::as_i64), None);
+    }
+
+    #[test]
+    fn reopen_stamps_the_demoted_pr_from_the_reopen_evidence() {
+        let mut row = json!({
+            "id": "ab-33333333",
+            "status": "done",
+            "completed_at": "2026-10-22T14:06:46+00:00",
+            "pr_number": 3763,
+            "pr_url": "https://github.com/o/r/pull/3763",
+        });
+        clear_completion_fields(&mut row, "work remains", "ready", Some("merged"));
+        let extras = row.get("additional_prs").and_then(Value::as_array).unwrap();
+        assert_eq!(
+            extras[0].get("merge_status").and_then(Value::as_str),
+            Some("merged"),
+            "the reopen's own gh read stamps the row terminal"
+        );
+        assert_eq!(
+            extras[0].get("history").and_then(Value::as_bool),
+            Some(true)
+        );
+        // The OPEN and UNKNOWN verdicts are not terminal outcomes; they
+        // leave the row unstamped for the settle passes to fill.
+        let mut row = json!({
+            "id": "ab-44444444",
+            "status": "done",
+            "completed_at": "2026-10-22T14:06:46+00:00",
+            "pr_number": 42,
+            "pr_url": "https://github.com/o/r/pull/42",
+        });
+        clear_completion_fields(&mut row, "work remains", "ready", None);
+        let extras = row.get("additional_prs").and_then(Value::as_array).unwrap();
+        assert_eq!(extras[0].get("merge_status").and_then(Value::as_str), None);
     }
 
     #[test]
