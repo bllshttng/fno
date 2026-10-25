@@ -156,6 +156,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_MAIL_SUBJECT` | py+rs | The peeled `mail send --subject`; the front exports it, the envelope render and the bus-append door stamp it as `meta.subject`. |
 | `FNO_MCP_SIDECAR_LOG` | py | unclear: cli/src/fno/mcp/sidecar.py:646 |
 | `FNO_MERGE_AUTHORITY` | rs | Selects the `fno do pr merge` authority arm: `durable_grant` swaps the manifest posture for the durable-grant resolution a parked worker rides; unset or any other value rides the manifest fields as written. |
+| `FNO_MERGE_STEP_TRACE` | rs | Non-empty: each probe of the authorized-merge decide chain prints a began and a took line on stderr. `fno do pr merge` sets it for its child, so a timeout names the step the child was inside. Unset prints nothing. |
 | `FNO_MUSE_BIN` | rs | The `muse` binary `-H muse` launches for `muse serve` and `muse exec`; unset, fno-agents looks on PATH. |
 | `FNO_MUX_ADMISSION_NAMESPACE` | rs | unclear: crates/fno/src/process_admission.rs:733 |
 | `FNO_MUX_DIR` | rs | unclear: crates/fno/src/mux_cli.rs:1533 |
@@ -211,7 +212,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_RECLAIM_TEMP_ROOT` | rs | unclear: crates/fno-agents/src/reclaim.rs:80 |
 | `FNO_REGISTRY_ALLOW_ROW_LOSS` | rs | Set to 1 when a registry write that drops live rows is deliberate. The bulk-loss guard refuses otherwise. |
 | `FNO_RELEASE_REPO` | rs | The `owner/repo` whose `bin-cache` pre-release `fno update` downloads the CI-built binaries from; the default is bllshttng/fno (`crates/fno/src/update_prebuilt.rs`, `crates/fno-agents/src/sync_canonical.rs`, `scripts/install/fno.sh`), pending the GitHub repo rename. The curl installer reads the same name for the nightly. |
-| `FNO_REPO_ROOT` | py+rs | unclear: cli/src/fno/outstanding/cli.py:35; the law matcher reads it to place the project events journal (crates/fno-agents/src/law_match.rs). |
+| `FNO_REPO_ROOT` | py+rs | unclear: the storage-root ladder reads it first (crates/fno-agents/src/outstanding.rs); the law matcher reads it to place the project events journal (crates/fno-agents/src/law_match.rs). |
 | `FNO_REVIEW_HOLD_GH` | rs | Overrides the gh binary the review-hold door's PR head read shells out to (review_hold.rs `pr_head_ref_and_oid`); unset resolves plain `gh`. A test suite pins a stub here so no real gh call escapes the sandbox. |
 | `FNO_REVIEW_INVOCATION_ID` | rs | unclear: crates/fno/src/mux_cli.rs:6090 |
 | `FNO_REVIEW_ROUND` | rs | The verified round a --verify-fixes pass declares, carried to the disposition comment when the shell producer emits; the attest flow's function argument outranks it. Set by skills/review/scripts/emit-attestation.sh, read in crates/fno-agents/src/review_findings.rs `resolve_round`. |
@@ -249,7 +250,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_STYLE_ENFORCE` | rs | Zero disables the mail style gate and the encounter prose check at their readers (send vet_body, send_raw, team, pane-prepare, encounter_cli.rs:115); any other value enforces. |
 | `FNO_SUBAGENT_LIVE_SECONDS` | rs | Positive seconds a sidechain transcript counts as active on mtime (default 600); the Rust check-in held-subagents reading reads it directly (subagent_hold.rs), and the `fno agents fleet top --subagents` scan (agents_top.rs) reads it through the same `live_threshold`. |
 | `FNO_SYNC_EVENTS_SCHEMA` | rs | Regenerate-on-build escape for the tracked events-schema copies: unset or any value but `1` keeps the build checking them (drift fails the build); `1` restores writing so a drift can be regenerated and committed. |
-| `FNO_TASK_CONTEXT_FILE` | py+rs | Absolute path to the executing attempt's bound task-context binding; a declared value gates `fno do target init`, embeds into written handoff receipts, and rides spawn payloads (rendered natively). |
+| `FNO_TASK_CONTEXT_FILE` | rs | Absolute path to the executing attempt's bound task-context binding; a declared value gates `fno do target init`, embeds into written handoff receipts, and rides spawn payloads (rendered natively). |
 | `FNO_TEST_BUILD_IDLE_SECS` | rs | Test seam: seconds a build-admit waiter lets the `build:cargo` holder run no compile before it takes the slot (default 30), so admission tests need not wait out the real window. |
 | `FNO_TEST_BUILD_SLOTS` | rs | Test seam: pins how many agent cargos may compile at once (0 to 3) in place of the load read, so admission tests do not depend on the load of the machine that runs them. |
 | `FNO_TEST_CLAUDE_CONFIG_LOG` | rs | Test seam: records the config root passed to `claude agents --json --all` while testing a pinned account root. |
@@ -273,7 +274,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_THINK_SPAWN_WAVE0` | rs | unclear: crates/fno-agents/src/backlog/decompose.rs:2382 |
 | `FNO_THREAD_TURN_REFRESH_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:105 |
 | `FNO_TOUCH_EMIT` | rs | unclear: crates/fno/src/server.rs:10464 |
-| `FNO_TRACKER_BACKEND` | py+rs | unclear: cli/src/fno/outstanding/core.py:365 |
+| `FNO_TRACKER_BACKEND` | py+rs | unclear: the store enumeration reads it first (crates/fno-agents/src/outstanding.rs). |
 | `FNO_TRACKER_GITHUB_REPO` | rs | unclear: crates/fno-agents/src/tracker/github.rs:113 |
 | `FNO_TRACKER_LINEAR_API_KEY` | rs | Linear API key for the linear tracker backend, read once at construction. Every backend op refuses without it, naming this var. Auth rides env only, no config key. |
 | `FNO_TRACKER_LINEAR_TEAM` | rs | Linear team key (e.g. ENG) scoping the linear tracker backend's list_open and list_closed_since, the way FNO_TRACKER_GITHUB_REPO scopes github. Without it the listings warn and return empty. |

@@ -1,0 +1,12 @@
+{
+ "expected": [
+  "project:acme"
+ ],
+ "input": {
+  "project_names": [
+   "acme",
+   "fno"
+  ],
+  "text": "touches acme and fno and acme-corp"
+ }
+}

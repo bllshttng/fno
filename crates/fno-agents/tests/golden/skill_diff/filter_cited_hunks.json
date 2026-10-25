@@ -1,0 +1,56 @@
+{
+ "expected": {
+  "dropped_new": [
+   "x",
+   "x",
+   "drop-missing"
+  ],
+  "kept": [
+   {
+    "cited_finding_ids": [
+     "s1"
+    ],
+    "file": "skills/blueprint/SKILL.md",
+    "new_text": "keep",
+    "old_text": "",
+    "rationale": ""
+   }
+  ]
+ },
+ "input": {
+  "hunks": [
+   {
+    "cited_finding_ids": [
+     "s1"
+    ],
+    "file": "skills/blueprint/SKILL.md",
+    "new_text": "keep",
+    "old_text": "",
+    "rationale": ""
+   },
+   {
+    "cited_finding_ids": [],
+    "file": "skills/blueprint/SKILL.md",
+    "new_text": "x",
+    "old_text": "",
+    "rationale": ""
+   },
+   {
+    "cited_finding_ids": [
+     ""
+    ],
+    "file": "skills/blueprint/SKILL.md",
+    "new_text": "x",
+    "old_text": "",
+    "rationale": ""
+   },
+   {
+    "cited_finding_ids": [],
+    "file": "skills/blueprint/SKILL.md",
+    "new_text": "drop-missing",
+    "old_text": "",
+    "rationale": ""
+   }
+  ]
+ }
+}

@@ -43,7 +43,7 @@ pub(crate) fn other_owned_scopes(
 /// The default blueprint-subagent ceiling when no provider budget applies
 /// (no new config key: a registry row is barred, so the default is a named
 /// Rust constant). One per lead: law d-6eb2cbbd.
-const DEFAULT_BLUEPRINT_CEILING: usize = 1;
+pub(crate) const DEFAULT_BLUEPRINT_CEILING: usize = 1;
 
 /// The check-in's blueprint reading: this session's live blueprint
 /// subagents against the ceiling, then which unplanned nodes to start and
@@ -186,6 +186,64 @@ pub(crate) fn r_blueprint(
         "idea_children": idea_children_json,
         "skips": skips,
     }))
+}
+
+/// The stop check's blueprint-ceiling reading: the same ceiling the
+/// check-in's `r_blueprint` reads, against the same claims source, so a row
+/// the beat skips at ceiling cannot hold the lead's stop open. `running`
+/// names the running blueprints by node id; `open` is the count of
+/// board-order unplanned rows that may still start. `None` on an unmeasured
+/// read: the check-in fails closed so no start is named past the ceiling;
+/// the stop check fails inert so no startable row reads as waiting, which
+/// would end a lead with work it could have started.
+pub(crate) struct BlueprintWait {
+    pub(crate) running: Vec<String>,
+    pub(crate) running_count: usize,
+    pub(crate) ceiling: usize,
+    pub(crate) open: usize,
+}
+
+/// The ceiling fold the check-in runs: a provider budget can only lower the
+/// one-per-lead ceiling, never raise it. One function so the stop check and
+/// the check-in cannot drift.
+pub(crate) fn blueprint_ceiling(provider_cap: Option<usize>) -> usize {
+    match provider_cap {
+        Some(cap) if cap < DEFAULT_BLUEPRINT_CEILING => cap,
+        _ => DEFAULT_BLUEPRINT_CEILING,
+    }
+}
+
+/// The node ids behind this session's live `blueprint-session:` claims, read
+/// from the same listing the check-in counts holders in.
+pub(crate) fn running_blueprint_ids(
+    rows: &[crate::claims::ClaimRecord],
+    session: &str,
+) -> Vec<String> {
+    let holder = format!("blueprint-session:{session}");
+    rows.iter()
+        .filter(|r| r.holder == holder)
+        .filter_map(|r| r.key.strip_prefix("node:").map(str::to_string))
+        .collect()
+}
+
+/// Read the ceiling state live. `None` when the session id or the claims
+/// listing is unreadable: an unmeasured ceiling never converts an
+/// actionable row into a waiting one.
+pub(crate) fn stop_check_reading(cwd: &Path) -> Option<BlueprintWait> {
+    let (session, _) = crate::claims::resolve_identity();
+    let session = session?;
+    let rows = crate::claims::list(Some("node:"), None, false).ok()?;
+    let running = running_blueprint_ids(&rows, &session);
+    let provider = std::env::var("FNO_ROUTE_PROVIDER").unwrap_or_default();
+    let provider_cap = crate::spawn_gate_lanes::provider_subagents_cap(cwd, &provider);
+    let ceiling = blueprint_ceiling(provider_cap);
+    let running_count = running.len();
+    Some(BlueprintWait {
+        running,
+        running_count,
+        ceiling,
+        open: ceiling.saturating_sub(running_count),
+    })
 }
 
 #[cfg(test)]
@@ -533,5 +591,34 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// The stop check folds the provider cap into the same one-per-lead
+    /// ceiling the check-in reads: never raised, only lowered, and the
+    /// default holds with no cap at all.
+    #[test]
+    fn the_stop_check_ceiling_folds_the_provider_cap_and_never_raises_the_default() {
+        assert_eq!(blueprint_ceiling(None), 1);
+        assert_eq!(blueprint_ceiling(Some(3)), 1);
+        assert_eq!(blueprint_ceiling(Some(1)), 1);
+    }
+
+    /// Only this session's `blueprint-session:` holders count as running,
+    /// and each names its node.
+    #[test]
+    fn running_blueprints_name_only_this_sessions_claims() {
+        let mk = |key: &str, holder: &str| -> crate::claims::ClaimRecord {
+            serde_json::from_value(json!({
+                "key": key, "holder": holder, "acquired_at": 0, "pid": null, "host": "t"
+            }))
+            .unwrap()
+        };
+        let rows = vec![
+            mk("node:x-9", "blueprint-session:s1"),
+            mk("node:x-8", "blueprint-session:s2"),
+            mk("node:x-7", "spawn-handover:t-w"),
+        ];
+        assert_eq!(running_blueprint_ids(&rows, "s1"), vec!["x-9".to_string()]);
+        assert!(running_blueprint_ids(&rows, "s3").is_empty());
     }
 }

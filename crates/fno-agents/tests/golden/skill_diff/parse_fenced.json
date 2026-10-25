@@ -1,0 +1,10 @@
+{
+ "expected": {
+  "hunks": 1,
+  "no_diff_reason": "arch",
+  "verdict": "no_diff_helps"
+ },
+ "input": {
+  "text": "```json\n{\"verdict\":\"no_diff_helps\",\"hunks\":[{\"file\":\"a\",\"cited_finding_ids\":[\"s1\"]}],\"no_diff_reason\":\"arch\"}\n```"
+ }
+}

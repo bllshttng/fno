@@ -1,0 +1,8 @@
+{
+ "expected": {
+  "error": "hunk.cited_finding_ids must be a list of strings"
+ },
+ "input": {
+  "text": "{\"verdict\":\"propose_pr\",\"hunks\":[{\"file\":\"a\",\"cited_finding_ids\":\"s1\"}]}"
+ }
+}

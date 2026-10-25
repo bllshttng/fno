@@ -68,6 +68,7 @@ enum Role {
     /// `config setup run` composes on. Native, so the inventory answers
     /// beside the setup command that reads it.
     ConfigDefaults(Vec<OsString>),
+    ConfigSchema(Vec<String>),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
@@ -182,6 +183,11 @@ enum Role {
     /// emit surface and the other event names until their cutover.
     DoctorEvent(Vec<OsString>),
     DoctorCost(Vec<OsString>),
+    /// `fno doctor skill-diff tick|reconcile` and the deprecated root `fno
+    /// skill-diff`: the whole command execs the native `fno-agents loops`
+    /// skill-diff ops. The tail (op word + flags) rides byte-verbatim; a
+    /// bare command or --help answers native help inside the op door.
+    DoctorSkillDiff(Vec<OsString>),
     /// `fno doctor lint style ...`: the native style check, exec'd through
     /// the sibling fno-agents `style-check` command. Args from the check name
     /// onward; Python keeps every other lint check until its port.
@@ -362,9 +368,13 @@ enum Role {
     /// `fno inbox user|operator status`: the native queue read; the carried
     /// tail is the `fno-agents compaction` argv.
     InboxUser(Vec<OsString>),
-    /// `fno inbox outstanding [--json|-J]`: the native listing; the carried
-    /// tail is the `fno-agents compaction outstanding` argv.
+    /// `fno inbox outstanding [--json|-J]`: the native listing and its
+    /// subcommands; the carried tail is the `fno-agents compaction
+    /// outstanding` argv.
     InboxOutstanding(Vec<OsString>),
+    /// `fno inbox day start|end`: the native day boundary; the carried tail
+    /// is the `fno-agents day` argv.
+    InboxDay(Vec<OsString>),
     /// `fno board-render`: the local board's snapshot writer, a native front
     /// command because the page and the read model both live in this crate.
     BoardRender(Vec<String>),
@@ -582,6 +592,19 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
         return None;
     }
     Some(args[2..].to_vec())
+}
+
+/// `fno doctor skill-diff ...` and the deprecated root `fno skill-diff ...`:
+/// the tail (op word + flags) rides byte-verbatim to the native ops door.
+/// A bare command and --help claim too (the Python leg dies in this port); an
+/// unknown op word refuses inside the op door.
+fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
+    let rest: &[OsString] = match args.first()?.to_str()? {
+        "doctor" if args.get(1)?.to_str()? == "skill-diff" => &args[2..],
+        "skill-diff" => &args[1..],
+        _ => return None,
+    };
+    Some(rest.to_vec())
 }
 
 /// `fno config plugins ...` or `fno plugins ...`: the args after the group.
@@ -851,6 +874,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::doctor_update::classify(args) {
         return Role::DoctorUpdate(rest);
     }
+    if let Some(rest) = classify_skill_diff(args) {
+        return Role::DoctorSkillDiff(rest);
+    }
     if let Some(rest) = classify_group_command(args, "doctor", "builds") {
         return Role::DoctorBuilds(rest);
     }
@@ -980,6 +1006,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::inbox_user::classify_inbox_outstanding(args) {
         return Role::InboxOutstanding(rest);
     }
+    if let Some(argv) = fno::inbox_user::classify_inbox_day(args) {
+        return Role::InboxDay(argv);
+    }
     if let Some(argv) = fno::inbox_user::classify_inbox_user(args)
         .or_else(|| fno::inbox_user::classify_inbox_peers(args))
     {
@@ -1001,6 +1030,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::config_defaults::classify(args) {
         return Role::ConfigDefaults(rest);
+    }
+    if let Some(rest) = fno::config_schema::classify(args) {
+        return Role::ConfigSchema(rest);
     }
     match cli_args::classify(args) {
         FrontDoor::Forward => Role::Forward,
@@ -1251,6 +1283,7 @@ fn main() {
         Role::Uninstall(opts) => std::process::exit(fno::uninstall::run_uninstall(opts)),
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
+        Role::ConfigSchema(rest) => std::process::exit(fno::config_schema::run(&rest)),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
         Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
@@ -1413,6 +1446,9 @@ fn main() {
             &["test-run", "builds"],
             &rest,
         )),
+        Role::DoctorSkillDiff(rest) => {
+            std::process::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))
+        }
         Role::ClaimStore(rest) => {
             std::process::exit(fno_agents_exec("fno agents claim", &["claim"], &rest))
         }
@@ -1505,6 +1541,9 @@ fn main() {
             &["compaction", "outstanding"],
             &rest,
         )),
+        Role::InboxDay(argv) => {
+            std::process::exit(fno_agents_exec("fno inbox day", &["day"], &argv))
+        }
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
         Role::MuxStats(json) => std::process::exit(mux_cli::stats(json)),
         Role::MuxNotify(title, message, json) => {

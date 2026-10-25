@@ -4,9 +4,8 @@
 //! belong to their own modules. Every root `fno setup <command>` spelling is
 //! claimed too: the deprecated root group lives nowhere else now.
 //!
-//! `plan` prints the wizard question plan. The plan is generated from the
-//! Python settings model and registry into a crate-local copy, embedded here,
-//! and a drift test fails CI when the copy and the generator disagree.
+//! `plan` prints the wizard question plan, rendered from the committed schema
+//! table (`config_schema::wizard_plan`).
 //!
 //! `post-merge` asks for this repo's `post_merge.parking_lot_path` (and a
 //! `project.id` when unset). It reads readiness from `fno config doctor
@@ -19,10 +18,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-
-/// The generated wizard plan. Regenerate with `fno config schema
-/// --wizard-plan`; the crate-local copy keeps `cargo publish` self-contained.
-const WIZARD_PLAN: &str = include_str!("../wizard-plan.json");
 
 const PLAN_USAGE: &str = "usage: fno config setup plan [--advanced]";
 const POST_MERGE_USAGE: &str = "usage: fno config setup post-merge";
@@ -122,15 +117,8 @@ pub fn run(cmd: Cmd) -> i32 {
 
 /// The plan's fields: the `always` tier only, or every asked field with
 /// `advanced`.
-pub fn plan_json(advanced: bool) -> Result<String, String> {
-    let mut plan: Value =
-        serde_json::from_str(WIZARD_PLAN).map_err(|e| format!("embedded wizard plan: {e}"))?;
-    if !advanced {
-        if let Some(fields) = plan.get_mut("fields").and_then(Value::as_array_mut) {
-            fields.retain(|f| f.get("tier").and_then(Value::as_str) == Some("always"));
-        }
-    }
-    serde_json::to_string_pretty(&plan).map_err(|e| e.to_string())
+pub fn plan_json(advanced: bool) -> String {
+    crate::config_schema::wizard_plan(advanced)
 }
 
 fn run_plan(rest: &[OsString]) -> i32 {
@@ -148,16 +136,8 @@ fn run_plan(rest: &[OsString]) -> i32 {
             }
         }
     }
-    match plan_json(advanced) {
-        Ok(text) => {
-            println!("{text}");
-            0
-        }
-        Err(e) => {
-            eprintln!("setup plan: {e}");
-            1
-        }
-    }
+    println!("{}", plan_json(advanced));
+    0
 }
 
 /// The scaffold's side effects, so a test drives the flow with no terminal
