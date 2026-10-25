@@ -54,7 +54,7 @@ Read the config floor with:
 ```bash
 N=$(fno config get config.blueprint.max_prs_per_epic 2>/dev/null || echo 4)
 ```
-If `fno config get` is unavailable, default to 4. **Auto-group MUST degrade to today's single-doc behavior (not error) if the config read fails** - treat an unreadable ceiling as 4, never abort the blueprint. An epic with `max_children: 6` and a default of 4 must raise the project ceiling to 6 first.
+If `fno config get` is unavailable, default to 4. If the config read fails, auto-group MUST degrade to today's single-doc behavior (not error). Treat an unreadable ceiling as 4, and never abort the blueprint. An epic with `max_children: 6` and a default of 4 must raise the project ceiling to 6 first.
 
 `N` is a **ceiling, not a quota** (Locked Decision #3): cohesive work uses
 fewer groups; never pad to `N`. This guardrail applies identically to
