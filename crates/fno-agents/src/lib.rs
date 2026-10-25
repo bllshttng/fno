@@ -64,6 +64,7 @@ pub mod agy_transcript;
 #[path = "agy_transcript_tests.rs"]
 mod agy_transcript_tests;
 pub mod announce;
+pub mod approvals;
 pub mod arm_repair;
 pub mod arm_watch;
 pub mod ask_project;
@@ -424,6 +425,7 @@ pub mod pr_watch;
 pub mod pr_worktree;
 pub mod process_owner;
 pub mod process_probe;
+pub mod project;
 pub(crate) mod prompt_wait;
 pub mod protocol;
 pub mod prove_it_verdicts;

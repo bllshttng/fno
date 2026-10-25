@@ -165,3 +165,4 @@ config setup github-cli|nothing: every worker spawn refreshes the gh proxy itsel
 # The two one-shot migrations: the loader converts settings.yaml and first run writes config.toml.
 config setup migrate-config|nothing: the config loader converts a legacy settings.yaml on first read|the setup migrate retirement
 config setup migrate-paths|fno do wizard|the setup migrate retirement
+fno do target cancel|end the session from its own harness, or touch .fno/.target-cancelled in its worktree|no such command; three refusal strings named a phantom

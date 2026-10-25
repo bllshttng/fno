@@ -1,0 +1,12 @@
+request     b542674a9612cd22ba88b3c906f76774d78467e3cd2f1d0bf936e81a5ef7bb5f
+  principal   agent-1
+  work order  wo-4
+  attempt     att-4
+  effect      eff-4
+  class       repo.write
+  destination github:org/old
+  action      act-4
+  expires     <PAST>
+  decision    pending
+  expired     yes - a new request is required
+  effect      not prepared

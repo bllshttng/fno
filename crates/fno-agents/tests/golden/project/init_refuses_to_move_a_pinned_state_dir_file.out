@@ -1,0 +1,2 @@
+# my own state root
+state_dir = "~/.fno/elsewhere"

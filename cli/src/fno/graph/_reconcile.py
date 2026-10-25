@@ -478,6 +478,10 @@ def node_pr_refs(node: dict) -> list[tuple[int, Optional[str]]]:
     for extra in node.get("additional_prs") or []:
         if not isinstance(extra, dict):
             continue
+        # A reopen-demoted row carries its recorded outcome and the history
+        # mark: record-keeping, not a promised ship; the gates skip it.
+        if extra.get("history") is True:
+            continue
         num = extra.get("number")
         if not isinstance(num, int) or num in seen:
             continue

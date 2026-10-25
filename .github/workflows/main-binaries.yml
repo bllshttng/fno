@@ -40,7 +40,7 @@ permissions:
 jobs:
   resolve:
     name: resolve the build key
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       crates_rev: ${{ steps.rev.outputs.crates_rev }}
@@ -85,7 +85,7 @@ jobs:
   publish:
     name: publish to bin-cache
     needs: [resolve, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write

@@ -1,0 +1,10 @@
+{
+  "result": "refused",
+  "reason": "replay",
+  "detail": "request b9822f9ebf0114b1cf9c2fa2ef41de47b86dc6e3c99790059ce1601ead28eeb9 was already decided approved by founder",
+  "fields": [
+    "request_digest"
+  ],
+  "authority_source": null,
+  "recovery": "A decided request is immutable. Submit a new request instead."
+}

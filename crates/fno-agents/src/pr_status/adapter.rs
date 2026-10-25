@@ -17,7 +17,9 @@ use crate::pr_status::lists;
 use crate::pr_status::quota;
 
 /// The metadata field set whose reads translate to the REST pulls fetch.
-const METADATA_FIELDS: [&str; 8] = [
+/// The stop gate's `PR_VIEW_FIELDS` must stay inside it, or the gate's read
+/// leaves REST for the broker and a spent budget refuses it.
+pub(crate) const METADATA_FIELDS: [&str; 8] = [
     "state",
     "number",
     "headRefName",

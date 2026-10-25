@@ -200,8 +200,8 @@ fn build_argv_create_forwards_add_dir() {
 fn build_argv_create_grants_git_metadata_write_in_a_repo() {
     // Byte-parity with codex.py::create. codex's workspace-write policy marks
     // <project_root>/.git read-only, so a bounded `ask` worker asked to commit
-    // fails on index.lock. The grant is the git COMMON dir, which also covers a
-    // linked worktree's gitdir at <repo>/.git/worktrees/<name>/.
+    // fails on index.lock. In a main checkout the grant is the git COMMON dir;
+    // a linked worktree also names its own gitdir (provider::git_write_roots).
     //
     // Shares PATH_ENV_LOCK with the PATH-mutating tests below: this test never
     // touches PATH itself, but a sibling test's temporary override (run

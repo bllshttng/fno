@@ -520,6 +520,51 @@ pub(crate) fn main_ci_reading_cached(cwd: &Path) -> Result<Value, String> {
     Ok(token)
 }
 
+/// The `fno do pr status main` receipt for one reading: a JSON line in the
+/// PR status shape and its exit code, 0 green, 1 red, 2 pending, 3 unknown,
+/// 4 read failed. A watch on main arms this, never a newest-run listing: the
+/// newest row is one workflow, and a red sibling hides behind its pass.
+fn status_main_receipt(reading: Result<Value, String>) -> (Value, i32) {
+    match reading {
+        Ok(token) => {
+            let verdict = token
+                .get("verdict")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            let code = match verdict.as_str() {
+                "green" => 0,
+                "red" => 1,
+                "pending" => 2,
+                _ => 3,
+            };
+            let line = main_ci_render(Some(&token));
+            (
+                json!({"pr": "main", "verdict": verdict, "green": code == 0, "main_ci": line}),
+                code,
+            )
+        }
+        Err(reason) => (
+            json!({"pr": "main", "verdict": "error", "green": false, "reason": reason}),
+            4,
+        ),
+    }
+}
+
+/// `fno do pr status main`: main's head verdict across every workflow, the
+/// same reduction the check-in's `main ci:` line and the merge gate read.
+/// `refresh` skips the 60s row cache for one live read.
+pub(crate) fn run_status_main(cwd: &Path, refresh: bool) -> i32 {
+    let reading = if refresh {
+        main_ci_reading(cwd)
+    } else {
+        main_ci_reading_cached(cwd)
+    };
+    let (receipt, code) = status_main_receipt(reading);
+    println!("{receipt}");
+    code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1180,5 +1225,39 @@ mod tests {
         );
         std::env::remove_var("FNO_GH_FACTS_DIR");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// `pr status main` reads every workflow at the head sha. The filed
+    /// trap: a newest-run probe returned a passing sibling and stayed
+    /// silent while rust-ci was red. A queued sibling with no check run
+    /// yet holds the verdict pending, never green. A failed read exits 4.
+    #[test]
+    fn status_main_reads_red_when_one_workflow_fails_beside_green_ones() {
+        let mut runs = vec![wf_run(
+            "rust-ci",
+            "h",
+            "completed",
+            "failure",
+            "2026-09-30T10:00:00Z",
+        )];
+        for name in ["cli-ci", "guards", "internal-refs", "stacked-base-guard"] {
+            runs.push(wf_run(
+                name,
+                "h",
+                "completed",
+                "success",
+                "2026-09-30T10:05:00Z",
+            ));
+        }
+        let (receipt, code) = status_main_receipt(Ok(token_at("h", &runs, &[])));
+        assert_eq!((receipt["verdict"].as_str(), code), (Some("red"), 1));
+        assert_eq!(receipt["main_ci"], "red (rust-ci at h)");
+
+        runs[0] = wf_run("rust-ci", "h", "queued", "", "2026-09-30T10:00:00Z");
+        let (receipt, code) = status_main_receipt(Ok(token_at("h", &runs, &[])));
+        assert_eq!((receipt["verdict"].as_str(), code), (Some("pending"), 2));
+
+        let (receipt, code) = status_main_receipt(Err("gh api failed".into()));
+        assert_eq!((receipt["verdict"].as_str(), code), (Some("error"), 4));
     }
 }
