@@ -384,7 +384,7 @@ mod tests {
         let state = std::sync::Arc::new(super::super::sidecar::SidecarState::new(1800));
         let server_sock = sock.clone();
         let server = tokio::spawn(async move {
-            super::super::sidecar::bind_and_serve(state, &server_sock).await;
+            let _ = super::super::sidecar::bind_and_serve(state, &server_sock).await;
         });
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let mut conn_a = tokio::net::UnixStream::connect(&sock).await.unwrap();
