@@ -580,7 +580,35 @@ fn check_plan(plan: &Path, root: &Path) -> Result<Vec<String>, String> {
     if lines.is_empty() {
         lines.push("O\twave strategy checks passed".to_string());
     }
+    lines.extend(pr_ceiling_line(plan, root));
     Ok(lines)
+}
+
+/// One `W` line when the plan declares more PRs than the project ceiling:
+/// the larger of its `max_prs` and its declared ship count, against
+/// `decompose::pr_ceiling`. An unreadable plan or ceiling says nothing here;
+/// decompose refuses a bad ceiling where it binds.
+fn pr_ceiling_line(plan: &Path, root: &Path) -> Option<String> {
+    use crate::plan_doc::codec::{self, Value as Fv};
+    let (_, fields, _) = codec::read_plan_file(plan).ok()?;
+    let ships = crate::plan_doc::stamp::declared_ships(&fields, plan);
+    let max_prs = match fields.get("max_prs") {
+        Some(Fv::Scalar(s)) => s.trim().parse::<i64>().unwrap_or(0),
+        _ => 0,
+    };
+    let (count, source) = if max_prs > ships {
+        (max_prs, "max_prs")
+    } else {
+        (ships, "declared ships")
+    };
+    let (ceiling, ceiling_src) = crate::backlog::decompose::pr_ceiling(root).ok()?;
+    (count > ceiling).then(|| {
+        format!(
+            "W\tplan declares {count} PRs ({source}), over the PR ceiling {ceiling} ({ceiling_src}); \
+             bundle the work into at most {ceiling} PRs (set expected_url_count when the waves ship as one PR), \
+             or raise the ceiling with config.blueprint.max_prs_per_epic in the project's .fno/config.toml"
+        )
+    })
 }
 
 fn run_check(args: &[String]) -> i32 {
@@ -1252,6 +1280,42 @@ mod tests {
         assert!(lines
             .iter()
             .any(|line| line == "E\tparallel tasks share surface 'src/fold.py': 1.1, 1.2"));
+    }
+
+    #[test]
+    fn a_plan_over_the_pr_ceiling_is_named() {
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(repo.join(".fno")).unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        let config = repo.join(".fno/config.toml");
+        fs::write(&config, "[blueprint]\nmax_prs_per_epic = 4\n").unwrap();
+        let file = repo.join("plan.md");
+        let body = plan("execution_mode: sequential\nwaves:\n  - wave: 1\n    mode: sequential\n    tasks: ['1.1']\ntasks:\n  - id: '1.1'\n    surface: ['a.py']\n    verify: 'cargo test'");
+        fs::write(
+            &file,
+            body.replacen("kind: quick-plan", "kind: quick-plan\nmax_prs: 25", 1),
+        )
+        .unwrap();
+        let lines = check_plan(&file, &repo).unwrap();
+        let warning = lines
+            .iter()
+            .find(|line| line.starts_with("W\tplan declares 25 PRs (max_prs)"))
+            .expect("the plan over the ceiling is named");
+        assert!(warning.contains("ceiling 4 (config.blueprint.max_prs_per_epic = 4)"));
+        assert!(warning.contains("raise the ceiling with config.blueprint.max_prs_per_epic"));
+        // The pass receipt still prints beside the warning.
+        assert!(lines
+            .iter()
+            .any(|line| line == "O\twave strategy checks passed"));
+        // A project ceiling of 25 lets the same plan through.
+        fs::write(&config, "[blueprint]\nmax_prs_per_epic = 25\n").unwrap();
+        let lines = check_plan(&file, &repo).unwrap();
+        assert!(lines.iter().all(|line| !line.starts_with('W')), "{lines:?}");
     }
 
     #[test]

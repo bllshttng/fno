@@ -82,9 +82,15 @@ fn plan_expected_url_count(fields: &Fields) -> Option<i64> {
 /// waves, not PRs, so a multi-wave join-manual plan never reads done while a
 /// wave is unshipped.
 pub(crate) fn unshipped_waves(fields: &Fields, plan_path: &Path) -> bool {
-    let expected = plan_expected_url_count(fields)
-        .unwrap_or_else(|| crate::wave::declared_wave_count(plan_path).unwrap_or(1) as i64);
+    let expected = declared_ships(fields, plan_path);
     expected > 1 && (plan_urls(fields).len() as i64) < expected
+}
+
+/// The ships a plan declares: expected_url_count when well-formed, else the
+/// Execution Strategy's wave count, else one.
+pub(crate) fn declared_ships(fields: &Fields, plan_path: &Path) -> i64 {
+    plan_expected_url_count(fields)
+        .unwrap_or_else(|| crate::wave::declared_wave_count(plan_path).unwrap_or(1) as i64)
 }
 
 /// The latest session id from session_ids (scalar or last list item).
