@@ -1023,7 +1023,7 @@ fn merge_sha(repo_root: &Path, pr: i64) -> Option<String> {
 /// loops it. Returns the subprocess rc (non-zero == that item did not score).
 fn run_replay(repo_root: &Path, corpus_item: &str, skill_ref: &str, run_id_after: &str) -> i32 {
     let output = bounded_run(
-        Command::new("fno")
+        Command::new(crate::scrape::fno_bin())
             .args([
                 "doctor",
                 "observer",
