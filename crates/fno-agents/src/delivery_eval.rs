@@ -1,15 +1,15 @@
-//! The `fno do delivery evaluate` verb, native.
+//! The `fno do delivery evaluate` command, native.
 //!
 //! One owner for plan-activated generic delivery evaluation: the plan
 //! frontmatter read, the coherent event-journal snapshot, the producer-event
 //! selection walk, the approval and effect adapters, and the requirement
-//! evaluator. Python owned those legs before the port; the verb's bytes are
+//! evaluator. Python owned those legs before the port; the command's bytes are
 //! frozen against goldens captured from the Python leg before its deletion
 //! (`crates/fno-agents/tests/delivery_evaluate_parity.rs`).
 //!
 //! Recorded divergence: the Python leg wrapped model-level plan validation
 //! failures in pydantic's rendered error, whose body embeds a versioned URL
-//! and a truncated dict repr. The native verb emits the same refusal sentence
+//! and a truncated dict repr. The native command emits the same refusal sentence
 //! bare inside the same undeterminable response, so every consumer verdict is
 //! unchanged while the message text stays stable across pydantic releases.
 //! Unreadable-file and journal diagnostics keep the exact Python spelling;
@@ -361,7 +361,6 @@ struct Fact {
 
 struct Rejection {
     evidence_id: String,
-    producer: String,
     diagnostic: String,
     fact_revision: String,
 }
@@ -1426,7 +1425,6 @@ fn approval_conflict_rejections(
         })
         .map(|evidence| Rejection {
             evidence_id: evidence.id.clone(),
-            producer: producer.clone(),
             diagnostic: format!(
                 "requirement {} from {producer} rejected binding: conflicting immutable approval {lifecycle} for {request_digest}",
                 evidence.id
@@ -1852,7 +1850,6 @@ fn reject_delivery_event(work: &CompanyWork, event: &Value, fact_revision: &str)
                 diagnostics.join(", ")
             ),
             evidence_id,
-            producer: producer.clone(),
             fact_revision: fact_revision.to_string(),
         })
         .collect()
@@ -2359,7 +2356,7 @@ fn evidence_revision(verdict: &Value) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// The verb body
+// The command body
 // ---------------------------------------------------------------------------
 
 /// Evaluate an activated plan from one immutable journal byte snapshot.
@@ -2489,7 +2486,6 @@ fn conflict_response(
             FactInput::Rejection(Rejection {
                 diagnostic: format!("requirement {evidence_id}: {diagnostic}"),
                 evidence_id: evidence_id.clone(),
-                producer: "event-journal".to_string(),
                 fact_revision: fact_revision.clone(),
             })
         })

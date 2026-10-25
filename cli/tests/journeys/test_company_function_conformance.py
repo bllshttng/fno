@@ -84,7 +84,7 @@ def _delivery_eval(
     """One native delivery evaluation over plan + journal fixtures.
 
     The delivery family answers through the `fno-agents delivery-evaluate`
-    verb now; the journey builds the same declaration it used to pass the
+    command now; the journey builds the same declaration it used to pass the
     Python evaluator in process and reads the response payload instead.
     """
     workdir.mkdir(parents=True, exist_ok=True)
@@ -492,7 +492,7 @@ def test_cadence_rejects_previous_cycle_residue_but_accepts_it_in_its_own_cycle(
 ) -> None:
     current = _company_work("operations-recurring", attempt_id="attempt-current")
     previous = _company_work("operations-recurring", attempt_id="attempt-previous")
-    # The verb reads freshness against the wall clock, so the residue leg
+    # The command reads freshness against the wall clock, so the residue leg
     # carries facts whose freshness window closed (still after observed_at,
     # which the fact contract requires) and the own-cycle leg carries the
     # same reads inside a live window.

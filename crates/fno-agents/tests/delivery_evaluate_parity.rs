@@ -1,7 +1,7 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.delivery.reader.evaluate_plan_delivery
 //!
-//! Characterization harness for the native `delivery-evaluate` verb. The
+//! Characterization harness for the native `delivery-evaluate` command. The
 //! cases were driven through the Python leg before its deletion, and the
 //! goldens under `tests/golden/delivery_evaluate/` are the frozen contract
 //! for the sole implementation. Normal runs never invoke Python.
@@ -153,7 +153,7 @@ const JOURNAL_DECISION_DUPLICATE: &str = "{\"ts\":\"2026-08-02T12:01:00Z\",\"typ
 
 const JOURNAL_DECISION_CONFLICT: &str = "{\"ts\":\"2026-08-02T12:06:00Z\",\"type\":\"approval_decided\",\"source\":\"approvals\",\"data\":{\"request_digest\":\"request-digest-1\",\"work_order_id\":\"x-delivery\",\"attempt_id\":\"attempt-1\",\"effect_id\":\"effect-1\",\"decision\":\"declined\",\"deciding_principal_id\":\"principal-1\",\"event_id\":\"event-decision-1\"}}\n";
 
-/// One frozen verb invocation: identical fixtures, argv shape, and stream
+/// One frozen command invocation: identical fixtures, argv shape, and stream
 /// normalization as the capture that wrote the goldens.
 fn run_case(plan: Option<&str>, journal: Option<&str>, json_flag: bool) -> (i32, String, String) {
     let tmp = TempDir::new().expect("temp dir");
@@ -178,7 +178,7 @@ fn run_case(plan: Option<&str>, journal: Option<&str>, json_flag: bool) -> (i32,
     }
     let output = command.output().expect("run delivery-evaluate");
     // The fixture dir is the only run-specific token in the streams: the
-    // ENOENT diagnostics spell the paths the verb was handed.
+    // ENOENT diagnostics spell the paths the command was handed.
     let normalize = |text: String| -> String {
         text.replace(fixture.to_str().expect("utf8 fixture path"), "<FIXTURE>")
     };
@@ -203,7 +203,7 @@ fn golden_for(label: &str, result: (i32, String, String)) {
 }
 
 #[test]
-fn delivery_verb_matches_frozen_goldens() {
+fn delivery_command_matches_frozen_goldens() {
     // The passing snapshot: the full evaluated response byte order, both
     // revisions, and the verdict row's provenance columns.
     golden_for(

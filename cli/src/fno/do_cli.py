@@ -54,7 +54,7 @@ delivery_app = typer.Typer(
 @delivery_app.command("evaluate")
 def delivery_evaluate(
     plan_path: Path = typer.Option(..., "--plan-path"),
-    events: Path = typer.Option(Path(".fno/events.jsonl"), "--events"),
+    events: Path | None = typer.Option(None, "--events"),
     json_output: bool = typer.Option(False, "--json", "-J"),
 ) -> None:
     """Evaluate one plan's generic delivery evidence against its journal.
@@ -63,7 +63,10 @@ def delivery_evaluate(
     (``fno-agents delivery-evaluate``); Python owns transport only, the same
     split as the mail hold forward.
     """
-    argv = ["--plan-path", str(plan_path), "--events", str(events)]
+    from fno.paths import project_events_json
+
+    events_path = str(events) if events is not None else str(project_events_json())
+    argv = ["--plan-path", str(plan_path), "--events", events_path]
     if json_output:
         argv.append("--json")
     _forward_delivery(argv)
