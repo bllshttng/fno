@@ -740,10 +740,11 @@ fn check_message_length(masked: &str, count: usize, cap: usize) -> Vec<Violation
 /// minus morphology-only entries that would carry prefix and suffix splits,
 /// plus a tech and fleet supplement. The protection tier
 /// (`style_protect.txt`) covers the WHOLE token: dwyl english-words (public
-/// domain) entries at least 10 letters long or frequency-attested, so an
-/// established compound never fires while obscure junk that shields
-/// fabricated glue stays outside. Both lists are closed; the rebuild script
-/// and the measurement record live in docs/style-rules.md.
+/// domain) entries at least 10 letters long or attested in a subtitle
+/// frequency slice, so an established compound never fires while obscure
+/// junk that shields fabricated glue stays outside. Both lists are closed;
+/// the rebuild script and the measurement record live in
+/// docs/style-rules.md.
 static GLUE_WORDLIST: &str = include_str!("style_words.txt");
 static GLUE_PROTECT: &str = include_str!("style_protect.txt");
 
@@ -1796,6 +1797,7 @@ diff --git a/n.md b/n.md
             "handle this beforehand and report alongside.\n",
             "the bottleneck bookkeeping aftermath is concurrent.\n",
             "rebasing broke the basename matchers again.\n",
+            "the appended note drifted from the source.\n",
         ] {
             assert_eq!(glue(body), 0, "must stay clean: {body:?}");
         }
