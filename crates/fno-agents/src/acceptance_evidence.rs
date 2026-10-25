@@ -997,6 +997,9 @@ pub fn run_probe_run(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("main-ci") {
         return crate::main_ci_proof::run(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("recheck") {
+        return crate::symptom_recheck::run(&args[1..]);
+    }
     let (code, json) = decide_probe_run(args);
     println!("{json}");
     code
