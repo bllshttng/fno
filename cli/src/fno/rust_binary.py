@@ -289,23 +289,14 @@ def delivered_terminals() -> frozenset:
     return frozenset(names)
 
 
-def active_backend_name(name: Optional[str] = None) -> str:
-    """The selected work-item tracker backend tag (``graph`` by default).
-
-    Explicit wins, else ``FNO_TRACKER_BACKEND``, else ``graph`` - the same
-    resolution ``tracker::backend_name`` applies when the door runs, so the
-    external-backend guards and the door cannot disagree on which backend is
-    live. One Python spelling of the guard; the authority is Rust.
-    """
-    return name or os.environ.get("FNO_TRACKER_BACKEND") or "graph"
-
-
 def sidecar_get(id: str) -> dict:
     """One id's sidecar fields through the native tracker door.
 
     Answers a plain dict (sparse: nulls dropped, the list fields defaulted
     to ``[]``). A missing row or file answers the empty shape (``id`` plus
-    the list defaults) - the "no sidecar yet" case, never an error.
+    the list defaults) - the "no sidecar yet" case, never an error. The
+    backend is the door's own resolution; the guard helper lives in
+    ``fno.graph.api``.
     """
     return command_call(
         ["backlog", "get"], {"tracker": "sidecar-get", "id": id}

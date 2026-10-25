@@ -399,13 +399,16 @@ class _TrackerNodeNotFound(RuntimeError):
     """The native door answered ``not_found`` for one exact id."""
 
 
-def _tracker_door(payload: dict) -> dict:
+def _tracker_door(payload: dict, *, timeout: float = 30) -> dict:
     """One round-trip with the native tracker door (the read, close,
     list-open and snapshot ops ride it). Refusals ride in the payload with
-    exit 0; transport failures raise CommandUnavailable."""
+    exit 0; transport failures raise CommandUnavailable. A backend op that
+    makes its own network round trips raises the timeout - a door reporting
+    the owner unreachable for a decision that was merely still running is
+    the wrong answer."""
     from fno import rust_binary
 
-    return rust_binary.command_call(["backlog", "get"], payload)
+    return rust_binary.command_call(["backlog", "get"], payload, timeout=timeout)
 
 
 def _read_external_node_and_sidecar(id: str):
@@ -414,7 +417,9 @@ def _read_external_node_and_sidecar(id: str):
     keeps its own not-found message and exit code."""
     from fno import rust_binary
 
-    node = _tracker_door({"tracker": "read", "id": id})
+    # The door's read can make its own network round trips on an external
+    # backend; the old seam client raised this above the local 30s default.
+    node = _tracker_door({"tracker": "read", "id": id}, timeout=120)
     if node.get("not_found"):
         raise _TrackerNodeNotFound(id)
     return node["node"], rust_binary.sidecar_get(id)
@@ -434,8 +439,9 @@ def _joined_open_candidates() -> list[dict]:
     Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
     from fno import rust_binary
+    from fno.graph.api import active_backend_name
 
-    backend = rust_binary.active_backend_name()
+    backend = active_backend_name()
     try:
         out = rust_binary.command_call(["backlog", "get"], {"tracker": "snapshot"})
         entries = out["entries"]
@@ -1908,6 +1914,7 @@ def _done_via_seam(task_id: str, *, skip_stamp: bool, force: bool, reason: Optio
     seam (tracker parent edges, sidecar plan_path)."""
     from fno import rust_binary
     from fno.graph._reconcile import node_pr_refs
+    from fno.graph.api import active_backend_name
 
     try:
         tnode, sc = _read_external_node_and_sidecar(task_id)
@@ -1918,7 +1925,7 @@ def _done_via_seam(task_id: str, *, skip_stamp: bool, force: bool, reason: Optio
         typer.echo(f"{task_id} is already done", err=True)
         return
 
-    backend = rust_binary.active_backend_name()
+    backend = active_backend_name()
     row = {
         "id": task_id,
         "title": tnode.get("title"),
