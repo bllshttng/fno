@@ -941,10 +941,9 @@ async fn run(args: Vec<String>) -> i32 {
     }
 
     // `lead-history`: the team-scope lead_checkin readback for
-    // `fno agents org history`. Daemon-free read, `==` dispatch like
-    // org-fold: Python resolves the caller's team scope and pins the
-    // journal path (identity and paths are Python-owned), the native side
-    // owns the scan so the file-budget Python-tree ratchet holds.
+    // `fno agents org history`, exec'd by the front door. Daemon-free
+    // read, `==` dispatch like org-fold: the caller's team scope and the
+    // live journals resolve natively when the argv names none.
     // `--verdict` is the same journals read as a tenure verdict (law
     // d-fe66560a: the verdict rides this action as an argument, never a
     // new action).
@@ -965,9 +964,8 @@ async fn run(args: Vec<String>) -> i32 {
     }
     // `evals-macro`: the macro-eval failure-pattern leaderboard for
     // `fno doctor evals macro`. Daemon-free read, `==` dispatch like
-    // lead-history: Python resolves the journal paths (identity and paths are
-    // Python-owned), the native side owns the fold so the file-budget
-    // Python-tree ratchet holds.
+    // lead-history: Python resolves the journal paths, the native side owns
+    // the fold so the file-budget Python-tree ratchet holds.
     if command == "evals-macro" {
         return fno_agents::evals_macro::run_evals_macro(&args[1..]);
     }
@@ -1033,9 +1031,9 @@ async fn run(args: Vec<String>) -> i32 {
 
     // `board`: the lead board collector, read-only, daemon-free. Not a
     // routable `fno agents` command (same `matches!` treatment as graph-get): the
-    // Python surface is `fno inbox board` / `fno lead board`, whose typer
-    // command shells HERE and renders, and the stop hook reads the collector
-    // in-process. Matched with `==` beside graph-get so the routable-command
+    // front door execs `board --user-command` for `fno inbox board` / `fno lead
+    // board`, which renders the text page here, and the stop hook reads the
+    // collector in-process. Matched with `==` beside graph-get so the routable-command
     // parity guard does not see it - no advertised fno command is added.
     if command == "board" {
         return fno_agents::org_board::run_board(&args[1..]);
