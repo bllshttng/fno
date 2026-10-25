@@ -257,8 +257,14 @@ fn data_owned(event: &Value) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
-fn str_of(map: &Map<String, Value>, key: &str) -> Option<&str> {
+fn str_of<'a>(map: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     map.get(key).and_then(Value::as_str)
+}
+
+/// The event's `type` field. Events arrive as bare `Value`s; only their
+/// `data` object is a map, so this is `str_of`'s event-level sibling.
+fn ev_type(event: &Value) -> Option<&str> {
+    event.get("type").and_then(Value::as_str)
 }
 
 /// run_ids with a run_complete for `skill_id` but no terminal proposer record,
@@ -270,7 +276,7 @@ pub fn unprocessed_runs(events: &[Value], skill_id: &str) -> Vec<String> {
     let mut handled: BTreeSet<(String, String)> = BTreeSet::new();
     let mut complete: Vec<String> = Vec::new();
     for e in events {
-        let ty = str_of(e, "type").unwrap_or("");
+        let ty = ev_type(e).unwrap_or("");
         let d = data_of(e);
         if TERMINAL_TYPES.contains(&ty) {
             if let (Some(rid), Some(sid)) = (str_of(d, "run_id"), str_of(d, "skill_id")) {
@@ -295,7 +301,7 @@ pub fn unprocessed_runs(events: &[Value], skill_id: &str) -> Vec<String> {
 
 pub fn run_complete_event<'e>(events: &'e [Value], run_id: &str) -> Option<&'e Value> {
     events.iter().find(|e| {
-        str_of(e, "type") == Some("skill_eval_run_complete")
+        ev_type(e) == Some("skill_eval_run_complete")
             && str_of(data_of(e), "run_id") == Some(run_id)
     })
 }
@@ -309,7 +315,7 @@ pub fn findings_for_run(
 ) -> Vec<Map<String, Value>> {
     let mut out = Vec::new();
     for e in events {
-        if str_of(e, "type") != Some("skill_eval_finding") {
+        if ev_type(e) != Some("skill_eval_finding") {
             continue;
         }
         let d = data_of(e);
@@ -386,7 +392,7 @@ pub fn local_maxima_tripped(events: &[Value], skill_id: &str, run_id: &str) -> b
     };
     let mut seq: Vec<String> = Vec::new();
     for e in events {
-        if str_of(e, "type") == Some("skill_eval_run_complete")
+        if ev_type(e) == Some("skill_eval_run_complete")
             && str_of(data_of(e), "skill_id") == Some(skill_id)
         {
             if let Some(rid) = str_of(data_of(e), "run_id") {
@@ -410,7 +416,7 @@ pub fn local_maxima_tripped(events: &[Value], skill_id: &str, run_id: &str) -> b
         return false;
     }
     events.iter().any(|e| {
-        str_of(e, "type") == Some("skill_diff_proposed")
+        ev_type(e) == Some("skill_diff_proposed")
             && str_of(data_of(e), "skill_id") == Some(skill_id)
             && data_of(e)
                 .get("run_id")
@@ -424,7 +430,7 @@ pub fn prior_proposed(events: &[Value], skill_id: &str) -> Vec<Map<String, Value
     events
         .iter()
         .filter(|e| {
-            str_of(e, "type") == Some("skill_diff_proposed")
+            ev_type(e) == Some("skill_diff_proposed")
                 && str_of(data_of(e), "skill_id") == Some(skill_id)
         })
         .map(data_owned)
@@ -650,7 +656,7 @@ pub fn build_prompt(
     } else {
         ""
     };
-    let ev: Vec<String> = findings
+    let ev = findings
         .iter()
         .map(|f| {
             let dim = str_of(&f, "dimension").unwrap_or("None");
@@ -663,7 +669,8 @@ pub fn build_prompt(
             let evidence: String = evidence.chars().take(500).collect();
             format!("- [{dim}/{verdict}] finding_id={cid}: {evidence}")
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .join("\n");
     let rank = if ranking.is_empty() {
         "(none)".to_string()
     } else {
@@ -673,10 +680,11 @@ pub fn build_prompt(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let files: Vec<String> = skill_files
+    let files = skill_files
         .iter()
         .map(|(p, b)| format!("### FILE: {p}\n{b}"))
-        .collect();
+        .collect::<Vec<_>>()
+        .join("\n\n");
     let prior = if history.is_empty() {
         "(no prior proposals)".to_string()
     } else {
@@ -867,13 +875,13 @@ fn synthesize(prompt: &str) -> Result<Proposal, String> {
 /// implementation both the judge's headless spawn and this family's one-shots
 /// share. Returns (exit code, stdout, stderr); a timeout reports code 124.
 fn bounded_run(cmd: &mut Command, timeout_secs: u64) -> Result<(i32, String, String), String> {
-    let mut child = cmd
+    let child = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .process_group(0)
         .spawn()
         .map_err(|e| format!("spawn failed: {e}"))?;
-    crate::blueprint_judge::bounded_wait(&mut child, timeout_secs)
+    crate::blueprint_judge::bounded_wait(child, timeout_secs)
 }
 
 // ---------------------------------------------------------------------------
@@ -925,12 +933,12 @@ fn blob_hash(repo_root: &Path, rel_path: &str) -> String {
 fn project_names(cwd: &Path) -> Vec<String> {
     let mut names = Vec::new();
     if let Some(work) = crate::agents_config::config_lookup(cwd, &["work"])
-        .and_then(|v| v.get("workspaces").and_then(Value::as_object).cloned())
+        .and_then(|v| v.get("workspaces").and_then(|w| w.as_table()).cloned())
     {
         for ws in work.values() {
-            if let Some(projects) = ws.get("projects").and_then(Value::as_array) {
+            if let Some(projects) = ws.get("projects").and_then(|p| p.as_array()) {
                 for p in projects {
-                    if let Some(name) = p.get("name").and_then(Value::as_str) {
+                    if let Some(name) = p.get("name").and_then(|n| n.as_str()) {
                         if !name.is_empty() {
                             names.push(name.to_string());
                         }
@@ -1618,6 +1626,11 @@ fn tick_core(deps: &mut TickDeps, journals: &[PathBuf], skill: &str, skill_id: &
             ));
         }
         Ok((pr_number, branch)) => {
+            // A report-level dry run opens nothing, so the number can be
+            // None; render it the way the Python leg's f-string did.
+            let pr_txt = pr_number
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "None".to_string());
             let proposed_ok = emit(
                 journals,
                 "skill_diff_proposed",
@@ -1635,12 +1648,12 @@ fn tick_core(deps: &mut TickDeps, journals: &[PathBuf], skill: &str, skill_id: &
                 // The proposed event IS the idempotency record; a failed log
                 // after the PR opened could open a second PR next tick.
                 eprintln!(
-                    "CRITICAL {run_id}: PR#{pr_number} opened but skill_diff_proposed failed to log canonically - reconcile before the next tick to avoid a duplicate PR"
+                    "CRITICAL {run_id}: PR#{pr_txt} opened but skill_diff_proposed failed to log canonically - reconcile before the next tick to avoid a duplicate PR"
                 );
             }
             emit_tick(journals, &deps.level, "proposed");
             deps.say(format!(
-                "proposed {run_id} PR#{pr_number} branch={branch} +{added}/-{removed} cited={}",
+                "proposed {run_id} PR#{pr_txt} branch={branch} +{added}/-{removed} cited={}",
                 py_list(&cited)
             ));
         }
@@ -1782,7 +1795,7 @@ fn reconcile_core(deps: &mut ReconcileDeps, journals: &[PathBuf], pr_number: Opt
     let mut order: Vec<i64> = Vec::new();
     let mut proposed: BTreeMap<i64, Map<String, Value>> = BTreeMap::new();
     for e in &deps.events {
-        if str_of(e, "type") == Some("skill_diff_proposed") {
+        if ev_type(e) == Some("skill_diff_proposed") {
             let d = data_of(e);
             if let Some(pr) = d.get("pr_number").and_then(Value::as_i64) {
                 if !order.contains(&pr) {
@@ -1795,7 +1808,7 @@ fn reconcile_core(deps: &mut ReconcileDeps, journals: &[PathBuf], pr_number: Opt
     let closed: BTreeSet<i64> = deps
         .events
         .iter()
-        .filter(|e| str_of(e, "type") == Some("skill_diff_eval_closed"))
+        .filter(|e| ev_type(e) == Some("skill_diff_eval_closed"))
         .filter_map(|e| data_of(e).get("pr_number").and_then(Value::as_i64))
         .collect();
     let open_gaps: Vec<i64> = match pr_number {
@@ -2032,7 +2045,7 @@ fn emit_receipt(
 /// shrinks, not eliminates, a simultaneous double-emit.
 fn already_closed(deps: &ReconcileDeps, pr: i64) -> bool {
     (deps.reread)().iter().any(|e| {
-        str_of(e, "type") == Some("skill_diff_eval_closed")
+        ev_type(e) == Some("skill_diff_eval_closed")
             && data_of(e).get("pr_number").and_then(Value::as_i64) == Some(pr)
     })
 }
@@ -2040,6 +2053,44 @@ fn already_closed(deps: &ReconcileDeps, pr: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A per-call temp root: the pre-state journal lives at
+    /// `dir/events.jsonl`, and every emitted event commits into the store
+    /// beside it without touching the file, so `emitted_types` reads the
+    /// store un-synced and sees only what the run under test emitted.
+    struct Scratch {
+        dir: PathBuf,
+    }
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            static SEQ: std::sync::AtomicU64 = std::sync::AtomicU64::new(0);
+            let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir()
+                .join(format!("fno-skill-diff-{}-{n}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("scratch dir");
+            Scratch { dir }
+        }
+
+        fn journals(&self) -> Vec<PathBuf> {
+            vec![self.dir.join("events.jsonl")]
+        }
+
+        fn emitted_types(&self) -> Vec<String> {
+            let journal = self.dir.join("events.jsonl");
+            if !crate::event_store::store_path(&journal).is_file() {
+                return Vec::new();
+            }
+            match crate::event_store::query_events(
+                &journal,
+                &crate::event_store::EventQuery::default(),
+            ) {
+                Ok(rows) => rows.iter().map(|r| r.r#type.clone()).collect(),
+                Err(_) => Vec::new(),
+            }
+        }
+    }
 
     fn ev(ty: &str, data: Value) -> Value {
         json!({"type": ty, "data": data})

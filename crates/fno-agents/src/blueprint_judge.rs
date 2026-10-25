@@ -294,14 +294,14 @@ pub(crate) fn headless_spawn(
     argv: &[String],
     kill_after_secs: u64,
 ) -> Result<(i32, String, String), String> {
-    let mut child = Command::new(crate::scrape::fno_bin())
+    let child = Command::new(crate::scrape::fno_bin())
         .args(argv)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .process_group(0)
         .spawn()
         .map_err(|e| e.to_string())?;
-    bounded_wait(&mut child, kill_after_secs)
+    bounded_wait(child, kill_after_secs)
 }
 
 /// The one bounded-wait implementation both the judge's headless spawn and
@@ -311,7 +311,7 @@ pub(crate) fn headless_spawn(
 /// small, so the unread pipes cannot deadlock it. A timeout returns code 124
 /// with a named stderr line when the child wrote none.
 pub(crate) fn bounded_wait(
-    child: &mut std::process::Child,
+    mut child: std::process::Child,
     timeout_secs: u64,
 ) -> Result<(i32, String, String), String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);

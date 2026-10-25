@@ -16,7 +16,7 @@ use std::fs;
 use fno_agents::skill_diff::{
     additive_only_needs_justification, bloat_flag, build_pr_body, build_prompt, failure_ranking,
     filter_cited_hunks, findings_for_run, has_actionable_findings, local_maxima_tripped,
-    parse_proposal, prior_proposed, redaction_violations, top_dimension, unprocessed_runs, Hunk,
+    parse_proposal, redaction_violations, top_dimension, unprocessed_runs, Hunk,
 };
 
 const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/skill_diff");
