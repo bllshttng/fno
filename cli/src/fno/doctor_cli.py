@@ -145,8 +145,8 @@ def harness_matrix_command(
     _route_harness("harness-matrix", ["harness-matrix"] + ["--write"] * write)
 doctor_app.command("plugin-file", hidden=True)(plugin_file_command)
 # `doctor route` (the declared-inventory reachability read) answers natively:
-# the front classifies the spelling onto the config-route command, so no
-# Python mount remains here.
+# the front classifies the spelling onto route-slot's config-route mode, so
+# no Python mount remains here.
 doctor_app.add_typer(observer_app, name="observer")
 # `doctor scratch` is the scratch-shape sweep; the Rust binary is
 # the only implementation and the leaf refuses without it.

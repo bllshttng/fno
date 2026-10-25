@@ -426,9 +426,9 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
         if command == "route-slot":
             if payload.get("mode") == "lane":
                 return dict(row, found=True)
+            if payload.get("mode") == "resolve":
+                return {"harness": "claude", "source": "builtin-default"}
             return {"found": False}
-        if command == "dispatch-harness":
-            return {"harness": "claude", "source": "builtin-default"}
         return real_call(command, payload, *a, **k)
 
     monkeypatch.setattr("fno.rust_binary.command_call", _slot_call)
@@ -845,9 +845,9 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
         if command == "route-slot":
             if payload.get("mode") == "lane":
                 return dict(row, found=True)
+            if payload.get("mode") == "resolve":
+                return {"harness": "claude", "source": "builtin-default"}
             return {"found": False}
-        if command == "dispatch-harness":
-            return {"harness": "claude", "source": "builtin-default"}
         return real_call(command, payload, *a, **k)
 
     monkeypatch.setattr("fno.rust_binary.command_call", _slot_call)
@@ -920,9 +920,9 @@ def test_native_lane_keeps_the_dispatcher_outside_a_session(tmp_path: Path, monk
         if command == "route-slot":
             if payload.get("mode") == "lane":
                 return dict(row, found=True)
+            if payload.get("mode") == "resolve":
+                return {"harness": "claude", "source": "builtin-default"}
             return {"found": False}
-        if command == "dispatch-harness":
-            return {"harness": "claude", "source": "builtin-default"}
         return real_call(command, payload, *a, **k)
 
     monkeypatch.setattr("fno.rust_binary.command_call", _slot_call)

@@ -1601,8 +1601,8 @@ def _load_dispatch_cfg(
             return {}
     # One home for the harness axis (the stage table) with the deprecated
     # dispatch.harness folded beneath it; the note names the losing spelling
-    # when both were set and disagreed. The rung answers through the
-    # dispatch-harness door now; the auto_merge grant below still reads the
+    # when both were set and disagreed. The rung answers through route-slot's
+    # configured mode now; the auto_merge grant below still reads the
     # caller's settings object, so a stub keeps resolving its grant.
     from fno.rust_binary import CommandUnavailable, command_call
 
@@ -1613,7 +1613,7 @@ def _load_dispatch_cfg(
         # node's stage table, never the parent process's.
         if cwd:
             payload["cwd"] = cwd
-        answer = command_call("dispatch-harness", payload)
+        answer = command_call("route-slot", payload)
     except CommandUnavailable:
         answer = {}
     harness_value = answer.get("harness")

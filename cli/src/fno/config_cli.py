@@ -40,7 +40,8 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
     # `config route` / `config routing` (the provider route lanes and the
     # declared-inventory reads) answer natively: the front classifies both
-    # spellings onto the config-route command, so no Python mount remains.
+    # spellings onto route-slot's config-route mode, so no Python mount
+    # remains.
     # (d-344fe242): `project init` gives a checkout its own fno state
     # root, which is state-root configuration - config's territory. Same
     # lazy+hidden treatment as its siblings above.

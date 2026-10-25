@@ -58,8 +58,8 @@ pub fn parse_canonical_stamp(
 
 /// The vendor fold (Python `_vendor_identity`): first family wins; two ids
 /// of one family that disagree conflict; multiple families resolve to
-/// nothing. Shared by the canonical resolution and the dispatch-harness
-/// door's infer, so the absent-stamp answer spells once.
+/// nothing. Shared by the canonical resolution and route-slot's dispatch
+/// infer, so the absent-stamp answer spells once.
 pub fn vendor_identity(markers: &[(String, String, String)]) -> (Option<String>, Option<String>) {
     let mut family: Option<String> = None;
     let mut vendor_session: Option<String> = None;

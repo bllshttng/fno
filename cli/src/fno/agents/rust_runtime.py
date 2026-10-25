@@ -535,9 +535,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     "evals-macro": "The macro-eval failure-pattern leaderboard fold: --events <journal.jsonl> [--events ...] [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json]; invoked directly by `fno doctor evals macro`, which resolves the journal defaults.",
     "lead-checkin": "One command runs the term check-in body: --scope <scope> --events-path <events.jsonl> [--events-path ...] --graph <graph.json> --handoffs-dir <dir> [--faqs-dir <dir>] [--board-state <manifest>] [--emit-path <events.jsonl>] [--no-emit] [--json]; invoked directly by `fno agents lead checkin`, which resolves the role and the paths.",
     "lead-rundown": "The term ledger page renderer: --team-json <team.json> --graph <graph.json> --generated <ts> [--out <page>]; with no --out the command resolves the lead page through the layout table. Invoked directly by `fno agents lead ledger`, which resolves the team.",
-    "route-slot": "Delivery-slot resolver: JSON payload on stdin, the {candidate, chain} answer on stdout; invoked by the spawn seam and the routing readouts through rust_binary.command_call, not `fno agents` routing.",
-    "config-route": "The config route family's reads and renders: <table|env|inventory|settings|plan-write> ops, one JSON answer or a rendered read on stdout; invoked by `fno config route` through the front classifier, not `fno agents` routing.",
-    "dispatch-harness": "Dispatch-flag resolution: {mode: resolve, explicit, env, flag} answers {harness, source} or {refusal}; {mode: validate-model, model, flag} answers {model} or {refusal}; {mode: configured, command} answers the stage-table rung {harness, note, route}; invoked by the spawn seam and the dispatch defaults through rust_binary.command_call, not `fno agents` routing.",
+    "route-slot": "Delivery-slot resolver: JSON payload on stdin, the {candidate, chain} answer on stdout; its payload modes carry the folded doors - {mode: resolve, explicit, env, flag} answers {harness, source} or {refusal}, {mode: validate-model, model, flag} answers {model} or {refusal}, {mode: configured, command} answers the stage-table rung {harness, note, route}, and {mode: config-route, argv} answers the config route family's reads and write plans for `fno config route`; invoked by the spawn seam, the dispatch defaults and the front's route spellings through rust_binary.command_call, not `fno agents` routing.",
     "spawn-gate": "The ONE spawn gate: reads one stdin JSON payload, writes one {status: admitted, gate/worker keys} or {status: refused, exit_code, receipt, event} answer; gate and probe modes; invoked by the fno.agents.spawn_gate transport.",
     "spawn-overlay": "Harness-keyed spawn-defaults resolver: JSON payload on stdin, the {refusal, effective, bundle} answer on stdout; invoked by fno.agents.spawn_overlay_client, not `fno agents` routing.",
     "spawn-axes": "Spawn-seam billing axes (route/account/model): JSON payload on stdin, the {inject, applied, suppressed, messages} plan on stdout; a `node_seed` field instead answers the node-command check. Invoked by fno.agents.spawn_axes_client and the spawn seam, not `fno agents` routing.",
@@ -748,7 +746,7 @@ def _refuse_seedless_thread_spawn(args: Sequence[str]) -> None:
 
 
 def _spawn_harness_at_seam(toks: "Sequence[str]") -> "Optional[str]":
-    """The spawn seam's harness answer through the dispatch-harness door.
+    """The spawn seam's harness answer through route-slot's resolve mode.
 
     Returns None when the door is missing or the explicit value is empty:
     both mean the pre-route refusal predicates stand down, exactly as the
@@ -759,8 +757,11 @@ def _spawn_harness_at_seam(toks: "Sequence[str]") -> "Optional[str]":
 
     try:
         answer = command_call(
-            "dispatch-harness",
-            {"explicit": _spawn_flag_value(toks, "--harness", "-H")},
+            "route-slot",
+            {
+                "mode": "resolve",
+                "explicit": _spawn_flag_value(toks, "--harness", "-H"),
+            },
         )
     except CommandUnavailable:
         return None

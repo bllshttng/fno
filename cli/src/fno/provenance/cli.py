@@ -116,8 +116,8 @@ def dispatch(
 
         try:
             answer = command_call(
-                "dispatch-harness",
-                {"explicit": provider, "flag": "--provider"},
+                "route-slot",
+                {"mode": "resolve", "explicit": provider, "flag": "--provider"},
             )
         except CommandUnavailable as exc:
             typer.echo(f"fno do think dispatch: {exc}", err=True)

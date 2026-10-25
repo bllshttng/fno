@@ -77,18 +77,24 @@ fn config_route_goldens_replay_reads_and_write_plans() {
             )
             .unwrap();
         }
-        cmd.arg("config-route");
-        match op {
-            "ls" => {
-                cmd.arg("table");
-            }
+        // The routing ops ride route-slot's `config-route` mode: the argv
+        // goes in one payload file, the answer rides back on stdout.
+        let door_args: Vec<String> = match op {
+            "ls" => vec!["table".to_string()],
             "set" | "unset" | "init" => {
-                cmd.arg("plan-write").args(&args);
+                let mut door = vec!["plan-write".to_string()];
+                door.extend(args.iter().map(|s| s.to_string()));
+                door
             }
-            _ => {
-                cmd.args(&args);
-            }
-        }
+            _ => args.iter().map(|s| s.to_string()).collect(),
+        };
+        let input = root.join("payload.json");
+        std::fs::write(
+            &input,
+            json!({"mode": "config-route", "argv": door_args}).to_string(),
+        )
+        .unwrap();
+        cmd.arg("route-slot").arg(&input);
         let result = cmd.output().unwrap();
         if matches!(op, "set" | "unset" | "init") && case["exit"] == 0 {
             assert!(

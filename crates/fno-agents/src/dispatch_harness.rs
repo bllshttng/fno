@@ -1,7 +1,10 @@
-//! The dispatch-harness resolution door: one JSON payload in, one answer out.
+//! The dispatch-flag answers behind route-slot's dispatch modes: one JSON
+//! payload in, one answer out.
 //!
 //! Ported from `fno.dispatch_flags` when the route family's Python leg
-//! deleted. Two modes:
+//! deleted; the standalone door action folded into `route-slot`, which owns
+//! the transport (payload file or stdin) and routes the payload's `mode`
+//! key here. The modes:
 //!
 //! - `resolve`   - `{explicit, env?, flag?}` -> `{harness, source}` or
 //!   `{refusal}`. Precedence: explicit flag > invoking-harness inference >
@@ -16,43 +19,21 @@
 //!   `dispatch.harness` key, with the shadow note naming the losing spelling
 //!   when both were set and disagreed. Read-only and total: a missing block
 //!   or field reads as unset, never fails.
+//! - `validate-model` - `{model?, flag?}` -> `{model}` or `{refusal}`; an
+//!   absent pin passes as null.
 
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 
-/// The command's entry: one payload (file argument or stdin), one answer on
-/// stdout. Exit 2 on a malformed payload, 0 otherwise - the ANSWER carries
-/// the resolution outcome, so the caller never parses stderr.
-pub fn run(args: &[String]) -> i32 {
-    let payload = match read_payload(args) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
-    let mode = payload
-        .get("mode")
-        .and_then(Value::as_str)
-        .unwrap_or("resolve");
-    let answer = match mode {
-        "configured" => configured_mode(&payload),
-        "validate-model" => validate_model_mode(&payload),
-        _ => resolve_mode(&payload),
-    };
-    println!(
-        "{}",
-        serde_json::to_string(&answer).unwrap_or_else(|_| "{}".into())
-    );
-    0
-}
-
-fn read_payload(args: &[String]) -> Result<Value, i32> {
-    if let Some(path) = args.first() {
-        let text = std::fs::read_to_string(path).map_err(|_| 2)?;
-        return serde_json::from_str(&text).map_err(|_| 2);
+/// The payload's answer; route-slot calls this for the `resolve`,
+/// `configured`, and `validate-model` modes. A payload with no `mode` key
+/// answers `resolve`, the ported default.
+pub fn answer(payload: &Value) -> Value {
+    match payload.get("mode").and_then(Value::as_str) {
+        Some("configured") => configured_mode(payload),
+        Some("validate-model") => validate_model_mode(payload),
+        _ => resolve_mode(payload),
     }
-    let mut buf = String::new();
-    use std::io::Read;
-    std::io::stdin().read_to_string(&mut buf).map_err(|_| 2)?;
-    serde_json::from_str(&buf).map_err(|_| 2)
 }
 
 fn resolve_mode(payload: &Value) -> Value {

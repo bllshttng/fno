@@ -178,8 +178,8 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     # `fno route` (the hidden root spelling of the provider route lanes)
-    # answers natively: the front classifies it onto the config-route
-    # command, so no Python mount remains.
+    # answers natively: the front classifies it onto route-slot's
+    # config-route mode, so no Python mount remains.
     "evals": (
         "fno.evals.cli:evals_app",
         "Golden-task efficacy evals (run / report / diff)",

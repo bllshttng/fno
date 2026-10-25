@@ -108,7 +108,7 @@ def test_spawn_door_answers_the_same_harness(monkeypatch) -> None:
     assert out["harness"] == "codex"
 
     assert asks, "the config rung must ride the door"
-    assert all(name == "dispatch-harness" for name, _ in asks)
+    assert all(name == "route-slot" for name, _ in asks)
     assert all(
         payload.get("mode") == "configured" and payload.get("command") == "target"
         for _, payload in asks

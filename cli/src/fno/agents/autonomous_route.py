@@ -67,7 +67,7 @@ def launch_is_pinned(
         # the deprecated dispatch.harness folded beneath it, so a launch routed
         # by the home key pins exactly like one routed by the legacy key.
         answer = command_call(
-            "dispatch-harness",
+            "route-slot",
             {"mode": "configured", "cwd": str(Path(node_cwd)) if node_cwd else None},
         )
         return bool((answer.get("harness") or "").strip())

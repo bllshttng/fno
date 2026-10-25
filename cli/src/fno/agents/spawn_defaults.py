@@ -718,7 +718,8 @@ def resolve_lane_vendor(
             from fno.rust_binary import command_call
 
             answer = command_call(
-                "dispatch-harness", {"explicit": None, "env": dict(env or {})}
+                "route-slot",
+                {"mode": "resolve", "explicit": None, "env": dict(env or {})},
             )
             env_harness = answer.get("harness")
         except Exception:

@@ -46,12 +46,34 @@ pub fn run(args: &[OsString]) -> i32 {
         }
     }
     door.extend_from_slice(&args[1..]);
-    let result = match Command::new(fno::digest_overlay::fno_agents_bin())
-        .arg("config-route")
-        .args(&door)
+    // route-slot is the routing ops' only entry: the argv rides one payload
+    // file as `{mode: config-route, argv: [...]}`.
+    let payload = serde_json::json!({
+        "mode": "config-route",
+        "argv": door
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+    });
+    let payload_path = std::env::temp_dir().join(format!(
+        "fno-route-door-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    if let Err(e) = std::fs::write(&payload_path, payload.to_string()) {
+        eprintln!("fno config route: could not write door payload: {e}");
+        return 1;
+    }
+    let ran = Command::new(fno::digest_overlay::fno_agents_bin())
+        .arg("route-slot")
+        .arg(&payload_path)
         .stdin(Stdio::null())
-        .output()
-    {
+        .output();
+    let _ = std::fs::remove_file(&payload_path);
+    let result = match ran {
         Ok(result) => result,
         Err(e) => {
             eprintln!("fno config route: could not run fno-agents: {e}");

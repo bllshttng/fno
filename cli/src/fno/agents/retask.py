@@ -175,7 +175,8 @@ def resolve_target_coordinate(
 
         try:
             answer = command_call(
-                "dispatch-harness", {"explicit": None, "env": dict(env)}
+                "route-slot",
+                {"mode": "resolve", "explicit": None, "env": dict(env or {})},
             )
             harness = answer.get("harness")
         except CommandUnavailable:

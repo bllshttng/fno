@@ -736,7 +736,7 @@ def resolve_harness_identity(
     from two harness families mean one is foreign and inherited - a claude
     child carrying its codex parent's ``CODEX_THREAD_ID`` - and the answer is
     ``(None, None)`` so no caller can launder the foreign marker into this
-    session's identity. The dispatch-harness door's infer folds the same
+    session's identity. route-slot's resolve mode folds the same
     markers through the Rust twin of this resolution; the two must not
     diverge.
 

@@ -67,20 +67,10 @@ pub(crate) fn protected_hint(role: &str) -> &'static str {
         .unwrap_or_default()
 }
 
-/// The command's entry: `config-route <op> [...]`. Reads print their render;
-/// plan-write answers one JSON object. Exit 0 on an answer, 2 on usage.
-pub fn run(args: &[String]) -> i32 {
-    let (code, out, err) = run_capture(args);
-    if !out.is_empty() {
-        print!("{out}");
-    }
-    if !err.is_empty() {
-        eprint!("{err}");
-    }
-    code
-}
-
-/// Test-friendly capture variant: (exit, stdout, stderr), nothing printed.
+/// The routing ops' entry behind route-slot's `config-route` mode: the front
+/// shim sends `{mode: config-route, argv: [...]}` and the answer rides back
+/// as (exit, stdout, stderr), nothing printed. Exit 0 on an answer, 2 on
+/// usage.
 pub fn run_capture(args: &[String]) -> (i32, String, String) {
     let rest: Vec<String> = args[1..].to_vec();
     match args.first().map(String::as_str) {

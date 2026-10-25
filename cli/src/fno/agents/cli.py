@@ -786,7 +786,8 @@ def cmd_spawn(
 
     try:
         answer = command_call(
-            "dispatch-harness", {"explicit": harness, "env": dict(os.environ)}
+            "route-slot",
+            {"mode": "resolve", "explicit": harness, "env": dict(os.environ)},
         )
     except CommandUnavailable as exc:
         print(f"spawn: {exc}", file=sys.stderr)
