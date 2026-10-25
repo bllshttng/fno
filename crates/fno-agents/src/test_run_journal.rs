@@ -262,7 +262,10 @@ mod tests {
         let _lock = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|p| p.into_inner());
-        let dir = std::env::temp_dir().join(format!(
+        // The events store routes by env: the journal path's parent must be
+        // the agents home's parent, or the row lands in whatever store the
+        // ambient home holds instead of this test's own.
+        let home = std::env::temp_dir().join(format!(
             "fno-journal-refused-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
@@ -270,24 +273,32 @@ mod tests {
                 .unwrap_or_default()
                 .as_nanos()
         ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("events.jsonl");
-        let _pin = crate::claims::EnvVarGuard::set("FNO_EVENTS_PATH", &path.display().to_string());
+        std::fs::create_dir_all(home.join("agents-home")).unwrap();
+        let journal = home.join("events.jsonl");
+        let _home_guard = crate::claims::EnvVarGuard::set(
+            "FNO_AGENTS_HOME",
+            &home.join("agents-home").display().to_string(),
+        );
+        let _pin =
+            crate::claims::EnvVarGuard::set("FNO_EVENTS_PATH", &journal.display().to_string());
         let run = Run {
             run_id: "r1",
             argv: &argv(&["cargo", "test", "--lib"]),
             whole: false,
         };
         record_refused(&run, "local-slots-full", crate::test_run::SLOT_BUSY, 4242);
-        let text = std::fs::read_to_string(&path).unwrap();
+        // Read back the way `test-run stats` does: through the store reader,
+        // not the raw path.
+        let text = crate::event_store::journal_text(&events_path(), &["test_run"]);
         assert!(text.contains("\"stage\":\"refused\""), "{text}");
         assert!(text.contains("\"exit_code\":86"), "{text}");
         assert!(text.contains("\"pid\":4242"), "{text}");
+        assert!(text.contains("\"reason\":\"local-slots-full\""), "{text}");
         // The stats fold reads started/finished pairs only: a refusal is
         // neither unfinished work nor a duration.
         let summary = summarize(&text);
         assert_eq!(summary.unfinished, 0);
         assert!(summary.durations_ms.is_empty(), "{summary:?}");
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
