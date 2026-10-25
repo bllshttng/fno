@@ -37,6 +37,12 @@ pub struct TaskSpec {
 /// The load-time discipline refusals name the id and file.
 pub struct BankError(pub String);
 
+impl std::fmt::Display for BankError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 fn require(cond: bool, msg: String) -> Result<(), BankError> {
     if cond {
         Ok(())
@@ -262,6 +268,7 @@ pub fn discover_bank(bank_dir: &std::path::Path) -> Result<Vec<TaskSpec>, BankEr
                 .unwrap_or_default();
             return Err(BankError(format!(
                 "duplicate bank task id '{id}': {first} and {second}",
+                id = task.id,
                 first = first,
                 second = yaml_path.display().to_string(),
             )));

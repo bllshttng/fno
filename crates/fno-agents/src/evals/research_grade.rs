@@ -71,7 +71,7 @@ fn strip_frontmatter(text: &str) -> (std::collections::HashMap<String, String>, 
         return (fields, text.to_string());
     };
     let fm = &text[3..end];
-    for line in fm.splitlines() {
+    for line in fm.lines() {
         let Some(colon) = line.find(':') else {
             continue;
         };
@@ -80,7 +80,7 @@ fn strip_frontmatter(text: &str) -> (std::collections::HashMap<String, String>, 
             continue;
         }
         let mut val = line[colon + 1..].trim().to_string();
-        for q in ['"', chr(39)] {
+        for q in ['"', '\''] {
             if val.starts_with(q) && val.ends_with(q) && val.len() >= 2 {
                 val = val[1..val.len() - 1].to_string();
                 break;
@@ -102,7 +102,7 @@ fn content_sections(body: &str) -> Vec<(String, String)> {
     let mut sections: Vec<(String, Vec<String>)> = Vec::new();
     let mut current: Option<String> = None;
     let h2 = Regex::new(r"^##\s+(.+?)\s*#*$").expect("static regex");
-    for line in body.splitlines() {
+    for line in body.lines() {
         if let Some(caps) = h2.captures(line) {
             let name = caps
                 .get(1)
@@ -131,7 +131,7 @@ fn golden_checklist(golden_text: &str) -> Vec<String> {
     let (_, body) = strip_frontmatter(golden_text);
     let mut items = Vec::new();
     let heading = Regex::new(r"^#{2,6}\s+(.+?)\s*#*$").expect("static regex");
-    for line in body.splitlines() {
+    for line in body.lines() {
         if let Some(caps) = heading.captures(line) {
             items.push(
                 caps.get(1)
@@ -253,7 +253,7 @@ pub fn grade(
     let claim = Regex::new(r"^\s*[-*]\s+(.+)$").expect("static regex");
     let cite = Regex::new(r"\[S([0-9]+)\]").expect("static regex");
     for (name, sect) in &sections {
-        for line in sect.splitlines() {
+        for line in sect.lines() {
             let Some(caps) = claim.captures(line) else {
                 continue;
             };

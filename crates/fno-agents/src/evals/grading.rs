@@ -66,7 +66,7 @@ fn grade_exit(
     }
     match spawn_wait_timeout(&mut cmd, timeout_s) {
         WaitOutcome::Done(code) => {
-            let ok = code == check.expect;
+            let ok = i64::from(code) == check.expect;
             let want = check.expect;
             CheckResult {
                 kind: "exit".into(),

@@ -15,7 +15,7 @@ pub fn run(args: &[String]) -> i32 {
     let tasks = match super::bank::discover_bank(&bank_dir) {
         Ok(tasks) => tasks,
         Err(e) => {
-            eprintln!("Error: {e} BankError display");
+            eprintln!("Error: {e}");
             return 1;
         }
     };

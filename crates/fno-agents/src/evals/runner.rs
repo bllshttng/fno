@@ -39,7 +39,7 @@ pub fn variant_ok(variant: &str) -> bool {
         return false;
     };
     !digits.is_empty()
-        && digits.starts_with(|c: char| (c.is_ascii_digit() && c != '0'))
+        && digits.starts_with(|c: char| c.is_ascii_digit() && c != '0')
         && digits.chars().all(|c| c.is_ascii_digit())
 }
 
@@ -497,7 +497,7 @@ pub fn run_task(
         let attempt_id = uuid_v4();
         let row_payload = json!({"obs": obs.clone(), "bank_rev": bank_rev});
         let verdict = crate::eval_attempt::classify(&row_payload, bank_rev.as_deref());
-        let status = verdict.status.clone();
+        let status = verdict.status.to_string();
         let retryable = false;
         let _ = retryable;
         let mut row = json!({
@@ -550,7 +550,7 @@ pub fn run_task(
 /// A uuid4-shaped hex id from getrandom (16 bytes, version/variant bits).
 fn uuid_v4() -> String {
     let mut b = [0u8; 16];
-    let _ = getrandom::getrandom(&mut b);
+    let _ = getrandom::fill(&mut b);
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let mut out = String::with_capacity(32);

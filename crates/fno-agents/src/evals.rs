@@ -6,6 +6,8 @@
 //! (the port protocol in docs/architecture/dual-implementation-inventory.md).
 //! Python owns transport only.
 
+use serde_json::json;
+
 pub mod bank;
 pub mod grading;
 pub mod graduate;
@@ -485,7 +487,7 @@ fn attempt_door(flags: &[String], tail: &[String]) -> (i32, serde_json::Value) {
             .trim()
             .lines()
             .last()
-            .and_then(|l| serde_json::from_str(l).ok())
+            .and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok())
             .filter(|v| v.is_object())
     };
     match out {
