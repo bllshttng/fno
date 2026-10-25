@@ -75,7 +75,7 @@ pub(super) fn compact_sorted_json(value: &Value) -> String {
                     format!(
                         "{}:{}",
                         serde_json::to_string(k).unwrap_or_default(),
-                        compact_sorted_json(&map[k.clone()])
+                        compact_sorted_json(&map[k.as_str()])
                     )
                 })
                 .collect();

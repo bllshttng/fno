@@ -198,7 +198,7 @@ fn compact_sorted_json(value: &Value) -> String {
                     format!(
                         "{}:{}",
                         py_json_string(k),
-                        compact_sorted_json(&map[k.clone()])
+                        compact_sorted_json(&map[k.as_str()])
                     )
                 })
                 .collect();
@@ -452,7 +452,7 @@ pub(super) fn pretty_sorted_json(value: &Value, depth: usize) -> String {
                         "{}{}: {}",
                         pad(depth + 1),
                         py_json_string(k),
-                        pretty_sorted_json(&map[k.clone()], depth + 1)
+                        pretty_sorted_json(&map[k.as_str()], depth + 1)
                     )
                 })
                 .collect();
