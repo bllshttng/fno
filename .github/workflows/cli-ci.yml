@@ -65,10 +65,10 @@ on:
   schedule:
     - cron: '17 9 * * *'
 
-# The Linux jobs pin ubuntu-24.04. On 2026-10-25 ubuntu-latest moved to
-# 26.04, and its runners hit "Disk quota exceeded" under this suite's /tmp
-# load: the mux heal and server-start tests and the persistence stress build
-# failed there and passed on 24.04 at the same code.
+# Every workflow's Linux jobs pin ubuntu-24.04. On 2026-10-25 ubuntu-latest
+# moved to 26.04, and its runners hit "Disk quota exceeded" under this
+# suite's /tmp load: the mux heal and server-start tests and the persistence
+# stress build failed there and passed on 24.04 at the same code.
 jobs:
   real-codex-0145:
     runs-on: ubuntu-24.04

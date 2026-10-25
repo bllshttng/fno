@@ -88,7 +88,7 @@ permissions:
 jobs:
   resolve:
     name: resolve channel, sha and version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -379,7 +379,7 @@ jobs:
     name: publish the nightly pre-release (rolling, replaceable, no registry)
     needs: [resolve, binaries, wheels]
     if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.channel == 'nightly'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -503,7 +503,7 @@ jobs:
     name: publish rc / stable (one approval click)
     needs: [resolve, binaries, wheels]
     if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.channel != 'nightly'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     # THE click. Every publish leg sits in this one job, so one approval
     # releases one job: PyPI, crates.io, the tag, the GitHub Release, the tap
@@ -669,7 +669,7 @@ jobs:
     # on the promotion click, naming the approval door and the
     # notes-drafting command.
     if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
