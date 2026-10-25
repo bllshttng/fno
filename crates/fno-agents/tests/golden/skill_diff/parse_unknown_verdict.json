@@ -1,0 +1,8 @@
+{
+ "expected": {
+  "error": "unknown verdict: 'ship_it'"
+ },
+ "input": {
+  "text": "{\"verdict\":\"ship_it\"}"
+ }
+}
