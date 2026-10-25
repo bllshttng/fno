@@ -3,11 +3,13 @@
 //!
 //! [`save`] is the only writer of the per-id file, reached through the
 //! tracker door's `sidecar-set`. It refuses any key outside `SIDECAR_KEYS`,
-//! so the partition is enforced where the file is written; the reader passes
-//! every key through except `id`. The graph backend projects its rows
-//! through the same key list (`project_row`, with the load semantics the
-//! Python `Sidecar` model owned: null lists coerce to `[]`, a present key
-//! with the wrong type degrades the projection).
+//! so the partition is enforced where the file is written; the reader
+//! (`load`, `load_all_files`) enforces it again where the file is read, the
+//! way the deleted `Sidecar` model did (`extra="forbid"` plus type checks).
+//! The graph backend projects its rows through the same key list
+//! (`project_row`, with the model's load semantics: null lists coerce to
+//! `[]`, numeric strings lax-coerce, a present key with the wrong type
+//! degrades the projection).
 
 use crate::claims::encode_key;
 use crate::tracker::TrackerError;
@@ -51,7 +53,8 @@ pub(crate) const NULL_COERCED_LISTS: &[&str] = &["additional_prs", "cost_session
 /// semantics. `None` is an invalid projection (any present sidecar key with
 /// the wrong type - the pydantic ValidationError case): single reads degrade
 /// to the empty sidecar, whole-store scans skip the row. Null scalars drop;
-/// the three list fields coerce null to `[]`.
+/// the three list fields coerce null to `[]`. The numeric fields lax-coerce
+/// a JSON string (`"7"` -> `7`), the model's pydantic-v2 default mode.
 pub(crate) fn project_row(row: &Value) -> Option<Map<String, Value>> {
     let obj = row.as_object()?;
     let mut out = Map::new();
@@ -65,18 +68,55 @@ pub(crate) fn project_row(row: &Value) -> Option<Map<String, Value>> {
             }
             continue;
         }
-        let valid = match *key {
-            "pr_number" => matches!(v, Value::Number(n) if n.is_i64() || n.is_u64()),
-            "cost_usd" => v.is_number(),
-            "additional_prs" | "cost_sessions" | "sessions" => v.is_array(),
-            _ => v.is_string(),
-        };
-        if !valid {
-            return None;
-        }
-        out.insert((*key).to_string(), v.clone());
+        out.insert((*key).to_string(), lax_field(key, v)?);
     }
     Some(out)
+}
+
+/// Type-check one present sidecar key the way the deleted `Sidecar` model
+/// parsed it, returning the value to serve. The numeric fields accept a
+/// string that parses (`"pr_number": "7"` served `7` for as long as the
+/// model stood - dropping the coercion would hand `node_pr_refs` a string
+/// it ignores, and the merge-evidence gate would close on no refs). A
+/// wrong-typed key is `None`: the ValidationError case.
+fn lax_field(key: &str, v: &Value) -> Option<Value> {
+    match key {
+        "pr_number" => match v {
+            Value::Number(n) if n.is_i64() || n.is_u64() => Some(v.clone()),
+            Value::String(s) => s
+                .parse::<i64>()
+                .map(|n| json!(n))
+                .or_else(|_| s.parse::<u64>().map(|n| json!(n)))
+                .ok(),
+            _ => None,
+        },
+        "cost_usd" => match v {
+            Value::Number(_) => Some(v.clone()),
+            Value::String(s) => s.parse::<f64>().ok().map(|n| json!(n)),
+            _ => None,
+        },
+        "additional_prs" | "cost_sessions" | "sessions" if v.is_array() => Some(v.clone()),
+        "additional_prs" | "cost_sessions" | "sessions" => None,
+        _ if v.is_string() => Some(v.clone()),
+        _ => None,
+    }
+}
+
+/// Validate one per-id sidecar FILE the way the deleted `Sidecar` model did
+/// on read: a key outside `SIDECAR_KEYS` (other than the `id` join key)
+/// refuses - `extra="forbid"`, the runtime twin of the write-side
+/// [`gate_fields`] - and every present key must type-check through
+/// [`lax_field`]. The single read refuses loud (the model raised
+/// ValidationError there); the whole-store scan skips the file.
+pub(crate) fn project_file(v: &Value) -> Result<Map<String, Value>, String> {
+    let obj = v.as_object().ok_or("sidecar file is not a JSON object")?;
+    if let Some(bad) = obj
+        .keys()
+        .find(|k| k.as_str() != "id" && !SIDECAR_KEYS.contains(&k.as_str()))
+    {
+        return Err(format!("{bad:?} is not a sidecar key; the tracker owns it"));
+    }
+    project_row(v).ok_or_else(|| "a sidecar field has the wrong type".to_string())
 }
 
 /// Finish a projection into the served shape: `id` always present, null
@@ -140,8 +180,8 @@ pub(crate) fn load_all_files(root: &Path) -> Vec<(String, Map<String, Value>)> {
         let Ok(v) = serde_json::from_str::<Value>(&raw) else {
             continue;
         };
-        if let Some(obj) = v.as_object() {
-            out.push((decode_key(stem), obj.clone()));
+        if let Ok(fields) = project_file(&v) {
+            out.push((decode_key(stem), fields));
         }
     }
     out
@@ -170,11 +210,17 @@ pub(crate) fn root(cwd: &Path) -> std::path::PathBuf {
         .join("sidecar")
 }
 
-/// Read one per-id sidecar file. A missing file is an empty map; a parse or
-/// read failure is `Backend` naming the id. Every key passes through except
-/// `id` - no second field list here.
+/// Read one per-id sidecar file and validate it the way the deleted
+/// `Sidecar` model did on read. A missing file is an empty map; a file that
+/// does not parse, carries a tracker-owned key, or types a field wrong is
+/// `Backend` naming the id - the ValidationError the old external read
+/// raised, loud. [`save`] merges over the raw file ([`read_file`]), never
+/// through this projection.
 pub fn load(root: &Path, id: &str) -> Result<serde_json::Map<String, Value>, TrackerError> {
-    read_file(&root.join(format!("{}.json", encode_key(id))), id)
+    read_file(&root.join(format!("{}.json", encode_key(id))), id).and_then(|raw| {
+        project_file(&Value::Object(raw))
+            .map_err(|e| TrackerError::Backend(format!("sidecar invalid for {id}: {e}")))
+    })
 }
 
 fn read_file(path: &Path, id: &str) -> Result<serde_json::Map<String, Value>, TrackerError> {

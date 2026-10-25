@@ -83,8 +83,10 @@ pub trait Tracker {
     fn list_closed_since(&self, _days: u32) -> Option<Result<Vec<Candidate>, TrackerError>> {
         None
     }
-    /// Sidecar fields for one id. The default reads the per-id sidecar file;
-    /// a backend that stores sidecar fields in the row overrides it.
+    /// Sidecar fields for one id. The default reads and validates the
+    /// per-id sidecar file (`sidecar::load` - the deleted `Sidecar` model's
+    /// read semantics); a backend that stores sidecar fields in the row
+    /// overrides it.
     fn sidecar(&self, id: &str) -> Result<serde_json::Map<String, Value>, TrackerError> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         sidecar::load(&sidecar::root(&cwd), id)

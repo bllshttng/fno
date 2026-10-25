@@ -399,16 +399,29 @@ class _TrackerNodeNotFound(RuntimeError):
     """The native door answered ``not_found`` for one exact id."""
 
 
+class _TrackerDoorError(RuntimeError):
+    """The door answered a refusal payload (``{"error": ...}``) - the
+    backend op did not happen. The payload rides exit 0 by door contract,
+    and the old tracker client raised the same failures, so this raises
+    before a caller can read the dict as success."""
+
+
 def _tracker_door(payload: dict, *, timeout: float = 30) -> dict:
     """One round-trip with the native tracker door (the read, close,
     list-open and snapshot ops ride it). Refusals ride in the payload with
-    exit 0; transport failures raise CommandUnavailable. A backend op that
+    exit 0, so an ``{"error"}`` payload raises :class:`_TrackerDoorError` -
+    the close retry, the cascade and selection all key on the exception;
+    ``{"not_found": true}`` still rides for the caller's own message.
+    Transport failures raise CommandUnavailable. A backend op that
     makes its own network round trips raises the timeout - a door reporting
     the owner unreachable for a decision that was merely still running is
     the wrong answer."""
     from fno import rust_binary
 
-    return rust_binary.command_call(["backlog", "get"], payload, timeout=timeout)
+    out = rust_binary.command_call(["backlog", "get"], payload, timeout=timeout)
+    if out.get("error"):
+        raise _TrackerDoorError(str(out["error"]))
+    return out
 
 
 def _read_external_node_and_sidecar(id: str):
@@ -443,7 +456,9 @@ def _joined_open_candidates() -> list[dict]:
 
     backend = active_backend_name()
     try:
-        out = rust_binary.command_call(["backlog", "get"], {"tracker": "snapshot"})
+        # The snapshot chains several backend round trips on an external
+        # tracker; the local 30s door default is not its budget.
+        out = _tracker_door({"tracker": "snapshot"}, timeout=120)
         entries = out["entries"]
     except Exception as exc:  # noqa: BLE001 - name the backend, fail closed
         raise _ExternalSelectionError(f"tracker {backend!r} snapshot failed: {exc}") from exc

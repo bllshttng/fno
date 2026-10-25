@@ -294,13 +294,15 @@ def sidecar_get(id: str) -> dict:
 
     Answers a plain dict (sparse: nulls dropped, the list fields defaulted
     to ``[]``). A missing row or file answers the empty shape (``id`` plus
-    the list defaults) - the "no sidecar yet" case, never an error. The
-    backend is the door's own resolution; the guard helper lives in
-    ``fno.graph.api``.
+    the list defaults) - the "no sidecar yet" case, never an error. A file
+    that fails the sidecar validation raises, the way the old model's
+    ValidationError did. The backend is the door's own resolution; the
+    guard helper lives in ``fno.graph.api``.
     """
-    return command_call(
-        ["backlog", "get"], {"tracker": "sidecar-get", "id": id}
-    )["sidecar"]
+    out = command_call(["backlog", "get"], {"tracker": "sidecar-get", "id": id})
+    if out.get("error"):
+        raise CommandUnavailable(f"sidecar read refused: {out['error']}")
+    return out["sidecar"]
 
 
 def sidecar_all() -> dict:
