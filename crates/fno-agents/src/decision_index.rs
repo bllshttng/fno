@@ -8,6 +8,7 @@
 //! inside.
 
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The Python reader's law-lane cutover (`AUTHORITY_LANE_CUTOVER`,
@@ -276,6 +277,43 @@ pub fn default_store_live() -> Result<Index, String> {
         &crate::graph_get::default_graph_path(),
         &default_state_path("decisions.jsonl"),
     )
+}
+
+/// The newest `law_trigger` row per law from the decision store's journal,
+/// keyed by decision_id. Append-only imports: the newest row wins and
+/// nothing rewrites a law row. A missing or unreadable journal is `Err`
+/// naming the path, the same contract as the store legs.
+pub fn read_law_triggers(jsonl: &Path) -> Result<BTreeMap<String, Value>, String> {
+    let text = crate::event_store::journal_text_checked(
+        jsonl,
+        &crate::event_store::EventQuery::of_types(&["law_trigger"]),
+    )?;
+    let mut best: BTreeMap<String, ((String, usize), Value)> = BTreeMap::new();
+    for (i, line) in text.lines().enumerate() {
+        let Ok(env) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(data) = env.get("data").cloned() else {
+            continue;
+        };
+        let Some(id) = data.get("decision_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if id.is_empty() {
+            continue;
+        }
+        let ts = env
+            .get("ts")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let rank = (ts, i);
+        let entry = best.entry(id.to_string()).or_insert((rank.clone(), data));
+        if entry.0 < rank {
+            *entry = (rank, data);
+        }
+    }
+    Ok(best.into_iter().map(|(k, (_, v))| (k, v)).collect())
 }
 
 /// Read an index file into its live rows: the committed rows of the journal's

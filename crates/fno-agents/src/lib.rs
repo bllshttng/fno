@@ -494,6 +494,7 @@ pub mod route_slot;
 pub mod row_truth;
 pub mod row_verdict;
 pub mod rules;
+pub mod rules_source;
 pub mod run_outcome;
 pub mod run_state;
 pub mod rundown;

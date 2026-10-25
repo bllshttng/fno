@@ -5257,6 +5257,18 @@ event_types:
           description: "refused: the run never started. unanswered: the verb reached the server and no reply came back inside the deadline; the server's side is unknown."
     consumers: [operator]
 
+  - name: law_trigger
+    description: "One imported trigger for a live law, written by `fno inbox law match rules-import` under operator authority. Append-only: the newest row per decision_id wins and nothing rewrites a law row. Rule rows carry the row's TOML text (rule_toml); disposition rows carry the disposition object."
+    sources: [backlog]
+    data:
+      required: [decision_id, trigger_kind]
+      properties:
+        decision_id: { type: string, description: "The law the trigger governs" }
+        trigger_kind: { type: string, description: "rule or disposition" }
+        rule_toml: { type: string, description: "For trigger_kind rule: the [[rule]] row's TOML text below its header" }
+        disposition: { type: object, description: "For trigger_kind disposition: the [[disposition]] row object" }
+    consumers: [operator]
+
   - name: mail_origin_classified
     retention: durable
     description: "Positive measurement of the origin classified at the mail send chokepoint, emitted before delivery or enforcement narrows the path."

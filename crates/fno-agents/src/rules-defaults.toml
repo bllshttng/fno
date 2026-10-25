@@ -1,0 +1,31 @@
+# The shipped default rule table (docs/architecture/event-rules.md). Every
+# [[rule]] row is one rule in the shared rule schema (crates/fno/src/rules.rs);
+# the shape follows how codex and opencode define rules (ruling d-6fb65dbc):
+# a structural pattern in, one decision verb out, no prose tiers. These rows
+# are project-neutral: every install gets them. `default` is the state with
+# no config override; `event_rules.<id> = true|false` in fno config flips any
+# row, the same namespace the Stop table reads.
+
+[[rule]]
+id = "memory-write-inform"
+action = "inform"
+what = "you are writing to agent memory"
+why = "load-bearing project knowledge in private memory ships to nobody"
+instead = "put it in the repo: code, docs, a gate, or a filed node"
+default = true
+[rule.when]
+events = ["pre-tool"]
+tools = ["Write", "Edit"]
+paths = ["*memory/*.md"]
+
+[[rule]]
+id = "graph-store-write-inform"
+action = "inform"
+what = "you are editing the backlog graph store by hand"
+why = "the graph store is written through fno backlog commands; a direct edit corrupts the fleet's board"
+instead = "use fno backlog (update, idea, contain); the write gate refuses direct edits"
+default = true
+[rule.when]
+events = ["pre-tool"]
+tools = ["Edit", "Write"]
+paths = ["*graph.db*", "*graph.json*"]
