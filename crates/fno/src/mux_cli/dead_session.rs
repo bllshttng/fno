@@ -50,7 +50,7 @@ pub(super) fn heal_if_dead(name: &str, sock: &Path) -> bool {
     // The row is best-effort, but a silently dropped row reads as a broken heal downstream (the e2e journal assert): name the refusal here.
     if let Err(e) = crate::pane_send_audit::append_agents_event(&path, &row) {
         eprintln!(
-            "fno mux: warn: heal of {name:?} could not journal the row at {}: {e}",
+            "fno mux: warn: heal of {name:?} not journaled at {}: {e}",
             path.display()
         );
     }
