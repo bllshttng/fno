@@ -7,6 +7,7 @@
 //! Python owns transport only.
 
 pub mod bank;
+pub mod graduate;
 pub mod research_grade;
 
 pub fn run(args: &[String]) -> i32 {
@@ -22,6 +23,7 @@ pub fn run(args: &[String]) -> i32 {
         "report" => crate::evals_trend::run_evals_trend(&trend_argv(rest, "report")),
         "macro" => crate::evals_arm::run_evals_arm(&macro_argv(rest)),
         "grade" => crate::evals::research_grade::run(rest),
+        "graduate" => crate::evals::graduate::run(rest),
         // The remainder lands with the port's later commits; the skeleton
         // answers every spelling so the dispatch shape compiles first.
         _ => {
@@ -190,4 +192,51 @@ fn agents_home() -> std::path::PathBuf {
         }
     }
     dirs_home().join(".fno").join("agents")
+}
+
+/// One --name value / --name=value token from a raw argv tail.
+pub(super) fn flag_lookup(args: &[String], name: &str) -> Option<String> {
+    let mut iter = args.iter();
+    while let Some(a) = iter.next() {
+        if a == name {
+            return iter.next().cloned();
+        }
+        if let Some(v) = a.strip_prefix(&format!("{name}=")) {
+            return Some(v.to_string());
+        }
+    }
+    None
+}
+
+/// The bank dir: explicit --bank, else <canonical-root>/evals/bank.
+pub(super) fn resolve_bank_dir(explicit: Option<String>) -> std::path::PathBuf {
+    if let Some(b) = explicit {
+        return std::path::PathBuf::from(b);
+    }
+    canonical_repo_root().join("evals").join("bank")
+}
+
+/// The canonical repo root the bank resolves against: FNO_REPO_ROOT, then
+/// the first git worktree-list row, then cwd (the Python resolver's walk).
+pub(super) fn canonical_repo_root() -> std::path::PathBuf {
+    if let Some(root) = std::env::var_os("FNO_REPO_ROOT") {
+        if !root.is_empty() {
+            return std::path::PathBuf::from(root);
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let main_root = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(&cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .find_map(|l| l.strip_prefix("worktree ").map(str::to_string))
+        })
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| cwd.clone());
+    main_root
 }
