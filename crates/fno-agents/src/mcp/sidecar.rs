@@ -591,10 +591,9 @@ mod tests {
         assert!(!sock.exists(), "the stale artifact was removed");
     }
 
-    /// One sidecar per user: a second invocation against a live sidecar
-    /// detects it and exits 0 with the "already running" note. Two workers
-    /// model the two processes production has: the probe blocks its thread,
-    /// and on one worker the server it probes could never answer.
+    /// One sidecar per user: a second invocation against a live sidecar detects it and exits 0 with the "already running" note.
+    ///
+    /// Two workers model the two processes production has: the probe blocks its thread, and on one worker the server it probes could never answer.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_second_sidecar_detects_a_live_first() {
         let dir = tempfile::tempdir().unwrap();
@@ -604,8 +603,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let _ = bind_and_serve(state, &server_sock).await;
         });
-        // The spawned server binds asynchronously; wait for the socket file
-        // instead of guessing a sleep length that races under runner load.
+        // The spawned server binds asynchronously; wait for the socket file instead of guessing a sleep length that races under runner load.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while !sock.exists() && std::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -617,8 +615,8 @@ mod tests {
         server.abort();
     }
 
-    /// The miss case: send_to_channel against an unregistered session
-    /// answers `channel_not_registered` (AC1-ERR of the lifecycle file).
+    /// The miss case: send_to_channel against an unregistered session answers `channel_not_registered` (AC1-ERR of the lifecycle file).
+    ///
     /// Two workers for the same reason as the already-running test above.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_send_to_an_unregistered_channel_is_refused() {
