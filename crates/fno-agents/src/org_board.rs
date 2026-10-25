@@ -39,7 +39,7 @@ mod classify;
 pub mod pr_closure;
 pub mod pr_closure_produce;
 pub(crate) mod prs;
-mod queues;
+pub(crate) mod queues;
 pub(crate) mod scope;
 mod stranded;
 
@@ -442,6 +442,11 @@ pub struct BoardOpts {
     /// because the old subprocess board ran with the lead session's cwd and
     /// the calling process's cwd is not guaranteed to be the same directory.
     pub cwd: Option<PathBuf>,
+    /// A registry the caller already loaded this fire (the stop gate's
+    /// session-binding read). The driver feed reuses it instead of paying a
+    /// second store read inside the board's budgeted slice; None reads the
+    /// store as before.
+    pub registry: Option<crate::state::Registry>,
 }
 
 impl Default for BoardOpts {
@@ -451,6 +456,7 @@ impl Default for BoardOpts {
             max_pr_reads: DEFAULT_MAX_PR_READS,
             state_path: None,
             cwd: None,
+            registry: None,
         }
     }
 }
@@ -629,7 +635,8 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     let (drivers, roster_tokens, driver_name_tokens) = match s_drivers {
         None => (budget.spent_read(), Vec::new(), HashMap::new()),
         Some(_) => {
-            let (mut read, name_to_token) = read_driver_rows(entries.as_deref());
+            let (mut read, name_to_token) =
+                read_driver_rows(entries.as_deref(), opts.registry.as_ref());
             let mut tokens: Vec<String> = Vec::new();
             if let Some(rows) = read.payload.as_mut().and_then(Value::as_array_mut) {
                 // PR-bound non-terminal nodes ride first: the cap spends the
@@ -1444,42 +1451,52 @@ pub fn read_board(opts: &BoardOpts) -> Value {
 /// holds. Also returns a name-to-token map over EVERY registry entry,
 /// whatever its status: the worked feed's worker labels are names, and an
 /// orphaned row's transcript can still answer for the worker it names.
-fn read_driver_rows(entries: Option<&[Value]>) -> (SourceRead, HashMap<String, String>) {
+/// A caller that already loaded the registry this fire (the stop gate's
+/// session-binding read) passes it in, so the board's budgeted slice pays
+/// for no second store read.
+fn read_driver_rows(
+    entries: Option<&[Value]>,
+    supplied: Option<&crate::state::Registry>,
+) -> (SourceRead, HashMap<String, String>) {
+    let fold = |registry: &crate::state::Registry| -> (SourceRead, HashMap<String, String>) {
+        let session_nodes = graph_session_nodes(entries);
+        let mut name_to_token: HashMap<String, String> = HashMap::new();
+        for e in &registry.entries {
+            name_to_token.entry(e.name.clone()).or_insert_with(|| {
+                e.harness_session_id
+                    .clone()
+                    .unwrap_or_else(|| e.name.clone())
+            });
+        }
+        let rows = registry
+            .entries
+            .iter()
+            .filter(|e| is_live_driver_status(e.status))
+            .filter_map(|e| {
+                let node = e.node.as_deref().or_else(|| {
+                    e.harness_session_id
+                        .as_deref()
+                        .and_then(|sid| session_nodes.get(sid))
+                        .map(String::as_str)
+                })?;
+                let token = e
+                    .harness_session_id
+                    .clone()
+                    .unwrap_or_else(|| e.name.clone());
+                Some(json!({"name": e.name, "node": node, "token": token}))
+            })
+            .collect();
+        (SourceRead::ok(Value::Array(rows)), name_to_token)
+    };
+    if let Some(registry) = supplied {
+        return fold(registry);
+    }
     let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
         return (SourceRead::ok(json!([])), HashMap::new());
     };
     let path = home.registry_json();
     match crate::state::load_registry(&path) {
-        Ok(registry) => {
-            let session_nodes = graph_session_nodes(entries);
-            let mut name_to_token: HashMap<String, String> = HashMap::new();
-            for e in &registry.entries {
-                name_to_token.entry(e.name.clone()).or_insert_with(|| {
-                    e.harness_session_id
-                        .clone()
-                        .unwrap_or_else(|| e.name.clone())
-                });
-            }
-            let rows = registry
-                .entries
-                .iter()
-                .filter(|e| is_live_driver_status(e.status))
-                .filter_map(|e| {
-                    let node = e.node.as_deref().or_else(|| {
-                        e.harness_session_id
-                            .as_deref()
-                            .and_then(|sid| session_nodes.get(sid))
-                            .map(String::as_str)
-                    })?;
-                    let token = e
-                        .harness_session_id
-                        .clone()
-                        .unwrap_or_else(|| e.name.clone());
-                    Some(json!({"name": e.name, "node": node, "token": token}))
-                })
-                .collect();
-            (SourceRead::ok(Value::Array(rows)), name_to_token)
-        }
+        Ok(registry) => fold(&registry),
         Err(e) => (
             SourceRead::err(format!("registry unreadable: {e}")),
             HashMap::new(),
@@ -2254,7 +2271,7 @@ mod tests {
             registry.entries.push(exited_row);
         })
         .unwrap();
-        let (read, name_to_token) = read_driver_rows(None);
+        let (read, name_to_token) = read_driver_rows(None, None);
         std::env::remove_var("FNO_AGENTS_HOME");
         assert!(read.is_ok(), "{read:?}");
         let rows = read.payload.unwrap().as_array().unwrap().clone();
@@ -2269,6 +2286,38 @@ mod tests {
             .filter_map(|r| r.get("node").and_then(Value::as_str))
             .collect();
         assert_eq!(nodes, vec!["x-live"], "{rows:?}");
+    }
+
+    #[test]
+    fn a_supplied_registry_feeds_the_driver_feed_without_a_store_read() {
+        // The board's driver slice must not pay a second registry read when
+        // the caller already loaded one this fire: a supplied registry feeds
+        // the fold even where the store read would answer empty (a test
+        // process with no declared home). That is the proof the store was
+        // never consulted.
+        let registry = crate::state::Registry {
+            entries: vec![crate::state::RegistryEntry {
+                name: "t-supplied-worker".to_string(),
+                node: Some("x-supplied".to_string()),
+                status: crate::AgentStatus::Live,
+                harness: Some("claude".to_string()),
+                harness_session_id: Some("uuid-supplied".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let (read, name_to_token) = read_driver_rows(None, Some(&registry));
+        assert!(read.is_ok(), "{read:?}");
+        let rows = read.payload.unwrap().as_array().unwrap().clone();
+        let nodes: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r.get("node").and_then(Value::as_str))
+            .collect();
+        assert_eq!(nodes, vec!["x-supplied"], "{rows:?}");
+        assert_eq!(
+            name_to_token.get("t-supplied-worker").map(String::as_str),
+            Some("uuid-supplied")
+        );
     }
 
     #[test]

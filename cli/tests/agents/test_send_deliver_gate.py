@@ -121,7 +121,7 @@ def test_deliver_live_codex_daemon_delivered_true(
     monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _mock_rpc)
 
     from fno.agents.dispatch import dispatch_send
-    from fno.inbox.store import read_all_threads
+    from fno.bus.log import iter_messages
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -139,7 +139,8 @@ def test_deliver_live_codex_daemon_delivered_true(
 
     # Bus demotion (node x-1f23): a hosted delivery is self-recording (transcript),
     # NOT also queued durable.
-    assert read_all_threads("00000001") == [], "hosted delivery must not queue durable"
+    queued = [m for m in iter_messages() if m.to == "00000001" and m.delivery != "hosted"]
+    assert queued == [], "hosted delivery must not queue durable"
 
     # The deliver RPC carried the delivered-mail header turn (codex/gemini share
     # the envelope now), not the raw body.
@@ -170,7 +171,7 @@ def test_deliver_live_codex_daemon_delivered_false(
     monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _mock_rpc)
 
     from fno.agents.dispatch import dispatch_send
-    from fno.inbox.store import read_all_threads
+    from fno.bus.log import iter_messages
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -184,8 +185,7 @@ def test_deliver_live_codex_daemon_delivered_false(
     assert result.delivery == "durable"
     assert result.msg_id.startswith("fmail-")
 
-    threads = read_all_threads("deadbeef")
-    assert len(threads) == 1
+    assert len({m.id for m in iter_messages() if m.to == "deadbeef"}) == 1
 
 
 # ---------------------------------------------------------------------------

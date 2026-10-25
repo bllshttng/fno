@@ -23,16 +23,16 @@ provable claim rather than an assertion.
 ## Components
 
 ```text
-cli/src/fno/plugins/manifest.py   frozen PackManifest and component declarations
-cli/src/fno/plugins/verify.py     pure two-axis verification
-cli/src/fno/plugins/registry.py   installed packs, digests, activation receipts
-cli/src/fno/plugins/activate.py   projection into the plugin role layer
-cli/src/fno/plugins/cli.py        hidden `fno config plugins` administrative surface
-plugins/growth-studio/            the first pack (content, not code)
+crates/fno-agents/src/plugins/manifest.rs   frozen PackManifest and component declarations
+crates/fno-agents/src/plugins/version.rs    PEP 440 parsing and ordering for the ranges
+crates/fno-agents/src/plugins/verify.rs     pure two-axis verification
+crates/fno-agents/src/plugins/registry.rs   installed packs, digests, activation receipts
+crates/fno-agents/src/plugins/activate.rs   projection into the plugin role layer
+crates/fno-agents/src/plugins/cli.rs        the `fno config plugins` administrative surface
+plugins/growth-studio/                      the first pack (content, not code)
 ```
 
-`manifest.py` and `verify.py` are pure over their inputs. `registry.py` and
-`activate.py` are the only modules that touch the filesystem outside a read.
+`manifest.rs` and `verify.rs` are pure over their inputs. `registry.rs` and `activate.rs` are the only modules that touch the filesystem outside a read. The `fno` front door claims `fno config plugins` and the moved `fno plugins` spelling, and execs `fno-agents spawn-overlay plugins`.
 
 ## Identity reuse
 
@@ -64,10 +64,7 @@ boolean is how a verifier starts reporting green for a condition it never
 evaluated. The command exits zero only when every condition is checked and
 passed, so an unverified pack is never mistaken for a verified one.
 
-The compatibility family goes beyond schema: it imports the closed topology
-vocabulary from `fno.company.topology` and runs `resolve_role` against a
-maximally permissive synthetic work order, so a manifest that would fail
-resolution is caught before activation, not at execution.
+The compatibility family goes beyond schema. It checks each role's `default_topology` against the closed four-word vocabulary, and it runs the role resolver against a maximally permissive synthetic work order. So verify catches a manifest that cannot resolve before activation, not at execution. The vocabulary is a recorded dual with `fno.company.topology` until the company topology port deletes the Python leg.
 
 A corrupt manifest reports `blocked` naming the file and the parse error and
 never reports the pack as absent, mirroring the role registry's rule that a
@@ -118,17 +115,11 @@ ownership treaty:
   activation, packaged roles, workflows, evaluators, assets, and progressive
   capability exposure.
 
-The single shared seam is the closed topology vocabulary in
-`fno.company.topology`, which the substrate imports and never redefines.
+The single shared seam is the closed topology vocabulary. The Rust verifier holds a copy of the four words that `fno.company.topology` owns. The copy is a recorded dual on the inventory page, and no parity test forces the two to agree.
 
 ## Function-agnostic invariant
 
-`cli/src/fno/plugins/` contains no branch on a pack id or a function name. The
-first pack is discovered by path and validated by schema.
-`scripts/ci/check-plugins-function-agnostic.sh` AST-scans the package for the
-pack id and function-name literals in code (excluding docstrings), failing
-loudly with file:line when one appears. The scan carries a positive control so
-an empty result is never trusted.
+`crates/fno-agents/src/plugins/` contains no branch on a pack id or a function name. The first pack is discovered by path and validated by schema. `scripts/ci/check-plugins-function-agnostic.sh` scans the module's string literals in production code for the pack id and function names. It skips comment lines and test modules. When one appears, it fails loudly with file:line. The scan carries a positive control, so an empty result is never trusted.
 
 The broader module-layer map, pack-projection rule, and extraction threshold are recorded in [Company Boundaries](company-boundaries.md).
 

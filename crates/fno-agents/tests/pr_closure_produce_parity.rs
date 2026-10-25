@@ -434,8 +434,8 @@ fn bind_stamp_stderr_is_pinned() {
 
 const CONTEXT_ARGV: [&str; 1] = ["pr-closure-context"];
 const CONTEXT_PAYLOAD: &str = r#"{"pr":41,"repo":"acme/widget"}"#;
-const CONTEXT_ROW: &str = r#"{"number":41,"body":"Fixes x-aaaa","url":"https://github.com/acme/widget/pull/41","state":"OPEN","mergedAt":null,"files":[{"path":"crates/a.rs"},{"path":"docs/b.md"}]}"#;
-const CONTEXT_ENVELOPE: &str = r#"{"number":41,"body":"Fixes x-aaaa","url":"https://github.com/acme/widget/pull/41","state":"OPEN","merged_at":null,"changed_files":["crates/a.rs","docs/b.md"]}"#;
+const CONTEXT_ROW: &str = r#"{"number":41,"body":"Fixes x-aaaa","url":"https://github.com/acme/widget/pull/41","state":"OPEN","mergedAt":null,"files":[{"path":"crates/a.rs"},{"path":"docs/b.md"}],"headRefName":"feature/x-aaaa-slug"}"#;
+const CONTEXT_ENVELOPE: &str = r#"{"number":41,"body":"Fixes x-aaaa","url":"https://github.com/acme/widget/pull/41","state":"OPEN","merged_at":null,"changed_files":["crates/a.rs","docs/b.md"],"head_ref":"feature/x-aaaa-slug"}"#;
 
 #[test]
 fn context_envelope_and_failure_paths_are_pinned() {

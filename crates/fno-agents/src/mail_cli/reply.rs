@@ -6,13 +6,13 @@
 //! its original sender; an id absent from the bus is recovered off THIS
 //! session's transcript (the live-injected envelope), with the chats index as
 //! the first receipt read; only an id absent from both is a hard error. A bus
-//! row addressed to a project falls to the thread-store append / orphan
+//! row addressed to a project falls to the chats-store thread reply / orphan
 //! self-note. The cross-host branch runs before any of that:
 //! `reply_cross_host` owns foreign-host senders, exactly as it did when the
 //! front claimed the command for the remote lane.
 //!
 //! The delivery rungs are the send leaf's shared choke points
-//! (`name_lane_send`, `write_durable_thread`, `append_to_kind_thread`); this
+//! (`name_lane_send`, `write_durable_thread`, `reply_parent`); this
 //! module owns reply's routing, refusals and transcript reads only. Goldens
 //! captured from the Python command through tests/capture/mail_reply_capture.py
 //! freeze the bytes.
@@ -744,15 +744,12 @@ fn thread_store_reply(
             return code;
         }
     };
-    let own_handle = send::find_thread_by_msg_id(&sender, to_msg);
-    let recipient = match &own_handle {
-        Some(path) => std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| send::thread_frontmatter_field(&text, "from"))
-            .unwrap_or_default(),
+    let parent = send::reply_parent(to_msg).filter(|p| !p.from.is_empty());
+    let recipient = match &parent {
+        Some(p) => p.from.clone(),
         None => {
             eprintln!(
-                "warning: msg-id '{to_msg}' not found in own inbox; \
+                "warning: msg-id '{to_msg}' not found in the chats store; \
                  writing a self-note thread (likely orphan reply)"
             );
             sender.clone()
@@ -777,46 +774,22 @@ fn thread_store_reply(
     let reservation = reservation.expect("checked above");
     let authored_words = crate::backlog::style_check::word_count(body_text) as i64;
 
-    // The reply's recipient is read off the parent thread's `from:`; re-find
-    // under THAT inbox, exactly as the oracle did.
-    let existing = send::find_thread_by_msg_id(&recipient, to_msg);
-    if let Some(thread_path) = existing {
-        match send::append_to_kind_thread(
-            &thread_path,
-            &sender,
-            body_text,
-            &reply_id,
-            Some(authored_words),
-            origin,
-        ) {
-            Ok(path) => {
-                let payload = json!({
-                    "msg_id": reply_id,
-                    "thread_path": path.display().to_string(),
-                    "appended": true,
-                });
-                if parsed.json_out {
-                    println!("{payload}");
-                } else {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    println!("appended reply {reply_id} to {name} (in {recipient})");
-                }
-                return 0;
-            }
-            Err(exc) => {
-                send::release_budget(&reservation);
-                eprintln!("error: {exc}");
-                return 1;
-            }
-        }
-    }
-    match send::write_durable_thread(
+    // A known parent: the reply joins its thread and kind, addressed back
+    // to its sender. An unknown one: a self-note that names the parent.
+    let thread = parent
+        .as_ref()
+        .map(|p| p.thread.clone())
+        .unwrap_or_else(|| reply_id.clone());
+    let row_kind = parent
+        .as_ref()
+        .map(|p| p.kind.as_str())
+        .filter(|k| !k.is_empty())
+        .unwrap_or(kind);
+    let appended = parent.is_some();
+    if let Err(exc) = send::write_durable_thread(
         &recipient,
         &sender,
-        kind,
+        row_kind,
         body_text,
         &reply_id,
         None,
@@ -829,35 +802,30 @@ fn thread_store_reply(
         origin,
         None,
         Some(to_msg),
+        Some(&thread),
         false,
         Some(Value::Object(refs)),
     ) {
-        Ok(path) => {
-            let payload = json!({
-                "msg_id": reply_id,
-                "thread_path": path.display().to_string(),
-                "appended": false,
-                "orphan": true,
-            });
-            if parsed.json_out {
-                println!("{payload}");
-            } else {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                println!(
-                    "sent orphan reply {reply_id} to {recipient} ({name}; replies_to:{to_msg})"
-                );
-            }
-            0
-        }
-        Err(exc) => {
-            send::release_budget(&reservation);
-            eprintln!("error: {exc}");
-            1
-        }
+        send::release_budget(&reservation);
+        eprintln!("error: {exc}");
+        return 1;
     }
+    if parsed.json_out {
+        let mut payload = json!({
+            "msg_id": reply_id,
+            "thread": thread,
+            "appended": appended,
+        });
+        if !appended {
+            payload["orphan"] = json!(true);
+        }
+        println!("{payload}");
+    } else if appended {
+        println!("appended reply {reply_id} to thread {thread} (in {recipient})");
+    } else {
+        println!("sent orphan reply {reply_id} to {recipient} (replies_to:{to_msg})");
+    }
+    0
 }
 
 #[cfg(test)]

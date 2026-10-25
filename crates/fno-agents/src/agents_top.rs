@@ -279,9 +279,13 @@ fn seat_facts(
         .filter(|om| om.get("kind").and_then(Value::as_str) == Some("observed"))
         .and_then(|om| om.get("model").and_then(Value::as_str))
         .filter(|m| !m.is_empty());
-    let (model, model_basis) = match (registry_model, observed_model) {
-        (Some(m), _) => (Some(m), Some("registry")),
-        (None, Some(m)) => (Some(m), Some("observed")),
+    // The live worker's observed model wins: the registry row carries the
+    // dispatch default the spawn stamped, and a worker serving a different
+    // model must read as the model it serves. The registry value
+    // is the fallback for a seat no probe reached.
+    let (model, model_basis) = match (observed_model, registry_model) {
+        (Some(m), _) => (Some(m), Some("observed")),
+        (None, Some(m)) => (Some(m), Some("registry")),
         (None, None) => (None, None),
     };
     let cwd = entry.map(|e| e.cwd.as_str()).filter(|d| !d.is_empty());

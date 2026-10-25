@@ -5,8 +5,8 @@ use super::tests::view_with_agents;
 use super::*;
 use crate::client::release_check::{Channel, ReleaseNotesSection, ReleaseOutcome};
 use crate::client::update_menu::{
-    ReleaseNoteLine, ReleaseNotes, ReleaseNotesGroup, RunningRow, UpdateOutcome, UpdateProbe,
-    UpdateReadiness,
+    ReleaseNoteLine, ReleaseNotes, ReleaseNotesGroup, RevisionsView, RunningRow, UpdateOutcome,
+    UpdateProbe, UpdateReadiness,
 };
 
 fn degraded_release_probe(release: ReleaseOutcome, running: Vec<RunningRow>) -> UpdateProbe {
@@ -25,6 +25,7 @@ fn degraded_release_probe(release: ReleaseOutcome, running: Vec<RunningRow>) -> 
             running,
             running_stale,
             source_pin: None,
+            revisions: None,
         }),
         release,
     }
@@ -222,6 +223,7 @@ fn update_modal_names_stale_processes_and_offers_restart() {
         ],
         running_stale: 2,
         source_pin: None,
+        revisions: None,
     });
     let menu = build_sideline_menu(
         Anchor::Center,
@@ -349,6 +351,7 @@ fn no_overlay_cuts_text_with_an_ellipsis() {
         running: vec![],
         running_stale: 0,
         source_pin: None,
+        revisions: None,
     });
     let name = "n".repeat(120);
     type Open = Box<dyn Fn(&mut View)>;
@@ -560,6 +563,81 @@ fn update_payload_without_running_key_parses_and_offers_no_restart() {
     );
 }
 
+/// The named revisions line and the mixed-build header print verbatim from
+/// the resolver's revisions block; a payload without the key (an older fno)
+/// renders neither row.
+#[test]
+fn update_modal_prints_the_named_revisions_and_the_mixed_flag() {
+    let rev_a = "2e55d52aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let rev_b = "19bbc27bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let rev_c = "ffc2af6ccccccccccccccccccccccccccccccccccc";
+    let outcome = UpdateOutcome::Ok(UpdateReadiness {
+        update_ready: false,
+        installed_rev: Some("aaa1111".into()),
+        source_rev: Some("bbb2222".into()),
+        installed_version: None,
+        source_prs_ahead: None,
+        changelog: vec![],
+        release_notes: None,
+        guidance: "up to date at bbb2222 - no update pending, 0 shell(s) unaffected".into(),
+        degraded: None,
+        running: vec![],
+        running_stale: 0,
+        source_pin: None,
+        revisions: Some(RevisionsView {
+            summary: Some(format!(
+                "build revs: fno-agents {}, fno {}; crates/ pin {}",
+                &rev_a[..12],
+                &rev_b[..12],
+                &rev_c[..12]
+            )),
+            mixed_detail: Some(format!(
+                "mixed component builds: fno-agents at {} vs fno at {}",
+                &rev_a[..12],
+                &rev_b[..12]
+            )),
+        }),
+    });
+    let modal = build_update_modal(Some(&outcome.into()));
+    let labels = row_labels(&modal);
+    assert!(
+        labels
+            .iter()
+            .any(|l| l.starts_with("build revs: fno-agents ") && l.contains("crates/ pin")),
+        "the side-by-side line prints: {labels:?}"
+    );
+    assert!(
+        labels
+            .iter()
+            .any(|l| l.starts_with("mixed component builds:")),
+        "the mixed flag prints: {labels:?}"
+    );
+
+    let plain = UpdateOutcome::Ok(UpdateReadiness {
+        update_ready: false,
+        installed_rev: Some("same".into()),
+        source_rev: Some("same".into()),
+        installed_version: None,
+        source_prs_ahead: None,
+        changelog: vec![],
+        release_notes: None,
+        guidance: "up to date at same - no update pending, 0 shell(s) unaffected".into(),
+        degraded: None,
+        running: vec![],
+        running_stale: 0,
+        source_pin: None,
+        revisions: None,
+    });
+    let modal = build_update_modal(Some(&plain.into()));
+    assert!(
+        !row_labels(&modal).iter().any(|l| l.contains("build revs:")),
+        "no revisions row without the block"
+    );
+    assert!(!row_labels(&modal)
+        .iter()
+        .any(|l| l.starts_with("mixed component builds:")));
+}
+
 /// AC3-HP mirrored client-side: not-ready builds the menu with no row.
 #[test]
 fn sideline_menu_omits_update_row_when_not_ready() {
@@ -576,6 +654,7 @@ fn sideline_menu_omits_update_row_when_not_ready() {
         running: vec![],
         running_stale: 0,
         source_pin: None,
+        revisions: None,
     });
     let menu = build_sideline_menu(
         Anchor::Center,
@@ -632,6 +711,7 @@ fn sideline_menu_shows_row_for_ok_but_internally_degraded_probe() {
         running: vec![],
         running_stale: 0,
         source_pin: None,
+        revisions: None,
     });
     let menu = build_sideline_menu(
         Anchor::Center,
@@ -733,6 +813,7 @@ fn sideline_menu_shows_update_row_above_keybinds_when_ready() {
         running: vec![],
         running_stale: 0,
         source_pin: None,
+        revisions: None,
     });
     let menu = build_sideline_menu(
         Anchor::Center,
@@ -773,6 +854,7 @@ fn update_modal_renders_version_pair_changelog_and_guidance() {
         running: vec![],
         running_stale: 0,
         source_pin: None,
+        revisions: None,
     });
     let modal = build_update_modal(Some(&outcome.clone().into()));
     let headers: Vec<&str> = modal
@@ -824,6 +906,7 @@ fn update_modal_renders_version_pair_changelog_and_guidance() {
         running: vec![],
         running_stale: 0,
         source_pin: None,
+        revisions: None,
     });
     let modal = build_update_modal(Some(&outcome.clone().into()));
     let entry_labels: Vec<&str> = modal
@@ -872,6 +955,7 @@ fn update_modal_renders_version_pair_changelog_and_guidance() {
         running: vec![],
         running_stale: 0,
         source_pin: None,
+        revisions: None,
     });
     let modal = build_update_modal(Some(&empty.clone().into()));
     assert!(row_labels(&modal).contains(&"fix(x): raw subject".to_string()));
@@ -917,6 +1001,7 @@ fn update_modal_shows_version_and_pr_distance_or_falls_back() {
             running: vec![],
             running_stale: 0,
             source_pin: None,
+            revisions: None,
         })
     };
     let headers = |probe: UpdateProbe| -> Vec<String> {
@@ -959,6 +1044,7 @@ fn update_modal_shows_version_and_pr_distance_or_falls_back() {
             running: vec![],
             running_stale: 0,
             source_pin: None,
+            revisions: None,
         });
         assert!(!headers(bare.into()).iter().any(|h| h.contains("->")));
     }
@@ -1022,6 +1108,7 @@ fn update_modal_leads_with_up_to_date_when_current() {
         running: vec![],
         running_stale: 0,
         source_pin: None,
+        revisions: None,
     });
     let modal = build_update_modal(Some(&outcome.into()));
     assert!(matches!(
@@ -1068,6 +1155,7 @@ fn update_modal_keeper_count_prints_once() {
         running: vec![stale("a"), keeper],
         running_stale: 2,
         source_pin: None,
+        revisions: None,
     });
     let modal = build_update_modal(Some(&outcome.into()));
     assert!(matches!(
@@ -1105,6 +1193,7 @@ fn update_modal_keeper_count_prints_once() {
             running: vec![],
             running_stale: 0,
             source_pin: None,
+            revisions: None,
         })
         .into()),
     ));

@@ -1,13 +1,9 @@
 """Move A (G1, ab-cee91152) - flip the inbox store canon to jsonl-first.
 
-Before this change, ``store.py`` wrote the per-recipient markdown thread
-durable-first and mirrored to the bus log best-effort - the inverse of the
-intended design. This suite pins the flipped contract:
+This suite pins the contract:
 
   - AC1-ERR: a bus-log append failure FAILS the send (the log is the durable
     write the caller depends on), surfacing the error - never a silent loss.
-  - AC1-FR:  a markdown-render write failure does NOT fail the send (the log
-    append already landed; the render is derived).
 """
 from __future__ import annotations
 
@@ -18,7 +14,7 @@ from fno.paths_testing import use_tmpdir
 
 @pytest.fixture
 def inbox_and_bus(tmp_path, monkeypatch):
-    """Co-isolate the md render (FNO_INBOX_ROOT) and the bus log under tmp."""
+    """Co-isolate the bus log (FNO_INBOX_ROOT) under tmp."""
     monkeypatch.setenv("FNO_INBOX_ROOT", str(tmp_path))
     use_tmpdir(monkeypatch, tmp_path)
     return tmp_path
@@ -41,36 +37,4 @@ def test_send_fails_when_bus_append_fails(inbox_and_bus, monkeypatch):
     with pytest.raises(OSError):
         store.write_new_thread("alice", "bob", store.Kind.HEADS_UP.value, "region work")
 
-    # Nothing leaked to the log (it raised) and no half-written render is left
-    # masquerading as a durable message the log never saw.
     assert list(iter_messages()) == []
-    inbox = store.inbox_dir_for("alice")
-    leftover = list(inbox.glob("*.md")) if inbox.exists() else []
-    assert leftover == [], f"render left behind after a failed durable send: {leftover}"
-
-
-# ---------------------------------------------------------------------------
-# AC1-FR: a render-write failure does NOT fail the send (the inverse contract)
-# ---------------------------------------------------------------------------
-
-def test_send_succeeds_when_render_write_fails(inbox_and_bus, monkeypatch, capsys):
-    from fno.inbox import store
-    from fno.bus.log import iter_messages
-
-    def boom(_target, _content):
-        raise OSError("readonly fs")
-
-    monkeypatch.setattr(store, "_atomic_write_text", boom)
-
-    # The durable write (bus append) landed, so the send SUCCEEDS even though
-    # the derived render could not be written.
-    handle = store.write_new_thread("alice", "bob", store.Kind.HEADS_UP.value, "still durable")
-
-    msgs = list(iter_messages())
-    assert len(msgs) == 1
-    assert msgs[0].id == handle.thread_id
-    assert msgs[0].body == "still durable"
-
-    # The failure is logged loudly, not silent.
-    err = capsys.readouterr().err
-    assert "render" in err.lower()

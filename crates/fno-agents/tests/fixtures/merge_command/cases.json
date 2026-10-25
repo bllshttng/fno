@@ -267,9 +267,6 @@
           "body": "Fixes x-hold1",
           "url": "https://github.com/acme/widget/pull/7"
         }
-      },
-      "pr-closure-parse": {
-        "json": {"ids": ["x-hold1"]}
       }
     }
   },

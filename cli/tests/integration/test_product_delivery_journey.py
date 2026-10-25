@@ -19,18 +19,15 @@ from pathlib import Path
 
 import pytest
 import yaml
-from typer.testing import CliRunner
 
-from fno.plugins.cli import plugins_app
+from fno.rust_binary import find_dev_binary
 
-# Role resolution runs in fno-agents (spawn-overlay kind roles-resolve).
+# The pack owner is native: `fno-agents spawn-overlay plugins`.
 pytestmark = pytest.mark.dev_build
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "external_workflow_pack"
 POSITIVE_MARKER = "EVALUATOR PASS"
 PACK_ID = "external-workflow-pack"
-
-runner = CliRunner()
 
 
 def _materialize_external_pack(dest: Path) -> Path:
@@ -55,10 +52,18 @@ def _run_evaluator(pack_dir: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _invoke(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(find_dev_binary()), "spawn-overlay", "plugins", "--root", str(root), *args, "--json"],
+        capture_output=True,
+        text=True,
+    )
+
+
 def _plugins(root: Path, *args: str) -> dict:
-    res = runner.invoke(plugins_app, ["--root", str(root), *args, "--json"])
-    assert res.exit_code == 0, res.output
-    return json.loads(res.output)
+    res = _invoke(root, *args)
+    assert res.returncode == 0, res.stdout + res.stderr
+    return json.loads(res.stdout)
 
 
 def _isolated_root(tmp_path: Path) -> Path:
@@ -120,15 +125,15 @@ def test_incompatible_pack_is_refused_and_writes_nothing(tmp_path: Path) -> None
     manifest["footnote_compat"] = {"minimum": "999.0.0"}
     (pack / "plugin.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
 
-    res = runner.invoke(plugins_app, ["--root", str(root), "verify", str(pack), "--json"])
-    assert res.exit_code == 1
-    report = json.loads(res.output)
+    res = _invoke(root, "verify", str(pack))
+    assert res.returncode == 1
+    report = json.loads(res.stdout)
     compat = next(c for c in report["conditions"] if c["name"] == "footnote-compat-range")
     assert compat["result"] == "failed"
 
-    res = runner.invoke(plugins_app, ["--root", str(root), "activate", str(pack), "--json"])
-    assert res.exit_code == 1
-    assert "verification_failed" in json.loads(res.output)["error"]
+    res = _invoke(root, "activate", str(pack))
+    assert res.returncode == 1
+    assert "verification_failed" in json.loads(res.stdout)["error"]
     assert list((root / "plugin").glob("**/*.json")) == []
 
 
@@ -143,9 +148,9 @@ def test_deactivation_leaves_an_anomalous_path_with_its_owner(tmp_path: Path) ->
     victim.unlink()
     victim.symlink_to(tmp_path / "elsewhere.json")
 
-    res = runner.invoke(plugins_app, ["--root", str(root), "deactivate", PACK_ID, "--json"])
-    assert res.exit_code == 1
-    outcome = json.loads(res.output)
+    res = _invoke(root, "deactivate", PACK_ID)
+    assert res.returncode == 1
+    outcome = json.loads(res.stdout)
     assert outcome["removed"] == []
     assert outcome["left_alone"] == activated["written_paths"]
     assert victim.is_symlink()

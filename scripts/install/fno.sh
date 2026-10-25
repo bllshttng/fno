@@ -592,14 +592,18 @@ main() {
 			;;
 	esac
 
-	detect_channel
-	resolve_source
-	# Name the channel before the slow provision: a nightly or rc run must say
-	# why it is not touching the stable PyPI package (AC7-UI's installer twin).
-	case "$FNO_CHANNEL" in
-		nightly) say "channel nightly (${FNO_DECLARED_VERSION}): installing this platform's wheel from the nightly GitHub release." ;;
-		rc) say "channel rc: pinning the candidate $FNO_SOURCE from PyPI." ;;
+	# PyPI ships prebuilt wheels (all four Rust binaries inside) for four
+	# targets only. Any other platform gets the Python-only install, so name
+	# that before provisioning and give the build route.
+	case "$(uname -s 2>/dev/null)/$(uname -m 2>/dev/null)" in
+		Darwin/arm64 | Darwin/x86_64 | Linux/x86_64 | Linux/aarch64) ;;
+		*)
+			say "no prebuilt wheel for $(uname -s 2>/dev/null)/$(uname -m 2>/dev/null): PyPI ships wheels for macOS arm64, macOS x86_64, Linux x86_64 and Linux aarch64 only."
+			say "this install will be Python-only. A Rust toolchain (https://rustup.rs) is required for the rest: run 'cargo install --locked fno' once it is installed."
+			;;
 	esac
+
+	detect_channel
 
 	# Honor FNO_INSTALL_DIR by handing it to uv as the tool-bin location.
 	if [ -n "${FNO_INSTALL_DIR:-}" ]; then
@@ -654,6 +658,17 @@ main() {
 			fi
 		fi
 	fi
+
+	# Resolve the source only once we know a provision is needed. A nightly
+	# source lookup hits the GitHub release, which can lack a wheel (not yet
+	# published, or a rate limit), and a no-op rerun must not die on it.
+	resolve_source
+	# Name the channel before the slow provision: a nightly or rc run must say
+	# why it is not touching the stable PyPI package (AC7-UI's installer twin).
+	case "$FNO_CHANNEL" in
+		nightly) say "channel nightly (${FNO_DECLARED_VERSION}): installing this platform's wheel from the nightly GitHub release." ;;
+		rc) say "channel rc: pinning the candidate $FNO_SOURCE from PyPI." ;;
+	esac
 
 	ensure_uv
 

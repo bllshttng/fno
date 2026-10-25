@@ -90,10 +90,7 @@ mail send
 mail reply
 mail unread
 mail ack
-mail list
 mail show
-mail status
-mail drain
 # Track D, a different product (L15)
 # L15 mux, optional. One native tree drives help, completion and inventory,
 # so the ratchet registers mux as one leaf; the operation paths live in the

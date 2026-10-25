@@ -179,7 +179,6 @@ LAYERS = (
             "fno.company.execution",
         ),
     ),
-    (4, "plugins", ("fno.plugins",)),
     (5, "runtime", ("fno.runtime", "fno.agents")),
 )
 
