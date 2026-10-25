@@ -4,32 +4,61 @@ A rule about asking, deciding or escalating is enforced where it breaks: at the 
 
 ## The row schema
 
+The table uses the shared rule schema in `crates/fno-agents/src/rules.rs`. A Stop row is one rule whose `[rule.when]` names one event and its predicates.
+
 ```toml
 [[rule]]
 id = "chat_ask_unfiled"
-event = "stop"
-when = ["titled", "last_message_decision_ask", "not:turn_filed_question"]
 action = "block"
 what = "you asked the user a decision in chat"
 why = "a chat ask is lost at compaction and no reader sees it"
 instead = "fno inbox outstanding ask --question-file q.md --node <node>"
 default = true
+[rule.when]
+events = ["stop"]
+predicates = ["promoted", "last_message_decision_ask", "not:turn_filed_question"]
 ```
-
-Each row carries: `id`, `event`, `when`, `action`, `what`, `why`, `instead`, `default`.
 
 | Field | Meaning |
 |---|---|
 | `id` | The row name. The config override key and the span's `rule` attr. |
-| `event` | What the row watches (below). |
-| `when` | Predicate names, `not:`-prefixable. All must hold. An unknown name fails the table load test, never the runtime. |
-| `action` | `block`, `nudge`, `notify` or `emit`. |
-| `what`, `why`, `instead` | The three sentences a block or nudge speaks: `rule <id>: <what>. Why: <why>. Do instead: <instead>.` |
+| `action` | `block`, `warn` or `inform` (below). |
+| `deliver` | For an `inform` row: `notify` sends a user notice, `emit` marks the event seen. |
+| `what`, `why`, `instead` | The three sentences a block or warn speaks: `rule <id>: <what>. Why: <why>. Do instead: <instead>.` |
 | `default` | The state with no config override. |
+| `when.events` | Exactly one event the row watches (below). |
+| `when.predicates` | Predicate names, `not:`-prefixable. All must hold. An unknown name fails the table load test, never the runtime. |
+
+## The rule schema
+
+One schema carries every rule fno checks: the Stop rows above, and the law corpus. A rule declares its own trigger, so it reaches an agent at the decision point it governs. `parse_table` refuses a row that breaks any rule below, so a bad row fails the load test.
+
+| Field | Values |
+|---|---|
+| `action` | `inform`, `warn`, `require-ack`, `block`. |
+| `class` | The hook class: `block` (sync, may deny), `wait` (sync, adds context), `next-turn` (async, lands at the next turn boundary), `rewake` (async, wakes or steers the session). Default: `block` for `block` and `require-ack`, else `wait`. |
+| `scope` | `fleet`, `team:<t>`, `project:<p>`, `node:<id>`, `session:<id>`. |
+| `expires` | `never`, `YYYY-MM-DD`, or `until <node> closes`. |
+| `family` | `hold`, `freeze`, `naming`, `other`. The first three are the rules that already have a gate shape. |
+| `authority` | `by`, `at` and `lane` (`law-door`, `decide-door`, `rule-file`): who ruled, when, and through which door. |
+| `law` | The decision id, for a rule that carries a law. |
+| `when` | `events`, `paths`, `tools`, `commands`, `skills`, `nodes`, `projects`, `phases`, `harnesses`, `models`, `machines`, `subjects`, `predicates`, `retrieval`, `classifier`. |
+
+The tier is derived, never written. A rule with only structural fields is tier 0: an index lookup, cheap enough for every tool call. `retrieval` text makes it tier 1, which ranks rules with BM25 (`bm25_rank`). A `classifier` question makes it tier 2, a model call. The tier sets what a rule can do:
+
+- `block` and `require-ack` run in class `block`, and only they do.
+- A denying rule needs a tier-0 trigger. One exception holds. If every event is a `door:*` event, a tier-2 rule can deny, because a door is off the hot path.
+- `next-turn` and `rewake` carry only `inform` or `warn`.
+
+The tier-0 match (`rules::matches`) reads every set field of `when` against an `Event` as a glob where `*` crosses `/`. The Stop engine evaluates `predicates`. The match does not.
+
+The Stop runtime keeps its own action names. `parse_table` maps `warn` to `nudge`, `inform` with `deliver = "notify"` to `notify`, and `inform` with `deliver = "emit"` to `emit`.
+
+Two modes on `fno inbox law match` read a rule file. `{"mode":"rules-check","file":"<path>"}` validates it against the live laws and names every live law no rule or `[[disposition]]` carries. `{"mode":"rules-measure","cases":"<path>"}` scores BM25 and the stage keywords over labeled cases. `scripts/probes/law-corpus-check.sh <file>` runs the check. It checks three facts. Every live law is covered. No row is invalid. Each of the hold, freeze and naming families holds a tier-0 rule. If all three hold, it exits 0.
 
 ## Events
 
-`stop` is the Stop payload: session id, last assistant text, transcript path. Journal events are a bare `<type>` (`operator_question`) or `decision_span:<kind>` (`decision_span:route`), read from the project events journal for rows written since this session's previous engine fire. The engine keeps a per-session cursor (seq + ts) under the journal's `event-rules/` folder. The spans a fire writes are the dedupe ledger. A lost cursor costs a re-read, never a re-fire.
+`stop` is the Stop payload: session id, last assistant text, transcript path. Journal events are `journal:<type>` (`journal:operator_question`) or `decision_span:<kind>` (`decision_span:route`), read from the project events journal for rows written since this session's previous engine fire. The engine keeps a per-session cursor (seq + ts) under the journal's `event-rules/` folder. The spans a fire writes are the dedupe ledger. A lost cursor costs a re-read, never a re-fire.
 
 ## Predicates
 
@@ -49,12 +78,12 @@ The fixed match lives in `event_rules.rs::predicate`. A row names any of these, 
 
 ## Actions
 
-| Action | Behavior |
-|---|---|
-| `block` | The Stop is blocked with the row's three sentences. Repeats while the condition holds, capped at 3 fires per rule per Stop turn; the last fire's span carries `cap_reached`, after which the engine allows. |
-| `nudge` | A block that fires once per matched event, then allows. |
-| `notify` | One operator notice through `notify_operator`, once per matched event. Never blocks. |
-| `emit` | Marks the matched event seen (the cursor is the record). No span. |
+| Action | Runtime name | Behavior |
+|---|---|---|
+| `block` | `block` | The Stop is blocked with the row's three sentences. Repeats while the condition holds, capped at 3 fires per rule per Stop turn; the last fire's span carries `cap_reached`, after which the engine allows. |
+| `warn` | `nudge` | A block that fires once per matched event, then allows. |
+| `inform`, `deliver = "notify"` | `notify` | One operator notice through `notify_operator`, once per matched event. Never blocks. |
+| `inform`, `deliver = "emit"` | `emit` | Marks the matched event seen (the cursor is the record). No span. |
 
 Every fire writes a `decision_span` row with `span_kind` `block`, `nudge` or `notify` and the attrs `rule` and `matched_event`. `rule` + `matched_event` is the dedupe ledger. A nudge or notify fires once per matched event. A block counts its prior fires per turn key.
 
@@ -86,7 +115,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 12 | Overdue escalation: take the recommendation or wait (lead:100) | stays prose (check-in reader; timer, not a turn boundary) |
 | 13 | Control-plane attention: tell the user (lead:101) | stays prose |
 | 14 | `pr status` ready: merge it yourself (lead:106) | guard: lead_decide blocks Stop while actionable rows exist |
-| 15 | Run merge verbs from the row's project cwd (lead:106) | stays prose |
+| 15 | Run merge commands from the row's project cwd (lead:106) | stays prose |
 | 16 | Lever order 1-5 (lead:108-113) | stays prose (judgment) |
 | 17 | Start only nodes the check-in lists (lead:115) | guard: blueprint ceiling + spawn gate |
 | 18 | A lever that needs the user goes through `outstanding ask`, never chat (lead:115) | row: chat_ask_unfiled |
@@ -99,10 +128,10 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 25 | Silence past the deadline takes the default (lead:139) | stays prose (check-in reader) |
 | 26 | User answers in chat: record it (lead:140) | row (later): port of hooks/operator-capture-nudge.sh |
 | 27 | `operator` authority refused on an agent (lead:142) | guard: decide door |
-| 28 | `backlog note` with no holder exits 3 (lead:144) | guard: note verb |
+| 28 | `backlog note` with no holder exits 3 (lead:144) | guard: note command |
 | 29 | A merge-conditioning ruling needs a hold, not a note (lead:144) | stays prose |
 | 30 | `law set` cannot supersede the user's law (lead:145) | guard: law door |
-| 31 | `faq add` needs `--exit` (lead:146) | guard: faq verb |
+| 31 | `faq add` needs `--exit` (lead:146) | guard: faq command |
 | 32 | Dispatch exception journaled BEFORE the spawn (lead:152) | row (later): PreToolUse spawn, titled, no `lead_dispatch_exception` row |
 | 33 | Dispatch brief on the node before a blueprint (lead:154) | row (later): PreToolUse Agent/spawn with blueprint, node without dispatch_brief |
 | 34 | Exit blocked while actionable rows exist (lead:163) | guard: lead_decide |
@@ -121,7 +150,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 47 | Codex: full session id, never head-8 (using-fno:60) | guard: mail send refuses the shape |
 | 48 | Spawn another project's work with `--cwd` (using-fno:66) | stays prose |
 | 49 | Fix what you find; carve out only big work (using-fno:72) | stays prose (judgment) |
-| 50 | One encounter per node per session (using-fno:74) | guard: encounter verb cap |
+| 50 | One encounter per node per session (using-fno:74) | guard: encounter command cap |
 | 51 | Worktree Bash refuses heredoc and substitution (using-fno:113) | guard: worktree Bash guard |
 | 52 | Review lane before `pr create` (target:62) | guard: review coverage merge gate |
 | 53 | Manifest is write-once (target:89) | guard: exit 5 |
@@ -130,4 +159,4 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 
 ## How to add a row
 
-Find the prose rule that has no guard and can be read at a turn boundary. Add a `[[rule]]` block to `event_rules.toml`, naming only predicates from the table above. If the rule needs a new reading, extend the predicate match in `event_rules.rs`. Run `cargo test -p fno-agents event_rules`: the table test refuses an unknown predicate, action or an empty sentence before anything ships. Rows that fire before a tool runs (PreToolUse) are not in this engine. The Stop boundary is the only wired event. Rules the engine cannot carry stay prose in the skill.
+Find the prose rule that has no guard and can be read at a turn boundary. Add a `[[rule]]` block to `event_rules.toml` with one event and only predicates from the table above. If the rule needs a new reading, extend the predicate match in `event_rules.rs`. Run `cargo test -p fno-agents event_rules`: the table test refuses an unknown predicate, an action that does not fit its class, or an empty sentence before anything ships. Rows that fire before a tool runs (PreToolUse) are not in this engine. The Stop boundary is the only wired event. Rules the engine cannot carry stay prose in the skill.

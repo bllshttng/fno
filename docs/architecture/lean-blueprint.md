@@ -92,7 +92,7 @@ In-place mutation needs something to version the file. Each `/blueprint` write i
 
 Two reads say whether a plan still holds. `fno backlog freshness <node> --plan <path>` compares the node's premise, and the plan's cited files, against current `origin/main`. Premise verdicts read `shipped`, `partly_shipped`, `changed`, `holds` or `unmeasured`. Plan verdicts read `void`, `drifted`, `fresh` or `unmeasured`. Target init runs it and prints one line per leg. Each run records a `backlog_freshness_verdict` event, so the false-positive rate is measured before any verdict is ever allowed to block. The read is advisory and never blocks.
 
-The notes half of that read is the older `fno backlog notes stale <node> --plan <path>`, which freshness reuses. That verb reads the plan's last commit time, or its mtime with no commit. It compares that time with every note time on the node: legacy progress notes, the current state, and the note journal. It names its basis, because an mtime moves on any save. If notes are newer, init prints a `predates` line.
+The notes half of that read is the older `fno backlog notes stale <node> --plan <path>`, which freshness reuses. That command reads the plan's last commit time, or its mtime with no commit. It compares that time with every note time on the node: legacy progress notes, the current state, and the note journal. It names its basis, because an mtime moves on any save. If notes are newer, init prints a `predates` line.
 
 Writes outside `/blueprint` are not committed: a `/think` design doc, `fno do plan stamp` at the ship gate, `fno do plan sync`, and hand edits in Obsidian. A ruling that lives only in mail is invisible to the stale read.
 

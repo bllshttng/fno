@@ -70,8 +70,6 @@ cd "$REPO_ROOT"
 # Docs that legitimately document the Obsidian-gated vault layout.
 ALLOWLIST=(
     "docs/architecture/auto-post-merge-ritual.md"
-    "docs/architecture/cross-project-inbox.md"
-    "docs/guides/cross-project-inbox.md"
     "docs/guides/reading-shipped-plans.md"
     "docs/path-config.md"
     "docs/state-root-inventory.md"

@@ -17,7 +17,7 @@ fi
 # separate worktrees took load to 508 on 12 cores. Probes never wait, and
 # admission fails open, so CI, a clone without fno, and an older fno-agents
 # that lacks build-admit all build normally. The fail-open is not silent: a
-# missing verb is named on stderr with its remedy and journaled as an event.
+# missing command is named on stderr with its remedy and journaled as an event.
 # See docs/architecture/test-run-lifecycle.md "Build admission" / "Run admission".
 admit() {
     local mode="$1"
@@ -50,8 +50,8 @@ admit() {
             # run nothing.
             exit "$rc"
         elif [[ "$rc" -ne 0 ]]; then
-            # A binary that has the verb refuses a bare call with
-            # "--cargo-pid is required". An older one that lacks the verb
+            # A binary that has the command refuses a bare call with
+            # "--cargo-pid is required". An older one that lacks the command
             # says something else: the line then names the remedy and an
             # event lands in the journal. The usage output is captured, not
             # piped: the bare call exits nonzero, and pipefail would turn a
@@ -65,7 +65,7 @@ admit() {
                     echo "cargo-rustc-wrapper: run admission unavailable (exit $rc); running unadmitted" >&2
                 fi
             else
-                reason=verb_missing
+                reason=command_missing
                 if [[ "$mode" == "build" ]]; then
                     echo "cargo-rustc-wrapper: the deployed fno-agents ($(command -v fno-agents)) has no build-admit; building unadmitted. Run: fno doctor update" >&2
                 else

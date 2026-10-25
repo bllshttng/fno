@@ -1,5 +1,5 @@
 <!-- style-exception: prose moved verbatim from cli.py docstrings to satisfy the shrink-only file budget; rewriting it here would edit history, not clarify it -->
-# Backlog graph verb contracts
+# Backlog graph command contracts
 
 The long design prose behind the backlog graph's close, reopen, supersede,
 archive, encounter, join, and selection helpers, moved out of the module so
@@ -31,7 +31,7 @@ Append a timestamped progress note to a node, and DELIVER it.
 
 A worker reads its node ONCE, at dispatch. So a note appended after that lands in a store no consumer re-reads: the write succeeds, the author believes the finding is delivered, and nothing reports the gap. That pairing is the worst one, because a silent success is indistinguishable from delivery from where the author stands. Measured on 2026-09-08: of seven notes written across four nodes, six were hand-relayed by a separate mail send and one was not, and the missing one's later retraction WAS relayed - so a live worker received the retraction of a finding it had never received.
 
-So the verb mails what it wrote. The worker chain runs for the node and again for its owner (``contained_in`` when set, else ``parent``), and the first arm that yields a live reader wins within a run:
+So the command mails what it wrote. The worker chain runs for the node and again for its owner (``contained_in`` when set, else ``parent``), and the first arm that yields a live reader wins within a run:
 
 - the live claim holder of ``node:<id>``. ``suspect`` counts as owned (TTL-unexpired, dead pid), because a suspect claim still belongs to its session.
 - the node's graph bindings: ``locked_by_harness_session``, ``session_id``, ``locked_by``, each resolved to an ownership-live registry row. A worker can be live and bound to the node in the graph while holding no claim row at all; the claim is the weakest of the bindings, not the only one.
@@ -43,7 +43,7 @@ The author is matched by identity, never by name shape: an address that names a 
 
 The body is a POINTER, never the note: the node id, the note's opening words, and the command to read it. A full body breaks rule 7's 80-word per-message cap on the first send.
 
-The delivery lives in the VERB, not in ``append_progress_note``. The status-fanout adapter writes its ``task_done`` / ``run_summary`` stamps through the store function, so machine progress lines never mail: one note per finished task is traffic no reader asked for. A fact somebody chose to record is the case that needs a reader.
+The delivery lives in the COMMAND, not in ``append_progress_note``. The status-fanout adapter writes its ``task_done`` / ``run_summary`` stamps through the store function, so machine progress lines never mail: one note per finished task is traffic no reader asked for. A fact somebody chose to record is the case that needs a reader.
 
 ``--quiet`` is the deliberate silent annotation. Delivery is the default because the two failure modes are not symmetric: a forgotten flag costs a redundant mail, where a forgotten mail costs the finding.
 
@@ -51,17 +51,17 @@ The delivery lives in the VERB, not in ``append_progress_note``. The status-fano
 
 ``note --resolve <finding-id>`` stamps ``resolved_at``. An unknown id exits 1. A second resolve exits 0 and names the prior resolution. ``fno backlog notes findings [<id>] [--open]`` is the reader. A count line prints even at zero. A store read error exits 1 rather than reading as clean. The retired ``fno backlog annotate`` spellings refuse, naming these replacements.
 
-Every outcome prints. A delivery prints ``notified <address> (<why>): <transport> <msg-id>``. When the author is the only bound reader, the note is written and one line names the binding: ``notify: you are the only reader bound to <id> (<why>); nobody else to tell``, exit 0. When nobody is bound, or a fault makes the bindings unreadable, the verb REFUSES BEFORE the append: nothing is written, stderr carries the refusal with every arm reading, and it exits 3 (a node that resolves to nothing stays exit 1). A resolution fault refuses for the same reason a vacant one does: neither can prove anyone would be told, and a note no reader would hear is a silent drop wearing a receipt. ``--quiet`` is the acknowledgment: it skips resolution, writes the note, and mails nobody. After the sends, exit 0 needs at least one ``notified`` receipt; when every receipt is ``notify FAILED`` or ``notify UNCONFIRMED``, the note stays written, one summary line goes to stderr, and the exit code is 4. A failed send - a budget refusal included - prints ``notify FAILED`` on stderr. Each send is bounded at 30 seconds because a live inject waits on the recipient's per-agent flock and one measured run wedged past 150; an unanswered recipient prints ``notify UNCONFIRMED`` on stderr, which says the delivery is unknown rather than done - so an UNCONFIRMED send is not a positive marker, and the exit-4 summary says to check before re-sending.
+Every outcome prints. A delivery prints ``notified <address> (<why>): <transport> <msg-id>``. When the author is the only bound reader, the note is written and one line names the binding: ``notify: you are the only reader bound to <id> (<why>); nobody else to tell``, exit 0. When nobody is bound, or a fault makes the bindings unreadable, the command REFUSES BEFORE the append: nothing is written, stderr carries the refusal with every arm reading, and it exits 3 (a node that resolves to nothing stays exit 1). A resolution fault refuses for the same reason a vacant one does: neither can prove anyone would be told, and a note no reader would hear is a silent drop wearing a receipt. ``--quiet`` is the acknowledgment: it skips resolution, writes the note, and mails nobody. After the sends, exit 0 needs at least one ``notified`` receipt; when every receipt is ``notify FAILED`` or ``notify UNCONFIRMED``, the note stays written, one summary line goes to stderr, and the exit code is 4. A failed send - a budget refusal included - prints ``notify FAILED`` on stderr. Each send is bounded at 30 seconds because a live inject waits on the recipient's per-agent flock and one measured run wedged past 150; an unanswered recipient prints ``notify UNCONFIRMED`` on stderr, which says the delivery is unknown rather than done - so an UNCONFIRMED send is not a positive marker, and the exit-4 summary says to check before re-sending.
 
 ## encounter
 
-The verb is native: `crates/fno-agents/src/backlog/encounter_cli.rs`. Record ONE encounter with this node, from this session, with evidence.
+The command is native: `crates/fno-agents/src/backlog/encounter_cli.rs`. Record ONE encounter with this node, from this session, with evidence.
 
 An encounter is a thing that happened, not an opinion. A poll count of N agents who like a node is unfalsifiable; N distinct sessions that each name what the node cost them is falsifiable against a transcript. That is why evidence is required, and why an agent vote needs a provable identity: a vote no transcript can vouch for is a poll. The one exception is the operator lane: on this single-operator machine the human may vote from a plain terminal by passing --operator, which votes under the stable ``operator`` voter key. That lane is a declaration, not proof - any session can pass the flag - so the record keeps the casting session's id whenever one is provable, and the demand read displays the agent/operator split instead of folding the two kinds together.
 
-Read the signal with ``fno backlog demand``. This verb never writes rank and never touches a kanban column: the board stays the work order, and demand is a column the operator ranks FROM.
+Read the signal with ``fno backlog demand``. This command never writes rank and never touches a kanban column: the board stays the work order, and demand is a column the operator ranks FROM.
 
-There is no correction verb: an encounter is a thing that happened and cannot be edited or withdrawn. An edit path would make the record deniable, which is the property this signal exists to prevent. A later correction is a ``fno backlog note``.
+There is no correction command: an encounter is a thing that happened and cannot be edited or withdrawn. An edit path would make the record deniable, which is the property this signal exists to prevent. A later correction is a ``fno backlog note``.
 
 Exit codes are distinct so a probe can tell the refusals apart. 1 evidence (or an unknown node), 3 duplicate, 4 style, 5 unprovable identity. 2 is the usage error and is deliberately unused here. An identity refusal that shares a code with a mistyped flag is a refusal nothing can verify.
 
@@ -107,15 +107,15 @@ Refusals: exit 2 nothing to join (no live claim), exit 3 width 1, exit 4 no usab
 
 Stamp a node with a lifecycle phase record (idempotent, append-only).
 
-Identify the node by NODE (id/slug/hex) or by ``--pr-number <n>`` (the unique PR-linked node) -- exactly one of the two. With ``--pr-number`` and no ``--repo`` the verb resolves the current checkout's slug itself, so a caller needs no conditional flag . Harness + session id default to the ambient session identity; with neither an env marker nor an explicit flag the stamp is skipped and a warning names the node/PR and phase (provenance is never invented, AC2-ERR). Exit 0 on append or duplicate; exit 2 on missing identity, an unresolvable NODE, unknown phase, or bad input. A ``--pr-number`` that maps to zero or several nodes is a best-effort SKIP, not an error: it warns (naming the candidates) and exits 0, because refusing to guess is the designed outcome and a caller must not log it as a failure (AC3-ERR).
+Identify the node by NODE (id/slug/hex) or by ``--pr-number <n>`` (the unique PR-linked node) -- exactly one of the two. With ``--pr-number`` and no ``--repo`` the command resolves the current checkout's slug itself, so a caller needs no conditional flag . Harness + session id default to the ambient session identity; with neither an env marker nor an explicit flag the stamp is skipped and a warning names the node/PR and phase (provenance is never invented, AC2-ERR). Exit 0 on append or duplicate; exit 2 on missing identity, an unresolvable NODE, unknown phase, or bad input. A ``--pr-number`` that maps to zero or several nodes is a best-effort SKIP, not an error: it warns (naming the candidates) and exits 0, because refusing to guess is the designed outcome and a caller must not log it as a failure (AC3-ERR).
 
 ``--require-session`` and ``--guard-plan`` are the honesty guards an unattended caller (finalize's do-provenance backstop,) needs: a stale manifest in a reused worktree or a plan claiming another node must not mis-attribute work on an append-only record. Both skip with exit 0 and one named reason, because a guard skip is a designed outcome the caller must not log as a failure.
 
 ## cmd_remove
 
-Delete a node from the graph permanently. This verb exists and works.
+Delete a node from the graph permanently. This command exists and works.
 
-It had no docstring until 2026-08-11, which is why `fno help backlog --all` printed its name against an empty description and read as a stub. An agent consequently ruled that no delete verb existed and made that the load-bearing reason for a decision, and another project kept 23 nodes it believed un-file-able. Hence this paragraph: the verb's own help is the one place a caller asking "can this node go away" will actually look.
+It had no docstring until 2026-08-11, which is why `fno help backlog --all` printed its name against an empty description and read as a stub. An agent consequently ruled that no delete command existed and made that the load-bearing reason for a decision, and another project kept 23 nodes it believed un-file-able. Hence this paragraph: the command's own help is the one place a caller asking "can this node go away" will actually look.
 
 A HARD delete, unlike ``archive``, which moves the node to ``graph-archive.json`` and keeps it readable. Prefer ``archive`` for shipped work, ``supersede`` when something replaced it, and ``defer`` when it is merely not now. Reach for ``remove`` on a duplicate, a test artifact, or a node filed by mistake - the cases where the record itself is the noise.
 
@@ -217,7 +217,7 @@ Best-effort: stamp a plan ``shipped`` (when a ship URL is known) then graduate.
 
 The completion path (``done``/``reconcile``) closes a node because its PR landed. ``graduate`` ALONE is a no-op on a plan that never went through target's ship gate: ``cmd_graduate`` returns early unless ``status`` is already ``shipped``, so a never-stamped plan's frontmatter would never record the ship . When a concrete PR ``url`` is available we first ``stamp`` the plan (sets ``shipped_at`` + ``status: in_review`` + records the URL and session id) and THEN ``graduate`` (flips ``shipped -> done`` once the URL count is met). Without a URL we fall back to graduate-only - the prior behavior - rather than assert a ship we cannot evidence (e.g. a forced close on an advisory node with no PR).
 
-Returns True when a stamp/graduate actually ran successfully (the relevant verb exited 0); False when the run failed. Non-fatal: every failure warns and returns False, never raising, so a node close is never aborted by a stamp problem.
+Returns True when a stamp/graduate actually ran successfully (the relevant command exited 0); False when the run failed. Non-fatal: every failure warns and returns False, never raising, so a node close is never aborted by a stamp problem.
 
 Shared by ``done`` and ``reconcile``. The stamper is the in-package ``fno.plan._stamp`` module, run under the same interpreter as fno, so it resolves whether the package runs from the repo (editable install) or a uv-installed venv.
 
@@ -225,7 +225,7 @@ Shared by ``done`` and ``reconcile``. The stamper is the in-package ``fno.plan._
 
 Authoritatively write expected_url_count=count onto a plan's frontmatter.
 
-Used by ``decompose`` so a shared epic-decomposition doc graduates only after all N group PRs ship, not after the first. Runs the in-package ``fno.plan._stamp`` ``set-expected`` verb (the same sys.executable pattern as ``_graduate_plan``) to keep plan-frontmatter I/O in its single owner and this graph CLI graph-agnostic about frontmatter format.
+Used by ``decompose`` so a shared epic-decomposition doc graduates only after all N group PRs ship, not after the first. Runs the in-package ``fno.plan._stamp`` ``set-expected`` command (the same sys.executable pattern as ``_graduate_plan``) to keep plan-frontmatter I/O in its single owner and this graph CLI graph-agnostic about frontmatter format.
 
 Returns ``(status, detail)`` where status is a ``SetExpectedStatus``:
 
@@ -263,7 +263,7 @@ Every other lifecycle transition had an inverse (``defer``/``undefer``, ``supers
 
 Refuses when a referenced PR is MERGED. That is ``done``'s gate inverted: the work is in main, and clearing the completion would make the graph assert that shipped work did not ship. The remedy is almost always to file the remaining work as its own node (``fno backlog idea``) rather than to reopen the record of the part that landed. ``--force`` records a deliberate reopen of shipped work, and is journaled as such.
 
-Ancestor epics the cascade auto-closed when this node closed are reopened alongside it, since an epic is done exactly when its children are. An epic closed on its own evidence is left done and named on stderr, because reopening it would discard a judgment this verb never made.
+Ancestor epics the cascade auto-closed when this node closed are reopened alongside it, since an epic is done exactly when its children are. An epic closed on its own evidence is left done and named on stderr, because reopening it would discard a judgment this command never made.
 
 Reopening does not reclaim, un-defer, or un-queue the node; see :func:`_clear_completion_fields` for what it deliberately leaves alone.
 
@@ -291,7 +291,7 @@ Two receipt additions close the "did the sweep stop?" gap. The receipt ends with
 
 Move one node from graph-archive.json back into the working graph.
 
-``archive`` is a bulk hygiene sweep with no way back, so a node swept early (or swept correctly and then needed again) could only be recovered by hand-editing, which a PreToolUse hook forbids. It is the fourth instance of the same shape as the missing ``reopen``, and the audit that produced this verb found it in ten minutes.
+``archive`` is a bulk hygiene sweep with no way back, so a node swept early (or swept correctly and then needed again) could only be recovered by hand-editing, which a PreToolUse hook forbids. It is the fourth instance of the same shape as the missing ``reopen``, and the audit that produced this command found it in ten minutes.
 
 Write order mirrors ``archive`` inverted, for its reason: the working graph is written FIRST, so a crash between the two writes leaves a duplicate that the next sweep dedupes rather than a lost node. Read-through (``entries_with_archive``) already tolerates the window.
 
@@ -301,21 +301,21 @@ Refuses to guess: 0 moved, or a warning that the node is already in the working 
 
 Reverse a supersede on ``node_id``. Idempotent in the safe direction.
 
-Clears ``superseded_by`` and removes ``node_id`` from the replacer's ``supersedes`` list; any ``deferred_at`` park the node carried before the supersession survives, so the status recomputes back to ``deferred`` after the reversal. The plan doc is forced off terminal ``superseded`` (the forward-only projector will not leave a terminal on its own). The verb prints the reason it clears and any plan ruling against the node.
+Clears ``superseded_by`` and removes ``node_id`` from the replacer's ``supersedes`` list; any ``deferred_at`` park the node carried before the supersession survives, so the status recomputes back to ``deferred`` after the reversal. The plan doc is forced off terminal ``superseded`` (the forward-only projector will not leave a terminal on its own). The command prints the reason it clears and any plan ruling against the node.
 
 A node that is merely deferred (no ``superseded_by``) is left untouched: reactivating parked work is ``undefer``'s job, and clearing a deferral here would silently make deferred work dispatchable.
 
-Reactivation is a separate verb from ``undefer`` on purpose: reviving a plan that another plan supplanted is a conscious act. ``recompute_statuses`` has always named this verb as the only route back from ``superseded`` - it just did not exist.
+Reactivation is a separate command from ``undefer`` on purpose: reviving a plan that another plan supplanted is a conscious act. ``recompute_statuses`` has always named this command as the only route back from ``superseded`` - it just did not exist.
 
 Does NOT re-contain or re-parent children released when the node was superseded: re-adoption is decompose's job, the same policy ``cmd_undefer`` applies to un-containment.
 
-The verb is now a transport over the patch door (`backlog-update --leave superseded`), and the door's readback refusal holds here too: a node that is not superseded answers ``unchanged`` with exit 0 and no ``Unsuperseded`` line, and a write whose readback still reads terminal refuses naming the fact that holds. The verb prints ``Unsuperseded`` only on an applied receipt.
+The command is now a transport over the patch door (`backlog-update --leave superseded`), and the door's readback refusal holds here too: a node that is not superseded answers ``unchanged`` with exit 0 and no ``Unsuperseded`` line, and a write whose readback still reads terminal refuses naming the fact that holds. The command prints ``Unsuperseded`` only on an applied receipt.
 
 ## cmd_undefer
 
 Clear the deferral facts on ``node_id``. A transport over the patch door (``backlog-update --leave deferred``).
 
-The readback refusal is the verb's honesty contract: the door clears the facts, recomputes, and refuses unless the derived status actually left ``deferred``. A node carrying BOTH ``superseded_by`` and ``deferred_at`` (74 rows at the 2026-09-13 read) is refused outright by the transport - the park rides on the supersession, so leaving deferred alone would either lie (the old ``Undeferred`` receipt printed while the node stayed superseded) or no-op. The refusal names the route that revives the node: ``fno backlog update <id> --status idea``, or ``fno backlog unsupersede <id>``.
+The readback refusal is the command's honesty contract: the door clears the facts, recomputes, and refuses unless the derived status actually left ``deferred``. A node carrying BOTH ``superseded_by`` and ``deferred_at`` (74 rows at the 2026-09-13 read) is refused outright by the transport - the park rides on the supersession, so leaving deferred alone would either lie (the old ``Undeferred`` receipt printed while the node stayed superseded) or no-op. The refusal names the route that revives the node: ``fno backlog update <id> --status idea``, or ``fno backlog unsupersede <id>``.
 
 A node that is not deferred answers ``unchanged`` with exit 0, a warning on stderr, no ``Undeferred`` line, and no boundary event.
 
@@ -331,7 +331,7 @@ Reopen ancestor epics the cascade auto-closed. Returns (reopened, warned).
     the ``auto-closed:`` note :func:`_auto_closed_note` wrote, so reopening it
     just restores what the cascade would compute today. An epic closed WITHOUT
     that note was closed on its own evidence - a real PR, an operator decision -
-    and silently reopening it would discard a judgment this verb never made. So
+    and silently reopening it would discard a judgment this command never made. So
     those are left done and NAMED, which is the refuse-and-say-why rule applied
     to a case where either silent choice is wrong.
 
@@ -682,7 +682,7 @@ Select up to ``max_lanes`` ready nodes, each collision-clean to dispatch.
 
 ## cmd_ready (the selection, served natively)
 
-Which backlog nodes may be dispatched right now, and in what order. The decision lives in `crates/fno-agents/src/backlog_ready.rs` (`backlog_ready::select`), served by the keeper's `ready` verb; `fno backlog ready` and `fno backlog next` are clients. The verb accepts the filter flags (`project`, `all`, `roadmap_id`, `parent`, `mission`, `include_ideas`, `include_deferred`, `repo_root`), an optional `staleness_days` override, and an optional `entries` array - rows ride IN, the one decision answers both backends (the external-tracker branch feeds `_joined_open_candidates` through it). Without the override the keeper reads `config.backlog.staleness_days` from the `config.toml` beside the graph, falling back to the 21-day default. With no `claimed` array the verb resolves live claims itself and FAILS CLOSED: an unreadable claims root refuses the whole selection (the same contract `live_claimed_node_ids(strict=True)` gave the Python leg), never an empty set read as "nothing is claimed". The reply carries survivors plus per-node drops, first-filter attribution, with guard drops naming `dead-ancestor:<id>`, `design-stage`, `idea-stage`, `stale-quarantine`, `contained:<id>`, `no-difficulty`, or the hold verdict's guard reason; `advance --explain` renders from them (AC4). A missing `--parent` node refuses (exit 1, `ReadyParentMissingError` client-side). An unreachable keeper refuses selection: `fno backlog ready` exits non-zero naming the keeper, never a locally recomputed fallback (AC6). The `next` observer merge (`_with_observer`) still re-verifies observer rows through the Python `selection_guards`: a divergence detector over the reply, not a second selection leg. Under `next --claim`, the lock fields land on the graph entry the winner id resolves to - the selection rows are serialized summaries, not references into the commit snapshot. The reply is a JSON array on stdout. Parse it as JSON, and see json-output-contract.md.
+Which backlog nodes may be dispatched right now, and in what order. The decision lives in `crates/fno-agents/src/backlog_ready.rs` (`backlog_ready::select`), served by the keeper's `ready` command; `fno backlog ready` and `fno backlog next` are clients. The command accepts the filter flags (`project`, `all`, `roadmap_id`, `parent`, `mission`, `include_ideas`, `include_deferred`, `repo_root`), an optional `staleness_days` override, and an optional `entries` array - rows ride IN, the one decision answers both backends (the external-tracker branch feeds `_joined_open_candidates` through it). Without the override the keeper reads `config.backlog.staleness_days` from the `config.toml` beside the graph, falling back to the 21-day default. With no `claimed` array the command resolves live claims itself and FAILS CLOSED: an unreadable claims root refuses the whole selection (the same contract `live_claimed_node_ids(strict=True)` gave the Python leg), never an empty set read as "nothing is claimed". The reply carries survivors plus per-node drops, first-filter attribution, with guard drops naming `dead-ancestor:<id>`, `design-stage`, `idea-stage`, `stale-quarantine`, `contained:<id>`, `no-difficulty`, or the hold verdict's guard reason; `advance --explain` renders from them (AC4). A missing `--parent` node refuses (exit 1, `ReadyParentMissingError` client-side). An unreachable keeper refuses selection: `fno backlog ready` exits non-zero naming the keeper, never a locally recomputed fallback (AC6). The `next` observer merge (`_with_observer`) still re-verifies observer rows through the Python `selection_guards`: a divergence detector over the reply, not a second selection leg. Under `next --claim`, the lock fields land on the graph entry the winner id resolves to - the selection rows are serialized summaries, not references into the commit snapshot. The reply is a JSON array on stdout. Parse it as JSON, and see json-output-contract.md.
 
 A node an open operator question names in `blocks` drops with reason `held:<qid>`, the same word the drain receipt uses. The caller resolves the map from the question journals (`needs::held_map`), so the Rust admission leg and the Python guard read one fold.
 
@@ -839,7 +839,7 @@ Assess one node without changing it or making an external mutation.
 
 ## _spawn_worker
 
-Dispatch a fire-and-forget autonomous ``/target`` (or ``dispatch_verb``) worker.
+Dispatch a fire-and-forget autonomous ``/target`` (or ``dispatch_command``) worker.
 
     Routes the substrate + the per-harness-normalized command through the shared
     resolver (``fno.agents.harness_map.resolve_dispatch``) instead of hardcoding
@@ -847,10 +847,10 @@ Dispatch a fire-and-forget autonomous ``/target`` (or ``dispatch_verb``) worker.
     provider record's ``cli``; ``None`` = config/``claude``) picks the substrate:
     ``bg`` for claude (the detached ``claude --bg`` thread that self-isolates into a
     worktree, never the pane default that would STALL a fire-and-forget dispatch),
-    ``headless`` for codex/others. The workflow verb is DECIDED once, in Rust:
-    ``backlog_ready.rs``'s ``effective_verb`` (served through the graph
+    ``headless`` for codex/others. The workflow command is DECIDED once, in Rust:
+    ``backlog_ready.rs``'s ``effective_command`` (served through the graph
     keeper; Python is its client) runs one conditional over the node's declared
-    verb, plan rung, difficulty, and doc kind. At INTAKE (plan rung
+    command, plan rung, difficulty, and doc kind. At INTAKE (plan rung
     ``none``) difficulty decides - ``low`` dispatches straight to ``/target``
     with no plan, ``medium``/``high`` blueprint on a frontier lane first and a
     separate ``/target`` builds the resulting plan. At RE-DISPATCH the table
@@ -862,28 +862,28 @@ Dispatch a fire-and-forget autonomous ``/target`` (or ``dispatch_verb``) worker.
     heading; a declared ``research``/``findings``/``think``/``stub`` kind is a
     hard no above the heading) - and otherwise derive ``/blueprint``, so a
     research doc that merely carries ``status: ready`` never dispatches
-    ``/target``. A DECLARED target-family ``dispatch_verb`` WINS: the
+    ``/target``. A DECLARED target-family ``dispatch_command`` WINS: the
     decision returns it as declared and the decision trail names what the
     table would have answered, so a stale declaration costs one more pass on
-    its declared verb, never a silent override. Refusals still fire before
-    the declared verb. An out-of-family verb (``/think``) keeps declared
+    its declared command, never a silent override. Refusals still fire before
+    the declared command. An out-of-family command (``/think``) keeps declared
     precedence; ``unreadable``/``done``/``superseded`` plan rungs and
     a planless node without a valid difficulty REFUSE. Selection drops such a
     node as ``no-difficulty`` on the UNSCOPED drain head, before any dispatcher
     reserves it, so one underivable row never spends a drain tick. A scoped
     call (``--parent``, ``--mission``, ``--roadmap-id``) is an enumeration:
     it still surfaces the row, so the epic fan-out decides per row, where one
-    refusal costs a failed spawn and never the tick. ``verb_source`` keeps
+    refusal costs a failed spawn and never the tick. ``command_source`` keeps
     the RAW declaration state (declared / none-declared) beside the resolved
-    verb, and a node dict missing the ``dispatch_verb`` key at all is a lossy
+    command, and a node dict missing the ``dispatch_command`` key at all is a lossy
     selection projection: the spawn refuses before anything is spent. The stage
-    table reads the RESOLVED verb (declared or derived), so
+    table reads the RESOLVED command (declared or derived), so
     ``agents.profiles.blueprint`` reaches
     medium/high planless nodes and ``agents.profiles.target`` no longer
     acquires planning eligibility from plan absence (the ``_grid_lane_for``
     role floor and the ``spawn_defaults.grid_role`` split are gone).
 
-    Merge posture stays a launcher decision, never baked into a node verb:
+    Merge posture stays a launcher decision, never baked into a node command:
     a derived ``/target`` renders through the same rungs as the builtin (the
     default bakes ``no-merge``; ``config.auto_merge.grant`` omits the flag);
     reconcile stays an explicit
@@ -904,30 +904,30 @@ Dispatch a fire-and-forget autonomous ``/target`` (or ``dispatch_verb``) worker.
     codex thread the FULL harness_session_id (codex has no short id; a head-8
     slice is refused by shape - ruling d-513d9d22). Raises SpawnAlreadyRunning
     on a name-collision (a peer beat us in the boot window),
-    DispatchResolveError on an unresolvable harness/substrate/verb (caught
+    DispatchResolveError on an unresolvable harness/substrate/command (caught
     non-fatally by the caller), and SpawnError otherwise.
 
 ## fno agents spawn --node
 
-Every node-bearing spawn passes the verb seam. The seam projects the
+Every node-bearing spawn passes the command seam. The seam projects the
     lifecycle table's ANSWER - never a copy of the table - plus the seed slot,
     the role/resume flags and the row facts to the ``spawn-axes`` action's
     ``node_seed`` field, and applies its answer verbatim before any lane is
     chosen. A seed that leads with ``/target`` or ``/blueprint`` must agree
-    with the node's derived verb; on disagreement the spawn refuses (exit 2,
+    with the node's derived command; on disagreement the spawn refuses (exit 2,
     ``fno agents spawn:`` prefix) before any lane slot, claim or worker is
-    spent, so callers stop writing the verb twice: drop it from the payload
+    spent, so callers stop writing the command twice: drop it from the payload
     and ``--node`` supplies it. An empty seed routes the profile by the
-    derived verb (``node_verb`` reaches the spawn compose; the journal
+    derived command (``node_command`` reaches the spawn compose; the journal
     keeps the real seed) and the door still renders the command, because
     ``render_node_seed`` also carries the brief env and the worktree ensure. A
     prose seed gains the node's command in front at its own slot. Everything
-    else passes unchanged: other verbs (``/think``, ``/pr``), ``--reconcile``,
+    else passes unchanged: other commands (``/think``, ``/pr``), ``--reconcile``,
     role and resume spawns. Only an explicit ``--node`` triggers the check -
     ``FNO_NODE`` is provenance a child inherits, never a decision to route. An
-    unreadable node row, a derivation failure, or a node with no verb refuses
+    unreadable node row, a derivation failure, or a node with no command refuses
     the same way (unknown is not evidence of ``/target``; the message names
-    ``fno backlog update <id> dispatch_verb=<verb>``).
+    ``fno backlog update <id> dispatch_command=<command>``).
 
 ## classify_lane_candidate (native)
 
@@ -1019,7 +1019,7 @@ without a word is the defect the reopen guards exist to end. Measured twice:
 a reopen carrying operator words was re-closed within two minutes, and no
 retry could hold it.
 
-Four close paths read a reopen; the deliberate verb (``cmd_done``, with its
+Four close paths read a reopen; the deliberate command (``cmd_done``, with its
 own ``--force`` plus ``--reason`` ladder) does not:
 
 - ``_cascade_close_parents`` and ``_sweep_close_done_epics`` key on the

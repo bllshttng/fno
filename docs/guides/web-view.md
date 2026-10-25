@@ -16,7 +16,7 @@ The command prints the URL and a token once at bind. The token is in the query s
 
 The page's **backlog** link renders the backlog live from the store through the same token. You get lanes by project or epic, six columns, stats, filters, and a node panel with sessions. It needs no render step and never caches. A missing or wrong token returns no backlog bytes.
 
-On a bridge bound to loopback, the node panel can also act. You can edit a node's title, priority, size and status. You can rank a card to the top or bottom of its column. You can launch a blueprint or a target for the node. Every write runs the same `fno` verb an agent runs, and the verb's own refusal is what you see. Every write answers to three conditions. The bridge must be bound to loopback. The request's Host header must name loopback. When your browser sends an Origin header, it must name loopback too. The reason is plain: a web page on another site must not be able to drive the bridge through your browser. On a bridge bound wider than loopback, the page shows no write controls at all.
+On a bridge bound to loopback, the node panel can also act. You can edit a node's title, priority, size and status. You can rank a card to the top or bottom of its column. You can launch a blueprint or a target for the node. Every write runs the same `fno` command an agent runs, and the command's own refusal is what you see. Every write answers to three conditions. The bridge must be bound to loopback. The request's Host header must name loopback. When your browser sends an Origin header, it must name loopback too. The reason is plain: a web page on another site must not be able to drive the bridge through your browser. On a bridge bound wider than loopback, the page shows no write controls at all.
 
 The bridge also serves the backlog as JSON through the same token. `/backlog/model.json` takes `lanes`, `project`, `epic`, `status`, `priority`, `size`, `lead`, `q` and `all`. `/backlog/node.json?id=<id>` returns one node. When the store holds no such node, the answer is 404. When the store read failed, it is 503. Each body carries `"schema": 1`. The bridge re-reads at most every 30 seconds unless the store changed.
 
@@ -37,7 +37,7 @@ fno mux serve --web --stop --server work  # the bridge that serves session work
 
 Stop reads the bridge's own state file, checks the pid still names that bridge, and sends the gentle signal first. If the bridge hangs, stop escalates. It removes the marker file either way.
 
-A bridge that died some other way, such as a kill or a reboot, leaves the marker behind with its token. `fno mux web reap` finds every marker whose port refuses and removes those corpses. Unreadable markers are named and left alone. It prints one receipt line, and `--json` prints rows instead.
+A bridge that died some other way, such as a kill or a reboot, leaves the marker behind with its token. `fno mux web reap` removes every marker whose recorded pid is gone. A marker whose port refuses is also a corpse. A stranger process holding the dead bridge's port does not save the marker. Unreadable markers are named and left alone. It prints one receipt line, and `--json` prints rows instead.
 
 ## Get the link for one agent
 

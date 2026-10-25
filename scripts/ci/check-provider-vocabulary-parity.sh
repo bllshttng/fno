@@ -7,7 +7,7 @@ ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
 CLAUDE_RUST="$ROOT/crates/fno-agents/src/claude_ask.rs"
 ADOPT_RUST="$ROOT/crates/fno-agents/src/claude_adopt.rs"
-CLIENT_RUST="$ROOT/crates/fno-agents/src/client_verbs.rs"
+CLIENT_RUST="$ROOT/crates/fno-agents/src/client_commands.rs"
 ADOPT_IDENTITY_RUST="$ROOT/crates/fno-agents/src/adopt_identity.rs"
 CODEX_RUST="$ROOT/crates/fno-agents/src/codex_ask.rs"
 RUST_GATE="$ROOT/crates/fno-agents/src/spawn_gate.rs"
@@ -65,7 +65,7 @@ rust_claude=$(extract_rust_provider "$CLAUDE_RUST" 'fn create(' '#[cfg(test)]')
 rust_codex=$(extract_rust_provider "$CODEX_RUST" 'fn dispatch_create(' 'fn dispatch_resume(')
 rust_unrouted=$(extract_constant "$RUST_GATE" 'const[[:space:]]+KNOWN_UNROUTED_PROVIDER')
 # The harness-to-vendor vocabulary left spawn_defaults.py for spawn_overlay.rs
-# (the lane-vendor verb is its only implementation now), so the claude/codex
+# (the lane-vendor command is its only implementation now), so the claude/codex
 # comparison reads the Rust table instead of a deleted Python one. The leg
 # keeps its teeth: the stamps in claude_ask.rs/codex_ask.rs can still drift
 # from the lane table in a different file.
@@ -90,7 +90,7 @@ require_value 'Rust Codex provider' "$rust_codex"
 # exactly the wrong-bill guess a vocabulary gate should never enforce), and
 # the manifest-identity persist resolves the provider from the route-settings
 # match, recording none on no match. Both shapes are the contract, so both
-# are asserted here. The mint lives in client_verbs.rs; the route-settings
+# are asserted here. The mint lives in client_commands.rs; the route-settings
 # match lives in the adopt-identity module the file budget carved out.
 adopt_mint=$(awk -v start="fn mint_synthesized_entry(" '
   !inside && index($0, start) > 0 { inside = 1 }

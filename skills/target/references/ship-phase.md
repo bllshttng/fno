@@ -9,7 +9,7 @@ The ship phase creates the PR. Whatever is on the feature branch at ship
 time is what ships. Therefore, before the ship phase fires:
 
 1. The validate command has run locally green (tests / typecheck / build); CI
-   green on the PR is verified by the loop-check verb at promise time.
+   green on the PR is verified by the loop-check command at promise time.
 2. Docs (architecture + how-to) are committed to the feature branch (unless
    `no_docs` is set) so they ride in the same PR, get reviewed alongside the
    code, and cannot be stranded by an auto-merge firing on external review.
@@ -65,7 +65,7 @@ if [[ "$pf_required" == "true" && -x scripts/ci/preflight.sh ]]; then
 fi
 ```
 
-- Stock config: no local preflight runs before a push. The focused checks are fmt for Rust changes, `bash scripts/ci/check-file-budget.sh` where the repo ships it, and the blast-radius tests. Run the budget check after each commit that grows code. The number then arrives while a cut is still cheap. `fno doctor lint style` remains a voluntary hand-run verb. CI is the gate. Six concurrent full preflights at load 415 with zero completions set this default.
+- Stock config: no local preflight runs before a push. The focused checks are fmt for Rust changes, `bash scripts/ci/check-file-budget.sh` where the repo ships it, and the blast-radius tests. Run the budget check after each commit that grows code. The number then arrives while a cut is still cheap. `fno doctor lint style` remains a voluntary hand-run command. CI is the gate. Six concurrent full preflights at load 415 with zero completions set this default.
 - **A project that set `preflight.required = true`:** run `scripts/ci/preflight.sh` (full) before the first push and the settle-green push. Between fix-loop commits (external-review fixes, iteration pushes) run `scripts/ci/preflight.sh --retry-failed`. It re-checks only the legs that failed last time. The legs are smoke, fmt, cargo test, and the leak guard, recorded per leg in `.fno/preflight-last-failed-legs.txt`. Then run one **full** pass before the push you expect to go green. A subset green is not a full green. The runner labels it, and a retry with no usable record runs every leg and earns FULL.
 - The receipt preflight mints is **review-entry evidence, not merge eligibility**. `fno do pr evidence-check` needs it to open the PR only on a project that opted in. Hosted CI on the PR head plus the configured reviewers decide the merge. Nothing local gates the merge. It survives a rebase (`fno do pr evidence-check --allow-rebase-equivalent`, matching verbatim patch ids) but not a code change. It never rescues a failed or pending receipt for HEAD itself.
 - The guard is `-x scripts/ci/preflight.sh`, a relative existence check. It no-ops in any repo that does not ship the script. The self-containment lint forbids repo-root-anchored script refs, and the relative form is portable.

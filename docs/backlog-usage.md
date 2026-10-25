@@ -11,7 +11,7 @@ A practical guide to driving `fno backlog` day to day. For the internals
 
 ## Is this page for you?
 
-You create, update, rank, or close backlog cards from a terminal, or you wonder why a verb refused. This page owns the day-to-day verbs and the node lifecycle. Misreading it costs a lost edit: a field you change by hand does not move the card. The board renders from node fields, never from the board file.
+You create, update, rank, or close backlog cards from a terminal, or you wonder why a command refused. This page owns the day-to-day commands and the node lifecycle. Misreading it costs a lost edit: a field you change by hand does not move the card. The board renders from node fields, never from the board file.
 
 Not for: why one card sits above another, or how the render pipeline works. That is [architecture/backlog-board-ordering.md](architecture/backlog-board-ordering.md). Sorting deferred work at intake is [backlog-triage.md](backlog-triage.md).
 
@@ -35,7 +35,7 @@ Use `fno backlog get <id> --grouped` for a human scan. It renders populated fiel
 
 ## Creating nodes
 
-There are three plan-less creation verbs. They overlap; pick by how much
+There are three plan-less creation commands. They overlap; pick by how much
 ceremony you need:
 
 | Goal | Command |
@@ -47,7 +47,7 @@ ceremony you need:
 
 Differences:
 
-- **`idea`** signals "skip the spec/plan ceremony for now"; the lightest verb.
+- **`idea`** signals "skip the spec/plan ceremony for now"; the lightest command.
 - **`add`** is the fullest manual form: also takes `--type`, `--size`,
   `--blocked-by`, `--parent`, `--roadmap-id`.
 - **`new`** auto-scopes `project`/`cwd` from the current git repo (pass
@@ -59,7 +59,7 @@ derives to `status: idea` until a plan is associated.
 
 Every node-birth path states its difficulty. `add`, `idea`, `new`, `intake`, `decompose`, `capture promote`, and retro either carry a band or refuse. Decompose inherits its epic's band. Intake reads the plan. Retro maps severity. Inbox-created nodes use the named medium default. `fno backlog migrate-difficulty --backfill` fills legacy nulls with an attributable `backfill` history entry. It reports rows with no signal as skipped.
 
-`fno backlog intake` is the one creation verb that reads a plan file. The plan's file table is load-bearing downstream: parallel lane fill collision-checks dispatches against it. Intake therefore refuses a plan whose `## Files to Modify` parses empty (exit 2) unless you pass `--allow-no-surface`. Such a node cannot be collision-checked and dispatches fail-open. A multi-path intake refuses the whole batch before any write. The plan-less creation verbs above are unaffected.
+`fno backlog intake` is the one creation command that reads a plan file. The plan's file table is load-bearing downstream: parallel lane fill collision-checks dispatches against it. Intake therefore refuses a plan whose `## Files to Modify` parses empty (exit 2) unless you pass `--allow-no-surface`. Such a node cannot be collision-checked and dispatches fail-open. A multi-path intake refuses the whole batch before any write. The plan-less creation commands above are unaffected.
 
 ## Editing a node
 
@@ -117,17 +117,17 @@ One voter votes once per node. Agent voters use their session identity. The oper
 
 The board (the served web backlog, and the same page written to disk by the render pass with the rows embedded) shows a vote pill on EVERY row and the count in the detail panel's demand group. A row with no encounter yet reads `0`, muted. On the served board the panel's upvote action posts the encounter with the evidence you type; on a page opened from disk the copy button hands you `fno backlog encounter <id> --operator --evidence "REPLACE: what it cost"` to paste and fill. The page never writes the store from a `file://` open.
 
-`demand` is a READ. It never writes `rank` and never touches `_kanban_column`. The verb itself reorders nothing.
+`demand` is a READ. It never writes `rank` and never touches `_kanban_column`. The command itself reorders nothing.
 
 Votes do move the order, in one place and below every decision. `demand.importance_score` is a projection: divergence plus a capped age term, zero for a node nobody voted on. Nothing stores it. `make_selection_sort_key` reads it after priority and fan-out. A measurement must not outrank a judgement, and an operator's pin outranks both. A graph with no encounters sorts as it did before the term existed.
 
 Votes also stop the age drain. `maintain` counts an encounter as movement, so a node somebody paid for is never deferred for sitting still. Before that, 807 rows were drained by age with no reader. The top demand row was 15 days from being one of them.
 
-An encounter has no correction verb. It cannot be edited or withdrawn, because an edit path makes the record deniable. A later correction is a progress note.
+An encounter has no correction command. It cannot be edited or withdrawn, because an edit path makes the record deniable. A later correction is a progress note.
 
 ### Progress notes reach the people building the node
 
-`fno backlog note <id> "<text>"` appends the note AND mails it. A worker reads its node once, at dispatch. So a note written after that reaches nobody on its own. The verb sends a short pointer to every bound reader. The node's live claim holder. The node's graph sessions. Workers named on the node in the registry. The same chain runs for the owner node. Then the role walk, from the epic out to the project. Every outcome prints, including "nobody to reach". When nobody bound to the node can hear it, the verb refuses, writes nothing, and exits 3. `--quiet` writes it anyway.
+`fno backlog note <id> "<text>"` appends the note AND mails it. A worker reads its node once, at dispatch. So a note written after that reaches nobody on its own. The command sends a short pointer to every bound reader. The node's live claim holder. The node's graph sessions. Workers named on the node in the registry. The same chain runs for the owner node. Then the role walk, from the epic out to the project. Every outcome prints, including "nobody to reach". When nobody bound to the node can hear it, the command refuses, writes nothing, and exits 3. `--quiet` writes it anyway.
 
 Pass `--quiet` to note without mailing. Delivery is the default on purpose. A forgotten flag costs a redundant mail. A forgotten mail cost the finding.
 
@@ -190,11 +190,11 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 
 | Action | Command | Effect |
 |--------|---------|--------|
-| Move any stored field, status included | `fno backlog update <id> --status <word>` and `--set <field>=<value>` | the patch door: lifecycle rules refuse a move whose facts are missing and name the flag or verb that supplies them; `--leave deferred\|--superseded` reverses one park without touching the other. The operator form (`field=value`, `field+=value`, `field-=value`) writes the same five fields the operators cover |
+| Move any stored field, status included | `fno backlog update <id> --status <word>` and `--set <field>=<value>` | the patch door: lifecycle rules refuse a move whose facts are missing and name the flag or command that supplies them; `--leave deferred\|--superseded` reverses one park without touching the other. The operator form (`field=value`, `field+=value`, `field-=value`) writes the same five fields the operators cover |
 | Pause a node | `fno backlog defer <id> --reason "..."` | leaves the board; `status: deferred` |
 | Retract a false row | `fno backlog retract <id> "the false premise"` | defers + stamps `deferred_kind: retracted` in one act; the blueprint consolidation gate halts on the stamp |
 | Resume it | `fno backlog undefer <id>` | returns to `ready`/`idea`; refuses a still-superseded node and names `fno backlog update <id> --status idea` instead |
-| Replace with a newer node | `fno backlog supersede <new> --replaces <old> --cause "..." --surface <path>` | old's status reads `superseded` from the edge alone; a merged PR touching every `--surface` stamps the record's `verified_at` |
+| Replace with a newer node | `fno backlog supersede <new> --replaces <old> --cause "..." --surface <path> --reason "..." --covers "..."` (or `--leftover <id>`) | old's status reads `superseded` from the edge alone; a merged PR touching every `--surface` stamps the record's `verified_at` |
 | Mark complete | `fno backlog done <id>` | closes only on a MERGED PR; sets `completed_at`, unblocks dependents |
 | Reopen it | `fno backlog reopen <id> --reason "..."` | clears `completed_at`; refuses when a referenced PR is MERGED |
 | Remove permanently | `fno backlog remove <id>` | hard delete (use for dupes / dead nodes) |
@@ -207,11 +207,11 @@ Blockers: `blocked_by=`, `blocked_by+=`, `blocked_by-=` on `update`.
 A node with an open blocker derives to `status: blocked` automatically.
 
 **Every transition here has a correction, and that is enforced.**
-`cli/tests/unit/test_lifecycle_pairs.py` fails on a verb that changes a node's state or existence and ships without an inverse.
+`cli/tests/unit/test_lifecycle_pairs.py` fails on a command that changes a node's state or existence and ships without an inverse.
 It fails just as hard on an inverse that nothing a caller reads ever names.
 That second half is the one that bit us.
 `fno backlog remove` existed and worked for a long time while nothing mentioned it.
-An agent therefore ruled that no delete verb existed, and another project kept 23 nodes it believed un-file-able.
+An agent therefore ruled that no delete command existed, and another project kept 23 nodes it believed un-file-able.
 
 Reopening is guarded rather than free.
 When a referenced PR is MERGED, `reopen` refuses.
@@ -219,7 +219,7 @@ That is `done`'s gate inverted: the work is in main, and clearing the completion
 The usual remedy is to file what remains as its own node.
 `--force --reason` records a deliberate reopen of shipped work.
 Ancestor epics the cascade auto-closed come back with the child.
-An epic closed on its own evidence is left alone and named, because reopening it discards a judgment the verb never made.
+An epic closed on its own evidence is left alone and named, because reopening it discards a judgment the command never made.
 
 Two facts hold a reopen against the children rollup, which otherwise re-derives `done` from the closed children on the next read. A parent with a bound plan and no PR of its own is never auto-closed. Its deliverables are unverified, so it closes through its own door on its own evidence. A reopen that postdates every child's close stamps `reopened_at`, and the rollup respects that stamp until a new child close lands.
 
@@ -242,7 +242,7 @@ A deferral is two facts wearing one status. One is an expiry: a hygiene sweep ag
 
 Classification is EXACT STRING MATCH only, never inference. `fno backlog defer <id> -R "..." --kind wont_do` stamps the kind directly. Without `--kind`, a reason that exactly matches a machine-stamped string (the maintain drain, the stale-ready quarantine) self-classifies. Anything else stays unclassified. That is the contract: an honest unknown beats a wrong label, because a wrong kind silently changes whether an epic can close. `undefer`, `done`, `reopen`, and `unsupersede` clear the kind with the rest of the deferral state.
 
-Two hidden verbs serve the migration and the operator:
+Two hidden commands serve the migration and the operator:
 
 - `fno backlog backfill-deferred-kind [--map FILE] [--apply]` classifies existing deferred rows by exact match against the built-in table plus a TSV map (`kind<TAB>exact reason` per line). Dry run by default. It never overwrites an existing kind and never closes or undefers anything.
 - `fno backlog stuck-epics` lists epics whose only incomplete children are deferred or superseded, each with a `closable` verdict and its holders. Read-only: closing one is always an operator ruling.
@@ -342,7 +342,7 @@ A node carries `origin_evidence`, the producing-event reference the birth had: a
 
 Unknown stays unknown. A recorder harness, an organic default, or the words "operator raised" in a title never establish origin. Every node born before this field existed reads unknown.
 
-Two writers backfill the ORIGIN SESSION (a different fact from request origin: which session filed or first touched the node). An `idea` filing appends one `think` session row for the filing session. `started_at` reads that session's first user turn. `ended_at` reads the filing time. An unreadable transcript stamps the filing time for both. The receipt says so, and the filing still lands. `fno backlog session add <node> --phase think --session-id <earlier> --harness <h> --origin` fills `started_at` from that session's transcript. It appends the row. When `source_session_id`/`source_harness` are empty, it first-fills them. A filled origin is never overwritten. The receipt names the session that holds it. When the transcript is missing, the verb exits 2 and names `--started-at` as the by-hand door.
+Two writers backfill the ORIGIN SESSION (a different fact from request origin: which session filed or first touched the node). An `idea` filing appends one `think` session row for the filing session. `started_at` reads that session's first user turn. `ended_at` reads the filing time. An unreadable transcript stamps the filing time for both. The receipt says so, and the filing still lands. `fno backlog session add <node> --phase think --session-id <earlier> --harness <h> --origin` fills `started_at` from that session's transcript. It appends the row. When `source_session_id`/`source_harness` are empty, it first-fills them. A filled origin is never overwritten. The receipt names the session that holds it. When the transcript is missing, the command exits 2 and names `--started-at` as the by-hand door.
 
 On the local board the buckets appear as an `All origins` filter. Rows with a known origin wear a dashed pill. Each detail panel shows an origin line and its evidence. The public board omits origin evidence entirely, since evidence can carry private paths and ids. Read either back with `fno backlog get <id> --grouped` under Provenance.
 
@@ -394,7 +394,7 @@ fno backlog board --project fno    # scope to one project (default: the current 
 fno backlog board --json           # same three sections, machine-readable
 ```
 
-It reads the graph, the on-disk pr-status cache under the state root, and local git against `origin/main`. It never makes a live GitHub call, so this verb can never exhaust the GraphQL quota.
+It reads the graph, the on-disk pr-status cache under the state root, and local git against `origin/main`. It never makes a live GitHub call, so this command can never exhaust the GraphQL quota.
 
 Each section caps at five rows and shows `... and N more` past that. Each row caps at twelve words after the node id, so the whole board fits on one screen.
 
@@ -430,7 +430,7 @@ The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setu
 
 When the graph changes, the daemon re-renders the page within about five minutes. The page is the web backlog page with its data embedded. Filters and search run in the browser. The file has no write controls.
 
-`fno backlog board open` renders the page and opens it in your default browser. `fno backlog view` is the same verb. Set `FNO_NO_OPEN=1` to print the path only.
+`fno backlog board open` renders the page and opens it in your default browser. `fno backlog view` is the same command. Set `FNO_NO_OPEN=1` to print the path only.
 
 To keep more boards current, add rows to `backlog.render_targets` (see [configuration-guide.md](configuration-guide.md)). Each row is a `path`, a `scope`, and a `projection`. The `scope` is one project slug, or `all` for every project. The `projection` is `local`, which is the default. The `backlog` and `roadmap` projections are retired and skip with a warning.
 
@@ -448,7 +448,7 @@ Do not point a row at the state root, for example `~/.fno/graph.html`. The daemo
 
 ### Served on the web
 
-`fno mux serve --web` starts the web bridge on `127.0.0.1:8722`. It prints the URL with a token once. The page's backlog link opens `/backlog` through the same token. The board reads the store live, needs no render step, and never caches. On a loopback bind the page can also write. It runs the same backlog verbs an agent runs. [guides/web-view.md](guides/web-view.md) covers the token, remote access, and the JSON routes.
+`fno mux serve --web` starts the web bridge on `127.0.0.1:8722`. It prints the URL with a token once. The page's backlog link opens `/backlog` through the same token. The board reads the store live, needs no render step, and never caches. On a loopback bind the page can also write. It runs the same backlog commands an agent runs. [guides/web-view.md](guides/web-view.md) covers the token, remote access, and the JSON routes.
 
 For a board anyone can open, use `fno backlog publish` (also `fno backlog board publish`). It renders the public projection: open, public rows only, with titles gated for leaks. [Publish a public board](#publish-a-public-board) covers the targets and the schedule.
 
@@ -470,7 +470,7 @@ The PR-keyed outcome columns measure only merged nodes that carry a PR number on
 
 The coverage block reports what share of records carry each lane axis and a measured cost. A record whose last execute session carries no harness lands in the `unattributed` bucket, sorted last, never dropped. Provider reads `unrecorded` without a ledger row. Model reads `unknown` without a session or ledger value. One axis going missing never hides a record.
 
-`--kind-depth` splits the kind by the node's merge commit on the default branch. Depth 2 appends the conventional type: fix, feat, docs, refactor, other. Depth 3 appends the type-surface pair. The surface reads rust for crates/ and Cargo.lock, python for cli/ with its tests, and ui for the web pages and the mux-server lane. docs covers a commit whose every changed path is docs or markdown. Support paths (scripts, skills, hooks, the root tests/) carry no vote. Anything else reads mixed. A node with no in-repo PR, or whose diff read fails, reads unknown at deeper depths - an unmeasured part groups visibly instead of guessing. A node with a blueprint session row also credits that session's lane with the node's downstream outcome under a blueprint kind, beside its target cell. The planning lane then shows up in the same fold at every depth. Its cost is its own session's ledger row, not the node's whole bill. The coverage block counts the population once: credit records never double it. The default depth stays 1. The plain by-lane read keeps its cell shape, and the blueprint kind is the one addition at that depth. The router rides the same read. `--propose --stage <verb>` folds one verdict per candidate lane per kind, names the contradicted seat laws, and writes nothing to config. The stage takes target or blueprint. A blueprint proposal comes only from the blueprint seat law's model families.
+`--kind-depth` splits the kind by the node's merge commit on the default branch. Depth 2 appends the conventional type: fix, feat, docs, refactor, other. Depth 3 appends the type-surface pair. The surface reads rust for crates/ and Cargo.lock, python for cli/ with its tests, and ui for the web pages and the mux-server lane. docs covers a commit whose every changed path is docs or markdown. Support paths (scripts, skills, hooks, the root tests/) carry no vote. Anything else reads mixed. A node with no in-repo PR, or whose diff read fails, reads unknown at deeper depths - an unmeasured part groups visibly instead of guessing. A node with a blueprint session row also credits that session's lane with the node's downstream outcome under a blueprint kind, beside its target cell. The planning lane then shows up in the same fold at every depth. Its cost is its own session's ledger row, not the node's whole bill. The coverage block counts the population once: credit records never double it. The default depth stays 1. The plain by-lane read keeps its cell shape, and the blueprint kind is the one addition at that depth. The router rides the same read. `--propose --stage <command>` folds one verdict per candidate lane per kind, names the contradicted seat laws, and writes nothing to config. The stage takes target or blueprint. A blueprint proposal comes only from the blueprint seat law's model families.
 
 The plain read is unchanged: `fno backlog calibration --json` still emits nodes and aggregate over done nodes with a `cost_sessions` row. `--since` requires `--by-lane`. `--kind-depth` requires `--by-lane`. `--json` gives the machine shape and `--domain` filters by domain.
 
@@ -493,7 +493,7 @@ An open do row wedges its node `in_progress`. The in-progress status hides the r
 1. The mechanical legs, in order - `archive --apply` (age-gated, `--age`, default 14 days), `reconcile`, `maintain --apply`, then `relatedness build` last so the map reflects the post-groom graph.
    Best-effort: one failing leg is named in the receipt and does not cost you the other three.
    A leg is `ok` only on exit 0; exit 4 is recorded as `partial` (in this CLI it always means a degraded result, such as PR queries `reconcile` could not resolve, never "nothing to do").
-   If any leg comes back other than `ok` the receipt status is `degraded` and the verb exits non-zero, and the worker names the leg in its report - a scheduler log nobody reads is not a signal.
+   If any leg comes back other than `ok` the receipt status is `degraded` and the command exits non-zero, and the worker names the leg in its report - a scheduler log nobody reads is not a signal.
 2. One Sonnet worker for the judgment calls, working from a fixed allowlist of reversible levers, finishing by mailing a one-screen report that leads with the mechanical outcomes.
 
 A UTC-day claim, not the scheduler, enforces once-a-day, so a double-fire or a manual run on a day that already groomed is a no-op (`already-ran`, zero subprocesses).
@@ -506,9 +506,9 @@ fno backlog groom --install-agent --hour 3 # pick another hour
 
 After an update, `fno doctor update` re-renders the agent onto the fresh binary through `--refresh-agent`. This automatic tail step preserves the installed hour and working directory.
 Without that, an update replaces the binary the plist points at and a migration that breaks the old entry point leaves the agent wedged with no self-heal.
-The verb is a no-op when no agent is installed, so it costs nothing if you schedule grooming another way.
+The command is a no-op when no agent is installed, so it costs nothing if you schedule grooming another way.
 
-Non-macOS gets a cron line instead; the verb itself is scheduler-agnostic:
+Non-macOS gets a cron line instead; the command itself is scheduler-agnostic:
 
 ```cron
 0 2 * * * fno backlog groom
@@ -617,7 +617,7 @@ Spam control is a second label. Create an approval label, `fno-approved` by defa
 
 Never list the approval label in any issue template, yours or your organization's. A template that applies it lets a visitor approve their own issue. If a template file names the label, the import refuses to run.
 
-The import verb is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph and GitHub and writes only to the graph. It never writes to GitHub: no comment, no label, no close.
+The import command is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph and GitHub and writes only to the graph. It never writes to GitHub: no comment, no label, no close.
 
 Four limits hold on every run:
 

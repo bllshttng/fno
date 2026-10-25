@@ -61,9 +61,9 @@ Phase 2 rolls the lowercase map across the everyday commands. Purely additive, s
 | `done` | `-p` pr-number, `-l` link, `-m` note (pre-existing) | - |
 | `carveout add` | `-k` kind, `-p` priority | - |
 
-Path/default-resolved flags (`--state` on `event emit`, `--body-file`, `--credentials-source`, `--roadmap-id`, ...) intentionally stay long. `backlog pick`/`queued`/`status` are outside the Phase 2 group and gained nothing. The per-command rule does real work here: `-b` means `--body` on `agents send` (the verb the Phase 2 `-k`/`-b` shorts moved onto when `inbox send` was removed; `-t --to` became `--to-project`, which is long-only) while `backlog pick` keeps `-b --blocked`, and `-p` carries six different per-command meanings - legal because those commands never co-occur.
+Path/default-resolved flags (`--state` on `event emit`, `--body-file`, `--credentials-source`, `--roadmap-id`, ...) intentionally stay long. `backlog pick`/`queued`/`status` are outside the Phase 2 group and gained nothing. The per-command rule does real work here: `-b` means `--body` on `agents send` (the command the Phase 2 `-k`/`-b` shorts moved onto when `inbox send` was removed; `-t --to` became `--to-project`, which is long-only) while `backlog pick` keeps `-b --blocked`, and `-p` carries six different per-command meanings - legal because those commands never co-occur.
 
-`agents list`/`resume` lowercase shorts on the Python path remain unassigned to any phase; on the Rust runtime the verb-agnostic parser already accepts them (see below).
+`agents list`/`resume` lowercase shorts on the Python path remain unassigned to any phase; on the Rust runtime the command-agnostic parser already accepts them (see below).
 
 ### Cross-language parity (the load-bearing detail)
 
@@ -71,7 +71,7 @@ Path/default-resolved flags (`--state` on `event emit`, `--body-file`, `--creden
 
 So the same aliases live in both parsers. The Rust `build_request` hand-parser gains `-p`/`-c`/`-t` plus the globals it already recognizes (`-J`/`-A`/`-F`/`-Y`). Short value flags take a space-separated value (`-p claude`), matching Click's short-option convention; the `-p=value` form is intentionally not normalized on the Rust path.
 
-Because the Rust parser is verb-agnostic, its aliases apply to every verb that uses those long flags, so `agents list -c /repo` works on the Rust runtime even though the Python `agents list` has no `-c`. This is additive and benign. Phase 2 deliberately did not touch the `agents` family (its delivery group covers the Python-only command surface, where no Rust parity question exists); reconciling Python `agents list`/`resume` is tracked as a separate carveout.
+Because the Rust parser is command-agnostic, its aliases apply to every command that uses those long flags, so `agents list -c /repo` works on the Rust runtime even though the Python `agents list` has no `-c`. This is additive and benign. Phase 2 deliberately did not touch the `agents` family (its delivery group covers the Python-only command surface, where no Rust parity question exists); reconciling Python `agents list`/`resume` is tracked as a separate carveout.
 
 ## Two-spelling canonicalization (Phase 3)
 
@@ -114,7 +114,7 @@ Two subtleties worth knowing:
 - **No collisions:** no command declares the same short for two different options.
 - **Pins (per-command semantics since Phase 2):** each of the 7 pre-convention (short, long) pairs (`-A -I -b -n -f -m -o`) still exists at its home declaration site. Lowercase letters are per-command, so a pre-existing letter may legally carry a different meaning on a new command (`-b --body` on `agents send` vs `-b --blocked` on `backlog pick`); the legacy uppercase `-I` stays codebase-exclusive like the global register.
 
-The AST scan proves declarations. It structurally cannot catch a Click registration failure. Every touched sub-app is lazily loaded, so a malformed declaration only raises at first dispatch. `cli/tests/test_short_flag_dispatch.py` closes that hole at runtime. It runs short-vs-long parity proofs for `backlog find` and `accounts add` through the real root app. The whole-app build walk in `cli/tests/test_lazy_imports.py` is the registration smoke for every sub-app. `cli/tests/test_two_spelling_dispatch.py` proves a legacy spelling stays hidden from `--help`. When the `reality-check gh` command they drove was removed, its equivalence, stderr-warning, and both-passed-refusal proofs moved to `cli/tests/unit/test_flag_aliases.py`. Phase 3 also adds `cli/tests/test_help_shorthands.py` for legend content and the bare-help pointer.
+The AST scan proves declarations. It structurally cannot catch a Click registration failure. Every touched sub-app is lazily loaded, so a malformed declaration only raises at first dispatch. `cli/tests/test_short_flag_dispatch.py` closes that hole at runtime. It runs a short-vs-long parity proof for `backlog find` through the real root app. The `accounts add` goldens in `crates/fno-agents/tests/golden/accounts_add` hold both of its spellings. The whole-app build walk in `cli/tests/test_lazy_imports.py` is the registration smoke for every sub-app. `cli/tests/test_two_spelling_dispatch.py` proves a legacy spelling stays hidden from `--help`. When the `reality-check gh` command they drove was removed, its equivalence, stderr-warning, and both-passed-refusal proofs moved to `cli/tests/unit/test_flag_aliases.py`. Phase 3 also adds `cli/tests/test_help_shorthands.py` for legend content and the bare-help pointer.
 
 The Rust path is pinned separately: `ask_accepts_phone_short_flags` (in `client.rs`) asserts the short form builds the byte-identical request the long form does.
 

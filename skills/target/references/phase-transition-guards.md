@@ -1,4 +1,4 @@
-<!-- style-exception: mechanical verb rename preserves pre-existing prose -->
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
 > **SUPERSEDED (2026-06-05):** the gate boolean transition matrix in this file (Completion Gates section) was deleted by the control-plane collapse wedge. The acceptance criteria gate before /execute waves remains active. Kept for historical context; see docs/architecture/control-plane-loop.md.
 
 # Phase Transition Guards
@@ -21,8 +21,8 @@ Key ordering rules that survive the control-plane collapse:
 - Run browser testing BEFORE /fno:ship pr create (same reason).
 - Do not run auto-merge until external review is satisfied (or `no_external` is set).
 
-These are workflow rules, not gate checks. The loop-check verb verifies the outcome (PR + CI + review); you ensure the pipeline ran in the right order.
+These are workflow rules, not gate checks. The loop-check command verifies the outcome (PR + CI + review); you ensure the pipeline ran in the right order.
 
 ## Why ordering matters
 
-An LLM under context pressure may rationalize skipping a phase. The skip flags in the immutable manifest are the anti-skip mechanism: if a skip flag is not set, the phase must run. The loop-check verb does not enforce ordering; it checks the final state. Correct ordering is the skill's responsibility.
+An LLM under context pressure may rationalize skipping a phase. The skip flags in the immutable manifest are the anti-skip mechanism: if a skip flag is not set, the phase must run. The loop-check command does not enforce ordering; it checks the final state. Correct ordering is the skill's responsibility.

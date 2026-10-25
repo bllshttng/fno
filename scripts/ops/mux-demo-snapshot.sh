@@ -2,12 +2,14 @@
 # Shoot the mux for a public page without one byte of a real session in it.
 #
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
+#       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
+#       [--hold] [--group <axis>]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
 # leads, mail, feed questions and harness panes, then shoots it with
 # `fno mux serve --snapshot --server`, kills the server and deletes the root.
-# Every view a paint PR changes renders populated: the verb itself refuses an
+# Every view a paint PR changes renders populated: the command itself refuses an
 # empty view render, and the refusal dies here.
 set -euo pipefail
 
@@ -20,12 +22,31 @@ PANES=()
 
 # The shot runs from $ROOT/code/checkout, so a relative --out would land in
 # the throwaway root and die with it. Absolutize against the caller's cwd.
+# --window-size and --no-fit are this script's own: the first sets the demo
+# server's mux.window_size policy by env (the server inherits it), the second
+# shoots as a passive observer so the shot crops instead of resizing the tab.
+# --hold arms a daemon reserve on the demo's breaker record, so the status row
+# shows the fleet hold. --group <axis> sets the sideline's group-by axis
+# (workspace, team, cwd, status, harness).
 ARGS=()
+FIT=(--fit)
 PREV=""
+HOLD=""
+GROUP=""
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
     ARGS+=("$(cd "$(dirname -- "$a")" && pwd -P)/$(basename -- "$a")")
+  elif [ "$PREV" = "--window-size" ]; then
+    export FNO_MUX_WINDOW_SIZE="$a"
+  elif [ "$PREV" = "--group" ]; then
+    GROUP="$a"
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ]; then
+    :
+  elif [ "$a" = "--hold" ]; then
+    HOLD=1
+  elif [ "$a" = "--no-fit" ]; then
+    FIT=()
   else
     ARGS+=("$a")
   fi
@@ -77,6 +98,32 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
     '[[work.workspaces.checkout.projects]]' \
     'name = "search"' \
     'path = "~/code/checkout"'
+  # Invented accounts for the connections view. No credential exists under
+  # these paths, so nothing here can log in or bill.
+  printf '%s\n' \
+    '[accounts]' \
+    'active = "studio"' \
+    '[[accounts.records]]' \
+    'id = "studio"' \
+    'name = "Studio"' \
+    'harness = "claude"' \
+    'auth = "oauth_dir"' \
+    'credentials_source = "~/.claude-studio"' \
+    'priority = 10' \
+    '[[accounts.records]]' \
+    'id = "night-shift"' \
+    'name = "Night shift"' \
+    'harness = "claude"' \
+    'auth = "oauth_dir"' \
+    'credentials_source = "~/.claude-night"' \
+    'priority = 20' \
+    '[[accounts.records]]' \
+    'id = "codex-lab"' \
+    'name = "Codex lab"' \
+    'harness = "codex"' \
+    'auth = "oauth_dir"' \
+    'credentials_source = "~/.codex-lab"' \
+    'priority = 30'
   if [ -n "${FNO_DEMO_PY_SOURCE:-}" ]; then
     printf '[dev]\nsource = "%s"\n' "$FNO_DEMO_PY_SOURCE"
   fi
@@ -106,6 +153,38 @@ unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH
 # the owner is the first short-lived `pane run`, and the server shuts down
 # before the shot. This script owns it instead, so it also dies with us.
 export FNO_OWNER_PID=$$
+
+# The usage cache the connections view reads first: invented readings, probed
+# now, with reset times ahead.
+mkdir -p "$ROOT/.fno/state" "$FNO_AGENTS_HOME"
+python3 - "$ROOT" "$HOLD" "$GROUP" <<'PY'
+import json, sys, time
+root, hold, group = sys.argv[1:4]
+now = int(time.time())
+def win(label, pct, resets_in):
+    return {"label": label, "used_pct": pct, "resets_at": now + resets_in}
+usage = {
+    "studio": {"probed_at": now, "source": "oauth-endpoint",
+               "windows": [win("5h", 38.0, 7900), win("weekly", 61.0, 302400)]},
+    "night-shift": {"probed_at": now - 240, "source": "oauth-endpoint",
+                    "windows": [win("5h", 4.0, 15800), win("weekly", 22.0, 475200)]},
+    "codex-lab": {"probed_at": now - 120, "source": "session-log",
+                  "windows": [win("5h", 12.0, 9600), win("weekly", 9.0, 518400)]},
+}
+with open(f"{root}/.fno/state/provider-runtime-state.json", "w") as f:
+    json.dump({"schema_version": 2, "usage": usage}, f)
+stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+if hold:
+    with open(f"{root}/.fno/agents/fleet-stop.json", "w") as f:
+        json.dump({"version": 1, "state": "stopped", "generation": 1,
+                   "changed_at": stamp(now), "changed_by": "machine_watch",
+                   "reason": "OBS is running, so the fleet keeps the machine free for stream",
+                   "holds": ["spawns", "tests"], "origin": "reserve_auto",
+                   "expires_at": stamp(now + 1800)}, f)
+if group:
+    with open(f"{root}/.fno/agents/mux-view.json", "w") as f:
+        json.dump({"agent_group": group}, f)
+PY
 
 cd "$ROOT/code/checkout"
 # A repo, so every attach resolves the panes' workspace instead of
@@ -145,7 +224,7 @@ done
 # Progress, and a session row names the harness session its pane runs.
 SIDS=(7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6 0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b ses_3f9a1c2b7e4dA1b2C3d4E5f6g7)
 HARNESSES=(claude codex opencode)
-# The first backlog verb migrates the store and publishes its tombstone AS
+# The first backlog command migrates the store and publishes its tombstone AS
 # the claims path: a marker file where the lock needs a directory. The
 # marker's backup imported at publish, so retiring the marker and
 # recreating the directory hands the path back to the legacy lock writer.
@@ -313,7 +392,7 @@ agents = [
 ]
 import sqlite3
 conn = sqlite3.connect(db)
-# The registry rides the graph store the verbs migrated to .fno/db. Its
+# The registry rides the graph store the commands migrated to .fno/db. Its
 # tables are created lazily by the first Rust registry writer, so the seed
 # matches that DDL instead of assuming they exist.
 if not conn.execute(
@@ -443,4 +522,4 @@ sleep 6
 sleep 3
 
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
-"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 --fit --squad checkout "$@"
+"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"

@@ -51,7 +51,7 @@ graph TD
     ASK -->|no| ADOPT["auto-intake"]
     ASK -->|yes| OPTIONS["AskUserQuestion:\nproceed / modify /\nsupersede / cancel"]
     OPTIONS --> ACK["fno backlog update\ncollisions_acknowledged=<ids>"]
-    OPTIONS --> SUP["fno backlog supersede\n<new> --replaces <old>\n--cause ... --surface ..."]
+    OPTIONS --> SUP["fno backlog supersede\n<new> --replaces <old>\n--cause ... --surface ...\n--reason ... --covers ..."]
     OPTIONS --> ADOPT
 ```
 
@@ -191,7 +191,7 @@ supplanted. `cmd_supersede` refuses to mutate already-shipped or
 already-superseded nodes so the operation is never a destructive write
 against ship history; the user opens a follow-up node instead.
 
-## Triage health verb
+## Triage health command
 
 `fno backlog triage health` returns a structured JSON report:
 
@@ -208,7 +208,7 @@ against ship history; the user opens a follow-up node instead.
 ```
 
 The shape is consumable by downstream tooling: `/loop`, scheduled agents,
-dashboards. Future health-style verbs (`fno backlog audit`,
+dashboards. Future health-style commands (`fno backlog audit`,
 `fno backlog cost-report`) follow the same pattern.
 
 ## Performance notes

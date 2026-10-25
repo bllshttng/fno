@@ -113,7 +113,7 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 2.25x | 9 | 4 | `cli/src/fno/config/__init__.py:2364` | `_coerce_enabled` |
 | 2.25x | 9 | 4 | `cli/src/fno/events/__init__.py:74` | `_resolve_manifest_path` |
 | 2.25x | 27 | 12 | `cli/src/fno/graph/store.py:288` | `_normalize_lock_fields` |
-| 2.25x | 9 | 4 | `cli/src/fno/lint_verb_ratchet.py:194` | `_locate_rust_front` |
+| 2.25x | 9 | 4 | `cli/src/fno/lint_command_ratchet.py:194` | `_locate_rust_front` |
 | 2.25x | 9 | 4 | `cli/src/fno/paths.py:1173` | `resolve_plugin_script_durable` |
 | 2.25x | 9 | 4 | `cli/src/fno/roles/context.py:48` | `catalog_revision` |
 | 2.25x | 9 | 4 | `cli/src/fno/rust_binary.py:58` | `_sibling_binary` |
@@ -124,7 +124,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 2.2x | 11 | 5 | `cli/src/fno/agents/harnesses/claude.py:267` | `_resolved_request_model` |
 | 2.2x | 11 | 5 | `cli/src/fno/agents/harnesses/claude.py:1535` | `claude_rm` |
 | 2.2x | 11 | 5 | `cli/src/fno/agents/registry.py:763` | `_is_identity_token` |
-| 2.2x | 11 | 5 | `cli/src/fno/agents/rust_runtime.py:707` | `_is_provenance_bearing_spawn` |
 | 2.2x | 11 | 5 | `cli/src/fno/backlog/groom.py:154` | `_mechanical_legs` |
 | 2.2x | 22 | 10 | `cli/src/fno/pr/_merge.py:216` | `_review_lane_configured` |
 | 2.17x | 13 | 6 | `cli/src/fno/agents/registry.py:505` | `resolve_agent` |
@@ -306,7 +305,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.43x | 10 | 7 | `cli/src/fno/worker/review.py:271` | `_warn_unknown_agent_keys` |
 | 1.43x | 10 | 7 | `cli/src/fno/worktree_paths.py:362` | `_worktrees_base_from` |
 | 1.42x | 17 | 12 | `cli/src/fno/adapters/providers/loader.py:110` | `_extract_accounts_block` |
-| 1.42x | 34 | 24 | `cli/src/fno/adapters/providers/loader.py:144` | `mutable_accounts_block` |
 | 1.42x | 17 | 12 | `cli/src/fno/plan/brief.py:423` | `filter_acs_for_task` |
 | 1.4x | 7 | 5 | `cli/src/fno/adapters/providers/managed.py:650` | `codex_pinning_sessions` |
 | 1.4x | 7 | 5 | `cli/src/fno/adapters/providers/managed.py:723` | `snapshot_current` |
@@ -335,7 +333,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.38x | 11 | 8 | `cli/src/fno/retro/cli.py:178` | `_current_repo_slug` |
 | 1.36x | 34 | 25 | `cli/src/fno/agents/harnesses/codex.py:907` | `remove_session_index_entry` |
 | 1.36x | 19 | 14 | `cli/src/fno/graph/types.py:52` | `_derive_status` |
-| 1.36x | 15 | 11 | `cli/src/fno/inbox/settings.py:31` | `_load_inbox_config` |
 | 1.36x | 15 | 11 | `cli/src/fno/inbox/store.py:224` | `inbox_dir_for` |
 | 1.36x | 19 | 14 | `cli/src/fno/plan/cli.py:410` | `rung` |
 | 1.35x | 23 | 17 | `cli/src/fno/backlog/advance.py:1339` | `_seed_lane_local_settings` |
@@ -455,7 +452,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.17x | 7 | 6 | `cli/src/fno/graph/slug.py:83` | `assign_unique_slug` |
 | 1.17x | 7 | 6 | `cli/src/fno/inbox/store.py:317` | `_slug_for` |
 | 1.17x | 7 | 6 | `cli/src/fno/mcp/client.py:253` | `ping` |
-| 1.17x | 7 | 6 | `cli/src/fno/plugins/verify.py:295` | `_in_range` |
 | 1.17x | 7 | 6 | `cli/src/fno/pr_watch/_discover.py:102` | `_resolve_repo_dir` |
 | 1.17x | 7 | 6 | `cli/src/fno/pr_watch/cli.py:410` | `ensure_watcher_activated` |
 | 1.17x | 7 | 6 | `cli/src/fno/provenance/spawn_think.py:343` | `_scan_md_field` |
@@ -539,7 +535,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.06x | 34 | 32 | `cli/src/fno/graph/_intake.py:533` | `detect_project_from_settings` |
 | 1.06x | 17 | 16 | `cli/src/fno/graph/collision.py:238` | `_load_thresholds` |
 | 1.06x | 38 | 36 | `cli/src/fno/worktree.py:286` | `create` |
-| 1.05x | 63 | 60 | `cli/src/fno/adapters/providers/managed.py:1430` | `register_slot_snapshot` |
 | 1.05x | 22 | 21 | `cli/src/fno/agents/harnesses/claude.py:1858` | `mcp_channel_reachable` |
 | 1.04x | 25 | 24 | `cli/src/fno/graph/cli.py:6301` | `_cascade_close_parents` |
 | 1.04x | 25 | 24 | `cli/src/fno/relay/roundtrip.py:737` | `submit_via_control_reply` |

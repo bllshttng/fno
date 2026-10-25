@@ -28,7 +28,7 @@ STUBDIR="$TMP/bin"; mkdir -p "$STUBDIR"
 cat > "$STUBDIR/fno" <<'STUB'
 #!/usr/bin/env bash
 echo "CALL: $*" >> "$STUB_LOG"
-# The nested agents spellings answer like the flat verbs they forward to.
+# The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
   "agents admit")
@@ -228,7 +228,7 @@ ok  'post-spawn unmeasured worker-row exits 0' "$rc" '0'
 has 'post-spawn unmeasured worker-row names the missing measurement' "$out" 'liveness never measured'
 
 # --- every guard reason has an arm in BOTH consumers -------------------------
-# One Python producer, two shell consumers, and neither case statement carries a
+# One Rust producer, two shell consumers, and neither case statement carries a
 # default: an unhandled reason falls through to a failure handler and turns a
 # benign skip into a hard failure. That is how unproven-claim shipped covering
 # only the probe path.
@@ -241,19 +241,19 @@ has 'post-spawn unmeasured worker-row names the missing measurement' "$out" 'liv
 #
 # CEILING, stated rather than implied. The list is written here, not derived
 # from the producer, because the reasons are built in a ternary that no grep
-# reads reliably. So it catches a reason DROPPED from Python, and a reason
+# reads reliably. So it catches a reason DROPPED from the producer, and a reason
 # mentioned in neither path of a consumer. It does NOT catch a brand-new reason
 # nobody adds to this list, and it does not prove the arm it found does the
 # right thing - the behavioral tests above do that for `unproven-claim`.
 _GUARD_REASONS='live-claim unproven-claim worker-row suspect-claim reservation-held duplicate-claim auto-deferred defer-failed'
 _SPAWN_SH_LOCAL="$(dirname "${BASH_SOURCE[0]}")/../scripts/spawn.sh"
-_CLI_PY="$(dirname "${BASH_SOURCE[0]}")/../../../cli/src/fno/agents/cli.py"
+_PRODUCER="$(dirname "${BASH_SOURCE[0]}")/../../../crates/fno-agents/src/spawn_guard.rs"
 _DISPATCH_SH="$(dirname "${BASH_SOURCE[0]}")/../../target/scripts/dispatch-node.sh"
 for reason in $_GUARD_REASONS; do
-  if grep -qF "\"$reason\"" "$_CLI_PY"; then
+  if grep -qF "\"$reason\"" "$_PRODUCER"; then
     ok "producer still emits: $reason" "present" "present"
   else
-    ok "producer still emits: $reason" "GONE from cli.py (stale list)" "present"
+    ok "producer still emits: $reason" "GONE from spawn_guard.rs (stale list)" "present"
   fi
   for consumer in "$_SPAWN_SH_LOCAL" "$_DISPATCH_SH"; do
     label="$(basename "$consumer")"
@@ -282,13 +282,13 @@ ok 'corrupted -> failed' "$(field "$out")" 'failed'
 has 'corrupted reason' "$out" 'claim is corrupted; force-release or repair'
 no  'corrupted did NOT spawn' "$(calllog)" 'agents spawn '
 
-# --- stale fno WITHOUT the verb -> fail CLOSED, NO spawn ----------------------
+# --- stale fno WITHOUT the command -> fail CLOSED, NO spawn ----------------------
 # empty stdout + non-zero rc (Typer "No such command" goes to stderr, suppressed).
 out="$(STUB_VERDICT='' STUB_VERDICT_RC=2 \
   run --name w5 --provider claude --message '/target x' --node "$NODE")"
-ok 'verb-absent -> failed (fail-closed)' "$(field "$out")" 'failed'
-has 'verb-absent reason' "$out" 'spawn-guard unavailable'
-no  'verb-absent did NOT spawn' "$(calllog)" 'agents spawn '
+ok 'command-absent -> failed (fail-closed)' "$(field "$out")" 'failed'
+has 'command-absent reason' "$out" 'spawn-guard unavailable'
+no  'command-absent did NOT spawn' "$(calllog)" 'agents spawn '
 
 # --- spawn-guard returns dispatchable but the launch FAILS -> failed -----------
 out="$(STUB_VERDICT='{"verdict":"dispatchable","reservation_key":"dispatch:'"$NODE"'","reservation_holder":"dispatch-skill:1"}' \

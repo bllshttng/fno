@@ -74,7 +74,7 @@
 #      root to allow exactly it and nothing wider. Comparison only; no
 #      footnote state lands there.
 #      scripts/metrics/port-order.sh reads the same transcripts: a 30-day
-#      scan counts `fno <verb-group>` occurrences for the port-order
+#      scan counts `fno <command-group>` occurrences for the port-order
 #      table's use column. Read-only; footnote stores nothing there, and a
 #      missing root leaves use at zero rather than creating anything.
 #      the harness's data; footnote stores nothing there, and a missing root
@@ -105,15 +105,26 @@
 #      per-config-dir accounts. It constructs and reads no path from the value.
 #      test_usage.py is its test, which builds a fake slot under tmp_path.
 #      binding.py is the shared effective-account read those callers now go
-#      through, and test_account_binding.py is its test: it builds a canonical
-#      ~/.claude and an alt dir under tmp_path to prove that two roots sharing
-#      a transcript folder keep distinct credential identity. Fixture paths
-#      under tmp_path; footnote stores nothing under either.
+#      through, and accounts/binding.rs is its Rust port: both read the
+#      shared ~/.claude slot's credential file to prove who it serves.
+#      accounts_binding_parity.rs builds a canonical ~/.claude and an alt dir
+#      under a temp root to prove two roots keep distinct credential
+#      identity. Read-only; footnote stores nothing under either.
+#      accounts/staging.rs and accounts/env.rs port staging.py, dispatch.py
+#      and the account_env.py overlay: they name a staged account's
+#      `<id>/.claude` dir and pin the shared ~/.claude slot for the active
+#      managed account. They build env values and write nothing there.
 #      managed.py resolves the same canonical path for the same reason, in
 #      reconcile-slot: an identity read must not follow an ambient
 #      CLAUDE_CONFIG_DIR, or the repair proves the pinned account and stamps
 #      it onto the shared slot. test_managed.py is its test and asserts on
 #      exactly that path, again under tmp_path.
+#      accounts/store.rs ports managed.py's store layer: it names the same
+#      shared ~/.claude slot to read and write the credential claude reads,
+#      and to tell which live claude pins it. Footnote's own store stays
+#      under the state dir.
+#      accounts/reconcile.rs ports reconcile-slot: it names the canonical
+#      ~/.claude slot in its sign-in remedy text, for the reason above.
 #      test_run.rs's hold-marker tests build fixture checkouts under a
 #      TempDir, including a nested `.claude/worktrees/x` path, to prove a
 #      nested checkout never reads its parent's hold. Fixture paths only;
@@ -131,7 +142,7 @@
 #      gc_inventory.rs and receipt.rs are the retirement census and the reap
 #      receipt: they resolve Claude Code's own ~/.claude/projects transcript
 #      tree to join a session's store existence and locator - read-only, the
-#      same category as claude_roster.rs/client_verbs.rs/daemon.rs, from
+#      same category as claude_roster.rs/client_commands.rs/daemon.rs, from
 #      which this code moved. roster_reap.rs is the roster-side twin of the
 #      same census: it stages reap receipts and measures resume evidence off
 #      that transcript tree, and its test stages one under a tmp HOME.
@@ -279,13 +290,10 @@ cli/src/fno/adapters/_shared.py
 cli/src/fno/adapters/providers/dispatch.py
 cli/src/fno/adapters/providers/managed.py
 cli/src/fno/adapters/providers/staging.py
-cli/src/fno/adapters/providers/test_account_binding.py
 cli/src/fno/adapters/providers/test_cli.py
-cli/src/fno/adapters/providers/test_dispatch.py
 cli/src/fno/adapters/providers/test_failover.py
 cli/src/fno/adapters/providers/test_loader.py
 cli/src/fno/adapters/providers/test_managed.py
-cli/src/fno/adapters/providers/test_model.py
 cli/src/fno/adapters/providers/test_rotation.py
 cli/src/fno/adapters/providers/test_staging.py
 cli/src/fno/adapters/providers/test_usage.py
@@ -312,6 +320,11 @@ crates/fno/src/doctor_update.rs
 crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/claude_vault.rs
+crates/fno-agents/src/accounts/binding.rs
+crates/fno-agents/src/accounts/env.rs
+crates/fno-agents/src/accounts/staging.rs
+crates/fno-agents/src/accounts/store.rs
+crates/fno-agents/src/accounts/reconcile.rs
 crates/fno-agents/src/capability_leaves.rs
 crates/fno-agents/src/slot_cutover.rs
 crates/fno-agents/src/backlog/dispatch_resolve.rs
@@ -368,7 +381,7 @@ crates/fno-agents/src/claude_roster.rs
 crates/fno-agents/src/plans_path.rs
 crates/fno-agents/src/law_match.rs
 crates/fno-agents/src/mail_cli/send/resolve.rs
-crates/fno-agents/src/client_verbs.rs
+crates/fno-agents/src/client_commands.rs
 crates/fno-agents/src/daemon.rs
 crates/fno-agents/src/daemon_tests.rs
 crates/fno-agents/src/eval_part4.rs

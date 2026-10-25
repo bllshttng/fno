@@ -86,7 +86,7 @@ graph TD
 
 Target is the autonomous delivery pipeline. Named as a persona, target is the agent that refuses to stop until the feature is actually shipped. The key mechanism:
 
-- A **stop hook** (`target-stop-hook.sh`) is a thin shim over the read-only `fno-agents loop-check` verb, which decides whether the session may exit.
+- A **stop hook** (`target-stop-hook.sh`) is a thin shim over the read-only `fno-agents loop-check` command, which decides whether the session may exit.
 - The agent signals it believes the work is done by emitting a `<promise>` tag; `loop-check` then verifies that claim against external truth before allowing exit.
 - If the session ends before completion, the unified loop (`fno-agents loop run` / `run-target-loop.sh`) re-invokes it.
 
@@ -96,7 +96,7 @@ Target is the autonomous delivery pipeline. Named as a persona, target is the ag
 - every required reviewer bot (`config.review.required_bots`) has reviewed with no unaddressed blocking finding,
 - and a budget cap has not been exceeded.
 
-There are no completion-gate booleans, no `fno gate` surface, and no `current_phase` state - the pre-wedge gate machinery was removed in the control-plane collapse. `loop-check` writes nothing; terminal side-effects (ledger record, plan stamp, handoff) are written by the separate `fno-agents finalize` verb.
+There are no completion-gate booleans, no `fno gate` surface, and no `current_phase` state - the pre-wedge gate machinery was removed in the control-plane collapse. `loop-check` writes nothing; terminal side-effects (ledger record, plan stamp, handoff) are written by the separate `fno-agents finalize` command.
 
 **Allowed statuses:** `IN_PROGRESS`, `COMPLETE`, `BLOCKED` - nothing else. Any other status breaks the loop.
 

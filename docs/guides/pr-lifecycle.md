@@ -1,6 +1,6 @@
 # The PR lifecycle: review, create, check, merged
 
-`target` runs this whole arc for you. This guide is for the times you drive it by hand: you wrote the code yourself, or you're picking up a PR someone (or some agent) opened earlier. Four verbs, in order.
+`target` runs this whole arc for you. This guide is for the times you drive it by hand: you wrote the code yourself, or you're picking up a PR someone (or some agent) opened earlier. Four commands, in order.
 
 ## 1. Review before you push: `/fno:review`
 
@@ -42,11 +42,11 @@ Merging is a human action (or `auto_merge`, if you opted in). Once the PR is mer
 
 It reconciles the backlog (closes the node whose PR merged, even if you merged from the GitHub UI), runs the retro to capture follow-up work, reads the merged diff, and appends a dated prose section to the project's parking-lot file. It then files any triage-worthy work it found as backlog ideas.
 
-`pr merged` needs `config.post_merge.parking_lot_path` set for this repo (the vault area is often named differently from the project, so it is never guessed). Set it with `fno config setup post-merge`. Without it the verb names what is missing and skips the prose step.
+`pr merged` needs `config.post_merge.parking_lot_path` set for this repo (the vault area is often named differently from the project, so it is never guessed). Set it with `fno config setup post-merge`. Without it the command names what is missing and skips the prose step.
 
 ## How this maps to `target`
 
-When `target` ships a feature it runs review, then `pr create`, then (unless you pass `--no-external`) `pr check`, and stamps the plan. It does not run `pr merged` for you unless `config.auto_merge.enabled` is on; merging stays a deliberate step. The completion gate `target` waits on is external truth: the PR exists, CI is green, every required bot has reviewed, and no blocking inline finding is left unaddressed. The verbs above are the same machinery, exposed one step at a time.
+When `target` ships a feature it runs review, then `pr create`, then (unless you pass `--no-external`) `pr check`, and stamps the plan. It does not run `pr merged` for you unless `config.auto_merge.enabled` is on; merging stays a deliberate step. The completion gate `target` waits on is external truth: the PR exists, CI is green, every required bot has reviewed, and no blocking inline finding is left unaddressed. The commands above are the same machinery, exposed one step at a time.
 
 ## See also
 

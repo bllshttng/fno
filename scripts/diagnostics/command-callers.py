@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Report external callers of every fno verb leaf.
+"""Report external callers of every fno command leaf.
 
-A diagnostic (not a CI gate): for each leaf in ``scripts/ci/verb-baseline.txt``,
+A diagnostic (not a CI gate): for each leaf in ``scripts/ci/command-baseline.txt``,
 count how many times it is named as ``fno``/``fno-py``/``fno-agents <leaf>`` in
-the corpus a contributor reads (everything except ``cli/src``, where verbs are
+the corpus a contributor reads (everything except ``cli/src``, where commands are
 defined). A leaf that scores zero is a cull candidate, not a verdict - the
 operator triages the zero set.
 
@@ -13,11 +13,11 @@ corrected zero set is a subset of the uncorrected one):
 
   (a) Pipe-joined help tables. ``using-fno`` writes ``fno agents spawn|ask|...``;
       only ``spawn`` follows ``fno agents`` as a discrete token, so a literal
-      scan credits only ``spawn``. A verb-path token containing ``|`` with no
+      scan credits only ``spawn``. A command-path token containing ``|`` with no
       surrounding whitespace fans out to one candidate per alternative.
       Whitespace around the pipe is a markdown
       table cell and is left alone - the cell is split into separate tokens and
-      the bare ``|`` is not a verb token.
+      the bare ``|`` is not a command token.
   (b) Binary-form invocation. ``fno-agents loop-check`` credits the
       ``agents loop-check`` namespace; ``fno-py <leaf>`` credits the plain one.
 
@@ -34,7 +34,7 @@ dead while a leaf invoked by an argv built in ``cli/src`` does not. Measured
 invoked from ``cli/src``. Deleting on the ``--zero`` answer would have broken 34
 live callers with no failing test to say so.
 
-``--dynamic`` is the other half of that safety property. A verb reached through
+``--dynamic`` is the other half of that safety property. A command reached through
 a constructed command - a shell array, an argv assembled from a variable, a
 wrapper function that renames the binary - matches no literal sweep and would be
 counted as dead. Those sites are reported rather than resolved, and shell
@@ -42,12 +42,12 @@ wrappers that forward ``"$@"`` to an fno binary are discovered and treated as
 binaries so their callers are not invisible.
 
 Usage:
-  python3 scripts/diagnostics/verb-callers.py            # full table, all leaves
-  python3 scripts/diagnostics/verb-callers.py --zero     # only zero-ref leaves
-  python3 scripts/diagnostics/verb-callers.py --dead     # deletion candidates
-  python3 scripts/diagnostics/verb-callers.py --dynamic  # unresolvable call sites
-  python3 scripts/diagnostics/verb-callers.py --summary  # counts + delta + clusters
-  python3 scripts/diagnostics/verb-callers.py --self-check  # controls + parity, exit code
+  python3 scripts/diagnostics/command-callers.py            # full table, all leaves
+  python3 scripts/diagnostics/command-callers.py --zero     # only zero-ref leaves
+  python3 scripts/diagnostics/command-callers.py --dead     # deletion candidates
+  python3 scripts/diagnostics/command-callers.py --dynamic  # unresolvable call sites
+  python3 scripts/diagnostics/command-callers.py --summary  # counts + delta + clusters
+  python3 scripts/diagnostics/command-callers.py --self-check  # controls + parity, exit code
 
 The sweep itself is stdlib-only. ``file:line`` and help columns require the fno
 environment (click/typer); run under ``uv run --project cli python ...`` for the
@@ -71,7 +71,7 @@ Optional_str = _Optional[str]
 
 # --- corpus -----------------------------------------------------------------
 
-# Everything a contributor reads, EXCLUDING cli/src (where verbs are defined).
+# Everything a contributor reads, EXCLUDING cli/src (where commands are defined).
 CORPUS_DIRS = [
     "skills", "docs", "scripts", "hooks", "agents",
     "commands", "crates", "cli/tests", "tests",
@@ -112,9 +112,9 @@ SKIP_DIRS = {
     "node_modules", "__pycache__", "venv", ".venv",
 }
 
-# A verb-path token: lowercase letters, digits, hyphens, and (for fan-out) pipes.
-# Uppercase stops a path; flags and brackets are not verb tokens.
-_VERB_RE = re.compile(r"[a-z][a-z0-9-|]*")
+# A command-path token: lowercase letters, digits, hyphens, and (for fan-out) pipes.
+# Uppercase stops a path; flags and brackets are not command tokens.
+_COMMAND_RE = re.compile(r"[a-z][a-z0-9-|]*")
 
 # Outer punctuation to strip so `` `fno-agents` `` and ``(fno-py)`` match; hyphen
 # and pipe are internal structure and stay.
@@ -130,7 +130,7 @@ CONTROLS = {"agents spawn": 100, "do": 25, "backlog next": 25}
 # control would go green on either one alone and a silently broken AST walk
 # would read as "no internal callers" - the exact absence-with-two-explanations
 # shape that turns a correct sweep into a wrong deletion. Each floor below is a
-# verb whose argv is built as a list literal in cli/src, verified by hand:
+# command whose argv is built as a list literal in cli/src, verified by hand:
 #   agents spawn  cli/src/fno/evals/runner.py, cli/src/fno/observer/cli.py
 #   backlog done  cli/src/fno/graph/cli.py
 # `agents mail send` now sits behind the argument-dispatched `agents` action,
@@ -145,7 +145,7 @@ AST_CONTROLS = {"agents spawn": 2, "backlog done": 1}
 # cli/src Python. The next wheel departure re-pins again.
 INTERNAL_TEXT_CONTROLS = {"agents spawn": 20, "do": 20, "backlog next": 6}
 
-# Verbs reachable ONLY through shell command substitution, where the binary
+# Commands reachable ONLY through shell command substitution, where the binary
 # name is glued to a variable assignment and is not a bare token:
 #   hooks/helpers/init-target-state.sh   _OWNED_OUT="$(fno do target resolve-owned-identity
 #   skills/ship/SKILL.md                   policy_json="$(candidate_fno do pr evidence-required
@@ -161,8 +161,8 @@ SUBSTITUTION_CONTROLS = {
 }
 
 # The FOURTH shape: a Rust argv ARRAY. `Command::new(fno_bin()).args(["agents", "claim",
-# "sweep", "--json"])` puts no binary token beside the verb, so the tokenizer
-# above credits nothing and a live verb scores zero.
+# "sweep", "--json"])` puts no binary token beside the command, so the tokenizer
+# above credits nothing and a live command scores zero.
 #
 #   crates/fno/src/needs_overlay.rs      .args(["needs", ...])   -> `agents needs`
 #   crates/fno-agents/src/finalize.rs    .args(["do", "pr", "base-lineage-check", ...])
@@ -171,11 +171,11 @@ SUBSTITUTION_CONTROLS = {
 # `Command::new(<ident>_bin())` and missed needs_overlay.rs outright, because the
 # real call reads `tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())`
 # and the qualifier's `::` and parens defeat that pattern.
-# Two shapes name a verb from Rust. `.args(&[...])` at the spawn site, and a
+# Two shapes name a command from Rust. `.args(&[...])` at the spawn site, and a
 # same-crate helper called `fno(cwd, &[...])` that forwards the slice to one
 # `Command::new("fno")`. The second exists because consolidating five probes
 # behind a single spawn site (authorized_merge.rs) hid `do pr info` and four
-# siblings from this sweep, and an invisible caller is how a live verb gets
+# siblings from this sweep, and an invisible caller is how a live command gets
 # deleted. `\bfno\(` cannot match inside `some_fno(`: there is no word
 # boundary after an underscore.
 _RUST_ARGS_RE = re.compile(
@@ -186,9 +186,9 @@ _RUST_CMD_LITERAL_RE = re.compile(r'Command::new\(\s*"([^"]+)"')
 
 # An array is skipped ONLY when the nearest preceding `Command::new` names one
 # of THESE literals. The set is enumerated on purpose and must never be inverted
-# into "skip any literal that is not fno": that rule kills a live verb the day
+# into "skip any literal that is not fno": that rule kills a live command the day
 # someone adds a wrapper under a new name. This file's own rule decides the
-# direction - a false positive keeps a verb alive, a false negative deletes a
+# direction - a false positive keeps a command alive, a false negative deletes a
 # live one - so over-collection is the safe error and this list stays long.
 FOREIGN_BINARIES = {
     "bash", "cargo", "echo", "env", "false", "gh", "git", "jq", "node", "npm",
@@ -229,7 +229,7 @@ def repo_root() -> Path:
 
 def load_leaves(root: Path) -> list[str]:
     """The leaf universe from the baseline, ``!--flag`` tokens stripped."""
-    baseline = root / "scripts" / "ci" / "verb-baseline.txt"
+    baseline = root / "scripts" / "ci" / "command-baseline.txt"
     leaves = []
     for line in baseline.read_text().splitlines():
         line = line.rstrip("\n")
@@ -240,9 +240,9 @@ def load_leaves(root: Path) -> list[str]:
 
 
 def load_curriculum(path: Path, leaves: set[str]) -> tuple[set[str], list[str]]:
-    """Taught verbs from a file, one per line, ``#`` comments (full-line or trailing).
+    """Taught commands from a file, one per line, ``#`` comments (full-line or trailing).
 
-    Returns ``(taught ∩ leaves, sorted unknown)`` so a curriculum typo or a verb
+    Returns ``(taught ∩ leaves, sorted unknown)`` so a curriculum typo or a command
     that was cut surfaces loudly instead of silently shrinking the complement.
     """
     raw: list[str] = []
@@ -251,7 +251,7 @@ def load_curriculum(path: Path, leaves: set[str]) -> tuple[set[str], list[str]]:
         if line:
             raw.append(line)
     typing_surface: set[str] = set()
-    allocation = path.with_name("verb-collapse-map.tsv")
+    allocation = path.with_name("command-collapse-map.tsv")
     if allocation.is_file():
         for row in allocation.read_text().splitlines()[1:]:
             current_leaf, *_ = row.split("\t")
@@ -335,10 +335,10 @@ def _clean(tok: str) -> str:
 # Shell glues the binary name to whatever precedes it: `x="$(fno` and
 # `policy_json="$(candidate_fno` are single whitespace-delimited tokens, and
 # stripping OUTER punctuation leaves them intact because the leading characters
-# are letters. Both were read as "not a binary", so every verb reached only
+# are letters. Both were read as "not a binary", so every command reached only
 # through command substitution scored zero.
 #
-# Two live verbs were in that hole - `fno do target resolve-owned-identity` (a
+# Two live commands were in that hole - `fno do target resolve-owned-identity` (a
 # hook) and `fno do pr evidence-required` (a skill) - and both sat in the dead set
 # until an independent whole-repo walk contradicted it. Splitting on shell
 # punctuation and keeping the last segment recovers them.
@@ -349,7 +349,7 @@ _SHELL_GLUE = re.compile(r"[^\w./-]+")
 # by a function), so no static reading can prove what it holds; the name is the
 # only signal available. Any `$...` reference whose identifier contains "fno" is
 # treated as the binary, which is deliberately loose - a false positive keeps a
-# verb alive, a false negative deletes a live one.
+# command alive, a false negative deletes a live one.
 _SHELL_VAR_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
 
 
@@ -363,11 +363,11 @@ def _binary_key(tok: str) -> str:
     return tail.rsplit("/", 1)[-1]
 
 
-def _verb_token(tok: str) -> str | None:
+def _command_token(tok: str) -> str | None:
     # Markdown table cells escape the alternation pipe as `\|`; unescape it so a
     # `spawn\|ask\|peek` token fans out instead of being rejected at the backslash.
     c = _clean(tok).replace("\\|", "|")
-    return c if _VERB_RE.fullmatch(c) else None
+    return c if _COMMAND_RE.fullmatch(c) else None
 
 
 def _fan(path: list[str]) -> list[tuple[str, ...]]:
@@ -404,7 +404,7 @@ def sweep(
             path_tokens = list(start)
             j = i + 1
             while j < len(tokens) and len(path_tokens) < 3:
-                vt = _verb_token(tokens[j])
+                vt = _command_token(tokens[j])
                 if vt is None:
                     break
                 path_tokens.append(vt)
@@ -441,10 +441,10 @@ def sweep_substitutions(
                 signal = "glued-binary"
             path_tokens: list[str] = ["agents"] if key == "fno-agents" else []
             for raw in tokens[i + 1:i + 4]:
-                verb = _verb_token(raw)
-                if verb is None:
+                command = _command_token(raw)
+                if command is None:
                     break
-                path_tokens.append(verb)
+                path_tokens.append(command)
             for combo in _fan(path_tokens):
                 _credit_longest(combo, leaves, counts[signal])
     return counts
@@ -461,7 +461,7 @@ def _credit_longest(combo: tuple[str, ...], leaves: set[str], counts: Counter) -
 
 # --- internal sweep: cli/src, call sites separated from definition sites -----
 #
-# The external sweep excludes ``cli/src`` because that is where verbs are
+# The external sweep excludes ``cli/src`` because that is where commands are
 # DEFINED, and a definition would credit every leaf with a reference to itself.
 # That exclusion makes the zero set mean "nothing a contributor reads names
 # this" and nothing stronger - which is not enough to delete on. A leaf invoked
@@ -485,9 +485,9 @@ def _leading_consts(elts) -> list[str]:
 
     A leading non-constant is SKIPPED rather than terminating the scan, because
     the canonical self-shellout is ``[*fno_py_cmd(), "backlog", "get", node]``:
-    the binary arrives as a starred call and the verb path follows it. Once a
+    the binary arrives as a starred call and the command path follows it. Once a
     constant run has begun, a non-constant ends it (that is an argument, not
-    more verb path).
+    more command path).
     """
     out: list[str] = []
     for e in elts:
@@ -496,15 +496,15 @@ def _leading_consts(elts) -> list[str]:
             if out:
                 break
             continue
-        # A path-ish or flag-ish constant is not a verb token.
+        # A path-ish or flag-ish constant is not a command token.
         if s.startswith("-") or "/" in s:
             if out:
                 break
             continue
-        # The binary name is not part of the verb path. Written literally
+        # The binary name is not part of the command path. Written literally
         # (``["fno", "agents", "mail", "send", ...]``) it must be dropped, or the path
         # resolves as ``fno agents agents mail`` and matches no leaf - which reads as
-        # "no internal caller" for a verb that plainly has one.
+        # "no internal caller" for a command that plainly has one.
         if not out and s in PREFIXES:
             continue
         out.append(s)
@@ -514,11 +514,11 @@ def _leading_consts(elts) -> list[str]:
 
 
 def _dynamic_after_binary(elts) -> bool:
-    """True when a binary-prefixed argv reaches a non-constant in verb position.
+    """True when a binary-prefixed argv reaches a non-constant in command position.
 
-    ``[*fno_py_cmd(), group, "get"]`` can invoke ANY verb under ``group``, so the
+    ``[*fno_py_cmd(), group, "get"]`` can invoke ANY command under ``group``, so the
     site cannot be resolved statically and must not be read as evidence that the
-    verbs it could reach are dead. These sites are reported, never silently
+    commands it could reach are dead. These sites are reported, never silently
     dropped: an unresolvable call site is the one thing that can turn a correct
     literal sweep into a wrong deletion.
     """
@@ -530,7 +530,7 @@ def _dynamic_after_binary(elts) -> bool:
                 seen_binary = True
                 continue
             if seen_binary:
-                return False  # verb position is a constant; resolvable
+                return False  # command position is a constant; resolvable
             continue
         if not seen_binary:
             # Only a call to a NAMED argv-prefix helper counts as the binary.
@@ -548,7 +548,7 @@ def _dynamic_after_binary(elts) -> bool:
 # is an invocation. Found by searching cli/src for functions returning a bare
 # binary list; ``fno_py_cmd`` is the only one today, and a new one that is not
 # listed here degrades to "not flagged as dynamic", never to a wrong deletion
-# (the AST and text sweeps still credit its constant verb tokens).
+# (the AST and text sweeps still credit its constant command tokens).
 ARGV_PREFIX_HELPERS = {"fno_py_cmd"}
 
 
@@ -571,7 +571,7 @@ def sweep_internal(root: Path, leaves: set[str]) -> tuple[Counter, Counter, list
          and its bare-``"fno"`` variants.
       2. Text: the same ``fno <leaf>`` token sweep the external corpus gets,
          which catches a shellout written as one string, a help line, or an
-         error message that teaches the verb.
+         error message that teaches the command.
 
     Returns ``(ast_counts, text_counts, dynamic_sites)`` SEPARATELY rather than
     pre-summed, because each signal carries its own enforced control. A merged
@@ -601,9 +601,9 @@ def sweep_internal(root: Path, leaves: set[str]) -> tuple[Counter, Counter, list
     return ast_counts, text_counts, sorted(set(dynamic))
 
 
-# A shell invocation whose verb path comes from an array or a variable:
-# ``fno "${cmd[@]}"``, ``fno $verb``, ``fno-py "$1"``. A literal token sweep
-# cannot see the verb, so each one is a hole in the dead set exactly the size of
+# A shell invocation whose command path comes from an array or a variable:
+# ``fno "${cmd[@]}"``, ``fno $command``, ``fno-py "$1"``. A literal token sweep
+# cannot see the command, so each one is a hole in the dead set exactly the size of
 # what it can reach. Reported, never resolved: resolving would mean interpreting
 # shell, and a wrong resolution here silently authorises a deletion.
 _SHELL_DYNAMIC_RE = re.compile(r"\bfno(?:-py|-agents)?\s+\"?\$[\{(]?[A-Za-z_@*]")
@@ -661,7 +661,7 @@ def _foreign_command(text: str, pos: int) -> bool:
 
     Only a STRING LITERAL counts. Anything computed (``fno_bin()``, a variable,
     a qualified path) is credited, because the array is the signal and guessing
-    at a non-literal is how a live verb gets deleted.
+    at a non-literal is how a live command gets deleted.
 
     The lookback must not cross a statement boundary. A builder-style command
     (``let mut c = Command::new(fno_bin()); ... c.args(["backlog", "done"]);``)
@@ -703,7 +703,7 @@ def sweep_rust_argv(
                     continue
                 combo: list[str] = []
                 for tok in _RUST_STR_RE.findall(m.group(1)):
-                    if not _VERB_RE.fullmatch(tok) or len(combo) == 3:
+                    if not _COMMAND_RE.fullmatch(tok) or len(combo) == 3:
                         break
                     combo.append(tok)
                 if not combo:
@@ -745,7 +745,7 @@ def load_enrichment(root: Path) -> dict[str, tuple[str, str]]:
     try:
         import inspect
 
-        from fno.lint_verb_ratchet import VerbRatchetError, iter_python_leaves
+        from fno.lint_command_ratchet import CommandRatchetError, iter_python_leaves
     except Exception:
         return {}
     table: dict[str, tuple[str, str]] = {}
@@ -781,8 +781,8 @@ def load_enrichment(root: Path) -> dict[str, tuple[str, str]]:
                 help_text = (inspect.getdoc(real) or "").strip()
             help_line = help_text.splitlines()[0] if help_text else ""
             table[path] = (file_line, help_line)
-    except VerbRatchetError as exc:
-        print(f"verb enrichment SKIPPED: {exc}", file=sys.stderr)
+    except CommandRatchetError as exc:
+        print(f"command enrichment SKIPPED: {exc}", file=sys.stderr)
         return {}
     except Exception:
         pass
@@ -879,10 +879,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dead", action="store_true",
                     help="leaves with zero user, runtime, AND cli/src references")
     ap.add_argument("--dynamic", action="store_true",
-                    help="cli/src argv sites whose verb position is not a constant")
+                    help="cli/src argv sites whose command position is not a constant")
     ap.add_argument("--out", help="also write the full table to this path")
     ap.add_argument("--curriculum", type=Path,
-                    help="taught-verb file; report the untaught complement and its cull candidates")
+                    help="taught-command file; report the untaught complement and its cull candidates")
     args = ap.parse_args(argv)
 
     root = repo_root()
@@ -892,7 +892,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dead or args.dynamic:
         dead, buckets, internal, dynamic, failures, wrappers = dead_set(root, leaves_list)
         if failures:
-            print("verb-callers: positive control(s) failed - no list emitted:", file=sys.stderr)
+            print("command-callers: positive control(s) failed - no list emitted:", file=sys.stderr)
             for f in failures:
                 print(f"  {f}", file=sys.stderr)
             return 2
@@ -900,14 +900,14 @@ def main(argv: list[str] | None = None) -> int:
             shell = sweep_shell_dynamic(root)
             print(f"shell wrappers treated as fno binaries: "
                   f"{', '.join(sorted(wrappers)) or '(none)'}")
-            print(f"cli/src argv sites with a non-constant verb position: {len(dynamic)}")
+            print(f"cli/src argv sites with a non-constant command position: {len(dynamic)}")
             for site in dynamic:
                 print(f"  {site}")
-            print(f"\nshell invocations with a variable verb path: {len(shell)}")
+            print(f"\nshell invocations with a variable command path: {len(shell)}")
             for site in shell:
                 print(f"  {site}")
             print(
-                "\nEach site can reach a verb this sweep cannot name. Read every one "
+                "\nEach site can reach a command this sweep cannot name. Read every one "
                 "before deleting anything, or the literal sweep is wrong by exactly "
                 "the set they reach."
             )
@@ -935,7 +935,7 @@ def main(argv: list[str] | None = None) -> int:
               f"(zero user + runtime + cli/src refs; tests-only counts as dead)")
         print("by group: " + ", ".join(f"{g}={n}" for g, n in by_group))
         print(f"unresolvable cli/src argv sites: {len(dynamic)} "
-              f"(see --dynamic; each can reach a verb no literal sweep names)")
+              f"(see --dynamic; each can reach a command no literal sweep names)")
         if args.out:
             Path(args.out).write_text("\n".join(dead) + "\n")
         return 0
@@ -969,7 +969,7 @@ def main(argv: list[str] | None = None) -> int:
     ]
     # A broken sweep emits no candidate list, including from self-check.
     if failed:
-        print("verb-callers: positive control(s) failed - sweep is broken, no list emitted:", file=sys.stderr)
+        print("command-callers: positive control(s) failed - sweep is broken, no list emitted:", file=sys.stderr)
         for f in failed:
             print(f"  {f}", file=sys.stderr)
         return 2
@@ -988,7 +988,7 @@ def main(argv: list[str] | None = None) -> int:
     zero_unc = {leaf for leaf in leaves_list if counts_unc.get(leaf, 0) == 0}
     not_subset = [leaf for leaf in zero_corr if leaf not in zero_unc]
     if not_subset:
-        print("verb-callers: corrected zero set is NOT a subset of uncorrected - "
+        print("command-callers: corrected zero set is NOT a subset of uncorrected - "
               "a fix removed references, which is impossible:", file=sys.stderr)
         for leaf in not_subset[:10]:
             print(f"  {leaf}", file=sys.stderr)
@@ -1001,7 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
         _, _, _, _, health_failures, _ = dead_set(root, leaves_list)
         if health_failures:
             print(
-                "verb-callers: positive control(s) failed - no list emitted:",
+                "command-callers: positive control(s) failed - no list emitted:",
                 file=sys.stderr,
             )
             for failure in health_failures:
@@ -1030,7 +1030,7 @@ def main(argv: list[str] | None = None) -> int:
         # the Rust dispatchers and the live binary are read separately and must
         # agree.
         try:
-            from fno.lint_verb_ratchet import enumerate_all_leaves
+            from fno.lint_command_ratchet import enumerate_all_leaves
             registry = {
                 leaf.split(' !')[0].strip() for leaf in enumerate_all_leaves()
             }
@@ -1060,7 +1060,7 @@ def main(argv: list[str] | None = None) -> int:
         # as every other mode; adds only the curriculum layer.
         taught, unknown = load_curriculum(args.curriculum, leaves)
         if unknown:
-            print("verb-callers: curriculum verbs not in baseline (typos or cut verbs):",
+            print("command-callers: curriculum commands not in baseline (typos or cut commands):",
                   file=sys.stderr)
             for u in unknown:
                 print(f"  {u}", file=sys.stderr)

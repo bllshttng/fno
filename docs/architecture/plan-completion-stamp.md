@@ -61,7 +61,7 @@ to `done`. Between the first and last sub-repo ships, the plan is genuinely
 
 ## The promise gate (node closure)
 
-A plan reaching `done` and a node closing are gated separately. The merge gate asks "is a PR merged" (a fact about an artifact). The promise gate asks "did the plan's declared work all ship". One verdict function, `resolve_promise_evidence`, is consulted by all three close verbs: `fno backlog done`, `fno backlog reconcile`, and the deprecated `done` spelling. A node can therefore never close through a second, ungated path.
+A plan reaching `done` and a node closing are gated separately. The merge gate asks "is a PR merged" (a fact about an artifact). The promise gate asks "did the plan's declared work all ship". One verdict function, `resolve_promise_evidence`, is consulted by all three close commands: `fno backlog done`, `fno backlog reconcile`, and the deprecated `done` spelling. A node can therefore never close through a second, ungated path.
 
 The gate fires ONLY on an explicit declaration. A plan declaring **neither `close_probes` nor `expected_url_count`** closes exactly as it does today. `## Wave N` headings are internal structure, not a promise, so a multi-wave single-PR plan closes clean. One .md == one PR == one node is the house rule. Inferring "multi-wave" from headings was rejected because it false-positives on exactly that common case, parking every such node on autonomous `/target`. A gate that only fires on an explicit promise cannot false-positive. Two conditions, first refusal wins:
 
@@ -101,7 +101,7 @@ flowchart TD
 
 ### 1. `fno-agents finalize` (primary)
 
-The stop-hook shim runs `fno-agents finalize` on the terminal-allow boundary in every mode (attended, autonomous, worker). Its `stamp_and_graduate` step (`crates/fno-agents/src/finalize.rs`) stamps the plan `in_review` with the PR URL. A code ship (`DonePRGreen`) does not graduate here: done means merged, so the flip to `done` happens later at merge. An advisory ship (`DoneAdvisory`) and a generic delivery (`DoneDelivery`) have no merge event, so finalize graduates them at once. On a code or advisory ship, a stamp failure is non-fatal. The graph and ledger writes are already committed, and the manual verbs below recover the plan. On a delivery ship, finalize exits non-zero and the stop hook retries the stamp.
+The stop-hook shim runs `fno-agents finalize` on the terminal-allow boundary in every mode (attended, autonomous, worker). Its `stamp_and_graduate` step (`crates/fno-agents/src/finalize.rs`) stamps the plan `in_review` with the PR URL. A code ship (`DonePRGreen`) does not graduate here: done means merged, so the flip to `done` happens later at merge. An advisory ship (`DoneAdvisory`) and a generic delivery (`DoneDelivery`) have no merge event, so finalize graduates them at once. On a code or advisory ship, a stamp failure is non-fatal. The graph and ledger writes are already committed, and the manual commands below recover the plan. On a delivery ship, finalize exits non-zero and the stop hook retries the stamp.
 
 ### 2. `fno backlog done`
 

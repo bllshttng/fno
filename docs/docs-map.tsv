@@ -25,10 +25,10 @@ docs/architecture/background-process-hygiene.md	contribute	contributor	keep	-	1	
 docs/architecture/background-processes.md	fleet	guide	move	guides/background-processes.md	2	which process is which, and how to stop it
 docs/architecture/backlog-advance-native.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/backlog-board-ordering.md	daily-driver	concept	keep	-	3	why one card sits above another
-docs/architecture/backlog-graph-verb-contracts.md	contribute	contributor	keep	-	13	design note for contributors
+docs/architecture/backlog-graph-command-contracts.md	contribute	contributor	keep	-	13	design note for contributors
 docs/architecture/batch-lane-loop-integration.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/blast-radius-router.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/claim-verbs-do-provenance.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/claim-commands-do-provenance.md	contribute	contributor	keep	-	1	design note for contributors
 docs/architecture/claude-mail-pane.md	fleet	guide	move	guides/claude-mail-pane.md	0	open delivered mail in Claude Code
 docs/architecture/cli-lazy-imports.md	contribute	contributor	keep	-	6	design note for contributors
 docs/architecture/cloud-substrate.md	fleet	concept	keep	-	1	remote claude workers
@@ -44,7 +44,6 @@ docs/architecture/cost-accuracy.md	contribute	contributor	keep	-	0	design note f
 docs/architecture/cross-agent-bus-log.md	contribute	contributor	keep	-	2	design note for contributors
 docs/architecture/cross-language-schema-parity.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/cross-model-review.md	daily-driver	concept	keep	-	1	review by a different provider
-docs/architecture/cross-project-inbox.md	contribute	contributor	keep	-	2	design note for contributors
 docs/architecture/decision-record.md	daily-driver	concept	keep	-	7	how a ruling is recorded and found
 docs/architecture/disposable-deletes.md	contribute	contributor	keep	-	5	design note for contributors
 docs/architecture/docs-information-architecture.md	contribute	contributor	keep	-	0	this design
@@ -58,13 +57,13 @@ docs/architecture/field-coverage.md	contribute	contributor	keep	-	1	design note 
 docs/architecture/fleet-cutover.md	fleet	guide	move	guides/fleet-cutover.md	0	move the fleet to another computer
 docs/architecture/fleet-watchdog.md	contribute	contributor	keep	-	3	design note for contributors
 docs/architecture/fno-agents-ask-auto-route.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/fno-agents-claude-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	1	one verb's port history over four pages
-docs/architecture/fno-agents-codex-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	0	one verb's port history over four pages
+docs/architecture/fno-agents-claude-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	1	one command's port history over four pages
+docs/architecture/fno-agents-codex-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	0	one command's port history over four pages
 docs/architecture/fno-agents-codex-provider.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/fno-agents-deliver-gate.md	contribute	contributor	keep	-	1	design note for contributors
 docs/architecture/fno-agents-drive.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/fno-agents-followup.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/fno-agents-gemini-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	0	one verb's port history over four pages
+docs/architecture/fno-agents-gemini-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	0	one command's port history over four pages
 docs/architecture/fno-agents-gemini-commands.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/fno-agents-interactive-drive.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/fno-agents-lifecycle.md	contribute	contributor	keep	-	0	design note for contributors
@@ -165,7 +164,7 @@ docs/architecture/target-plan-mode-integration.md	daily-driver	concept	keep	-	3	
 docs/architecture/target-plan-mode-phase2.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/target-reliability-core.md	contribute	contributor	keep	-	1	design note for contributors
 docs/architecture/target-self-handoff.md	contribute	contributor	keep	-	5	design note for contributors
-docs/architecture/target-start-verb.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/target-start-command.md	contribute	contributor	keep	-	1	design note for contributors
 docs/architecture/task-context-binding.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/test-hermeticity.md	contribute	contributor	keep	-	4	design note for contributors
 docs/architecture/test-run-lifecycle.md	contribute	contributor	keep	-	1	design note for contributors
@@ -208,7 +207,7 @@ docs/guides/fno-agents-ask-followup.md	fleet	guide	keep	-	1	message a running ag
 docs/guides/fno-agents-list-logs.md	fleet	guide	keep	-	0	list and tail agents
 docs/guides/fno-agents-send.md	fleet	guide	keep	-	0	async message to a peer
 docs/guides/fno-agents-spawn.md	fleet	guide	keep	-	3	create a peer agent
-docs/guides/fno-agents-stop-rm-reconcile.md	fleet	guide	keep	-	0	agent lifecycle verbs
+docs/guides/fno-agents-stop-rm-reconcile.md	fleet	guide	keep	-	0	agent lifecycle commands
 docs/guides/how-done-is-decided.md	first-target	guide	keep	-	0	watch a run reach done
 docs/guides/measuring-fno-overhead.md	contribute	contributor	move	contributing/measuring-fno-overhead.md	0	maintainer measurement harness
 docs/guides/megawalk-walker.md	daily-driver	guide	keep	-	0	redirect for the retired walker
@@ -224,7 +223,7 @@ docs/guides/task-to-verified-pr-demo.md	contribute	contributor	move	contributing
 docs/guides/think-and-plan.md	daily-driver	guide	keep	-	1	think and blueprint; mentions think what-if and panel, which the move PR checks
 docs/guides/web-view.md	fleet	guide	keep	-	0	watch panes from a browser
 docs/guides/worktrees.md	daily-driver	guide	keep	-	0	worktree basics
-docs/harness-command-matrix.md	fleet	reference	move	reference/harness-command-matrix.md	4	every agents verb per harness
+docs/harness-command-matrix.md	fleet	reference	move	reference/harness-command-matrix.md	4	every agents command per harness
 docs/harnesses/capability-matrix.md	install	reference	keep	-	4	generated feature matrix
 docs/harnesses/codex.md	install	guide	keep	-	1	codex install and use
 docs/harnesses/gemini.md	install	guide	keep	-	3	gemini CLI is deprecated upstream; harness support stays a feature
@@ -235,7 +234,7 @@ docs/harnesses/launch/launch-codex.md	fleet	guide	keep	-	1	seat a codex worker
 docs/harnesses/launch/launch-opencode.md	fleet	guide	keep	-	1	seat an opencode worker
 docs/harnesses/launch/launch-pi.md	fleet	guide	keep	-	1	seat a pi worker
 docs/harnesses/promise-sentinel.md	contribute	reference	keep	-	4	protocol for third-party loop drivers
-docs/harnesses/verb-matrix.md	install	reference	keep	-	4	generated verb by harness table
+docs/harnesses/command-matrix.md	install	reference	keep	-	4	generated command by harness table
 docs/hooks-fail-open.md	daily-driver	concept	move	concepts/hooks-fail-open.md	4	explains the optional-hook budget
 docs/install.md	install	entry	keep	-	0	Stage 2 entry: install half of getting-started.md and the live part of deployment-guide.md
 docs/loops.md	fleet	reference	move	reference/loops.md	2	generated scheduled-loop table; the move PR updates its generator

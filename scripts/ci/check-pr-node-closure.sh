@@ -54,7 +54,7 @@ if [[ -n "${FNO_CLOSURE_ID_FAMILIES:-}" ]]; then
   fi
 fi
 
-# Candidate ids come from the fno-agents binary's pr-closure-branch-ids verb:
+# Candidate ids come from the fno-agents binary's pr-closure-branch-ids command:
 # the same delimiter-bounded scanner the merge-time bind runs, so this gate can
 # no longer disagree with the producer about what the ref names. The bash
 # re-glue loop this replaced kept its own split table (a single `IFS='/-'` once
@@ -117,7 +117,7 @@ fi
 # The approved Retarget line, mirroring the Rust grammar in
 # org_board/pr_closure.rs (retarget/retargeted_from): keyword case-insensitive
 # with optional colon, then exactly three tokens - two differing node ids and
-# an approval (msg-... or d-...). Ids stay case-sensitive, so no lowercasing
+# an approval (fmail-..., msg-... or d-...). Ids stay case-sensitive, so no lowercasing
 # here. The LAST well-formed line wins; prose never erases it.
 retarget_from=""
 retarget_to=""
@@ -130,7 +130,7 @@ while IFS= read -r rline; do
   if [[ ${#rtok[@]} -ne 3 ]]; then continue; fi
   if [[ "${rtok[0]}" =~ ^${node_id_re}$ && "${rtok[1]}" =~ ^${node_id_re}$ \
        && "${rtok[0]}" != "${rtok[1]}" \
-       && "${rtok[2]}" =~ ^(msg-[0-9a-f]{6,}|d-[0-9a-f]{8})$ ]]; then
+       && "${rtok[2]}" =~ ^((fmail|msg)-[0-9a-f]{6,}|d-[0-9a-f]{8})$ ]]; then
     retarget_from="${rtok[0]}"
     retarget_to="${rtok[1]}"
     retarget_approval="${rtok[2]}"
@@ -197,7 +197,7 @@ if [[ $claimed -eq 0 ]]; then
     echo "  The gate wanted: ${candidates[*]}"
     echo "  Remedy: fno do pr closure-trailer <node-id> --extra <id> [--extra <id> ...]"
     echo "  prints ONE Fixes line naming every id. Replace EVERY closure line in"
-    echo "  the PR body with that one line. The verb checks the ids against the"
+    echo "  the PR body with that one line. The command checks the ids against the"
     echo "  graph and PRINTS the line; it does not edit the PR. Do NOT paste a"
     echo "  candidate from this message:"
     echo "  a branch segment can match the id grammar without being a real node,"

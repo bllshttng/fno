@@ -116,7 +116,7 @@ Per outside, non-bot PR the steward takes one action per pass, tracked in stage 
 
 ## The merge freeze
 
-A merge freeze holds a release window. The team sets it, and only the user lifts it. The record lives in `merge-freeze.json` in the agents home, beside the fleet breaker. The code is `merge_freeze.rs`.
+A merge freeze holds a release window. The team sets it, and only the user lifts it. The code is `merge_freeze.rs`. With `store.remote_url` set, the record lives in the primary's `merge_freeze` table, so a freeze set on one machine holds a merge made from any other. Without it, the record lives in `merge-freeze.json` in the agents home, beside the fleet breaker. If the primary holds no record, a machine with a primary still reads its local file, so a freeze an older build wrote keeps holding. An unreachable primary holds the merge. The lift is a ruling, so it reaches another machine only through the shared backlog (`store.share_backlog`).
 
 The record names a subject, a `set_by`, a reason, a repo and a pin. The pin is a candidate sha, a list of PR numbers, or both. A set with no pin refuses, because a total stop belongs to the fleet breaker. The team sets it through the `authorized-merge` command:
 
@@ -128,17 +128,19 @@ The pin key is `sha:<first 12 hex>` and `prs:<n>+<n>` in ascending order, joined
 
 Four doors read the freeze. `fno do pr merge`, the pr-watch merge arm and the finalize auto-merge arm all reach `authorized_merge::run`, which reads the freeze as the `merge_freeze` probe beside the per-PR hold. The decision answers `held`, and `fno do pr status` lists a `merge_freeze` blocker. The fourth door is GitHub's own queue. A freeze set disarms every open armed PR of the repo that is off the pin, and the receipt lists them under `disarmed`. A failed disarm never fails the set. The receipt names the PR and the `gh pr merge <n> --repo <owner/repo> --disable-auto` command. The probe also disarms an armed off-pin PR at its next gate read. The pr-watch pre-check sends no repo, so it reads every PR as inside the frozen repo. That is an early skip, never a leak.
 
-Only a live superuser ruling (operator or chat_attested) at the lift subject lifts the freeze:
+Only a live `operator` ruling at the lift subject lifts the freeze:
 
 ```
 fno inbox decide 'merge-freeze:<owner/repo>@<pin key>' 'lift' --authority operator
 ```
 
-The user records that row at a terminal, or types `/fno:law` in chat with the same subject. A team or agent row at the subject does not lift it. A row at another pin's subject does not lift it. A retracted lift row freezes the window again. An unreadable record or decision store holds the merge.
+The user records that row at their own terminal. A `chat_attested` row does not lift it: any process a harness session started can mint one, so it cannot show the user ruled. This is the trust shape of the merge grant and the waiver. A team or agent row at the subject does not lift it either. A row at another pin's subject does not lift it. A retracted lift row freezes the window again. An unreadable record or decision store holds the merge.
 
-The `freeze-clear` op only tidies the file. Its `evidence` must be the decision id of a live superuser ruling at the current lift subject. Free text refuses, and the refusal names both user doors.
+The `freeze-clear` op only tidies the record. It removes the primary row and the local file. Its `evidence` must be the decision id of a live `operator` ruling at the current lift subject. Free text refuses, and the refusal names the user's terminal door.
 
 A new pin re-arms the freeze. While the current pin is unlifted, a set refuses. After the user lifts it, a set with the same pin refuses, and a set with a new pin writes the record. The new pin has its own lift subject and no ruling there, so it holds again.
+
+The pr-nudge ladder pauses on a frozen PR, so its owner gets no merge retry while the freeze holds.
 
 The freeze does not cover a merge through the GitHub web page or a bare `gh pr merge` outside fno. The fleet breaker's total stop (`fno agents incident stop --hold merges`) stays separate.
 
@@ -157,18 +159,18 @@ The recovery and the cleanup failure ride separate fields. A recovery that worke
 ## Who calls it
 
 - **`fno do pr merge`** (`cli/src/fno/pr/_merge.py`) asks twice. The `decide_only` pass comes first, so a merge about to be refused never publishes its coverage status receipt. The second pass re-runs the whole chain and closes the window the first one opened.
-- **`fno do pr verify --kind merged`** (`crates/fno-agents/src/pr_verify.rs`) asks once, then re-reads the PR before it reports. This verb's name is its contract, so the receipt is not its last word.
+- **`fno do pr verify --kind merged`** (`crates/fno-agents/src/pr_verify.rs`) asks once, then re-reads the PR before it reports. This command's name is its contract, so the receipt is not its last word.
 - **`fno-agents finalize`** arms at a green terminal. What stays in finalize is what only the terminal knows: the merge-gating opt-out claim, and the optional-App review evidence.
 
-Python reaches it through `fno.rust_binary.verb_call("authorized-merge", payload)`, the single door. An unreachable binary answers `unknown`, never a clear merge. A merge whose authorization nobody read is not an authorized merge.
+Python reaches it through `fno.rust_binary.command_call("authorized-merge", payload)`, the single door. An unreachable binary answers `unknown`, never a clear merge. A merge whose authorization nobody read is not an authorized merge.
 
-That includes a binary too OLD to know the verb. A deployed `fno-agents` from before this landed answers `unknown`, so `fno do pr merge` holds at exit 2 rather than merging unauthorized. The remedy is `fno doctor update --rust`, and `fno doctor` reports the lag. Hold, never break, was the point of routing the door through one named refusal.
+That includes a binary too OLD to know the command. A deployed `fno-agents` from before this landed answers `unknown`, so `fno do pr merge` holds at exit 2 rather than merging unauthorized. The remedy is `fno doctor update --rust`, and `fno doctor` reports the lag. Hold, never break, was the point of routing the door through one named refusal.
 
 ## After a queue-armed merge
 
-When the queue lands a merge later, no fno process is in the loop. The remote ref used to stay behind forever, because the merge verb's cleanup step never runs on that path.
+When the queue lands a merge later, no fno process is in the loop. The remote ref used to stay behind forever, because the merge command's cleanup step never runs on that path.
 
-The PR watcher tick already detects the confirmed merge. It pays the step there, through the merge verb's own `_post_merge_remote_delete`. One cleanup implementation. No second watcher, no second store. Only the MERGED arm reaches it, so a pending or unreadable state never deletes anything. It is warn-only: cleanup never fails the merge it follows.
+The PR watcher tick already detects the confirmed merge. It pays the step there, through the merge command's own `_post_merge_remote_delete`. One cleanup implementation. No second watcher, no second store. Only the MERGED arm reaches it, so a pending or unreadable state never deletes anything. It is warn-only: cleanup never fails the merge it follows.
 
 Local branches and worktrees keep their own lifecycle. See [worktree-mechanics](worktree-mechanics.md).
 

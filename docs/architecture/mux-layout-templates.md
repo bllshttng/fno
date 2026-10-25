@@ -111,7 +111,7 @@ Live re-binding at cold start is eventually consistent: the off-loop registry re
 
 `layout apply` owns and persists an entire tab.
 `layout graft` owns only the subtree it substitutes at one anchor pane and is session-local: it is never written to the template store, and it leaves every pane outside that subtree exactly where it was.
-The two verbs have deliberately different ownership scopes so a local automation cannot accidentally reconcile away an operator's tab.
+The two commands have deliberately different ownership scopes so a local automation cannot accidentally reconcile away an operator's tab.
 
 ```
 fno mux layout graft --at current \

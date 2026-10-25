@@ -259,8 +259,8 @@ An empty value means **clear this variable**.
 Pinning `CLAUDE_CONFIG_DIR` alone is only half an overlay: an inherited `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or routed `ANTHROPIC_BASE_URL` outranks it, so the worker would authenticate or bill through a different route while the receipt named the picked account.
 Every Python spawn substrate already scrubs that list before applying an overlay; emitting it here is what lets a non-Python caller apply the whole thing from one source of truth.
 
-`--if-armed` makes the verb itself honor `pick_on_launch`, declining with exit 5 when it is false.
-It exists for callers that must respect the opt-in but cannot read config themselves (the Rust loop dispatcher), so the knob keeps exactly one implementation.
+`--if-armed` makes the command itself honor `pick_on_launch`, declining with exit 5 when it is false.
+It exists for callers that must respect the opt-in: the Python spawn seams pass it, and the Rust loop dispatcher runs the same pick in process with it set, so the knob keeps exactly one implementation.
 A bare `fno config accounts pick` you type by hand always answers: you asked.
 
 Footnote does not own your interactive `claude` invocation and does not pretend to; you relaunch.
@@ -283,7 +283,7 @@ Two spawns are never picked for, whatever the knob says:
 
 ### `fno config accounts doctor`
 
-One read-only verb reporting the store's real condition, exiting non-zero when anything is wrong:
+One read-only command reporting the store's real condition, exiting non-zero when anything is wrong:
 
 - a record whose stored credential duplicates another's (two ids, one account)
 - a `config_dir` that is missing or holds no login
@@ -293,7 +293,7 @@ One read-only verb reporting the store's real condition, exiting non-zero when a
 - `account_identity_unknown`: the live slot's account is unproven, so the slot is neither healthy nor a successful switch
 
 `register` refuses a duplicate credential up front, but that guard is register-time only.
-`doctor` is the surface that reports stores predating it, and the verb that confirms a `--config-dir` conversion took.
+`doctor` is the surface that reports stores predating it, and the command that confirms a `--config-dir` conversion took.
 It stays read-only: for the one finding it cannot merely report, it names `fno config accounts reconcile-slot <harness>` as the repair.
 
 ### `fno config accounts reconcile-slot <harness>`
@@ -310,7 +310,7 @@ On exactly one match it refreshes that account's snapshot from the live blob, st
 fno config accounts reconcile-slot claude
 ```
 
-It is deliberately **not** a `clear-taint` verb, and it will not act on anything short of proof.
+It is deliberately **not** a `clear-taint` command, and it will not act on anything short of proof.
 An unreachable profile endpoint, a malformed response, a slot `security` could not read, a principal matching no registered account, or one matching two of them each leave the stamp, the snapshots, and the taint byte-identical, and exit non-zero naming which of those happened.
 Clearing a taint without proof would file one account's usage under another's name, which is worse than staying `unknown`.
 
@@ -490,7 +490,7 @@ refuses non-zero naming the file it could not restore.
 
 Which commands are relaunch doors is wider than this page once claimed, and the distinction is load-bearing. An earlier version held that `claude attach` opens a session that is still running. So attach cannot lose a route and had "nothing to do". The operator falsified that on 2026-08-23. Every re-entry door shells a fresh claude process. A fresh process re-resolves its account namespace from ambient env, so a re-entry launched from the wrong shell lands in the wrong config namespace. The transcript store is per-config-dir, so it either misses the session (loud) or bills the wrong account (silent). That claim is superseded. The table below is the replacement.
 
-Every door that re-enters or re-launches a Claude session, and what fno does at each. fno controls the first seven. The last two are Claude-native transitions fno cannot block, only observe and record. A fork is additive: the row keeps its primary id and gains at most one optional `related_session_id`. Both ids address the row. When both ids are recorded, `recover` is the selection verb.
+Every door that re-enters or re-launches a Claude session, and what fno does at each. fno controls the first seven. The last two are Claude-native transitions fno cannot block, only observe and record. A fork is additive: the row keeps its primary id and gains at most one optional `related_session_id`. Both ids address the row. When both ids are recorded, `recover` is the selection command.
 
 | Door | Starts a claude process? | Account + route handling |
 |---|---|---|
@@ -500,11 +500,11 @@ Every door that re-enters or re-launches a Claude session, and what fno does at 
 | mux attach gestures (`AttachAgent`, open-here, split/drop, restore, picker) | yes | resolve through the same re-entry plan. A resolver refusal starts no pane. |
 | mux `ResumeAgent` gesture | yes | run the same re-entry plan in the selected pane, never bare provider argv |
 | `fno agents session resume <name>` (revive) | yes | restore the recorded route, or refuse (exit 2). The revived row inherits the source row's `launch_account`. The spawn `--resume` fork door is retired. |
-| `fno agents session recover <agent> [--session <id>]` | yes | restore the selected id under the row's account and route, or refuse. With two recorded ids the verb refuses until `--session` names one. |
+| `fno agents session recover <agent> [--session <id>]` | yes | restore the selected id under the row's account and route, or refuse. With two recorded ids the command refuses until `--session` names one. |
 | native background / left-arrow fork (Claude-owned) | yes, Claude's own | not blockable pre-transition. SessionStart observes and records the second id. |
 | explicit `--fork-session` / SessionStart `source=fork` | yes, Claude's own | same: apply the row's binding on any fno re-entry, and record the id |
 
-The re-entry doors resolve through one canonical resolver, `fno-agents reentry-plan` in `crates/fno-agents/src/reentry.rs`. It consumes the row's recorded launch context: harness session id, `launch_account`, the derived `CLAUDE_CONFIG_DIR`, `route_settings_path`, cwd, substrate. It returns the provider argv plus env, or refuses naming the missing evidence. Account truth lives in the Python account store. The resolver reads it through `fno config accounts show <id> --print-binding` (identity, lane, config dir, never credentials) and never trusts ambient `CLAUDE_CONFIG_DIR`.
+The re-entry doors resolve through one canonical resolver, `fno-agents reentry-plan` in `crates/fno-agents/src/reentry.rs`. It consumes the row's recorded launch context: harness session id, `launch_account`, the derived `CLAUDE_CONFIG_DIR`, `route_settings_path`, cwd, substrate. It returns the provider argv plus env, or refuses naming the missing evidence. The resolver reads the account through `accounts::show::binding` in process, the projection `fno config accounts show <id> --print-binding` prints (identity, lane, config dir, never credentials). It never trusts ambient `CLAUDE_CONFIG_DIR`.
 
 The exact fail-closed rule, one statement for every door: a routed or non-Anthropic row whose `launch_account` is unknown refuses re-entry. Guessing a namespace is the wrong-bill door. A row that positively records `launch_account: default` and no route file keeps the historical bare behavior. A recorded route file that is missing, unparseable, or carries only the auth-scrub floor refuses for the same reason as below.
 
@@ -514,7 +514,7 @@ The paragraph below is the superseded theory, kept as the historical record of t
 
 A 2026-08-15 incident found the theory does not hold for a *blocked* row. A supervisor can be registered as reachable and still sit at a populated prompt. It can have no model turn in flight. Non-interactive `claude attach` has no pty. It can print "Attaching..." and exit without delivery. The Rust live arm reads the target account's Claude roster. When a message was requested, it refuses `working` or `done` rows. It sends the wrapped message over `control.sock` and confirms it in the transcript. Python no longer wakes Claude rows.
 
-**The Rust arm owns live Claude resume directly.** The `resume` verb routes to the installed `fno-agents` binary because it is in `RUST_CLIENT_VERBS`. Its `claude_live_route` reads the plan-pinned account roster. It delivers wrapped messages over `control.sock`. It no longer delegates to Python or pins `FNO_AGENTS_RUNTIME=python`. Python `resume_cli.py` refuses Claude rows with exit 13. The dead-row `claude --resume <uuid>` arm still restores recorded routes through `--settings`.
+**The Rust arm owns live Claude resume directly.** The `resume` command routes to the installed `fno-agents` binary because it is in `RUST_CLIENT_COMMANDS`. Its `claude_live_route` reads the plan-pinned account roster. It delivers wrapped messages over `control.sock`. It no longer delegates to Python or pins `FNO_AGENTS_RUNTIME=python`. Python `resume_cli.py` refuses Claude rows with exit 13. The dead-row `claude --resume <uuid>` arm still restores recorded routes through `--settings`.
 
 Both doors apply the same usability rule, not just an existence check: a recorded
 file that is missing, unparseable, or carries only the auth-scrub floor all
@@ -752,8 +752,8 @@ portable alternatives. If the item exists but `dispatch_env()` still raises
 
 **config.toml validation failure on `fno config accounts add`**
 
-The `add` command validates the record via Pydantic before writing. Common
-causes:
+The `add` command validates the record before writing
+(`crates/fno-agents/src/accounts/records.rs`). Common causes:
 
 - `id` contains uppercase or spaces. Pattern: `[a-z][a-z0-9-]{0,63}`.
 - `auth: oauth_dir` without `--credentials-source`.
@@ -799,21 +799,6 @@ trigger a swap.
 | `parser_error` | NO | HTTP 200 with unparseable body (OpenRouter envelope mismatch, HTML error page through 200) |
 | `unknown` | NO | Anything else - surface to caller |
 
-### Swap Rules
-
-- **Storm-cap.** At most `config.accounts.failover.max_swaps_per_phase`
-  swaps per phase, default 5. Beyond this, the controller writes
-  `blocked_reason: stuck:failover_thrash` to `target-state.md` and the
-  typed-blocker stop hook trips BLOCKED.
-- **No swap-back within phase.** Once swapped from A to B, A is
-  ineligible for the rest of the phase. Cheap v0 hysteresis without a
-  multi-success-counter health-check loop. Resets at phase boundaries.
-- **End of queue.** When the queue is exhausted with the no-swap-back
-  rule applied, the controller returns `QUEUE_EXHAUSTED`. The upstream
-  loop layer's mode-aware branching (attended -> BLOCKED with
-  `reason: all_providers_exhausted`; unattended -> sleep 5 min, restart)
-  handles the action.
-
 ### Exhaustion-triggered auto-switch (multi-account)
 
 When the recovery sweep swaps a rate-limited claude worker onto a second claude
@@ -822,20 +807,18 @@ record, the account switch depends on the swapped-to record's `auth` strategy:
 - **`oauth_dir`** (two-dir substrate): nothing extra - the record's own config
   dir rides the respawn's `dispatch_env`, so the new worker reads the other
   account's credentials directly.
-- **`managed`** (single shared slot): `attempt_swap` itself materializes the candidate into the slot before it writes the routing pointer. It uses the same capture-before-overwrite and live-pin gate as `fno config accounts use`. It refuses the swap outright on a pin or store error, instead of reporting one that never happened.
+- **`managed`** (single shared slot): `recovery._materialize_managed_switch` materializes the candidate into the slot before it writes the routing pointer. It uses the same capture-before-overwrite and live-pin gate as `fno config accounts use`. It refuses the swap outright on a pin or store error, instead of reporting one that never happened.
 
 This closes a long-standing gap. The pointer used to flip while the slot kept the exhausted account's credentials. `list` and dispatch read the new pointer, but every worker kept the old creds.
 
-This materialization is **opt-in**. It is gated by `auto_switch`, on `attempt_swap`'s only production caller, the recovery sweep:
+This materialization is **opt-in**. The recovery sweep gates it on `auto_switch`:
 
 ```toml
 [accounts]
 auto_switch = true   # default false; arms managed-account materialization on auto-switch
 ```
 
-When `auto_switch` is off (default), the sweep tells `attempt_swap` not to materialize a managed candidate (`materialize_managed=False`). The pointer still flips, today's warn/defer/nudge behavior, unchanged. The slot does not. The sweep degrades to the bounded nudge instead of redispatching onto un-switched (exhausted) credentials.
-
-A caller that omits the argument gets the default: materialize. That default is correct for every `attempt_swap` caller except the recovery sweep, which has its own separate opt-in contract to honor.
+When `auto_switch` is off (default), the sweep does not materialize a managed candidate. The pointer still flips. The slot does not. The sweep degrades to the bounded nudge instead of redispatching onto un-switched (exhausted) credentials.
 
 A live-pin defer or a store/keychain failure degrades the same way, regardless of the setting. Single-account and `oauth_dir` setups are unaffected by the knob.
 
@@ -900,8 +883,7 @@ The sidecar feeds:
 | File | Owner | Reset on |
 |---|---|---|
 | `.fno/turn-attribution.jsonl` | dispatch layer | session boundary (gitignored, re-created per session) |
-| `.fno/failover-state.json` | failover controller | phase boundary (detected via phase_id mismatch) |
-| `~/.fno/.settings.lock` | atomic_mutate_settings + read_active_provider_atomic | n/a (lock file, content irrelevant) |
+| `~/.fno/config.toml.lock` | save_providers, the Rust `accounts/writer.rs` | n/a (lock file, content irrelevant) |
 
 ---
 
@@ -1011,8 +993,8 @@ or backfill required.
 
 ### verify_provenance evidence path
 
-The bundled binary's `fno-agents verify-evidence` verb exposes three sub-commands
-(`child-promise`, `has-nonclaude`, `receipt`); the per-agent `event` sub-verb and
+The bundled binary's `fno-agents verify-evidence` command exposes three sub-commands
+(`child-promise`, `has-nonclaude`, `receipt`); the per-agent `event` sub-command and
 its `subagent_spawn` / `subagent_complete` pair verifier were removed for cause
 (production sigma dispatch goes through the raw Task tool and never reached the
 wrapper). See `crates/fno-agents/tests/verify_evidence_parity.rs` for the
@@ -1020,22 +1002,11 @@ contract tests against golden output captured before the bash oracle was deleted
 
 ## Failover hardening (Plan A)
 
-The Spec 2 failover controller ships with a closed-taxonomy `ErrorClass` enum and fixed-cooldown swap behavior. Provider-rotation Plan A adds two complementary behaviors without touching the swap-decision contract or the existing `failover-state.json` schema:
+The error taxonomy classifies a provider call into a closed `ErrorClass` set. Plan A adds two behaviors on top of it:
 
 1. **Priority-ordered error rules.** Body text runs BEFORE HTTP-status fallback. When the upstream provider returns 200 with a soft-error body, the body phrases catch the rate-limit class. Phrases include `"rate limit"`, `"quota exceeded"`, `"capacity"`, and `"overloaded"`. Status rules (401, 402, 403, 404, 429) act as fallbacks. Rules live in `cli/src/fno/adapters/providers/error_taxonomy.py::ERROR_RULES` as a verbatim rule table.
 
-2. **Per-provider exponential backoff.** Repeated rate-limit/quota errors increment a per-provider `backoff_level` from 0 toward 15. The cooldown for the just-witnessed error is `BASE * 2^old_level` (1st hit -> 2000ms, 2nd -> 4000ms, 9th and beyond capped at MAX_BACKOFF_MS = 5min). A successful call clears the level back to 0 via the public `failover.record_success(provider_id)` helper.
-
-### State separation
-
-Plan A introduces a NEW state file at `.fno/provider-runtime-state.json` for per-provider backoff. This file is **distinct from** `failover-state.json`:
-
-| File | Owns | Lifetime | Lock |
-|---|---|---|---|
-| `failover-state.json` | phase storm-cap, no-swap-back | per-phase (resets on phase boundary) | `<path>.lock` |
-| `provider-runtime-state.json` | per-provider backoff_level + rate_limited_until | survives target spawns within a multi-node campaign; 1h TTL | `<path>.update.lock` |
-
-The two files use different sidecar lock paths so the runtime-state writer cannot self-deadlock on `atomic_write`'s internal lock. The `failover-state.json` schema (phase_id, swaps_this_phase, last_swap_from, last_swap_at_iso) is unchanged.
+2. **Per-provider exponential backoff.** Repeated rate-limit/quota errors increment a per-provider `backoff_level` from 0 toward 15. The cooldown for the just-witnessed error is `BASE * 2^old_level` (1st hit -> 2000ms, 2nd -> 4000ms, 9th and beyond capped at 5min). The level drops back to 0 when the entry ages past the 1h health TTL. The Rust writer `accounts::state::update_health` does this arithmetic.
 
 ### Schema (provider-runtime-state.json)
 
@@ -1057,19 +1028,11 @@ The two files use different sidecar lock paths so the runtime-state writer canno
 - `backoff_level` is clamped to `[0, MAX_BACKOFF_LEVEL=15]` on construction AND on disk-read. A corrupt or hand-edited out-of-range integer is repaired in memory; the next write rewrites disk with the clamped value.
 - `rate_limited_until` and `last_error_at` are unix epoch seconds (UTC). `last_error_at` is what the 1h TTL is measured against.
 
-### Wiring into failover
-
-`failover.attempt_swap()` consults `classify_error(status, body)` after the existing `triggers_swap` check. If a rule matches (text rule OR status rule), `update_provider_health(provider_id, rule)` writes the new backoff record. The swap decision itself (storm-cap, no-swap-back, queue-exhausted) is unchanged - the new state is supplementary. Failures inside the runtime_state IO layer (`OSError`, `JSONDecodeError`) are swallowed and logged so the swap path is never blocked; programmer errors (TypeError, AttributeError, etc.) propagate so they surface in CI.
-
 ### Concurrency contract
 
 - Writes to `provider-runtime-state.json` serialize via `filelock.FileLock(path + ".update.lock", timeout=5)`. The lock releases after `os.replace()` commits the tempfile.
 - Lock-contention timeout (>5s) returns the last-known-good `ProviderHealth` without raising and without incrementing.
 - Two parallel processes both calling `update_provider_health(provider, rule)` produce a final state where the level reflects both increments (no lost updates). Test `TestConcurrency::test_concurrency_no_lost_updates` pins this with `multiprocessing.Process(spawn)` workers.
-
-### Plan B prerequisites
-
-This is Plan A. Plan B (combos + round-robin rotation) extends `ProviderRuntimeState` with `combo_cursors` and adds `dispatch_with_combo()` consumers that read `is_in_cooldown()` for cooldown-aware candidate selection. Plan A explicitly does NOT add cooldown-aware filtering to `_next_eligible_provider`; that is Plan B scope.
 
 ## Per-model lockout granularity (Plan A1)
 
@@ -1118,7 +1081,7 @@ Stale `model_locks` entries drop together with their parent `ProviderHealth` rec
 
 ### Producer wiring (`NormalizedError.model`)
 
-`normalize(http_status, exit_code, body, *, model="claude-opus-4-7")` clamps to 256 bytes and threads the identifier through `NormalizedError.model`. `NormalizedError.__post_init__` rejects empty strings so an accidental `model=""` surfaces in CI instead of crashing the failover swap path. `failover.attempt_swap` forwards `error.model` to `update_provider_health(..., model=...)`. Existing call sites that omit `model=` route through the `model=None` branch and see exactly the Plan A baseline.
+`normalize(http_status, exit_code, body, *, model="claude-opus-4-7")` clamps to 256 bytes and threads the identifier through `NormalizedError.model`. `NormalizedError.__post_init__` rejects empty strings so an accidental `model=""` surfaces in CI instead of crashing the failover swap path. A writer that has the model forwards `error.model` to `update_provider_health(..., model=...)`. Existing call sites that omit `model=` route through the `model=None` branch and see exactly the Plan A baseline.
 
 ### Test contract
 
@@ -1176,7 +1139,10 @@ fno config accounts combos list [--json]
 fno config accounts combos remove <name> [--scope project|global]
 fno config accounts combos test <name>      # config-only validation; reports per-member health
 fno config accounts combos use <name> [--scope project|global]
+fno config accounts combos update <name> --providers a,b,c [--strategy S] [--sticky N] [--scope project|global]
 ```
+
+`fno-agents spawn-overlay accounts combos` answers every argument; the Python command only forwards. `combos update` replaces one combo in a single write and keeps the stored strategy and sticky limit when their flags are omitted.
 
 `combos test` does NOT issue real API calls (smoke-pinging every member multiplies cost). For an active liveness probe, run `fno config accounts test <id> --smoke` per member.
 
@@ -1191,11 +1157,11 @@ When a subagent dispatch needs to pick a provider, `agents.dispatch_target.resol
 
 Per-agent pins win over combos when both are configured for the same agent: combos compose with per-agent routing as additional fallback, not replacement.
 
-Unknown combo (in env or settings) logs a WARNING and falls through to the next rule. `ComboNotFoundError` is reserved for `dispatch_with_combo` itself (the silent-bypass-blocker that callers can catch and fall through cleanly).
+Unknown combo (in env or settings) logs a WARNING and falls through to the next rule.
 
 ### What chooses the account a spawn bills
 
-`accounts.active` is rung four of `agents.dispatch_target.resolve_dispatch_target`. Failover and outage-handoff routes read it. It is a rotation pointer, not a spawn default. For a spawn, the spawn compose (`spawn_compose.rs` via `compose_spawn_argv`) checks the lane, then `agents.profiles.<verb>.account`, then `agents.defaults.account`. An explicit `--account` is the CLI pin.
+`accounts.active` is rung four of `agents.dispatch_target.resolve_dispatch_target`. Failover and outage-handoff routes read it. It is a rotation pointer, not a spawn default. For a spawn, the spawn compose (`spawn_compose.rs` via `compose_spawn_argv`) checks the lane, then `agents.profiles.<command>.account`, then `agents.defaults.account`. An explicit `--account` is the CLI pin.
 
 | Reading | Where it shows | What it means |
 |---|---|---|
@@ -1225,35 +1191,18 @@ Per-combo cursors live in `provider-runtime-state.json` under `combo_cursors.<na
 }
 ```
 
-`providers_hash` is a stable order-sensitive sha256[:16] of the combo's providers tuple. When the user edits the combo (add/remove/reorder), the hash changes and the next read returns `None` (cursor invalidated) - the next `advance_cursor` resets to `(idx=0, count=1)` cleanly.
+`providers_hash` is a stable order-sensitive sha256[:16] of the combo's providers tuple. When the user edits the combo (add/remove/reorder), the hash changes and the next read returns `None` (cursor invalidated).
 
-`last_rotated_at` drives the 24h TTL: a quiescent combo's cursor is dropped on the next locked write to `provider-runtime-state.json` and a future advance starts fresh at `(idx=0, count=1)`.
+`last_rotated_at` drives the 24h TTL: a quiescent combo's cursor is dropped on the next locked write to `provider-runtime-state.json`.
 
-Cursor-state writes serialize via the same fcntl lock (`provider-runtime-state.json.update.lock`) as `update_provider_health` / `reset_provider_health`, so two parallel `advance_cursor` calls never lose updates.
-
-### Sticky math
-
-For `round_robin` with `N` providers and `sticky_limit=K`:
-
-| Call # | Returned cursor (idx, count) | Rotation result (providers=[a,b,c], K=3) |
-|--------|------------------------------|------------------------------------------|
-| 1      | (0, 1) | [a, b, c] |
-| 2      | (0, 2) | [a, b, c] |
-| 3      | (0, 3) | [a, b, c] |
-| 4      | (1, 1) | [b, c, a] |
-| 5      | (1, 2) | [b, c, a] |
-| 6      | (1, 3) | [b, c, a] |
-| 7      | (2, 1) | [c, a, b] |
-| ...    | ...    | ...    |
-
-Single-provider combos short-circuit (cursor never advances past `idx=0`).
+Nothing advances a cursor today. The round-robin advance had no caller, so it was deleted when the state writers moved to Rust. `fno config accounts combos` still reads a cursor that an earlier build left.
 
 ### Skill + entry-point integration
 
 | Surface | How combo is supplied |
 |---------|-----------------------|
 | `/target` skill | `/fno:target combo my-stack "feature"` (positional 2-token modifier) |
-| `run-target-loop.sh` | `TARGET_COMBO=my-stack bash scripts/run-target-loop.sh <plan>` (env; the `fno loop` verb is removed) |
+| `run-target-loop.sh` | `TARGET_COMBO=my-stack bash scripts/run-target-loop.sh <plan>` (env; the `fno loop` command is removed) |
 
 (The `/megawalk` skill and `fno megawalk` combo rows are gone with the retired megawalk surface.)
 
@@ -1264,209 +1213,8 @@ All paths terminate in setting `TARGET_COMBO=<name>` in the environment of spawn
 - **Empty `providers` list:** `Combo.__post_init__` raises `ValueError`; `load_combos` wraps as `ProviderConfigError`.
 - **Invalid strategy:** raised at construction-time.
 - **Unknown provider id in `--providers`:** rejected before `config.toml` mutation.
-- **Combo deleted mid-dispatch:** `dispatch_with_combo` raises `ComboNotFoundError`; `agents.dispatch_target.resolve_dispatch_target` catches its loader equivalent and falls through.
-- **All members in cooldown:** `dispatch_with_combo` returns `QueueExhausted(retry_after=...)` with the soonest cooldown-expiry hint.
-- **YAML round-trip via PyYAML loses comments:** documented limitation. Use `fno config accounts combos add/remove` for safe edits, or hand-edit and re-add.
-
-## Runtime adapter documentation
-
-The Codex and other non-Hermes runtime adapter designs that previously appeared here are retired.
-The active provider registry is Hermes-only, and new provider dispatch must use the canonical `fno agents spawn` seam.
-
-Historical adapter implementation details were removed with the dead runtime paths and are intentionally not documented as current APIs.
-## Hermes Agent CLI runtime adapter (Plan A3)
-
-Plan A3 is the second non-Claude `RuntimeAdapter`. After it lands, a
-provider record with `cli: hermes` resolves through `get_adapter("hermes")`,
-`dispatch_with_combo` picks it up via Locked Decision 8, and the universal
-error taxonomy applies to Hermes subprocess outcomes.
-
-Hermes Agent (`/nousresearch/hermes-agent`) is an open-source AI agent
-platform with persistent memory and tool-calling. The adapter dispatches
-via `hermes chat -q "<prompt>"` and lets Hermes' own memory semantics
-apply. Unlike Claude Code and Codex (one-shot CLIs), Hermes carries
-memory across invocations by default; the adapter does not enforce
-statelessness, that is a Hermes-server-side concern.
-
-### Shape
-
-```
-RuntimeAdapter Protocol (3 primitives + health)
-       |
-       v
-HermesCliAdapter (name = "hermes")
-       |
-       +-- spawn_worker(prompt) -> subprocess.Popen(["hermes", "chat", "-q", prompt])
-       |   (in-session env => skill_dispatch_required sentinel; no shell spawn)
-       |
-       +-- create_worktree(name) -> _shared.create_worktree(name) (Locked Decision 5)
-       |
-       +-- call_api(command, retries=3) -> subprocess.run(["hermes"] + command)
-       |   (retry on 137/143/124; non-retryable on usage errors)
-       |
-       +-- health() -> AdapterHealth
-           (binary on PATH + hermes doctor exit 0 + config dir present)
-```
-
-### Differences from the Codex adapter
-
-| Concern | Codex (A2) | Hermes (A3) |
-|---------|-----------|-------------|
-| Subcommand | `codex exec <prompt>` | `hermes chat -q "<prompt>"` |
-| In-session env vars | `CLAUDECODE_SESSION_ID`, `CODEX_SESSION_ID` | adds `HERMES_SESSION_ID` |
-| In-session check | `os.environ.get(...) is truthy` | `os.environ.get(...) is not None` (fail-closed; empty string still counts) |
-| Health probe | `codex --version` + version parsing + auth file or env | `hermes doctor` exit code + config dir candidate search |
-| Min version | `MIN_CODEX_VERSION = "0.117.0"` | none (no `--version` flag documented) |
-| Auth model | `~/.codex/auth.json` (oauth) or `OPENAI_API_KEY` | not enforced at adapter layer; Hermes wraps an underlying provider |
-| Statefulness | one-shot per invocation | persistent memory across invocations (server-side concern) |
-| Exit codes | 1=usage, 2=subcommand | 1=usage, 2=runtime, 3=auth |
-
-### In-session sentinel (fail-closed)
-
-Inside any CLI agent session (`CLAUDECODE_SESSION_ID`, `CODEX_SESSION_ID`,
-or `HERMES_SESSION_ID` set to anything including empty string), shell-spawn
-is forbidden. `spawn_worker` returns the standard
-`{"action": "skill_dispatch_required", ...}` envelope, forcing callers to
-use Agent-tool dispatch instead. The empty-string treatment is fail-closed
-specifically because Hermes' persistent memory makes silent in-session
-spawn doubly dangerous: a second hermes invocation could observe or
-corrupt state from the parent session.
-
-### `health()` checks
-
-`health()` is non-invasive: no real LLM call, no chat invocation. Three
-checks in order:
-
-1. **Binary**: `hermes doctor` is on PATH (15s timeout; longer than Codex's
-   10s because `doctor` may probe multiple subsystems). FileNotFoundError
-   surfaces ok=False with a PATH error message.
-2. **Doctor exit**: `hermes doctor` returns exit 0. Non-zero surfaces
-   ok=False with the exit code in the error message.
-3. **Config dir**: at least one of `~/.config/hermes`, `~/.hermes`, or
-   `~/Library/Application Support/hermes` exists as a directory. The
-   ordering is XDG-first, POSIX-home second, macOS-specific third.
-   - A candidate path that exists as a file or broken symlink surfaces
-     a distinct "config path exists but is not a directory" error so
-     the operator knows to clean up the stray entry rather than
-     re-running `hermes setup` futilely.
-
-Every health return path - happy and unhappy - populates `doctor_exit`,
-`doctor_stdout`, and `doctor_stderr` in `details` (None on early-return
-paths) so downstream consumers can read them without a KeyError guard.
-
-### `map_hermes_error` order of operations
-
-Per Locked Decision 4, error mapping is per-adapter and walks Plan A's
-universal `classify_error` first. The order is:
-
-1. **Universal text rules first**. `normalize(http_status=None,
-   exit_code=rc, body=stderr)` plus a fall-through walk of Plan A's
-   `ERROR_RULES`. Catches `rate limit` / `too many requests` /
-   `quota exceeded` / `capacity` / `overloaded` regardless of which CLI
-   emitted the error, plus auth-shape phrases like `no credentials`.
-   Backoff matches map to `PROVIDER_4XX_QUOTA` + `triggers_swap=True`;
-   long-cooldown matches like `no credentials` map to
-   `PROVIDER_4XX_AUTH` + `triggers_swap=True`.
-2. **Negative returncode normalisation**. Same as Codex: signal-killed
-   subprocess returncodes (`-N`) are normalised to shell-style 128+N
-   when `signum < 128`, so both Python subprocess and shell call paths
-   classify identically.
-3. **Hermes-specific exit-code fallback** for cases the universal rules
-   don't cover: `0` -> `UNKNOWN` (defensive), `1` -> `PARSER_ERROR`,
-   `2` with server-side hint (`internal error`, `unavailable`, `5xx`,
-   `server`, `upstream`) -> `PROVIDER_5XX` + swap, `2` without hint
-   -> `UNKNOWN`, `3` -> `PROVIDER_4XX_AUTH` + swap (the Hermes-specific
-   exit-3-as-auth-error convention; verify against real binary per
-   [VERIFY-AT-IMPL] in `hermes.py`), `124/137/143` -> `PARSER_ERROR`.
-
-`body_excerpt` is truncated to 256 characters and stderr blob to 64K
-characters before processing (the constant names say "bytes" but the
-slices are character-counted; a Codex-parity rename is queued as a
-follow-up).
-
-### Plan B integration is automatic (Locked Decision 8)
-
-Plan B's `dispatch_with_combo("my-mixed-stack", fn)` calls
-`get_adapter(record.harness)` for each provider in the combo. Registering
-`HermesCliAdapter` as `"hermes"` in
-`cli/src/fno/adapters/__init__.py` is the only change needed - no
-edits to `rotation.py`, `dispatch_with_combo`, or any combo-resolution
-code.
-
-Example combo that routes work across Claude, Codex, and Hermes:
-
-```toml
-[accounts.combos.multi-cli]
-strategy = "round_robin"
-providers = ["claude-anthropic", "codex-openai", "hermes-nous"]
-sticky_limit = 3
-
-[[accounts.records]]
-id = "claude-anthropic"
-name = "Claude Anthropic"
-harness = "claude"
-auth = "oauth_dir"
-credentials_source = "~/.claude"
-
-[[accounts.records]]
-id = "codex-openai"
-name = "Codex OpenAI"
-harness = "codex"
-auth = "oauth_dir"
-credentials_source = "~/.codex"
-
-[[accounts.records]]
-id = "hermes-nous"
-name = "Hermes Nous"
-harness = "hermes"
-auth = "oauth_dir"
-credentials_source = "~/.config/hermes"
-```
-
-### Provider record example
-
-A minimal Hermes provider record:
-
-```toml
-[[accounts.records]]
-id = "hermes-nous"
-name = "Hermes Nous"
-harness = "hermes"
-auth = "oauth_dir"
-credentials_source = "~/.config/hermes"
-```
-
-### `[VERIFY-AT-IMPL]` markers (pre-merge gates)
-
-Plan A3 was written against `ctx7`-fetched documentation rather than a
-running Hermes binary. The implementer flagged five assumptions in
-`hermes.py` with `[VERIFY-AT-IMPL]` markers:
-
-- Doctor command (`hermes doctor`) exit-code semantics and stdout shape
-- Config directory canonical path (currently three candidates)
-- Exit code numbering (1/2/3 follow the Codex convention)
-- Doctor timeout (15s; tune based on real-binary timings)
-- Auth env-var name(s); the adapter treats them as opaque
-
-Real-binary smoke verification is gated behind `FNO_RUN_SMOKE=1`
-per AC4.3. The implementer (or the user before merge) should run
-`hermes doctor` and `hermes chat -q "test"` against an installed binary
-and either remove the markers or correct the values.
-
-### Out of scope for Plan A3
-
-- Cross-adapter parity fixes (a sigma-review pass surfaced several
-  symmetric bugs in Codex; they land in a separate follow-up PR rather
-  than expanding Plan A3's surface)
-- HTTP API translation (Locked Decision 12)
-- Hermes server-side configuration (user installs and sets up Hermes;
-  footnote just invokes the binary)
-- Forcing stateless dispatch when Hermes is configured stateful
-  (server-side concern; documented but not enforced)
-- Hermes MCP server mode (`hermes mcp serve`) is a different shape from
-  one-shot CLI dispatch; separate concern
-- Other CLI adapters: `gemini.py`, `glm.py`, `openclaw.py` (separate
-  plans, one per CLI)
+- **Combo deleted mid-dispatch:** `agents.dispatch_target.resolve_dispatch_target` logs the unknown combo and falls through.
+- **Comments in the config file:** the combos writers edit the file in place, so comments and other keys survive a write.
 
 ## Quota-aware dispatch
 
@@ -1496,10 +1244,6 @@ is absent or stale, behavior is byte-for-byte the reactive baseline.
 
 ### Consumers
 
-- **Combo rotation** (`rotation.dispatch_with_combo`): an `EXHAUSTED` member is
-  skipped like a cooldown (its reset feeds the `QueueExhausted.retry_after`
-  hint); non-exhausted members are stably ordered `OK`/`UNKNOWN` before `LOW`.
-  Cache-only (no probe - dispatch stays latency-clean).
 - **Node dispatcher** (`dispatch._dispatch_one`, `backlog.advance`): both go
   through the one shared route selector,
   `fno.agents.autonomous_route.select_autonomous_route`, so they cannot
@@ -1507,14 +1251,12 @@ is absent or stale, behavior is byte-for-byte the reactive baseline.
   `EXHAUSTED` (or `LOW` with a reset inside `defer_horizon_minutes`) is **not**
   dispatched here - it either cuts over to another record (below) or leaves a
   `quota-deferred` receipt + one decision event, node left in `ready`, the first
-  tick after the reset dispatching it. `p0` and explicit human dispatch verbs
+  tick after the reset dispatching it. `p0` and explicit human dispatch commands
   always fire. This is the one probe site (refresh-on-stale).
 - **Lane routing** (review panel `alternate` selection): a kind whose records
   are all `EXHAUSTED` is stably demoted below kinds with headroom. Explicit
   per-agent pins and role→provider config mappings are never overridden.
-- **Promise-time warning** (`fno config accounts required-bot-check`): read-only,
-  warns when a `config.review` required-bot's provider is `EXHAUSTED`, naming
-  the reset, so a coming review-gate wedge surfaces immediately.
+- **Promise-time warning** (`fno config accounts required-bot-check`): read-only. When every account behind a `config.review` required bot is `EXHAUSTED`, it warns. It names the reset, so a coming review-gate wedge surfaces at once.
 
 Looking at quota and acting on it are two decisions, and they have two knobs. `observe` arms the probe and the snapshot write and changes no dispatch decision. `defer_dispatch` arms the verdicts that hold or reroute a dispatch, and implies `observe`, because deferring requires looking. With neither set, `evaluate_quota_signal` short-circuits to `UNKNOWN` (reason `quota-observation-off`) before it ever calls the probe, so a fresh install makes no network call. With `observe` on and `defer_dispatch` off, the probe runs and the snapshot lands. Both verdicts stay false, and the reason reads `observed` rather than `probed`. That is a working meter with no behavioural change to dispatch. One knob used to decide both, so an operator who wanted the meter had to accept automatic deferral, and the safe choice was blindness.
 
@@ -1626,9 +1368,9 @@ later.
 
 ### The credential-shape discriminator: `managed` vs `api_key`
 
-A rotation onto a `managed` record needs a human at a login prompt. One Claude/codex login shares the CLI's one credential slot. `managed.switch` materializes the *stored* snapshot into the slot, but a slot with only one account registered has nowhere to rotate to without a fresh `/login`.
+A rotation onto a `managed` record needs a human at a login prompt. One Claude/codex login shares the CLI's one credential slot. The switch (`fno config accounts use`) materializes the *stored* snapshot into the slot, but a slot with only one account registered has nowhere to rotate to without a fresh `/login`.
 
-An `api_key` record has no such ceiling. Its credential rides the env overlay (`ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`). `pick_account` and `attempt_swap` can select it with nobody watching. Every `managed` record shares one failure domain, the subscription, not the account row. A Claude-wide outage takes them all down together but never touches this lane.
+An `api_key` record has no such ceiling. Its credential rides the env overlay (`ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`). `pick_account` and the recovery sweep can select it with nobody watching. Every `managed` record shares one failure domain, the subscription, not the account row. A Claude-wide outage takes them all down together but never touches this lane.
 
 So a two-record queue of `readyrule` + `makers`, both `auth: managed`, is not really two candidates for an unattended failover. It is one failure domain with two names.
 

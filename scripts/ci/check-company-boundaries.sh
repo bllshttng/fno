@@ -175,14 +175,10 @@ LAYERS = (
         3,
         "composition",
         (
-            "fno.company.campaign",
-            "fno.company.coordinator",
             "fno.company.topology",
             "fno.company.execution",
-            "fno.company.join",
         ),
     ),
-    (4, "plugins", ("fno.plugins",)),
     (5, "runtime", ("fno.runtime", "fno.agents")),
 )
 

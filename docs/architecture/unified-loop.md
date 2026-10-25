@@ -5,11 +5,11 @@
 - **Group 2 shipped:** megawalk driver (driver arm removed 2026-08-03, see "The megawalk driver" below)
 - **Group 3:** planned - see "What lands later" below
 
-**Sibling doc:** [control-plane-loop.md](control-plane-loop.md) - the stop-hook decision verb INSIDE a session
+**Sibling doc:** [control-plane-loop.md](control-plane-loop.md) - the stop-hook decision command INSIDE a session
 
 ## Scope
 
-This document covers the driver loop AROUND sessions: `crates/fno-agents/src/loop_runtime.rs`, `loop_target.rs`, `loop_dispatch.rs`, and the `scripts/run-target-loop.sh` exec shim. For the stop-hook decision verb that runs INSIDE each session, see [control-plane-loop.md](control-plane-loop.md).
+This document covers the driver loop AROUND sessions: `crates/fno-agents/src/loop_runtime.rs`, `loop_target.rs`, `loop_dispatch.rs`, and the `scripts/run-target-loop.sh` exec shim. For the stop-hook decision command that runs INSIDE each session, see [control-plane-loop.md](control-plane-loop.md).
 
 The target stop shims resolve the manifest by harness session id before invoking `loop-check`. When a cwd manifest's `harness_session_id` or legacy alias names the stopping session, the shims keep it. Otherwise, `fno-agents manifest-for-session` scans the repository worktrees. A confirmed miss emits `loop-check: no manifest names session <id>; visitor allowed` and allows the visitor to stop. An unreadable resolver remains checker-unavailable and takes the shim's bounded retry path.
 
@@ -202,7 +202,7 @@ After `next()` returns the unit and `close()` is called, subsequent `next()` cal
 
 A target driver asks whether its one deliverable shipped. A lead has no PR, so pointing the target driver at one can never reach a clean terminal state. `done_probes` are additive only. A plan can add conjuncts and can never silence the PR, CI, and review conjuncts underneath. The run burns to `NoProgress` or `Budget` while looking like it is working. The lead driver asks the lead's question instead, which is whether the board is clean.
 
-`fno inbox board --json` reads fourteen queues through verbs that already exist and computes nothing they already answer. Every queue carries the literal shell command that produced it, so board emptiness is reproducible by a third party rather than asserted. `undispatched` is planned work awaiting a worker. `unplanned` is unplanned work awaiting a blueprint. They use different verbs and are disjoint on `plan_path`. The `undispatched` queue has an independent source. `fno backlog undispatched --json` scans graph entries and the complete node-claim snapshot. It does not reuse the ranked dispatch selector, so a selector omission is nameable rather than an empty queue.
+`fno inbox board --json` reads fourteen queues through commands that already exist and computes nothing they already answer. Every queue carries the literal shell command that produced it, so board emptiness is reproducible by a third party rather than asserted. `undispatched` is planned work awaiting a worker. `unplanned` is unplanned work awaiting a blueprint. They use different commands and are disjoint on `plan_path`. The `undispatched` queue has an independent source. `fno backlog undispatched --json` scans graph entries and the complete node-claim snapshot. It does not reuse the ranked dispatch selector, so a selector omission is nameable rather than an empty queue.
 
 | Queue | Read | Lead can shrink it |
 |---|---|---|
@@ -219,9 +219,9 @@ A target driver asks whether its one deliverable shipped. A lead has no PR, so p
 | `fleet_task` | `questions.jsonl` fleet_task rows, folded by `crates/fno-agents/src/fleet_task.rs` | yes, by running the row's command; the row closes when its condition clears or its node closes |
 | `unreachable_worker` | `fno agents fleet needs --json` | not yet |
 
-`stalled_holder`, `unheld_progress`, and `undriven_pr` are three queues over ONE predicate, `_node_driver`, which answers who is driving a node: `active`, `stalled`, `promoted`, or `none`. `promoted` is a live role driving the epic it tenures over, which never holds a claim or a PR of its own; without it the serving epic would read unheld and hold the lead open on a row no verb can clear. They cannot disagree, because none computes its own answer. The reason there are three queues at all is sourcing. `stalled_holder` starts from the claim list, so it can only reach a worker still holding its lock. `undriven_pr` starts from open PRs bound back to their node, so it catches the worker that exited cleanly and released. Measured 2026-09-03: 7 of 12 open PRs sat undriven that way while the board named none of them. `unheld_progress` starts from the graph, so it catches the node the status stamp left `in_progress` after its claim went free or stale and no PR exists; the stamp is never revoked when a worker dies, so status alone can never carry it. Measured 2026-09-05: one such row sat invisible to every queue for 25 minutes while a lead watched a clean board. `undriven_pr` and `unheld_progress` are report-only toward the node. They never close or defer anything, and a node the operator already deferred or blocked is skipped, not nagged back up.
+`stalled_holder`, `unheld_progress`, and `undriven_pr` are three queues over ONE predicate, `_node_driver`, which answers who is driving a node: `active`, `stalled`, `promoted`, or `none`. `promoted` is a live role driving the epic it tenures over, which never holds a claim or a PR of its own; without it the serving epic would read unheld and hold the lead open on a row no command can clear. They cannot disagree, because none computes its own answer. The reason there are three queues at all is sourcing. `stalled_holder` starts from the claim list, so it can only reach a worker still holding its lock. `undriven_pr` starts from open PRs bound back to their node, so it catches the worker that exited cleanly and released. Measured 2026-09-03: 7 of 12 open PRs sat undriven that way while the board named none of them. `unheld_progress` starts from the graph, so it catches the node the status stamp left `in_progress` after its claim went free or stale and no PR exists; the stamp is never revoked when a worker dies, so status alone can never carry it. Measured 2026-09-05: one such row sat invisible to every queue for 25 minutes while a lead watched a clean board. `undriven_pr` and `unheld_progress` are report-only toward the node. They never close or defer anything, and a node the operator already deferred or blocked is skipped, not nagged back up.
 
-The split in that last column is what makes the loop converge. A queue only a human can clear holds the loop open forever, so it is reported and never counted toward done. The rule survives a broken verb. An unreadable report-only queue is loud (the board exits non-zero) and still uncounted. A human-gated queue never gates `NoWork`, and a failed reader behind it does not weaken that.
+The split in that last column is what makes the loop converge. A queue only a human can clear holds the loop open forever, so it is reported and never counted toward done. The rule survives a broken command. An unreadable report-only queue is loud (the board exits non-zero) and still uncounted. A human-gated queue never gates `NoWork`, and a failed reader behind it does not weaken that.
 
 **Staffed is an activity reading, never a status word.** The roster's wire vocabulary collapses four real states into three words. A worker consuming tokens, a worker parked at its prompt, and a worker whose model refused all render alike. A board reading that word drops every stalled node out of its queue. It then terminates `NoWork` while claims are held and nothing moves, which is worse than no loop. The discriminator is membership in `_ACTIVE_STATES` plus a fresh activity age. The set is imported rather than copied, so a later vocabulary fix reaches the board without an edit here.
 
@@ -232,7 +232,7 @@ The split in that last column is what makes the loop converge. A queue only a hu
 - *In-session:* `hooks/target-stop-hook.sh` adds `.fno/lead-state.md` as a second candidate after its target search comes up empty and forwards `--driver lead`. When both are present the target manifest wins: a session holding one is a worker whatever else sits beside it. A lead terminal skips `finalize`, which stamps a plan and graduates a node that a lead does not have. `hooks/footnote-agy-target-stop-hook.sh` cannot gate a lead, because the loop is claude-only in v1. It names the manifest and refuses rather than allowing the stop. A guard on one of two reachable paths is decorative.
 - *Cross-session:* `fno-agents loop run --driver lead --scope <scope>` respawns a lead while the board is non-empty. When the board is empty, it terminates `NoWork`. The first cut of this arm was built and cut before it shipped. Its unit key collided with the lead's own termination id. Its continue prompt was a target resume. The rebuild keys the unit per invocation. It names the lead in the prompt. It bounds dispatch-bearing invocations with the manifest `respawn_count`. See `crates/fno-agents/src/loop_lead.rs`.
 
-**A `NoProgress` terminal asks the operator, exactly once.** `NoWork` is the clean exit. `NoProgress` is different. It is the lead giving up with the board still full. That is this feature's own failure arriving through a different door. Work is pending, nothing moves, and nobody is told. So every `NoProgress` terminal calls `fno agents org escalate --stalled <rows>`. The verb records one question in the operator queue. `lead_decide` reaches NoProgress two ways: an unreadable board, and a board nothing cleared. So the call sits in the shared `terminate` closure rather than at one site. That covers a terminal added later without anyone remembering to wire it, and a guard on one of several terminals is decorative.
+**A `NoProgress` terminal asks the operator, exactly once.** `NoWork` is the clean exit. `NoProgress` is different. It is the lead giving up with the board still full. That is this feature's own failure arriving through a different door. Work is pending, nothing moves, and nobody is told. So every `NoProgress` terminal calls `fno agents org escalate --stalled <rows>`. The command records one question in the operator queue. `lead_decide` reaches NoProgress two ways: an unreadable board, and a board nothing cleared. So the call sits in the shared `terminate` closure rather than at one site. That covers a terminal added later without anyone remembering to wire it, and a guard on one of several terminals is decorative.
 
 The dedupe key is a hash of the sorted stalled row set. It is not the session and not the fire. A later lead meeting the same stalled board must not file a second question. A board that CHANGED is a different ask and gets its own question. Rows are queue-qualified, as in `undispatched:<id>`. The same node in two queues is two rows, and clearing one of them is real progress. An unreadable board escalates over an empty set. The question text names that case, so the operator never has to tell "no rows" from "could not see". A failed escalation is named on stderr and folded into the termination message. It never blocks the terminal. The lead stops either way, and a terminal that refused to finish because the ask failed is strictly worse.
 
@@ -259,7 +259,7 @@ A plan may therefore declare `done_probes` in its frontmatter - up to 3 shell co
 
 ```yaml
 done_probes:
-  - "fno agents mail list --kind report --since 24h | grep -q groom"
+  - "fno agents mail unread --json | grep -q groom"
 ```
 
 `loop-check` runs them as the **final** conjunct, only once every other conjunct already holds, and refuses `DonePRGreen` until each exits 0.
@@ -329,7 +329,7 @@ The reachable merge paths it governs:
 | `fno do pr status` | reports the `review_coverage` field (advisory) |
 | `gh pr merge`, the web button, raw REST, the auto-merge queue | the server refuses an uncovered head once the merge ruleset is applied; the verdict is published as the `fno/review-coverage` status from the same source |
 
-The verdict is published where GitHub can see it as two contexts on the PR head. `fno/review-coverage` is the required merge predicate. `fno/review-coverage-unavailable` is diagnostic instrument health and is never required by the ruleset. An unknown read sets both contexts to pending and tells the operator to retry the review verb. A computed covered or uncovered result preserves the required success/failure verdict and clears the diagnostic context to success.
+The verdict is published where GitHub can see it as two contexts on the PR head. `fno/review-coverage` is the required merge predicate. `fno/review-coverage-unavailable` is diagnostic instrument health and is never required by the ruleset. An unknown read sets both contexts to pending and tells the operator to retry the review command. A computed covered or uncovered result preserves the required success/failure verdict and clears the diagnostic context to success.
 
 `review-coverage-gate.yml` refreshes the status on the events only GitHub sees. A push invalidates the head. The `coverage-override` label arms or withdraws the release valve, naming its actor.
 
@@ -428,7 +428,7 @@ Identical to `hooks/target-stop-hook.sh` (grilled decision 8):
 
 Binary missing: the shim exits 2 with instructions to build or set `$FNO_AGENTS_BIN`.
 
-The Rust verb (`run_loop_verb_inner`) also resolves `--cli` for the dispatcher's binary check. Precedence for the driver CLI binary (mirrors `driver-claude-code.sh`): `$CLAUDE_CLI` env > `--cli` flag > `$CLI` env > `"claude"` default.
+The Rust command (`run_loop_command_inner`) also resolves `--cli` for the dispatcher's binary check. Precedence for the driver CLI binary (mirrors `driver-claude-code.sh`): `$CLAUDE_CLI` env > `--cli` flag > `$CLI` env > `"claude"` default.
 
 ### Exit-code map
 
@@ -466,7 +466,7 @@ The legacy `scripts/run-target-loop.sh` was 466 lines. The code it contained is 
 
 | Bash construct | What replaced it |
 |---|---|
-| `<promise>` grep in session output | typed `termination` event from `loop-check` verb; loop never reads stdout |
+| `<promise>` grep in session output | typed `termination` event from `loop-check` command; loop never reads stdout |
 | Model-fallback chain (`sed`/`grep` state machine over model names) | intentionally NOT ported; loop-check budget/backstop + driver-level retries cover the failure modes; strangler flag parity only. The rate-limit/model-fallback class is deliberately not ported as an output-grep detector (locked decision: retry and backoff policies belong over typed events, not detectors); retry/backoff policy is the per-unit dispatch cap and consecutive-failure pause in the megawalk walk policy (group 2). |
 | Restart-signal file polling | target closure checks `SIGINT_RECEIVED` + `.target-cancelled`; lead closure checks its scoped `.cancelled` sidecar |
 | Multi-plan grep over session output | plan identity in manifest (`plan_path`), not parsed from stdout |
@@ -480,7 +480,7 @@ Model-fallback is a deliberate drop, not an oversight. The loop contract is type
 
 ## The megawalk driver (group 2, removed)
 
-> **Removed 2026-08-03.** The `--driver megawalk` arm and `loop_megawalk.rs` are deleted ([path-census.md](path-census.md)). So are the `/megawalk` skill and the `fno megawalk` verbs. The backlog walk today runs through `/fno:target <node>` per node and `/fno:target bg --all-ready` for the ready board. Merge-triggered `fno backlog advance` and the active-backlog daemon ([active-backlog-dispatcher.md](active-backlog-dispatcher.md)) cover the rest. The sections below are the design record.
+> **Removed 2026-08-03.** The `--driver megawalk` arm and `loop_megawalk.rs` are deleted ([path-census.md](path-census.md)). So are the `/megawalk` skill and the `fno megawalk` commands. The backlog walk today runs through `/fno:target <node>` per node and `/fno:target bg --all-ready` for the ready board. Merge-triggered `fno backlog advance` and the active-backlog daemon ([active-backlog-dispatcher.md](active-backlog-dispatcher.md)) cover the rest. The sections below are the design record.
 
 ### MegawalkQueue
 

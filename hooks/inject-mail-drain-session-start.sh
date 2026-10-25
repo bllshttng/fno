@@ -26,7 +26,7 @@ OUTPUT=$(hook_run_optional fno agents mail admin drain-self 2>/dev/null || true)
 
 printf '%s\n' "$OUTPUT"
 
-# The read-verb lesson rides the drain, once per session and again after
+# The read-command lesson rides the drain, once per session and again after
 # each compaction: the door prints the line only when the session's teach
 # state says due, and --mark stamps it in the same breath. Best-effort - a
 # stale or absent binary teaches nothing and never blocks session start.

@@ -20,7 +20,7 @@ One line, every time, before a multi-hour walk: `claude /status`. If more than o
 
 ## Keep the install fresh
 
-Run `fno doctor` when something behaves unexpectedly, and especially after pulling. Skew between the source and the installed binary is a common cause of confusing behavior, including loops that will not finish because a verb the loop depends on silently did nothing. `fno doctor --fix` refreshes a stale install.
+Run `fno doctor` when something behaves unexpectedly, and especially after pulling. Skew between the source and the installed binary is a common cause of confusing behavior, including loops that will not finish because a command the loop depends on silently did nothing. `fno doctor --fix` refreshes a stale install.
 
 ## Let it run, and watch for its call for help
 
@@ -62,7 +62,7 @@ fno backlog decisions                         # the recent decisions across ever
 
 When a node exists, its id is the subject. Otherwise use `pr-<n>`, or the area. When a ruling changes what a worker does next, record it. An answered question is already recorded for you, because `fno inbox outstanding clear --answer` writes the decision on the same call.
 
-Agents have no decide lane: the verb refuses agent sessions. An agent records its rulings on the artifacts it can write. A ruling about a node goes on the node with `fno backlog note`. A ruling that kills another node's work defers it with `fno backlog defer <id> -K wont_do -R "<ruling>"`. A plan records the same verdict in `consolidation.rejected`. `fno backlog decisions <id>`, the inspect receipt, and `fno backlog undefer` read it back.
+Agents have no decide lane: the command refuses agent sessions. An agent records its rulings on the artifacts it can write. A ruling about a node goes on the node with `fno backlog note`. A ruling that kills another node's work defers it with `fno backlog defer <id> -K wont_do -R "<ruling>"`. A plan records the same verdict in `consolidation.rejected`. `fno backlog decisions <id>`, the inspect receipt, and `fno backlog undefer` read it back.
 
 Full contract in [decision-record](architecture/decision-record.md).
 
@@ -75,7 +75,7 @@ Do not add a worktree from inside another one, and do not work on a protected br
 To put them elsewhere, set `config.paths.worktrees_base` together with `worktree.policy = "external"`.
 The implementation-entry gates will refuse a write on a protected branch and point you at the fix.
 
-## Route ships through the fno verbs
+## Route ships through the fno commands
 
 Drive merges and PR operations through `fno do pr merge` and the ship gate. Do not reach for raw `gh`/`git`. The server enforces the same rule where no guard can reach. If the merge ruleset is applied, GitHub itself refuses a merge with no passing `fno/review-coverage` status on the head. Run `bash scripts/ci/apply-merge-ruleset.sh --apply` to apply it. Every path is covered: the web button, raw REST, `gh pr merge`, and the auto-merge queue. The only way past an uncovered head is the `coverage-override` label. The dangerous-command guards block merge and force-push commands by their text, even inside an echo or a commit body. Hand-running them tends to get blocked anyway. Writing PR and commit bodies with `--body-file` avoids tripping the same guards. That harness classifier is separate from this repo's own gates. `hooks/pre-push.sh` and `hooks/git-protection.py` read the DESTINATION only. They refuse writes to `main`, `master`, `develop`, and `dev`. Nothing else is gated. **A feature-branch force-push after a rebase needs no approval.** Not from an operator, not from a lead. Prefer `--force-with-lease` so a concurrent push refuses instead of clobbering. This never extends to the four protected branches.
 

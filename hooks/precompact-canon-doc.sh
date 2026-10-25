@@ -107,7 +107,7 @@ SHORT="${SID: -8}"
 REG_ROWS=""
 REG_RC=0
 if command -v fno >/dev/null 2>&1; then
-  # A hook is never a delegated one-verb child, so a FNO_AGENTS_RUNTIME pin
+  # A hook is never a delegated one-command child, so a FNO_AGENTS_RUNTIME pin
   # here has leaked off a spawned worker: strip it for this read, keep the
   # exit code, and let a failed read read as `unknown`, never as unpromoted
   # (under the pin the silent `|| true` took the failure for "no

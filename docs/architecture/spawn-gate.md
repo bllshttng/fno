@@ -1,19 +1,19 @@
 # The spawn gate: one gate, one answer
 
-There is ONE spawn gate: `crates/fno-agents/src/spawn_gate.rs`, with the lane axes in `spawn_gate_lanes.rs`. Every door asks the same gate: pane, routed, account, and the native bg/headless arms. Python's `cli/src/fno/agents/spawn_gate.py` is a TRANSPORT over the `fno-agents spawn-gate` verb. It carries the caller's identity in. It carries the refusal out, as data. This doc carries the long stories from the docstrings. The code keeps its prose short. The mux's own revival door asks through `crates/fno/src/server/revival_gate.rs`: the resume gesture and the held-pane focus ask in `gate` mode with `hold: false` (the verb releases the mutex before it answers), and the workspace restore asks once in `probe` mode and spends the headroom it grants.
+There is ONE spawn gate: `crates/fno-agents/src/spawn_gate.rs`, with the lane axes in `spawn_gate_lanes.rs`. Every door asks the same gate: pane, routed, account, and the native bg/headless arms. Python's `cli/src/fno/agents/spawn_gate.py` is a TRANSPORT over the `fno-agents spawn-gate` command. It carries the caller's identity in. It carries the refusal out, as data. This doc carries the long stories from the docstrings. The code keeps its prose short. The mux's own revival door asks through `crates/fno/src/server/revival_gate.rs`: the resume gesture and the held-pane focus ask in `gate` mode with `hold: false` (the command releases the mutex before it answers), and the workspace restore asks once in `probe` mode and spends the headroom it grants.
 
-## The verb contract
+## The command contract
 
-`fno-agents spawn-gate` reads one JSON payload on stdin. It writes one JSON answer on stdout. The verb exits 0 whenever it produced an ANSWER, including a refusal. A refusal is data. The caller decides what to do with it. The gate's own prose (`spawn queued: ...` during a 240-second queue) streams on stderr.
+`fno-agents spawn-gate` reads one JSON payload on stdin. It writes one JSON answer on stdout. The command exits 0 whenever it produced an ANSWER, including a refusal. A refusal is data. The caller decides what to do with it. The gate's own prose (`spawn queued: ...` during a 240-second queue) streams on stderr.
 
 Two modes:
 
-- `gate` runs the full admission gate. Its payload is `{mode, name, substrate, force, no_wait, route_provider, account, caller_session, succession_scope, holder_pid, seed, session_phase}`. An admitted answer is `{status: "admitted", gate_key, gate_holder, worker_key, worker_holder}`. When a claim is not held, its key is null. A refusal is `{status: "refused", exit_code, receipt, event}`. When the seed first verb or explicit `session_phase` label names review, the gate refuses. Seed verbs use `spawn_phase.toml`.
+- `gate` runs the full admission gate. Its payload is `{mode, name, substrate, force, no_wait, route_provider, account, caller_session, succession_scope, holder_pid, seed, session_phase}`. An admitted answer is `{status: "admitted", gate_key, gate_holder, worker_key, worker_holder}`. When a claim is not held, its key is null. A refusal is `{status: "refused", exit_code, receipt, event}`. When the seed first command or explicit `session_phase` label names review, the gate refuses. Seed commands use `spawn_phase.toml`.
 - `probe` is the read-only capacity reading. `fno agents admit status`, the lane readouts, `explain` and the advance width all consume it. The payload is `{mode: "probe", caller_session, only}`. Set `only: ["lanes"]` to skip the CPU and RAM reads. This is for callers already on the spawn path. The answer keeps the probe's verdict shape. It adds three blocks every reader consumes. `lanes` covers every capped provider and every provider a live row names, each `{cap, live, counted}`. `share` is `{leads, share, held, held_rows, unattributed}`. `rows` holds the explain Gate dicts in `{name, measured, threshold, verdict, key, note}` shape.
 
 ## Claims cross the boundary owned by the caller
 
-Every claim the verb takes in gate mode is stamped with the PYTHON caller's pid. The holder reads `spawn-gate:<holder_pid>:<name>`. The native claim verdict therefore judges the real holder. It never judges the verb process, which has already exited by the time dispatch returns. The verb hands the held keys back in the admitted answer. The Python `GateGuard` releases them with the ordinary release path.
+Every claim the command takes in gate mode is stamped with the PYTHON caller's pid. The holder reads `spawn-gate:<holder_pid>:<name>`. The native claim verdict therefore judges the real holder. It never judges the command process, which has already exited by the time dispatch returns. The command hands the held keys back in the admitted answer. The Python `GateGuard` releases them with the ordinary release path.
 
 ## Leads take no worker slot
 
@@ -67,6 +67,12 @@ The queue gives up after 240 seconds with exit 75. It used to wait 600 seconds. 
 
 A `--no-wait` pass takes no ticket. Its refusal receipt carries `queue_place`, `queue_size` and `waiting_on`, where the place is the back of the queue. A queue timeout carries them too. A refused native launch line names the place: `spawn gate refused the native launch (no_wait, place 3 of 3 waiting on max_live): ...`. The ticket leaves the queue as the gate returns.
 
+## Lead share: the floor, the spare seat, and finished workers
+
+Each teamed lead gets an even share of the cap: `max_live` divided by the lead count. The share is a floor that every lead keeps. Take the free seats, less every seat the other leads still lack to reach their share. If one is left over, a lead at its share can borrow it. A lead under its share always passes this axis. With `max_live` 16 and leads holding 5, 1 and 1, the first lead borrows the spare sixth seat. When the second lead then spawns, it admits, and the first lead's seventh is refused. At `max_live` 15 there is no spare seat, so the first lead is refused at 5.
+
+A worker that finished stops charging its lead. Two facts mark it finished: its hook reported `done` for its turn, and the graph records every node it names as merged. The reaper's own verdict reads the merge, so the gate and the reaper agree. The row still takes a fleet seat until the reaper removes it. On 2026-10-24 seven such workers held one lead at 7 of 7, and the gate refused that lead with a 15-node queue. A worker whose run left a terminal-run receipt is skipped the same way. The refusal receipt carries `free` and `owed` beside `held` and `share`.
+
 ## The exit-code allocation table
 
 One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py` and is mirrored in `spawn_gate.rs`. `cli/tests/unit/test_exit_code_allocation.py` keeps it unique. Values >= 64 claim a number once. The same NAME at the same number in both trees is byte-parity.
@@ -84,7 +90,7 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 - 84 state root ungranted. Permanent until a human grants.
 - 85 the Python sandbox probe
 - 86 the per-territory team cap. Exit 86 is the permanent, non-queueable territory-cap refusal. Unreadable territory attribution uses the same exit. Callers do not retry it as capacity.
-- 87 gate unavailable. The gate verb is missing, failed, or timed out. Fail closed: never admit on an unreadable gate.
+- 87 gate unavailable. The gate command is missing, failed, or timed out. Fail closed: never admit on an unreadable gate.
 - 88 blueprint thread cap. More than `agents.profiles.blueprint.max_live` live `bp` threads, or more than one per territory, refuses the spawn and teaches the subagent path.
 - 89 review session. A seed or label that names review causes a permanent refusal. The refusal runs before `--force` and the `FNO_SPAWN_GATE=0` bypass. Run the inline fno review lane.
 - 90 and 91, the fleet-incident check pair (`fleet_incident.rs`).
@@ -92,7 +98,7 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 
 ## Overriding the learned cap
 
-`agents.max_live` is the ceiling, and the burst is the one rule that passes it. Under it, the machine watch learns a working cap per machine. A first run starts the cap at the ceiling. A long run queue cuts the cap by 25 percent. Calm adds one slot per 900 seconds. The learned cap lives in `<agents home>/capacity/<machine-id>.json`. Every cap display reads it through `capacity::effective`.
+`agents.max_live` is the ceiling, and the burst is the one rule that passes it. Under it, the machine watch learns a working cap per machine. A first run starts the cap at the ceiling. The loop reads the fleet CPU share the spawn gate reads, so the two never read the machine two ways. A share over `[agents.capacity] cut_fleet_share` (default 0.75) for 600 seconds cuts the cap by 25 percent. A share under `raise_fleet_share` (default 0.35) adds one slot per 900 seconds. An unreadable share moves no streak and no cap. The learned cap lives in `<agents home>/capacity/<machine-id>.json`. Every cap display reads it through `capacity::effective`.
 
 Only a measured cut binds below the ceiling. An older first run stamped a cap it guessed from the machine budget (`seeded from machine budget`), and a cap can sit at an older and lower ceiling. The reader treats both as no measurement, so `agents.max_live = 32` with no floor reads an effective cap of 32 at once, not 24. The next tick writes the same answer to the file.
 
@@ -106,16 +112,16 @@ Every refusal on a soft axis prints a hint line. The line names the learned cap,
 
 ## Reading a refusal
 
-The last `spawn-gate: refused on <axis> (<reason>, exit <code>): <figures>` line on stderr is the verdict. It is the WHOLE refusal: one line naming the reason and what to do, the exit code carrying the class. When the receipt carries a `remedy`, the verdict ends `; remedy: <what to do>`. The figures are the receipt's scalar fields. With `--json` the caller also gets the receipt as one JSON object. Every other gate line starts `spawn-gate note:` and passed. The Python transport's pass lines carry that prefix too. If the gate verb itself is unreachable, the transport prints the same verdict shape for exit 87 before refusing. The Python reader `cli/src/fno/backlog/advance.py` (`_gate_refusal_detail`) keys on the `spawn-gate: ` prefix and reads the last such line, so it gets the verdict, never a passing reading.
+The last `spawn-gate: refused on <axis> (<reason>, exit <code>): <figures>` line on stderr is the verdict. It is the WHOLE refusal: one line naming the reason and what to do, the exit code carrying the class. When the receipt carries a `remedy`, the verdict ends `; remedy: <what to do>`. The figures are the receipt's scalar fields. With `--json` the caller also gets the receipt as one JSON object. Every other gate line starts `spawn-gate note:` and passed. The Python transport's pass lines carry that prefix too. If the gate command itself is unreachable, the transport prints the same verdict shape for exit 87 before refusing. The Python reader `cli/src/fno/backlog/advance.py` (`_gate_refusal_detail`) keys on the `spawn-gate: ` prefix and reads the last such line, so it gets the verdict, never a passing reading.
 
 A stderr with no `spawn-gate:` line means the gate admitted and something after it failed. The real error is the first non-note line there, never a `spawn-gate note:` line.
 
 ## Refusal events: Python via the seam, routing from Rust
 
-Some spawns ENTER Python: pane, routed, and account. For them the verb returns the event fields, and the Python transport emits `spawn_gate_refused` through `_refuse`. The journal vocabulary is unchanged. The native unrouted arms now emit too. The route-slot verb appends one `spawn_gate_refused` row, `gate: "routing"`, at the verb entry, so a refused native spawn leaves a trace beside the Python rows. The Rust side has no config-resolved state-dir parity yet, so the row lands in the space journal rather than the global one. The verb read is the answer: `fno doctor event find spawn_gate_refused --field gate=routing` scans every journal and rotation. The emit and its guard test live in `crates/fno-agents/src/route_slot.rs` (`journal_routing_refusal` and the `journal_rows` tests). See `scripts/ci/check-gate-refusals-emit.sh` for the Python seam guard.
+Some spawns ENTER Python: pane, routed, and account. For them the command returns the event fields, and the Python transport emits `spawn_gate_refused` through `_refuse`. The journal vocabulary is unchanged. The native unrouted arms now emit too. The route-slot command appends one `spawn_gate_refused` row, `gate: "routing"`, at the command entry, so a refused native spawn leaves a trace beside the Python rows. The Rust side has no config-resolved state-dir parity yet, so the row lands in the space journal rather than the global one. The command read is the answer: `fno doctor event find spawn_gate_refused --field gate=routing` scans every journal and rotation. The emit and its guard test live in `crates/fno-agents/src/route_slot.rs` (`journal_routing_refusal` and the `journal_rows` tests). See `scripts/ci/check-gate-refusals-emit.sh` for the Python seam guard.
 
 ## The registry schema check refuses writes it cannot understand
 
 `check_registry_schema` refuses a spawn into a fleet whose shared registry this binary cannot write. A node claim and a mail stamp are both WRITES. A registry ahead of this fno therefore blocks the whole spawn path. On 2026-08-28 a worker reported "Claim store is not writable for this Codex session". The worker blamed a sandbox permission profile, and the report was believed. Nothing in that chain named the registry.
 
-So the check refuses and does not warn. The message carries both integers, the file, and the repair verb. On the edges it matches the other guards. An unreadable file skips the check, because a spawn is not the place to adjudicate a torn registry. A refusal there can make the repair verb itself unspawnable. Both trees read the version from `src/registry_schema.toml`. build.rs projects the same file into the wheel. The two sides of the check therefore cannot disagree about a number.
+So the check refuses and does not warn. The message carries both integers, the file, and the repair command. On the edges it matches the other guards. An unreadable file skips the check, because a spawn is not the place to adjudicate a torn registry. A refusal there can make the repair command itself unspawnable. Both trees read the version from `src/registry_schema.toml`. build.rs projects the same file into the wheel. The two sides of the check therefore cannot disagree about a number.
