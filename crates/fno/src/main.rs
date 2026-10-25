@@ -68,6 +68,7 @@ enum Role {
     /// `config setup run` composes on. Native, so the inventory answers
     /// beside the setup command that reads it.
     ConfigDefaults(Vec<OsString>),
+    ConfigSchema(Vec<String>),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
@@ -182,6 +183,11 @@ enum Role {
     /// emit surface and the other event names until their cutover.
     DoctorEvent(Vec<OsString>),
     DoctorCost(Vec<OsString>),
+    /// `fno doctor skill-diff tick|reconcile` and the deprecated root `fno
+    /// skill-diff`: the whole command execs the native `fno-agents loops`
+    /// skill-diff ops. The tail (op word + flags) rides byte-verbatim; a
+    /// bare command or --help answers native help inside the op door.
+    DoctorSkillDiff(Vec<OsString>),
     /// `fno doctor lint style ...`: the native style check, exec'd through
     /// the sibling fno-agents `style-check` command. Args from the check name
     /// onward; Python keeps every other lint check until its port.
@@ -342,6 +348,10 @@ enum Role {
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
     /// The bool is the moved spelling, which prints its one stderr note.
     PluginsCli(Vec<OsString>, bool),
+    /// `fno config project ...` and the moved `fno project ...` spelling: the
+    /// whole project group execs `fno-agents spawn-overlay project`. The bool
+    /// is the moved spelling, which prints its one stderr note.
+    ProjectCli(Vec<OsString>, bool),
     /// `fno backlog ...`: the whole backlog namespace execs the sibling Rust
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
@@ -367,9 +377,13 @@ enum Role {
     /// `fno inbox user|operator status`: the native queue read; the carried
     /// tail is the `fno-agents compaction` argv.
     InboxUser(Vec<OsString>),
-    /// `fno inbox outstanding [--json|-J]`: the native listing; the carried
-    /// tail is the `fno-agents compaction outstanding` argv.
+    /// `fno inbox outstanding [--json|-J]`: the native listing and its
+    /// subcommands; the carried tail is the `fno-agents compaction
+    /// outstanding` argv.
     InboxOutstanding(Vec<OsString>),
+    /// `fno inbox day start|end`: the native day boundary; the carried tail
+    /// is the `fno-agents day` argv.
+    InboxDay(Vec<OsString>),
     /// `fno board-render`: the local board's snapshot writer, a native front
     /// command because the page and the read model both live in this crate.
     BoardRender(Vec<String>),
@@ -589,12 +603,35 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
     Some(args[2..].to_vec())
 }
 
+/// `fno doctor skill-diff ...` and the deprecated root `fno skill-diff ...`:
+/// the tail (op word + flags) rides byte-verbatim to the native ops door.
+/// A bare command and --help claim too (the Python leg dies in this port); an
+/// unknown op word refuses inside the op door.
+fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
+    let rest: &[OsString] = match args.first()?.to_str()? {
+        "doctor" if args.get(1)?.to_str()? == "skill-diff" => &args[2..],
+        "skill-diff" => &args[1..],
+        _ => return None,
+    };
+    Some(rest.to_vec())
+}
+
 /// `fno config plugins ...` or `fno plugins ...`: the args after the group.
 fn classify_plugins(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
     if args.first()?.to_str()? == "plugins" {
         return Some((args[1..].to_vec(), true));
     }
     classify_group_command(args, "config", "plugins").map(|rest| (rest, false))
+}
+
+/// `fno config project ...` or `fno project ...` (moved): the args after the
+/// group. The project family answers natively whole, so both spellings claim
+/// here and never reach the Python forward.
+fn classify_project(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
+    if args.first()?.to_str()? == "project" {
+        return Some((args[1..].to_vec(), true));
+    }
+    classify_group_command(args, "config", "project").map(|rest| (rest, false))
 }
 
 /// `fno agents claim backlog|export ...`: the shared-store commands live only
@@ -856,8 +893,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some((rest, moved)) = classify_plugins(args) {
         return Role::PluginsCli(rest, moved);
     }
+    if let Some((rest, moved)) = classify_project(args) {
+        return Role::ProjectCli(rest, moved);
+    }
     if let Some(rest) = fno::doctor_update::classify(args) {
         return Role::DoctorUpdate(rest);
+    }
+    if let Some(rest) = classify_skill_diff(args) {
+        return Role::DoctorSkillDiff(rest);
     }
     if let Some(rest) = classify_group_command(args, "doctor", "builds") {
         return Role::DoctorBuilds(rest);
@@ -988,8 +1031,12 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::inbox_user::classify_inbox_outstanding(args) {
         return Role::InboxOutstanding(rest);
     }
+    if let Some(argv) = fno::inbox_user::classify_inbox_day(args) {
+        return Role::InboxDay(argv);
+    }
     if let Some(argv) = fno::inbox_user::classify_inbox_user(args)
         .or_else(|| fno::inbox_user::classify_inbox_peers(args))
+        .or_else(|| fno::inbox_user::classify_inbox_approvals(args))
     {
         return Role::InboxUser(argv);
     }
@@ -1009,6 +1056,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::config_defaults::classify(args) {
         return Role::ConfigDefaults(rest);
+    }
+    if let Some(rest) = fno::config_schema::classify(args) {
+        return Role::ConfigSchema(rest);
     }
     match cli_args::classify(args) {
         FrontDoor::Forward => Role::Forward,
@@ -1259,6 +1309,7 @@ fn main() {
         Role::Uninstall(opts) => std::process::exit(fno::uninstall::run_uninstall(opts)),
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
+        Role::ConfigSchema(rest) => std::process::exit(fno::config_schema::run(&rest)),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
         Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
@@ -1314,6 +1365,16 @@ fn main() {
             std::process::exit(fno_agents_exec(
                 "fno config plugins",
                 &["spawn-overlay", "plugins"],
+                &rest,
+            ))
+        }
+        Role::ProjectCli(rest, moved) => {
+            if moved {
+                eprintln!("fno project is now fno config project");
+            }
+            std::process::exit(fno_agents_exec(
+                "fno config project",
+                &["spawn-overlay", "project"],
                 &rest,
             ))
         }
@@ -1424,6 +1485,9 @@ fn main() {
             &["test-run", "builds"],
             &rest,
         )),
+        Role::DoctorSkillDiff(rest) => {
+            std::process::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))
+        }
         Role::ClaimStore(rest) => {
             std::process::exit(fno_agents_exec("fno agents claim", &["claim"], &rest))
         }
@@ -1516,6 +1580,9 @@ fn main() {
             &["compaction", "outstanding"],
             &rest,
         )),
+        Role::InboxDay(argv) => {
+            std::process::exit(fno_agents_exec("fno inbox day", &["day"], &argv))
+        }
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
         Role::MuxStats(json) => std::process::exit(mux_cli::stats(json)),
         Role::MuxNotify(title, message, json) => {
@@ -2018,6 +2085,19 @@ mod tests {
         assert_ne!(
             decide_role(&os(&["config", "plugin", "claude"]), false),
             Role::PluginsCli(os(&["claude"]), false)
+        );
+        // The project group is native whole, under both spellings.
+        assert_eq!(
+            decide_role(&os(&["config", "project", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), false)
+        );
+        assert_eq!(
+            decide_role(&os(&["project", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), true)
+        );
+        assert_ne!(
+            decide_role(&os(&["config", "projects", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), false)
         );
     }
 

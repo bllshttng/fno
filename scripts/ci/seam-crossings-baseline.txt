@@ -26,7 +26,7 @@ crossing	crates/fno-agents/src/bin/client.rs	let out = std::process::Command::ne
 crossing	crates/fno-agents/src/bin/client.rs	let err = std::process::Command::new(fno_agents::scrape::fno_bin())
 crossing	crates/fno-agents/src/bin/client.rs	let mut cmd = Command::new(fno_agents::scrape::fno_bin());
 crossing	crates/fno-agents/src/blueprint_judge.rs	return match Command::new(crate::scrape::fno_bin())
-crossing	crates/fno-agents/src/blueprint_judge.rs	let mut child = Command::new(crate::scrape::fno_bin())
+crossing	crates/fno-agents/src/blueprint_judge.rs	let child = Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/claim_cli/reap.rs	let bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
 crossing	crates/fno-agents/src/claim_cli/reap.rs	let bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
 crossing	crates/fno-agents/src/daemon.rs	let mut child = match std::process::Command::new(crate::scrape::fno_bin())
@@ -94,6 +94,7 @@ crossing	crates/fno-agents/src/scrape.rs	let bin = fno_bin();
 crossing	crates/fno-agents/src/scratch.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/select_read.rs	.unwrap_or_else(|_| crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/session_report.rs	let fno = crate::loopcheck::loopcheck_fno_bin();
+crossing	crates/fno-agents/src/skill_diff.rs	Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/spawn_gate.rs	let _ = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/spawn_gate_lanes.rs	Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/spawn_gate_lanes.rs	let mut cmd = Command::new(crate::scrape::fno_bin());

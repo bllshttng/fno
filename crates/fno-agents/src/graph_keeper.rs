@@ -2531,30 +2531,76 @@ pub(crate) fn session_append(
             && r.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
     });
     if let Some(prior) = prior {
-        // merge_grant joins the fill-if-absent set: the first resolved posture
-        // owns the row, and a re-stamp cannot rewrite a recorded refusal into
-        // a grant in place.
-        for key in ["ended_at", "started_at", "effort", "merge_grant"] {
-            if let Some(v) = row.get(key) {
-                if !v.is_null() && !prior.as_object().unwrap().contains_key(key) {
-                    prior
-                        .as_object_mut()
-                        .unwrap()
-                        .insert(key.to_string(), v.clone());
-                }
-            }
-        }
-        let merged = merge_observed_model(prior.get("observed_model"), row.get("observed_model"));
-        if let Some(merged) = merged {
-            prior
-                .as_object_mut()
-                .unwrap()
-                .insert("observed_model".to_string(), merged);
-        }
+        fill_prior_row(prior, &row);
         return Ok((true, false));
     }
     rows.push(row);
     Ok((true, true))
+}
+
+/// The fill-if-absent write one matched row takes from a re-stamp: the four
+/// keys fill only when absent (merge_grant is among them so a re-stamp cannot
+/// rewrite a recorded refusal into a grant in place), and observed_model
+/// merges. Shared by `session_append` and `session_fill_open` so the two
+/// cannot drift.
+fn fill_prior_row(prior: &mut Value, row: &Value) {
+    for key in ["ended_at", "started_at", "effort", "merge_grant"] {
+        if let Some(v) = row.get(key) {
+            if !v.is_null() && !prior.as_object().unwrap().contains_key(key) {
+                prior
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(key.to_string(), v.clone());
+            }
+        }
+    }
+    let merged = merge_observed_model(prior.get("observed_model"), row.get("observed_model"));
+    if let Some(merged) = merged {
+        prior
+            .as_object_mut()
+            .unwrap()
+            .insert("observed_model".to_string(), merged);
+    }
+}
+
+/// Fill an EXISTING matching row and never append: the release-time stamp
+/// names a window the acquire stamp opened, so a release whose node carries
+/// no matching row records nothing rather than inventing a closed one (a
+/// blueprint or rolled-back claim released after a failure must not gain an
+/// execute completion it never earned). Returns (node found, row filled).
+pub(crate) fn session_fill_open(
+    entries: &mut Vec<Value>,
+    node_id: &str,
+    row: Value,
+) -> Result<(bool, bool), StoreError> {
+    let Some(idx) = find_exact(entries, node_id) else {
+        return Ok((false, false));
+    };
+    let phase = row
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let session_id = row
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let obj = entries[idx].as_object_mut().unwrap();
+    let Some(rows) = obj.get_mut("sessions").and_then(Value::as_array_mut) else {
+        return Ok((true, false));
+    };
+    let prior = rows.iter_mut().find(|r| {
+        r.get("phase").and_then(Value::as_str) == Some(phase.as_str())
+            && r.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
+    });
+    match prior {
+        Some(prior) => {
+            fill_prior_row(prior, &row);
+            Ok((true, true))
+        }
+        None => Ok((true, false)),
+    }
 }
 
 /// The value a re-stamp should write to observed_model, or None to keep

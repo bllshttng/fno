@@ -32,7 +32,6 @@ def test_doctor_lists_direct_actions() -> None:
         "reclaim",
         "route",
         "scratch",
-        "skill-diff",
         "stalls",
         "test",
         "update",

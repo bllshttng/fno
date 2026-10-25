@@ -31,44 +31,46 @@ runner = CliRunner()
 
 def _app_with_old_registration(with_dest: bool) -> typer.Typer:
     """A scratch root app registering the moved spellings and (optionally)
-    their destinations, on the same lazy-group class the real CLI uses."""
+    their destinations, on the same lazy-group class the real CLI uses. The
+    specimen is ``claim``, a deprecated move that survives the table; the
+    outstanding family's move died with its native port."""
     app = typer.Typer(cls=make_lazy_group_cls({}))
 
     @app.callback()
     def _cb() -> None: ...
 
-    old = typer.Typer(help="old outstanding")
+    old = typer.Typer(help="old claim")
 
     @old.command("list")
     def _old_list() -> None:
         typer.echo("OLD-PATH")
 
-    app.add_typer(old, name="outstanding", hidden=True)
+    app.add_typer(old, name="claim", hidden=True)
 
     if with_dest:
-        inbox = typer.Typer(help="inbox")
-        outstanding = typer.Typer(help="outstanding")
+        agents = typer.Typer(help="agents")
+        claim = typer.Typer(help="claim")
 
-        @outstanding.command("list")
-        def _inbox_outstanding_list() -> None:
+        @claim.command("list")
+        def _agents_claim_list() -> None:
             typer.echo("NEW-PATH")
 
-        inbox.add_typer(outstanding, name="outstanding")
-        app.add_typer(inbox, name="inbox", hidden=True)
+        agents.add_typer(claim, name="claim")
+        app.add_typer(agents, name="agents", hidden=True)
     return app
 
 
 def test_registered_destination_forwards_byte_identical():
     app = _app_with_old_registration(with_dest=True)
-    direct = runner.invoke(app, ["inbox", "outstanding", "list"])
-    forwarded = runner.invoke(app, ["outstanding", "list"])
+    direct = runner.invoke(app, ["agents", "claim", "list"])
+    forwarded = runner.invoke(app, ["claim", "list"])
     assert direct.exit_code == 0 and forwarded.exit_code == 0
     # stdout of the old spelling is byte-identical to the new path: callers
     # parse stdout, so the shim must not edit it.
     assert forwarded.stdout == direct.stdout == "NEW-PATH\n"
     err = forwarded.stderr or ""
     assert err.count("is now") == 1
-    assert "fno inbox outstanding" in err
+    assert "fno agents claim" in err
     assert "is now" not in (direct.stderr or "")
 
 
@@ -166,10 +168,19 @@ def test_every_moved_spelling_is_hidden():
         # dispatcher with the argv intact). `retro` joined when its family
         # ported native: the move is a leaf-alias that refuses with the new
         # spelling. `restart` joined when the front door claimed both
-        # spellings and execs `fno-agents restart` itself. Every OTHER moved
-        # spelling keeps a one-release registration, and any registration that
-        # exists must be hidden: an advertised moved name teaches a doomed spelling.
-        if name in ("decide", "yard", "review", "pr", "retro", "restart"):
+        # spellings and execs `fno-agents restart` itself. `project` joined
+        # the same way: the front door claims both spellings, prints the
+        # rename notice, and execs `spawn-overlay project` itself. `skill-diff`
+        # joined when its family ported: the front door claims both
+        # spellings and execs the native ops, so a python registration
+        # would forward into nothing. `mcp` joined the same way: the send
+        # family ported native and the front door claims both spellings.
+        # Every OTHER moved spelling keeps a
+        # one-release registration, and any registration that exists must
+        # be hidden: an advertised moved name teaches a doomed spelling.
+        if name in (
+            "decide", "yard", "review", "pr", "retro", "restart", "project", "skill-diff", "mcp",
+        ):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue
         assert cmd is not None, f"moved spelling {name!r} must stay registered"

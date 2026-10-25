@@ -1,0 +1,18 @@
+{
+ "expected": "collision_free",
+ "input": [
+  {
+   "data": {
+    "failure_ranking": [
+     {
+      "dimension": "collision_free",
+      "fail_count": 1
+     }
+    ],
+    "run_id": "r1",
+    "skill_id": "fno:blueprint"
+   },
+   "type": "skill_eval_run_complete"
+  }
+ ]
+}

@@ -65,6 +65,38 @@ def _agreement(
     return True, None
 
 
+def _project_map() -> dict | None:
+    """The operator's ``{alias: canonical}`` table through the native project
+    door (``fno-agents spawn-overlay project map``), the same env-aware
+    resolver ``_canonical_project`` rides - a pinned ``$FNO_AGENTS_BIN``
+    answers it. None on any failure, a missing config.toml among them (the
+    deleted reader's SettingsNotFound case), which omits the payload key and
+    leaves the scanner's own cwd-candidates read in charge.
+    """
+    import json
+    import subprocess
+
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [str(binary), "spawn-overlay", "project", "map"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            return None
+        table = json.loads(proc.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    return table if isinstance(table, dict) else None
+
+
 def _conflicts(rows: list) -> list[dict[str, Any]]:
     """Territory two live promoted rows double-rule, one entry per rival PAIR.
 
@@ -80,15 +112,13 @@ def _conflicts(rows: list) -> list[dict[str, Any]]:
     """
     import sys
 
-    from fno import projects as projects_mod
     from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
-    # An unreadable settings table must not take the view down: omitting
-    # the key sends the scanner to its cwd read and its degrade rule.
-    try:
-        projects = projects_mod.resolve._get_cache()
-    except Exception:  # noqa: BLE001 - the scanner's own degrade rule owns this
-        projects = None
+    # The alias table rides the payload again: the scanner's own read runs
+    # over cwd config candidates, which a `fno agents team` run from any
+    # other tree cannot see the operator's registry through. An unreadable
+    # table omits the key and the scanner applies its own degrade rule.
+    projects = _project_map()
     try:
         answer = spawn_overlay_call({
             "kind": "team-rivals",
@@ -100,7 +130,7 @@ def _conflicts(rows: list) -> list[dict[str, Any]]:
                 }
                 for row in rows
             ],
-            **({"projects": projects} if projects is not None else {}),
+            **({"projects": projects} if isinstance(projects, dict) else {}),
         })
         return answer["pairs"]
     except (SpawnOverlayUnavailable, LookupError, TypeError) as exc:
