@@ -495,6 +495,7 @@ def _refuse_dispatch_hold(node: Optional[dict], entries: Optional[list] = None) 
     raise typer.Exit(code=2)
 
 
+@target_app.command("blast-check")
 def blast_check(
     plan: str = typer.Argument(
         ..., help="Path to the plan whose File Ownership Map to classify"
