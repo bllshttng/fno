@@ -1,18 +1,16 @@
 //! Time each probe of the authorization chain on stderr.
 //!
 //! The chain is one subprocess the merge command kills at its bound, so a
-//! timeout alone says nothing about where the time went. A slow step names
-//! itself when it ends. Under [`TRACE_ENV`] every step also names itself when
-//! it begins, and the killed child's last unmatched `began` line is the step
-//! that held the bound.
+//! timeout alone says nothing about where the time went. Under [`TRACE_ENV`]
+//! every step names itself when it begins and when it ends, and the killed
+//! child's last unmatched `began` line is the step that held the bound.
+//! Without the trace nothing prints: the probes also run in-process (the
+//! stop hook's finalize) and behind doors that read stderr as the error.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Set by a caller that will read the child's stderr after a timeout.
 pub const TRACE_ENV: &str = "FNO_MERGE_STEP_TRACE";
-
-/// A step at or above this is reported even without the trace.
-const SLOW: Duration = Duration::from_secs(2);
 
 /// The line prefix both ends agree on.
 pub const BEGAN: &str = "authorized-merge: step began: ";
@@ -38,12 +36,11 @@ pub fn step(name: impl Into<String>) -> Step {
 
 impl Drop for Step {
     fn drop(&mut self) {
-        let took = self.start.elapsed();
-        if self.trace || took >= SLOW {
+        if self.trace {
             eprintln!(
                 "authorized-merge: step {} took {:.1}s",
                 self.name,
-                took.as_secs_f64()
+                self.start.elapsed().as_secs_f64()
             );
         }
     }
