@@ -13,6 +13,17 @@ description: >
 runs:
   using: composite
   steps:
+    # A smoke shard builds the fno-agents and fno debug binaries, then a
+    # step like the menu-cap guard links the fno lib tests on top. On
+    # 2026-10-25 two changed-smoke shards died there with "Disk quota
+    # exceeded". The image's unused toolchains are about 25 GB.
+    - name: Free runner disk
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        df -h /
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
