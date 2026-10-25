@@ -885,6 +885,29 @@ fn run_single_plan(
     }
 }
 
+/// [`run_single_plan`]'s computation without the stdout print - the timeout
+/// stamp still lands, the rows come back as the judge payload. The observer
+/// door shares it so the sweep's `--judge` tail and `fno doctor observer
+/// judge` answer from one judge body (x-470d).
+pub(crate) fn judge_plan_rows(
+    plan_path: &Path,
+    node_id: Option<&str>,
+    cwd: &Path,
+    lenses: &Lenses,
+    spawn: Spawn,
+    budget: u64,
+) -> Value {
+    let plan_text = std::fs::read_to_string(plan_path).unwrap_or_default();
+    let (kind, rows, timeout_reason) = judge_rows(&plan_text, node_id, cwd, lenses, spawn, budget);
+    let tripped = timeout_reason.is_some();
+    if let Some(reason) = timeout_reason {
+        stamp_judge_timeout(plan_path, &reason);
+    } else {
+        clear_judge_stamp(plan_path);
+    }
+    json!({"kind": kind, "rows": rows})
+}
+
 fn run_calibration(
     labels_path: &Path,
     split: &str,
@@ -892,25 +915,39 @@ fn run_calibration(
     lenses: &Lenses,
     spawn: Spawn,
 ) -> i32 {
+    match calibration_result(labels_path, split, cwd, lenses, spawn) {
+        Ok(v) => {
+            println!("{v}");
+            if v.get("controls_wrong").and_then(Value::as_u64).unwrap_or(0) > 0 {
+                1
+            } else {
+                0
+            }
+        }
+        Err(msg) => {
+            println!("{}", json!({"error": msg}));
+            1
+        }
+    }
+}
+
+/// `run_calibration`'s computation, returning the payload the observer's
+/// labels view renders (the x-470d observer port shares the judge's
+/// calibration without re-running the spawn loop twice).
+pub(crate) fn calibration_result(
+    labels_path: &Path,
+    split: &str,
+    cwd: &Path,
+    lenses: &Lenses,
+    spawn: Spawn,
+) -> Result<Value, String> {
     let text = match std::fs::read_to_string(labels_path) {
         Ok(t) => t,
-        Err(e) => {
-            println!(
-                "{}",
-                json!({"error": format!("cannot read {}: {e}", labels_path.display())})
-            );
-            return 1;
-        }
+        Err(e) => Err(format!("cannot read {}: {e}", labels_path.display()))?,
     };
     let rows: Vec<Value> = match serde_yaml_ng::from_str(&text) {
         Ok(Value::Array(v)) => v,
-        _ => {
-            println!(
-                "{}",
-                json!({"error": "labels.yaml did not parse to a list"})
-            );
-            return 1;
-        }
+        _ => return Err("labels.yaml did not parse to a list".to_string()),
     };
     let base = labels_path.parent().unwrap_or(Path::new("."));
 

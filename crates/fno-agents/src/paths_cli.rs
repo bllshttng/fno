@@ -608,6 +608,65 @@ pub fn worktrees_base(cwd: &Path) -> PathBuf {
         .join("worktrees")
 }
 
+/// Python `paths.postmortems_dir()`: the `paths.postmortems_dir` override,
+/// else `<state_dir>/postmortems`.
+pub fn postmortems_dir(cwd: &Path) -> PathBuf {
+    if let Some(raw) = cfg_str(cwd, &["paths", "postmortems_dir"]) {
+        if let Ok(p) = resolve_override_path(&raw) {
+            return p;
+        }
+    }
+    state_dir_resolved(cwd)
+        .ok()
+        .filter(|d| d.is_absolute())
+        .unwrap_or_else(|| crate::decision_index::default_state_path(""))
+        .join("postmortems")
+}
+
+/// Python `paths.observer_reports_dir(project_id=...)`: the explicit
+/// override, else the configured Obsidian vault's
+/// `internal/<owner>/observer-reports/`, else
+/// `<state_dir>/observer-reports/<owner>/`. The owner (the skill-id
+/// namespace prefix) pins the report to the project that OWNS the evaluated
+/// skill, so a sweep launched from any cwd lands under internal/<owner>/
+/// instead of the ambient checkout's basename. A caller-supplied id with a
+/// path escape falls back to `fno` (never escapes internal/<project>/).
+pub fn observer_reports_dir(cwd: &Path, project_id: Option<&str>) -> PathBuf {
+    if let Some(raw) = cfg_str(cwd, &["paths", "observer_reports_dir"]) {
+        if let Ok(p) = resolve_override_path(&raw) {
+            return p;
+        }
+    }
+    let owner = project_id
+        .filter(|id| !id.contains('/') && !id.contains(".."))
+        .unwrap_or("fno");
+    if let Some(vault) = obsidian_vault(cwd) {
+        return vault.join("internal").join(owner).join("observer-reports");
+    }
+    state_dir_resolved(cwd)
+        .ok()
+        .filter(|d| d.is_absolute())
+        .unwrap_or_else(|| crate::decision_index::default_state_path(""))
+        .join("observer-reports")
+        .join(owner)
+}
+
+/// The Obsidian vault root from config (`obsidian.enabled` + `obsidian.vault`,
+/// `~`-expanded), `plan._paths.vault_root()`'s read as paths_cli serves it.
+fn obsidian_vault(cwd: &Path) -> Option<PathBuf> {
+    let enabled = live_lookup(cwd, &["obsidian", "enabled"])
+        .and_then(|r| r.ok())
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let vault = cfg_str(cwd, &["obsidian", "vault"])?;
+    Some(crate::plans_path::expanduser(
+        &crate::plans_path::expandvars(&vault),
+    ))
+}
+
 /// One `paths.<key>` override value, the shape Python's emitter shares for
 /// every override: a `{template}` resolves at codegen time, a `~` value
 /// goes `$HOME`-relative, anything else passes through verbatim.
