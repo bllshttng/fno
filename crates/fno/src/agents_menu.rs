@@ -150,6 +150,7 @@ const ORG_CHART: &[Node] = &[
 const ORG: &[Node] = &[
     command("init", &["lead", "init"], "Write the role manifest (step 1 of the lead skill)."),
     command("checkin", &["lead", "checkin"], "One lead beat: gather, print, diff, journal."),
+    command("refresh-canon", &["lead", "refresh-canon"], "Refresh the beat's canon doc, resolving the plugin root itself."),
     command("done", &["lead", "done"], "Expire this role: vacate the row and clear the manifest."),
     command("cancel", &["lead", "cancel"], "Set or clear the cancel signal beside a role manifest."),
     command("escalate", &["lead", "escalate"], "Escalate to the presiding role with work pending."),
@@ -653,6 +654,11 @@ mod tests {
         assert_eq!(
             run(&["org", "-J"]),
             Some((Agents::Run(osv(&["agents", "team", "-J"])), None))
+        );
+        // The canon-refresh row forwards to its lead-family door.
+        assert_eq!(
+            run(&["org", "refresh-canon"]),
+            Some((Agents::Run(osv(&["agents", "lead", "refresh-canon"])), None))
         );
         let rundown = walk(&ROOT)
             .into_iter()
