@@ -692,7 +692,7 @@ fn mutate_lane_at(path: &std::path::Path, action: &str, rest: &[String]) -> Resu
                     // A link rewrites the whole line, so a parked reason on it
                     // is lost - the same overwrite the Python leg performed.
                     let ending = line_ending(&owned);
-                    let mark = if item.done { " " } else { "x" };
+                    let mark = if item.done { "x" } else { " " };
                     lines[idx] = format!("- [{}] {} -> {}{}", mark, item.text, rest[1], ending);
                 }
             }

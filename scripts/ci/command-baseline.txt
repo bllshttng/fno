@@ -79,16 +79,10 @@ inbox approvals decide !--db
 inbox approvals ls !--db
 inbox approvals show !--db
 inbox board
-inbox day end
-inbox day start
 inbox notify
 inbox operator ack
 inbox operator list
 inbox operator status
-inbox outstanding ask
-inbox outstanding clear !--origin
-inbox outstanding mine do
-inbox outstanding reindex
 inbox user ack
 inbox user list
 inbox user status
