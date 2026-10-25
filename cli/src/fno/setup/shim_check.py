@@ -1,6 +1,7 @@
-"""fno shims must never dangle into a cleaned mktemp dir.
+"""fno shims must never dangle into a cleaned mktemp dir, or go missing.
 Scans the tool bin for fno* symlinks that dangle or resolve under a temp
-root, and repoints them to the durable uv tools copy.
+root, and for required shims that are absent, and points them at the
+durable copy.
 """
 
 from __future__ import annotations
@@ -11,6 +12,11 @@ import tempfile
 from pathlib import Path
 
 UV_TOOL_FNO_BIN = Path.home() / ".local" / "share" / "uv" / "tools" / "fno" / "bin"
+# `fno doctor update` lands the Rust binaries here, fno-gh-proxy among them;
+# the wheel does not ship that one.
+CARGO_BIN = Path(os.environ.get("CARGO_HOME") or Path.home() / ".cargo") / "bin"
+# Every gh read and every fno command dies when one of these is missing.
+REQUIRED_SHIMS = ("fno", "fno-gh-proxy")
 
 
 def _temp_root() -> str:
@@ -18,9 +24,11 @@ def _temp_root() -> str:
 
 
 def scan(bin_dir: Path | None = None) -> dict:
-    """Report every fno* symlink defect (dangling or temp-resolving).
+    """Report every fno* symlink defect (dangling, temp-resolving, absent).
 
     Scope is the fno prefix, so a broken third-party link is not our finding.
+    An absent required shim counts only when a durable copy exists to link:
+    a pure-Python install ships no fno binary, and that is not a link defect.
     """
     directory = Path(bin_dir) if bin_dir else Path.home() / ".local" / "bin"
     temp_root = _temp_root()
@@ -44,15 +52,25 @@ def scan(bin_dir: Path | None = None) -> dict:
             continue
         elif resolved.is_relative_to(Path(temp_root)):
             defects.append(_defect(entry, resolved, "temp-resolving"))
+    if Path(directory).is_dir():
+        for name in REQUIRED_SHIMS:
+            entry = Path(directory) / name
+            if entry.exists() or entry.is_symlink():
+                continue
+            defect = _defect(entry, entry, "absent")
+            if defect["repair"]:
+                defects.append(defect)
     return {"bin_dir": str(directory), "defects": defects, "healthy": not defects}
 
 
 def _defect(link: Path, resolved: Path, problem: str) -> dict:
     # Prefer the RUNNING venv's bin (the channels invoke through the tool venv
     # python), so a uv store outside the default home still repairs.
-    durable = Path(sys.executable).parent / link.name
-    if not (durable.is_file() and os.access(durable, os.X_OK)):
-        durable = UV_TOOL_FNO_BIN / link.name
+    candidates = [Path(sys.executable).parent, UV_TOOL_FNO_BIN, CARGO_BIN]
+    durable = next(
+        (d / link.name for d in candidates if (d / link.name).is_file() and os.access(d / link.name, os.X_OK)),
+        UV_TOOL_FNO_BIN / link.name,
+    )
     repairable = durable.is_file() and os.access(durable, os.X_OK)
     return {
         "name": link.name,
