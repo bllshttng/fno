@@ -245,6 +245,25 @@ fn parse_expires(raw: &str) -> Result<Duration, String> {
 /// All retained bus lines oldest -> newest (log.py::_segment_paths_oldest_first
 /// order), malformed lines skipped. Readers are lock-free by contract.
 pub(crate) fn read_bus_segments(live: &Path) -> Vec<Value> {
+    read_bus_segments_reported(live)
+        .0
+        .into_iter()
+        .map(|r| r.row)
+        .collect()
+}
+
+/// One parsed bus row and where it came from, so a validation warning can
+/// name the segment and line the Python read leg named.
+pub(crate) struct PositionedBusRow {
+    pub row: Value,
+    pub source: String,
+    pub line: usize,
+}
+
+/// The same walk with one stderr warning per skipped line, the reader
+/// contract `bus.log.iter_messages` froze: blank lines skip silently, a line
+/// that fails to parse warns, and an unreadable segment warns whole.
+pub(crate) fn read_bus_segments_reported(live: &Path) -> (Vec<PositionedBusRow>, Vec<String>) {
     let mut paths: Vec<(u64, PathBuf)> = Vec::new();
     if let Some(parent) = live.parent() {
         let prefix = format!(
@@ -264,21 +283,42 @@ pub(crate) fn read_bus_segments(live: &Path) -> Vec<Value> {
     }
     paths.sort_by(|a, b| b.0.cmp(&a.0)); // oldest (highest N) first
     let mut out = Vec::new();
+    let mut warnings = Vec::new();
     for p in paths
         .iter()
         .map(|(_, p)| p.as_path())
         .chain(std::iter::once(live))
     {
-        let Ok(text) = std::fs::read_to_string(p) else {
-            continue;
+        let text = match std::fs::read_to_string(p) {
+            Ok(text) => text,
+            Err(e) => {
+                warnings.push(format!("bus log: cannot read segment {p}: {e}"));
+                continue;
+            }
         };
-        for line in text.lines() {
-            if let Ok(v) = serde_json::from_str::<Value>(line) {
-                out.push(v);
+        for (lineno, line) in text.lines().enumerate() {
+            match serde_json::from_str::<Value>(line) {
+                Ok(v) => out.push(PositionedBusRow {
+                    row: v,
+                    source: p
+                        .file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    line: lineno + 1,
+                }),
+                Err(_) if line.trim().is_empty() => {}
+                Err(_) => warnings.push(format!(
+                    "bus log: skipping malformed line {}:{} (JSONDecodeError)",
+                    p.file_name()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .unwrap_or_default(),
+                    lineno + 1
+                )),
             }
         }
     }
-    out
+    (out, warnings)
 }
 
 /// Exclusive flock on the Python sidecar lockfile (`messages.jsonl + .lock`),
