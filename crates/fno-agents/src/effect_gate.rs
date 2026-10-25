@@ -468,12 +468,15 @@ pub fn judge(payload: &Value, cwd: &Path) -> Option<String> {
             // command this refusal suggests cannot decide. Say so and name
             // the key, the same words the decide door prints.
             let reason = if policy_configured(cwd, &mapped.effect_class) {
-                ""
+                String::new()
             } else {
-                " (no approval policy is configured: set \
-                 config.approvals.authorized_principals before deciding)"
+                format!(
+                    " (no approval policy covers {}: set \
+                     config.approvals.authorized_principals before deciding)",
+                    mapped.effect_class
+                )
             };
-            refusal(&digest, reason)
+            refusal(&digest, &reason)
         }
         Err(e) => refusal(&digest, &format!(" (verdict unread: {e})")),
     }
