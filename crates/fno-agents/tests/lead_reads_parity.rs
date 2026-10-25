@@ -192,9 +192,11 @@ fn manifest_path_matches_the_python_goldens() {
     let p = tmp.path();
     let state_root = p.join("root");
     fs::create_dir_all(state_root.join("leads")).unwrap();
+    // The manifest names the predecessor's session: the read keys on the
+    // live row's role scope, so a respawned lead still finds its manifest.
     fs::write(
         state_root.join("leads/epic-y.md"),
-        "---\nscope: epic-y\nharness_session_id: sess-lead\n---\n",
+        "---\nscope: epic-y\nharness_session_id: sess-predecessor\n---\n",
     )
     .unwrap();
     let sr = state_root.to_string_lossy().into_owned();
