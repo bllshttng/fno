@@ -544,7 +544,11 @@ fn sidecar_load_refuses_a_wrong_typed_field_loud() {
 fn sidecar_load_refuses_a_tracker_owned_key() {
     let tmp = tempfile::tempdir().unwrap();
     let name = format!("{}.json", crate::claims::encode_key("o/r#1"));
-    std::fs::write(tmp.path().join(name), r#"{"id":"o/r#1","title":"tracker-owned"}"#).unwrap();
+    std::fs::write(
+        tmp.path().join(name),
+        r#"{"id":"o/r#1","title":"tracker-owned"}"#,
+    )
+    .unwrap();
     let err = sidecar::load(tmp.path(), "o/r#1").unwrap_err();
     assert!(err.to_string().contains("title"), "{err}");
 }
