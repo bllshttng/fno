@@ -28,6 +28,8 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
+use crate::store_remote::{Remote, SqlValue};
+
 /// Terminal registry statuses (registry.py::TERMINAL_STATUSES). `pub(crate)`
 /// so other JSON-row readers in this crate (`team_settle`) share the one
 /// string-matched copy instead of re-declaring it.
@@ -98,6 +100,106 @@ impl AnnouncePaths {
 
 pub(crate) fn row_str<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
     row.get(key).and_then(Value::as_str)
+}
+
+/// The primary's announce table: one row per announcement, the same JSON the
+/// local bus line holds. With `store.remote_url` set, a send writes here and
+/// every machine's read merges these rows with its own bus, so an announcement
+/// made on one machine reaches sessions on another.
+const ANNOUNCE_TABLE: &str = "fleet_announce";
+
+/// How many rows the primary keeps: expiry governs standing-ness, this cap
+/// only bounds the table. Local retention is size-based (5 MB, 5 segments);
+/// a row count well past any expiry window is the same answer over SQL.
+const ANNOUNCE_PRIMARY_CAP: i64 = 200;
+
+/// The announce row store: the local bus is always the writer's first copy;
+/// the primary carries the row to every other machine. Absent
+/// `store.remote_url` both arms are local-only and nothing changes.
+struct AnnounceStore {
+    primary: Option<Remote>,
+}
+
+impl AnnounceStore {
+    fn from_env() -> Result<Self, String> {
+        Ok(Self {
+            primary: crate::store_remote::configured()?,
+        })
+    }
+
+    /// The primary's rows oldest -> newest. A primary that never saw a send
+    /// has no table: no rows. Every other failure is the caller's to surface.
+    fn rows(&self) -> Result<Vec<Value>, String> {
+        let Some(remote) = &self.primary else {
+            return Ok(Vec::new());
+        };
+        let label = format!("the {ANNOUNCE_TABLE} rows on {}", remote.url());
+        let reply = match remote.execute(
+            &format!("SELECT record FROM {ANNOUNCE_TABLE} ORDER BY id"),
+            &[],
+        ) {
+            Ok(reply) => reply,
+            Err(e) if e.contains("no such table") => return Ok(Vec::new()),
+            Err(e) => return Err(format!("read {label}: {e}")),
+        };
+        Ok(reply
+            .rows
+            .iter()
+            .filter_map(|row| row.first())
+            .filter_map(|cell| cell.text())
+            .map(|text| serde_json::from_str::<Value>(text))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("{label}: unparsable row: {e}"))?)
+    }
+
+    /// Insert one announcement row and bound the table. A failure fails the
+    /// send: the row would be machine-local, which is the bug this store
+    /// exists to close.
+    fn insert(&self, row: &Value) -> Result<(), String> {
+        let Some(remote) = &self.primary else {
+            return Ok(());
+        };
+        remote.script(&format!(
+            "CREATE TABLE IF NOT EXISTS {ANNOUNCE_TABLE} (\
+                 id INTEGER PRIMARY KEY AUTOINCREMENT, \
+                 record TEXT NOT NULL)"
+        ))?;
+        let text = serde_json::to_string(row).map_err(|e| format!("serialize: {e}"))?;
+        remote.execute(
+            &format!("INSERT INTO {ANNOUNCE_TABLE} (record) VALUES (?)"),
+            &[SqlValue::Text(text)],
+        )?;
+        // Best-effort bound: a retention failure must not fail a sent row.
+        let _ = remote.execute(
+            &format!(
+                "DELETE FROM {ANNOUNCE_TABLE} WHERE id NOT IN (\
+                     SELECT id FROM {ANNOUNCE_TABLE} ORDER BY id DESC LIMIT {ANNOUNCE_PRIMARY_CAP})"
+            ),
+            &[],
+        );
+        Ok(())
+    }
+}
+
+/// The rows both announce surfaces scan: the local bus segments merged with
+/// the primary's rows, deduped by id (the sender's own machine holds both
+/// copies) and ordered oldest -> newest by ts, so the supersede and
+/// standing-announcements folds see one timeline.
+fn read_announce_rows(live: &Path, store: &AnnounceStore) -> Result<Vec<Value>, String> {
+    let mut out = read_bus_segments(live);
+    out.extend(store.rows()?);
+    let mut seen: HashSet<String> = HashSet::new();
+    out.retain(|row| match row_str(row, "id") {
+        Some(id) => seen.insert(id.to_string()),
+        None => true,
+    });
+    out.sort_by_key(|row| {
+        row_str(row, "ts")
+            .and_then(parse_iso)
+            .map(|t| t.timestamp_millis())
+            .unwrap_or(i64::MAX)
+    });
+    Ok(out)
 }
 
 fn row_session_id(row: &Value) -> Option<String> {
@@ -533,6 +635,7 @@ fn team_row<'a>(rows: &'a [Value], sender: &str) -> Option<&'a Value> {
     })
 }
 
+#[derive(Debug)]
 struct SendReceipt {
     id: String,
     scope: String,
@@ -545,6 +648,19 @@ fn send_announcement(
     body: &str,
     paths: &AnnouncePaths,
     projects: Option<&HashMap<String, String>>,
+) -> Result<SendReceipt, (i32, String)> {
+    let store = AnnounceStore::from_env().map_err(|e| (12, format!("announce send: {e}")))?;
+    send_announcement_in(parsed, body, paths, projects, &store)
+}
+
+/// [`send_announcement`] with the row store injected, so a test can seat two
+/// machines on one in-process primary.
+fn send_announcement_in(
+    parsed: &SendArgs,
+    body: &str,
+    paths: &AnnouncePaths,
+    projects: Option<&HashMap<String, String>>,
+    store: &AnnounceStore,
 ) -> Result<SendReceipt, (i32, String)> {
     let registry = crate::client_commands::load_registry_entries(&paths.registry)
         .map_err(|e| (12, format!("announce send: {e}")))?;
@@ -584,7 +700,9 @@ fn send_announcement(
     let fleet_scope = format!("fleet:{}", parsed.scope);
     let mut recent = 0usize;
     let mut supersedes: Vec<String> = Vec::new();
-    for m in read_bus_segments(&paths.bus_live) {
+    let bus_rows = read_announce_rows(&paths.bus_live, store)
+        .map_err(|e| (12, format!("announce send: {e}")))?;
+    for m in bus_rows.iter() {
         if row_str(&m, "kind") != Some(ANNOUNCE_KIND) {
             continue;
         }
@@ -664,8 +782,21 @@ fn send_announcement(
     );
     obj.insert("body".into(), json!(body));
 
-    append_line(&paths.bus_live, &Value::Object(obj), &paths.chats_dir)
+    let row = Value::Object(obj);
+    append_line(&paths.bus_live, &row, &paths.chats_dir)
         .map_err(|e| (1, format!("announce send: {e}")))?;
+    // The primary copy is what carries the row to other machines; a failed
+    // insert fails the send, because a machine-local announcement during an
+    // incident is exactly the bug this closes. The local copy stays: the
+    // sender's retry supersedes it by subject+scope.
+    store.insert(&row).map_err(|e| {
+        (
+            1,
+            format!(
+                "announce send: the primary copy failed ({e}); the announcement is machine-local"
+            ),
+        )
+    })?;
     Ok(SendReceipt {
         id,
         scope: parsed.scope.clone(),
@@ -924,7 +1055,19 @@ pub(crate) fn read_render(
     session_id: &str,
     boundary: Boundary,
 ) -> Result<Option<String>, String> {
-    let rows = read_bus_segments(&paths.bus_live);
+    let store = AnnounceStore::from_env()?;
+    read_render_in(paths, session_id, boundary, &store)
+}
+
+/// [`read_render`] with the row store injected, so a test can seat two
+/// machines on one in-process primary.
+fn read_render_in(
+    paths: &AnnouncePaths,
+    session_id: &str,
+    boundary: Boundary,
+    store: &AnnounceStore,
+) -> Result<Option<String>, String> {
+    let rows = read_announce_rows(&paths.bus_live, store)?;
     let now = chrono::Utc::now();
     let (standing, _superseded) = standing_announcements(&rows, now);
     if standing.is_empty() {
@@ -1627,6 +1770,107 @@ mod tests {
             Some(second.as_str())
         );
         std::fs::remove_dir_all(&f.root).ok();
+    }
+
+    #[test]
+    fn an_announcement_on_the_primary_reaches_another_machine() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let primary = crate::store_remote::test_primary::start();
+        let machine = |tag: &str| {
+            let f = fixture(tag);
+            let store = AnnounceStore {
+                primary: Some(primary.remote.clone()),
+            };
+            (f, store)
+        };
+        let (macbook, macbook_store) = machine("primary-a");
+        let (imac, imac_store) = machine("primary-b");
+
+        let registry = vec![agent_row(
+            "red",
+            "aaaa8888-8888-8888-8888-888888888888",
+            json!({}),
+        )];
+        write_registry(&macbook.paths, &registry);
+        write_registry(&imac.paths, &registry);
+        let mut flags: Vec<String> = send_flags("all").into_iter().map(str::to_string).collect();
+        flags.push("--subject".into());
+        flags.push("test hold".into());
+        let parsed = parse_send_args(&flags).expect("flags parse");
+
+        // A send on the MacBook lands in its own bus and on the primary.
+        let first = send_announcement_in(
+            &parsed,
+            "tests may not run",
+            &macbook.paths,
+            Some(&HashMap::new()),
+            &macbook_store,
+        )
+        .expect("the send lands");
+
+        // The iMac renders it; its own cursor silences the second read.
+        let reader = "bbbb9999-9999-9999-9999-999999999999";
+        let out = read_render_in(&imac.paths, reader, Boundary::Prompt, &imac_store)
+            .expect("the read renders")
+            .expect("the announcement is standing");
+        assert!(out.contains("tests may not run"), "{out}");
+        assert!(
+            read_render_in(&imac.paths, reader, Boundary::Prompt, &imac_store)
+                .unwrap()
+                .is_none(),
+            "the cursor silences the second read"
+        );
+
+        // A same-subject resend on the MacBook supersedes across machines.
+        let second = send_announcement_in(
+            &parsed,
+            "tests may run again",
+            &macbook.paths,
+            Some(&HashMap::new()),
+            &macbook_store,
+        )
+        .expect("the resend lands");
+        assert_eq!(second.superseded, vec![first.id.clone()]);
+        let out2 = read_render_in(
+            &imac.paths,
+            "cccc1111-1111-1111-1111-111111111111",
+            Boundary::Prompt,
+            &imac_store,
+        )
+        .unwrap()
+        .expect("the newest stands");
+        assert!(out2.contains("tests may run again"), "{out2}");
+        assert!(
+            !out2.contains("tests may not run"),
+            "stale news skipped: {out2}"
+        );
+
+        // An unreachable primary fails the send closed (the supersede and
+        // rate-limit scan reads primary rows before anything is written) and
+        // the read loud.
+        let dead = AnnounceStore {
+            primary: Some(crate::store_remote::test_primary::dead()),
+        };
+        let why = send_announcement_in(
+            &parsed,
+            "offline send",
+            &macbook.paths,
+            Some(&HashMap::new()),
+            &dead,
+        )
+        .unwrap_err()
+        .1;
+        assert!(
+            why.contains("unreachable") || why.contains("machine-local"),
+            "{why}"
+        );
+        assert!(
+            read_render_in(&imac.paths, reader, Boundary::Prompt, &dead).is_err(),
+            "an unreachable primary fails the read loud"
+        );
+
+        std::fs::remove_dir_all(&macbook.root).ok();
+        std::fs::remove_dir_all(&imac.root).ok();
     }
 
     #[test]
