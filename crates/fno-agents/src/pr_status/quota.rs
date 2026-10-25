@@ -953,11 +953,14 @@ mod tests {
         let now = crate::gh_budget::now_ms();
         let stage = |core_remaining: i64, core_seen_ms: i64| {
             std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+            // core_reset_ms is stored in MILLIS (the ledger field the core
+            // gate compares against now_ms()); an epoch-seconds value here
+            // reads as a passed window and the fresh leg never downgrades.
             std::fs::write(
                 &ledger,
                 format!(
                     r#"{{"stamps":[],"backoff_until_ms":0,"backoff_step":0,"refusal_kind":"unknown","last_refusal_ms":0,"last_half_open_ms":0,"core_remaining":{core_remaining},"core_reset_ms":{core_reset_ms},"core_seen_ms":{core_seen_ms}}}"#,
-                    core_reset_ms = now / 1000 + 3_000,
+                    core_reset_ms = now + 3_000,
                 ),
             )
             .unwrap();
