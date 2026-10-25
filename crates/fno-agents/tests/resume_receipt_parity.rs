@@ -49,6 +49,7 @@ fn the_door_answers_the_frozen_python_goldens() {
 
     let status = Command::new("bash")
         .arg(repo_root.join("tests/fixtures/resume_receipt/capture_golden.sh"))
+        .envs(fno_agents::test_run::self_owner_env())
         .env("FNO_CAPTURE_BIN", env!("CARGO_BIN_EXE_fno-agents"))
         .env("FNO_CAPTURE_GOLDEN_OUT", fresh.path())
         .env_remove("FNO_TASK_CONTEXT_FILE")
