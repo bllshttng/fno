@@ -208,6 +208,10 @@ fn cancel_matches_the_python_goldens() {
     case("cancel sets the signal", p, &argv);
     let sentinel = space(p).join("leads/epic-y.cancelled");
     assert!(sentinel.is_file(), "the set left no sentinel");
+    let journal = fs::read_to_string(space(p).join("events.jsonl")).unwrap();
+    let set: serde_json::Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
+    assert_eq!(set["type"], "cancel_signal_set");
+    assert_eq!(set["data"]["path"], sentinel.display().to_string());
     let clear = ["lead-state", "--cancel", "--scope", "epic-y", "--clear"];
     case("cancel clears the signal", p, &clear);
     assert!(!sentinel.exists(), "the clear left the sentinel");
@@ -297,6 +301,10 @@ fn init_matches_the_python_goldens() {
         space(p).join("events.jsonl"),
     )
     .unwrap();
+    // A predecessor's cancel signal never outlives a fresh init.
+    let stale = space(p).join("leads/epic-y.cancelled");
+    fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    fs::write(&stale, "").unwrap();
     run(
         "init writes the manifest",
         &[],
@@ -307,6 +315,7 @@ fn init_matches_the_python_goldens() {
         manifest.contains("harness_session_id: sess-lead"),
         "{manifest}"
     );
+    assert!(!stale.exists(), "init left the stale cancel signal");
     run(
         "init refuses an existing manifest",
         &[],
