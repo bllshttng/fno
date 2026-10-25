@@ -317,6 +317,10 @@ enum Role {
     /// paths commands still forward to Python (one command per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
+    /// `fno agents org` history, verdict, faq, `chart shape`, `chart
+    /// manifest-path`, and `fno inbox board`: the lead read verbs, exec'd as
+    /// arguments of existing fno-agents actions. Their Python legs are gone.
+    LeadRead(fno::lead_reads_route::Claim),
     AccountsCli(Vec<OsString>),
     /// `fno backlog ...`: the whole backlog namespace execs the sibling Rust
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
@@ -784,6 +788,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::paths_route::classify(args) {
         return Role::PathsCli(rest);
     }
+    if let Some(claim) = fno::lead_reads_route::classify(args) {
+        return Role::LeadRead(claim);
+    }
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
     }
@@ -1216,6 +1223,7 @@ fn main() {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
+        Role::LeadRead(claim) => std::process::exit(fno::lead_reads_route::run(&claim)),
         Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],

@@ -1,0 +1,71 @@
+{
+  "actionable": 2,
+  "exit_code": 1,
+  "queues": [
+    {
+      "name": "mail",
+      "status": "ok",
+      "actionable": true,
+      "count": 2,
+      "verb": "fno agents mail list",
+      "note": "oldest 3h",
+      "rows": [
+        "fmail-1 from gavin: shim fix",
+        "fmail-2 from robin: freeze"
+      ],
+      "source": "bus",
+      "error": null
+    },
+    {
+      "name": "questions",
+      "status": "ok",
+      "actionable": true,
+      "count": 0,
+      "verb": "fno inbox outstanding",
+      "note": "none open",
+      "rows": [],
+      "source": "questions.jsonl",
+      "error": null
+    },
+    {
+      "name": "claims",
+      "status": "ok",
+      "actionable": false,
+      "count": 3,
+      "verb": null,
+      "note": "",
+      "rows": [
+        "x-c435 held",
+        "x-9c6c held",
+        "x-91dd held"
+      ],
+      "source": "claim store",
+      "error": null
+    },
+    {
+      "name": "prs",
+      "status": "over_budget",
+      "actionable": true,
+      "count": 0,
+      "verb": "fno do pr status",
+      "note": "",
+      "rows": [],
+      "source": "gh",
+      "error": "budget spent before the read"
+    },
+    {
+      "name": "graph",
+      "status": "unreadable",
+      "actionable": true,
+      "count": 0,
+      "verb": null,
+      "note": "",
+      "rows": [],
+      "source": "graph.db",
+      "error": "database is locked"
+    }
+  ],
+  "warnings": [
+    "prs: 1 read skipped"
+  ]
+}

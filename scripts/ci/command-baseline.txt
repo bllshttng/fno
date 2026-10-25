@@ -98,8 +98,6 @@ lead done
 lead drain
 lead escalate
 lead init
-lead manifest-path
-lead shape
 lead term
 lint
 loops

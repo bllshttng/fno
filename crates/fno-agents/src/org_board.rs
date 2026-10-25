@@ -386,12 +386,27 @@ pub(crate) fn as_int(v: &Value) -> i64 {
 /// The `fno-agents board` entry point: parse flags, print the payload, exit
 /// with the board's own exit_code. Kept beside the parity sets' reach (an
 /// `==` arm in client.rs), so no advertised command is added.
+///
+/// `--user-verb` is `fno inbox board`: with no `--state` the caller's own
+/// role manifest bounds the board, and the payload prints as the text page
+/// (`--max-rows` per queue) or, with `--json`, indented.
 pub fn run_board(args: &[String]) -> i32 {
     let mut opts = BoardOpts::default();
+    let mut user_verb = false;
+    let mut as_json = false;
+    let mut max_rows = crate::lead_reads::DEFAULT_BOARD_ROWS;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--json" | "-J" => {}
+            "--json" | "-J" => as_json = true,
+            "--user-verb" => user_verb = true,
+            "--max-rows" => match it.next().and_then(|v| v.parse::<usize>().ok()) {
+                Some(v) => max_rows = v,
+                None => {
+                    eprintln!("fno-agents board: --max-rows needs an integer");
+                    return 2;
+                }
+            },
             "--budget-ms" => match it.next().and_then(|v| v.parse::<u64>().ok()) {
                 Some(v) => opts.budget_ms = v,
                 None => {
@@ -419,11 +434,22 @@ pub fn run_board(args: &[String]) -> i32 {
             }
         }
     }
+    if user_verb && opts.state_path.is_none() {
+        opts.state_path = crate::lead_reads::board_default_state();
+    }
     let payload = read_board(&opts);
-    println!(
-        "{}",
-        serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into())
-    );
+    if !user_verb {
+        println!(
+            "{}",
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into())
+        );
+    } else if as_json {
+        println!("{}", crate::backlog::render::py_json_pretty(&payload));
+    } else {
+        let (out, err) = crate::lead_reads::render_board(&payload, max_rows);
+        print!("{out}");
+        eprint!("{err}");
+    }
     payload
         .get("exit_code")
         .and_then(Value::as_i64)
