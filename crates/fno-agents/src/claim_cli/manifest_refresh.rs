@@ -59,9 +59,15 @@ pub(crate) fn refresh_manifest_on_handover_at(
         return;
     };
     let Some(manifest_path) = crate::state_path::resolve("target-state", cwd) else {
-        eprintln!("claim handover: manifest refresh skipped for {key}: no manifest path resolved");
         return;
     };
+    if !manifest_path.exists() {
+        // No session manifest here: a handover can complete outside any
+        // target session, and an absent manifest is a nothing, not a skip
+        // worth a line. A poisoned manifest is the only thing this module
+        // exists to heal.
+        return;
+    }
     let Ok(content) = std::fs::read_to_string(&manifest_path) else {
         eprintln!(
             "claim handover: manifest refresh skipped for {key}: unreadable {}",
@@ -99,6 +105,11 @@ pub(crate) fn refresh_manifest_on_handover_at(
         .filter(|l| !l.trim().starts_with(blocked_marker))
         .collect();
     let mut out = kept.join("\n");
+    if content.ends_with('\n') && !out.ends_with('\n') && !out.is_empty() {
+        // lines() drops the trailing newline; the rewritten manifest keeps
+        // whatever the original ended with.
+        out.push('\n');
+    }
     if scan_field(&content, "target_claim_key").is_none() {
         if !out.ends_with('\n') && !out.is_empty() {
             out.push('\n');

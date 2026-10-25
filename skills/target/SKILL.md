@@ -78,7 +78,7 @@ Direct edits are blocked by `hooks/write-gate.sh`.
 
 <HARD-GATE>
 NEVER hand-edit `.fno/target-state.md` after init via Edit/Write/Bash.
-The manifest is WRITE-ONCE: `fno do target init` writes it at session start; the ONLY legal post-init mutation is first-fill of an empty `plan_path` via `fno do state set --field plan_path`. Any other field write exits 5.
+The manifest is WRITE-ONCE for agent tools: `fno do target init` writes it at session start; the only legal post-init writes are the native ones - first-fill of an empty `plan_path` via `fno do state set --field plan_path`, and the claim-handover refresh (a completed `claim acquire --handover-from` for the manifest's own node drops a stale `target_claim_blocked_reason` line and appends the real claim lines). Any other field write exits 5.
 There are NO gate booleans, NO `current_phase`, NO `status` field, NO `quality_check_passed` or similar. Do not attempt to write them.
 </HARD-GATE>
 
@@ -93,7 +93,7 @@ Environment-specific traps that defy reasonable assumptions. Read these before y
 - **`fno doctor test`, not bare `pytest`.** `fno doctor test [paths...]` pins the worktree `PYTHONPATH`, bypasses the rtk tee wrapper, and returns the real exit code. Bare `pytest` in a worktree imports the wrong `fno` and can report a false green; `cmd | tail` masks the real `$?`.
 - **Read the RESOLVED `auto_merge_approved` from the manifest, never `fno config get auto_merge`.** Init folds config with this run's modifiers. `/target bg` injects `--no-merge` by default. The raw config tells you to merge against an explicit per-run prohibition.
 - **`git checkout -- <file>` destroys uncommitted work** and is NOT stash-recoverable. In a stale-base worktree, `git add -A` can revert an unmerged merge - stage named files, never `-A`.
-- **The manifest is write-once.** After `fno do target init`, the only legal write is first-filling an empty `plan_path` via `fno do state set`. There are no gate booleans or status fields to set; any other field write exits 5.
+- **The manifest is write-once for agent tools.** After `fno do target init`, the only legal writes are the native ones: first-filling an empty `plan_path` via `fno do state set`, and the claim-handover refresh when a `--handover-from` acquire completes for the manifest's node. There are no gate booleans or status fields to set; any other field write exits 5.
 - **A `bg` worker is unsupervised, NOT headless.** `/target bg` dispatches and continues without blocking, but the worker is not invisible: it registers an agent-view row and keeps an attachable pane, so it stays observable and drivable after launch (`fno agents session logs <name>`, or attach). "Fire-and-forget" describes only the dispatching session's non-blocking stance, never the worker's nature.
 
 ## When another node costs you time

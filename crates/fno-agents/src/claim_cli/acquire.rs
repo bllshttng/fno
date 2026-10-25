@@ -382,6 +382,19 @@ fn ordinary_acquire(
             // A launch-window claim is not work: the worker's handover opens the row.
             if key.starts_with("node:") && !a.holder.starts_with(HANDOVER_HOLDER_PREFIX) {
                 stamp_do_on_acquire(key, &claim, &a.holder);
+                // The session now owns the node through the ordinary door:
+                // fresh init, or a recovery that reaped a dead window claim.
+                // Heal what a refused earlier init may have written, the same
+                // way the handover arm below does.
+                super::manifest_refresh::refresh_manifest_on_handover(
+                    &key,
+                    &a.holder,
+                    if a.ttl.is_empty() {
+                        None
+                    } else {
+                        Some(a.ttl.as_str())
+                    },
+                );
             }
             if a.json_output {
                 println!("{}", claim_json_string(&claim));
