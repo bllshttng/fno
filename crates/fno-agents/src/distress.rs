@@ -124,6 +124,19 @@ pub(crate) fn help_distress_stuck(reason: String, evidence: Option<String>) -> H
     }
 }
 
+/// The held row the stop gate writes when the run is held on its own
+/// dispatch: the spawn gate refused the node (share or provider cap) and
+/// the node reads undispatched. Same shape as the parsed distresses; only
+/// the door differs (built by the gate, not parsed from a message).
+pub(crate) fn help_distress_held(reason: String, evidence: Option<String>) -> HelpDistress {
+    HelpDistress {
+        reason,
+        evidence,
+        kind: DistressKind::Help,
+        class: HelpClass::Held,
+    }
+}
+
 /// First `<help ...>` opening tag whose name is exactly `help` (a raw
 /// `find("<help")` would also match `<helper>`). An empty or missing reason
 /// still parses: the events schema permits a reason-less blocked row, and the

@@ -4257,8 +4257,8 @@ event_types:
       properties:
         reason:
           type: string
-          enum: [gate, timeout, error, no_rows]
-          description: "Why the run could not fire: gate (spawn gate refused), timeout (the tick budget killed the subprocess), error (non-zero exit or spawn trouble), no_rows (exit 0 but no history rows appended)."
+          enum: [gate, timeout, error, no_rows, no_bank]
+          description: "Why the run could not fire: gate (spawn gate refused), timeout (the tick budget killed the subprocess), error (non-zero exit or spawn trouble), no_rows (exit 0 but no history rows appended), no_bank (no checkout carries evals/bank, so nothing launched)."
         detail:
           type: string
           description: "Optional. The refusal, exit line, or stderr tail naming the cause."

@@ -730,48 +730,33 @@ fn holder_is_ours(holder: &str, record: Option<&crate::claims::ClaimRecord>) -> 
 
 /// `(verdict, info)` for `node:<id>` from THIS session's view; verdict in
 /// {ours, foreign_live, dead_predecessor, free}. Read-only, never fails the
-/// caller: a probe failure reads as free (a re-acquire candidate).
+/// caller: a probe failure reads as free (a re-acquire candidate). It judges
+/// the one `status` read the caller already made, so a shared primary pays
+/// one round trip per observation, not one per question.
 pub fn classify_node_claim(
-    node_id: &str,
-    info: Option<crate::claims::ClaimRecord>,
+    state: crate::claims::ClaimState,
+    record: Option<crate::claims::ClaimRecord>,
 ) -> (String, Option<crate::claims::ClaimRecord>) {
-    let record = match info {
-        Some(r) => Some(r),
-        None => match crate::claims::status(&format!("node:{node_id}"), None) {
-            (crate::claims::ClaimState::Free, None) => None,
-            (state, rec @ Some(_)) => {
-                use crate::claims::ClaimState::*;
-                match state {
-                    Free | Corrupted => None,
-                    _ => rec,
-                }
-            }
-            _ => None,
-        },
-    };
-    let Some(record) = record else {
+    use crate::claims::ClaimState::*;
+    let Some(record) = record.filter(|_| !matches!(state, Free | Corrupted)) else {
         return ("free".to_string(), None);
     };
-    let state = record_state(&record);
-    if state.is_empty() || state == "free" {
-        return ("free".to_string(), Some(record));
-    }
     if holder_is_ours(&record.holder, Some(&record)) {
         return ("ours".to_string(), Some(record));
     }
-    if state == "live" || state == "suspect" {
+    if state == Live || state == Suspect {
         return ("foreign_live".to_string(), Some(record));
     }
     ("dead_predecessor".to_string(), Some(record))
 }
 
-fn record_state(record: &crate::claims::ClaimRecord) -> String {
-    match crate::claims::status(&record.key, None).0 {
-        crate::claims::ClaimState::Free => "free".to_string(),
-        crate::claims::ClaimState::Live => "live".to_string(),
-        crate::claims::ClaimState::Suspect => "suspect".to_string(),
-        crate::claims::ClaimState::Stale => "stale".to_string(),
-        crate::claims::ClaimState::Corrupted => "corrupted".to_string(),
+fn state_word(state: crate::claims::ClaimState) -> &'static str {
+    match state {
+        crate::claims::ClaimState::Free => "free",
+        crate::claims::ClaimState::Live => "live",
+        crate::claims::ClaimState::Suspect => "suspect",
+        crate::claims::ClaimState::Stale => "stale",
+        crate::claims::ClaimState::Corrupted => "corrupted",
     }
 }
 
@@ -793,17 +778,22 @@ pub fn observe_node_claim(
     node_cwd: Option<&str>,
     enforce_failure_limit: bool,
     emit_events: bool,
-    native_info: Option<crate::claims::ClaimRecord>,
+    claim_read: Option<(
+        crate::claims::ClaimState,
+        Option<crate::claims::ClaimRecord>,
+    )>,
     worked_nodes: Option<BTreeMap<String, Vec<String>>>,
     worked_error: Option<String>,
     events_path: Option<&Path>,
 ) -> DispatchClaimObservation {
-    let (verdict, info) = classify_node_claim(node_id, native_info);
-    let info_ref = info.as_ref();
+    let (state, record) =
+        claim_read.unwrap_or_else(|| crate::claims::status(&format!("node:{node_id}"), None));
     // Truth is diagnostic; the claim verdict is authority. An unreadable
     // truth read degrades to unknown, never to a false claim verdict.
-    let truth_status = resolve_truth_status_word(node_id);
-    let claim_state = info_ref.map(|r| record_state(r)).filter(|s| !s.is_empty());
+    let truth_status = truth_status_word(state, record.as_ref());
+    let (verdict, info) = classify_node_claim(state, record);
+    let info_ref = info.as_ref();
+    let claim_state = info_ref.map(|_| state_word(state).to_string());
     let holder = info_ref
         .map(|r| r.holder.clone())
         .unwrap_or_else(|| "unknown".to_string());
@@ -913,13 +903,11 @@ pub fn observe_node_claim(
 /// The truth row's state word, or "unknown" when nothing answers. The claim
 /// verdict is authority; truth is diagnostic. Native derivation over the
 /// node claim + the newest loop_check fire per session (30-minute recency).
-fn resolve_truth_status_word(node_id: &str) -> String {
-    let claim_key = format!("node:{node_id}");
-    let (state, record) = crate::claims::status(&claim_key, None);
-    let holder = record
-        .as_ref()
-        .map(|r| r.holder.clone())
-        .unwrap_or_default();
+fn truth_status_word(
+    state: crate::claims::ClaimState,
+    record: Option<&crate::claims::ClaimRecord>,
+) -> String {
+    let holder = record.map(|r| r.holder.clone()).unwrap_or_default();
     let sid = holder
         .strip_prefix("target-session:")
         .filter(|s| !s.is_empty())

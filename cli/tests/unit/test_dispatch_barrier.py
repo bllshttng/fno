@@ -227,6 +227,26 @@ def test_the_bare_guard_command_never_clears_a_barrier_it_cannot_replace(
     assert exit_code == 0
 
 
+def test_a_guard_timeout_names_its_cause(monkeypatch):
+    """A guard that never answered under a slow shared primary printed
+    reason=error, which named nothing an operator could check."""
+    import subprocess
+
+    from fno import rust_binary
+
+    def _times_out(*_args, **_kwargs):
+        try:
+            raise subprocess.TimeoutExpired(["fno-agents"], 30)
+        except subprocess.TimeoutExpired as exc:
+            raise rust_binary.CommandUnavailable(f"fno-agents failed: {exc}") from exc
+
+    monkeypatch.setattr(rust_binary, "command_call", _times_out)
+    verdict, exit_code = _spawn_guard_decision("N", "spawn-cli:me")
+    assert exit_code == 3
+    assert " reason=guard-timeout; " in verdict["refusal_line"]
+    assert "store.remote_url" in verdict["detail"]
+
+
 @pytest.mark.dev_build
 def test_a_held_node_refuses_and_hands_back_its_own_reservation(monkeypatch, tmp_path):
     """A session that claimed the node through its own `fno do target init` is

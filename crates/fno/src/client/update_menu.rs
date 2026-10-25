@@ -46,6 +46,11 @@ pub(crate) struct UpdateReadiness {
     /// payload); only `behind` is read here.
     #[serde(default)]
     pub(crate) source_pin: Option<SourcePinView>,
+    /// The named revisions block: the side-by-side rev line and the
+    /// mixed-build flag, from the same resolver. Tolerated absent (an
+    /// older fno's payload); both rows skip when it is.
+    #[serde(default)]
+    pub(crate) revisions: Option<RevisionsView>,
 }
 
 /// The slice of the source-pin answer the menu needs. Serde ignores
@@ -54,6 +59,17 @@ pub(crate) struct UpdateReadiness {
 pub(crate) struct SourcePinView {
     #[serde(default)]
     pub(crate) behind: Option<u64>,
+}
+
+/// The slice of the readiness payload's `revisions` block the modal
+/// renders: the ready-made side-by-side line and the mixed-build detail.
+/// The resolver formats both; the TUI only prints them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub(crate) struct RevisionsView {
+    #[serde(default)]
+    pub(crate) summary: Option<String>,
+    #[serde(default)]
+    pub(crate) mixed_detail: Option<String>,
 }
 
 /// One release-notes line: the plain-English summary, the PR number for the
@@ -443,6 +459,17 @@ pub(crate) fn build_update_modal(probe: Option<&UpdateProbe>) -> AuxPopup {
                         short(r.installed_rev.as_deref()),
                         short(r.source_rev.as_deref())
                     ))),
+                }
+            }
+            // The named revisions line and the mixed-build flag, printed
+            // verbatim from the resolver so every surface words them
+            // identically.
+            if let Some(revs) = &r.revisions {
+                if let Some(summary) = &revs.summary {
+                    rows.push(PopupRow::Text(summary.clone()));
+                }
+                if let Some(detail) = &revs.mixed_detail {
+                    rows.push(PopupRow::Header(detail.clone()));
                 }
             }
             // Shaped notes win; the raw changelog stays the fallback for an

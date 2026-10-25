@@ -15,7 +15,7 @@ no trigger at all:   `fno backlog retro sweep-carveouts` reads the ledger direct
                                                      |
                               `fno backlog retro run` (consumer)
                                                      v
-   shared routine (cli/src/fno/retro/routine.py::triage_pr):
+   shared routine (crates/fno-agents/src/retro/routine.rs::triage_pr):
      harvest (carveouts + declined reviews + COMPLETION deferred_findings)
        -> classify + expand (verbatim reasoning + source cite, severity tier)
        -> dedup (source_pr + content-hash, idempotent)
@@ -52,17 +52,19 @@ It appends one JSON line to `.fno/carveouts.jsonl` via the events.jsonl mkdir-mu
 
 ### Waves 3-4 — the shared retro-triage routine
 
-`cli/src/fno/retro/`:
+`crates/fno-agents/src/retro/`:
 
 | Module | Role |
 |---|---|
-| `harvest.py` | gather carve-outs + declined reviewer findings (gh-injectable; severity-badge normalized, no-badge → medium; resolved/fix-commit ids subtracted) + COMPLETION.md `deferred_findings`. gh failure → WARN + process the rest; malformed jsonl line skipped, never aborting. |
-| `classify.py` | verbatim reasoning + source cite; title from the finding's own first line (never a generic stub); severity → tier (crit/high/med → node, low → inbox) and → priority; **uncited candidates rejected** (anti-hallucination); body truncated to a cap with a marker. |
-| `dedup.py` | key = `source_pr + blake2b(normalized finding)`; badge/whitespace-insensitive so two reviewers on one issue collapse; reads existing keys from a machine trailer in node `details` (no schema fields). Idempotent. |
-| `land.py` | routes by mode — autonomous → active node; interactive → create + queue (adopt-stays-pure); low/nit → `backlog.inbox.add_item`. Mode from the trigger sentinel, absent → interactive (safe). Per-node failures recorded, not raised, so partial progress persists and a re-run dedups. |
-| `routine.py` | the one shared `triage_pr(...)` both triggers call. |
-| `sweep.py` | the PR-independent ledger sweep (see below): reads `.fno/carveouts.jsonl` with no trigger, dedups every row against the live graph, files only what nothing already tracks. `plan_sweep` is pure, so the dry run and the applied run cannot diverge. |
-| `cli.py` | `fno backlog retro run` consumes `~/.fno/retro-pending/*.json` (universal) and `.fno/.triage-pending` (fast-path). Consume-then-remove: a sentinel is removed only on a clean land; a partial harvest (`gh_unavailable`) or land failure retains it for retry. Reloads live nodes per sentinel so dual triggers collapse to one node set. |
+| `harvest.rs` | gather carve-outs + declined reviewer findings (gh-injectable; severity-badge normalized, no-badge → medium; resolved/fix-commit ids subtracted) + COMPLETION.md `deferred_findings`. gh failure → WARN + process the rest; malformed jsonl line skipped, never aborting. |
+| `classify.rs` | verbatim reasoning + source cite; title from the finding's own first line (never a generic stub); severity → tier (crit/high/med → node, low → inbox) and → priority; **uncited candidates rejected** (anti-hallucination); body truncated to a cap with a marker. |
+| `dedup.rs` | key = `source_pr + blake2b(normalized finding)`; badge/whitespace-insensitive so two reviewers on one issue collapse; reads existing keys from a machine trailer in node `details` (no schema fields). Idempotent. |
+| `land.rs` | routes by mode — autonomous → active node; interactive → create + queue (adopt-stays-pure); low/nit → `backlog.inbox.add_item`. Mode from the trigger sentinel, absent → interactive (safe). Per-node failures recorded, not raised, so partial progress persists and a re-run dedups. |
+| `routine.rs` | the one shared `triage_pr(...)` both triggers call. |
+| `sweep.rs` | the PR-independent ledger sweep (see below): reads `.fno/carveouts.jsonl` with no trigger, dedups every row against the live graph, files only what nothing already tracks. `plan_sweep` is pure, so the dry run and the applied run cannot diverge. |
+| `postmortem.rs` | the postmortem source: both on-disk formats, the `consumed_at` stamp. |
+| `keep_going.rs` | the autonomous follow-up engine, under the shared daily counter in `crates/fno-agents/src/think_daily.rs`. |
+| `cli.rs` | `fno backlog retro run` consumes `~/.fno/retro-pending/*.json` (universal) and `.fno/.triage-pending` (fast-path). Consume-then-remove: a sentinel is removed only on a clean land; a partial harvest (`gh_unavailable`) or land failure retains it for retry. Reloads live nodes per sentinel so dual triggers collapse to one node set. |
 
 ### The PR-independent sweep (`fno backlog retro sweep-carveouts`)
 
@@ -144,7 +146,7 @@ A failed mint leaves the row in the ledger; clearing it to turn the gate green w
 
 ### Classification is deterministic by design
 
-Discretion #4 asked to "keep the classify step LLM-driven." We resolved this by *hosting*, not by a hidden API call: `classify.py` is deterministic and verbatim-preserving, which is the stronger anti-hallucination guarantee — with no LLM summarization there is no surface to fabricate a finding ("no cite, no node" is mechanical). The routine runs at an LLM-present checkpoint (the `/target` post-merge fast-path or the sentinel consumer) that *can* review before landing.
+Discretion #4 asked to "keep the classify step LLM-driven." We resolved this by *hosting*, not by a hidden API call: `classify.rs` is deterministic and verbatim-preserving, which is the stronger anti-hallucination guarantee — with no LLM summarization there is no surface to fabricate a finding ("no cite, no node" is mechanical). The routine runs at an LLM-present checkpoint (the `/target` post-merge fast-path or the sentinel consumer) that *can* review before landing.
 
 ## Boundary with the memory pass
 

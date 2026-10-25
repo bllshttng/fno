@@ -67,7 +67,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_ATTEST_DEBUG` | rs | Prints one stderr line naming the pull's slug, row count and primary url. Unset prints nothing; diagnostics only, never the data channel. Read in crates/fno-agents/src/attest.rs `run_pull`. |
 | `FNO_ATTEST_ENV_ONLY` | rs | `1` makes the retract arm's retractor identity resolve as an environment-only witness (no process ancestry), skipping the CLAUDE_CODE_SESSION_ID conflict read; the identity-conflict unit test pins it. Read in crates/fno-agents/src/attest.rs `resolve_retractor_identity`. |
 | `FNO_AUTO_CONTINUE` | rs | Env override of the merge-triggered auto-continue gate; truthy-set membership on the whole value, mirrored exactly from Python. |
-| `FNO_AUTO_MEMORY_DIR` | py | unclear: cli/src/fno/inbox/drain.py:407 |
 | `FNO_BG` | py+rs | unclear: cli/src/fno/target/orient.py:254 |
 | `FNO_BIN` | py+rs | Overrides the Python fno porcelain path at the Rust/Python seam. |
 | `FNO_BOARD_SCOPE` | rs | unclear: crates/fno/src/backlog_view.rs:333 |
@@ -133,6 +132,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_IDLE_EXIT_GRACE_MS` | rs | unclear: crates/fno/src/server.rs:14324 |
 | `FNO_INBOX_ROOT` | py+rs | unclear: cli/src/fno/inbox/store.py:218 |
 | `FNO_INSTALL_BUILD` | rs | unclear: cli/src/fno/update.py:1748 |
+| `FNO_KEEP_GOING` | py+rs | Forces the retro keep-going engine on or off above `keep_going.enabled`; truthy words are 1, true, yes, on. |
 | `FNO_KEEPER_ORPHAN_POLL_MS` | rs | Pane keeper poll interval in ms for the socket-dir-gone check; default 30000. Tests set it low. |
 | `FNO_KILLCHECK_GIT_BIN` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:58 |
 | `FNO_LAUNCH_ACCOUNT` | py+rs | Launch account resolved onto a spawn's exec seam; scrubbed before resolve so a stale value never mislabels the next spawn. |

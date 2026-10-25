@@ -628,6 +628,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
     let owner = classify_durable_owner(false, recipient_live, !recipient_live);
     let bus_only = live_reason.as_deref() == Some(BUS_ONLY_POLICY);
     let durable_body = wrap(None);
+    let reply_thread = args.reply_to.and_then(reply_parent).map(|p| p.thread);
     let write = write_durable_thread(
         &recipient,
         &stamp_from(args.from_name),
@@ -644,6 +645,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         args.origin,
         args.subject,
         args.reply_to,
+        reply_thread.as_deref(),
         false,
         None,
     );
@@ -905,6 +907,7 @@ pub(super) fn dispatch_send_to_project(
         Some(words),
         origin,
         subject,
+        None,
         None,
         false,
         None,
@@ -1189,69 +1192,46 @@ pub(super) fn kind_lane_send(
         "ref_node": args.ref_node,
         "ref_gate": args.ref_gate,
     });
-    let write = match args.reply_to.as_deref() {
-        Some(reply_to) => match find_thread_by_msg_id(&recipient, reply_to) {
-            Some(thread_path) => append_to_kind_thread(
-                &thread_path,
-                &sender,
-                content,
-                &msg_id,
-                Some(crate::backlog::style_check::word_count(content) as i64),
-                mail_origin,
-            )
-            .map(|target| (target, true)),
-            None => write_durable_thread(
-                &recipient,
-                &sender,
-                kind,
-                content,
-                &msg_id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                "inbox-drain",
-                Some(crate::backlog::style_check::word_count(content) as i64),
-                mail_origin,
-                subject,
-                Some(reply_to),
-                persist_to_memory,
-                Some(refs.clone()),
-            )
-            .map(|target| (target, false)),
-        },
-        None => write_durable_thread(
-            &recipient,
-            &sender,
-            kind,
-            content,
-            &msg_id,
-            None,
-            None,
-            None,
-            None,
-            None,
-            "inbox-drain",
-            Some(crate::backlog::style_check::word_count(content) as i64),
-            mail_origin,
-            subject,
-            None,
-            persist_to_memory,
-            Some(refs.clone()),
-        )
-        .map(|target| (target, false)),
-    };
-    let (thread_path, appended) = match write {
-        Ok(pair) => pair,
-        Err(exc) => {
-            if let Ok(res) = &reservation {
-                release_budget(res);
-            }
-            eprintln!("error: {exc}");
-            return Err(2);
+    // A reply joins its parent's thread and kind when the chats store holds
+    // the parent; an unknown parent leaves a fresh thread that names it.
+    let parent = args.reply_to.as_deref().and_then(reply_parent);
+    let appended = parent.is_some();
+    let thread = parent
+        .as_ref()
+        .map(|p| p.thread.clone())
+        .unwrap_or_else(|| msg_id.clone());
+    let row_kind = parent
+        .as_ref()
+        .map(|p| p.kind.as_str())
+        .filter(|k| !k.is_empty())
+        .unwrap_or(kind);
+    let write = write_durable_thread(
+        &recipient,
+        &sender,
+        row_kind,
+        content,
+        &msg_id,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "inbox-drain",
+        Some(crate::backlog::style_check::word_count(content) as i64),
+        mail_origin,
+        subject,
+        args.reply_to.as_deref(),
+        Some(&thread),
+        persist_to_memory,
+        Some(refs.clone()),
+    );
+    if let Err(exc) = write {
+        if let Ok(res) = &reservation {
+            release_budget(res);
         }
-    };
+        eprintln!("error: {exc}");
+        return Err(2);
+    }
     let thread_id = msg_id;
     if kind == "question" {
         let esc = escalate_to_human(&sender, &recipient, content, "question", Some(&thread_id));
@@ -1281,7 +1261,7 @@ pub(super) fn kind_lane_send(
             "{}",
             json!({
                 "msg_id": thread_id,
-                "thread_path": thread_path.to_string_lossy(),
+                "thread": thread,
                 "appended": appended,
             })
         );
@@ -1563,6 +1543,7 @@ pub(super) fn job_lane_send(
         Some(crate::backlog::style_check::word_count(payload) as i64),
         origin,
         subject,
+        None,
         None,
         false,
         None,

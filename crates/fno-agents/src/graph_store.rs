@@ -667,7 +667,7 @@ fn archive_rows_at(path: &Path) -> Vec<Value> {
 /// needs when its -shm sidecar is gone; a file that opens to none of the
 /// store's shapes contributes nothing.
 fn archive_db_rows(path: &Path) -> Vec<Value> {
-    let Some(conn) = open_archive_conn(path) else {
+    let Some(conn) = open_read_only_wal_safe(path) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -687,12 +687,14 @@ fn archive_db_rows(path: &Path) -> Vec<Value> {
     out
 }
 
-/// The one read-only archive open both archive readers share: an ordinary
-/// read-only open, then the immutable retry a WAL-mode twin whose -shm
-/// sidecar is gone needs. The URI spelling percent-encodes the path so the
+/// The one read-only open over a WAL-mode store, shared by the archive and
+/// session readers: an ordinary read-only open, then the immutable retry a
+/// store whose daemon exited clean (the -shm sidecar gone while the header
+/// stays WAL) needs. The URI spelling percent-encodes the path so the
 /// `?immutable=1` query survives reserved characters in the path itself.
-/// `None` when neither opens.
-pub(crate) fn open_archive_conn(path: &Path) -> Option<rusqlite::Connection> {
+/// The retry fires only when the plain open refused, so a live writer never
+/// takes it. `None` when neither opens.
+pub(crate) fn open_read_only_wal_safe(path: &Path) -> Option<rusqlite::Connection> {
     let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
     if let Ok(conn) = rusqlite::Connection::open_with_flags(path, flags) {
         return Some(conn);

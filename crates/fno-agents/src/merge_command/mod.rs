@@ -23,10 +23,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MERGE_LOCK_WAIT_S: u64 = 120;
 const MERGE_LOCK_POLL_S: u64 = 5;
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const FLAKE_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 const BIN_MISSING: &str =
     "the fno-agents binary was not found; reinstall fno, run `fno doctor update --rust`, or set FNO_AGENTS_BIN";
+
+/// The merge-path fno-child wall bound: `bounds.merge_gh_read_secs` (the
+/// one key the pr-worktree resolve and every merge consult shares), so a
+/// stalled shim is tuned in one place instead of a hardcoded 30s.
+fn command_timeout(cwd: &Path) -> Duration {
+    Duration::from_secs(crate::agents_config::merge_gh_read_secs(cwd))
+}
 
 /// One flow's collected output: every stdout/stderr line in write order, the
 /// final receipt, and the authorized receipt's observed head when one rendered.
@@ -904,7 +910,7 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
     let _ = command_call(
         "authorized-merge",
         &json!({"op": "pr-head", "pr": pr, "cwd": repo.to_string_lossy()}),
-        COMMAND_TIMEOUT,
+        command_timeout(&repo),
     );
     let covered_head = "";
 
@@ -1027,7 +1033,7 @@ fn do_merge(
     let publish_head = match command_call(
         "authorized-merge",
         &json!({"op": "pr-head", "pr": pr, "cwd": repo.to_string_lossy()}),
-        COMMAND_TIMEOUT,
+        command_timeout(&repo),
     ) {
         Ok(v) => v
             .get("head")
@@ -1167,7 +1173,7 @@ impl PipeIfEmpty for String {
 fn resolve_durable_grant(pr: i64, repo: &Path) -> (String, String) {
     const UNKNOWN: &str = "unknown";
     let payload = json!({"op": "grant-verdict", "pr": pr, "cwd": repo.to_string_lossy()});
-    let out = match command_call("authorized-merge", &payload, COMMAND_TIMEOUT) {
+    let out = match command_call("authorized-merge", &payload, command_timeout(repo)) {
         Ok(v) => v,
         Err(e) => {
             return (
@@ -1194,7 +1200,7 @@ fn resolve_durable_grant(pr: i64, repo: &Path) -> (String, String) {
 
 fn resolve_pr_worktree(pr: i64, repo: &Path) -> Result<PathBuf, String> {
     let payload = json!({"cwd": repo.to_string_lossy(), "pr": pr});
-    match command_call("pr-worktree", &payload, COMMAND_TIMEOUT) {
+    match command_call("pr-worktree", &payload, command_timeout(repo)) {
         Ok(v) => match v.get("worktree") {
             Some(w) => Ok(PathBuf::from(py_str(w))),
             // A zero-exit answer without the key surfaces as the KeyError

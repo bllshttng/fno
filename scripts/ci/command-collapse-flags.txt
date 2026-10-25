@@ -19,8 +19,6 @@ agents spawn !--bounded-placement
 agents spawn !--recorded-provider
 agents spawn !--mux-session
 agents worker external !--pr
-backlog retro run !--pr
-backlog retro run !--session
 worktree cleanup !--kill-orphans
 do resume receipt validate !--session
 do resume receipt write !--session
@@ -35,8 +33,6 @@ mail send !--origin
 mail send !--provider
 resume receipt validate !--session
 resume receipt write !--session
-retro run !--pr
-retro run !--session
 agents pane-identity !--session
 agents pane-identity !--session-id
 state init !--allow-stub

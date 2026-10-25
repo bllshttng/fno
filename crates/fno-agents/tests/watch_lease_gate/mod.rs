@@ -215,6 +215,15 @@ fn watching_requires_durable_registration() {
 fn watching_ignored_unaddressed_findings_are_audible() {
     let tmp = findings_cwd("sess-watching-findings");
     let cwd = tmp.path();
+    // The findings refusal is the claimed-session branch: a claimless session
+    // reads the permanent no-claim refusal now, with the findings riding the
+    // block reason beside it. Give the manifest a claim pair so this test
+    // keeps guarding the findings text itself.
+    fs::write(
+        cwd.join("target-state.md"),
+        "---\nsession_id: sess-watching-findings\ncreated_at: 2026-06-05T00:00:00Z\nattended: true\ntarget_claim_key: node:x-watching-findings\ntarget_claim_holder: target-session:sess-watching-findings\n---\n",
+    )
+    .unwrap();
     fs::write(cwd.join("transcript.jsonl"), transcript_with_watching()).unwrap();
 
     let comments = r#"[

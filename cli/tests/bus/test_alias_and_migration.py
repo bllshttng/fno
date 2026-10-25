@@ -37,7 +37,6 @@ def runner() -> CliRunner:
 
 def test_g4_agents_send_writes_one_bus_line(inbox_and_bus, runner):
     from fno.bus.log import iter_messages
-    from fno.inbox.store import read_all_threads
 
     res = runner.invoke(
         mail_app,
@@ -51,8 +50,3 @@ def test_g4_agents_send_writes_one_bus_line(inbox_and_bus, runner):
     assert msgs[0].to == "acme"
     assert msgs[0].kind == "fyi"
     assert msgs[0].body == "build is green"
-
-    # The md render exists too and agrees (same single message id).
-    threads = read_all_threads("acme")
-    assert len(threads) == 1
-    assert threads[0].messages[0].msg_id == msgs[0].id
