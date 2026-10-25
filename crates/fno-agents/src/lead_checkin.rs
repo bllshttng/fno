@@ -2720,18 +2720,21 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
             ctx.events_paths = crate::lead_history::default_journals(&ctx.cwd);
         }
         if ctx.graph.as_os_str().is_empty() {
-            ctx.graph = crate::backlog::settings::graph_path();
+            ctx.graph = crate::paths_cli::graph_json(&ctx.cwd);
         }
         if ctx.handoffs_dir.as_os_str().is_empty() {
-            let home = std::env::var_os("HOME").map(PathBuf::from);
-            ctx.handoffs_dir =
-                crate::finalize::resolve_handoffs_dir(None, None, &ctx.cwd, home.as_deref());
+            ctx.handoffs_dir = crate::paths_cli::handoffs_dir(&ctx.cwd);
         }
         if ctx.faqs_dir.is_none() {
             ctx.faqs_dir = crate::backlog::autobrief::briefs_dir().map(|d| d.join("lead-faqs"));
         }
         if ctx.emit_path.is_none() {
-            ctx.emit_path = Some(crate::claims::claim_events_path(None, &ctx.cwd));
+            ctx.emit_path = Some(
+                std::env::var_os("FNO_EVENTS_PATH")
+                    .filter(|p| !p.is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| crate::paths::events_path(&ctx.cwd)),
+            );
         }
     }
     if ctx.events_paths.is_empty()
