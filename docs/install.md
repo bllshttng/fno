@@ -201,7 +201,7 @@ fno uninstall --yes        # no question; needed when stdin is not a terminal
 It removes each item through its own uninstall command, in this order:
 
 1. The launchd agents (`~/Library/LaunchAgents/sh.fno.*.plist` and the autocorrect agents).
-2. The Claude Code and Codex plugins and their `fno` marketplaces (`footnote` on an install from before the rename), and the OpenCode plugin files.
+2. The Claude Code and Codex plugins, their `fno` or older `footnote` marketplaces, and the OpenCode plugin files.
 3. The hooks fno added to `~/.claude/settings.json`, `~/.gemini/settings.json` and `~/.codex/config.toml`. Your own hooks stay.
 4. The `uv` tool, the Homebrew formula and the bootstrap cache. When the install script installed `uv` itself, `uv` is listed too.
 5. The daemon and the mux sessions, which it stops.

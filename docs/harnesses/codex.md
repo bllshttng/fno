@@ -24,7 +24,9 @@ Install first validates the requested marketplace and plugin in an isolated temp
 It then replaces the source behind `fno`, verifies the installed version and complete loadable payload, and writes the channel marker only after that verification succeeds.
 Every failed live switch restores the previous marketplace registration, plugin, and exact marker bytes.
 A rollback failure is persisted and reported distinctly by `fno doctor`.
-Install also migrates and removes legacy registrations and their cache: `footnote-dev` (`fno@footnote-dev`), and `footnote` (`fno@footnote`), the marketplace name before the rename to `fno`. Until install runs, `fno doctor` reports an old `fno@footnote` install as `legacy-marketplace`.
+
+Install also removes legacy registrations and their cache. They are `footnote-dev` (`fno@footnote-dev`) and `footnote` (`fno@footnote`). `footnote` is the marketplace name before the rename to `fno`. Until install runs, `fno doctor` reports an old `fno@footnote` install as `legacy-marketplace`.
+
 An already-correct install is a no-op unless `--force` is present.
 Every mutation can require hook approval and takes effect in a new Codex session.
 Blocking `cli-ci` installs Codex 0.145 and runs the isolated real-binary containment and rollback regressions on every affected pull request.

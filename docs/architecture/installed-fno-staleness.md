@@ -152,7 +152,7 @@ A machine can host several full copies of the footnote plugin tree, and they dri
 
 The removal guard reads the marketplace shape, not the harness version. If a future Claude Code loads a local marketplace by copying it into the cache, the guard reads wrong: removal then deletes the loaded tree. The doctor lane survives that change, because it reports every root whatever the shape. The ceiling is stated here rather than hidden.
 
-When the install succeeds on a local marketplace and the cache is not the live root, the install command removes the copy at `~/.claude/plugins/cache/fno` (and the pre-rename `cache/footnote`). The removal is reversible. If the marketplace shape changes back, the install command recreates the cache from the stage.
+When the install succeeds on a local marketplace and the cache is not the live root, the install command removes the copy at `~/.claude/plugins/cache/fno`. It also removes the pre-rename `cache/footnote`. The removal is reversible. If the marketplace shape changes back, the install command recreates the cache from the stage.
 
 ## Locked decisions
 
