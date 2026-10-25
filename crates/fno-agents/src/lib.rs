@@ -372,6 +372,7 @@ pub mod osc;
 pub mod otel_ingest;
 pub mod otel_read;
 pub mod otlp_export;
+pub mod outstanding;
 pub(crate) mod owner_ladder;
 pub mod pane_claim;
 pub mod pane_keeper;

@@ -39,7 +39,7 @@ mod classify;
 pub mod pr_closure;
 pub mod pr_closure_produce;
 pub(crate) mod prs;
-mod queues;
+pub(crate) mod queues;
 pub(crate) mod scope;
 mod stranded;
 
