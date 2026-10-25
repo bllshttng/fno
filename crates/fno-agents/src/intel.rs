@@ -1227,7 +1227,7 @@ pub fn run_intel(args: &[String]) -> i32 {
     if let Some(name) = lens.as_deref() {
         return match name {
             "decisions" => crate::intel_lens::run_lens(days, json),
-            "rules" => crate::intel_rules_lens::run_lens(days, json, &sample, labels.as_deref()),
+            "rules" => crate::intel_rules_lens::run_lens(days, &sample, labels.as_deref()),
             _ => {
                 eprintln!("fno-agents intel: unknown lens {name} (known: decisions, rules)");
                 2
