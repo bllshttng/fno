@@ -218,11 +218,17 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
         .map(|(number, _, _)| *number)
         .max();
     rows.sort_by(|a, b| b.0.cmp(&a.0));
+    // Key 0 = live, 1 = settled (stamped, or age-gated history), 2 = an
+    // explicitly marked history row. A marked row sinks below even the
+    // stamped rows: state, not number order, decides for it.
     rows.sort_by_key(|(number, status, history)| {
-        if terminal(status) || *history {
-            return true;
+        if *history {
+            2
+        } else if terminal(status) || max_terminal.is_some_and(|bound| *number <= bound) {
+            1
+        } else {
+            0
         }
-        max_terminal.is_some_and(|bound| *number <= bound)
     });
     rows.first().map(|(number, _, _)| number.to_string())
 }
