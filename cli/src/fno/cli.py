@@ -358,8 +358,7 @@ def _check_migration() -> None:
     """Fast-path stat check; runs migration on first invocation post-upgrade.
 
     The try/except Exception: pass is intentional - this migration is a
-    best-effort startup convenience, not load-bearing.  Hard-fail path
-    remains ``fno config setup migrate-paths`` (called explicitly).
+    best-effort startup convenience, not load-bearing.
 
     Guarded by FNO_SKIP_MIGRATION=1 (explicit opt-out) or PYTEST_CURRENT_TEST
     (pytest sets this automatically in all test processes) for isolation.

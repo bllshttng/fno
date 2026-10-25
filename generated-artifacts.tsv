@@ -32,3 +32,4 @@ docs/reference/otel-schema.md	crates/fno-agents/src/otel_schema.sql	python3 scri
 crates/fno/src/role_migration.rs	crates/fno-agents/src/role_migration.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 docs/architecture/help-routing.md	crates/fno-agents/src/help_router.rs	cargo test -p fno-agents help_router -- --ignored bless_help_routing
 crates/fno/src/model_reach.toml	crates/fno-agents/src/model_reach.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/wizard-plan.json	SettingsModel and cli/src/fno/config/registry.py	cd cli && uv run fno-py config schema --wizard-plan > ../crates/fno/wizard-plan.json
