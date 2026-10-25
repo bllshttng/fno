@@ -97,9 +97,9 @@ pub fn run(args: &[String]) -> i32 {
                 eprintln!("Error: No such option: {other}");
                 return 2;
             }
-            (Some(_), other) if other.starts_with('-') => {
-                eprintln!("Usage: fno whoami {leaf} [OPTIONS]");
-                eprintln!("Try 'fno whoami {leaf} --help' for help.");
+            (Some(l), other) if other.starts_with('-') => {
+                eprintln!("Usage: fno whoami {l} [OPTIONS]");
+                eprintln!("Try 'fno whoami {l} --help' for help.");
                 eprintln!();
                 eprintln!("Error: No such option: {other}");
                 return 2;
@@ -111,9 +111,9 @@ pub fn run(args: &[String]) -> i32 {
                 eprintln!("Error: No such command '{other}'.");
                 return 2;
             }
-            (Some(_), other) => {
-                eprintln!("Usage: fno whoami {leaf} [OPTIONS]");
-                eprintln!("Try 'fno whoami {leaf} --help' for help.");
+            (Some(l), other) => {
+                eprintln!("Usage: fno whoami {l} [OPTIONS]");
+                eprintln!("Try 'fno whoami {l} --help' for help.");
                 eprintln!();
                 eprintln!("Error: Got unexpected extra argument ({other}).");
                 return 2;
@@ -693,11 +693,14 @@ fn whoami_render(opts: &Options, home: &AgentsHome) -> i32 {
     let state = match load_agent_context(opts.state_file.as_deref(), home) {
         Ok(state) => state,
         Err(StateError::Malformed { path, detail }) => {
-            eprintln!("error: malformed state file: {path}: {detail}");
+            eprintln!("error: malformed state file: {}: {detail}", path.display());
             return 2;
         }
         Err(StateError::MissingOverride { path }) => {
-            eprintln!("error: --state-file path does not exist: {path}");
+            eprintln!(
+                "error: --state-file path does not exist: {}",
+                path.display()
+            );
             return 2;
         }
     };
@@ -904,11 +907,14 @@ fn status_render(opts: &Options, home: &AgentsHome) -> i32 {
     let state = match load_agent_context(opts.state_file.as_deref(), home) {
         Ok(state) => state,
         Err(StateError::Malformed { path, detail }) => {
-            eprintln!("error: malformed state file: {path}: {detail}");
+            eprintln!("error: malformed state file: {}: {detail}", path.display());
             return 2;
         }
         Err(StateError::MissingOverride { path }) => {
-            eprintln!("error: --state-file path does not exist: {path}");
+            eprintln!(
+                "error: --state-file path does not exist: {}",
+                path.display()
+            );
             return 2;
         }
     };
@@ -1402,7 +1408,7 @@ fn ambient_strip_flags(keep_family: &str) -> Vec<String> {
     ];
     let own_session = TABLE
         .iter()
-        .find(|(name, family)| *family == keep_family)
+        .find(|(_, family)| *family == keep_family)
         .and_then(|(name, _)| {
             std::env::var(name)
                 .ok()
@@ -1654,7 +1660,7 @@ fn find_by_session<'a>(rows: &'a [Value], session_uuid: &str, harness: &str) -> 
         if harness == "claude" {
             fields.push(row.get("cc_session_id").and_then(Value::as_str));
         }
-        if fields.iter().any(|f| f == Some(session_uuid)) {
+        if fields.iter().any(|f| *f == Some(session_uuid)) {
             return Some(row);
         }
     }
@@ -1707,7 +1713,8 @@ fn task_holder(
     {
         return None;
     }
-    let row = find_by_session(&registry_rows(home), sid, _harness);
+    let rows = registry_rows(home);
+    let row = find_by_session(&rows, sid, _harness);
     match row {
         Some(row) => Some(
             row.get("name")
@@ -1752,7 +1759,8 @@ fn role_text(ident: &crate::spawn_context::OwnedIdentity, home: &AgentsHome) -> 
     let (Some(sid), Some(harness)) = (&ident.session_id, &ident.harness) else {
         return None;
     };
-    let row = find_by_session(&registry_rows(home), sid, harness)?;
+    let rows = registry_rows(home);
+    let row = find_by_session(&rows, sid, harness)?;
     let label = row.get("role_label").and_then(Value::as_str)?;
     let grantor = row
         .get("role_grantor")
