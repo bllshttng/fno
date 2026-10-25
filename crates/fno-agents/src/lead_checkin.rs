@@ -94,6 +94,7 @@ fn iso_now() -> String {
 /// One reading could not be taken; the beat continues without it.
 struct ReaderError(String);
 
+#[derive(Debug)]
 pub(crate) struct Reading {
     pub(crate) name: &'static str,
     pub(crate) ok: bool,
