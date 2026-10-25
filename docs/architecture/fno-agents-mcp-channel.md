@@ -103,4 +103,4 @@ The pin lives in the characterization tests in `crates/fno-agents/src/mcp/channe
 - Sidecar logs land under `$XDG_STATE_HOME/fno/sidecar.log` (default `~/.local/state/fno/sidecar.log`). The lazy-start appends there.
 - The sidecar state file (`sidecar-state.json`) is flushed on SIGTERM but not on SIGKILL. Channel servers re-register on next session boot; the registry's `mcp_channel_id` is the persistent source of truth.
 - macOS AF_UNIX path limit is 104 chars. Long `$HOME` values are rare in practice, but the operator-visible error (`AF_UNIX path too long`) is transparent.
-- The verb answers natively: `fno agents mcp send --session-id <id>` (envelope on stdin, exit 0/1/2) execs the worker's `--mcp-exec send` lane. The reachability probe rides `--mcp-exec status`. Run the sidecar by hand with `fno-agents-worker --mcp-exec sidecar`.
+- The send command answers natively: `fno agents mcp send --session-id <id>` (envelope on stdin, exit 0/1/2) execs the worker's `--mcp-exec send` lane. The reachability probe rides `--mcp-exec status`. Run the sidecar by hand with `fno-agents-worker --mcp-exec sidecar`.
