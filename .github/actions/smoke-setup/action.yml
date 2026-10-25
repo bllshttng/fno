@@ -13,23 +13,9 @@ description: >
 runs:
   using: composite
   steps:
-    # The test sandbox comes from tempfile.mkdtemp, and the cargo build dir
-    # is pinned inside it. Newer runner images mount /tmp as a tmpfs with a
-    # per-user quota, and a cold fno lib-test build there died with "Disk
-    # quota exceeded" (errno 122) while / had 106G free. Point TMPDIR at a
-    # root-disk directory instead. Mounting over a live /tmp would hide
-    # files the runner holds open there. /ft is shorter than /tmp, so
-    # socket paths stay under the AF_UNIX limit.
+    # The test sandbox and the cargo build dir inside it follow TMPDIR.
     - name: Put TMPDIR on the runner disk
-      if: runner.os == 'Linux'
-      shell: bash
-      run: |
-        findmnt -T /tmp -o TARGET,SOURCE,FSTYPE,SIZE,AVAIL,OPTIONS
-        if [[ "$(findmnt -n -o FSTYPE -T /tmp)" == tmpfs ]]; then
-          sudo install -d -m 1777 /ft
-          echo "TMPDIR=/ft" >> "$GITHUB_ENV"
-          findmnt -T /ft -o TARGET,SOURCE,FSTYPE,SIZE,AVAIL,OPTIONS
-        fi
+      uses: ./.github/actions/tmpdir-on-disk
 
     - name: Set up Python
       uses: actions/setup-python@v5

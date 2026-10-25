@@ -1167,6 +1167,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Put TMPDIR on the runner disk
+        uses: ./.github/actions/tmpdir-on-disk
+
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -1248,6 +1251,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Put TMPDIR on the runner disk
+        uses: ./.github/actions/tmpdir-on-disk
 
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
