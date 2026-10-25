@@ -932,29 +932,6 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_gate_leaves_an_open_ceiling_blueprint_row_actionable() {
-        // The refusal leg holds spawn-routed rows only. A blueprint runs
-        // through the session's own subagent surface, spends no spawn share,
-        // and starts fine at a full seat count, so a blueprint-only board
-        // with an open ceiling never saturates on a worker-capacity refusal.
-        let board = parse_org_board_value_with_floor(
-            &json!({
-                "actionable": 2,
-                "queues": [
-                    {"name": "unplanned", "status": "ok", "actionable": true,
-                     "verb": "/fno:blueprint", "rows": [
-                        {"id": "x-1", "difficulty": "high"},
-                        {"id": "x-2", "difficulty": "high"},
-                    ]}, // verb-wording: allow
-                ],
-            }),
-            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
-        )
-        .unwrap();
-        assert!(saturation_verdict(&board, Some(&refused_probe()), None).is_none());
-    }
-
-    #[test]
     fn a_refused_gate_with_a_full_ceiling_names_both_holds() {
         // Both legs at once: the gate holds the undispatched row, the full
         // ceiling holds every blueprint row, and the saturated message names
@@ -1144,9 +1121,27 @@ mod tests {
 
     #[test]
     fn a_refused_split_holds_only_spawn_rows_and_points_at_the_blueprint_row() {
-        // The split arithmetic on the narrowed refusal leg: the gate holds
-        // the undispatched row only, and the blueprint row with an open
-        // ceiling stays the actionable next row the block points at.
+        // The refusal leg holds spawn-routed rows only. A blueprint runs
+        // through the session's own subagent surface, spends no spawn share,
+        // and starts fine at a full seat count: a blueprint-only board with
+        // an open ceiling never saturates on a worker-capacity refusal, and
+        // a mixed board keeps the blueprint row as the actionable next row
+        // the block points at.
+        let blueprint_only = parse_org_board_value_with_floor(
+            &json!({
+                "actionable": 2,
+                "queues": [
+                    {"name": "unplanned", "status": "ok", "actionable": true,
+                     "verb": "/fno:blueprint", "rows": [
+                        {"id": "x-1", "difficulty": "high"},
+                        {"id": "x-2", "difficulty": "high"},
+                    ]}, // verb-wording: allow
+                ],
+            }),
+            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
+        )
+        .unwrap();
+        assert!(saturation_verdict(&blueprint_only, Some(&refused_probe()), None).is_none());
         let board = parse_org_board_value_with_floor(
             &json!({
                 "actionable": 3,
