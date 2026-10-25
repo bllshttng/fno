@@ -60,6 +60,8 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "lead-history",
     "term-ledger",
     "route-slot",
+    "config-route",
+    "dispatch-harness",
     "list",
     "logs",
     "loop",
@@ -818,6 +820,12 @@ async fn run(args: Vec<String>) -> i32 {
     // and the readouts send one JSON payload, read {status, candidate, chain}.
     if command == "route-slot" {
         return fno_agents::route_slot::run_route_slot(&args[1..]);
+    }
+    if command == "config-route" {
+        return fno_agents::config_route::run(&args[1..]);
+    }
+    if command == "dispatch-harness" {
+        return fno_agents::dispatch_harness::run(&args[1..]);
     }
 
     // `spawn-gate`: the ONE spawn gate; the Python transport sends one JSON

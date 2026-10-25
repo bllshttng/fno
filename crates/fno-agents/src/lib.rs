@@ -163,6 +163,8 @@ pub mod decision_trace;
 pub mod delivery_completion;
 pub mod digest;
 pub mod dispatch_credit;
+pub mod dispatch_harness;
+pub mod config_route;
 pub mod disposition_gate;
 pub mod distress;
 pub mod drift;
