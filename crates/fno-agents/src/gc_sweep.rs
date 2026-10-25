@@ -2191,6 +2191,12 @@ pub(crate) fn run_with_release(
         };
         let mut row = GcRow {
             origin: e.origin.clone(),
+            // The bg-adoption ruling: scan only a no-origin claude row -
+            // the population the not-spawn keep holds on "no origin
+            // recorded" - and let the transcript prove the join.
+            bg_fno_invoked: e.origin.is_none()
+                && e.harness.as_deref() == Some("claude")
+                && crate::session_backfill::bg_fno_invocation(sid),
             teamed: e.role_level.is_some(),
             work,
             transcript_age_s: age,
