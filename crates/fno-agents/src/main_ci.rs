@@ -67,7 +67,14 @@ const STALE_REPORT_WINDOW_DAYS: i64 = 14;
 /// on an old sha must not read main red while the head is clean. Such
 /// failures ride the token's `stale` list instead (a cancelled older run is
 /// a superseded one and rides nowhere) and the check-in names
-/// each on its own line with its age. Per workflow with head rows the
+/// each on its own line with its age. A stale failure a newer completed run
+/// of the same `workflow_id` answered is resolved, not live, and rides
+/// nowhere too: an older red outlived by a newer pass is history. While the
+/// head's own run is still in flight the verdict reads pending and the
+/// NEWEST stale failure promotes onto the verdict line (`pending (cli-ci at
+/// <sha>)`) instead of riding the stale list - the previous head's red is
+/// the live signal while the head is unverified; with no head rows at all
+/// nothing promotes. Per workflow with head rows the
 /// newest COMPLETED run decides - red on fail or cancel, naming the
 /// workflow and the sha it ran on - except that a cancelled run whose
 /// workflow already has a newer in-flight run on the same sha reduces to
@@ -145,10 +152,34 @@ fn main_ci_token_from_pages<'a>(
             .filter(|run| !at_head(run) && crate::pr_push::rest_bucket(run) != "cancel"),
     );
     let window_start = now - chrono::Duration::days(STALE_REPORT_WINDOW_DAYS);
+    // A stale failure a newer completed run of the same workflow answered is
+    // resolved, not live: an older red outlived by a newer pass is history
+    // the check-in must not keep printing. Matched by the stable
+    // `workflow_id` like the supersede passes above, never the display
+    // `name` alone, and fail-closed - a row pair the API gives no id for
+    // never de-stales.
+    let resolved_by_newer_pass = |run: &Value| {
+        let (Some(wf_id), Some(created)) = (
+            run.get("workflow_id").and_then(Value::as_u64),
+            run.get("created_at").and_then(Value::as_str),
+        ) else {
+            return false;
+        };
+        at_sha.iter().chain(on_main.iter()).any(|other| {
+            crate::pr_push::rest_bucket(other) == "pass"
+                && other.get("workflow_id").and_then(Value::as_u64) == Some(wf_id)
+                && other
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    > created
+        })
+    };
     let stale: Vec<Value> = older
         .iter()
         .filter_map(|(_, _, completed)| *completed)
         .filter(|run| crate::pr_push::rest_bucket(run) == "fail")
+        .filter(|run| !resolved_by_newer_pass(run))
         .filter(|run| {
             run.get("created_at")
                 .and_then(Value::as_str)
@@ -201,6 +232,10 @@ fn main_ci_token_from_pages<'a>(
                     .any(|other| at_head(other) && !is_push(other) && newer_inflight(other))
         });
     let red = if red_superseded_inflight { None } else { red };
+    let inflight = red_superseded_inflight
+        || head.iter().any(|(_, newest, _)| {
+            newest.get("status").and_then(Value::as_str) != Some("completed")
+        });
     let mut token = match red {
         Some(run) => json!({
             "verdict": "red",
@@ -208,13 +243,31 @@ fn main_ci_token_from_pages<'a>(
             "sha": run.get("head_sha").and_then(Value::as_str).unwrap_or("unknown"),
         }),
         None => {
-            let inflight = red_superseded_inflight
-                || head.iter().any(|(_, newest, _)| {
-                    newest.get("status").and_then(Value::as_str) != Some("completed")
-                });
             json!({ "verdict": if head.is_empty() || inflight { "pending" } else { "green" } })
         }
     };
+    // While the head's own run is still in flight the newest stale failure
+    // is the live signal, not archaeology: promote it onto the verdict line
+    // (`pending (cli-ci at 40bde08)`) and leave the rest to the stale list.
+    // A red verdict never promotes - it already names its run - and main
+    // with no head rows at all keeps its stale list, since nothing is in
+    // flight to read the promotion against.
+    if red.is_none() && inflight && !stale.is_empty() {
+        let newest = stale
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, run)| run.get("created_at").and_then(Value::as_str).unwrap_or(""))
+            .map(|(idx, _)| idx)
+            .expect("stale is non-empty");
+        let run = stale.swap_remove(newest);
+        let fields = token.as_object_mut().expect("token is built as an object");
+        if let Some(workflow) = run.get("workflow") {
+            fields.insert("workflow".into(), workflow.clone());
+        }
+        if let Some(sha) = run.get("sha") {
+            fields.insert("sha".into(), sha.clone());
+        }
+    }
     if !stale.is_empty() {
         token
             .as_object_mut()
@@ -265,8 +318,9 @@ fn attach_incident(cwd: &Path, token: &mut Value, red: Option<&Value>) {
 }
 
 /// The `main ci:` line body: a red verdict names the workflow and sha, a
-/// plain verdict is the word alone, and legacy cached string tokens pass
-/// through untouched.
+/// pending verdict names them too when the previous head's red promotes
+/// onto it, a plain verdict is the word alone, and legacy cached string
+/// tokens pass through untouched.
 pub(crate) fn main_ci_render(v: Option<&Value>) -> String {
     match v {
         Some(Value::Object(o)) => {
@@ -838,6 +892,173 @@ mod tests {
                 "stale": [{
                     "workflow": "release", "sha": "old",
                     "created_at": "2026-09-28T11:00:00Z",
+                }],
+            })
+        );
+    }
+
+    /// The stale specimen: cli-ci failed at 54ba82b, then passed at 2753e49,
+    /// the new head. The older red is resolved - a newer completed pass of
+    /// the same workflow rides it off the stale list entirely.
+    #[test]
+    fn a_stale_failure_a_newer_pass_of_the_same_workflow_resolved_rides_nowhere() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "2753e49",
+            "completed",
+            "success",
+            "2026-09-30T11:05:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "54ba82b",
+                "completed",
+                "failure",
+                "2026-09-29T20:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "2753e49",
+                "completed",
+                "success",
+                "2026-09-30T11:05:00Z",
+                "push",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("2753e49", &at_sha, &on_main),
+            serde_json::json!({"verdict": "green"})
+        );
+    }
+
+    /// The resolution is workflow-scoped and id-matched: a newer pass of a
+    /// DIFFERENT workflow file sharing the display name answers nothing, and
+    /// a candidate the API gives no `workflow_id` never de-stales.
+    #[test]
+    fn a_newer_pass_of_a_different_workflow_sharing_the_name_resolves_nothing() {
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "old",
+                "completed",
+                "failure",
+                "2026-09-29T20:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-09-30T11:00:00Z",
+                "push",
+                99,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &[], &on_main),
+            serde_json::json!({
+                "verdict": "green",
+                "stale": [{
+                    "workflow": "cli-ci", "sha": "old",
+                    "created_at": "2026-09-29T20:00:00Z",
+                }],
+            })
+        );
+    }
+
+    /// The pending specimen: cli-ci failed at 40bde08 (the previous head)
+    /// and the newer head 6889efa is still running. The verdict is pending
+    /// and the line names the previous head's red instead of leaving it to
+    /// archaeology, while the merge gate still reads no red.
+    #[test]
+    fn a_red_run_on_the_previous_head_rides_the_pending_line_while_the_head_runs() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "6889efa",
+            "in_progress",
+            "",
+            "2026-09-30T11:30:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "40bde08",
+                "completed",
+                "failure",
+                "2026-09-30T11:05:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "6889efa",
+                "in_progress",
+                "",
+                "2026-09-30T11:30:00Z",
+                "push",
+                42,
+            ),
+        ];
+        let token = token_at("6889efa", &at_sha, &on_main);
+        assert_eq!(
+            token,
+            serde_json::json!({
+                "verdict": "pending", "workflow": "cli-ci", "sha": "40bde08",
+            })
+        );
+        assert_eq!(main_ci_red_run(&token), None);
+    }
+
+    /// Promotion moves the NEWEST failure onto the line and leaves the rest
+    /// to the stale list: the previous head's red is live, the older one is
+    /// archaeology with its own age line.
+    #[test]
+    fn the_pending_line_promotes_the_newest_failure_and_leaves_the_rest_stale() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "queued",
+            "",
+            "2026-09-30T10:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_event(
+                "release",
+                "old1",
+                "completed",
+                "failure",
+                "2026-09-28T08:00:00Z",
+                "workflow_dispatch",
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "prev",
+                "completed",
+                "failure",
+                "2026-09-30T08:00:00Z",
+                "push",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({
+                "verdict": "pending", "workflow": "cli-ci", "sha": "prev",
+                "stale": [{
+                    "workflow": "release", "sha": "old1",
+                    "created_at": "2026-09-28T08:00:00Z",
                 }],
             })
         );
