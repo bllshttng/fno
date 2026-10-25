@@ -1,0 +1,175 @@
+{
+  "conditions": [
+    {
+      "checked": true,
+      "detail": "id=alpha version=1.0.0",
+      "family": "identity",
+      "name": "pack-id",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "90c203a5275de46f4babd8b8e1e0f7cdc1ffcd162e060081a40f21fb085569e4",
+      "family": "identity",
+      "name": "digest-stability",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "identity",
+      "name": "role-ids-safe",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "identity",
+      "name": "role-ids-case-unique",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "identity",
+      "name": "role-and-function-ids-unique",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "docs",
+      "family": "identity",
+      "name": "function-set",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "roles=2; skills=1; workflows=1; adapters=1; evaluators=1; assets=1; permissions=1; scenarios=1",
+      "family": "schema",
+      "name": "declarations-parse",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "workflows/flow.yaml present",
+      "family": "schema",
+      "name": "source:workflow:flow",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "skills/sk/SKILL.md present",
+      "family": "schema",
+      "name": "source:skill:sk",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "agents/writer.md present",
+      "family": "schema",
+      "name": "source:agent:alpha-writer",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "assets/style.md present",
+      "family": "schema",
+      "name": "source:asset:style-guide",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "role writer declared by this pack",
+      "family": "schema",
+      "name": "agent-role-binding:alpha-writer",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "frontmatter name/pack/role match the declaration",
+      "family": "schema",
+      "name": "agent-frontmatter-identity:alpha-writer",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "all 2 tool(s) within the bounded allowlist",
+      "family": "schema",
+      "name": "agent-tools-bounded:alpha-writer",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "dependency",
+      "name": "no-declared-dependencies",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": null,
+      "family": "capability",
+      "name": "declarations-are-not-grants",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "running footnote <VERSION> within declared range",
+      "family": "compatibility",
+      "name": "footnote-compat-range",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "2 role(s) parsed as RoleManifest",
+      "family": "compatibility",
+      "name": "role-manifest-schema",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "writer default_topology=loop",
+      "family": "compatibility",
+      "name": "topology:writer",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "editor default_topology=direct",
+      "family": "compatibility",
+      "name": "topology:editor",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "writer manifest=cec2325feba8",
+      "family": "compatibility",
+      "name": "resolve:writer",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "editor manifest=be1e4e161f20",
+      "family": "compatibility",
+      "name": "resolve:editor",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "smoke command runnable; recorded=passed",
+      "family": "declared-test",
+      "name": "scenario:smoke",
+      "result": "passed"
+    },
+    {
+      "checked": true,
+      "detail": "check command runnable: bash evaluators/check.sh",
+      "family": "schema",
+      "name": "evaluator-runnable:check",
+      "result": "passed"
+    }
+  ],
+  "ok": true,
+  "pack_path": "<PACKS>/alpha",
+  "version": 1
+}

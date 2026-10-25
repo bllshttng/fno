@@ -1,0 +1,16 @@
+pack: <PACKS>/dependent
+  identity      pack-id                      checked   passed
+  identity      digest-stability             checked   passed
+  identity      role-ids-safe                checked   passed
+  identity      role-ids-case-unique         checked   passed
+  identity      role-and-function-ids-unique checked   passed
+  identity      function-set                 checked   passed
+  schema        declarations-parse           checked   passed
+  dependency    dependency:alpha             checked   blocked
+      declared dependency alpha (1.0.0..2.0.0) is not installed
+  capability    declarations-are-not-grants  checked   passed
+  compatibility footnote-compat-range        checked   passed
+  compatibility role-manifest-schema         checked   passed
+  declared-test no-declared-scenarios        checked   passed
+  schema        no-declared-evaluators       checked   passed
+ok: False

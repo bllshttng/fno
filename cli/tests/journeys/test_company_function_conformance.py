@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from fno.company.contracts import (
     CompanyWorkRefs,
@@ -16,18 +20,17 @@ from fno.company.contracts import (
     WorkOrderRef,
 )
 from fno.delivery import DeliveryEvidenceFact, evaluate_delivery
-from fno.plugins.activate import activate
-from fno.plugins.registry import PackRegistryStore
-from fno.plugins.verify import load_manifest, verify_pack
 from fno.roles.models import (
     ApprovalFloor,
     CapabilityFact,
     ContextBundleBounds,
     ResolvedRole,
     RoleLayer,
+    RoleManifest,
 )
 from fno.roles.registry import discover_role_definitions
 from fno.roles.resolver import resolve_role
+from fno.rust_binary import find_dev_binary
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACK = REPO_ROOT / "plugins" / "company-conformance" / "plugin.yaml"
@@ -45,10 +48,24 @@ OBSERVATION_CADENCE = {
 
 
 def _manifest(path: Path):
-    manifest, failure = load_manifest(path)
-    assert failure is None, failure
-    assert manifest is not None
-    return manifest
+    # The pack schema is native; the journey reads the roles through the
+    # Python role models it asserts against.
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return SimpleNamespace(
+        roles=tuple(RoleManifest.model_validate(role) for role in raw.get("roles", ())),
+        skills=tuple(raw.get("skills", ())),
+        agents=tuple(raw.get("agents", ())),
+    )
+
+
+def _plugins(root: Path, *args: str) -> tuple[int, dict]:
+    """One native `fno config plugins` command against this role root."""
+    proc = subprocess.run(
+        [str(find_dev_binary()), "spawn-overlay", "plugins", "--root", str(root), *args, "--json"],
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode, json.loads(proc.stdout)
 
 
 CONFORMANCE = _manifest(PACK)
@@ -161,27 +178,25 @@ def _complete_facts(company_work: CompanyWorkRefs) -> tuple[DeliveryEvidenceFact
 def role_root(tmp_path: Path) -> Path:
     root = tmp_path / "roles"
     root.mkdir()
-    outcome = activate(
-        PACK,
-        registry_store=PackRegistryStore(tmp_path / "registry.json"),
-        role_root=root,
-    )
-    assert outcome.unconfigured_artifacts == ()
-    assert set(outcome.receipt.written_paths) == {
+    code, outcome = _plugins(root, "activate", str(PACK))
+    assert code == 0, outcome
+    assert outcome["unconfigured_artifacts"] == []
+    assert set(outcome["written_paths"]) == {
         f"plugin/company-conformance/{role_id}.json" for role_id in ROLE_IDS
     }
     return root
 
 
 @pytest.mark.dev_build
-def test_pack_verification_runs_but_the_journey_carries_conformance() -> None:
-    report = verify_pack(PACK, installed={})
-    assert report.ok, [condition.name for condition in report.conditions if not condition.ok]
+def test_pack_verification_runs_but_the_journey_carries_conformance(tmp_path: Path) -> None:
+    code, report = _plugins(tmp_path / "roles", "verify", str(PACK))
+    failing = [c["name"] for c in report["conditions"] if not (c["checked"] and c["result"] == "passed")]
+    assert code == 0 and report["ok"], failing
     scenario_conditions = [
-        condition for condition in report.conditions if condition.name.startswith("scenario:")
+        condition for condition in report["conditions"] if condition["name"].startswith("scenario:")
     ]
     assert len(scenario_conditions) == len(ROLE_IDS)
-    assert all(condition.checked for condition in scenario_conditions)
+    assert all(condition["checked"] for condition in scenario_conditions)
 
 
 def _assert_resolved_roles_match_every_declared_policy_axis(role_root: Path) -> None:

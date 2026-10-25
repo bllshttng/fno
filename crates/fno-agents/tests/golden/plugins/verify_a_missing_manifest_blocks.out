@@ -1,0 +1,4 @@
+pack: <PACKS>/nowhere
+  schema        manifest-load                checked   blocked
+      unreadable manifest <PACKS>/nowhere: FileNotFoundError: [Errno 2] No such file or directory: '<PACKS>/nowhere'
+ok: False

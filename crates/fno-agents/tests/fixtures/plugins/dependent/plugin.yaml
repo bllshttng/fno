@@ -1,0 +1,7 @@
+id: dependent
+version: 0.2.0rc1
+footnote_compat: {minimum: 0.1.0}
+permissions:
+  - {effect_class: notify, destination: chat}
+depends_on:
+  - {pack_id: alpha, version_range: {minimum: 1.0.0, maximum: 2.0.0}}

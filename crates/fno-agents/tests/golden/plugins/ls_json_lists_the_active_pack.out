@@ -1,0 +1,17 @@
+{
+  "packs": [
+    {
+      "activated": true,
+      "declared_effects": [
+        {
+          "destination": "docs-site",
+          "effect_class": "publish"
+        }
+      ],
+      "digest": "90c203a5275d",
+      "pack_id": "alpha",
+      "version": "1.0.0"
+    }
+  ],
+  "version": 1
+}
