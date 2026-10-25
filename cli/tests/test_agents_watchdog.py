@@ -783,7 +783,6 @@ def test_recoverable_apply_refuses_transcript_loss_after_adoption(tmp_path):
         CodexRecoveryScan((candidate,), True, 1, 0, 0, ()),
         scope_cwd=tmp_path,
         adopt_fn=adopt,
-        confine_fn=lambda token, hits, **kwargs: hits,
         load_registry_fn=lambda path: list(registry_rows),
         update_registry_fn=update_registry,
     )
@@ -855,7 +854,6 @@ def test_recoverable_apply_checks_the_exact_adopted_registry_row(tmp_path):
         scan,
         scope_cwd=tmp_path,
         adopt_fn=adopt,
-        confine_fn=lambda token, hits, **kwargs: hits,
         load_registry_fn=lambda path: [SimpleNamespace(
             harness="codex",
             harness_session_id=session_id,
@@ -898,7 +896,6 @@ def test_recoverable_apply_refuses_a_row_without_the_follow_up_path(tmp_path):
         CodexRecoveryScan((candidate,), True, 1, 0, 0, ()),
         scope_cwd=tmp_path,
         adopt_fn=lambda hit, **kwargs: None,
-        confine_fn=lambda token, hits, **kwargs: hits,
         load_registry_fn=lambda path: [SimpleNamespace(
             harness="codex",
             harness_session_id=session_id,

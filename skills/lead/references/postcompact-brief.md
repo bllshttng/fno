@@ -6,6 +6,6 @@ You still hold the role; compaction dropped the rules.
 - **Reuse rides the retask receipt, not headroom.** `fno agents fleet top` picks a candidate. `fno agents registry retask <name> --node <id>` resolves the routed lane; `status=retasked` confirms reuse. `spawn_required` keeps the worker and spawns fresh. Never retier by hand.
 - **glm workers:** `fno agents spawn --name <n> "<payload>" --substrate thread -P zai -m 'glm-5.3-flash[1m]' --print`. Run its `claude --bg` line.
 - **Vote on each node that cost you time.** `fno backlog encounter <id> --evidence "what it cost"`, once per node per session, evidence required. `fno backlog demand` is the read you rank FROM.
-- **Reap by last activity, not pid.** `fno agents session rm <name>` removes the harness record, then the fno row. Keep the full `harness_session_id`; recover with `fno agents session resume <full-id> --cross-project --cwd <checkout>`, or re-adopt with `fno agents registry adopt <full-id> --cross-project`. Short ids are not machine-wide. Pruned worktree contents are not recoverable. Never run bare `claude rm <id>`.
+- **Reap by last activity, not pid.** `fno agents session rm <name>` removes the harness record, then the fno row. Keep the full `harness_session_id`; recover with `fno agents session resume <full-id> --cwd <checkout>`, or re-adopt with `fno agents registry adopt <full-id>`. Short ids are not machine-wide. Pruned worktree contents are not recoverable. Never run bare `claude rm <id>`.
 
 Manual: `skills/lead/SKILL.md`, `references/org-operations.md`.
