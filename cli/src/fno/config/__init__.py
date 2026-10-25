@@ -60,7 +60,6 @@ from fno.config._attention import AttentionBlock
 from fno.config._telemetry import TelemetryBlock
 from fno.config._test import TestBlock
 from fno.config._watchdog import WatchdogBlock
-from fno.config_io import _apply_search_ceiling as _apply_search_ceiling
 from fno.config_io import _deep_merge as _deep_merge
 from fno.config_io import _global_settings_path as _global_settings_path
 from fno.config_io import _load_raw as _load_raw
@@ -4497,7 +4496,7 @@ def _settings_yaml_locations(root: Optional[Path] = None) -> list[Path]:
     if canonical_candidate not in candidates and not suppress_canonical:
         candidates.append(canonical_candidate)
     candidates.append(_global_settings_path())
-    return _apply_search_ceiling(candidates)
+    return candidates
 
 
 def _candidate_paths(root: Optional[Path] = None) -> list[Path]:

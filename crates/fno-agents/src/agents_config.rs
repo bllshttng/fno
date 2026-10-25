@@ -44,12 +44,12 @@ pub(crate) fn global_config_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| Path::new(&h).join(".fno/config.toml"))
 }
 
-/// Python `_apply_search_ceiling` (config_io.py): under `FNO_CONFIG_SEARCH_ROOT`
-/// (an os.pathsep list), a DISCOVERED config file outside every root is not
-/// read. `fno.hermetic.neutralise` sets it so the git-derived canonical climb,
-/// which no HOME redirect can bound, cannot reach a real checkout. Unset, empty,
-/// or no resolvable root: no ceiling. An explicit `FNO_CONFIG` is exempt, as in
-/// Python.
+/// The one config search ceiling: under `FNO_CONFIG_SEARCH_ROOT` (an
+/// os.pathsep list), a DISCOVERED config file outside every root is not read.
+/// `fno.hermetic.neutralise` sets it for test runs, beside
+/// `FNO_NO_CANONICAL_CONFIG=1`, so no discovered file outside the sandbox
+/// reaches a Rust reader. The Python loader has no ceiling. Unset, empty, or
+/// no resolvable root: no ceiling. An explicit `FNO_CONFIG` is exempt.
 pub(crate) fn within_search_ceiling(path: &Path) -> bool {
     let Some(raw) = non_empty_env("FNO_CONFIG_SEARCH_ROOT") else {
         return true;
