@@ -268,7 +268,7 @@ fn default_spawn(
         lane,
         prompt,
     );
-    let mut cmd = std::process::Command::new("fno");
+    let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
     cmd.args(&argv)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
