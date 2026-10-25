@@ -175,6 +175,7 @@ pub mod escalation;
 pub mod eval_attempt;
 pub mod eval_part4;
 pub mod eval_reap;
+pub mod evals;
 pub mod evals_arm;
 pub mod evals_climb;
 pub mod evals_macro;

@@ -257,6 +257,12 @@ fn main() {
     if args.first().map(String::as_str) == Some("evals-arm") {
         std::process::exit(fno_agents::evals_arm::run_evals_arm(&args[1..]));
     }
+    // `evals`: the family dispatch the forwarding leaf calls, per the port
+    // protocol: Python owns transport only. Transport-only arm, dispatched
+    // here like evals-trend: the shrink law bars a new `run` arm.
+    if args.first().map(String::as_str) == Some("evals") {
+        std::process::exit(fno_agents::evals::run(&args[1..]));
+    }
     // `evals-trend` and `corrections-verify`: transport-only folds (the
     // shrink law allows no new `run` arm); their module docs carry the
     // contract, autocorrect-pack.sh embeds the verify one.
