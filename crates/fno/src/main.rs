@@ -191,6 +191,11 @@ enum Role {
     DoctorUpdate(Vec<OsString>),
     /// `fno agents history ... --graph ...`: the native session-card reader.
     AgentsHistory(Vec<OsString>),
+    /// `fno agents lead refresh-canon` (the front's rewrite of
+    /// `fno agents org refresh-canon`): the beat's canon-doc refresh. The
+    /// carried tail is empty by contract; the door resolves the plugin root
+    /// itself and refuses naming every source it tried.
+    AgentsLeadRefreshCanon(Vec<OsString>),
     /// `fno agents transcript ...`: the native session-bundle transfer.
     AgentsTranscript(Vec<OsString>),
     /// `fno agents claim backlog|export ...`: the shared-store commands, run
@@ -242,6 +247,9 @@ enum Role {
     /// `fno agents top ...`: the native worker table (`fno-agents census
     /// --workers`), claimed here because the Python front alone cost seconds.
     AgentsTop(Vec<OsString>),
+    /// `fno agents restart ...` and root `fno restart ...`: exec'd as
+    /// `fno-agents restart`, the one implementation.
+    AgentsRestart(Vec<OsString>),
     /// `fno agents status ...`: the read command hooks and wait loops spend,
     /// exec'd natively for the same reason as agents_top: the Python front
     /// only turned around and exec'd the same binary. The argv passes
@@ -492,8 +500,33 @@ fn classify_agents_transcript(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_agents_command(args, "transcript")
 }
 
+/// `fno agents org refresh-canon` arrives here as `agents lead
+/// refresh-canon` (the front's rewrite of the org row): the beat's
+/// canon-doc refresh, claimed natively so the door resolves the plugin root
+/// itself. The door takes no deeper words; the tail forwards so the usage
+/// refusal names what was typed.
+fn classify_agents_lead_refresh_canon(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "agents"
+        || args[1].to_str()? != "lead"
+        || args[2].to_str()? != "refresh-canon"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
 fn classify_agents_command(args: &[OsString], command: &str) -> Option<Vec<OsString>> {
     classify_group_command(args, "agents", command)
+}
+
+/// `fno agents restart ...` and its permanent root alias `fno restart ...`:
+/// the command is `fno-agents restart`, so the front door execs it directly.
+fn classify_agents_restart(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.first().and_then(|a| a.to_str()) == Some("restart") {
+        return Some(args[1..].to_vec());
+    }
+    classify_agents_command(args, "restart")
 }
 
 /// `fno agents status ...`: claimed natively like agents_top. The one
@@ -814,6 +847,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
     }
+    if let Some(rest) = classify_agents_lead_refresh_canon(args) {
+        return Role::AgentsLeadRefreshCanon(rest);
+    }
     if let Some(rest) = classify_agents_transcript(args) {
         return Role::AgentsTranscript(rest);
     }
@@ -853,6 +889,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_agents_command(args, "top") {
         return Role::AgentsTop(rest);
+    }
+    if let Some(rest) = classify_agents_restart(args) {
+        return Role::AgentsRestart(rest);
     }
     if let Some(rest) = classify_agents_status(args) {
         return Role::AgentsStatus(rest);
@@ -1254,6 +1293,9 @@ fn main() {
         }
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
+        Role::AgentsLeadRefreshCanon(rest) => {
+            std::process::exit(fno::lead_refresh_canon::run(&rest))
+        }
         Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),
         Role::MailShow(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail show",
@@ -1325,6 +1367,9 @@ fn main() {
             &["census", "--workers"],
             &rest,
         )),
+        Role::AgentsRestart(rest) => {
+            std::process::exit(fno_agents_exec("fno agents restart", &["restart"], &rest))
+        }
         Role::AgentsRoles(rest) => std::process::exit(fno_agents_exec(
             "fno agents roles",
             &["spawn-overlay", "roles"],
@@ -1610,6 +1655,20 @@ mod tests {
             decide_role(&os(&["agents", "history", "--help"]), false),
             Role::Forward
         );
+        // The canon-refresh door claims the front's rewrite exactly; the
+        // sibling lead commands stay on the compat leg.
+        assert_eq!(
+            decide_role(&os(&["agents", "lead", "refresh-canon"]), false),
+            Role::AgentsLeadRefreshCanon(os(&[]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "lead", "refresh-canon", "--extra"]), false),
+            Role::AgentsLeadRefreshCanon(os(&["--extra"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "lead", "checkin"]), false),
+            Role::Forward
+        );
         // The mail reader claims its command and refuses the renamed one by
         // name; the send port claims local sends, while @host and plain
         // names stay the relay's.
@@ -1880,6 +1939,15 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["agents", "top", "--json", "--subagents"]), false),
             Role::AgentsTop(os(&["--json", "--subagents"]))
+        );
+        // `restart` answers natively in both spellings, flags carried.
+        assert_eq!(
+            decide_role(&os(&["agents", "restart", "--mux", "--json"]), false),
+            Role::AgentsRestart(os(&["--mux", "--json"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["restart", "--force"]), false),
+            Role::AgentsRestart(os(&["--force"]))
         );
         // Every `roles` op is the Rust door's in every spelling, group
         // options carried; an unknown op forwards.

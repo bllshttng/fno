@@ -185,6 +185,11 @@ fn main() {
     if args.first().map(String::as_str) == Some("gh-cache") {
         std::process::exit(fno_agents::gh_cache::run());
     }
+    // `target-status`: the orientation report door; Python's `fno do target
+    // status` reaches it through command_call, transport-only.
+    if args.first().map(String::as_str) == Some("target-status") {
+        std::process::exit(fno_agents::target_orient::run_status(&args[1..]));
+    }
     // `launch-workdir`: the spawn door's launch-cwd resolution (see
     // launch_workdir.rs doc). Transport-only: registers no client action; Python's
     // ensure_launch_workdir reaches it through command_call, and a `hold`

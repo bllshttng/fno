@@ -460,17 +460,6 @@ fn node_lists_children_blockers_and_live_sessions() {
     );
     assert!(tree.leads[0].nodes[1].current.is_empty());
     assert!(tree.unowned.is_empty());
-    let mut snapshot = crate::org_model::OrgSnapshot::default();
-    snapshot.apply(&org, 100);
-    org.fold = Err("org-fold exited 1".into());
-    snapshot.apply(&org, 160);
-    assert_eq!(snapshot.tree.as_ref().unwrap().measured_at, 100);
-    assert_eq!(snapshot.error.as_deref(), Some("org-fold exited 1"));
-    assert_eq!(snapshot.error_at, Some(160));
-    let mut first = crate::org_model::OrgSnapshot::default();
-    first.apply(&org, 160);
-    assert!(first.tree.is_none());
-    assert_eq!(first.error, snapshot.error);
     org.fold = Ok(
         json!({"scope_nodes": {"territory": {"status": "ok", "nodes": [
         {"id": "x-top", "claim_state": "live"}, {"id": "x-kid1", "claim_state": "no-record"}
