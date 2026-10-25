@@ -158,10 +158,10 @@ def _escalation_answer_trigger(
     full_id = parse_manifest(target.manifest).get("harness_session_id") or ""
     if full_id:
         addresses.update({full_id, canonical_handle(full_id)})
+    from fno import paths
     from fno.events.store_client import read_projection
-    from fno.outstanding.core import questions_path
 
-    result = read_projection(questions_path(), "--next-answer", {
+    result = read_projection(paths.questions_jsonl(), "--next-answer", {
         "addresses": sorted(addresses), "records": records, "cursor": cursor,
     })
     return result["prompt"], result["cursor"]
@@ -172,24 +172,33 @@ def _raise_marker_question(target: RoleTarget, marker: str, question: str, ask: 
     scope is still stranded re-asks - correctly."""
     import secrets
 
+    from fno import paths
     from fno.agents.stale_escalate import already_asked
     from fno.events import operator_question
-    from fno.outstanding.core import append_question_event
+    from fno.rust_binary import command_call
 
     existing = already_asked(target.root, target.scope, marker=marker)
     if existing:
         return existing
     qid = f"q-{secrets.token_hex(4)}"
-    append_question_event(
-        operator_question(
-            question_id=qid,
-            question=f"[{marker}:{target.scope}] {question}",
-            cwd=str(target.root),
-            ask=ask,
-            source="daemon",
-        ),
-        target.root,
+    answer = command_call(
+        "question-intake",
+        {
+            "op": "append",
+            "event": operator_question(
+                question_id=qid,
+                question=f"[{marker}:{target.scope}] {question}",
+                cwd=str(target.root),
+                ask=ask,
+                source="daemon",
+            ),
+            "storage_root": str(target.root),
+            "journal_path": str(paths.project_log("events.jsonl")),
+            "index_path": str(paths.questions_jsonl()),
+        },
     )
+    if answer.get("exit_code"):
+        raise RuntimeError("; ".join(answer.get("lines") or ()))
     return qid
 
 
@@ -339,10 +348,14 @@ def _backstop_due(
     the scope wakeable."""
     from fno.lead.state import last_run_is_fresh
     from fno.lead.wake import read_wakes
-    from fno.outstanding.core import events_path
+    from fno import paths
 
     now_iso = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if last_run_is_fresh(events_path(target.root), since_s=backstop_s, now_iso=now_iso):
+    if last_run_is_fresh(
+        paths.project_log("events.jsonl", project_root=target.root),
+        since_s=backstop_s,
+        now_iso=now_iso,
+    ):
         return False
     if _scope_undelivered(target.scope, entries, resolver) <= 0:
         return False
@@ -526,9 +539,10 @@ def run_lead_wake(
             return batch[0](handle)
         truth_fn = partial(resolve_session_truth, resolve=_resolve)
     if answered_fn is None:
-        from fno.outstanding.core import read_answered_questions
+        from fno import paths
+        from fno.events.store_client import read_projection
 
-        answered_fn = read_answered_questions
+        answered_fn = lambda: read_projection(paths.questions_jsonl(), "--answered-questions", {})
     if entries_fn is None:
         entries_fn = graph_entries
 
