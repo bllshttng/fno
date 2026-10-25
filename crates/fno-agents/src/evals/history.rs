@@ -12,14 +12,16 @@ pub fn append_row(path: &std::path::Path, row: &serde_json::Value) -> Result<(),
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let line = serde_json::to_string(row).map_err(|e| e.to_string())?;
+    // One write carries line + newline: the single O_APPEND write is the
+    // concurrent-append atomicity the deleted leg documented.
+    let mut line = serde_json::to_string(row).map_err(|e| e.to_string())?;
+    line.push('\n');
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .map_err(|e| e.to_string())?;
     file.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-    file.write_all(b"\n").map_err(|e| e.to_string())?;
     Ok(())
 }
 

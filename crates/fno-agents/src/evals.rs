@@ -61,8 +61,14 @@ fn trend_argv(rest: &[String], mode: &str) -> Vec<String> {
         .iter()
         .any(|a| a == "--stale-days" || a.starts_with("--stale-days="))
     {
+        // config evals.stale_days rides along, the same read doctor.py and
+        // pr_watch make; an unreadable config reads the 7 the leg used.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let stale = crate::paths_cli::cfg_str(&cwd, &["evals", "stale_days"])
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .unwrap_or(7);
         argv.push("--stale-days".into());
-        argv.push("7".into());
+        argv.push(stale.to_string());
     }
     argv.extend(rest.iter().cloned());
     argv
@@ -86,20 +92,18 @@ fn macro_argv(rest: &[String]) -> Vec<String> {
 }
 
 /// The eval history path: config.paths.evals_history, else
-/// <state_dir>/evals-history.jsonl. Cross-project like the ledger: a
-/// per-machine ledger, never a repo-relative artifact.
+/// <state_dir>/history/evals-history.jsonl. Cross-project like the ledger:
+/// a per-machine ledger, never a repo-relative artifact.
 pub fn history_path() -> std::path::PathBuf {
-    // The settings read lives behind the config module once the port's
-    // config seam lands; the skeleton resolves the env/default chain.
-    if let Ok(carrier) = std::env::var("FNO_STATE_DIR") {
-        let mut p = std::path::PathBuf::from(carrier);
-        p.push("evals-history.jsonl");
-        return p;
-    }
-    let mut p = dirs_home();
-    p.push(".fno");
-    p.push("evals-history.jsonl");
-    p
+    // One authority: the same resolution eval_reap and triage_health read -
+    // config.paths.evals_history, else <state>/history/evals-history.jsonl
+    // (the Python leg's default carried the history/ dir).
+    crate::eval_reap::eval_history_path().unwrap_or_else(|| {
+        dirs_home()
+            .join(".fno")
+            .join("history")
+            .join("evals-history.jsonl")
+    })
 }
 
 fn dirs_home() -> std::path::PathBuf {
@@ -290,8 +294,9 @@ fn run_verb(rest: &[String]) -> i32 {
     if cohorts_yaml.exists() {
         match cohort_gate(&bank_dir, &tasks, &repo_root) {
             Ok(line) => println!("{line}"),
+            // The refusal already carries the leg's full line shape.
             Err(text) => {
-                eprintln!("Error: cohort split refused: {text}");
+                eprintln!("{text}");
                 return 2;
             }
         }
@@ -363,7 +368,7 @@ fn cohort_gate(
         .args(["--repo"])
         .arg(repo_root)
         .output()
-        .map_err(|e| format!("native cohort door failed ({e})"))?;
+        .map_err(|e| format!("Error: cohort split refused: native cohort door failed ({e})"))?;
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let last = stdout.trim().lines().last().unwrap_or("");
     let payload: serde_json::Value = serde_json::from_str(last)
@@ -374,33 +379,41 @@ fn cohort_gate(
         .map(|s| !s.is_empty())
         .unwrap_or(false)
     {
-        return Err(payload["error"].as_str().unwrap_or_default().to_string());
+        return Err(format!(
+            "Error: cohort split refused: {}",
+            payload["error"].as_str().unwrap_or_default()
+        ));
     }
     if !out.status.success() || payload.get("ok").and_then(serde_json::Value::as_bool) != Some(true)
     {
-        let errs = payload
+        // The leg printed one line per door error; the empty-errors
+        // fallback names the door's exit code.
+        let errs: Vec<String> = payload
             .get("errors")
             .and_then(serde_json::Value::as_array)
             .map(|a| {
                 a.iter()
                     .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                    .map(|e| format!("Error: cohort split refused: {e}"))
+                    .collect()
             })
-            .unwrap_or_else(|| {
-                format!(
-                    "native cohort door failed ({})",
-                    out.status.code().unwrap_or(-1)
-                )
-            });
-        return Err(errs);
+            .unwrap_or_default();
+        let lines = if errs.is_empty() {
+            vec![format!(
+                "Error: cohort split refused: native cohort door failed ({})",
+                out.status.code().unwrap_or(-1)
+            )]
+        } else {
+            errs
+        };
+        return Err(lines.join("\n"));
     }
     let unchanged = payload
         .get("bank_unchanged")
         .and_then(serde_json::Value::as_bool);
     Ok(if unchanged == Some(false) {
         return Err(
-            "cohort split is pinned to a bank rev the bank has changed since; redeclare cohorts.yaml against the current bank"
+            "Error: cohort split is pinned to a bank rev the bank has changed since; redeclare cohorts.yaml against the current bank."
                 .into(),
         );
     } else if unchanged == Some(true) {
@@ -584,7 +597,8 @@ fn qualify_verb(rest: &[String]) -> i32 {
     }
     let tail = match cohort_setup(rest, &bank_dir) {
         Ok(t) => t,
-        Err(_) => {
+        Err(e) => {
+            eprintln!("Error: {e}");
             return 2;
         }
     };

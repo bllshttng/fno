@@ -160,6 +160,15 @@ fn remove_worktree(repo_root: &std::path::Path, path: &std::path::Path) {
         .output();
 }
 
+/// Every trial worktree is a fresh cwd, so claude keeps one projects dir
+/// per trial and they pile up in its session list; the history row is the
+/// record. Best-effort: the cleanup never masks the run's verdict.
+fn forget_trial_transcript(workdir: &std::path::Path) {
+    let slug = crate::claude_ask::claude_cwd_slug(workdir);
+    let root = crate::claude_drive::claude_projects_dir();
+    let _ = std::fs::remove_dir_all(root.join(slug));
+}
+
 /// Prune leftover eval worktrees whose owning run is gone. Best-effort; a
 /// sweep failure never blocks a fresh run.
 pub fn sweep_orphans(repo_root: &std::path::Path) -> usize {
@@ -188,15 +197,55 @@ pub fn sweep_orphans(repo_root: &std::path::Path) -> usize {
     removed
 }
 
+/// The spawn argv: the substrate's own --timeout is the first guard; a
+/// lane is a complete coordinate (its harness wins over the provider
+/// default, and its route/account ride along). `--` fences the prompt.
+fn spawn_argv(
+    name: &str,
+    workdir: &str,
+    timeout_s: i64,
+    harness: Option<&str>,
+    lane: Option<&LaneRow>,
+    prompt: &str,
+) -> Vec<String> {
+    let mut argv: Vec<String> = ["agents", "spawn"].iter().map(|s| s.to_string()).collect();
+    argv.push("--name".into());
+    argv.push(name.into());
+    argv.push("--once".into());
+    argv.push("--cwd".into());
+    argv.push(workdir.into());
+    argv.push("--timeout".into());
+    argv.push(timeout_s.to_string());
+    if let Some(h) = harness {
+        argv.push("--harness".into());
+        argv.push(h.into());
+    }
+    if let Some(l) = lane {
+        if !l.route.is_empty() {
+            argv.push("--route".into());
+            argv.push(l.route.clone());
+        }
+        if !l.account.is_empty() {
+            argv.push("--account".into());
+            argv.push(l.account.clone());
+        }
+    }
+    argv.push("--".into());
+    argv.push(prompt.into());
+    argv
+}
+
 /// The worker spawn: `fno agents spawn --once` in the workdir. A non-zero
 /// exit, missing binary, or timeout is a graded failure, never a sweep
-/// crash. The worker name is the typed non-node identity
-/// `ev-th-evals-<pid>-<secs>`.
+/// crash. The deadline is the backstop the Python leg kept: a wedged
+/// spawner fails the leg instead of hanging the run. The worker name is the
+/// typed non-node identity `ev-th-evals-<pid>-<secs>`.
 fn default_spawn(
     prompt: &str,
     workdir: &std::path::Path,
     timeout_s: i64,
     provider: Option<&str>,
+    lane: Option<&LaneRow>,
 ) -> SpawnResult {
     let tag = format!(
         "{}-{}",
@@ -207,56 +256,103 @@ fn default_spawn(
             .unwrap_or(0)
     );
     let name = format!("ev-th-evals-{tag}");
+    let harness = lane
+        .map(|l| l.harness.as_str())
+        .filter(|h| !h.is_empty())
+        .or(provider);
+    let argv = spawn_argv(
+        &name,
+        &workdir.display().to_string(),
+        timeout_s,
+        harness,
+        lane,
+        prompt,
+    );
     let mut cmd = std::process::Command::new("fno");
-    cmd.args(["agents", "spawn"])
-        .args(["--name", &name])
-        .arg("--once")
-        .args(["--cwd", &workdir.display().to_string()])
-        .args(["--timeout", &timeout_s.to_string()])
-        .arg("--")
-        .arg(prompt);
-    match cmd.output() {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => SpawnResult {
-            ok: false,
-            reason: "spawn failed: `fno` binary not found".into(),
-            worker_name: name,
-            timed_out: false,
-            lane_note: String::new(),
-        },
-        Err(e) => SpawnResult {
-            ok: false,
-            reason: format!("spawn error: {e}"),
-            worker_name: name,
-            timed_out: false,
-            lane_note: String::new(),
-        },
-        Ok(out) if out.status.code() != Some(0) => {
-            let tail = String::from_utf8_lossy(&out.stderr);
-            let tail = if tail.trim().is_empty() {
-                String::from_utf8_lossy(&out.stdout).to_string()
-            } else {
-                tail.to_string()
-            };
-            let last = tail.trim().lines().last().unwrap_or("").to_string();
-            SpawnResult {
+    cmd.args(&argv)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(timeout_s.max(1) as u64 + 30);
+    let mut child = match cmd.spawn() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return SpawnResult {
                 ok: false,
-                reason: {
-                    let code = out.status.code().unwrap_or(-1);
-                    format!("spawn exit {code}: {last}")
-                },
+                reason: "spawn failed: `fno` binary not found".into(),
                 worker_name: name,
                 timed_out: false,
                 lane_note: String::new(),
-            }
+            };
         }
-        Ok(out) => {
-            let _ = out;
-            SpawnResult {
-                ok: true,
-                reason: String::new(),
+        Err(e) => {
+            return SpawnResult {
+                ok: false,
+                reason: format!("spawn error: {e}"),
                 worker_name: name,
                 timed_out: false,
                 lane_note: String::new(),
+            };
+        }
+        Ok(child) => child,
+    };
+    loop {
+        match child.try_wait() {
+            Err(e) => {
+                return SpawnResult {
+                    ok: false,
+                    reason: format!("spawn error: {e}"),
+                    worker_name: name,
+                    timed_out: false,
+                    lane_note: String::new(),
+                };
+            }
+            Ok(Some(status)) => {
+                use std::io::Read as _;
+                let mut out_text = String::new();
+                if let Some(mut s) = child.stdout.take() {
+                    let _ = s.read_to_string(&mut out_text);
+                }
+                let mut err_text = String::new();
+                if let Some(mut s) = child.stderr.take() {
+                    let _ = s.read_to_string(&mut err_text);
+                }
+                let code = status.code().unwrap_or(-1);
+                if code == 0 {
+                    return SpawnResult {
+                        ok: true,
+                        reason: String::new(),
+                        worker_name: name,
+                        timed_out: false,
+                        lane_note: String::new(),
+                    };
+                }
+                let tail = if err_text.trim().is_empty() {
+                    out_text
+                } else {
+                    err_text
+                };
+                let last = tail.trim().lines().last().unwrap_or("").to_string();
+                return SpawnResult {
+                    ok: false,
+                    reason: format!("spawn exit {code}: {last}"),
+                    worker_name: name,
+                    timed_out: false,
+                    lane_note: String::new(),
+                };
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return SpawnResult {
+                        ok: false,
+                        reason: format!("spawn timed out after {timeout_s}s"),
+                        worker_name: name,
+                        timed_out: true,
+                        lane_note: String::new(),
+                    };
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
     }
@@ -360,7 +456,7 @@ pub fn run_task(
                 reason = "config.evals.enabled is false".into();
                 gate_blocked = true;
             } else if let Some(prompt) = &task.prompt {
-                let res = default_spawn(prompt, dir, timeout_s, worker_provider);
+                let res = default_spawn(prompt, dir, timeout_s, worker_provider, lane);
                 worker_name = res.worker_name.clone();
                 if !res.ok {
                     reason = res.reason.clone();
@@ -377,6 +473,7 @@ pub fn run_task(
                 outcome = Some(o);
             }
             remove_worktree(repo_root, dir);
+            forget_trial_transcript(dir);
         }
         let duration = started.elapsed().as_secs_f64().round_ties_even();
         let _ = started_wall;
@@ -466,4 +563,58 @@ fn uuid_v4() -> String {
 /// The row timestamp: Python isoformat's Z form, microseconds.
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_spawn_carries_the_lane_coordinate() {
+        let lane = LaneRow {
+            name: "acme".into(),
+            harness: "codex".into(),
+            route: "openai/gpt-5.6".into(),
+            account: "acme".into(),
+        };
+        let argv = spawn_argv(
+            "ev-th-evals-1-2",
+            "/tmp/wt",
+            60,
+            Some("claude"),
+            Some(&lane),
+            "do the thing",
+        );
+        let joined = argv.join(" ");
+        assert!(
+            joined.contains("--harness codex"),
+            "the lane harness wins over the provider: {joined}"
+        );
+        assert!(joined.contains("--route openai/gpt-5.6"));
+        assert!(joined.contains("--account acme"));
+        assert!(joined.ends_with("-- do the thing"));
+    }
+
+    #[test]
+    fn the_provider_default_rides_when_no_lane_names_a_harness() {
+        let argv = spawn_argv("n", "/tmp/wt", 60, Some("codex"), None, "p");
+        assert!(argv
+            .windows(2)
+            .any(|w| w[0] == "--harness" && w[1] == "codex"));
+        let bare = spawn_argv("n", "/tmp/wt", 60, None, None, "p");
+        assert!(!bare.contains(&"--harness".to_string()));
+    }
+
+    #[test]
+    fn a_lane_with_an_empty_harness_falls_back_to_the_provider() {
+        let lane = LaneRow {
+            name: "r".into(),
+            harness: String::new(),
+            route: "zai/glm".into(),
+            account: "a".into(),
+        };
+        let argv = spawn_argv("n", "/tmp/wt", 60, Some("claude"), Some(&lane), "p");
+        let i = argv.iter().position(|a| a == "--harness").unwrap();
+        assert_eq!(argv[i + 1], "claude");
+    }
 }
