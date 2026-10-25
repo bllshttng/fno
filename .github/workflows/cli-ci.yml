@@ -782,8 +782,12 @@ jobs:
     # runs sampled 2026-09-24 was 11.1m; the lib suite has since grown
     # past 6550 tests and the env-holding fixtures serialize behind one
     # shared lock, so 30 leaves room for a cold cargo cache and a hang
-    # still fails sooner than a stuck queue would.
-    timeout-minutes: 30
+    # still fails sooner than a stuck queue would. On 2026-10-25 a starved
+    # runner pushed the per-test cost to 0.68s (1857 of 3699 lib tests in
+    # 21 minutes, about 42 minutes for the whole binary) and the cap killed
+    # three runs that were still passing; 60 is the stopgap until the lib
+    # suite shards like the crates do.
+    timeout-minutes: 60
 
     # The claim classifier parity harness needs the FULL oracle package
     # (pydantic included: fno.claims.staleness imports claims/types.py), not a
