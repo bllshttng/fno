@@ -372,6 +372,7 @@ pub mod osc;
 pub mod otel_ingest;
 pub mod otel_read;
 pub mod otlp_export;
+pub mod outstanding;
 pub(crate) mod owner_ladder;
 pub mod pane_claim;
 pub mod pane_keeper;
@@ -396,6 +397,7 @@ pub mod planning_lane;
 pub mod plans_dirs;
 pub mod plans_path;
 pub mod plugin_install;
+pub mod plugins;
 pub mod post_merge;
 pub mod pr_admission;
 pub mod pr_base_check;
@@ -1511,6 +1513,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The daemon trust-answer sweep: one row per attempt to answer a parked
     // codex folder-trust modal itself (daemon/sweeps.rs).
     "trust_prompt_answered",
+    // The legacy shell-writer rendezvous sweep (daemon/shell_writers_sweep.rs):
+    // the per-pass summary row and its pause-skip row.
+    "shell_writers_sweep",
     // The native-bg roster adopt (native_bg_mint.rs): a failed registry
     // birth write, a node or parent filled on a later beat, a short-id row
     // renamed, and the per-beat budget deferral.

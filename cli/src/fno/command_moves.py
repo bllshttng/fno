@@ -80,7 +80,6 @@ COMMAND_MOVES: dict[str, Move] = {
     "outstanding": Move(kind="deprecated", to="inbox outstanding"),
     "paths": Move(kind="deprecated", to="config paths"),
     "phase": Move(kind="deprecated", to="do phase"),
-    "plugins": Move(kind="deprecated", to="config plugins"),
     "project": Move(kind="deprecated", to="config project"),
     "plan": Move(kind="deprecated", to="do plan"),
     "pr": Move(

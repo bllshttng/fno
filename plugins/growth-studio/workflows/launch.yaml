@@ -2,7 +2,7 @@
 #
 # Content, not code: this template is consumed by the company coordinator's
 # topology selection (owned by the sibling company-coordinator lane), never by a
-# branch in cli/src/fno/plugins/. It names the staged deliverables a launch
+# branch in crates/fno-agents/src/plugins/. It names the staged deliverables a launch
 # produces and the evaluators each stage requires; it grants no effect and opens
 # no authority.
 name: launch

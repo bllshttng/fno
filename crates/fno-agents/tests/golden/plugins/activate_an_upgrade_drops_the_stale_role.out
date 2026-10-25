@@ -1,0 +1,11 @@
+{
+  "already_active": false,
+  "pack_digest": "9fb81b2cb13c9eec853bce6c0370eecd996d382fe1493eb33af4ff8cfacba9bc",
+  "pack_id": "alpha",
+  "resolved_version": "1.1.0",
+  "unconfigured_artifacts": [],
+  "version": 1,
+  "written_paths": [
+    "plugin/alpha/editor.json"
+  ]
+}

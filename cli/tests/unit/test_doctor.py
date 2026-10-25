@@ -858,14 +858,15 @@ def test_codex_app_server_report_dead_socket_inode_reads_absent(tmp_path, monkey
 
 def _root_verdict(path: str, status: str, live: bool, **extra) -> dict:
     drift = extra.get("differing_count", 0) + extra.get("missing_count", 0)
-    note = f" ({drift} file(s) differ from source HEAD)" if drift else ""
+    lag = f"hooks {drift}"
+    note = f" ({drift} file(s) differ from source HEAD: {lag})" if drift else ""
     if status == "stale" and not live:
         note += ". Fix: cd /src && fno config plugin install claude removes the stale second copy"
     blocker = None
     if status == "stale":
         blocker = (
             f"plugin root {path} ({'live' if live else 'second copy'}) differs from "
-            f"source HEAD in {drift} file(s) (e.g. {(extra.get('sample') or ['?'])[0]}). "
+            f"source HEAD in {drift} file(s) ({lag}; e.g. {(extra.get('sample') or ['?'])[0]}). "
             "Fix: cd /src && fno config plugin install claude"
         )
     verdict = {

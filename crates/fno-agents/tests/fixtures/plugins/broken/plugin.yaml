@@ -1,0 +1,33 @@
+id: broken
+version: 2.0.0
+footnote_compat: {minimum: 0.0.1, maximum: 0.0.2}
+roles:
+  - role: {id: Lead, function_id: ops}
+    function: {id: ops}
+    mission: Lead
+    deliverable_kinds: [plan]
+    authority_ceiling: internal
+    review_policy: {}
+    delivery_policy: {}
+    default_topology: solo
+  - role: {id: lead, function_id: ops}
+    function: {id: ops}
+    mission: Lead again
+    deliverable_kinds: [plan]
+    authority_ceiling: internal
+    review_policy: {}
+    delivery_policy: {}
+    default_topology: squad
+agents:
+  - {id: shell, source: agents/shell.md, role: {id: ghost, function_id: ops}}
+  - {id: bare, source: agents/bare.md}
+  - {id: away, source: ../alpha/agents/writer.md}
+assets:
+  - {id: gone, source: assets/gone.md}
+depends_on:
+  - {pack_id: missing-pack, version_range: {minimum: 1.0.0}}
+evaluators:
+  - {id: absent, command: no-such-runner-xyz --check}
+scenarios:
+  - {id: ghost, command: bash scenarios/ghost.sh, recorded_result: passed}
+  - {id: flaky, command: "true", recorded_result: unknown}

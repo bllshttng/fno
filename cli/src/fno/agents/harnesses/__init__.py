@@ -15,7 +15,7 @@ package fixed the container; the field is a separate, ruled-out surface.
 # _check_known_provider, spawn_defaults, mux_spawn), never at registry LOAD --
 # the load gate is a shape check now, so an alien harness reads fine and is
 # refused only where a dispatchable provider is actually required.
-KNOWN_PROVIDERS: tuple[str, ...] = ("claude", "codex")
+KNOWN_PROVIDERS: tuple[str, ...]  # annotation only; __getattr__ serves it
 
 # Harnesses the thread/headless spawn seam accepts: the roster's spawn set.
 SPAWN_HARNESSES: tuple[str, ...]  # annotation only; __getattr__ serves it
@@ -28,7 +28,7 @@ def __getattr__(name: str) -> tuple[str, ...]:
     if name == "SPAWN_HARNESSES":
         from fno.harness_names import SPAWN_HARNESSES as spawn_set
         return spawn_set
-    if name == "READABLE_PROVIDERS":
+    if name in ("READABLE_PROVIDERS", "KNOWN_PROVIDERS"):
         from fno.harness_names import known_providers
         return known_providers()
     raise AttributeError(name)

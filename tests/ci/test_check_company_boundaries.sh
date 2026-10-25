@@ -42,7 +42,7 @@ grep -Eq <<<"$out" '[0-9]+ layers, [0-9]+ modules, 0 violations' \
 
 printf 'value = 1\n' > "$CLEAN/cli/src/fno/unmapped.py"
 out="$(bash "$CHECK" --strict "$CLEAN" 2>&1)"; rc=$?
-grep -q <<<"$out" '6 layers, 3 modules, 0 violations' \
+grep -q <<<"$out" '5 layers, 3 modules, 0 violations' \
     && ok "coverage excludes unmapped modules" || fail "coverage over-counts: $out"
 
 echo "== a broken scan fails closed =="
