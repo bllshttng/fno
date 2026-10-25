@@ -228,7 +228,7 @@ fn str_list(data: &Map<String, Value>, key: &str) -> Vec<String> {
 
 /// `<space>/<name>` for a project log, or the pre-space `<root>/.fno/<name>`
 /// a checkout still holds before its first migrating write.
-fn project_log(root: &Path, name: &str) -> PathBuf {
+pub(crate) fn project_log(root: &Path, name: &str) -> PathBuf {
     if let Some(space) = crate::paths::space_dir_opt(root) {
         let path = space.join(name);
         if path.exists() || crate::event_store::store_path(&path).exists() {
@@ -447,7 +447,7 @@ fn resolve_liveness(questions: &[Question], budget: Duration) -> HashMap<String,
 /// This root plus every project root the backlog names (each node's `cwd`
 /// and `source_cwd` that is still a directory). The backlog is advisory
 /// here: an unreadable store reads as this root alone.
-fn capture_project_roots(src: &Sources) -> Vec<PathBuf> {
+pub(crate) fn capture_project_roots(src: &Sources) -> Vec<PathBuf> {
     let mut roots: BTreeSet<PathBuf> = BTreeSet::new();
     roots.insert(crate::paths::resolve_loose(&src.root));
     let mut locations: Vec<Value> = Vec::new();
@@ -1004,7 +1004,7 @@ fn env_nonempty(key: &str) -> Option<String> {
 }
 
 /// The canonical root that owns the project stores.
-fn storage_root(cwd: &Path) -> PathBuf {
+pub(crate) fn storage_root(cwd: &Path) -> PathBuf {
     if let Some(pin) = env_nonempty("FNO_REPO_ROOT") {
         return crate::paths::resolve_loose(Path::new(&pin));
     }
@@ -1025,7 +1025,7 @@ fn storage_root(cwd: &Path) -> PathBuf {
 
 /// This session's id: the target manifest's `fno_id` or `session_id`, else
 /// `CLAUDECODE_SESSION_ID`.
-fn session_id(cwd: &Path) -> Option<String> {
+pub(crate) fn session_id(cwd: &Path) -> Option<String> {
     let manifest = crate::state_path::resolve("target-state", cwd);
     if let Some(Ok(text)) = manifest.map(std::fs::read_to_string) {
         let mut lines = text.lines();
@@ -1089,8 +1089,28 @@ fn prove_it_rows() -> Result<Vec<Value>, String> {
     crate::prove_it_verdicts::prove_it_verdict_rows()
 }
 
+/// The run-path `Sources`: the listing and the reindex arm resolve the same
+/// stores once, through one builder.
+pub(crate) fn sources(cwd: &Path) -> Sources {
+    let home = crate::paths::AgentsHome::from_env();
+    Sources {
+        root: storage_root(cwd),
+        questions: crate::provider_cap::questions_path(&home),
+        lane: crate::org_board::scope::operator_lane_path(cwd),
+        graph: crate::graph_get::default_graph_path(),
+        backend: env_nonempty("FNO_TRACKER_BACKEND").unwrap_or_else(|| "graph".to_string()),
+        sidecar_dir: crate::tracker::sidecar::root(cwd),
+        home: std::env::var_os("HOME").map(PathBuf::from),
+    }
+}
+
 /// `fno-agents compaction outstanding [--json|-J]`, the native `fno inbox outstanding`.
 pub fn run_outstanding(args: &[String]) -> i32 {
+    if let Some((word, rest)) = args.split_first() {
+        if let Some(code) = crate::outstanding_cmds::dispatch(word, rest) {
+            return code;
+        }
+    }
     let mut as_json = false;
     for a in args {
         match a.as_str() {
@@ -1106,16 +1126,7 @@ pub fn run_outstanding(args: &[String]) -> i32 {
         }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let home = crate::paths::AgentsHome::from_env();
-    let src = Sources {
-        root: storage_root(&cwd),
-        questions: crate::provider_cap::questions_path(&home),
-        lane: crate::org_board::scope::operator_lane_path(&cwd),
-        graph: crate::graph_get::default_graph_path(),
-        backend: env_nonempty("FNO_TRACKER_BACKEND").unwrap_or_else(|| "graph".to_string()),
-        sidecar_dir: crate::tracker::sidecar::root(&cwd),
-        home: std::env::var_os("HOME").map(PathBuf::from),
-    };
+    let src = sources(&cwd);
     let mut o = match collect(&src, prove_it_rows()) {
         Ok(o) => o,
         Err(e) => {
@@ -1132,7 +1143,7 @@ pub fn run_outstanding(args: &[String]) -> i32 {
     }
     let ctx = RenderCtx {
         session_id: session_id(&cwd),
-        promoted: is_promoted(&home),
+        promoted: is_promoted(&crate::paths::AgentsHome::from_env()),
         cwd_name: cwd
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
