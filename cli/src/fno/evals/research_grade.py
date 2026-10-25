@@ -49,7 +49,7 @@ class _SourceRow:
 def _sidecar_rows(path: Path) -> list[_SourceRow]:
     """The sources.jsonl rows the grade reads; a malformed or url-less row is skipped."""
     rows: list[_SourceRow] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").split("\n"):
         line = line.strip()
         if not line:
             continue
