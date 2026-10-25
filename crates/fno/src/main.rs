@@ -1278,11 +1278,9 @@ fn main() {
         }
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
-        Role::AgentsLeadRefreshCanon(rest) => std::process::exit(fno_agents_exec(
-            "fno agents org refresh-canon",
-            &["lead-refresh-canon"],
-            &rest,
-        )),
+        Role::AgentsLeadRefreshCanon(rest) => {
+            std::process::exit(fno::lead_refresh_canon::run(&rest))
+        }
         Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),
         Role::MailShow(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail show",

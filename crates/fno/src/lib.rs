@@ -53,6 +53,7 @@ pub mod keys;
 pub mod lane_colors_panel;
 pub(crate) mod lattice;
 pub mod law_cli;
+pub mod lead_refresh_canon;
 pub mod link;
 pub mod lint_cli;
 pub mod live_store_fence;

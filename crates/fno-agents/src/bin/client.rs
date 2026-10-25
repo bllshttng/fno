@@ -951,16 +951,6 @@ async fn run(args: Vec<String>) -> i32 {
     if command == "lead-checkin" {
         return fno_agents::lead_checkin::run_lead_checkin(&args[1..]);
     }
-    // `lead-refresh-canon`: the lead beat's canon-doc refresh for
-    // `fno agents org refresh-canon`. Daemon-free, `==` dispatch like
-    // stalls and intel: never registered in ALL_CLIENT_ACTIONS (the action
-    // list is shrink-only) and never routed by `fno agents`; the fno front
-    // classifies the argv and execs HERE. The command resolves the plugin
-    // root itself, so a beat shell with no env and no pointer file either
-    // refreshes or refuses naming every source it tried.
-    if command == "lead-refresh-canon" {
-        return fno_agents::lead_refresh_canon::run_refresh_canon(&args[1..]);
-    }
     // `evals-macro`: the macro-eval failure-pattern leaderboard for
     // `fno doctor evals macro`. Daemon-free read, `==` dispatch like
     // lead-history: Python resolves the journal paths (identity and paths are
