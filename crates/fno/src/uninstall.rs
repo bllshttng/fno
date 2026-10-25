@@ -442,8 +442,8 @@ fn discover() -> Vec<Item> {
         }
     }
 
-    // "footnote" is the marketplace name before the rename to "fno"; an
-    // older install still carries it.
+    // An install made before the marketplace moved to "fno" still carries
+    // the old "footnote" name, so both are removed.
     let claude = env_dir("CLAUDE_CONFIG_DIR", ".claude");
     if on_path("claude").is_some() {
         let installed = read(&claude.join("plugins/installed_plugins.json"));
