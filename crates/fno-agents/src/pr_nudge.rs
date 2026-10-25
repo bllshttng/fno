@@ -255,8 +255,9 @@ fn ladder_run(argv: &[String], cwd: &str) -> (i32, String, String) {
 /// then drop the state files of sessions that no longer carry one.
 pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow], grace_secs: i64) {
     let now = crate::daemon::now_epoch_secs();
+    let graph = crate::gc_sweep::read_graph_rows(home).unwrap_or_default();
     for row in rows {
-        let held = merge_hold(home, row);
+        let held = merge_hold_in(home, row, &graph);
         let state = load_state(home, &row.session_id);
         apply(
             home,
@@ -272,28 +273,23 @@ pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow],
     cleanup_state_files(home, rows);
 }
 
-/// Every hold that forbids the merge this ladder would drive.
-fn merge_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
+/// Every hold that forbids the merge this ladder would drive, over graph
+/// rows the caller read once for the whole sweep.
+fn merge_hold_in(home: &AgentsHome, row: &OpenPrRow, graph: &[Value]) -> bool {
     merge_order_hold(home, &row.node)
         || authorized_merge_hold(home, row)
         || merge_freeze_hold(home, row)
-        || node_dispatch_hold(home, &row.node)
+        || node_dispatch_hold_rows(&row.node, graph)
 }
 
 fn nudge_pause_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
-    merge_hold(home, row) || loop_pause_hold(home, row)
+    let graph = crate::gc_sweep::read_graph_rows(home).unwrap_or_default();
+    merge_hold_in(home, row, &graph) || loop_pause_hold(home, row)
 }
 
 /// The node's `dispatch_hold` (plan frontmatter, or the node row when there
 /// is no plan), walked up its ancestors as the merge gate walks it. An
 /// invalid hold also pauses: the gate refuses that merge too.
-fn node_dispatch_hold(home: &AgentsHome, node: &str) -> bool {
-    let Some(entries) = crate::gc_sweep::read_graph_rows(home) else {
-        return false;
-    };
-    node_dispatch_hold_rows(node, &entries)
-}
-
 fn node_dispatch_hold_rows(node: &str, entries: &[Value]) -> bool {
     let by_id: std::collections::BTreeMap<String, Value> = entries
         .iter()
@@ -1033,10 +1029,11 @@ pub fn plan_with(
     runner: Runner,
 ) -> Vec<(String, String)> {
     let now = crate::daemon::now_epoch_secs();
+    let graph = crate::gc_sweep::read_graph_rows(home).unwrap_or_default();
     rows.iter()
         .map(|row| {
             let state = load_state(home, &row.session_id);
-            let merge_order = merge_hold(home, row);
+            let merge_order = merge_hold_in(home, row, &graph);
             let loop_paused = loop_pause_hold(home, row);
             let action = decide_with_read(
                 row,
