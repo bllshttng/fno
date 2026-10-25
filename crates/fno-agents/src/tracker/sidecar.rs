@@ -273,6 +273,6 @@ pub fn save(
         .tempfile_in(dir)
         .map_err(|e| fail(&e))?;
     std::fs::write(tmp.path(), text).map_err(|e| fail(&e))?;
-    tmp.persist(path).map_err(|e| fail(&e.error))?;
+    tmp.persist(&path).map_err(|e| fail(&e.error))?;
     Ok(path)
 }

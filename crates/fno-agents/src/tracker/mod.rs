@@ -199,10 +199,8 @@ pub fn run_door(payload: &Value) -> Value {
             };
             let mut map = serde_json::Map::new();
             for (sid, fields) in all {
-                map.insert(
-                    sid,
-                    Value::Object(sidecar::served_shape(&sid, Some(fields))),
-                );
+                let shaped = Value::Object(sidecar::served_shape(&sid, Some(fields)));
+                map.insert(sid, shaped);
             }
             json!({ "sidecars": map })
         }
