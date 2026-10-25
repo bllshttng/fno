@@ -28,6 +28,8 @@ pub fn run(args: &[String]) -> i32 {
         "grade" => crate::evals::research_grade::run(rest),
         "graduate" => crate::evals::graduate::run(rest),
         "run" => run_verb(rest),
+        "export" => export_verb(rest),
+        "qualify" => qualify_verb(rest),
         // The remainder lands with the port's later commits; the skeleton
         // answers every spelling so the dispatch shape compiles first.
         _ => {
@@ -455,4 +457,181 @@ pub(super) fn canonical_repo_root() -> std::path::PathBuf {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| cwd.clone());
     main_root
+}
+
+/// One attempt-door call: (returncode, last-line JSON). An unreachable
+/// binary or an unreadable answer returns (2, {"error": ...}) so every
+/// caller refuses closed.
+fn attempt_door(flags: &[String], tail: &[String]) -> (i32, serde_json::Value) {
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("fno-agents"));
+    let out = std::process::Command::new(exe)
+        .arg("evals-attempt")
+        .args(flags)
+        .args(tail)
+        .output();
+    let ok_json = |stdout: &str| -> Option<serde_json::Value> {
+        stdout
+            .trim()
+            .lines()
+            .last()
+            .and_then(|l| serde_json::from_str(l).ok())
+            .filter(|v| v.is_object())
+    };
+    match out {
+        Err(e) => (
+            2,
+            json!({"error": format!("native cohort door failed: {e}")}),
+        ),
+        Ok(o) => match ok_json(&String::from_utf8_lossy(&o.stdout)) {
+            Some(payload) => (o.status.code().unwrap_or(2), payload),
+            None => (
+                o.status.code().unwrap_or(2),
+                json!({"error": "native cohort door returned unreadable output"}),
+            ),
+        },
+    }
+}
+
+/// The shared export/qualify plumbing: resolve the bank, refuse an
+/// undeclared split (named per command), and assemble the door tail
+/// (declared split, bank-current known ids, rows source).
+fn cohort_setup(rest: &[String], bank_dir: &std::path::Path) -> Result<Vec<String>, String> {
+    let tasks = crate::evals::bank::discover_bank(bank_dir).map_err(|e| e.0)?;
+    let repo_root = canonical_repo_root();
+    let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
+    let known = serde_json::to_string(&ids).unwrap_or_default();
+    let history = flag_lookup(rest, "--history")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(history_path);
+    Ok(vec![
+        "--cohorts-yaml".into(),
+        bank_dir.join("cohorts.yaml").display().to_string(),
+        "--known-ids".into(),
+        known,
+        "--repo".into(),
+        repo_root.display().to_string(),
+        "--rows".into(),
+        history.display().to_string(),
+    ])
+}
+
+/// The export command: train-cohort history for prompt tuning. ONLY train
+/// rows, so held-out trajectories never enter a tuning view. Exit 0
+/// exported / 1 no declared split / 2 refused or setup error.
+fn export_verb(rest: &[String]) -> i32 {
+    let Some(out_path) = flag_lookup(rest, "--out") else {
+        eprintln!("Error: export requires --out FILE");
+        return 2;
+    };
+    let bank_dir = resolve_bank_dir(flag_lookup(rest, "--bank"));
+    if !bank_dir.join("cohorts.yaml").exists() {
+        eprintln!(
+            "Error: no declared cohort split in {} (cohorts.yaml): a tuning export must never be cut from an undeclared bank.",
+            bank_dir.display()
+        );
+        return 1;
+    }
+    let tail = match cohort_setup(rest, &bank_dir) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return 2;
+        }
+    };
+    let mut tail = tail;
+    tail.push("--out".into());
+    tail.push(out_path.clone());
+    let (rc, payload) = attempt_door(&["--export-train".to_string()], &tail);
+    if payload
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
+        eprintln!("Error: {}", payload["error"].as_str().unwrap_or_default());
+        return 2;
+    }
+    if rc != 0 {
+        eprintln!("Error: export door failed ({rc})");
+        return 2;
+    }
+    let exported = payload
+        .get("exported")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let train_tasks = payload
+        .get("train_tasks")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    println!(
+        "exported {exported} train row(s) across {train_tasks} declared task(s) -> {out_path}"
+    );
+    0
+}
+
+/// The qualify command: aggregate held-out qualification results: counts and
+/// coverage only, never a held-out prompt or trace. Reports
+/// {"qualified": false, "reason"} (exit 0) when the split is absent,
+/// refused, stale, or empty. Exit 2 = setup error.
+fn qualify_verb(rest: &[String]) -> i32 {
+    let bank_dir = resolve_bank_dir(flag_lookup(rest, "--bank"));
+    if !bank_dir.join("cohorts.yaml").exists() {
+        println!(
+            "{}",
+            py_compact(
+                &json!({"qualified": false, "reason": "no declared cohort split (cohorts.yaml)"})
+            )
+        );
+        return 0;
+    }
+    let tail = match cohort_setup(rest, &bank_dir) {
+        Ok(t) => t,
+        Err(_) => {
+            return 2;
+        }
+    };
+    let (rc, payload) = attempt_door(&["--aggregate".to_string()], &tail);
+    if payload
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
+        eprintln!("Error: {}", payload["error"].as_str().unwrap_or_default());
+        return 2;
+    }
+    if rc != 0 {
+        eprintln!("Error: qualify door failed ({rc})");
+        return 2;
+    }
+    println!("{}", py_compact(&payload));
+    0
+}
+
+/// The Python json.dumps default shape (", " and ": " separators, insertion
+/// order): the leaf's echo bytes.
+fn py_compact(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Null => "null".into(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => serde_json::to_string(s).unwrap_or_default(),
+        serde_json::Value::Array(a) => {
+            let items: Vec<String> = a.iter().map(py_compact).collect();
+            format!("[{}]", items.join(", "))
+        }
+        serde_json::Value::Object(m) => {
+            let items: Vec<String> = m
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{}: {}",
+                        serde_json::to_string(k).unwrap_or_default(),
+                        py_compact(v)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", items.join(", "))
+        }
+    }
 }
