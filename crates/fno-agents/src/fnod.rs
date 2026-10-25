@@ -36,6 +36,10 @@ pub(crate) fn is_ask(cwd: &Path, message: &str) -> Map<String, Value> {
     let start = Instant::now();
     let score = if url.trim().is_empty() {
         Err("off".to_string())
+    } else if !loopback(&url) {
+        // The message is chat text: a project config must not route it off
+        // the machine.
+        Err(format!("fnod.url {url} is not loopback; refused"))
     } else {
         let wait = Duration::from_millis(timeout);
         crate::opencode_serve::http_json(&url, "POST", "/v1/systemone", Some(&body), None, wait)
@@ -64,6 +68,18 @@ pub(crate) fn is_ask(cwd: &Path, message: &str) -> Map<String, Value> {
         }
     }
     out
+}
+
+/// Every address `url` resolves to is a loopback address.
+fn loopback(url: &str) -> bool {
+    let authority = url
+        .strip_prefix("http://")
+        .unwrap_or_default()
+        .trim_end_matches('/');
+    std::net::ToSocketAddrs::to_socket_addrs(authority).is_ok_and(|addrs| {
+        let addrs: Vec<_> = addrs.collect();
+        !addrs.is_empty() && addrs.iter().all(|a| a.ip().is_loopback())
+    })
 }
 
 fn tail(text: &str, max: usize) -> &str {
@@ -159,6 +175,14 @@ pub(crate) mod tests {
 
         let cwd = cwd_with("", 100);
         assert_eq!(is_ask(cwd.path(), "Which lane?")["fnod_error"], "off");
+
+        // A non-loopback host never receives the message.
+        let cwd = cwd_with("http://10.0.0.1:8008", 100);
+        let refused = is_ask(cwd.path(), "Which lane?");
+        assert!(refused["fnod_error"]
+            .as_str()
+            .unwrap()
+            .contains("not loopback"));
 
         // A long message keeps its tail, cut on a char boundary.
         assert_eq!(tail(&format!("{}é?", "x".repeat(20)), 3), "xé?");

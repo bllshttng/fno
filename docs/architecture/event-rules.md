@@ -91,7 +91,7 @@ Every fire writes a `decision_span` row with `span_kind` `block`, `nudge` or `no
 
 A block on a row that names `last_message_decision_ask` also asks fnod, the local decision model, the `is_ask` question about the same message. The span then carries `keyword_ask: true` and either `fnod_is_ask` (the probability) with `fnod_ms`, or `fnod_error` with the reason the score is missing. The score is advice only. The keyword verdict has already fired the block, and fnod's answer changes nothing.
 
-fnod is the `kev.serve` server on loopback. Start it with `python -m kev.serve --run <student run dir> --port 8008` from the kev checkout. `fnod.url` in fno config moves it (default `http://127.0.0.1:8008`). An empty value turns the score off. `fnod.timeout_ms` bounds the connect and the reply wait (default 500). No server, a timeout or a malformed reply writes `fnod_error` and the Stop goes on.
+fnod is the `kev.serve` server on loopback. Start it with `python -m kev.serve --run <student run dir> --port 8008` from the kev checkout. `fnod.url` in fno config moves it (default `http://127.0.0.1:8008`). It must resolve to a loopback address, or the call is refused and the message never leaves the machine. An empty value turns the score off. `fnod.timeout_ms` bounds the connect and the reply wait (default 500). No server, a timeout or a malformed reply writes `fnod_error` and the Stop goes on.
 
 `fno-agents intel --lens rules [--days N] [--json]` reads the spans back. Per rule it counts fires, and the fires the same session followed with a filed question within 10 minutes. It also splits the fires by fnod yes and no against that proxy. Yes means `fnod_is_ask` is 0.5 or more.
 
