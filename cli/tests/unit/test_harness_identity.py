@@ -709,7 +709,9 @@ def test_resolve_attester_identity_refuses_mixed_family_env():
 @pytest.mark.parametrize("denied", ["argv", "parent"])
 def test_attester_identity_survives_process_inspection_denied(monkeypatch, denied):
     from types import SimpleNamespace
+
     import psutil
+
     from fno import harness_identity as identity
 
     def unavailable():
