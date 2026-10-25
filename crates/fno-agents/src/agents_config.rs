@@ -489,7 +489,8 @@ pub fn merge_gh_read_secs(cwd: &Path) -> u64 {
         return v;
     }
     config_lookup(cwd, &["bounds", "merge_gh_read_secs"])
-        .and_then(|v| v.as_u64())
+        .and_then(|v| v.as_integer())
+        .and_then(|i| u64::try_from(i).ok())
         .filter(|v| *v > 0)
         .unwrap_or(DEFAULT_MERGE_GH_READ_SECS)
 }
