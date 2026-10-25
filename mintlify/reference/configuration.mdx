@@ -76,10 +76,12 @@ An exported HTML file shows the last rendered state. A file opened from disk doe
 To request one saved board for all projects, run:
 
 ```bash
-fno config set --local backlog.render_targets '[{"path":"~/notes/fno/backlog.html","scope":"all","projection":"local"}]'
+fno config set --global backlog.render_targets '[{"path":"~/notes/fno/backlog.html","scope":"all","projection":"local"}]'
 ```
 
-This replaces that setting's array in the project config. It does not render immediately. Check the file after the next background render.
+This replaces that setting's array in the global config. The background renderer ignores project-local render-target rows.
+
+The write does not render immediately. Check the file after the next background render.
 
 Change the path to your intended notes directory before running it. The `~/.fno/` directory is fno's state root, not a notes destination.
 
