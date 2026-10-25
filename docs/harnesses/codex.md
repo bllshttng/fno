@@ -1,6 +1,6 @@
 # Codex Provider Guide
 
-footnote ships one native Codex marketplace identity, `footnote`, and one plugin identity, `fno@footnote`.
+footnote ships one native Codex marketplace identity, `fno`, and one plugin identity, `fno@fno`.
 The plugin installs from the filtered stage of your checkout: git-tracked files only, never build output or worktrees.
 
 ## Plugin Install
@@ -21,10 +21,10 @@ fno config plugin install codex --force
 ```
 
 Install first validates the requested marketplace and plugin in an isolated temporary `CODEX_HOME`, leaving the working install untouched when the candidate is invalid.
-It then replaces the source behind `footnote`, verifies the installed version and complete loadable payload, and writes the channel marker only after that verification succeeds.
+It then replaces the source behind `fno`, verifies the installed version and complete loadable payload, and writes the channel marker only after that verification succeeds.
 Every failed live switch restores the previous marketplace registration, plugin, and exact marker bytes.
 A rollback failure is persisted and reported distinctly by `fno doctor`.
-Install also migrates and removes legacy `footnote-dev` registrations, `fno@footnote-dev`, and their cache.
+Install also migrates and removes legacy registrations and their cache: `footnote-dev` (`fno@footnote-dev`), and `footnote` (`fno@footnote`), the marketplace name before the rename to `fno`. Until install runs, `fno doctor` reports an old `fno@footnote` install as `legacy-marketplace`.
 An already-correct install is a no-op unless `--force` is present.
 Every mutation can require hook approval and takes effect in a new Codex session.
 Blocking `cli-ci` installs Codex 0.145 and runs the isolated real-binary containment and rollback regressions on every affected pull request.
