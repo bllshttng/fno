@@ -955,8 +955,8 @@ async fn run(args: Vec<String>) -> i32 {
     // `fno agents org refresh-canon`. Daemon-free, `==` dispatch like
     // stalls and intel: never registered in ALL_CLIENT_ACTIONS (the action
     // list is shrink-only) and never routed by `fno agents`; the fno front
-    // classifies the argv and execs HERE. The verb resolves the plugin root
-    // itself, so a beat shell with no env and no pointer file either
+    // classifies the argv and execs HERE. The command resolves the plugin
+    // root itself, so a beat shell with no env and no pointer file either
     // refreshes or refuses naming every source it tried.
     if command == "lead-refresh-canon" {
         return fno_agents::lead_refresh_canon::run_refresh_canon(&args[1..]);

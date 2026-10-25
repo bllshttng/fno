@@ -1640,7 +1640,7 @@ mod tests {
             Role::Forward
         );
         // The canon-refresh door claims the front's rewrite exactly; the
-        // sibling lead verbs stay on the compat leg.
+        // sibling lead commands stay on the compat leg.
         assert_eq!(
             decide_role(&os(&["agents", "lead", "refresh-canon"]), false),
             Role::AgentsLeadRefreshCanon(os(&[]))
