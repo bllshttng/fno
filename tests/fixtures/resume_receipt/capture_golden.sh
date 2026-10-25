@@ -175,9 +175,11 @@ case_run validate-stale-head "$FIXBASE/stale" \
   do resume receipt validate --node x-1 --claims-root "$FIXBASE/stale/claims" \
   --worktree "$FIXBASE/stale/repo" --session-id sess-1
 
-# foreign_claim: a live claim held by another session refuses. The lockfile
+# foreign_claim: a claim held by another session refuses. The lockfile
 # is the native record format at the native path (root/.fno/claims/), pid
-# pinned to this script's own pid so the holder reads LIVE, not suspect.
+# pinned to this script's own pid so the record is well-formed. The native
+# classifier reads an off-host, session-unproven held claim as SUSPECT
+# (TTL-protected, not stealable), and the golden carries that verdict.
 cp -R "$HP" "$FIXBASE/foreign"
 mkdir -p "$FIXBASE/foreign/claims/.fno/claims"
 {
