@@ -130,7 +130,7 @@ Every subfolder and file below was found in the real root unnamed at the 2026-09
 | `logs/cargo-fallback-writers.log` | `scripts/lib/cargo-rustc-wrapper.sh` | one line per cargo that builds without the build-dir env; self-trims to its last 500 lines at 1,000 |
 | `mail-escalations/` | `cli/src/fno/mail/cli.py` (debounce markers via `O_CREAT|O_EXCL`) | one empty marker per sender/recipient pair inside the debounce window; safe to delete, the next escalation re-creates it |
 | `state/notice-route/sent.json`, `state/notice-route/fold.json`, `state/notice-route/q-<fingerprint>.md` | `crates/fno-agents/src/notice_route.rs` | runtime; the sent store prunes its old entries on every write, and nothing in the router deletes the `q-` pages - the outstanding-ask intake owns a page once it is filed |
-| `notes/` | `cli/src/fno/research/core.py` (`notes/research`) | permanent research notes |
+| `notes/` | `crates/fno-agents/src/research/engine.rs` (`notes/research`) | permanent research notes |
 | `nudge-cursors/` | `cli/src/fno/agents/nudge.py` | one cursor per nudge target, overwritten |
 | `state/announce-cursors/` | `fno-agents announce` (`crates/fno-agents/src/announce.rs`) | one seen-id set per session; pruned to ids still on retained bus segments |
 | `law-edit-seen/` | `fno inbox law` edit read (`crates/fno-agents/src/law_match.rs` `edit_answer`, via the shared cursor in `announce.rs`) | one seen-id set per session; tiny, never cleaned |

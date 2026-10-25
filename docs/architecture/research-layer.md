@@ -18,8 +18,8 @@ Because the backbone **self-fetches**, provenance is clean from round one: the a
 
 | Piece | Location | Role |
 |-------|----------|------|
-| `fno do research "X"` | `cli/src/fno/research/cli.py` | CLI entry point. Validates the topic, runs one retrieve+store round, prints a summary. |
-| retrieval engine | `cli/src/fno/research/core.py` | ddgs search, SSRF-guarded self-fetch, `sources.jsonl` read/write, per-topic claim. stdlib-only. |
+| `fno do research "X"` | `crates/fno-agents/src/research/cli.rs` | CLI entry point. Validates the topic, runs one retrieve+store round, prints a summary. |
+| retrieval engine | `crates/fno-agents/src/research/engine.rs` | ddgs search, SSRF-guarded self-fetch over system `curl`, `sources.jsonl` read/write, per-topic claim. |
 | `scout` | `agents/scout.md` | The `research` executor subagent. Retrieves through the deterministic backbone (not WebSearch/WebFetch) and treats fetched content as data. |
 | `research` executor | `skills/execute/references/executor-resolution.md` | Registry row. Reached via `fno do research`, **not** `/execute waves` surface inference. |
 
@@ -44,7 +44,7 @@ One JSON line per source at `~/.fno/notes/research/<slug>.sources.jsonl`. The sc
 
 ## Security: SSRF boundary
 
-The self-fetch is the first fno code path that fetches **untrusted, attacker-influenced** URLs (search results and their redirects). `_guard_url` rejects non-`http(s)` schemes and any host resolving to a private / loopback / link-local / reserved / multicast / unspecified address, and `_GuardedRedirectHandler` re-validates every redirect hop - so a result page cannot `30x`-redirect the fetch into cloud metadata (`169.254.169.254`) or an internal service. A DNS-rebind TOCTOU remains (the guard resolves, urllib re-resolves at connect); closing it fully means pinning the connection to the vetted IP, deferred until rebinding is a real threat.
+The self-fetch is the first fno code path that fetches **untrusted, attacker-influenced** URLs (search results and their redirects). `guard_url` rejects non-`http(s)` schemes and any host resolving to a private / loopback / link-local / reserved / multicast / unspecified address. `curl` runs without `-L`: the engine follows each redirect itself and re-validates every hop, so a result page cannot `30x`-redirect the fetch into cloud metadata (`169.254.169.254`) or an internal service. A DNS-rebind TOCTOU remains (the guard resolves, curl re-resolves at connect). Closing it fully means pinning the connection to the vetted IP with `--resolve`, deferred until rebinding is a real threat.
 
 Separately, fetched page text is treated as **data, never instructions**: nothing interpolates an extract into a prompt; `scout` is told to treat retrieved content as quoted evidence only (prompt-injection boundary).
 
@@ -60,7 +60,7 @@ By default `fno do research "X"` now ships, after retrieval, a `doc`:
 
 ```
 ~/.fno/notes/research/<slug>.sources.jsonl   (cache, Group 1)
-        │  ship step (cli/src/fno/research/deliverable.py)
+        │  ship step (crates/fno-agents/src/research/deliverable.rs)
         ▼
 <output_dir>/<slug>.md               (the brief)
 <output_dir>/<slug>.sources.jsonl    (cited-evidence sidecar)
