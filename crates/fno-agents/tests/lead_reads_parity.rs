@@ -110,6 +110,7 @@ fn case(label: &str, root: &Path, cwd: &Path, argv: &[&str], fold_root: &Path) {
     }
     let out = cmd
         .env("HOME", root)
+        .env("FNO_HOME", root.join(".fno"))
         .env("FNO_AGENTS_HOME", root.join("home"))
         .env("FNO_STATE_DIR", root.join("state"))
         .env("FNO_SPACES_DIR", root.join("spaces"))
