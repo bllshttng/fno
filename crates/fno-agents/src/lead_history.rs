@@ -1146,7 +1146,11 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
     readings.inherited_closed_in_window = inputs.inherited_closed_in_window;
     let (v, bounds) = verdict(&readings);
     let summary = bound_summary(v, &bounds);
-    if let Some(note) = inputs.harness_disagreement.as_ref().filter(|_| !user_command) {
+    if let Some(note) = inputs
+        .harness_disagreement
+        .as_ref()
+        .filter(|_| !user_command)
+    {
         eprintln!("lead-history --verdict: harness disagreement: {note}");
     }
     let payload = json!({

@@ -78,7 +78,8 @@ fn claim(route: &Route, tail: &[OsString], notice: Option<String>) -> Claim {
         .iter()
         .any(|a| matches!(a.to_str(), Some("--help") | Some("-h")));
     let native = (!help).then(|| {
-        route.native
+        route
+            .native
             .iter()
             .map(OsString::from)
             .chain(tail.iter().cloned())
