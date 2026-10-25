@@ -212,7 +212,7 @@ pub(crate) fn node_pr_refs(node: &Value) -> Vec<(i64, Option<String>)> {
         .flatten()
     {
         // A reopen-demoted row is record-keeping, not a promised ship: the
-        // history mark keeps it out of the evidence set the gates read.
+        // history mark keeps it out of the evidence set.
         if extra.get("history").and_then(Value::as_bool) == Some(true) {
             continue;
         }
