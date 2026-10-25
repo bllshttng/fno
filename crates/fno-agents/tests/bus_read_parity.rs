@@ -265,7 +265,7 @@ fn stage_mints_the_hosted_receipt() {
                 .take()
                 .unwrap()
                 .write_all(fields.as_bytes())
-                .map(|_| c.wait_with_output())
+                .and_then(|_| c.wait_with_output())
         })
         .expect("run fno-agents chats stage");
     assert_eq!(out.status.code(), Some(0));
@@ -339,7 +339,7 @@ fn stage_mints_the_typed_receipt() {
                 .take()
                 .unwrap()
                 .write_all(fields.as_bytes())
-                .map(|_| c.wait_with_output())
+                .and_then(|_| c.wait_with_output())
         })
         .expect("run fno-agents chats stage");
     assert_eq!(out.status.code(), Some(0));
