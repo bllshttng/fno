@@ -46,13 +46,8 @@ agents lead-checkin	T1	agents lead-checkin	0
 agents lead done	T1	agents lead done	5
 agents lead drain	T1	agents lead drain	1
 agents lead escalate	T1	agents lead escalate	1
-agents lead faq add	T1	agents lead faq add	2
-agents lead faq list	T1	agents lead faq list	2
-agents lead history	T1	agents lead history	0
 agents lead init	T1	agents lead init	7
-agents lead manifest-path	T1	agents lead manifest-path	3
 agents lead ledger	T1	agents lead ledger	0
-agents lead verdict	T1	agents lead verdict	5
 agents lead-history	T1	agents lead-history	0
 agents list	KEEP	agents list	81	deliberate readability slack for a high-traffic distinct operation
 agents logs	KEEP	agents logs	73	deliberate readability slack for a high-traffic distinct operation
@@ -437,10 +432,6 @@ setup cli-hooks	T1	setup cli-hooks	8
 setup cli-hooks-codex	T1	setup cli-hooks-codex	4
 config plugin	T1	config plugin	0
 doctor reclaim	T1	doctor reclaim	0
-setup migrate-config	T1	setup migrate-config	1
-setup migrate-paths	T1	setup migrate-paths	8
-setup plan	T1	setup plan	7
-setup post-merge	T1	setup post-merge	6
 skill-diff reconcile	T1	skill-diff reconcile	1
 skill-diff tick	T1	skill-diff tick	4
 state archive	T1	state archive	1
@@ -485,22 +476,15 @@ agents stale-escalate	T1	agents stale-escalate	6
 agents friction-escalate	T1	agents friction-escalate	5
 agents feed	T1	agents feed	13
 agents harness probe	T1	agents harness probe	0
-agents lead shape	T1	agents lead shape	5
 agents lead term	T1	agents lead term	7
 agents org cancel	T1	agents org cancel	6
 agents org checkin	T1	agents org checkin	14
 agents org done	T1	agents org done	10
 agents org drain	T1	agents org drain	2
 agents org escalate	T1	agents org escalate	2
-agents org faq add	T1	agents org faq add	4
-agents org faq list	T1	agents org faq list	0
-agents org history	T1	agents org history	8
 agents org init	T1	agents org init	6
 agents org ledger	T1	agents org ledger	0
-agents org manifest-path	T1	agents org manifest-path	0
-agents org shape	T1	agents org shape	6
 agents org term	T1	agents org term	6
-agents org verdict	T1	agents org verdict	3
 do review invocations	T1	do review invocations	3
 do review post-dispositions	T1	do review post-dispositions	1
 backlog version	T1	backlog version	19

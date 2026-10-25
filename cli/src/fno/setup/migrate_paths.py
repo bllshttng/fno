@@ -1,4 +1,4 @@
-"""fno config setup migrate-paths
+"""First-run path migration (the auto-fire in cli._check_migration).
 
 Idempotent migration. Detects existing install by probing the schema's
 path-key enumeration; writes a settings.yaml that reproduces it; sets

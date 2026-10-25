@@ -71,6 +71,9 @@ enum Role {
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
+    /// `fno config setup plan|post-merge` and the root `fno setup` twins:
+    /// the wizard question plan and the post-merge scaffold.
+    SetupCmd(fno::setup_cmds::Cmd),
     /// `fno do wizard`: the interactive terminal host for the wizard flow.
     /// Native, because it owns the raw-mode terminal and must run before any
     /// Python wheel exists on a fresh machine.
@@ -325,6 +328,10 @@ enum Role {
     /// paths commands still forward to Python (one command per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
+    /// `fno agents org` history, verdict, faq, `chart shape`, `chart
+    /// manifest-path`, and `fno inbox board`: the lead read commands, exec'd as
+    /// arguments of existing fno-agents actions. Their Python legs are gone.
+    LeadRead(fno::lead_reads_route::Claim),
     /// `fno agents mcp send ...` and the deprecated root `fno mcp send ...`:
     /// the ported MCP channel family's verb, exec'd through the worker's
     /// --mcp-exec lane with the tail byte-verbatim. The bool is the root
@@ -837,6 +844,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::paths_route::classify(args) {
         return Role::PathsCli(rest);
     }
+    if let Some(claim) = fno::lead_reads_route::classify(args) {
+        return Role::LeadRead(claim);
+    }
     if let Some((root_alias, rest)) = fno::agents_mcp_route::classify(args) {
         return Role::AgentsMcpRoot(root_alias, rest);
     }
@@ -985,6 +995,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::setup_run::classify(args) {
         return Role::SetupRun(rest);
+    }
+    if let Some(cmd) = fno::setup_cmds::classify(args) {
+        return Role::SetupCmd(cmd);
     }
     if args.first().and_then(|a| a.to_str()) == Some("do")
         && args.get(1).and_then(|a| a.to_str()) == Some("wizard")
@@ -1247,6 +1260,7 @@ fn main() {
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
+        Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
         Role::MuxLs(json) => exit_mux(mux_cli::ls(json)),
         Role::MuxKill(kill_req) => {
@@ -1284,6 +1298,7 @@ fn main() {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
+        Role::LeadRead(claim) => std::process::exit(fno::lead_reads_route::run(&claim)),
         Role::AgentsMcpRoot(root_alias, rest) => {
             std::process::exit(fno::agents_mcp_route::run(root_alias, &rest))
         }
@@ -1834,6 +1849,11 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["do", "wizard", "--json"]), false),
             Role::Wizard(os(&["--json"]))
+        );
+        // So do the wizard plan and the post-merge scaffold.
+        assert_eq!(
+            decide_role(&os(&["config", "setup", "plan", "--advanced"]), false),
+            Role::SetupCmd(fno::setup_cmds::Cmd::Plan(os(&["--advanced"])))
         );
     }
 

@@ -1,0 +1,15 @@
+actionable: 2
+ *mail                 2  -> fno agents mail list  (oldest 3h)
+      fmail-1 from gavin: shim fix
+      ... 1 more not shown
+      source: bus
+  questions            0  -> fno inbox outstanding
+      source: questions.jsonl
+  claims               3
+      x-c435 held
+      ... 2 more not shown
+      source: claim store
+  prs                  NOT READ    budget spent before the read
+      source: gh
+  graph                UNREADABLE  database is locked
+      source: graph.db
