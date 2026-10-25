@@ -63,8 +63,8 @@ If a check is blocked, record it as unverified. A successful preview response do
 
 ## Writing Principles
 
-- **Show, don't tell**: "Click the green button" not "Select the action"
+- **Use visible detail**: Name the exact button, field, or screen the reader needs
 - **One step at a time**: Break complex flows into atomic steps
-- **Anticipate errors**: Include "If you see X, do Y" guidance
+- **Anticipate errors**: State each visible error and its recovery action
 - **Use their words**: "Sign in your child" not "Initiate attendance record"
-- **Visual markers**: Describe what they'll see at each step
+- **Visual markers**: Describe the result of each step
