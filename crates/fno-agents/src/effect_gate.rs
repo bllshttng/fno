@@ -317,6 +317,19 @@ pub fn verdict(
     if classify(&effect_class) == Disposition::Deny {
         return Ok(false);
     }
+    // A spent approval refuses: the attempts journal holds the one hook fire
+    // the approval bought, so a repeat derives a fresh attempt and owes a
+    // new decision instead of riding the old one.
+    let spent: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM attempts WHERE request_digest = ? AND state = 'authorized'",
+            [digest],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if spent > 0 {
+        return Ok(false);
+    }
     Ok(authorized(cwd, &principal, &effect_class))
 }
 
@@ -425,11 +438,6 @@ pub fn judge(payload: &Value, cwd: &Path) -> Option<String> {
         .filter(|s| !s.is_empty())
         .unwrap_or("unknown-session");
     let mut request = hook_request(session, &mapped, now);
-    // request_id is not a bound field, so it may derive from the request
-    // digest: two sessions making the same call file different digests, and
-    // each needs its own request row rather than a UNIQUE clash on a shared
-    // action-derived id.
-    request.request_id = format!("hook-{}", &request.request_digest()[..16]);
     let db_path = match payload.get("db").and_then(Value::as_str) {
         Some(db) => PathBuf::from(db),
         None => default_db_path(cwd).ok()?,
@@ -452,6 +460,20 @@ pub fn judge(payload: &Value, cwd: &Path) -> Option<String> {
             ));
         }
     };
+    // attempt_id is a bound field. Pre-execution retries share the session's
+    // one request (that is the retry identity), and every fire the gate
+    // allows spends the approval, so the next identical call derives the
+    // next attempt id from the journal and owes a fresh decision: one
+    // approval, one execution.
+    let executed = executed_count(&conn, session, &mapped.action_digest);
+    if executed > 0 {
+        request.attempt_id = format!("{session}-{executed}");
+    }
+    // request_id is not a bound field, so it may derive from the request
+    // digest: two sessions making the same call file different digests, and
+    // each needs its own request row rather than a UNIQUE clash on a shared
+    // action-derived id.
+    request.request_id = format!("hook-{}", &request.request_digest()[..16]);
     let digest = match submit(&conn, Some(&events_for(cwd)), &request) {
         Ok(digest) => digest,
         Err(e) => {
@@ -462,7 +484,10 @@ pub fn judge(payload: &Value, cwd: &Path) -> Option<String> {
         }
     };
     match verdict(&conn, cwd, &digest, now) {
-        Ok(true) => None,
+        Ok(true) => {
+            record_spent(&conn, &request, &digest);
+            None
+        }
         Ok(false) => {
             // A fresh install names nobody under the policy, so the approve
             // command this refusal suggests cannot decide. Say so and name
@@ -486,6 +511,44 @@ pub fn judge(payload: &Value, cwd: &Path) -> Option<String> {
 /// `emit_guard_decision` uses.
 fn events_for(cwd: &Path) -> PathBuf {
     crate::state_path::resolve("events", cwd).unwrap_or_else(|| crate::paths::events_path(cwd))
+}
+
+/// How many fires of this exact action the gate already allowed for the
+/// session. The attempts journal is the record; the count names the next
+/// attempt id, so each execution owes and consumes its own approval. The
+/// first fire rides the bare session id, its successors the numbered form.
+fn executed_count(conn: &Connection, session: &str, action_digest: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM attempts WHERE action_digest = ? \
+         AND (attempt_id = ? OR attempt_id LIKE ?)",
+        rusqlite::params![action_digest, session, format!("{session}-%")],
+        |row| row.get(0),
+    )
+    .unwrap_or(0)
+}
+
+/// Record the one execution this allow bought. The gate sees the allow, not
+/// the tool's outcome, so the row states exactly that fact; a failed effect
+/// re-approves, the gate's stated fail-toward-re-approval bias.
+fn record_spent(conn: &Connection, request: &EffectRequest, digest: &str) {
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO attempts (idempotency_key, effect_id, work_order_id, \
+         attempt_id, request_digest, action_digest, destination, effect_class, \
+         adapter_id, adapter_version, state) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        rusqlite::params![
+            format!("hook:{digest}"),
+            request.effect_id,
+            request.work_order_id,
+            request.attempt_id,
+            digest,
+            request.action_digest,
+            request.destination,
+            request.effect_class,
+            "hook",
+            "0",
+            "authorized",
+        ],
+    );
 }
 
 // -- Transports --------------------------------------------------------------

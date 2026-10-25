@@ -345,6 +345,36 @@ fn approved_request_admits_a_retry_with_a_new_tool_use_id() {
         count, 1,
         "the retry re-read the same request, not a new one"
     );
+
+    // One approval buys one execution: a third identical call derives the
+    // next attempt, files a fresh request, and refuses again.
+    let third = publish_payload(&root, &db, "toolu_third");
+    let refusal = judge(&third, &root).unwrap();
+    assert!(refusal.contains("needs approval"), "{refusal}");
+    let next_digest: String = conn
+        .query_row(
+            "SELECT request_digest FROM requests ORDER BY rowid DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_ne!(next_digest, digest, "the new attempt files its own request");
+    seed_approved(&conn, &next_digest, "boss");
+    assert!(
+        judge(&third, &root).is_none(),
+        "the new decision executes once"
+    );
+    assert!(
+        judge(&publish_payload(&root, &db, "toolu_fourth"), &root).is_some(),
+        "the spent approval never admits a repeat"
+    );
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM requests", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        count, 3,
+        "each execution after the first files its own request"
+    );
     std::env::remove_var("FNO_SPACES_DIR");
 }
 
