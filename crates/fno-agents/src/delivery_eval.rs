@@ -478,7 +478,32 @@ fn load_company_work(plan_path: &Path) -> Result<(bool, CompanyWork), String> {
         },
         Some(company) => parse_company_work(company)?,
     };
+    if let Some((order_node, _)) = &work.work_order {
+        if plan_node_value(&mapping)? != *order_node {
+            return Err(
+                "plan is unreadable or invalid: company_work work_order node_id must match plan node"
+                    .to_string(),
+            );
+        }
+    }
     Ok((active, work))
+}
+
+/// The collapsed plan identity the Python model compared against: `node`
+/// verbatim, else `claims` verbatim (its before-validator), else refusal.
+fn plan_node_value(mapping: &Map<String, Value>) -> Result<String, String> {
+    match mapping.get("node") {
+        Some(Value::String(text)) => Ok(text.clone()),
+        Some(_) => {
+            Err("plan is unreadable or invalid: plan frontmatter node must be a string".to_string())
+        }
+        None => match mapping.get("claims") {
+            Some(Value::String(text)) => Ok(text.clone()),
+            _ => Err(
+                "plan is unreadable or invalid: plan frontmatter node must be a string".to_string(),
+            ),
+        },
+    }
 }
 
 /// The plan-doc frontmatter split: `---\n ... \n---` fence; an absent fence
@@ -677,6 +702,8 @@ fn parse_company_work(value: &Value) -> Result<CompanyWork, String> {
     let mut deliverables = Vec::new();
     for item in seq_or_empty(map.get("deliverables")) {
         let item = item.as_object().ok_or_else(invalid)?;
+        // kind is a required contract field; validated, never read here.
+        nonempty_stripped(item.get("kind")).ok_or_else(invalid)?;
         let effect_id = match item.get("effect_id") {
             Some(Value::Null) | None => None,
             other => Some(nonempty_stripped(other).ok_or_else(invalid)?),
@@ -899,9 +926,7 @@ fn journal_unreadable(error: &std::io::Error, path: &Path) -> JournalRead {
 /// post-cutover journal may have no bytes at all.
 fn read_snapshot(events_path: &Path) -> Result<Snapshot, JournalRead> {
     if crate::event_store::store_path(events_path).exists() {
-        if events_path.exists() {
-            let _ = crate::event_store::import_all(events_path);
-        }
+        let _ = crate::event_store::import_all(events_path);
         let rows = crate::event_store::query_events(
             events_path,
             &crate::event_store::EventQuery {
