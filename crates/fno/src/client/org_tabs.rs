@@ -235,7 +235,7 @@ pub(crate) fn explorer(
     width: usize,
 ) -> Vec<Line> {
     let mut out = vec![
-        Lb::default().s(" EXPLORER", BRole::Head).done(),
+        Lb::default().s(" Explorer", BRole::Head).done(),
         Lb::default().s(" Topology", BRole::Body).done(),
     ];
     let tree: Vec<&Entry> = entries
@@ -514,9 +514,9 @@ pub(crate) fn overview(
     now: u64,
 ) -> Vec<Line> {
     let title = match item {
-        Item::Lead(..) | Item::Seat(..) => "lead",
-        Item::Host(_) => "machine",
-        _ => "fleet",
+        Item::Lead(..) | Item::Seat(..) => "Lead",
+        Item::Host(_) => "Machine",
+        _ => "Fleet",
     };
     let hosts: Vec<String> = fleet
         .machines
@@ -558,7 +558,7 @@ pub(crate) fn overview(
         blank(),
     ];
     if matches!(item, Item::Lead(..) | Item::Seat(..)) {
-        out.push(rule("seats", width));
+        out.push(rule("Seats", width));
         for r in rows {
             let title =
                 r.s.work
@@ -584,7 +584,7 @@ pub(crate) fn overview(
             );
         }
     } else {
-        out.push(rule("leads", width));
+        out.push(rule("Leads", width));
         for g in groups {
             let w = g.iter().filter(|r| r.s.status == "writing").count();
             out.push(
@@ -759,7 +759,7 @@ pub(crate) fn health(
         }
     }
     out.push(blank());
-    out.push(rule("signals in this snapshot \u{b7} not a verdict", width));
+    out.push(rule("Signals in this snapshot \u{b7} not a verdict", width));
     let old =
         |r: &&Row| epoch(r.s.last_message_at.as_deref()).is_some_and(|t| now as i64 - t > 7200);
     let signals: [(&str, Vec<&Row>, &str); 3] = [
@@ -813,7 +813,7 @@ pub(crate) fn health(
         );
     }
     out.push(blank());
-    out.push(rule("machines", width));
+    out.push(rule("Machines", width));
     for m in machines {
         out.push(
             Lb::default()

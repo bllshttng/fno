@@ -20,7 +20,7 @@ Below 80 columns the explorer paints alone, and the bottom bar names `F` for ful
 
 ## Look
 
-The view wears the panel slots every fno view wears: body text, bold for emphasis and the dim slot for meta. It paints no accent color. Only headers use capitals: the explorer's `EXPLORER`, the right pane's frame title and the seat page's section rules. Tabs, column heads and entries use sentence case.
+The view wears the panel slots every fno view wears: body text, bold for emphasis and the dim slot for meta. It paints no accent color and no all-caps word. Headers such as Explorer, Topology, Seat and Current work are bold sentence case. Tabs, column heads and entries use sentence case too.
 
 ## Keys
 

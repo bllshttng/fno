@@ -1,6 +1,6 @@
 //! The org view: the fleet command center. The explorer on the left lists
 //! the fleet, its machines, the leads on each machine and the open lead's seats;
-//! the right pane shows a tab over the selection, or a seat, FEED or SYSTEM
+//! the right pane shows a tab over the selection, or a seat, feed or system
 //! page. Every seat comes from the fleet map, so the other machine's seats
 //! show beside this one's.
 
@@ -220,12 +220,12 @@ impl OrgBoard {
         now: u64,
     ) -> (Vec<Line>, Vec<Line>) {
         if self.keys_help {
-            return (vec![title("KEYS", width)], super::org_pages::keys_help());
+            return (vec![title("Keys", width)], super::org_pages::keys_help());
         }
         let item = self.current();
         if item == Item::Feed {
             return (
-                vec![title("FEED", width)],
+                vec![title("Feed", width)],
                 super::org_pages::feed(questions, width),
             );
         }
@@ -235,20 +235,20 @@ impl OrgBoard {
                 None => "   reading the fleet map".into(),
             };
             return (
-                vec![title("TOPOLOGY", width)],
+                vec![title("Topology", width)],
                 vec![super::org_tabs::meta(state)],
             );
         };
         match item {
             Item::System => (
-                vec![title("SYSTEM", width)],
+                vec![title("System", width)],
                 super::org_pages::system(f, width),
             ),
             Item::Seat(m, p, s) => {
                 let machine = &f.machines[m];
                 let lead = &machine.leads[p];
                 (
-                    vec![title("SEAT", width)],
+                    vec![title("Seat", width)],
                     super::org_pages::seat(machine, lead, &lead.seats[s], width, now),
                 )
             }
@@ -266,7 +266,7 @@ impl OrgBoard {
                 };
                 (
                     vec![
-                        title("TOPOLOGY", width),
+                        title("Topology", width),
                         t::header(f, &item, self.tab),
                         t::blank(),
                     ],

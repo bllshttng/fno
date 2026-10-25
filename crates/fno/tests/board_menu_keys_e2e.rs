@@ -43,7 +43,7 @@ fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
     // board holds the keyboard. Org is the next view from the board.
     h.type_bytes(&[PREFIX, b'V']);
     eprintln!("STAGE leg1 org-after-V");
-    h.wait_screen(15, |s| s.contains("EXPLORER"));
+    h.wait_screen(15, |s| s.contains("Explorer"));
 
     h.type_bytes(&[PREFIX, b'?']);
     eprintln!("STAGE org global-keybinds");
@@ -53,7 +53,7 @@ fn board_menu_keys_reach_their_surfaces_while_the_board_is_docked() {
         "Org's own keys must not answer the prefix chord:\n{screen}"
     );
     h.type_bytes(&[27]);
-    h.wait_screen(15, |s| s.contains("EXPLORER") && !s.contains("keybindings"));
+    h.wait_screen(15, |s| s.contains("Explorer") && !s.contains("keybindings"));
 
     h.type_bytes(&[PREFIX, b'V']);
     eprintln!("STAGE leg1 agents-after-second-V");

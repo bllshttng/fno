@@ -32,7 +32,7 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
             )
             .done(),
         blank(),
-        rule("CONTEXT", width),
+        rule("Context", width),
         kv(
             "context",
             s.context_pct
@@ -55,7 +55,7 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
             .done()
     });
     out.push(blank());
-    out.push(rule("CURRENT ACTIVITY", width));
+    out.push(rule("Current activity", width));
     out.push(kv("activity", s.status, status_role(s.status)));
     out.push(kv(
         "for",
@@ -70,7 +70,7 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
     out.push(blank());
     match &s.work {
         Some(w) => {
-            out.push(rule(&format!("CURRENT WORK \u{b7} {}", w.id), width));
+            out.push(rule(&format!("Current work \u{b7} {}", w.id), width));
             let facts = [
                 Some(w.id.clone()),
                 w.status.clone(),
@@ -113,12 +113,12 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
             }
         }
         None => {
-            out.push(rule("CURRENT WORK", width));
+            out.push(rule("Current work", width));
             out.push(kv("node", "none", BRole::Meta));
         }
     }
     out.push(blank());
-    out.push(rule("LAST MESSAGE", width));
+    out.push(rule("Last message", width));
     let stamp = match (ago(s.last_message_at.as_deref(), now), &s.last_message_at) {
         (Some(a), Some(at)) => format!("{NOT_PUBLISHED} \u{b7} last turn {a} ({at})"),
         _ => NOT_PUBLISHED.into(),
@@ -130,7 +130,7 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
             .done(),
     );
     out.push(blank());
-    out.push(rule("SEAT", width));
+    out.push(rule("Seat", width));
     out.push(kv("machine", format!("{} ({})", m.host, m.id), BRole::Body));
     out.push(kv("lead", p.name.clone(), BRole::Body));
     out.push(kv("project", or_np(s.project.as_deref()), BRole::Body));
@@ -277,7 +277,7 @@ pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {
         );
     }
     out.push(blank());
-    out.push(rule("connections", width));
+    out.push(rule("Connections", width));
     out.push(meta(format!(
         "   roster: fleet_machine rows on the shared primary \u{b7} {} machine{}",
         fleet.machines.len(),
@@ -288,7 +288,7 @@ pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {
         out.push(meta(format!("   seat facts not read: {e}")));
     }
     out.push(blank());
-    out.push(rule("health", width));
+    out.push(rule("Health", width));
     if fleet.machines.iter().all(|m| sampled(m).is_none()) {
         out.push(not_sampled());
     } else {

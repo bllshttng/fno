@@ -119,7 +119,7 @@ fn a_remote_seat_names_its_attach_command_and_no_action_key() {
         let line = page.lines().find(|l| l.contains(field)).unwrap();
         assert!(line.contains("not published"), "{line}");
     }
-    let last = page.lines().skip_while(|l| !l.contains("LAST MESSAGE"));
+    let last = page.lines().skip_while(|l| !l.contains("Last message"));
     assert!(last.skip(1).next().unwrap().contains("not published"));
     b.select("seat/m-bb16/mb-00/mb-03");
     let footer = b.footer(true, 200, now());
