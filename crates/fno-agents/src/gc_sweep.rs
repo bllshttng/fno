@@ -1878,14 +1878,30 @@ pub(crate) fn run_with_release(
             .is_some_and(|a| a > grace_secs);
         let adopted_terminal = idle_past_grace
             && crate::gc_adopt::adopted_claude_terminal(e, &agents_memo, agents_read);
+        // The bg-adoption ruling, computed once per row BEFORE the early
+        // origin gate: a no-origin claude row whose transcript carries a
+        // real fno skill invocation takes the spawn path, and a row this
+        // would adopt must not be classified here and `continue`d - past
+        // this gate it never reaches the policy arm, so the scan has to
+        // happen at the gate, not only at GcRow construction.
+        let bg_adopted = e.origin.is_none()
+            && e.harness.as_deref() == Some("claude")
+            && crate::session_backfill::bg_fno_invocation(
+                e.harness_session_id.as_deref().unwrap_or("").trim(),
+                e.launch_account.as_deref(),
+            );
         if !is_spawn && !adopted_finished(e) && !adopted_terminal {
-            if !crate::gc_adopt::origin_corpse(e, quiet, &agents_memo, agents_read) {
+            let corpse_probe = crate::gc_adopt::origin_corpse(e, quiet, &agents_memo, agents_read);
+            // An adopted bg row falls through as a live row judged like a
+            // spawn one, never as a corpse: only a row the corpse probe
+            // actually PASSED carries origin_corpse into the policy.
+            if !bg_adopted && !corpse_probe {
                 summary
                     .kept_not_spawn
                     .push((id, e.origin.clone().unwrap_or_default()));
                 continue;
             }
-            corpse = true;
+            corpse = corpse_probe;
         }
         let Some(graph) = &graph else {
             summary.kept_graph_unreadable.push(id);
@@ -2191,6 +2207,9 @@ pub(crate) fn run_with_release(
         };
         let mut row = GcRow {
             origin: e.origin.clone(),
+            // Computed once above, at the early origin gate: past that gate
+            // a row this adopts would never have reached construction.
+            bg_fno_invoked: bg_adopted,
             teamed: e.role_level.is_some(),
             work,
             transcript_age_s: age,

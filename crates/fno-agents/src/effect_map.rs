@@ -134,6 +134,11 @@ pub fn map_tool_call(tool_name: &str, tool_input: &Value) -> Option<MappedEffect
     if !tool_name.starts_with("mcp__") {
         return None;
     }
+    // An artifact starts private to its owner, so publishing files to it is
+    // not an outside effect; the name holding "publish" is not the test.
+    if tool_name.starts_with("mcp__claude-artifacts__") {
+        return None;
+    }
     if lower.contains("send") || lower.contains("post_message") {
         return Some(mapped(
             "external.communication",
@@ -307,6 +312,12 @@ mod tests {
         assert_eq!(publish.destination, "docs.example.com");
 
         assert!(map_tool_call("mcp__repo__search", &json!({})).is_none());
+        // An artifact is private to its owner, whatever the tool name holds.
+        assert!(map_tool_call(
+            "mcp__claude-artifacts__publish_files",
+            &json!({"files": [{"path": "x.html"}]})
+        )
+        .is_none());
         assert!(map_tool_call("Read", &json!({})).is_none());
         assert!(map_tool_call("Bash", &json!({"command": "git status"})).is_none());
         // Merge effects stay with the merge gate and git-protection.
