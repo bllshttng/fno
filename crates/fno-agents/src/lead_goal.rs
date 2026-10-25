@@ -130,10 +130,14 @@ fn run_on_provider_thread<T: Send + 'static>(
         })
         .map_err(|error| format!("Codex provider goal thread unavailable: {error}"))?;
     // A bounded wait, not a bare join: an unresponsive provider action must
-    // not hold the stop fire past its kill. On timeout the worker thread is
-    // deliberately detached - the action is best-effort, the process may
-    // exit first, and a wedged tokio runtime is not joinable in bounded time.
-    let bound = crate::loopcheck::stopgate_read_timeout();
+    // not hold the stop fire past its kill. The margin-funded floor (the
+    // merged-read formula), not the pre-drain clamp: every caller runs
+    // POST-drain, where stopgate_read_timeout() still subtracts the reserve
+    // and collapses to the 1ms spent bound - a hot fire would refuse every
+    // pause. On timeout the worker thread is deliberately detached - the
+    // action is best-effort, the process may exit first, and a wedged tokio
+    // runtime is not joinable in bounded time.
+    let bound = crate::loopcheck::stopgate_pr_meta_timeout();
     match rx.recv_timeout(bound) {
         Ok(value) => Ok(value),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
