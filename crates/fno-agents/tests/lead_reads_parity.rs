@@ -278,6 +278,18 @@ fn verdict_matches_the_python_goldens() {
             .status()
             .unwrap();
         assert!(init.success());
+        // The capture read a graph with rows: an empty graph answers that a
+        // scope is unknown, not that it names no node.
+        let graph = fno_agents::state_layout::graph_anchor(&p.join(".fno"));
+        fs::create_dir_all(graph.parent().unwrap()).unwrap();
+        fno_agents::graph_store::seed_rows_with_slugs(
+            &graph,
+            &[
+                serde_json::json!({"id": "x-0001", "title": "an unrelated node",
+                "type": "feature", "status": "ready"}),
+            ],
+        )
+        .unwrap();
         if *with_manifest {
             let space = p
                 .join("spaces")
