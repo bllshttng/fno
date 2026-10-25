@@ -298,6 +298,7 @@ When a node is found, these **graph node** fields append: `graph_node_id`, `targ
 **Write-once enforcement:**
 - Detection: manifest is immutable iff frontmatter has no `status:` key.
 - Allowed post-init: `fno do state set --field plan_path` when current value is empty (first-fill only).
+- Allowed post-init (claim handover): a `--handover-from` acquire success for the manifest's node drops `target_claim_blocked_reason` and appends the claim lines. It consumes the init-authored `.target-cancelled` sentinel. A claim handed over after a refused init then stops refusing the stop gate's watching tags.
 - Refused: any other field on an immutable manifest -> exit 5, `state_write_refused` event.
 
 ## Event types

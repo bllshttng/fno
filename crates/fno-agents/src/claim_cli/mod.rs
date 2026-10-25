@@ -10,6 +10,7 @@
 
 pub mod acquire;
 pub mod list;
+pub mod manifest_refresh;
 pub mod reap;
 pub mod refresh;
 pub mod release;
