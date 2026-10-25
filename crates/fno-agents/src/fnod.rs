@@ -17,40 +17,14 @@ const MAX_MESSAGE_CHARS: usize = 16_000;
 /// (`intel_corpus.rs::question`): a reworded question is a different input.
 const IS_ASK: &str = "Does this message ask the user for a decision or an answer?";
 
-#[derive(Debug, PartialEq)]
-pub(crate) enum Answer {
-    Score { p: f64, ms: u64 },
-    Unavailable(String),
-}
-
-impl Answer {
-    /// The journal attrs for this answer: `fnod_is_ask` and `fnod_ms`, or
-    /// `fnod_error` with the reason the score is missing.
-    pub(crate) fn attrs(&self) -> Map<String, Value> {
-        let mut out = Map::new();
-        match self {
-            Answer::Score { p, ms } => {
-                out.insert("fnod_is_ask".to_string(), json!(p));
-                out.insert("fnod_ms".to_string(), json!(ms));
-            }
-            Answer::Unavailable(why) => {
-                out.insert("fnod_error".to_string(), json!(why));
-            }
-        }
-        out
-    }
-}
-
-/// fnod's probability that `message` asks the user for a decision or an
-/// answer. `fnod.url` (empty turns it off) and `fnod.timeout_ms` come from
-/// fno config.
-pub(crate) fn is_ask(cwd: &Path, message: &str) -> Answer {
+/// fnod's answer to "does `message` ask the user for a decision or an
+/// answer?" as journal attrs: `fnod_is_ask` (the probability) and `fnod_ms`,
+/// or `fnod_error` with the reason the score is missing. `fnod.url` (empty
+/// turns it off) and `fnod.timeout_ms` come from fno config.
+pub(crate) fn is_ask(cwd: &Path, message: &str) -> Map<String, Value> {
     let url = crate::agents_config::config_value_deep(cwd, &["fnod", "url"])
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_else(|| DEFAULT_URL.to_string());
-    if url.trim().is_empty() {
-        return Answer::Unavailable("off".to_string());
-    }
     let timeout = crate::agents_config::config_value_deep(cwd, &["fnod", "timeout_ms"])
         .and_then(|v| v.as_integer())
         .and_then(|n| u64::try_from(n).ok())
@@ -60,31 +34,36 @@ pub(crate) fn is_ask(cwd: &Path, message: &str) -> Answer {
         "questions": {"is_ask": {"type": "noul", "instructions": IS_ASK}},
     });
     let start = Instant::now();
-    let reply = crate::opencode_serve::http_json(
-        &url,
-        "POST",
-        "/v1/systemone",
-        Some(&body),
-        None,
-        Duration::from_millis(timeout),
-    )
-    .and_then(|(status, text)| match status {
-        200 => serde_json::from_str::<Value>(&text).map_err(|e| format!("reply is not JSON: {e}")),
-        _ => Err(format!("HTTP {status}")),
-    });
-    match reply {
-        Ok(reply) => match reply
-            .pointer("/answers/is_ask/noul")
-            .and_then(Value::as_f64)
-        {
-            Some(p) => Answer::Score {
-                p,
-                ms: start.elapsed().as_millis() as u64,
-            },
-            None => Answer::Unavailable("reply carries no answers.is_ask.noul".to_string()),
-        },
-        Err(e) => Answer::Unavailable(e),
+    let score = if url.trim().is_empty() {
+        Err("off".to_string())
+    } else {
+        let wait = Duration::from_millis(timeout);
+        crate::opencode_serve::http_json(&url, "POST", "/v1/systemone", Some(&body), None, wait)
+            .and_then(|(status, text)| match status {
+                200 => serde_json::from_str::<Value>(&text).map_err(|e| format!("reply: {e}")),
+                _ => Err(format!("HTTP {status}")),
+            })
+            .and_then(|reply| {
+                reply
+                    .pointer("/answers/is_ask/noul")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| "reply carries no answers.is_ask.noul".to_string())
+            })
+    };
+    let mut out = Map::new();
+    match score {
+        Ok(p) => {
+            out.insert("fnod_is_ask".to_string(), json!(p));
+            out.insert(
+                "fnod_ms".to_string(),
+                json!(start.elapsed().as_millis() as u64),
+            );
+        }
+        Err(why) => {
+            out.insert("fnod_error".to_string(), json!(why));
+        }
     }
+    out
 }
 
 fn tail(text: &str, max: usize) -> &str {
@@ -162,7 +141,7 @@ pub(crate) mod tests {
         );
         let cwd = cwd_with(&url, 2000);
         let answer = is_ask(cwd.path(), "Ship it now or wait for review?");
-        assert!(matches!(answer, Answer::Score { p, .. } if (p - 0.91).abs() < 1e-9));
+        assert_eq!(answer["fnod_is_ask"], 0.91);
         let sent: Value = serde_json::from_str(&server.join().unwrap()).unwrap();
         assert_eq!(sent["questions"]["is_ask"]["instructions"], IS_ASK);
         assert_eq!(sent["state"]["message"], "Ship it now or wait for review?");
@@ -172,15 +151,14 @@ pub(crate) mod tests {
         let started = Instant::now();
         let answer = is_ask(cwd.path(), "Which lane?");
         assert!(started.elapsed() < Duration::from_millis(500));
-        assert!(matches!(&answer, Answer::Unavailable(e) if e.starts_with("read from")));
-        assert!(answer.attrs().contains_key("fnod_error"));
+        assert!(answer["fnod_error"]
+            .as_str()
+            .unwrap()
+            .starts_with("read from"));
         server.join().ok();
 
         let cwd = cwd_with("", 100);
-        assert_eq!(
-            is_ask(cwd.path(), "Which lane?"),
-            Answer::Unavailable("off".to_string())
-        );
+        assert_eq!(is_ask(cwd.path(), "Which lane?")["fnod_error"], "off");
 
         // A long message keeps its tail, cut on a char boundary.
         assert_eq!(tail(&format!("{}é?", "x".repeat(20)), 3), "xé?");

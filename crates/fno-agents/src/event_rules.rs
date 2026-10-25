@@ -328,7 +328,7 @@ fn stop_block(
     // so `intel --lens rules` can compare them.
     if row.when.iter().any(|p| p == "last_message_decision_ask") {
         attrs.insert("keyword_ask".to_string(), json!(true));
-        attrs.extend(crate::fnod::is_ask(ctx.cwd, &ctx.last_message).attrs());
+        attrs.extend(crate::fnod::is_ask(ctx.cwd, &ctx.last_message));
     }
     write_fire_span(
         journal,

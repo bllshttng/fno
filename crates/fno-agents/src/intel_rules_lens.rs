@@ -111,18 +111,16 @@ pub fn run(days: u64, json: bool) -> i32 {
         return 0;
     }
     println!("rules lens (days {days}): {} rule(s) fired", tallies.len());
-    println!(
-        "  {:<26} {:>5} {:>6} {:>12} {:>12} {:>8}",
-        "rule", "fires", "filed", "fnod yes/f", "fnod no/f", "unscored"
-    );
     for t in &tallies {
         println!(
-            "  {:<26} {:>5} {:>6} {:>12} {:>12} {:>8}",
+            "  {}: {} fires, {} filed; fnod yes {} ({} filed), no {} ({} filed), unscored {}",
             t.rule,
             t.fires,
             t.filed,
-            format!("{}/{}", t.fnod_yes, t.fnod_yes_filed),
-            format!("{}/{}", t.fnod_no, t.fnod_no_filed),
+            t.fnod_yes,
+            t.fnod_yes_filed,
+            t.fnod_no,
+            t.fnod_no_filed,
             t.unscored
         );
     }
