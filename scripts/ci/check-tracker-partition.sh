@@ -226,6 +226,12 @@ if not sidecar:
     )
     sys.exit(1)
 
+# SIDECAR_KEYS is the vocabulary MINUS the join key by construction (the
+# served shape inserts `id` beside the projected fields), so the gate
+# re-joins the key here: the partition rule governs data fields, and the
+# positive check below still proves both sides carry the join key.
+sidecar |= {"id"}
+
 # The tracker side: the Rust projections (TrackerNode, Candidate in
 # tracker/mod.rs). A `#[serde(flatten)]` field contributes its type's fields.
 tracker: set = set()
@@ -258,8 +264,8 @@ extra = overlap - ALLOWED_OVERLAP
 if extra:
     print(
         "check-tracker-partition: FAIL - sidecar and tracker share non-key "
-        f"fields {sorted(extra)} (projections inspected: {projections} + Rust "
-        f"{rust_projections}). The sidecar may hold only fields the tracker "
+        f"fields {sorted(extra)} across the Rust projections "
+        f"{rust_projections}. The sidecar may hold only fields the tracker "
         "cannot express; a shared name is the two-writer bug the partition "
         "exists to prevent.",
         file=sys.stderr,

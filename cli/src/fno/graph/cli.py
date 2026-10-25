@@ -451,7 +451,6 @@ def _joined_open_candidates() -> list[dict]:
     """The transient joined selection model: the Rust snapshot exactly once.
     Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
-    from fno import rust_binary
     from fno.graph.api import active_backend_name
 
     backend = active_backend_name()
