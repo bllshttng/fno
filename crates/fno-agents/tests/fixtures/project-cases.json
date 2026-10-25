@@ -55,6 +55,28 @@
     ]
   },
   {
+    "label": "init accepts a seven alnum id",
+    "argv": [
+      "init",
+      "abcdefg"
+    ],
+    "file_golden": ".fno/config.toml"
+  },
+  {
+    "label": "init accepts a trailing dash on a seven alnum id",
+    "argv": [
+      "init",
+      "abcdefg-"
+    ]
+  },
+  {
+    "label": "init refusal echoes the normalized spelling",
+    "argv": [
+      "init",
+      "WEB X"
+    ]
+  },
+  {
     "label": "init rewrites an existing project config and keeps its keys",
     "root_files": {
       ".fno/config.toml": "# perf tweak\nbacklog.staleness_days = 21\n"

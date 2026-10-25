@@ -178,14 +178,18 @@ fn cmd_init(args: &[String]) -> i32 {
 /// The writer's id_prefix validation, verbatim in wording.
 fn id_prefix_violation(id: &str) -> Option<String> {
     let bytes = id.as_bytes();
-    let valid = !bytes.is_empty() && bytes.len() <= 7 && bytes[0].is_ascii_lowercase() && {
-        let body = if bytes[bytes.len() - 1] == b'-' {
+    let valid = !bytes.is_empty() && bytes[0].is_ascii_lowercase() && {
+        // The trailing dash is the validator's optional `-?` and never counts
+        // against the body: `abcdefg` and `abcdefg-` are both 7 letters.
+        let body = if bytes.len() > 1 && bytes[bytes.len() - 1] == b'-' {
             &bytes[1..bytes.len() - 1]
         } else {
             &bytes[1..]
         };
-        body.iter()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        body.len() <= 6
+            && body
+                .iter()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
     };
     if !valid {
         return Some(format!(
