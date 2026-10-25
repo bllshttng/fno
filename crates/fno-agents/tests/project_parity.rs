@@ -117,7 +117,10 @@ fn project_matches_the_python_goldens() {
             .args(&argv)
             .current_dir(tmp.path())
             .env("HOME", &home)
-            .env_remove("FNO_REPO_ROOT")
+            // The frozen argv carries no --repo-root: the oracle runs pinned
+            // the root explicitly, so the replay names the case's root the
+            // same way or an init lands its config outside it.
+            .env("FNO_REPO_ROOT", &root)
             .envs(fno_agents::test_run::self_owner_env())
             .output()
             .unwrap();
