@@ -154,3 +154,72 @@ def decision_record(event: dict, *, path: Path = GRAPH_JSON) -> dict:
 def decision_retract(event: dict, *, path: Path = GRAPH_JSON) -> dict:
     """Append one ``decision_retracted`` event row to the decisions table."""
     return _api("decision_retract", {"event": event}, path=path)
+
+
+class ExternalMetadataUnavailable(RuntimeError):
+    """Footnote-minted metadata is unreachable under an external backend.
+
+    Raised by :func:`read_entries`. Callers catch this and take their existing
+    missing-data path (advisory None, empty scan, fallback shape); swallowing
+    it into a graph.json fallback is the one forbidden move.
+    """
+
+    def __init__(self, reader: str) -> None:
+        super().__init__(
+            f"{reader}: footnote-minted node metadata (size/type/project/"
+            "dep/model pins/persistent slug) lives only in the default graph "
+            "store and is unavailable under an external tracker backend"
+        )
+
+
+def active_backend_name(name: Optional[str] = None) -> str:
+    """The selected work-item tracker backend tag (``graph`` by default).
+
+    Explicit wins, else ``FNO_TRACKER_BACKEND``, else ``graph`` - the same
+    resolution the native door applies (``tracker::backend_name``), so the
+    external-backend guards and the door cannot disagree on which backend is
+    live. One Python spelling of the guard; the authority is Rust.
+    """
+    import os
+
+    return name or os.environ.get("FNO_TRACKER_BACKEND") or "graph"
+
+
+def read_entries(reader: str, *, strict: bool = False) -> list[dict]:
+    """The guarded default-backend graph read.
+
+    This read wraps the graph family's own read model (wire_rows /
+    read_graph_strict) rather than porting it: a door port would have to
+    re-derive the pydantic dump's null padding, a second read model. Raises
+    :class:`ExternalMetadataUnavailable` before any store
+    read under an external backend. Non-strict keeps the soft contract:
+    corrupt degrades to an empty answer, unreadable still raises.
+
+    External-backend callers:
+      - doctor archive id-collision scan
+      - agents.role node index
+      - plan sync vault mirror
+      - provenance think dispatch
+      - graph cli default-entry loader
+      - lead drain (strict; also catches the store errors beside it)
+    """
+    import os
+
+    if (os.environ.get("FNO_TRACKER_BACKEND") or "graph") != "graph":
+        raise ExternalMetadataUnavailable(reader)
+    from fno.graph.store import GraphCorruptError, read_graph_strict
+
+    try:
+        from fno import paths
+
+        path = paths.graph_json()
+    except Exception:  # noqa: BLE001 - mirror _constants' fail-open default
+        from fno.graph._constants import _graph_json
+
+        path = _graph_json()
+    if strict:
+        return read_graph_strict(path)
+    try:
+        return wire_rows(path=path)
+    except GraphCorruptError:
+        return []

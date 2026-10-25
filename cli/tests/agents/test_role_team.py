@@ -113,7 +113,6 @@ def test_unreadable_graph_answers_null_never_true_or_false(
     """AC7-EDGE: every affected row reads agree=null with a stated reason, and
     the unknown count is tracked separately from disagreements."""
     from fno.agents.team import gather_team
-    from fno.tracker import metadata
 
     _prepare(
         monkeypatch,
@@ -129,8 +128,7 @@ def test_unreadable_graph_answers_null_never_true_or_false(
         ],
     )
     monkeypatch.setattr(
-        metadata,
-        "read_entries",
+        "fno.graph.api.read_entries",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("unreadable")),
     )
 

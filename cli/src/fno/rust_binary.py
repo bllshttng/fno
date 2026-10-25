@@ -289,6 +289,51 @@ def delivered_terminals() -> frozenset:
     return frozenset(names)
 
 
+def active_backend_name(name: Optional[str] = None) -> str:
+    """The selected work-item tracker backend tag (``graph`` by default).
+
+    Explicit wins, else ``FNO_TRACKER_BACKEND``, else ``graph`` - the same
+    resolution ``tracker::backend_name`` applies when the door runs, so the
+    external-backend guards and the door cannot disagree on which backend is
+    live. One Python spelling of the guard; the authority is Rust.
+    """
+    return name or os.environ.get("FNO_TRACKER_BACKEND") or "graph"
+
+
+def sidecar_get(id: str) -> dict:
+    """One id's sidecar fields through the native tracker door.
+
+    Answers a plain dict (sparse: nulls dropped, the list fields defaulted
+    to ``[]``). A missing row or file answers the empty shape (``id`` plus
+    the list defaults) - the "no sidecar yet" case, never an error.
+    """
+    return command_call(
+        ["backlog", "get"], {"tracker": "sidecar-get", "id": id}
+    )["sidecar"]
+
+
+def sidecar_all() -> dict:
+    """Every id's sidecar fields in one native read (the scan primitive).
+
+    Graph mode projects the store's rows (archived residents excluded,
+    invalid projections skipped); an external backend decodes the per-id
+    files. Values are plain JSON - ``sc.get("cwd")`` style access.
+    """
+    return command_call(["backlog", "get"], {"tracker": "sidecar-all"})["sidecars"]
+
+
+def sidecar_set(id: str, fields: dict) -> Path:
+    """Merge ``fields`` into the id's sidecar under the selected backend's
+    own store: the graph row under the store's optimistic write cycle, the
+    per-id file otherwise. Returns the physical path written. A key outside
+    the sidecar set refuses - the tracker owns it.
+    """
+    out = command_call(["backlog", "get"], {"tracker": "sidecar-set", "id": id, "fields": fields})
+    if out.get("error"):
+        raise CommandUnavailable(f"sidecar write refused: {out['error']}")
+    return Path(out["saved"])
+
+
 def resolve_installed_binary() -> Optional[Path]:
     """Locate an *installed* ``fno-agents``, deliberately excluding the cargo dev target.
 

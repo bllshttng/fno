@@ -446,7 +446,7 @@ def done_command(
         # roster lives in the tracker and the rollup lives in the footnote
         # sidecar, so both halves target the wrong store; the per-node door
         # above already fills sidecar rollups at completion time.
-        from fno.tracker import active_backend_name
+        from fno.graph.api import active_backend_name
 
         if active_backend_name() != "graph":
             typer.echo(
@@ -530,7 +530,7 @@ def done_command(
     # before the close, exactly one tracker.close - instead of the local
     # graph resolution below. Requires an explicit node id: the branch-based
     # auto-detect resolves through footnote-minted slug metadata.
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     if active_backend_name() != "graph":
         from fno.graph.cli import _done_via_seam

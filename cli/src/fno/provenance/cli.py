@@ -102,7 +102,7 @@ def dispatch(
     from fno.graph.cli import _session_provenance
     from fno.graph.fuzzy import resolve_node
     from fno.provenance.spawn_think import dispatch_conversational
-    from fno.tracker.metadata import ExternalMetadataUnavailable, read_entries
+    from fno.graph.api import ExternalMetadataUnavailable, read_entries
 
     # Validate the dispatch flags up front (empty --model/--provider is a usage
     # error, not a silently-forwarded empty argv token). Resolved only when

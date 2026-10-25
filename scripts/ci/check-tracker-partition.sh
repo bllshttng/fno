@@ -11,12 +11,12 @@
 # exists to catch - the first convenience mirror of e.g. ``title`` into the
 # sidecar would reintroduce exactly the two-writer bug option 2 was rejected for.
 #
-# Every tracker-owned projection is inspected, not just ``TrackerNode``: any
-# class that is ``TrackerNode`` or a subclass of it (today ``TrackerCandidate``,
-# the selection-only projection from ``list_open``) joins the check, so widening
-# the read surface cannot quietly widen the overlap. A new projection declared
-# without subclassing TrackerNode is out of scope here by construction; the
-# consumer census (check-tracker-consumers.sh) names the projections it knows.
+# Every tracker-owned projection is inspected: ``TrackerNode`` and
+# ``Candidate`` (the selection-only projection from ``list_open``) in
+# ``crates/fno-agents/src/tracker/mod.rs``, against the ``SIDECAR_KEYS``
+# vocabulary declared beside the sidecar reader. The Python projections this
+# gate once read died with the tracker package; the Rust structs are the read
+# interface now, so a missing one is a refusal, never a pass.
 #
 # Run:  bash scripts/ci/check-tracker-partition.sh [repo-root]
 #       bash scripts/ci/check-tracker-partition.sh --self-test
@@ -160,45 +160,27 @@ PY
 fi
 
 [[ "${1:-}" != "" ]] && REPO_ROOT="$1"
-TYPES="$REPO_ROOT/cli/src/fno/tracker/types.py"
-SIDECAR="$REPO_ROOT/cli/src/fno/tracker/sidecar.py"
 RUST="$REPO_ROOT/crates/fno-agents/src/tracker/mod.rs"
-for f in "$TYPES" "$SIDECAR" "$RUST"; do
+SIDECAR="$REPO_ROOT/crates/fno-agents/src/tracker/sidecar.rs"
+for f in "$RUST" "$SIDECAR"; do
   [[ -f "$f" ]] || { echo "check-tracker-partition: missing $f" >&2; exit 1; }
 done
 
-python3 - "$TYPES" "$SIDECAR" "$RUST" <<'PY'
-import ast, sys
+python3 - "$SIDECAR" "$RUST" <<'PY'
+import re
+import sys
 from pathlib import Path
 
-types_src = Path(sys.argv[1]).read_text()
-sidecar_src = Path(sys.argv[2]).read_text()
-rust_src = Path(sys.argv[3]).read_text()
+sidecar_src = Path(sys.argv[1]).read_text()
+rust_src = Path(sys.argv[2]).read_text()
 
-def extract_fields(src, class_name):
-    tree = ast.parse(src)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == class_name:
-            fields = set()
-            for stmt in node.body:
-                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
-                    fields.add(stmt.target.id)
-            return fields
-    raise KeyError(f"no class {class_name!r} in {class_name} source")
-
-def projection_names(src):
-    """Every class that is TrackerNode or a subclass of it (transitively)."""
-    tree = ast.parse(src)
-    by_name = {c.name: c for c in ast.walk(tree) if isinstance(c, ast.ClassDef)}
-    def is_proj(cls, seen=frozenset()):
-        if cls.name in seen:
-            return False
-        for base in cls.bases:
-            if isinstance(base, ast.Name) and base.id in by_name:
-                if base.id == "TrackerNode" or is_proj(by_name[base.id], seen | {cls.name}):
-                    return True
-        return False
-    return sorted(c.name for c in by_name.values() if c.name == "TrackerNode" or is_proj(c))
+def extract_sidecar_keys(src):
+    """The names inside the `SIDECAR_KEYS` const array: the sidecar-side
+    vocabulary, declared once beside the reader and the write gate."""
+    m = re.search(r"pub(?:\(crate\))? const SIDECAR_KEYS: &\[&str\] = &\[(.*?)\];", src, re.S)
+    if not m:
+        raise KeyError("no SIDECAR_KEYS const in sidecar source")
+    return set(re.findall(r'"([a-z_0-9]+)"', m.group(1)))
 
 def extract_rust_fields(src, struct_name):
     """The `pub <name>:` fields declared inside `pub struct <Name> { ... }`.
@@ -235,37 +217,30 @@ def extract_rust_fields(src, struct_name):
 
 ALLOWED_OVERLAP = frozenset({"id"})
 
-projections = projection_names(types_src)
-if not projections:
+sidecar = extract_sidecar_keys(sidecar_src)
+if not sidecar:
     print(
-        "check-tracker-partition: FAIL - no TrackerNode projection found in "
-        f"{sys.argv[1]}; the read interface must exist for the partition to mean anything.",
+        "check-tracker-partition: FAIL - no SIDECAR_KEYS extracted from "
+        f"{sys.argv[1]}; the sidecar vocabulary must exist for the partition to mean anything.",
         file=sys.stderr,
     )
     sys.exit(1)
 
-sidecar = extract_fields(sidecar_src, "Sidecar")
-# Union across every projection: an inherited field (id on subclasses) is
-# covered by its declaring class, a smuggled mirror on any projection is caught.
-# The Rust projections (TrackerNode, Candidate in tracker/mod.rs) join the same
-# union: a `#[serde(flatten)]` field contributes its type's fields.
+# The tracker side: the Rust projections (TrackerNode, Candidate in
+# tracker/mod.rs). A `#[serde(flatten)]` field contributes its type's fields.
 tracker: set = set()
-for name in projections:
-    tracker |= extract_fields(types_src, name)
 rust_projections = ["TrackerNode", "Candidate"]
-rust_fields: set = set()
 for name in rust_projections:
     try:
-        rust_fields |= extract_rust_fields(rust_src, name)
+        tracker |= extract_rust_fields(rust_src, name)
     except KeyError:
         print(
             "check-tracker-partition: FAIL - Rust projection "
-            f"{name!r} not found in {sys.argv[3]}; the gate inspects the "
+            f"{name!r} not found in {sys.argv[2]}; the gate inspects the "
             "Rust structs, so a missing one is a refusal, never a pass.",
             file=sys.stderr,
         )
         sys.exit(1)
-tracker |= rust_fields
 overlap = tracker & sidecar
 # Require the overlap to be EXACTLY {id}: the join key must be present on both
 # sides (an empty overlap is not "clean", it is a missing key) and nothing else
@@ -292,6 +267,6 @@ if extra:
     sys.exit(1)
 print(
     f"check-tracker-partition: OK - overlap is exactly the join key {sorted(overlap)} "
-    f"across projections {projections} + Rust {rust_projections}"
+    f"across the Rust projections {rust_projections} and {len(sidecar)} sidecar keys"
 )
 PY
