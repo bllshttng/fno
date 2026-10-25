@@ -472,7 +472,7 @@ pub fn default_diff_budget(cwd: &Path) -> u32 {
 }
 
 /// Default wall bound for one merge-path gh read (the pr-worktree resolve
-/// that backs the merge gate and the push verb): the 30s the call sites
+/// that backs the merge gate and the push command): the 30s the call sites
 /// hardcoded, now one config key. The shim's own stall under load is the
 /// reason reads missed it; a longer bound hides a stall, it does not fix
 /// one.
