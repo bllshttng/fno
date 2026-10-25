@@ -1,0 +1,2 @@
+/Users/bb16/.fno/worktrees/footnote/x-3c41/cli/src/fno/evals/bank.py:183: UserWarning: bank task 'decorative' (FIXTURE/run-decorative/repo/evals/bank/decorative.yaml): every grade check is a trivial exit-only command (frozenset({'', ':', 'true'})); this task always passes and grades nothing task-specific.
+  _warn_if_decorative(task_id, path, checks)
