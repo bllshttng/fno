@@ -171,8 +171,15 @@ pub fn walk(
     let open: std::collections::HashMap<&str, &str> = rows
         .iter()
         .filter(|r| !matches!(text(r, "status"), "done" | "superseded"))
-        .filter(|r| !text(r, "caused_by").is_empty())
-        .map(|r| (text(r, "caused_by"), text(r, "id")))
+        .filter_map(|r| {
+            // source_node_id lands at birth, caused_by one call later: a
+            // filing whose second call failed must still stop a refile.
+            let orig = match text(r, "caused_by") {
+                "" if text(r, "title").starts_with("regression: ") => text(r, "source_node_id"),
+                linked => linked,
+            };
+            (!orig.is_empty()).then(|| (orig, text(r, "id")))
+        })
         .collect();
     let all = candidates(rows);
     let mut results = Vec::new();
@@ -254,12 +261,13 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
             .map(str::to_string)
             .unwrap_or_else(|| {
                 format!(
-                    "checked {} regressed {} undeterminable {} filed {} unfiled {}",
+                    "checked {} regressed {} undeterminable {} filed {} unfiled {} over_cap {}",
                     n("checked"),
                     n("failed"),
                     n("undeterminable"),
                     n("filed"),
-                    n("unfiled")
+                    n("unfiled"),
+                    n("over_cap")
                 )
             });
         let skip = body["error"].is_string().then_some("error");
@@ -320,6 +328,12 @@ mod tests {
         let body = walk(&rows, true, &decide_probe_run, &mut never);
         assert_eq!(body["results"][1]["regression"], "x-new");
         assert_eq!(body["filed"], 0);
+
+        // A filing whose caused_by write failed still stops a refile.
+        rows.pop();
+        rows.push(json!({"id": "x-half", "title": "regression: x-f", "status": "idea", "source_node_id": "x-f"}));
+        let body = walk(&rows, true, &decide_probe_run, &mut never);
+        assert_eq!(body["results"][1]["regression"], "x-half");
     }
 
     #[test]
