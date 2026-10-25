@@ -122,12 +122,28 @@ fn run_action(session_id: &str, cwd: &Path, action: GoalAction) -> Result<Value,
 fn run_on_provider_thread<T: Send + 'static>(
     action: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("codex-provider-goal".to_string())
-        .spawn(action)
-        .map_err(|error| format!("Codex provider goal thread unavailable: {error}"))?
-        .join()
-        .map_err(|_| "Codex provider goal thread panicked".to_string())
+        .spawn(move || {
+            let _ = tx.send(action());
+        })
+        .map_err(|error| format!("Codex provider goal thread unavailable: {error}"))?;
+    // A bounded wait, not a bare join: an unresponsive provider action must
+    // not hold the stop fire past its kill. On timeout the worker thread is
+    // deliberately detached - the action is best-effort, the process may
+    // exit first, and a wedged tokio runtime is not joinable in bounded time.
+    let bound = crate::loopcheck::stopgate_read_timeout();
+    match rx.recv_timeout(bound) {
+        Ok(value) => Ok(value),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "Codex provider goal action timed out after {}ms",
+            bound.as_millis()
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("Codex provider goal thread panicked".to_string())
+        }
+    }
 }
 
 pub(crate) fn read_codex_goal_for_stop(session_id: &str) -> Result<Option<NativeGoal>, String> {
@@ -530,6 +546,35 @@ mod tests {
             })
         });
         assert_eq!(result, Ok(17));
+    }
+
+    #[test]
+    fn an_unresponsive_provider_action_times_out_at_its_bound() {
+        // The bounded join: an action that never completes must return Err
+        // at the fire's bound instead of holding the stop open on a wedged
+        // runtime. The injected bound is an instruction the floor keeps.
+        crate::loopcheck::stopgate_stamp_fire(
+            100,
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+            0,
+        );
+        let started = std::time::Instant::now();
+        let out: Result<String, String> = run_on_provider_thread(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        });
+        let elapsed = started.elapsed();
+        let error = out.expect_err("an unresponsive action must time out");
+        assert!(error.contains("timed out"), "{error}");
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "the join waited {elapsed:?}, far past its bound"
+        );
+    }
+
+    #[test]
+    fn a_fast_provider_action_returns_its_value() {
+        let out: Result<u32, String> = run_on_provider_thread(|| 7u32);
+        assert_eq!(out.unwrap(), 7);
     }
 
     #[test]
