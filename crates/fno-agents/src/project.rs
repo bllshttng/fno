@@ -499,7 +499,7 @@ fn register_one(map: &mut Vec<(String, String)>, key: &str, canonical: &str) -> 
     if let Some((_, existing)) = map.iter().find(|(k, _)| k == key) {
         if existing != canonical {
             return Err(format!(
-                "short_name/name '{key}' is claimed by both '{existing}' and '{canonical}'; remove one of the duplicate aliases from settings.yaml"
+                "short_name/name '{key}' is claimed by both '{existing}' and '{canonical}'; remove one of the duplicate aliases from settings.yaml\n"
             ));
         }
         return Ok(());
