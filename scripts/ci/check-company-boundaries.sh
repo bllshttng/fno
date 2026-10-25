@@ -165,7 +165,6 @@ LAYERS = (
             "fno.graph",
             "fno.claims",
             "fno.plan",
-            "fno.delivery",
         ),
     ),
     (2, "roles", ("fno.roles",)),
