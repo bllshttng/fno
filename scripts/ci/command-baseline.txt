@@ -114,7 +114,6 @@ route
 scoreboard
 setup
 state
-status
 status-fanout tick
 stub-manifest
 target
@@ -127,7 +126,6 @@ whoami context
 whoami cost
 whoami ledger
 whoami scoreboard
-whoami status
 worker
 workspace reap
 workspace register-worker

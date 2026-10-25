@@ -258,6 +258,9 @@ CASES: tuple[Case, ...] = (
         },
     ),
     Case("status_empty_project", ("whoami", "status"), {}),
+    Case("help_group", ("whoami", "--help"), {}),
+    Case("help_status", ("whoami", "status", "--help"), {}),
+    Case("unknown_leaf", ("whoami", "badleaf"), {}),
 )
 
 
@@ -396,10 +399,32 @@ def main() -> None:
         sys.stdout.write(out)
         sys.stderr.write(err)
         sys.exit(code)
+    if len(sys.argv) >= 4 and sys.argv[1] == "--fixture":
+        case = next(c for c in CASES if c.name == sys.argv[2])
+        build_fixture(case, Path(sys.argv[3]))
+        return
+    if len(sys.argv) == 2 and sys.argv[1] == "--list":
+        print(
+            json.dumps(
+                [
+                    {
+                        "name": c.name,
+                        "argv": list(c.argv),
+                        "env": dict(c.env),
+                        "fleet": c.fleet,
+                    }
+                    for c in CASES
+                ]
+            )
+        )
+        return
     if len(sys.argv) == 3 and sys.argv[1] == "--capture":
         capture(Path(sys.argv[2]))
         return
-    sys.exit("usage: whoami_driver.py --case NAME ROOT | --capture GOLDEN_DIR")
+    sys.exit(
+        "usage: whoami_driver.py --case NAME ROOT | --capture GOLDEN_DIR"
+        " | --list | --fixture NAME ROOT"
+    )
 
 
 if __name__ == "__main__":
