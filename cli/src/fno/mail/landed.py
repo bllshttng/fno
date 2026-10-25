@@ -260,12 +260,12 @@ def _sent_unclaimed(handle: str, ttl_seconds: int) -> list:
         return []
     pos = {m.get("id"): i for i, m in enumerate(all_msgs)}
     cursor_pos: dict[str, int] = {}
-    for r in {m.get("to") for m in sent if m.get("delivery") != HOSTED_DELIVERY}:
+    for r in {str(m.get("to")) for m in sent if m.get("delivery") != HOSTED_DELIVERY}:
         cid = _read_cursor(r)
         cursor_pos[r] = pos.get(cid, -1) if cid else -1
     candidates = []
     for m in sent:
-        if m.get("delivery") != HOSTED_DELIVERY and pos[m.get("id")] <= cursor_pos.get(m.get("to"), len(all_msgs)):
+        if m.get("delivery") != HOSTED_DELIVERY and pos[m.get("id")] <= cursor_pos.get(str(m.get("to")), len(all_msgs)):
             continue  # durable: claimed via cursor
         if not _age_exceeds(m.get("ts", ""), ttl_seconds, now):  # still fresh (strict >)
             continue
@@ -275,11 +275,12 @@ def _sent_unclaimed(handle: str, ttl_seconds: int) -> list:
     states = landed_states(already_landed, candidates, budget_s=_LANDED_READ_BUDGET_S)
     out = []
     for m in candidates:
-        if states.get(m.get("id")) is True:
+        mid = str(m.get("id"))
+        if states.get(mid) is True:
             # Persists past a transcript rotation; later scans skip the grep.
             _record_landed(msg_id=m.get("id", ""), sender=m.get("from", ""), recipient=m.get("to", ""))
             continue
-        if m.get("delivery") == HOSTED_DELIVERY and states.get(m.get("id")) is not False:
+        if m.get("delivery") == HOSTED_DELIVERY and states.get(mid) is not False:
             continue  # hosted: unknown is not a proven miss
         out.append(m)
     return out
