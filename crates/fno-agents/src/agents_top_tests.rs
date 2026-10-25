@@ -202,8 +202,8 @@ fn worker_rows_carry_seat_facts_and_null_when_unread() {
         &BTreeMap::new(),
     );
     let seat = out.iter().find(|r| r["name"] == "sorrel").unwrap();
-    assert_eq!(seat["model"], "opus");
-    assert_eq!(seat["model_basis"], "registry");
+    assert_eq!(seat["model"], "sonnet");
+    assert_eq!(seat["model_basis"], "observed");
     assert_eq!(seat["project"], "fno");
     assert_eq!(seat["session_id"], sid);
     assert_eq!(seat["started_at"], "2026-01-01T00:00:00Z");

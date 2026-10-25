@@ -789,7 +789,7 @@ pub fn maybe_run_daily(home: &AgentsHome) {
         // The full run carries the cargo lane, so it also satisfies the
         // hourly gate instead of sweeping the base twice in one tick.
         let _ = std::fs::write(cargo_stamp_path(home), b"");
-        let (_rc, summary) = run_reclaim_lanes(home, true, false, false);
+        let (_rc, summary) = run_reclaim_lanes(home, true, false, false, true);
         emit_sweep_event(home, &summary);
     }
 }
@@ -902,10 +902,12 @@ pub fn run_reclaim(args: &[String], home: &AgentsHome) -> i32 {
 
     let mut apply = false;
     let mut verbose = false;
+    let mut uv_prune = true;
     for arg in args {
         match arg.as_str() {
             "--apply" => apply = true,
             "-v" | "--verbose" => verbose = true,
+            "--no-uv-prune" => uv_prune = false,
             other => {
                 eprintln!("fno doctor reclaim: unknown argument: {other}");
                 return 2;
@@ -916,7 +918,7 @@ pub fn run_reclaim(args: &[String], home: &AgentsHome) -> i32 {
     // the cargo-build-dirs lane sweeps that repo too even if unregistered.
     // The summary rides the daemon path only; a hand run's record is the
     // receipt it prints.
-    run_reclaim_lanes(home, apply, verbose, true).0
+    run_reclaim_lanes(home, apply, verbose, true, uv_prune).0
 }
 
 /// The full lane set (every `run_reclaim` lane but the leading subcommands),
@@ -929,6 +931,7 @@ fn run_reclaim_lanes(
     apply: bool,
     verbose: bool,
     include_cwd_root: bool,
+    uv_prune: bool,
 ) -> (i32, ReclaimSummary) {
     let mut lanes = vec![
         Lane::new("plugin_cache_build_copies", plugin_cache_copies()),
@@ -962,6 +965,9 @@ fn run_reclaim_lanes(
     let mut uv = Lane::new("uv_cache_prune", Vec::new());
     match uv_cache_dir() {
         None => uv.note = "uv not found".to_string(),
+        // An install run skips the prune: uv holds its cache lock exclusively
+        // for it, and a first install must not wait out the 120s cap.
+        Some(_) if !uv_prune => uv.note = "skipped (--no-uv-prune)".to_string(),
         Some(dir) => {
             uv.bytes = tree_bytes(&dir);
             uv.paths.push(dir);

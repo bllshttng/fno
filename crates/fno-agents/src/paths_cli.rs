@@ -142,10 +142,6 @@ pub fn emit_paths_sh_defaults() -> String {
         "export PLANS_DIR={}",
         bash_quote("$REPO_ROOT/.fno/plans")
     ));
-    lines.push(format!(
-        "export INBOX_DIR={}",
-        bash_quote("$REPO_ROOT/.fno/inbox")
-    ));
     // Defaults mode: no handoffs override, obsidian off, project.id unset --
     // the literal fallback line keeps the stub machine-stable; the basename
     // resolves at source-time from the consumer's repo.
@@ -168,11 +164,6 @@ fn functions_lines() -> Vec<String> {
         "paths_plan_file() {",
         "  local name=\"$1\"",
         "  echo \"${PLANS_DIR}/${name}\"",
-        "}",
-        "",
-        "paths_inbox_thread() {",
-        "  local thread=\"$1\"",
-        "  echo \"${INBOX_DIR}/${thread}\"",
         "}",
         "",
         "# Mirrors fno.paths.project_log(): <repo>/.fno/<name>, anchored to",
@@ -664,13 +655,6 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
         plans.to_string()
     };
     lines.push(format!("export PLANS_DIR={}", bash_quote(&plans_tmpl)));
-
-    // INBOX_DIR: project-relative by default.
-    let inbox_tmpl = match cfg_str(cwd, &["paths", "inbox_dir"]) {
-        Some(raw) => resolve_override(&raw)?,
-        None => "$REPO_ROOT/.fno/inbox".to_string(),
-    };
-    lines.push(format!("export INBOX_DIR={}", bash_quote(&inbox_tmpl)));
 
     // HANDOFFS_DIR: override, else the vault placement, else the state-dir
     // fallback -- mirrors paths.handoffs_dir() resolution.

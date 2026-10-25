@@ -7,7 +7,15 @@ use super::*;
 use serde_json::Value;
 use tempfile::TempDir;
 
+/// The checkout the run grades: `<tmp>/repo` carrying an `evals/bank` dir.
+fn bank_repo_dir(tmp: &TempDir) -> PathBuf {
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(repo.join("evals").join("bank")).unwrap();
+    repo
+}
+
 fn base_args(tmp: &TempDir, extra: &[&str]) -> Vec<String> {
+    let repo = bank_repo_dir(tmp);
     let mut v: Vec<String> = [
         "--history",
         &tmp.path().join("history.jsonl").to_string_lossy(),
@@ -21,6 +29,8 @@ fn base_args(tmp: &TempDir, extra: &[&str]) -> Vec<String> {
         "7",
         "--claims-root",
         &tmp.path().join("claims-root").to_string_lossy(),
+        "--repo",
+        &repo.to_string_lossy(),
     ]
     .iter()
     .map(|s| s.to_string())
@@ -40,9 +50,13 @@ fn reg_row(task_id: &str, ts_rfc3339: &str) -> String {
 
 /// Fixture `fno-bin`: `doctor evals run` appends ROWS (stamped one second
 /// after the run window opens, so `ts >= started` holds at second
-/// granularity); `inbox notify` records the call.
+/// granularity) and records its cwd in `cwd.log`; `inbox notify` records
+/// the call.
 fn write_fixture(tmp: &TempDir, rows: &[String], history: &Path, notify_log: &Path) {
-    let mut script = String::from("#!/bin/sh\ncase \"$1/$2\" in\n  doctor/evals)\n    sleep 1\n");
+    let mut script = format!(
+        "#!/bin/sh\ncase \"$1/$2\" in\n  doctor/evals)\n    pwd -P > '{}'\n    sleep 1\n",
+        tmp.path().join("cwd.log").to_string_lossy()
+    );
     // Rows baked as literal JSON; the ts is stamped at run time (second
     // granularity), which `sleep 1` places strictly after `--started`. The
     // JSON rides a double-quoted echo so `$(date)` substitutes; its own
@@ -172,6 +186,30 @@ fn fires_past_window_journals_run_and_frees_claim() {
     assert_eq!(data.get("window_days"), Some(&Value::from(7)));
     let claims_root = tmp.path().join("claims-root");
     assert_eq!(claim_state(&claims_root), claims::ClaimState::Free);
+    // The bank resolves from the child's cwd, so the run must sit in the
+    // repo, never in the launchd tick's $HOME.
+    let ran_in = std::fs::read_to_string(tmp.path().join("cwd.log")).unwrap();
+    assert_eq!(
+        Path::new(ran_in.trim()),
+        bank_repo_dir(&tmp).canonicalize().unwrap()
+    );
+}
+
+// No checkout carries a bank: the tick names `no_bank` and launches
+// nothing, and an escalation-grade bank journals that reason.
+#[test]
+fn no_bank_skips_and_names_the_reason() {
+    let tmp = TempDir::new().unwrap();
+    let events = tmp.path().join("events.jsonl");
+    let mut args = base_args(&tmp, &["--summary-json", r#"{"age_days": 26.0}"#]);
+    let idx = args.iter().position(|a| a == "--repo").unwrap();
+    args[idx + 1] = tmp.path().join("no-bank").to_string_lossy().into_owned();
+    let o = parse_args(&args).unwrap();
+
+    run_tick_mode(&o, &ok_gate, &clear, &|_a| panic!("must not spawn"));
+
+    let row = wait_for_row(&events, "evals_stale", Duration::from_secs(5)).unwrap();
+    assert_eq!(row["data"]["reason"], "no_bank");
 }
 
 // The durable stop outranks everything: an armed incident holds the arm

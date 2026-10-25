@@ -50,6 +50,17 @@ fi
 
 log() { printf "[fno postinstall] %s\n" "$*"; }
 err() { printf "[fno postinstall] ERROR: %s\n" "$*" >&2; }
+# PyPI carries prebuilt wheels (all four Rust binaries inside) for exactly four
+# targets. Any other platform lands on the Python-only source install, which
+# leaves the daemon-backed commands missing. Say so before installing, with the
+# build commands, instead of after a half-working install.
+platform_wheel_notice() {
+  case "$(uname -s)/$(uname -m)" in
+    Darwin/arm64|Darwin/x86_64|Linux/x86_64|Linux/aarch64) return 0 ;;
+  esac
+  log "no prebuilt wheel for $(uname -s)/$(uname -m). PyPI ships wheels for macOS arm64, macOS x86_64, Linux x86_64 and Linux aarch64 only."
+  log "This install will be Python-only. A Rust toolchain (https://rustup.rs) is required for the rest: run 'cargo install --locked fno' once it is installed."
+}
 # Printed after a successful install so a new user knows the one configuration
 # step exists (install never prompts). Optional: defaults work without it.
 next_steps() { log "Next: run 'fno do wizard' to configure (optional; defaults work)."; }
@@ -433,6 +444,7 @@ if command -v uv >/dev/null 2>&1; then
     fi
   }
 
+  platform_wheel_notice
   case "$CHANNEL" in
     rc)
       log "channel rc: pinning the candidate from PyPI as fno==$SRC_VERSION (a plain by-name install skips pre-releases)..."

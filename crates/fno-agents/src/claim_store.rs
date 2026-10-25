@@ -160,7 +160,7 @@ pub(crate) fn database_path(root: Option<&Path>) -> Result<PathBuf, String> {
     database_path_from_directory(&directory(root)?)
 }
 
-fn directory(root: Option<&Path>) -> Result<PathBuf, String> {
+pub(crate) fn directory(root: Option<&Path>) -> Result<PathBuf, String> {
     claims::claims_dir_for(root).ok_or_else(|| "claims root is unavailable".into())
 }
 

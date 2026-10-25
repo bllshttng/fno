@@ -121,7 +121,6 @@ pr-watch
 project init
 research
 resume
-retro
 roles
 route
 scoreboard

@@ -217,22 +217,45 @@ fn a_lost_commit_rows_reply_is_recoverable_over_a_fresh_socket() {
         TAG_REQUEST,
         serde_json::to_vec(&request).unwrap().as_slice(),
     );
-    drop(stream);
 
+    // Hold the writer open until the request has landed. A connection whose
+    // client closes before the keeper accepts it can be aborted by the
+    // kernel whole, frame and all (the accept loop's ConnectionAborted arm
+    // names the probe shape), and no reader can honor a frame that never
+    // surfaced. The contract under test starts at delivery: write_status
+    // must see the request before the writer is gone, and from that point
+    // the client's death must lose neither the write nor the reply.
     let mut status_stream = UnixStream::connect(&sock).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut poll_id = 3u64;
     let mut status = ok_result(rpc(
         &mut status_stream,
-        3,
+        poll_id,
         "write_status",
         json!({"request_id": "r1"}),
     ));
-    let deadline = Instant::now() + Duration::from_secs(5);
+    while status["state"] == json!("unknown") {
+        assert!(
+            Instant::now() < deadline,
+            "commit_rows never landed: write_status never saw the request"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+        poll_id += 1;
+        status = ok_result(rpc(
+            &mut status_stream,
+            poll_id,
+            "write_status",
+            json!({"request_id": "r1"}),
+        ));
+    }
+    drop(stream);
     while status["state"] == json!("in_flight") {
         assert!(Instant::now() < deadline, "commit_rows never reached done");
         std::thread::sleep(Duration::from_millis(20));
+        poll_id += 1;
         status = ok_result(rpc(
             &mut status_stream,
-            4,
+            poll_id,
             "write_status",
             json!({"request_id": "r1"}),
         ));

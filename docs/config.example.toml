@@ -55,8 +55,6 @@ agent_freeze = false
 # memory_dir = <unset>   # optional; no default
 # Override path to hook logs.
 # hook_logs_dir = <unset>   # optional; no default
-# Override path to the cross-project messaging inbox dir.
-# inbox_dir = <unset>   # optional; no default
 # Override path to the capture-tier inbox/parking-lot file.
 # inbox_path = <unset>   # optional; no default
 # Override path to the handoffs dir.
@@ -87,7 +85,7 @@ enabled = false
 # vision = <unset>   # optional; no default
 
 [inbox]
-# Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (turn-boundary nudge + `fno agents mail status`).
+# Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (the turn-boundary nudge).
 unclaimed_ttl = 1800
 # Seconds past which an outstanding sent message drops off the nag entirely and is never grepped again.
 landed_abandon_ttl = 21600
@@ -761,6 +759,10 @@ card_graph = "activity"
 open_with = "inmux"
 # Shape of the in-mux file viewer: panel (default, docks at the right edge) | modal. Read by the Rust client.
 viewer = "panel"
+# Lines one wheel notch scrolls a pane whose app does NOT own the mouse (default 1). A notch here is one cell of trackpad travel; a wheel-mouse user wanting the classic 3-detent step sets 3. Read once at mux server birth.
+wheel_lines = 1
+# Wheel ticks forwarded per 100ms to a pane whose app DOES own the mouse (default 3). The app scrolls its own step per tick, so this caps how fast a trackpad flick moves a Claude Code / Codex pane. Raise it if a deliberate notch scroll ever drops.
+wheel_passthrough_rate = 3
 
 [mux.restore]
 # Rebuild named held panes for pane-substrate workers after a mux server restart; focusing a held pane resumes its persisted harness session (default on).

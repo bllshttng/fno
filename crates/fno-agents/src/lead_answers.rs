@@ -173,10 +173,7 @@ fn quiet_scope_workers(workers: &[Value], scope_ids: &BTreeSet<String>) -> Vec<(
         let Some(name) = crate::lead_checkin::s_str(w, "name") else {
             continue;
         };
-        let node = crate::lead_checkin::s_str(w, "node")
-            .map(str::to_string)
-            .or_else(|| node_from_name(name));
-        let Some(node) = node else {
+        let Some(node) = row_scope_node(w) else {
             continue;
         };
         if !scope_ids.contains(&node) {
@@ -187,23 +184,100 @@ fn quiet_scope_workers(workers: &[Value], scope_ids: &BTreeSet<String>) -> Vec<(
     rows
 }
 
+/// The node id a payload worker row answers for: the joined node when the
+/// row carries one, else the id its spawn name embeds.
+fn row_scope_node(w: &Value) -> Option<String> {
+    crate::lead_checkin::s_str(w, "node")
+        .map(str::to_string)
+        .or_else(|| crate::lead_checkin::s_str(w, "name").and_then(node_from_name))
+}
+
 /// The node id a spawned worker's name carries (`t-x-9999-glm`): the first
 /// `x-` run of 4 to 8 hex chars bounded by non-alphanumerics.
-pub(crate) fn node_from_name(name: &str) -> Option<String> {
+pub(crate) fn node_from_name(node_name: &str) -> Option<String> {
     let mut from = 0usize;
-    while let Some(pos) = name[from..].find("x-") {
+    while let Some(pos) = node_name[from..].find("x-") {
         let abs = from + pos + 2;
-        let end = name[abs..]
+        let end = node_name[abs..]
             .find(|c: char| !c.is_ascii_alphanumeric())
             .map(|p| abs + p)
-            .unwrap_or(name.len());
-        let id = &name[abs..end];
+            .unwrap_or(node_name.len());
+        let id = &node_name[abs..end];
         if (4..=8).contains(&id.len()) && id.bytes().all(|c| c.is_ascii_hexdigit()) {
             return Some(format!("x-{id}"));
         }
         from = abs;
     }
     None
+}
+
+/// Idea-status children under the scope's epics, counted. A child holds a
+/// non-empty `contained_in` or `parent` naming a scope node, is not
+/// terminal, and still reads `idea`. The ready selection refuses every
+/// contained child, so an epic-heavy scope reads as clean while it holds
+/// the most unplanned work it has ever had; the check-in counts them as
+/// the unplanned work they are, never dispatch rows - a contained child
+/// rides its epic.
+pub(crate) fn scope_idea_children_count(rows: &[Value], scope_ids: &BTreeSet<String>) -> usize {
+    rows.iter()
+        .filter(|r| {
+            crate::lead_checkin::s_str(r, "status") == Some("idea")
+                && !crate::org_board::is_terminal(r)
+                && row_holder(r).is_some_and(|holder| scope_ids.contains(holder))
+        })
+        .count()
+}
+
+/// The node id the row hangs from: `contained_in` first, then `parent`.
+fn row_holder(r: &Value) -> Option<&str> {
+    crate::lead_checkin::s_str(r, "contained_in")
+        .filter(|s| !s.is_empty())
+        .or_else(|| crate::lead_checkin::s_str(r, "parent").filter(|s| !s.is_empty()))
+}
+
+/// The beat-facing reader: one graph read for the count, scoped by the
+/// same compile every other scope reading shares.
+pub(crate) fn idea_children_reading(
+    graph: &Path,
+    scope_ids: &BTreeSet<String>,
+) -> Result<Value, String> {
+    let rows = crate::graph_store::read_rows_where(
+        graph,
+        &crate::backlog::RowQuery {
+            fields: Some(
+                [
+                    "id",
+                    "status",
+                    "contained_in",
+                    "parent",
+                    "superseded_by",
+                    "completed_at",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ),
+            // The count explains the live board's empty queue; an archived
+            // child is off the board, so it stays out of the count too.
+            include_archived: false,
+            with_blockers: false,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
+    .map_err(|e| format!("graph unreadable: {}", e.0))?;
+    let count = scope_idea_children_count(&rows, scope_ids);
+    Ok(json!({ "count": count }))
+}
+
+/// How many payload worker rows run inside the scope: the in-scope live
+/// worker count the idle-scope attention reads. Machine-wide `live_workers`
+/// cannot answer it - the bug this fixes read 4 of 32 workers live while
+/// this scope held zero.
+pub(crate) fn scope_live_worker_count(rows: &[Value], scope_ids: &BTreeSet<String>) -> usize {
+    rows.iter()
+        .filter(|w| row_scope_node(w).is_some_and(|node| scope_ids.contains(&node)))
+        .count()
 }
 
 /// The worker's own last word, read in process from its transcript tail:
@@ -416,7 +490,7 @@ pub(crate) fn r_subagents() -> Result<Value, String> {
 /// The payload's worker rows, behind the same positive-predicate guard the
 /// summary runs: a top payload whose census failed carries no rows, and a
 /// reading that answered from it would read as a quiet zero.
-fn payload_workers(payload: &Value) -> Result<&[Value], String> {
+pub(crate) fn payload_workers(payload: &Value) -> Result<&[Value], String> {
     let predicate = payload
         .get("predicate")
         .and_then(|p| p.as_str())
@@ -834,5 +908,50 @@ mod tests {
             "---\nquestion_id: {id}\nkind: question\nstatus: {status}\ntitle: t-{id}\nasked_at: {asked_at}\n{node_line}team: {team}\n---\n\n# t-{id}\n"
         );
         (stem, text)
+    }
+
+    /// The counted child: idea status, a holder inside the scope, not
+    /// terminal. Every other shape the board produces is the uncounted
+    /// contrast; one test walks the filter's four legs.
+    #[test]
+    fn an_idea_child_counts_only_through_a_live_scope_holder() {
+        let scope = ids(&["e-1"]);
+        let rows = vec![
+            // In scope through contained_in: the counted shape.
+            json!({"id": "x-a", "status": "idea", "contained_in": "e-1"}),
+            // Same child through the parent fallback.
+            json!({"id": "x-b", "status": "idea", "parent": "e-1"}),
+            // Not idea: riding its epic means nothing for the ready
+            // selection when the row already left idea.
+            json!({"id": "x-c", "status": "ready", "contained_in": "e-1"}),
+            // Terminal despite idea: superseded, done, or completed rows
+            // are not unplanned work.
+            json!({"id": "x-d", "status": "idea", "contained_in": "e-1", "superseded_by": "x-2"}),
+            json!({"id": "x-e", "status": "idea", "contained_in": "e-1", "completed_at": "2026-10-24T00:00:00Z"}),
+            // Idea but the holder is a foreign epic.
+            json!({"id": "x-f", "status": "idea", "contained_in": "e-9"}),
+            // Idea with no holder: it does not ride any epic, so the
+            // selection surface never refused it - not this bug.
+            json!({"id": "x-g", "status": "idea"}),
+        ];
+        assert_eq!(scope_idea_children_count(&rows, &scope), 2, "{rows:?}");
+    }
+
+    /// The live count is a scope read, not a machine read: an in-scope
+    /// worker row counts, a foreign node does not, and a row that names no
+    /// node joins through the id its spawn name embeds. A lead row (no node
+    /// anywhere) counts nothing.
+    #[test]
+    fn a_live_worker_counts_when_its_node_joins_the_scope() {
+        let scope = ids(&["x-1111", "x-2222"]);
+        let rows = vec![
+            json!({"name": "t-x-1111-a", "node": "x-1111", "status": "live"}),
+            json!({"name": "t-x-9999-a", "node": "x-9999", "status": "live"}),
+            // No node field: the spawn name carries it.
+            json!({"name": "t-x-2222-glm", "status": "live"}),
+            // No node anywhere: a lead row, never a scope worker.
+            json!({"name": "lead-main", "status": "live"}),
+        ];
+        assert_eq!(scope_live_worker_count(&rows, &scope), 2, "{rows:?}");
     }
 }

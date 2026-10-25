@@ -55,7 +55,6 @@ FIELD_META: dict[str, Meta] = {
     "paths.cargo_targets_base": Meta("never", "Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries."),
     "paths.memory_dir": Meta("never", "Override path to the memory dir."),
     "paths.hook_logs_dir": Meta("never", "Override path to hook logs."),
-    "paths.inbox_dir": Meta("never", "Override path to the cross-project messaging inbox dir."),
     "paths.inbox_path": Meta("never", "Override path to the capture-tier inbox/parking-lot file."),
     "paths.chats": Meta("never", "Override root dir for the per-chat message store (default ~/.fno/chats)."),
     "paths.handoffs_dir": Meta("never", "Override path to the handoffs dir."),
@@ -67,7 +66,7 @@ FIELD_META: dict[str, Meta] = {
     # --- config.inbox.* ---
     "inbox.unclaimed_ttl": Meta(
         "advanced",
-        "Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (turn-boundary nudge + `fno agents mail status`).",
+        "Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (the turn-boundary nudge).",
         default_source="default",
     ),
     "inbox.landed_abandon_ttl": Meta(
@@ -462,6 +461,8 @@ FIELD_META: dict[str, Meta] = {
     ),
     "mux.open_with": Meta("advanced", "Where a clicked file path opens: inmux (default; text, source files, images and PDFs open in the mux viewer, other files in the platform opener) | obsidian (files under the configured vault open in Obsidian, others fall back to system) | system (the platform opener). Read by the Rust client.", default_source="default"),
     "mux.viewer": Meta("advanced", "Shape of the in-mux file viewer: panel (default, docks at the right edge) | modal. Read by the Rust client.", default_source="default"),
+    "mux.wheel_lines": Meta("advanced", "Lines one wheel notch scrolls a pane whose app does NOT own the mouse (default 1). A notch here is one cell of trackpad travel; a wheel-mouse user wanting the classic 3-detent step sets 3. Read once at mux server birth.", default_source="default"),
+    "mux.wheel_passthrough_rate": Meta("advanced", "Wheel ticks forwarded per 100ms to a pane whose app DOES own the mouse (default 3). The app scrolls its own step per tick, so this caps how fast a trackpad flick moves a Claude Code / Codex pane. Raise it if a deliberate notch scroll ever drops.", default_source="default"),
     # --- config.split.* ---
     "split.opens": Meta("advanced", "Where the mux row menu's Split Direction toggle starts: pane (default) | portal. The t key flips it inside the open menu, and the flip lands here.", default_source="default"),
     # --- config.dev.* (: maintainer local-dev) ---

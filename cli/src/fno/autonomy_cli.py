@@ -209,15 +209,14 @@ def _keep_going_status(project_root: Optional[Path]) -> SpawnerStatus:
     like _auto_continue_resolve, so a read failure genuinely reports rank
     "default" (the exact failure class this module's docstring cites)."""
     from fno.config import autonomy_master_enabled
-    from fno.retro.keep_going import _ENV_OVERRIDE, _TRUTHY
 
     try:
         if not autonomy_master_enabled(project_root):
             armed, rank = False, "autonomy"
         else:
-            env = os.environ.get(_ENV_OVERRIDE)
+            env = os.environ.get("FNO_KEEP_GOING")
             if env is not None:
-                armed, rank = env.strip().lower() in _TRUTHY, "env"
+                armed, rank = env.strip().lower() in {"1", "true", "yes", "on"}, "env"
             else:
                 settings = _settings_for(project_root)
                 armed, rank = bool(settings.keep_going.enabled), "config"

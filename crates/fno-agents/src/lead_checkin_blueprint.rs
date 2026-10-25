@@ -62,6 +62,9 @@ const DEFAULT_BLUEPRINT_CEILING: usize = 1;
 /// it, so the starts and target-ready lines answer with the same one and a
 /// child of another lead's team never prints. An unread map is this
 /// reading's error - an empty read would name starts in foreign territory.
+/// `idea_children` counts the scope's idea-status children riding their
+/// contained epics: work the selection refuses (a contained child never
+/// dispatches alone) that an empty unplanned queue must not read as clean.
 pub(crate) fn r_blueprint(
     board: &Result<Value, String>,
     cwd: &Path,
@@ -70,6 +73,7 @@ pub(crate) fn r_blueprint(
     slots: Result<usize, String>,
     floor: &str,
     other_owned: &Result<HashMap<String, String>, String>,
+    idea_children: &Result<usize, String>,
 ) -> Result<Value, String> {
     let session_id = session_id
         .ok_or_else(|| "no session id; cannot count this lead's blueprint subagents".to_string())?;
@@ -159,8 +163,18 @@ pub(crate) fn r_blueprint(
         }),
     };
     if rows.is_empty() && running == 0 {
-        skips.push(json!({"id": null, "reason": "no unplanned node in scope"}));
+        let reason = match idea_children {
+            Ok(n) if *n > 0 => format!(
+                "no dispatchable unplanned node in scope: {n} idea children ride their contained epics"
+            ),
+            _ => "no unplanned node in scope".to_string(),
+        };
+        skips.push(json!({ "id": null, "reason": reason }));
     }
+    let idea_children_json = match idea_children {
+        Ok(n) => json!(n),
+        Err(e) => json!({ "error": e }),
+    };
     Ok(json!({
         "running": running,
         "ceiling": ceiling,
@@ -169,6 +183,7 @@ pub(crate) fn r_blueprint(
         "slots": slots_v,
         "starts": starts,
         "target_ready": target_ready,
+        "idea_children": idea_children_json,
         "skips": skips,
     }))
 }
@@ -214,10 +229,12 @@ mod tests {
             slots,
             floor,
             Ok(HashMap::new()),
+            Ok(0),
         )
     }
 
-    /// The same call with the owner map named, for the deeper-team filter.
+    /// The same call with the owner map named, for the deeper-team filter,
+    /// and the idea-children count named, for the epic-heavy line.
     fn blueprint_reading_owned(
         dir: &std::path::Path,
         config_toml: &str,
@@ -227,6 +244,7 @@ mod tests {
         slots: Result<usize, String>,
         floor: &str,
         other_owned: Result<HashMap<String, String>, String>,
+        idea_children: Result<usize, String>,
     ) -> Result<Value, String> {
         // The FNO_CONFIG pin below is the SOLE config candidate for every
         // concurrent reader, so it must not interleave with another test's
@@ -252,6 +270,7 @@ mod tests {
             slots,
             floor,
             &other_owned,
+            &idea_children,
         );
         match prior_provider {
             Some(v) => std::env::set_var("FNO_ROUTE_PROVIDER", v),
@@ -430,6 +449,7 @@ mod tests {
                 ("x-c1".to_string(), "x-cccc".to_string()),
                 ("x-c2".to_string(), "x-cccc".to_string()),
             ])),
+            Ok(0),
         )
         .unwrap();
         assert_eq!(reading["target_ready"], json!(["x-mine"]), "{reading}");
@@ -459,8 +479,59 @@ mod tests {
             Ok(4),
             "high",
             Err("a live team's scope does not compile: e-x: unknown".to_string()),
+            Ok(0),
         );
         assert!(reading.is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An epic-heavy scope names its idea children: the selection refuses
+    /// every contained child, so an empty unplanned queue must not read as
+    /// clean while the epics hold the most unplanned work in the scope
+    /// (observed 2026-10-24: 76 idea children, beat said "no unplanned
+    /// node in scope").
+    #[test]
+    fn an_epic_heavy_scope_names_its_idea_children() {
+        let dir = std::env::temp_dir().join(format!("fno-bp-ideas-{}", std::process::id()));
+        let reading = blueprint_reading_owned(
+            &dir,
+            "",
+            unplanned_board(&[], Some(0)),
+            Some("sess-1"),
+            vec![],
+            Ok(4),
+            "high",
+            Ok(HashMap::new()),
+            Ok(0),
+        )
+        .unwrap();
+        // Zero count keeps the old line; a real count names the children.
+        assert_eq!(reading["idea_children"], 0);
+        assert_eq!(
+            reading["skips"][0]["reason"], "no unplanned node in scope",
+            "{reading}"
+        );
+
+        let dir2 = std::env::temp_dir().join(format!("fno-bp-ideas2-{}", std::process::id()));
+        let reading = blueprint_reading_owned(
+            &dir2,
+            "",
+            unplanned_board(&[], Some(0)),
+            Some("sess-1"),
+            vec![],
+            Ok(4),
+            "high",
+            Ok(HashMap::new()),
+            Ok(76),
+        )
+        .unwrap();
+        assert_eq!(reading["idea_children"], 76);
+        assert_eq!(
+            reading["skips"][0]["reason"],
+            "no dispatchable unplanned node in scope: 76 idea children ride their contained epics",
+            "{reading}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
     }
 }
