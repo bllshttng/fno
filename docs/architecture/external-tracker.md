@@ -26,7 +26,7 @@ Both sides carry `id` as the join key, never as a synced value.
 
 ## The interface
 
-The interface lives in Rust, on `TrackerNode` and `Candidate` in `crates/fno-agents/src/tracker/mod.rs`. The Python seam package is deleted: Python callers ride the native door (`fno-agents backlog get`'s stdin form) through the small client helpers in `cli/src/fno/rust_binary.py` (backend name, sidecar get/all/set) and the guarded default-backend read in `fno/graph/api.py` (`read_entries`). The sidecar graph projection, the per-id file store, and the backend resolution all answer in Rust; their behavior is characterized by the goldens under `crates/fno-agents/tests/golden/tracker/`.
+The interface lives in Rust, on `TrackerNode` and `Candidate` in `crates/fno-agents/src/tracker/mod.rs`. The Python seam package is deleted. Python callers ride the native door (`fno-agents backlog get`'s stdin form) through the small client helpers in `cli/src/fno/rust_binary.py`. The helpers are the backend name plus sidecar get, all, and set. The guarded default-backend read lives in `fno/graph/api.py` as `read_entries`. The sidecar graph projection, the per-id file store, and the backend resolution all answer in Rust. The goldens under `crates/fno-agents/tests/golden/tracker/` characterize them.
 
 Read from the tracker, five fields plus the display-only reads.
 
