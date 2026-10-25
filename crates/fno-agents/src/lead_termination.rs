@@ -536,6 +536,7 @@ pub(crate) fn saturation_verdict(
 /// What the capacity gate decided for this fire, rendered and ready for the
 /// caller's two verdicts. Composition of the probe read, the pure
 /// saturation verdict, and the two messages the lead block carries.
+#[derive(Debug)]
 pub(crate) enum CapacityGate {
     /// Every readable actionable row waits and the caller may terminate
     /// NoWork: on a refused gate (the `/fno:target` queues plus the
