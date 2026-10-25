@@ -501,7 +501,7 @@ mod release_stamp_tests {
         let db = root.path().join("db/graph.db");
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         let backup = std::env::var_os("FNO_STATE_DIR");
-        std::env::set_var("FNO_STATE_DIR", &root);
+        std::env::set_var("FNO_STATE_DIR", root.path());
         (root, backup.unwrap_or_default().into())
     }
 
