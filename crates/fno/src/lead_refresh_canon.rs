@@ -83,12 +83,13 @@ fn hook_path(root: &Path) -> PathBuf {
 /// Run the beat refresh and return the process exit code. Takes no
 /// arguments; any argument is a usage refusal.
 pub fn run(args: &[OsString]) -> i32 {
-    let stdout = io::stdout();
     let stderr = io::stderr();
-    run_to(args, &mut stdout.lock(), &mut stderr.lock())
+    run_to(args, &mut stderr.lock())
 }
 
-fn run_to(args: &[OsString], stdout: &mut impl Write, stderr: &mut impl Write) -> i32 {
+/// The door's own writes go to stderr only: the hook's stdout is the beat's
+/// output and the child inherits it, so the caller never forwards one.
+fn run_to(args: &[OsString], stderr: &mut impl Write) -> i32 {
     if !args.is_empty() {
         let _ = writeln!(stderr, "refresh-canon: takes no arguments");
         return 2;
@@ -143,9 +144,8 @@ mod tests {
 
     #[test]
     fn extra_arguments_are_a_usage_refusal() {
-        let mut out: Vec<u8> = Vec::new();
         let mut err: Vec<u8> = Vec::new();
-        let code = run_to(&[OsString::from("--extra")], &mut out, &mut err);
+        let code = run_to(&[OsString::from("--extra")], &mut err);
         assert_eq!(code, 2);
         assert!(String::from_utf8_lossy(&err).contains("takes no arguments"));
     }
