@@ -134,18 +134,13 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "resume": (
-        "fno.resume.cli:cli",
+        "fno.resume_receipt_cli:cli",
         "Durable typed resume receipts (evidence, never write authority)",
         {"hidden": True},
     ),
     "carveout": (
         "fno.carveout:carveout_app",
         "Capture left-out work (deferred decisions, out-of-scope bugs) for retro-triage.",
-        {"hidden": True},
-    ),
-    "outstanding": (
-        "fno.outstanding:outstanding_app",
-        "What is waiting on a human: unharvested carve-outs and open questions.",
         {"hidden": True},
     ),
     "annotate": (

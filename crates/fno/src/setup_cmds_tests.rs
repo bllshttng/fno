@@ -29,7 +29,7 @@ fn the_claim_and_the_plan_filter() {
     }
 
     let tiers = |advanced| -> Vec<String> {
-        let plan: Value = serde_json::from_str(&plan_json(advanced).unwrap()).unwrap();
+        let plan: Value = serde_json::from_str(&plan_json(advanced)).unwrap();
         plan["fields"]
             .as_array()
             .unwrap()

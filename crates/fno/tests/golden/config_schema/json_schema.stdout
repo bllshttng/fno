@@ -1,0 +1,3675 @@
+{
+  "$defs": {
+    "A2aBlock": {
+      "description": "Agent-to-agent switchboard settings (nested under 'config.agents.a2a').\n\nGoverns the stream-json session-to-session switchboard (epic,\nGroup 2). `auto` is the A2A toggle: when true (the default), a switchboard\n`send A->B` runs the bounded literal-injection relay (B's reply becomes a\nuser turn in A, A's reply relays back to B, ...) up to `turn_ceiling` total\nturns, then stops with a visible \"loop ceiling reached\". When false it falls\nback to OBSERVED mode: B is driven once and its reply is mirrored into A's\nview, with no autonomous relay.\n\n`turn_ceiling` is a HARD correctness bound (a runaway A<->B exchange burns\nplan credit); it applies regardless of `auto` and must be >= 1.",
+      "properties": {
+        "auto": {
+          "default": true,
+          "title": "Auto",
+          "type": "boolean"
+        },
+        "turn_ceiling": {
+          "default": 6,
+          "title": "Turn Ceiling",
+          "type": "integer"
+        }
+      },
+      "title": "A2aBlock",
+      "type": "object"
+    },
+    "AccountsBlock": {
+      "description": "Account rotation and provider configuration (nested under 'config.accounts').",
+      "properties": {
+        "active": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active"
+        },
+        "active_combo": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Combo"
+        },
+        "auto_switch": {
+          "default": false,
+          "title": "Auto Switch",
+          "type": "boolean"
+        },
+        "combos": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ComboBlock"
+          },
+          "title": "Combos",
+          "type": "object"
+        },
+        "failover": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FailoverBlock"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "quota": {
+          "$ref": "#/$defs/QuotaBlock"
+        },
+        "records": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Records",
+          "type": "array"
+        }
+      },
+      "title": "AccountsBlock",
+      "type": "object"
+    },
+    "ActiveBacklogConfig": {
+      "description": "Active backlog dispatcher settings (nested under 'config.active_backlog').\n\nThe opt-in for the always-on backlog drain daemon (node): when\nenabled for a project, the per-user supervisor daemon continuously claims\nready backlog nodes for that project and dispatches them one at a time\nthrough the existing megawalk loop primitive, sleeping between drains with\nan event nudge for low latency.\n\nDefault OFF (footnote convention): a disabled block is byte-for-byte\ntoday's behavior. The fail-safe posture mirrors ``config.auto_continue`` /\n``config.target.blast``: a malformed block degrades to disabled rather than\nraising out of the whole settings load, a bad scalar field is dropped to its\ndefault (never raised), and an invalid ``interval`` (zero, negative, or\nunparseable) disables the feature rather than spinning a 0-sleep hot loop\n(Boundaries).\n\nFields\n------\nenabled:\n    ``True`` to drain every project, or a per-project map\n    ``{<project>: bool}`` to scope the daemon to specific projects.\n    Default ``False``. A scalar typo fails safe to disabled; in a map, only\n    a clear affirmative (``true``/``yes``/``on``/``1``) enables a project.\ninterval:\n    Poll-floor cadence as a duration string (``\"5m\"``, ``\"30s\"``, ``\"2h\"``,\n    ``\"1d\"``) or a bare integer (seconds). Default ``\"5m\"``. The poll floor\n    is the correctness guarantee; the event nudge is a latency optimization\n    layered on top.\nfailure_limit:\n    Consecutive dispatch failures before a node is parked (the circuit\n    breaker). Default 3. Reset to zero only on a successful close.\nmax_concurrent:\n    GLOBAL ceiling on concurrent converge runs (``backlog advance --epic``)\n    across every mission, never per mission. Default 1 (serial).\nmission: IGNORED (missions are per-epic graph state, never config; ``fno config doctor`` warns when it is set; the live axis is ``fno backlog advance --epic <id>`` / ``--stop``).",
+      "properties": {
+        "enabled": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "type": "object"
+            }
+          ],
+          "default": false,
+          "title": "Enabled"
+        },
+        "failure_limit": {
+          "default": 3,
+          "minimum": 1,
+          "title": "Failure Limit",
+          "type": "integer"
+        },
+        "interval": {
+          "default": "5m",
+          "title": "Interval",
+          "type": "string"
+        },
+        "max_concurrent": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Max Concurrent",
+          "type": "integer"
+        },
+        "mission": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mission"
+        }
+      },
+      "title": "ActiveBacklogConfig",
+      "type": "object"
+    },
+    "AgentBeatBlock": {
+      "description": "`config.agents.<harness>.beat`; `auto` reads the harness capability row.",
+      "properties": {
+        "beat": {
+          "default": "auto",
+          "title": "Beat",
+          "type": "string"
+        }
+      },
+      "title": "AgentBeatBlock",
+      "type": "object"
+    },
+    "AgentProviderBlock": {
+      "description": "Per-provider agent-runtime settings (nested under 'config.agents.<provider>').\n\n`headless_yolo` (redefined by the bounded-posture amendment)\nselects FULL yolo vs the BOUNDED posture for an autonomous (headless,\nMODE==exec) codex/gemini worker. Both postures never prompt (no hang); they\ndiffer on the sandbox:\n\n  - False (default) -> BOUNDED: sandboxed AND never-prompt. codex\n    `--sandbox workspace-write --ask-for-approval never`; gemini\n    `--approval-mode yolo --sandbox`. No hang, and the worker cannot roam\n    outside the workspace.\n  - True -> FULL YOLO: unsandboxed bypass. codex\n    `--dangerously-bypass-approvals-and-sandbox`; gemini bare `--yolo`. The\n    explicit opt-in for an operator who genuinely wants no sandbox.\n\nThe default is False (bounded) because it kills the headless hang WITHOUT\ndropping the sandbox - strictly safer than the full bypass. A malformed\nblock fails safe to bounded. Only the autonomous exec lane consults it; an\ninteractive `host`/`drive` launch and claude (yolo is a no-op) are never\naffected.",
+      "properties": {
+        "headless_yolo": {
+          "default": false,
+          "title": "Headless Yolo",
+          "type": "boolean"
+        }
+      },
+      "title": "AgentProviderBlock",
+      "type": "object"
+    },
+    "AgentsBlock": {
+      "description": "Agent-runtime settings (nested under 'config.agents').\n\n`confirm` is always, auto (skip only resolved caveat-free node builds), or never. The default is auto; invalid values fail the read and callers degrade toward confirmation.",
+      "properties": {
+        "a2a": {
+          "$ref": "#/$defs/A2aBlock"
+        },
+        "auto_register_sessions": {
+          "default": false,
+          "title": "Auto Register Sessions",
+          "type": "boolean"
+        },
+        "claude": {
+          "$ref": "#/$defs/AgentBeatBlock"
+        },
+        "codex": {
+          "$ref": "#/$defs/CodexAgentBlock"
+        },
+        "confirm": {
+          "default": "auto",
+          "title": "Confirm",
+          "type": "string"
+        },
+        "defaults": {
+          "$ref": "#/$defs/SpawnDefaultsBlock"
+        },
+        "fallback": {
+          "additionalProperties": true,
+          "title": "Fallback",
+          "type": "object"
+        },
+        "first_check_minutes": {
+          "default": 10,
+          "maximum": 60,
+          "minimum": 1,
+          "title": "First Check Minutes",
+          "type": "integer"
+        },
+        "footprint_sustained_cpu_cores": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Footprint Sustained Cpu Cores"
+        },
+        "gemini": {
+          "$ref": "#/$defs/AgentProviderBlock"
+        },
+        "happy_routed_panes": {
+          "default": false,
+          "title": "Happy Routed Panes",
+          "type": "boolean"
+        },
+        "hold_escalate_after_s": {
+          "default": 5400,
+          "minimum": 0,
+          "title": "Hold Escalate After S",
+          "type": "integer"
+        },
+        "max_fleet_cpu_share": {
+          "default": 0.5,
+          "title": "Max Fleet Cpu Share",
+          "type": "number"
+        },
+        "max_live": {
+          "default": 3,
+          "title": "Max Live",
+          "type": "integer"
+        },
+        "max_live_per_territory": {
+          "default": 4,
+          "title": "Max Live Per Territory",
+          "type": "integer"
+        },
+        "max_load_per_cpu": {
+          "default": 8.0,
+          "title": "Max Load Per Cpu",
+          "type": "number"
+        },
+        "max_swap_pct": {
+          "default": 90.0,
+          "title": "Max Swap Pct",
+          "type": "number"
+        },
+        "min_free_gb": {
+          "default": 4.0,
+          "title": "Min Free Gb",
+          "type": "number"
+        },
+        "naming": {
+          "$ref": "#/$defs/NamingBlock"
+        },
+        "orphan_reap_after_seconds": {
+          "default": 5400,
+          "title": "Orphan Reap After Seconds",
+          "type": "integer"
+        },
+        "pane_group_max": {
+          "default": 4,
+          "title": "Pane Group Max",
+          "type": "integer"
+        },
+        "profiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SpawnProfileBlock"
+          },
+          "title": "Profiles",
+          "type": "object"
+        },
+        "provider_limits": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ProviderBudget"
+          },
+          "title": "Provider Limits",
+          "type": "object"
+        },
+        "reap": {
+          "$ref": "#/$defs/ReapBlock"
+        },
+        "reap_receipts": {
+          "$ref": "#/$defs/ReapReceiptsBlock"
+        },
+        "retire_grace_s": {
+          "default": 900,
+          "minimum": 0,
+          "title": "Retire Grace S",
+          "type": "integer"
+        },
+        "retire_interval_s": {
+          "default": 300,
+          "minimum": 0,
+          "title": "Retire Interval S",
+          "type": "integer"
+        },
+        "silence_deadline_seconds": {
+          "default": 600,
+          "title": "Silence Deadline Seconds",
+          "type": "integer"
+        },
+        "single_flight_join_budget_seconds": {
+          "default": 30,
+          "title": "Single Flight Join Budget Seconds",
+          "type": "integer"
+        },
+        "single_flight_ttl_seconds": {
+          "default": 60,
+          "title": "Single Flight Ttl Seconds",
+          "type": "integer"
+        },
+        "state_reap": {
+          "$ref": "#/$defs/StateReapBlock"
+        },
+        "worker_qos": {
+          "default": "utility",
+          "title": "Worker Qos",
+          "type": "string"
+        }
+      },
+      "title": "AgentsBlock",
+      "type": "object"
+    },
+    "ApprovalsBlock": {
+      "description": "Who may approve a consequential effect (nested under 'config.approvals').\n\nThis is the independent policy source the approval store consults at decision\ntime and again at execution time. It lives in config, not in a role manifest\nor a plugin declaration, precisely so that no runtime object can add itself\nto the authorized set: a role may declare an authority ceiling but cannot\ngrant one, and a transport carries a decision without minting its semantics.\n\nMaps an effect class to the principal ids allowed to decide it. The key `*`\nmatches every class, which is the solo-founder shape. Absent or empty means\nNOBODY may approve: a fresh install can inspect pending approvals but cannot\ndecide one until a human writes the policy down.\n\nCore policy denies financial, signature, employment, and destructive effect\nclasses outright; listing a principal here never overrides that.",
+      "properties": {
+        "authorized_principals": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Authorized Principals",
+          "type": "object"
+        }
+      },
+      "title": "ApprovalsBlock",
+      "type": "object"
+    },
+    "ArtifactConfig": {
+      "description": "One project-supplied context artifact (a value in ``context.artifacts``).\n\n``path`` points at the audited, repository-tracked content the role reads;\n``sensitivity`` is the ceiling a selector must accept to receive it. The\nstring values mirror ``fno.roles.models.Sensitivity`` verbatim but are kept\nas a Literal here so the config layer never imports the roles package\n(roles imports paths, which imports config - that direction would cycle).",
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "sensitivity": {
+          "default": "internal",
+          "enum": [
+            "public",
+            "internal",
+            "sensitive",
+            "restricted"
+          ],
+          "title": "Sensitivity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "ArtifactConfig",
+      "type": "object"
+    },
+    "AttentionBlock": {
+      "description": "``sinks`` rows stay raw tables: the daemon checks each one and names a refusal.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "sinks": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Sinks",
+          "type": "array"
+        }
+      },
+      "title": "AttentionBlock",
+      "type": "object"
+    },
+    "AutoContinueBlock": {
+      "description": "Merge-triggered auto-continue settings (nested under 'config.auto_continue').\n\nThe opt-in for merge-triggered auto-continue (node): when\nenabled, a merge-detector (``fno backlog reconcile`` / the /fno:ship pr merged skill)\ndispatches a fresh background ``/target --no-merge`` worker for the next\nnow-unblocked backlog node after a PR merges, so a merge-gated epic walks\nitself group-by-group with no manual re-invocation.\n\nDefault ``False`` (Locked Decision 3): shipping this changes nothing until\nthe operator arms it. Precedence mirrors ``config.auto_merge``: a malformed\nblock degrades to disabled (fail-safe) rather than failing the settings\nload, so one operator typo can never break every CLI invocation. The\nenable-resolution chain (env override > campaign-arm marker > this block)\nlives in :func:`fno.backlog.advance.auto_continue_enabled`.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "AutoContinueBlock",
+      "type": "object"
+    },
+    "AutoHealBlock": {
+      "description": "The pr-watch tick's heal phase (nested under 'auto_heal').\n\n``enabled`` arms the phase that runs the CI heal drive loop\n(``fno do pr heal --all --apply`` in Rust) once per tick. Default false\nuntil the loop is measured on real PRs: an arm that pushes to branches\nis opt-in by design, like every other acting phase on the tick.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "AutoHealBlock",
+      "type": "object"
+    },
+    "AutoMergeBlock": {
+      "description": "Auto-merge settings (nested under 'config.auto_merge').\n\nThe typed reader for what the bash ``scripts/lib/config.sh`` auto_merge\nhelpers used to parse (``is_auto_merge_allowed_for`` / ``get_auto_merge_*``).\nThe ``fno do pr`` port reads these via :func:`load_settings`\ninstead of re-parsing settings.yaml in a subprocess, so the 4-tier\nprecedence + caching live in one place.\n\nValidation mirrors the bash exactly: an invalid ``merge_strategy`` falls\nback to ``merge``, an invalid ``conflict_resolution`` to ``opus``, an\ninvalid ``remediation`` to ``attempt`` (the bash printed a warning and used\nthe same fallback). A malformed block degrades to defaults (auto-merge OFF)\nrather than failing the whole settings load - false-enabled is the dangerous\ndirection for a merge opt-in.\n\nScope-ordered to read like the AND chain ``fno do pr merge`` enforces:\n``enabled`` is PROJECT scope (the standing arm, re-read live at merge and\narm time so an operator disarm mid-flight still withholds);\n``grant`` is ACTOR scope (who may merge once ``enabled`` passes); the\npolicy keys below only matter once both do.\n\nRUN scope is deliberately not a key here. ``fno do target init`` folds\n``enabled`` plus ``grant`` plus ``--allow-merge`` / ``--no-merge`` plus the\n``/target bg`` injected default into ``auto_merge_approved`` in\n``.fno/target-state.md``, with ``auto_merge_source`` naming the decider.\nThe fold withholds and it grants: a per-run refusal (``false``) outranks\nevery grant at the merge gate (``pr/_merge.py``), and a\n``TARGET_AUTO_MERGE=1`` grant (``env-target-auto-merge``) satisfies the\nstanding arm on its own. Scrubbed on runs carrying a mesh\nidentity (``FNO_AGENT_SELF``) or an unattended marker; an interactive\nsession the operator launched carries neither and is the documented\ncarrier of the grant, inside the operator's trust boundary, with the\nsource stamp keeping every grant auditable.\nThe review rung of the same chain is ``config.review.required_bots`` /\n``config.review.reviewers``, enforced at the coverage guard in\n``_merge.py``.",
+      "properties": {
+        "conflict_resolution": {
+          "default": "opus",
+          "title": "Conflict Resolution",
+          "type": "string"
+        },
+        "delete_branch_on_merge": {
+          "default": true,
+          "title": "Delete Branch On Merge",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "grant": {
+          "default": "none",
+          "title": "Grant",
+          "type": "string"
+        },
+        "merge_strategy": {
+          "default": "merge",
+          "title": "Merge Strategy",
+          "type": "string"
+        },
+        "remediation": {
+          "default": "attempt",
+          "title": "Remediation",
+          "type": "string"
+        },
+        "require_checks_pass": {
+          "default": true,
+          "title": "Require Checks Pass",
+          "type": "boolean"
+        },
+        "require_fresh_ci": {
+          "default": false,
+          "title": "Require Fresh Ci",
+          "type": "boolean"
+        }
+      },
+      "title": "AutoMergeBlock",
+      "type": "object"
+    },
+    "AutonomyBlock": {
+      "description": "The one master switch over every autonomous session-starting spawner\n(nested under 'config.autonomy'). wave 3.\n\n``enabled=False`` stops EVERY spawner - the merge-triggered ones\n(advance, dispatch_lanes, epic converge, reconcile_dispatch), spawn_think,\npost-merge ritual, pr_watch, keep_going, and the\nwave-2 ones (groom, restart, evals) - regardless of that spawner's own\ngate. It is checked BEFORE any other precedence rank, even an explicit env\noverride: the whole point of a panic switch is that nothing overrides it.\nA skip caused by this switch stamps rank ``\"autonomy\"`` on its decision\nevent (distinct from env/config/default) so the log names the master\nswitch as the reason, never leaving it to inference (AC4-HP).\n\nDefault ``True``: shipping this changes nothing for an existing user -\nevery spawner's own gate still governs exactly as before until an\noperator explicitly arms the panic switch.\n\nExplicitly NOT a per-dispatcher lever (Alternative A in the design doc,\nrejected): nine levers multiply the state an operator must hold and\nguarantee some subset goes stale, which is the same failure with more\nsurface. This is the ONE switch; detail belongs in ``fno agents autonomy\nstatus``, not in a second layer of configuration.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "AutonomyBlock",
+      "type": "object"
+    },
+    "BacklogBlock": {
+      "description": "Backlog hygiene settings (nested under 'config.backlog').\n\n``id_prefix`` / ``id_hex_width`` configure the node-ID minting scheme\n(``<prefix><hex>``). Schema defaults are the LEGACY values - an absent\n``id_prefix`` (``None``) falls back to ``ab-`` at the accessor, and the width\ndefaults to 8 - so an existing ``config.backlog`` block with no id keys is\nbyte-identical. The setup wizard OFFERS width 4 for new installs; that is the\nwizard's default, not the schema default (AC3-FR).",
+      "properties": {
+        "epic_max_open_children": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Epic Max Open Children"
+        },
+        "id_hex_width": {
+          "default": 8,
+          "title": "Id Hex Width",
+          "type": "integer"
+        },
+        "id_prefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id Prefix"
+        },
+        "maintain": {
+          "$ref": "#/$defs/MaintainBlock"
+        },
+        "max_open_ideas": {
+          "default": 25,
+          "minimum": 0,
+          "title": "Max Open Ideas",
+          "type": "integer"
+        },
+        "page_reload_s": {
+          "default": 60,
+          "title": "Page Reload S",
+          "type": "integer"
+        },
+        "render_targets": {
+          "items": {
+            "$ref": "#/$defs/RenderTargetConfig"
+          },
+          "title": "Render Targets",
+          "type": "array"
+        },
+        "staleness_days": {
+          "default": 21,
+          "title": "Staleness Days",
+          "type": "integer"
+        }
+      },
+      "title": "BacklogBlock",
+      "type": "object"
+    },
+    "BatchBlock": {
+      "description": "Batch-lane settings (nested under 'config.batch').\n\nThe auto-target runner can coalesce N same-domain ready nodes onto one\nbranch and open ONE PR per batch instead of one-per-node, cutting GitHub\nActions runs ~N\u00d7 (the cost driver is PR *volume*, not bad merges).\n\nDefault OFF (footnote opt-in convention): with `enabled=false` the selection\npath is byte-for-byte today's one-PR-per-node behavior. A malformed\n`enabled` fails safe to disabled (mirrors config.auto_merge / cross_model) \u2014\nfalse-enabled is the dangerous direction because a bad batch could pool\nunrelated work into one PR.\n\nKnobs:\n  enabled   - whole-feature opt-in.\n  max_nodes - nodes per batch before it closes (domain boundary + size/p0\n              can close it sooner). Non-positive/malformed \u2192 default 3.\n  max_loc   - optional cumulative-diff LOC ceiling (None = off).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "max_loc": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Loc"
+        },
+        "max_nodes": {
+          "default": 3,
+          "title": "Max Nodes",
+          "type": "integer"
+        }
+      },
+      "title": "BatchBlock",
+      "type": "object"
+    },
+    "BlastConfig": {
+      "description": "Blast-radius router settings (nested under 'config.target.blast').\n\nA deterministic blast read at `/target` init modulates the size profile\nBEFORE the immutable manifest is written: a high-blast surface can only\nraise ceremony (a non-overridable floor at `M`), and low-blast work is\ndowngraded to the fast path only when the operator did not pin a size.\n\nDefault OFF (footnote convention): disabled is byte-for-byte today's\nbehavior. A malformed block fails safe to disabled, mirroring\n`config.auto_merge` / `config.auto_continue`; a single bad glob in\n`high_blast_globs` is skipped, not raised (the classifier owns that).\n\nKnobs:\n  enabled          - whole-feature opt-in.\n  downgrade        - when False, only the high-blast floor applies\n                     (safety-only mode; no token-saving downgrades).\n  reuse_loc_manifest - legacy key spelling; include the packaged\n                     control-plane scope in the map.\n  high_blast_globs - per-project extension of the general default list.",
+      "properties": {
+        "downgrade": {
+          "default": true,
+          "title": "Downgrade",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "high_blast_globs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "High Blast Globs",
+          "type": "array"
+        },
+        "reuse_loc_manifest": {
+          "default": true,
+          "title": "Reuse Loc Manifest",
+          "type": "boolean"
+        }
+      },
+      "title": "BlastConfig",
+      "type": "object"
+    },
+    "BlueprintBlock": {
+      "description": "Blueprint / epic-decomposition settings (nested under 'config.blueprint').",
+      "properties": {
+        "max_prs_per_epic": {
+          "default": 4,
+          "title": "Max Prs Per Epic",
+          "type": "integer"
+        },
+        "python_repair_added_lines": {
+          "default": 30,
+          "minimum": 0,
+          "title": "Python Repair Added Lines",
+          "type": "integer"
+        }
+      },
+      "title": "BlueprintBlock",
+      "type": "object"
+    },
+    "BranchBlock": {
+      "description": "Dispatch branch naming (nested under 'config.branch', W3).\n\n``prefix`` is the leading segment of a dispatched worktree branch:\n``<prefix>/<slug>-<node>`` (e.g. ``fno/plan-docs-...-x-aaaa``). A legible\nbranch that round-trips back to its node beats the opaque ``feature/<hex>``.",
+      "properties": {
+        "prefix": {
+          "default": "fno",
+          "title": "Prefix",
+          "type": "string"
+        }
+      },
+      "title": "BranchBlock",
+      "type": "object"
+    },
+    "BuildBlock": {
+      "description": "Build-freeze switch (nested under 'config.build').",
+      "properties": {
+        "agent_freeze": {
+          "default": false,
+          "title": "Agent Freeze",
+          "type": "boolean"
+        }
+      },
+      "title": "BuildBlock",
+      "type": "object"
+    },
+    "CodexAgentBlock": {
+      "description": "The codex block: the provider settings plus its lead beat.",
+      "properties": {
+        "beat": {
+          "default": "auto",
+          "title": "Beat",
+          "type": "string"
+        },
+        "headless_yolo": {
+          "default": false,
+          "title": "Headless Yolo",
+          "type": "boolean"
+        }
+      },
+      "title": "CodexAgentBlock",
+      "type": "object"
+    },
+    "CollisionBlock": {
+      "description": "File-collision detection settings (config.collision).",
+      "properties": {
+        "severity_thresholds": {
+          "$ref": "#/$defs/CollisionThresholdsBlock"
+        }
+      },
+      "title": "CollisionBlock",
+      "type": "object"
+    },
+    "CollisionThresholdsBlock": {
+      "description": "Collision severity scoring thresholds (config.collision.severity_thresholds).\n\nDefaults lifted verbatim from the former\n``collision.py:DEFAULT_THRESHOLDS`` (US2 converges that private loader here).",
+      "properties": {
+        "high_count": {
+          "default": 3,
+          "title": "High Count",
+          "type": "number"
+        },
+        "high_ratio": {
+          "default": 0.5,
+          "title": "High Ratio",
+          "type": "number"
+        },
+        "medium_count": {
+          "default": 2,
+          "title": "Medium Count",
+          "type": "number"
+        },
+        "medium_ratio": {
+          "default": 0.25,
+          "title": "Medium Ratio",
+          "type": "number"
+        }
+      },
+      "title": "CollisionThresholdsBlock",
+      "type": "object"
+    },
+    "ComboBlock": {
+      "description": "Named combo specification (nested under 'config.accounts.combos.<name>').",
+      "properties": {
+        "providers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Providers",
+          "type": "array"
+        },
+        "sticky_limit": {
+          "default": 1,
+          "title": "Sticky Limit",
+          "type": "integer"
+        },
+        "strategy": {
+          "default": "fallback",
+          "enum": [
+            "fallback",
+            "round_robin"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        }
+      },
+      "title": "ComboBlock",
+      "type": "object"
+    },
+    "ContextBlock": {
+      "description": "Project-supplied context artifacts (nested under 'config.context').\n\nA GENERIC identifier -> artifact map. Core never learns a function's\nvocabulary: a role's context selector names an identifier and the\ninstalling project resolves it here, so a pack installed in a second\nproject is reviewed against that project's facts, not the first's. Empty\nby default; an unconfigured identifier blocks resolution with\nMISSING_CONTEXT rather than falling back to a pack asset.",
+      "properties": {
+        "artifacts": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ArtifactConfig"
+          },
+          "title": "Artifacts",
+          "type": "object"
+        }
+      },
+      "title": "ContextBlock",
+      "type": "object"
+    },
+    "CrossModelBlock": {
+      "description": "Cross-model review opt-in (nested under 'config.review.cross_model').\n\nGates the diversity axis of review (; the sigma panel it once\nrouted is removed): when `enabled` is true, reviewer capacity\nmay include a different provider (codex/gemini) than wrote the code,\ncatching model-specific blind spots - the peer rung's substrate and the\nassurance resolver's effective kinds. Default False: existing all-claude\nreview is byte-for-byte unchanged until the operator turns it on (Locked\nDecision 7). An explicit `config.review.agent_providers` map ALSO engages\ncross-model (the selector treats either signal as opt-in); this flag is\nthe no-map-needed switch.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "CrossModelBlock",
+      "type": "object"
+    },
+    "DevBlock": {
+      "description": "Maintainer local-dev settings (nested under 'config.dev').\n\n``source`` is the machine-local pin the Rust bootstrap reads to re-provision\nfrom a checkout instead of the published PyPI wheel when its uv tool venv is\nwiped. Unset (the default) keeps the frictionless PyPI self-provision\nfor end users; a maintainer sets it to their checkout root to make recovery\nsource-first, matching the repo's \"unset = OSS-neutral, set = maintainer\nchoice\" pattern (``paths.worktrees_base``).\n\nThe bootstrap reads this key from ``~/.fno/config.toml`` DIRECTLY (fno-free:\nit runs precisely because ``fno`` is broken). The read is hard-coded in\n``crates/fno/src/bootstrap.rs::parse_dev_source`` as ``[dev].source``; the\ncross-language test in ``cli/tests/unit/test_dev_source_pin.py`` pins the two\nsides so a rename here can't silently break recovery.",
+      "properties": {
+        "source": {
+          "default": "",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "title": "DevBlock",
+      "type": "object"
+    },
+    "DifficultyLaneBlock": {
+      "description": "One difficulty rung of ``profiles.<command>.by_difficulty``.\n\nMirrors exactly what the Rust route-slot reader accepts inside an entry\n(crates/fno-agents/src/route_slot.rs:903: lanes plus the three policy\nleaves, nothing else). Any change to either side must move both.",
+      "properties": {
+        "lanes": {
+          "title": "Lanes"
+        },
+        "on_exhausted": {
+          "default": "",
+          "title": "On Exhausted",
+          "type": "string"
+        },
+        "on_low": {
+          "default": "",
+          "title": "On Low",
+          "type": "string"
+        },
+        "on_unknown": {
+          "default": "",
+          "title": "On Unknown",
+          "type": "string"
+        }
+      },
+      "title": "DifficultyLaneBlock",
+      "type": "object"
+    },
+    "DispatchBlock": {
+      "description": "Autonomous-dispatch profile (nested under 'config.dispatch').\n\nPer-environment overlay of the in-tree harness-capability map\n(`fno.agents.harness_map`): the shared `resolve_node_spawn` resolver reads\nthese as the config rung between an explicit flag and the built-in default.\nAll three are empty (\"\") = unset, so a fresh install resolves exactly as the\nbuilt-ins (harness=claude, per-harness substrate, `/target --no-merge {id}`).\n\nNo value validation here: the resolver checks harness and substrate at\nresolve time, fail-loud.\n\n`command` is a template with a single `{id}` placeholder. A node's\n`dispatch_command`/`dispatch_brief` (US3) layer on top: the resolver validates\nthe command against `allowed_commands` and carries the brief via env only, so a\ngraph field crossing into a worker prompt is a guarded trust boundary.",
+      "properties": {
+        "allowed_commands": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Allowed Commands",
+          "type": "array"
+        },
+        "auto_merge": {
+          "default": false,
+          "title": "Auto Merge",
+          "type": "boolean"
+        },
+        "blueprint_floor": {
+          "default": "high",
+          "title": "Blueprint Floor",
+          "type": "string"
+        },
+        "command": {
+          "default": "",
+          "title": "Command",
+          "type": "string"
+        },
+        "command_registry": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DispatchCommandDescriptor"
+          },
+          "title": "Command Registry",
+          "type": "object"
+        },
+        "cutover_low_after_minutes": {
+          "default": 0,
+          "title": "Cutover Low After Minutes",
+          "type": "integer"
+        },
+        "harness": {
+          "default": "",
+          "title": "Harness",
+          "type": "string"
+        },
+        "on_exhaustion": {
+          "default": "defer",
+          "title": "On Exhaustion",
+          "type": "string"
+        },
+        "substrate": {
+          "default": "",
+          "title": "Substrate",
+          "type": "string"
+        }
+      },
+      "title": "DispatchBlock",
+      "type": "object"
+    },
+    "DispatchCommandDescriptor": {
+      "properties": {
+        "asserts": {
+          "default": "invocation",
+          "enum": [
+            "pr",
+            "doc",
+            "invocation"
+          ],
+          "title": "Asserts",
+          "type": "string"
+        },
+        "invocation": {
+          "title": "Invocation",
+          "type": "string"
+        },
+        "invocations": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Invocations"
+        },
+        "requires": {
+          "default": "none",
+          "enum": [
+            "none",
+            "skill"
+          ],
+          "title": "Requires",
+          "type": "string"
+        },
+        "session_phase": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Phase"
+        },
+        "takes_node_id": {
+          "default": true,
+          "title": "Takes Node Id",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "invocation"
+      ],
+      "title": "DispatchCommandDescriptor",
+      "type": "object"
+    },
+    "EvalsBlock": {
+      "description": "Eval-suite settings: the grading-worker gate plus the demand keys.\nFull key docs live in the generated reference and docs/evals.md.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "schedule_days": {
+          "default": 7,
+          "title": "Schedule Days",
+          "type": "integer"
+        },
+        "scratch_threshold": {
+          "default": 3,
+          "title": "Scratch Threshold",
+          "type": "integer"
+        },
+        "scratch_window_days": {
+          "default": 28,
+          "title": "Scratch Window Days",
+          "type": "integer"
+        },
+        "stale_days": {
+          "default": 7,
+          "title": "Stale Days",
+          "type": "integer"
+        }
+      },
+      "title": "EvalsBlock",
+      "type": "object"
+    },
+    "FailoverBlock": {
+      "description": "Provider rotation failover configuration (nested under 'config.accounts.failover').",
+      "properties": {
+        "max_swaps_per_phase": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Max Swaps Per Phase",
+          "type": "integer"
+        }
+      },
+      "title": "FailoverBlock",
+      "type": "object"
+    },
+    "GroomBlock": {
+      "description": "Daily backlog-grooming pass settings (nested under 'config.groom').\n\nwave 2: `fno backlog groom` (`spawn_worker` in\n   crates/fno-agents/src/backlog/groom.rs) previously spawned with no enable key at all, so it\n   could not be turned off. Default ``True`` matches the spawner's CURRENT\n   effective behavior (it always ran) - shipping this gate changes nothing\n   for an existing user until they explicitly disable it.\n   ",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "GroomBlock",
+      "type": "object"
+    },
+    "GuardsBlock": {
+      "description": "Which gatable guards run for this project.\n\n``strict`` runs every gatable guard, ``standard`` keeps the two\ndestructive-write guards on, ``off`` runs none. The state-integrity guards\nnever gate in any preset. A malformed value reads as ``strict`` in Rust.",
+      "properties": {
+        "preset": {
+          "default": "standard",
+          "enum": [
+            "strict",
+            "standard",
+            "off"
+          ],
+          "title": "Preset",
+          "type": "string"
+        }
+      },
+      "title": "GuardsBlock",
+      "type": "object"
+    },
+    "HandoffBlock": {
+      "description": "Capability escalation plus the shared context-compact thresholds.\n\n``enabled`` gates the explicit escalation transaction. Context pressure is\nhandled by ``hooks/context-nudge.sh`` and compaction, never by succession.\nThe historical generation knob is intentionally absent: one externally\nselected destination is one escalation rung.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "lead_used_pct_trigger": {
+          "default": 40,
+          "title": "Lead Used Pct Trigger",
+          "type": "integer"
+        },
+        "used_pct_trigger": {
+          "default": 50,
+          "title": "Used Pct Trigger",
+          "type": "integer"
+        }
+      },
+      "title": "HandoffBlock",
+      "type": "object"
+    },
+    "HarnessOverlayBlock": {
+      "additionalProperties": true,
+      "description": "One harness's answers under a spawn-defaults block.\n\nPrecedence: explicit flag > lane > ``profiles.<command>.harness.<h>`` >\n``profiles.<command>`` > ``defaults.harness.<h>`` > ``defaults``. A\npermission/effort value spells the HARNESS's own flags, so the answer\nlives keyed by harness; ranking fields are refused at the spawn seam.\n``extra=\"allow\"`` is deliberate: a smuggled lane field must survive load\nso the seam can name it in its refusal.",
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Args",
+          "type": "array"
+        },
+        "effort": {
+          "default": "",
+          "title": "Effort",
+          "type": "string"
+        },
+        "permission_mode": {
+          "default": "",
+          "title": "Permission Mode",
+          "type": "string"
+        },
+        "substrate": {
+          "default": "",
+          "title": "Substrate",
+          "type": "string"
+        }
+      },
+      "title": "HarnessOverlayBlock",
+      "type": "object"
+    },
+    "HealthHistoryBlock": {
+      "description": "Backlog-health history retention (config.health_monitor.history).\n\n``path`` defaults to None and is resolved at runtime via paths.state_dir().",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "retain_days": {
+          "default": 90,
+          "title": "Retain Days",
+          "type": "integer"
+        }
+      },
+      "title": "HealthHistoryBlock",
+      "type": "object"
+    },
+    "HealthMonitorBlock": {
+      "description": "Backlog health monitoring (config.health_monitor).\n\nPromoted from the private ``health_monitor.py:DEFAULT_CONFIG`` so the model\nis the single source of truth (US1) and ``health_monitor.py`` can read\n``load_settings().health_monitor`` instead of re-loading the YAML (US2).\nSub-blocks use ``extra=\"ignore\"`` + fail-safe coercers so a malformed value\ndegrades to defaults rather than breaking ``load_settings()`` (Failure Modes).",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "history": {
+          "$ref": "#/$defs/HealthHistoryBlock"
+        },
+        "notifications": {
+          "$ref": "#/$defs/HealthNotificationsBlock"
+        },
+        "thresholds": {
+          "$ref": "#/$defs/HealthThresholdsBlock"
+        }
+      },
+      "title": "HealthMonitorBlock",
+      "type": "object"
+    },
+    "HealthNotificationsBlock": {
+      "description": "Backlog-health notification routing (config.health_monitor.notifications).",
+      "properties": {
+        "discord_channel": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Discord Channel"
+        },
+        "surfaces": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Surfaces",
+          "type": "array"
+        },
+        "throttle_minutes": {
+          "default": 60,
+          "title": "Throttle Minutes",
+          "type": "integer"
+        },
+        "webhook_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Webhook Url"
+        }
+      },
+      "title": "HealthNotificationsBlock",
+      "type": "object"
+    },
+    "HealthThresholdsBlock": {
+      "description": "Backlog-health breach thresholds (config.health_monitor.thresholds).\n\nDefaults lifted verbatim from the former\n``health_monitor.py:DEFAULT_CONFIG[\"thresholds\"]`` (US2 converges that\nprivate loader onto this block).",
+      "properties": {
+        "collision_count": {
+          "default": 3,
+          "title": "Collision Count",
+          "type": "integer"
+        },
+        "failure_prone_attempts": {
+          "default": 2,
+          "title": "Failure Prone Attempts",
+          "type": "integer"
+        },
+        "idea_pile_depth": {
+          "default": 25,
+          "title": "Idea Pile Depth",
+          "type": "integer"
+        },
+        "orphan_feature_rate": {
+          "default": 1.0,
+          "title": "Orphan Feature Rate",
+          "type": "number"
+        },
+        "project_cwd_mismatch": {
+          "default": 0,
+          "title": "Project Cwd Mismatch",
+          "type": "integer"
+        },
+        "stale_ready_days": {
+          "default": 30,
+          "title": "Stale Ready Days",
+          "type": "integer"
+        }
+      },
+      "title": "HealthThresholdsBlock",
+      "type": "object"
+    },
+    "InboxBlock": {
+      "description": "Cross-session mail delivery-honesty settings (nested under 'config.inbox').\n\n``unclaimed_ttl`` (seconds, default 1800/30m, locked) is the age\npast which a sent-but-unclaimed bus message is surfaced back to its\nsender. ``landed_abandon_ttl`` (seconds, default 21600/6h) is the age past\nwhich an outstanding message drops off that nag entirely and is never\ngrepped again. Both non-negative.",
+      "properties": {
+        "landed_abandon_ttl": {
+          "default": 21600,
+          "title": "Landed Abandon Ttl",
+          "type": "integer"
+        },
+        "tool_boundary_ordinary": {
+          "default": false,
+          "title": "Tool Boundary Ordinary",
+          "type": "boolean"
+        },
+        "unclaimed_ttl": {
+          "default": 1800,
+          "title": "Unclaimed Ttl",
+          "type": "integer"
+        }
+      },
+      "title": "InboxBlock",
+      "type": "object"
+    },
+    "JoinBlock": {
+      "description": "`fno backlog join` behavior (config.join.*).\n\n``sandbox`` is ONE switch over BOTH enforcement layers of the per-joiner\nwrite partition (the OS allowlist composed into the worker's --settings\nand the Edit/Write guard): partial enforcement that reads as enforcement\nis the failure mode the feature exists to prevent, so they are not\nseparately toggleable. Default off; a config error degrades toward off.",
+      "properties": {
+        "sandbox": {
+          "default": false,
+          "title": "Sandbox",
+          "type": "boolean"
+        }
+      },
+      "title": "JoinBlock",
+      "type": "object"
+    },
+    "KeepGoingBlock": {
+      "description": "Autonomous keep-going engine settings (nested under 'config.keep_going').\n\nThe opt-in for the autonomous keep-going engine : when enabled, the\nautonomous ``/fno:ship pr merged`` ritual classifies each surviving carve-out\nfollow-up and DISPATCHES the next unit of work (a ``/think``, a ``/target``,\nor just a filed node) instead of only closing the merged node. This is what\nkeeps the autonomous loop moving without a human in the seat.\n\nDefault ``False`` (same posture as ``config.auto_continue`` /\n``config.think_spawn``): shipping this changes nothing until the operator\narms it - false-enabled (background workers dispatched against the operator's\nintent) is the dangerous direction, so a malformed block fails safe to\ndisabled rather than breaking the whole settings load.\n\nThe firehose ceiling is NOT a knob here: it deliberately reuses\n``config.think_spawn.daily_cap`` (the same per-install per-day counter\n``fno do think dispatch`` bumps) so think + target dispatches share ONE budget -\na single ceiling on total autonomous fan-out per day. The classify + dispatch\nlogic lives in the native retro keep-going engine (crates/fno-agents/src/retro/keep_going.rs).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "KeepGoingBlock",
+      "type": "object"
+    },
+    "LeadBlock": {
+      "description": "The lead loop (config.lead). Field detail is in registry.py's Meta\ntext, surfaced by `fno config schema`.\n\n``RunAtLoad`` is false for the pr-watcher LaunchAgent by design, so a\nmachine that never ran ``launchctl load`` has no waker; ``wake_enabled``\ndoes not change that.",
+      "properties": {
+        "autonomous_merge": {
+          "default": false,
+          "title": "Autonomous Merge",
+          "type": "boolean"
+        },
+        "blocked_child_grace_minutes": {
+          "default": 30,
+          "title": "Blocked Child Grace Minutes",
+          "type": "integer"
+        },
+        "checkin_interval": {
+          "default": "55m",
+          "title": "Checkin Interval",
+          "type": "string"
+        },
+        "checkin_text": {
+          "default": "lead check-in. Run fno agents org checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. ",
+          "title": "Checkin Text",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "implementation_guard": {
+          "default": "refuse",
+          "title": "Implementation Guard",
+          "type": "string"
+        },
+        "wake_backstop_seconds": {
+          "default": 1800,
+          "title": "Wake Backstop Seconds",
+          "type": "integer"
+        },
+        "wake_ceiling": {
+          "default": 32,
+          "title": "Wake Ceiling",
+          "type": "integer"
+        },
+        "wake_debounce_seconds": {
+          "default": 900,
+          "title": "Wake Debounce Seconds",
+          "type": "integer"
+        },
+        "wake_enabled": {
+          "default": false,
+          "title": "Wake Enabled",
+          "type": "boolean"
+        },
+        "write_roots": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Write Roots",
+          "type": "array"
+        }
+      },
+      "title": "LeadBlock",
+      "type": "object"
+    },
+    "LoopEntry": {
+      "description": "One named loop's level (``config.loops.<name>``).\n\n``report`` (observe only) is the safest default, so a malformed or\nunrecognized level fails safe to it rather than raising - a standing\nloop must never silently upgrade its own autonomy from a config typo.",
+      "properties": {
+        "budget_usd_per_run": {
+          "default": 30.0,
+          "title": "Budget Usd Per Run",
+          "type": "number"
+        },
+        "level": {
+          "default": "report",
+          "enum": [
+            "report",
+            "assisted",
+            "unattended"
+          ],
+          "title": "Level",
+          "type": "string"
+        }
+      },
+      "title": "LoopEntry",
+      "type": "object"
+    },
+    "MaintainBlock": {
+      "description": "`fno backlog maintain` settings (nested under 'config.backlog.maintain').",
+      "properties": {
+        "abandoned_do_row_hours": {
+          "default": 24,
+          "title": "Abandoned Do Row Hours",
+          "type": "integer"
+        },
+        "budget_seconds": {
+          "default": 300,
+          "title": "Budget Seconds",
+          "type": "integer"
+        },
+        "max_failed_attempts": {
+          "default": 3,
+          "title": "Max Failed Attempts",
+          "type": "integer"
+        },
+        "staleness_days": {
+          "default": 30,
+          "title": "Staleness Days",
+          "type": "integer"
+        },
+        "validity_batch_size": {
+          "default": 25,
+          "title": "Validity Batch Size",
+          "type": "integer"
+        },
+        "validity_days": {
+          "default": 60,
+          "title": "Validity Days",
+          "type": "integer"
+        }
+      },
+      "title": "MaintainBlock",
+      "type": "object"
+    },
+    "ModelProvider": {
+      "description": "One secondary model provider for role-based routing (z.ai, DeepSeek, ...).\n\nAnthropic-protocol only for the claude lane (the vendor's compatible\nendpoint, not its OpenAI ``/v4`` path); the key comes from\n``api_key_env`` / ``api_key_file``, never settings.yaml. ``zai`` is built\nin; list a provider here to override it or add another.",
+      "properties": {
+        "api_key_env": {
+          "default": "",
+          "title": "Api Key Env",
+          "type": "string"
+        },
+        "api_key_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Key File"
+        },
+        "base_url": {
+          "default": "",
+          "title": "Base Url",
+          "type": "string"
+        },
+        "haiku_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Haiku Model"
+        },
+        "protocol": {
+          "default": "anthropic",
+          "title": "Protocol",
+          "type": "string"
+        },
+        "tier_models": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tier Models"
+        },
+        "wire_api": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wire Api"
+        }
+      },
+      "title": "ModelProvider",
+      "type": "object"
+    },
+    "ModelRoutingBlock": {
+      "description": "Role-based per-spawn model routing (config.model_routing in settings.yaml).\n\nRoutes auxiliary coordination roles to a secondary provider (z.ai GLM by\ndefault) while production roles stay primary; provider keys live in env\nvars / .env files, never here. See fno.agents.model_routing.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "extra_env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Extra Env",
+          "type": "object"
+        },
+        "providers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelProvider"
+          },
+          "title": "Providers",
+          "type": "object"
+        },
+        "roles": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Roles",
+          "type": "object"
+        }
+      },
+      "title": "ModelRoutingBlock",
+      "type": "object"
+    },
+    "MuxBlock": {
+      "description": "fno mux (terminal multiplexer) settings (nested under 'config.mux').\n\n``shell_integration`` controls whether the mux auto-injects the\nOSC 133 block-marker snippet into the shells it spawns, so command-block\ncapture works with zero user config and WITHOUT touching the user's global\nshell rc. The injection happens ONLY in mux-spawned pane shells (temp\n``ZDOTDIR`` / ``--rcfile``), never in ``~/.zshrc`` / ``~/.bashrc``. Consumed\nby the Rust mux via ``FNO_MUX_SHELL_INTEGRATION``; absent env reads as\n``mux-panes`` (the Rust default is on).\n\n``prefix`` and ``keys`` are the keyboard. The mux prefix shipped as Ctrl-b\nwith no way to move it, which collides with readline, vim and emacs for\nanyone who did not choose tmux's default on purpose. ``prefix`` takes a key\nspec (``C-a``, ``Ctrl-a``, ``^a``, or a bare printable character) and\n``keys`` maps a stable action id to the key that should run it, e.g.\n``keys.detach = \"D\"``. The action ids are the ones ``prefix+?`` lists; the\nRust client reads both straight from config.toml (the same split-brain as\n``attach_digest``, since the interactive attach path has no Python launcher)\nand refuses any rebind that is unparseable, names no action, lands on the\nstructural ``1``-``9`` tab range, or collides with another action, saying so\nin a notice rather than silently running the shipped default.\n\n``notify_on_blocked`` / ``notify_on_done`` are read by the Rust daemon straight\nfrom config.toml; modeling them here keeps them settable via ``fno config``.\n\nFields\n------\nshell_integration:\n    ``mux-panes`` (default): inject into mux-spawned pane shells only.\n    ``off``: never inject (the manual ``fno mux shell-init`` eval still\n    works). Any other value coerces to ``mux-panes`` - only ``off`` is off,\n    matching the Rust ``integration_disabled`` semantics.",
+      "properties": {
+        "attach_digest": {
+          "default": true,
+          "title": "Attach Digest",
+          "type": "boolean"
+        },
+        "attach_digest_threshold_min": {
+          "default": 10,
+          "minimum": 1,
+          "title": "Attach Digest Threshold Min",
+          "type": "integer"
+        },
+        "board_scope": {
+          "default": "repo",
+          "title": "Board Scope",
+          "type": "string"
+        },
+        "card_graph": {
+          "default": "activity",
+          "enum": [
+            "activity",
+            "context"
+          ],
+          "title": "Card Graph",
+          "type": "string"
+        },
+        "hover_focus": {
+          "default": true,
+          "title": "Hover Focus",
+          "type": "boolean"
+        },
+        "keys": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Keys",
+          "type": "object"
+        },
+        "load_readout": {
+          "default": "simple",
+          "enum": [
+            "simple",
+            "detailed"
+          ],
+          "title": "Load Readout",
+          "type": "string"
+        },
+        "notify_on_blocked": {
+          "default": true,
+          "title": "Notify On Blocked",
+          "type": "boolean"
+        },
+        "notify_on_done": {
+          "default": false,
+          "title": "Notify On Done",
+          "type": "boolean"
+        },
+        "open_with": {
+          "default": "inmux",
+          "enum": [
+            "inmux",
+            "obsidian",
+            "system"
+          ],
+          "title": "Open With",
+          "type": "string"
+        },
+        "paint_background": {
+          "default": true,
+          "title": "Paint Background",
+          "type": "boolean"
+        },
+        "prefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prefix"
+        },
+        "restore": {
+          "$ref": "#/$defs/MuxRestoreBlock"
+        },
+        "shell_integration": {
+          "default": "mux-panes",
+          "title": "Shell Integration",
+          "type": "string"
+        },
+        "status_row": {
+          "default": true,
+          "title": "Status Row",
+          "type": "boolean"
+        },
+        "theme": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Theme"
+        },
+        "viewer": {
+          "default": "panel",
+          "enum": [
+            "panel",
+            "modal"
+          ],
+          "title": "Viewer",
+          "type": "string"
+        },
+        "wheel_lines": {
+          "default": 1,
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Wheel Lines",
+          "type": "integer"
+        },
+        "wheel_passthrough_rate": {
+          "default": 3,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Wheel Passthrough Rate",
+          "type": "integer"
+        }
+      },
+      "title": "MuxBlock",
+      "type": "object"
+    },
+    "MuxRestoreBlock": {
+      "description": "Mux server-restart restoration settings.",
+      "properties": {
+        "hold_workers": {
+          "default": true,
+          "title": "Hold Workers",
+          "type": "boolean"
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "enum": [
+                "hold",
+                "idle",
+                "resume"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy"
+        }
+      },
+      "title": "MuxRestoreBlock",
+      "type": "object"
+    },
+    "NamingBlock": {
+      "description": "``config.agents.naming``; the template is rendered in Rust (naming.rs).",
+      "properties": {
+        "worker": {
+          "default": "t-{slug}",
+          "title": "Worker",
+          "type": "string"
+        }
+      },
+      "title": "NamingBlock",
+      "type": "object"
+    },
+    "ObsidianBlock": {
+      "description": "Obsidian vault integration settings.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "vault": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vault"
+        }
+      },
+      "title": "ObsidianBlock",
+      "type": "object"
+    },
+    "ParallelBlock": {
+      "description": "Parallel-mode dispatch settings (nested under 'config.parallel').\n\nParallel mode (epic) runs up to ``max_lanes`` independent bg\nworktree lanes concurrently, one per distinct backlog domain, to compress\nwall-clock time. The cap is the sole cost-bound lever (design Locked\nDecision #3): it trades CI minutes for throughput, never the reverse.\n\n``max_lanes`` is deliberately SHARED config, NOT in the per-worktree\n``config.local.toml`` override allowlist (:data:`WORKTREE_LOCAL_KEYS`,\nLocked Decision #10): a per-lane cap is meaningless - every lane must see\none global ceiling or the cap does not bound anything. The allowlist is an\nexact-match frozenset of ``{project.id}`` (narrowed it to this sole\nkey), so this key is excluded by construction; do NOT add\n``config.parallel.max_lanes`` to it.\n\nFields\n------\nmax_lanes:\n    Max concurrent lanes. ``0`` disables parallel (sequential); ``1`` is\n    today's single-lane path; ``>=2`` opts into parallelism. Default ``1``\n    (footnote convention: a new feature is OFF until the operator turns it\n    up; the wiring that consumes this lands in later groups). Negative\n    values fail safe to the default rather than raising.",
+      "properties": {
+        "max_lanes": {
+          "default": 1,
+          "minimum": 0,
+          "title": "Max Lanes",
+          "type": "integer"
+        }
+      },
+      "title": "ParallelBlock",
+      "type": "object"
+    },
+    "PathsBlock": {
+      "description": "Per-resource path overrides; an omitted field derives from state_dir.",
+      "properties": {
+        "briefs_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Briefs Dir"
+        },
+        "bus_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bus Dir"
+        },
+        "cargo_targets_base": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cargo Targets Base"
+        },
+        "chats": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chats"
+        },
+        "evals_history": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evals History"
+        },
+        "fleet_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fleet Dir"
+        },
+        "handoffs_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Handoffs Dir"
+        },
+        "hook_logs_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hook Logs Dir"
+        },
+        "inbox_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inbox Path"
+        },
+        "ledger_json": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ledger Json"
+        },
+        "memory_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Memory Dir"
+        },
+        "observer_reports_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observer Reports Dir"
+        },
+        "operator_lane": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operator Lane"
+        },
+        "postmortems_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Postmortems Dir"
+        },
+        "retro_pending_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retro Pending Dir"
+        },
+        "spaces_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Spaces Dir"
+        },
+        "worktrees_base": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Worktrees Base"
+        }
+      },
+      "title": "PathsBlock",
+      "type": "object"
+    },
+    "PlanBlock": {
+      "description": "Plan budgets (config.plan): default_diff_budget is the commit-time diff-budget ceiling (hooks/diff-budget-commit.sh), 0 is off; a plan's frontmatter diff_budget overrides.",
+      "properties": {
+        "default_diff_budget": {
+          "default": 300,
+          "minimum": 0,
+          "title": "Default Diff Budget",
+          "type": "integer"
+        }
+      },
+      "title": "PlanBlock",
+      "type": "object"
+    },
+    "PostMergeBlock": {
+      "description": "Post-merge ritual settings (nested under 'config.post_merge').\n\nDrives the /fno:ship pr merged skill: where to write prose follow-up\ntodos after a PR merges, and whether the ritual is enabled for this repo.\n\n`parking_lot_path` is repo-relative. The vault-area name does NOT equal the\nproject name (e.g. example-pipeline -> internal/etl/backlog/parking-lot.md),\nso it must be set explicitly per repo and is never derived from the project\nname. Left unset by default so a repo that has not opted in resolves to an\nempty value and the skill fails loud rather than guessing a path.",
+      "properties": {
+        "auto_run": {
+          "default": false,
+          "title": "Auto Run",
+          "type": "boolean"
+        },
+        "catchup_window_days": {
+          "default": 3,
+          "title": "Catchup Window Days",
+          "type": "integer"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "maintainer_marker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maintainer Marker"
+        },
+        "model": {
+          "default": "claude-opus-5",
+          "title": "Model",
+          "type": "string"
+        },
+        "parking_lot_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parking Lot Path"
+        },
+        "self_reap": {
+          "default": false,
+          "title": "Self Reap",
+          "type": "boolean"
+        },
+        "sync_command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sync Command"
+        },
+        "sync_paths": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sync Paths",
+          "type": "array"
+        },
+        "sync_stale_hours": {
+          "default": 24,
+          "title": "Sync Stale Hours",
+          "type": "integer"
+        }
+      },
+      "title": "PostMergeBlock",
+      "type": "object"
+    },
+    "PrWatchBlock": {
+      "description": "PR-state watcher settings (nested under 'config.pr_watch').\n\nControls the global launchd watcher that polls open-PR backlog nodes\nand fires headless /fno:ship pr check / /fno:ship pr merged.\n\nFields: enabled (operator opt-in, default False); interval_seconds\n(plist StartInterval, default 600); retries (consecutive dispatch\nfailures before a PR parks, default 3); max_age_days (default 14);\nmodel (headless skill-fire model, default claude-haiku-4-5);\ntick_timeout_seconds (wall clock per tick; unset derives\nmax(60, 0.8 * interval_seconds) so launchd never suppresses the next\ntick); graphql_min_remaining (dispatch-pass skip floor on the shared\nGraphQL budget, default 200); wedged_after_ticks (consecutive broken\ntick ends at a fresh watermark before liveness reads wedged, default\n3; one broken tick is transient).",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "graphql_min_remaining": {
+          "default": 200,
+          "minimum": 0,
+          "title": "Graphql Min Remaining",
+          "type": "integer"
+        },
+        "interval_seconds": {
+          "default": 600,
+          "exclusiveMinimum": 0,
+          "title": "Interval Seconds",
+          "type": "integer"
+        },
+        "max_age_days": {
+          "default": 14,
+          "minimum": 1,
+          "title": "Max Age Days",
+          "type": "integer"
+        },
+        "model": {
+          "default": "claude-haiku-4-5",
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "retries": {
+          "default": 3,
+          "minimum": 1,
+          "title": "Retries",
+          "type": "integer"
+        },
+        "tick_timeout_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tick Timeout Seconds"
+        },
+        "wedged_after_ticks": {
+          "default": 3,
+          "minimum": 1,
+          "title": "Wedged After Ticks",
+          "type": "integer"
+        }
+      },
+      "title": "PrWatchBlock",
+      "type": "object"
+    },
+    "PreflightBlock": {
+      "description": "Local preflight policy (nested under 'config.preflight').\n\n``required`` decides whether a full local ``scripts/ci/preflight.sh``\nreceipt is REQUIRED before a PR is opened. Default false: CI is the merge\ngate, and a 22-to-47-minute local rehearsal of it is an optimisation,\nnever the authority. Six concurrent runs at load average 415 with zero\ncompletions (2026-08-19) is the measurement that set this default. Set\ntrue to restore the mandatory rehearsal per project.",
+      "properties": {
+        "required": {
+          "default": false,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "title": "PreflightBlock",
+      "type": "object"
+    },
+    "ProcessAdmissionBlock": {
+      "description": "The agent-spawn door's process ceiling, expressed only in OS processes.",
+      "properties": {
+        "max_processes": {
+          "default": 400,
+          "title": "Max Processes",
+          "type": "integer"
+        }
+      },
+      "title": "ProcessAdmissionBlock",
+      "type": "object"
+    },
+    "ProjectBlock": {
+      "description": "Project identity settings.",
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "vision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vision"
+        }
+      },
+      "title": "ProjectBlock",
+      "type": "object"
+    },
+    "ProviderBudget": {
+      "description": "What ONE account at a model provider tolerates, in every dimension.\n\nThe fleet already had a per-provider record: `agents.provider_limits.<provider>` (then `max_lanes`),\na bare integer capping concurrent spawned workers. It carried one dimension\nwhile the account is spent on two - a worker also fans out subagents inside\nits own session, and a shared-quota account was spent eight subagents deep\non one review that returned nothing.\n\n`subagents` is that second dimension, and it is consumed by ROUTE\nRESOLUTION rather than by a guard: a native subagent is a harness-internal\nTask call fno never observes, so a spawn-path guard is decorative for\nexactly the case that cost the account. The capability resolver that once\nread this budget to refuse a panel reviewer is gone (the native\n`review-level capability` door replaced it); a worker cannot fan out a\npanel it was never handed.\n\n`None` on either field means unbounded in that dimension, which is what an\nunlisted provider gets: today's behavior for every dedicated account.",
+      "properties": {
+        "lanes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lanes"
+        },
+        "subagents": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subagents"
+        }
+      },
+      "title": "ProviderBudget",
+      "type": "object"
+    },
+    "QuotaBlock": {
+      "description": "Quota-aware dispatch configuration (nested under 'config.accounts.quota').\n\n``observe`` and ``defer_dispatch`` are two decisions, not one: looking at\nquota and acting on it. ``defer_dispatch`` implies ``observe``.",
+      "properties": {
+        "defer_dispatch": {
+          "default": false,
+          "title": "Defer Dispatch",
+          "type": "boolean"
+        },
+        "defer_horizon_minutes": {
+          "default": 60,
+          "minimum": 0,
+          "title": "Defer Horizon Minutes",
+          "type": "integer"
+        },
+        "defer_threshold_pct": {
+          "default": 90.0,
+          "maximum": 100.0,
+          "minimum": 0.0,
+          "title": "Defer Threshold Pct",
+          "type": "number"
+        },
+        "observe": {
+          "default": false,
+          "title": "Observe",
+          "type": "boolean"
+        },
+        "pick_on_launch": {
+          "default": false,
+          "title": "Pick On Launch",
+          "type": "boolean"
+        },
+        "probe_ttl_seconds": {
+          "default": 300,
+          "minimum": 1,
+          "title": "Probe Ttl Seconds",
+          "type": "integer"
+        }
+      },
+      "title": "QuotaBlock",
+      "type": "object"
+    },
+    "ReapBlock": {
+      "description": "Scope of the roster-side sweep (nested under 'config.agents.reap').\n\n``roster_scope`` names which claude rows the sweep may retire:\n``off`` retires nothing, ``provenanced`` (the default) only rows whose\nprovenance resolves to fno and whose work is done, ``all`` widens to\nrows fno itself spawned (sessions or registry provenance) with open\nwork. One rule no value can cross: a row that resolves to no fno node\nis never retirable at any value, including ``all`` - an operator's\nhand-started session is safe by construction, not by default value.",
+      "properties": {
+        "roster_scope": {
+          "default": "provenanced",
+          "title": "Roster Scope",
+          "type": "string"
+        }
+      },
+      "title": "ReapBlock",
+      "type": "object"
+    },
+    "ReapReceiptsBlock": {
+      "description": "Retention for readable, aged reap receipts under ``config.agents``.",
+      "properties": {
+        "retain_days": {
+          "default": 7,
+          "title": "Retain Days",
+          "type": "integer"
+        }
+      },
+      "title": "ReapReceiptsBlock",
+      "type": "object"
+    },
+    "RecoveryBlock": {
+      "description": "Bg-session recovery sweep settings (nested under 'config.recovery').\n\nControls the Layer-2 sweep that rides the ``pr_watch`` launchd\ntick over footnote-launched bg sessions. Two actions survive the\nremoval of the held socket nudge: provider failover on a swap-class death\n(rate-limit / quota / auth / 5xx; respawns a fresh ``claude --bg``), and\nclose-surfacing for a session whose mission finished but whose process\nstill lingers. It only runs when ``pr_watch`` is installed (it shares that\ncadence) AND ``enabled`` here is true; even then it is a no-op unless an\nidle-stale footnote bg session exists.\n\nFields\n------\nenabled:\n    True to run the recovery sweep each pr_watch tick (default True; the\n    target audience for pr_watch is exactly bg-session operators). Set\n    false to keep pr_watch's PR polling without the recovery sweep.\nidle_threshold_seconds:\n    How old family-1 transcript activity may be before recovery acts on a\n    session (default 900 = 15 min). Keep it above the longest expected\n    single-tool runtime: a long build legitimately produces no turn.\nmax_nudges:\n    Per-session cap on held-by-design surfaces before the sweep gives up\n    and emits ``recovery_capped`` (default 3). Close notifications are\n    once-only, tracked separately.\nwatchdog:\n    The fleet watchdog lane, as a nested block. See\n    :mod:`fno.config._watchdog`.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "idle_threshold_seconds": {
+          "default": 900,
+          "exclusiveMinimum": 0,
+          "title": "Idle Threshold Seconds",
+          "type": "integer"
+        },
+        "max_nudges": {
+          "default": 3,
+          "minimum": 1,
+          "title": "Max Nudges",
+          "type": "integer"
+        },
+        "provider_health_marker_ttl_seconds": {
+          "default": 120,
+          "minimum": 120,
+          "title": "Provider Health Marker Ttl Seconds",
+          "type": "integer"
+        },
+        "provider_outage_529_count": {
+          "default": 3,
+          "minimum": 3,
+          "title": "Provider Outage 529 Count",
+          "type": "integer"
+        },
+        "provider_outage_529_cross_session_window_seconds": {
+          "default": 600,
+          "minimum": 600,
+          "title": "Provider Outage 529 Cross Session Window Seconds",
+          "type": "integer"
+        },
+        "provider_outage_529_span_seconds": {
+          "default": 120,
+          "minimum": 120,
+          "title": "Provider Outage 529 Span Seconds",
+          "type": "integer"
+        },
+        "provider_outage_evidence_freshness_seconds": {
+          "default": 600,
+          "minimum": 600,
+          "title": "Provider Outage Evidence Freshness Seconds",
+          "type": "integer"
+        },
+        "provider_outage_fup_window_seconds": {
+          "default": 300,
+          "minimum": 300,
+          "title": "Provider Outage Fup Window Seconds",
+          "type": "integer"
+        },
+        "provider_outage_pane_freshness_seconds": {
+          "default": 120,
+          "minimum": 120,
+          "title": "Provider Outage Pane Freshness Seconds",
+          "type": "integer"
+        },
+        "provider_outage_quorum": {
+          "default": 2,
+          "minimum": 1,
+          "title": "Provider Outage Quorum",
+          "type": "integer"
+        },
+        "provider_outage_reset_grace_seconds": {
+          "default": 120,
+          "minimum": 120,
+          "title": "Provider Outage Reset Grace Seconds",
+          "type": "integer"
+        },
+        "startup_destructive": {
+          "default": false,
+          "title": "Startup Destructive",
+          "type": "boolean"
+        },
+        "watchdog": {
+          "$ref": "#/$defs/WatchdogBlock"
+        }
+      },
+      "title": "RecoveryBlock",
+      "type": "object"
+    },
+    "RenderTargetConfig": {
+      "description": "One auto-rendered backlog projection (``config.backlog.render_targets[]``).\n\n``local`` (the default) renders the unified board page; ``backlog`` and\n``roadmap`` name retired public HTML projections and warn-skip. ``scope``\nnames one project or ``all``. ``project`` remains accepted as a\ncompatibility spelling.",
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Project"
+        },
+        "projection": {
+          "default": "local",
+          "title": "Projection",
+          "type": "string"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scope"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "RenderTargetConfig",
+      "type": "object"
+    },
+    "ResearchBlock": {
+      "description": "`fno do research` doc-deliverable settings (nested under 'config.research').\n\n`output_dir` is the landing area for the research `doc` deliverable: the\nbrief (`<slug>.md`) and its evidence sidecar (`<slug>.sources.jsonl`) are\nwritten there. Unlike `post_merge.parking_lot_path` this is NOT repo-relative\n- it is a vault/output area (e.g. ~/c3po/raw/readyrule), so absolute and\n'~'-anchored paths are allowed. Left unset by default so a repo that has not\nopted in fails loud at the ship step rather than guessing a landing path\n(the parking_lot_path lesson, AC5).",
+      "properties": {
+        "output_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Dir"
+        }
+      },
+      "title": "ResearchBlock",
+      "type": "object"
+    },
+    "ResourceMeterBlock": {
+      "description": "The whole-machine resource meter (config.resource_meter).\n\nSame four parts as ``config.health_monitor``: an enable, thresholds, a\nnotification routing block, and a history block. ``enabled`` defaults to\nFALSE - the feature needs the ``macmon`` binary on PATH, which fno core\ndoes not depend on, and a meter that silently renders nothing on a machine\nwithout it must not be on by default. This is a plain feature toggle by\noperator ruling: no adapter interface, no plugin registry, no\ndiscriminator.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "history": {
+          "$ref": "#/$defs/HealthHistoryBlock"
+        },
+        "notifications": {
+          "$ref": "#/$defs/HealthNotificationsBlock"
+        },
+        "refresh_seconds": {
+          "default": 5,
+          "title": "Refresh Seconds",
+          "type": "integer"
+        },
+        "thresholds": {
+          "$ref": "#/$defs/ResourceMeterThresholdsBlock"
+        }
+      },
+      "title": "ResourceMeterBlock",
+      "type": "object"
+    },
+    "ResourceMeterThresholdsBlock": {
+      "description": "Whole-machine resource thresholds the meter may flag against.\n\n``swap_used_gb``: swap in use above this reads as memory pressure. It is\nadvisory for now - the meter renders readings, it gates nothing yet - but\nthe shape is here so a later gate does not re-derive the numbers.",
+      "properties": {
+        "cpu_busy_fraction": {
+          "default": 0.9,
+          "title": "Cpu Busy Fraction",
+          "type": "number"
+        },
+        "swap_used_gb": {
+          "default": 1.0,
+          "title": "Swap Used Gb",
+          "type": "number"
+        }
+      },
+      "title": "ResourceMeterThresholdsBlock",
+      "type": "object"
+    },
+    "ReviewBlock": {
+      "description": "External-review gate settings (nested under 'config.review').\n\n    `github_apps` is the must-have-reviewed list of GitHub App bot logins\n    consumed by the `fno-agents loop-check` review gate (control-plane step 2,\n): a session terminates DonePRGreen only when every listed login\n    has at least one completed review pass and no unaddressed blocking finding.\n\n    Semantics (mirrors the Rust-side parser in loopcheck.rs):\n      - key absent (None)  -> no review gate (PR + CI only); a fresh install\n                              completes without hanging on a bot it never set up.\n                              The effective Rust default is [] (cv-6537099f); the\n                              old [\"chatgpt-codex-connector\"] docstring was wrong.\n      - explicit []        -> declared no-review-gate path (PR + CI only),\n                              mirroring ci.declared_none; never auto-detected\n      - non-empty list     -> every listed login must pass\n\n    `peers` are harness peers (codex/gemini/...) run locally. Identity-free\n    entries satisfy one composite, head-pinned local-attestation gate when any\n    configured cross-model peer returns a clean verdict. An explicit entry\n    `identity` or shared `peer_identity` retains the legacy mode that posts a\n    GitHub review and gates on that login.\n\n    `required_bots` is a legacy alias for `github_apps` (a straight rename).\n    Existing configs are unchanged; if both are set, `github_apps` wins.\n\n    Distinct from `config.external_reviewers` (the recognition/matching\n    list): that list says which logins count as bots; `github_apps` says which\n    logins are REQUIRED to have reviewed.\n    ",
+      "properties": {
+        "agent_harnesses": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Agent Harnesses",
+          "type": "object"
+        },
+        "agent_providers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Agent Providers",
+          "type": "object"
+        },
+        "agent_routes": {
+          "additionalProperties": true,
+          "title": "Agent Routes",
+          "type": "object"
+        },
+        "bot_identity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bot Identity"
+        },
+        "bot_token_env": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bot Token Env"
+        },
+        "carry_interdiff_lines": {
+          "default": 100,
+          "minimum": 0,
+          "title": "Carry Interdiff Lines",
+          "type": "integer"
+        },
+        "cross_model": {
+          "$ref": "#/$defs/CrossModelBlock"
+        },
+        "external_reviewers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "External Reviewers",
+          "type": "array"
+        },
+        "github_approval_satisfies": {
+          "default": true,
+          "title": "Github Approval Satisfies",
+          "type": "boolean"
+        },
+        "github_apps": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Github Apps"
+        },
+        "hold_ttl_minutes": {
+          "default": 90,
+          "title": "Hold Ttl Minutes",
+          "type": "integer"
+        },
+        "invocation_ttl_minutes": {
+          "default": 15,
+          "minimum": 1,
+          "title": "Invocation Ttl Minutes",
+          "type": "integer"
+        },
+        "max_rounds": {
+          "default": 2,
+          "minimum": 1,
+          "title": "Max Rounds",
+          "type": "integer"
+        },
+        "nonblocking_categories": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nonblocking Categories"
+        },
+        "nudge": {
+          "additionalProperties": true,
+          "title": "Nudge",
+          "type": "object"
+        },
+        "optional_apps": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Optional Apps"
+        },
+        "optout_ttl_minutes": {
+          "default": 60,
+          "maximum": 1440,
+          "minimum": 1,
+          "title": "Optout Ttl Minutes",
+          "type": "integer"
+        },
+        "peer_identity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peer Identity"
+        },
+        "peer_token_env": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peer Token Env"
+        },
+        "peers": {
+          "items": {},
+          "title": "Peers",
+          "type": "array"
+        },
+        "posture": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Posture"
+        },
+        "require_corroboration": {
+          "default": false,
+          "title": "Require Corroboration",
+          "type": "boolean"
+        },
+        "required_bots": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required Bots"
+        },
+        "reviewer_registry": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ReviewerDescriptor"
+          },
+          "title": "Reviewer Registry",
+          "type": "object"
+        },
+        "reviewers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reviewers",
+          "type": "array"
+        },
+        "self_review_required": {
+          "default": true,
+          "title": "Self Review Required",
+          "type": "boolean"
+        }
+      },
+      "title": "ReviewBlock",
+      "type": "object"
+    },
+    "ReviewerDescriptor": {
+      "description": "What a `config.review.reviewers` entry needs in order to actually run.\n\nA name alone cannot answer \"can this reviewer run unattended, here?\" - the\nquestion that made a `reviewers: [sigma]` gate unsatisfiable-by-construction\non a harness with no subagent dispatch, discovered only after the work was\ndone. These four fields are what the init capability check and the\nloop-check blocked reason both render from, so neither can invent its own\nstory about a reviewer.",
+      "properties": {
+        "asserts": {
+          "enum": [
+            "review-evidence",
+            "self-cert",
+            "invocation"
+          ],
+          "title": "Asserts",
+          "type": "string"
+        },
+        "invocation": {
+          "title": "Invocation",
+          "type": "string"
+        },
+        "invocations": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Invocations"
+        },
+        "kind": {
+          "enum": [
+            "local-attestation",
+            "github-app",
+            "external-cli",
+            "human",
+            "harness-skill"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "requires": {
+          "enum": [
+            "none",
+            "subagent-dispatch",
+            "operator",
+            "skill",
+            "retired"
+          ],
+          "title": "Requires",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "requires",
+        "invocation",
+        "asserts"
+      ],
+      "title": "ReviewerDescriptor",
+      "type": "object"
+    },
+    "RoutingBlock": {
+      "description": "Config-first model routing inventory (nested under 'config.routing').\n\nConfig overrides the built-in fallback table per model and per field and\nextends it; the fallback only keeps a tier request answerable where\nnothing is declared. Full policy: docs/architecture/role-based-model-routing.md.",
+      "properties": {
+        "enforce_inventory": {
+          "default": false,
+          "title": "Enforce Inventory",
+          "type": "boolean"
+        },
+        "models": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Models",
+          "type": "array"
+        },
+        "objective": {
+          "default": "cheapest-that-clears",
+          "title": "Objective",
+          "type": "string"
+        },
+        "operator_access": {
+          "default": "unknown",
+          "title": "Operator Access",
+          "type": "string"
+        },
+        "prefer_harness": {
+          "default": "",
+          "title": "Prefer Harness",
+          "type": "string"
+        }
+      },
+      "title": "RoutingBlock",
+      "type": "object"
+    },
+    "SandboxBlock": {
+      "description": "Confinement fallback policy (nested under ``config.sandbox``).",
+      "properties": {
+        "on_unavailable": {
+          "default": "refuse",
+          "enum": [
+            "refuse",
+            "warn"
+          ],
+          "title": "On Unavailable",
+          "type": "string"
+        }
+      },
+      "title": "SandboxBlock",
+      "type": "object"
+    },
+    "SidelineBlock": {
+      "description": "Sideline render config (nested under 'config.sideline').",
+      "properties": {
+        "colors": {
+          "$ref": "#/$defs/SidelineColorsBlock"
+        },
+        "layout": {
+          "default": "card",
+          "enum": [
+            "card",
+            "list"
+          ],
+          "title": "Layout",
+          "type": "string"
+        }
+      },
+      "title": "SidelineBlock",
+      "type": "object"
+    },
+    "SidelineColorsBlock": {
+      "additionalProperties": false,
+      "description": "Lane-color tables for the mux sideline (nested under 'config.sideline.colors').\n\nEvery key names its axis explicitly - ``harness.<name>``,\n   ``route.<name>``, ``model.\"<model string>\"``, ``row.<routing-row name>`` -\n   because a bare key is ambiguous between account, route and model, and an\n   axis is never inferred from a value. ``extra='forbid'`` is the refusal: a\n   bare ``zai = \"green\"`` under this table is a config ERROR naming the four\n   legal axis tables, not a silently ignored guess.\n\n   Values are color names the Rust reader parses (ANSI-16 names,\n   ``indexed(<n>)``, ``#rrggbb``). Resolution happens in\n   ``crates/fno/src/sideline_color.rs`` through one fixed cascade - routing\n   row, then model, then route, then harness, then the built-in table - and\n   an unknown color name falls THROUGH the cascade rather than blanking a\n   row, so a typo here can never mis-color the sideline.\n   ",
+      "properties": {
+        "harness": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Harness",
+          "type": "object"
+        },
+        "model": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Model",
+          "type": "object"
+        },
+        "route": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Route",
+          "type": "object"
+        },
+        "row": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Row",
+          "type": "object"
+        }
+      },
+      "title": "SidelineColorsBlock",
+      "type": "object"
+    },
+    "SpawnDefaultsBlock": {
+      "description": "Default spawn routing (nested under 'config.agents.defaults').\n\nThe bottom-most operator rung of the spawn precedence chain: an explicit\nCLI flag > these defaults > the built-in. Every bare `fno agents spawn`\ninherits any field set here, autonomous dispatch included; an unpinned\n`model` or `effort` DOES inherit. Empty string = unset. No value\nvalidation here: config stays a leaf module ; provider and effort\nare checked at the spawn seam. `route`/`account` sit beside the legacy\n`provider` field (ruling 4), which keeps meaning harness.",
+      "properties": {
+        "account": {
+          "default": "",
+          "title": "Account",
+          "type": "string"
+        },
+        "effort": {
+          "default": "",
+          "title": "Effort",
+          "type": "string"
+        },
+        "harness": {
+          "additionalProperties": {
+            "$ref": "#/$defs/HarnessOverlayBlock"
+          },
+          "title": "Harness",
+          "type": "object"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "permission_mode": {
+          "default": "",
+          "title": "Permission Mode",
+          "type": "string"
+        },
+        "provider": {
+          "default": "",
+          "title": "Provider",
+          "type": "string"
+        },
+        "route": {
+          "default": "",
+          "title": "Route",
+          "type": "string"
+        },
+        "substrate": {
+          "default": "",
+          "title": "Substrate",
+          "type": "string"
+        }
+      },
+      "title": "SpawnDefaultsBlock",
+      "type": "object"
+    },
+    "SpawnProfileBlock": {
+      "description": "Per-command overlay plus its strict ordered delivery-lane vocabulary.",
+      "properties": {
+        "account": {
+          "default": "",
+          "title": "Account",
+          "type": "string"
+        },
+        "by_difficulty": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DifficultyLaneBlock"
+          },
+          "title": "By Difficulty",
+          "type": "object"
+        },
+        "effort": {
+          "default": "",
+          "title": "Effort",
+          "type": "string"
+        },
+        "harness": {
+          "additionalProperties": {
+            "$ref": "#/$defs/HarnessOverlayBlock"
+          },
+          "title": "Harness",
+          "type": "object"
+        },
+        "lanes": {
+          "title": "Lanes"
+        },
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "on_exhausted": {
+          "default": "",
+          "title": "On Exhausted",
+          "type": "string"
+        },
+        "on_low": {
+          "default": "",
+          "title": "On Low",
+          "type": "string"
+        },
+        "on_unknown": {
+          "default": "",
+          "title": "On Unknown",
+          "type": "string"
+        },
+        "pane_group": {
+          "default": "",
+          "title": "Pane Group",
+          "type": "string"
+        },
+        "permission_mode": {
+          "default": "",
+          "title": "Permission Mode",
+          "type": "string"
+        },
+        "provider": {
+          "default": "",
+          "title": "Provider",
+          "type": "string"
+        },
+        "route": {
+          "default": "",
+          "title": "Route",
+          "type": "string"
+        },
+        "substrate": {
+          "default": "",
+          "title": "Substrate",
+          "type": "string"
+        }
+      },
+      "title": "SpawnProfileBlock",
+      "type": "object"
+    },
+    "SplitBlock": {
+      "description": "Split placement config (nested under 'config.split').",
+      "properties": {
+        "opens": {
+          "default": "pane",
+          "enum": [
+            "pane",
+            "portal"
+          ],
+          "title": "Opens",
+          "type": "string"
+        }
+      },
+      "title": "SplitBlock",
+      "type": "object"
+    },
+    "StateReapBlock": {
+      "description": "Retention windows for expendable local state families.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "expired_claims_retain_days": {
+          "default": 30,
+          "title": "Expired Claims Retain Days",
+          "type": "integer"
+        },
+        "locks_retain_days": {
+          "default": 7,
+          "title": "Locks Retain Days",
+          "type": "integer"
+        },
+        "pr_status_cache_retain_days": {
+          "default": 14,
+          "title": "Pr Status Cache Retain Days",
+          "type": "integer"
+        }
+      },
+      "title": "StateReapBlock",
+      "type": "object"
+    },
+    "StatusFanoutConfig": {
+      "description": "Fanout dispatcher tuning (config.status_fanout).\n\nNon-positive tuning values fail loud at config load (matching this file's\nconvention) rather than reaching ``urllib`` as a negative timeout - which\nraises deep inside a per-sink try/except and silently drops every event.",
+      "properties": {
+        "http_timeout_secs": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Http Timeout Secs",
+          "type": "integer"
+        },
+        "interval_secs": {
+          "default": 5,
+          "minimum": 1,
+          "title": "Interval Secs",
+          "type": "integer"
+        },
+        "retries": {
+          "default": 2,
+          "minimum": 0,
+          "title": "Retries",
+          "type": "integer"
+        },
+        "short_circuit_backoff_secs": {
+          "default": 300,
+          "minimum": 0,
+          "title": "Short Circuit Backoff Secs",
+          "type": "integer"
+        }
+      },
+      "title": "StatusFanoutConfig",
+      "type": "object"
+    },
+    "StatusSinkConfig": {
+      "description": "One status sink (``config.status_sinks[]``).\n\nSemantic errors (unknown type, out-of-whitelist ``match`` key, both/neither\nof ``url``/``url_env``, duplicate ``name`` across the list) RAISE at config\nload - a misconfigured sink fails loud rather than silently not delivering.\nA container-level type mismatch (a scalar where the list belongs) still\nfails safe to ``[]`` in ``ConfigBlock`` so a typo never bricks settings load.",
+      "properties": {
+        "cloudevents": {
+          "default": false,
+          "title": "Cloudevents",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "events": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Events",
+          "type": "array"
+        },
+        "field": {
+          "default": "content",
+          "title": "Field",
+          "type": "string"
+        },
+        "match": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Match",
+          "type": "object"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "raw_body": {
+          "default": false,
+          "title": "Raw Body",
+          "type": "boolean"
+        },
+        "template": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Template"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "url_env": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url Env"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "title": "StatusSinkConfig",
+      "type": "object"
+    },
+    "StoreBlock": {
+      "description": "The libSQL (sqld) primary that every machine dials out to.",
+      "properties": {
+        "remote_addrs": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Addrs"
+        },
+        "remote_token": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Token"
+        },
+        "remote_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remote Url"
+        },
+        "share_backlog": {
+          "default": false,
+          "title": "Share Backlog",
+          "type": "boolean"
+        }
+      },
+      "title": "StoreBlock",
+      "type": "object"
+    },
+    "StyleBlock": {
+      "description": "Style-checker numbers (nested under 'config.style').",
+      "properties": {
+        "word_cap": {
+          "$ref": "#/$defs/WordCapBlock"
+        }
+      },
+      "title": "StyleBlock",
+      "type": "object"
+    },
+    "TargetConfig": {
+      "description": "Target pipeline settings (nested under 'config.target').\n\n`dedupe_dead_duplicates` (Component B) gates the stop hook's\nopt-in cleanup of provably-dead duplicate sibling target-state.md files.\nWhen two worktrees of one repo carry an IN_PROGRESS state bound to the same\nclaude_transcript_id, enabling this lets the stop hook rename the\nprovably-dead sibling to `*.superseded` (recoverable) after a transcript-id\nbackfill - but only when it is not the live worktree, its owner_pid is dead,\nand it is older than the current state. Default OFF: the non-destructive\nresolution-time tiebreak (Component A) alone fixes the p1 false-orphan; this\nis an incremental hygiene layer.",
+      "properties": {
+        "blast": {
+          "$ref": "#/$defs/BlastConfig"
+        },
+        "dedupe_dead_duplicates": {
+          "default": false,
+          "title": "Dedupe Dead Duplicates",
+          "type": "boolean"
+        },
+        "defaults": {
+          "$ref": "#/$defs/TargetDefaultsBlock"
+        },
+        "handoff": {
+          "$ref": "#/$defs/HandoffBlock"
+        }
+      },
+      "title": "TargetConfig",
+      "type": "object"
+    },
+    "TargetDefaultsBlock": {
+      "description": "Session-input defaults (nested under 'config.target.defaults').\n\nThese are NOT pipeline config: they are the default *values* a /target\nsession starts with when the CLI flag / env override is absent. They are\nenumerated here so they appear in the generated docs as \"session-input\ndefaults\", but the runtime values are still resolved from the size profile\nand TARGET_NO_* env overrides at session init - this block only documents\nthe fallbacks. `budget_cap` was intentionally NOT modeled (Locked Decision\n10): cost accounting is not yet a dependable control.",
+      "properties": {
+        "max_iterations": {
+          "default": 40,
+          "title": "Max Iterations",
+          "type": "integer"
+        },
+        "no_docs": {
+          "default": false,
+          "title": "No Docs",
+          "type": "boolean"
+        },
+        "no_external": {
+          "default": false,
+          "title": "No External",
+          "type": "boolean"
+        }
+      },
+      "title": "TargetDefaultsBlock",
+      "type": "object"
+    },
+    "TelemetryBlock": {
+      "properties": {
+        "claude_otel": {
+          "default": true,
+          "title": "Claude Otel",
+          "type": "boolean"
+        },
+        "otlp": {
+          "$ref": "#/$defs/TelemetryOtlpBlock"
+        }
+      },
+      "title": "TelemetryBlock",
+      "type": "object"
+    },
+    "TelemetryOtlpBlock": {
+      "description": "OTLP log export. ``headers_env`` names the env var holding the auth headers.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "endpoint": {
+          "default": "",
+          "title": "Endpoint",
+          "type": "string"
+        },
+        "headers_env": {
+          "default": "FNO_OTLP_HEADERS",
+          "title": "Headers Env",
+          "type": "string"
+        },
+        "log_content": {
+          "default": false,
+          "title": "Log Content",
+          "type": "boolean"
+        }
+      },
+      "title": "TelemetryOtlpBlock",
+      "type": "object"
+    },
+    "TestBlock": {
+      "description": "Bounds for one suite run under ``fno doctor test``.",
+      "properties": {
+        "max_net_new": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Net New"
+        },
+        "timeout_seconds": {
+          "default": 1800,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "title": "TestBlock",
+      "type": "object"
+    },
+    "ThinkSpawnBlock": {
+      "description": "Context-carrying /think spawn settings (nested under 'config.think_spawn').\n\nThe opt-in for node : when enabled, the node-birth path (``fno backlog\nidea``) OFFERS a context-carrying ``/think`` thread for a generated organic\nnode (a birth trigger never auto-spawns -), handing it the *resolved*\norigin transcript pointer (not a paraphrase) so a later pickup starts from\nground truth. A real spawn still happens for the explicit conversational\ncommand, an armed lifecycle trigger (``on_work_start``), or a\nconsented decompose fan-out.\n\nDefault ``False`` (Locked Decision 2): shipping this changes nothing until\nthe operator arms it; an absent key reads as off. The fail-safe posture\nmirrors ``config.auto_continue``: a malformed block degrades to disabled\nrather than failing the whole settings load - false-enabled (a background\n``/think`` dispatched against the operator's intent) is the dangerous\ndirection. The enable + presence + spawn logic lives in\n:mod:`fno.provenance.spawn_think`.\n\n``max_per_run`` is the per-node-generation-run blast-radius cap (AC4-EDGE):\na bulk run exceeding it skips the remainder and logs the truncation.\n``idle_threshold_s`` is the discretionary activity-recency refinement\n(Claude's Discretion 1); ``0`` (default) disables it so the primary\nattended-vs-headless signal stands alone.\n\nActual context-think launches use the shared ``config.dispatch`` profile;\nthis block controls when to offer or launch them, not their harness or\nsubstrate.",
+      "properties": {
+        "attended": {
+          "default": "offer",
+          "title": "Attended",
+          "type": "string"
+        },
+        "daily_cap": {
+          "default": 20,
+          "title": "Daily Cap",
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "idle_threshold_s": {
+          "default": 0,
+          "title": "Idle Threshold S",
+          "type": "integer"
+        },
+        "max_per_run": {
+          "default": 5,
+          "title": "Max Per Run",
+          "type": "integer"
+        },
+        "on_decompose_wave0": {
+          "default": false,
+          "title": "On Decompose Wave0",
+          "type": "boolean"
+        },
+        "on_work_start": {
+          "default": false,
+          "title": "On Work Start",
+          "type": "boolean"
+        },
+        "substrate": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Substrate"
+        }
+      },
+      "title": "ThinkSpawnBlock",
+      "type": "object"
+    },
+    "UserBlock": {
+      "description": "How the machine addresses the human (nested under ``config.user``).\n\n``name`` is a form of address, never an identity and never an authority.\nEmpty is the unset state, and ``display_name`` falls back to\n``git config user.name`` so a fresh install already says something better\nthan a role noun.",
+      "properties": {
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "title": "UserBlock",
+      "type": "object"
+    },
+    "WatchdogBlock": {
+      "description": "The lane's settings. The per-key text an operator reads is\n`FIELD_META` in `registry.py`; a copy here would drift from it.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "mail_to": {
+          "default": "",
+          "title": "Mail To",
+          "type": "string"
+        },
+        "mode": {
+          "default": "report",
+          "enum": [
+            "report",
+            "wake",
+            "handoff"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "title": "WatchdogBlock",
+      "type": "object"
+    },
+    "WordCapBlock": {
+      "description": "Per-surface masked-word caps for style rule 7.\n\nOne number per surface that is read MID-TURN. The surface set itself lives\nin the style gate (crates/fno-agents/src/backlog/style_check.rs) and is not\nconfigurable: a project may move a number here, and may never cap a surface\nthe checker says is uncapped.\n\nBounds come from a validator, not from `Field(80, ge=1)`. A positional\ndefault plus a constraint makes mypy resolve this class's `default_factory`\nuse below as `Callable[[], Never]`, and `fno.config` is held to mypy strict.\n`MaintainBlock` above is the same shape for the same reason.",
+      "properties": {
+        "encounter": {
+          "default": 80,
+          "title": "Encounter",
+          "type": "integer"
+        },
+        "mail": {
+          "default": 80,
+          "title": "Mail",
+          "type": "integer"
+        }
+      },
+      "title": "WordCapBlock",
+      "type": "object"
+    },
+    "WorkBlock": {
+      "description": "Workspace / project topology map (TOP-LEVEL ``work:`` in settings.yaml).\n\nStored at the top level (NOT under ``config:``), matching the live file and\nthe bash ``get_workspace`` reader (``scripts/lib/config.sh`` reads\n``.work.workspaces.*``). Load-bearing for project/cwd resolution in\n``fno backlog maintain`` / ``health``. The plan's \"config.work\" phrasing was\ncorrected to top-level to match ground truth and keep promotion non-breaking.",
+      "properties": {
+        "workspaces": {
+          "additionalProperties": {
+            "$ref": "#/$defs/WorkspaceEntry"
+          },
+          "title": "Workspaces",
+          "type": "object"
+        }
+      },
+      "title": "WorkBlock",
+      "type": "object"
+    },
+    "WorkspaceEntry": {
+      "description": "One named workspace (work.workspaces.<slug>).",
+      "properties": {
+        "projects": {
+          "items": {
+            "$ref": "#/$defs/WorkspaceProjectEntry"
+          },
+          "title": "Projects",
+          "type": "array"
+        }
+      },
+      "title": "WorkspaceEntry",
+      "type": "object"
+    },
+    "WorkspaceProjectEntry": {
+      "description": "One project within a workspace (work.workspaces.<slug>.projects[]).\n\nField names match what the bash ``get_workspace`` reader and the\ncross-project pipeline expect; ``extra=\"ignore\"`` keeps any extra per-project\nkeys a user added.",
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "package_manager": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Package Manager"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "stack": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Stack",
+          "type": "array"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        },
+        "worktree": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Worktree"
+        }
+      },
+      "title": "WorkspaceProjectEntry",
+      "type": "object"
+    },
+    "WorktreeBlock": {
+      "description": "config.worktree.* - global worktree-isolation defaults.\n\n``extra=\"ignore\"`` keeps the DEPRECATED ``use_conductor_canonical`` key\n(read ad-hoc via read_config_flat elsewhere) valid here. ``policy`` is the\nglobal default (never|harness-native|external); a per-project entry's\n``worktree`` key overrides it. Validated at resolve time, not here.",
+      "properties": {
+        "auto_install": {
+          "default": true,
+          "title": "Auto Install",
+          "type": "boolean"
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Policy"
+        },
+        "prune_done": {
+          "default": "balanced",
+          "title": "Prune Done",
+          "type": "string"
+        },
+        "setup_command": {
+          "default": "",
+          "title": "Setup Command",
+          "type": "string"
+        },
+        "skip_verification": {
+          "default": false,
+          "title": "Skip Verification",
+          "type": "boolean"
+        },
+        "test_command": {
+          "default": "",
+          "title": "Test Command",
+          "type": "string"
+        }
+      },
+      "title": "WorktreeBlock",
+      "type": "object"
+    }
+  },
+  "description": "Root settings model. Config fields live at the TOP level (flat).\n\nHistorically every setting nested under a ``config:`` key; the file is now\nflat (``config.toml`` with top-level blocks). ``SettingsModel`` inherits\n``ConfigBlock`` so ``settings.review`` / ``settings.project`` resolve\ndirectly. The legacy ``config:``-wrapped shape still loads via the\n``_unwrap`` before-validator (so ``SettingsModel(config={...})`` and old\nYAML both work).",
+  "properties": {
+    "accounts": {
+      "$ref": "#/$defs/AccountsBlock"
+    },
+    "active_backlog": {
+      "$ref": "#/$defs/ActiveBacklogConfig"
+    },
+    "agents": {
+      "$ref": "#/$defs/AgentsBlock"
+    },
+    "approvals": {
+      "$ref": "#/$defs/ApprovalsBlock"
+    },
+    "attention": {
+      "$ref": "#/$defs/AttentionBlock"
+    },
+    "auto_continue": {
+      "$ref": "#/$defs/AutoContinueBlock"
+    },
+    "auto_heal": {
+      "$ref": "#/$defs/AutoHealBlock"
+    },
+    "auto_merge": {
+      "$ref": "#/$defs/AutoMergeBlock"
+    },
+    "autonomy": {
+      "$ref": "#/$defs/AutonomyBlock"
+    },
+    "backlog": {
+      "$ref": "#/$defs/BacklogBlock"
+    },
+    "batch": {
+      "$ref": "#/$defs/BatchBlock"
+    },
+    "blueprint": {
+      "$ref": "#/$defs/BlueprintBlock"
+    },
+    "branch": {
+      "$ref": "#/$defs/BranchBlock"
+    },
+    "build": {
+      "$ref": "#/$defs/BuildBlock"
+    },
+    "collision": {
+      "$ref": "#/$defs/CollisionBlock"
+    },
+    "context": {
+      "$ref": "#/$defs/ContextBlock"
+    },
+    "dev": {
+      "$ref": "#/$defs/DevBlock"
+    },
+    "dispatch": {
+      "$ref": "#/$defs/DispatchBlock"
+    },
+    "done_probes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Done Probes",
+      "type": "array"
+    },
+    "evals": {
+      "$ref": "#/$defs/EvalsBlock"
+    },
+    "groom": {
+      "$ref": "#/$defs/GroomBlock"
+    },
+    "guards": {
+      "$ref": "#/$defs/GuardsBlock"
+    },
+    "health_monitor": {
+      "$ref": "#/$defs/HealthMonitorBlock"
+    },
+    "inbox": {
+      "$ref": "#/$defs/InboxBlock"
+    },
+    "join": {
+      "$ref": "#/$defs/JoinBlock"
+    },
+    "keep_going": {
+      "$ref": "#/$defs/KeepGoingBlock"
+    },
+    "lead": {
+      "$ref": "#/$defs/LeadBlock"
+    },
+    "loops": {
+      "additionalProperties": {
+        "$ref": "#/$defs/LoopEntry"
+      },
+      "title": "Loops",
+      "type": "object"
+    },
+    "model_routing": {
+      "$ref": "#/$defs/ModelRoutingBlock"
+    },
+    "mux": {
+      "$ref": "#/$defs/MuxBlock"
+    },
+    "obsidian": {
+      "$ref": "#/$defs/ObsidianBlock"
+    },
+    "parallel": {
+      "$ref": "#/$defs/ParallelBlock"
+    },
+    "paths": {
+      "$ref": "#/$defs/PathsBlock"
+    },
+    "plan": {
+      "$ref": "#/$defs/PlanBlock"
+    },
+    "plans_dir": {
+      "default": ".fno/plans/",
+      "title": "Plans Dir",
+      "type": "string"
+    },
+    "plans_filename": {
+      "default": "%Y%m%d-{slug}-{node}.md",
+      "title": "Plans Filename",
+      "type": "string"
+    },
+    "post_merge": {
+      "$ref": "#/$defs/PostMergeBlock"
+    },
+    "pr_watch": {
+      "$ref": "#/$defs/PrWatchBlock"
+    },
+    "preflight": {
+      "$ref": "#/$defs/PreflightBlock"
+    },
+    "process_admission": {
+      "$ref": "#/$defs/ProcessAdmissionBlock"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectBlock"
+    },
+    "recovery": {
+      "$ref": "#/$defs/RecoveryBlock"
+    },
+    "research": {
+      "$ref": "#/$defs/ResearchBlock"
+    },
+    "resource_meter": {
+      "$ref": "#/$defs/ResourceMeterBlock"
+    },
+    "review": {
+      "$ref": "#/$defs/ReviewBlock"
+    },
+    "routing": {
+      "$ref": "#/$defs/RoutingBlock"
+    },
+    "sandbox": {
+      "$ref": "#/$defs/SandboxBlock"
+    },
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "sideline": {
+      "$ref": "#/$defs/SidelineBlock"
+    },
+    "split": {
+      "$ref": "#/$defs/SplitBlock"
+    },
+    "state_dir": {
+      "default": "~/.fno/",
+      "title": "State Dir",
+      "type": "string"
+    },
+    "status_fanout": {
+      "$ref": "#/$defs/StatusFanoutConfig"
+    },
+    "status_sinks": {
+      "items": {
+        "$ref": "#/$defs/StatusSinkConfig"
+      },
+      "title": "Status Sinks",
+      "type": "array"
+    },
+    "store": {
+      "$ref": "#/$defs/StoreBlock"
+    },
+    "style": {
+      "$ref": "#/$defs/StyleBlock"
+    },
+    "target": {
+      "$ref": "#/$defs/TargetConfig"
+    },
+    "telemetry": {
+      "$ref": "#/$defs/TelemetryBlock"
+    },
+    "test": {
+      "$ref": "#/$defs/TestBlock"
+    },
+    "think_spawn": {
+      "$ref": "#/$defs/ThinkSpawnBlock"
+    },
+    "user": {
+      "$ref": "#/$defs/UserBlock"
+    },
+    "work": {
+      "$ref": "#/$defs/WorkBlock"
+    },
+    "worktree": {
+      "$ref": "#/$defs/WorktreeBlock"
+    }
+  },
+  "title": "SettingsModel",
+  "type": "object"
+}

@@ -308,7 +308,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.4x | 7 | 5 | `cli/src/fno/paths.py:706` | `plan_doc_path` |
 | 1.4x | 7 | 5 | `cli/src/fno/plan/_stamp.py:105` | `_parse_scalar` |
 | 1.4x | 7 | 5 | `cli/src/fno/pr/_merge.py:437` | `_repo_slug` |
-| 1.4x | 7 | 5 | `cli/src/fno/resume/receipt.py:274` | `load_receipt` |
 | 1.4x | 7 | 5 | `cli/src/fno/skill_diff/guards.py:40` | `filter_cited_hunks` |
 | 1.4x | 7 | 5 | `cli/src/fno/target/blast.py:196` | `default_manifest_path` |
 | 1.4x | 7 | 5 | `cli/src/fno/target_cli.py:223` | `_load_blast_cfg` |

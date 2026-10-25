@@ -1,0 +1,35 @@
+0
+{
+  "branch": "feature/x",
+  "claims": [],
+  "completed_tasks": [
+    "1.1",
+    "1.2"
+  ],
+  "content_sha": "39701c8c588783230882ca157c68d638590a39b6c0af6fa36e8edfcda9bfaf13",
+  "head": "02a5dd7474c2268b65799ef0146a9b6d059754ca",
+  "idempotency_keys": [],
+  "identity": {
+    "candidate_sha": "02a5dd7474c2",
+    "generation": 1,
+    "node": "x-1",
+    "phase": "do",
+    "session": "sess-1"
+  },
+  "known_reds": [],
+  "next_action": {
+    "target": "x-1",
+    "verb": "/fno:ship pr check 12"
+  },
+  "open_findings": [],
+  "remaining_tasks": [
+    "2.1"
+  ],
+  "repo": "fno",
+  "task_context": null,
+  "task_context_bound": false,
+  "version": 1,
+  "watchers": [],
+  "worktree": "FIXTURE/write-hp/repo",
+  "written_at": "2026-10-24T12:00:00Z"
+}

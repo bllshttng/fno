@@ -1,9 +1,9 @@
 //! `lead-history`: the team-scope `lead_checkin` readback behind
 //! `fno agents org history`.
 //!
-//! Python resolves the caller's team scope (harness identity and registry
-//! rows are Python-owned), passes every journal `paths.event_journals`
-//! returns, and relays here. The paths reduce to unique live journals (the
+//! The front door execs this for the command. The caller's team scope comes
+//! from the registry and, with no `--events-path`, the journals from
+//! [`default_journals`]. The paths reduce to unique live journals (the
 //! `.ephemeral` siblings never carry durable rows, and a `.1` generation is
 //! the same journal its live path names); each live journal's `events.db`
 //! store is synced FIRST (`event_store::sync`, which ingests the rotated
@@ -497,10 +497,33 @@ fn render(payload: &Value) -> String {
     lines.join("\n")
 }
 
-/// `lead-history [--scope SCOPE] --events-path PATH [--events-path PATH ...] [--json|-J]`
+/// The live journals a read names when the caller passes no `--events-path`:
+/// the machine journal, the agents home journal and the project journal
+/// (`FNO_EVENTS_PATH` pin first), resolved and de-duplicated in the order the
+/// retired Python `paths.event_journals` listed them. Its rotations and
+/// `.ephemeral` siblings need no listing: the scan reduces every path to its
+/// live journal and syncs the rotated generation through the store.
+pub(crate) fn default_journals(cwd: &Path) -> Vec<PathBuf> {
+    let mut journals: Vec<PathBuf> = Vec::new();
+    for live in [
+        crate::paths_cli::global_events_json(cwd),
+        crate::paths::AgentsHome::from_env().events_jsonl(),
+        crate::claims::claim_events_path(None, cwd),
+    ] {
+        let resolved = crate::paths::canonical_best_effort(&live);
+        if !journals.contains(&resolved) {
+            journals.push(resolved);
+        }
+    }
+    journals
+}
+
+/// `lead-history [--scope SCOPE] [--events-path PATH ...] [--json|-J]`
 ///
 /// With no `--scope`, the caller's team scope is resolved natively from the
-/// registry (the retired Python `resolve_scope`).
+/// registry (the retired Python `resolve_scope`). With no `--events-path`,
+/// the read takes [`default_journals`] for the cwd: this is the
+/// `fno agents org history` command.
 ///
 /// rc 0 read (any match count), 1 a store that cannot be opened or synced
 /// (the message names the store path), 2 usage failure.
@@ -526,8 +549,7 @@ pub fn run_lead_history(args: &[String]) -> i32 {
             other => {
                 eprintln!("fno-agents lead-history: unknown flag {other}");
                 eprintln!(
-                    "fno-agents lead-history: [--scope SCOPE] --events-path PATH \
-                     [--events-path PATH ...] [--json|-J]"
+                    "fno-agents lead-history: [--scope SCOPE] [--events-path PATH ...] [--json|-J]"
                 );
                 return 2;
             }
@@ -544,8 +566,8 @@ pub fn run_lead_history(args: &[String]) -> i32 {
         }
     }
     if events_paths.is_empty() {
-        eprintln!("fno-agents lead-history: --events-path is required");
-        return 2;
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        events_paths = default_journals(&cwd);
     }
     match scan(&events_paths, &scope) {
         Ok(payload) => {
@@ -937,11 +959,16 @@ fn scan_readings(
     Ok((r, scanned, duplicates, skipped, journals))
 }
 
-/// `lead-history --verdict [--scope SCOPE] [--manifest PATH] --cwd DIR
-/// --events-path PATH [--events-path ...] [--json]`
+/// `lead-history --verdict [--user-command] [SCOPE | --scope SCOPE] [--manifest PATH]
+/// [--cwd DIR] [--events-path PATH ...] [--json]`
 ///
-/// rc 0 verdict read (any verdict), 1 refused or unreadable input (the
-/// message names the failed reading), 2 usage failure. The read assembles
+/// `--cwd` defaults to the process cwd and the journals to
+/// [`default_journals`]. rc 0 verdict read (any verdict), 1 refused or
+/// unreadable input (the message names the failed reading), 2 usage failure.
+/// `--user-command` is `fno agents org verdict [scope]`: the scope may ride
+/// positionally, a failed reading refuses as `lead verdict unreadable: ...`
+/// at rc 2, and the harness note stays off stderr, as the Python command
+/// printed them. The read assembles
 /// its own inputs: team, manifest, config, graph scope, window,
 /// and delivery split come from `lead_verdict_inputs`; accepting
 /// precomputed facts on the argv would keep the split owner this port
@@ -953,10 +980,20 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
     let mut cwd: Option<PathBuf> = None;
     let mut events_paths: Vec<PathBuf> = Vec::new();
     let mut as_json = false;
+    let mut user_command = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--verdict" => {
+                i += 1;
+            }
+            "--user-command" => {
+                user_command = true;
+                i += 1;
+            }
+            positional if user_command && scope.is_none() && !positional.starts_with('-') => {
+                // An empty word is the command's "default: this session's own".
+                scope = Some(positional.to_string()).filter(|s| !s.is_empty());
                 i += 1;
             }
             "--scope" if i + 1 < args.len() => {
@@ -982,20 +1019,25 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
             other => {
                 eprintln!("fno-agents lead-history --verdict: unknown flag {other}");
                 eprintln!(
-                    "fno-agents lead-history --verdict: [--scope SCOPE] [--manifest PATH] \
-                     --cwd DIR --events-path PATH [--events-path ...] [--json]"
+                    "fno-agents lead-history --verdict: [--user-command] [SCOPE | --scope SCOPE] \
+                     [--manifest PATH] [--cwd DIR] [--events-path PATH ...] [--json]"
                 );
                 return 2;
             }
         }
     }
-    let Some(cwd) = cwd else {
-        eprintln!("fno-agents lead-history --verdict: --cwd and --events-path are required");
-        return 2;
+    let unreadable = |code: i32, msg: &str| -> i32 {
+        if user_command {
+            eprintln!("lead verdict unreadable: fno-agents lead-history --verdict: {msg}");
+            2
+        } else {
+            eprintln!("fno-agents lead-history --verdict: {msg}");
+            code
+        }
     };
+    let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     if events_paths.is_empty() {
-        eprintln!("fno-agents lead-history --verdict: --cwd and --events-path are required");
-        return 2;
+        events_paths = default_journals(&cwd);
     }
     let registry = crate::paths::AgentsHome::from_env().registry_json();
     let inputs = match crate::lead_verdict_inputs::resolve_verdict_inputs(
@@ -1006,10 +1048,7 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
         || chrono::Utc::now(),
     ) {
         Ok(inputs) => inputs,
-        Err(msg) => {
-            eprintln!("fno-agents lead-history --verdict: {msg}");
-            return 1;
-        }
+        Err(msg) => return unreadable(1, &msg),
     };
     let manifest_path = inputs.manifest_path.clone();
     let harness = inputs.harness.clone();
@@ -1038,10 +1077,7 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
         &team_start,
     ) {
         Ok(x) => x,
-        Err(msg) => {
-            eprintln!("fno-agents lead-history --verdict: {msg}");
-            return 1;
-        }
+        Err(msg) => return unreadable(1, &msg),
     };
     // Coverage across the verdict's stores: the row kinds the verdict
     // counts. A store with no epoch (or an unreadable one) leaves the
@@ -1110,7 +1146,11 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
     readings.inherited_closed_in_window = inputs.inherited_closed_in_window;
     let (v, bounds) = verdict(&readings);
     let summary = bound_summary(v, &bounds);
-    if let Some(note) = &inputs.harness_disagreement {
+    if let Some(note) = inputs
+        .harness_disagreement
+        .as_ref()
+        .filter(|_| !user_command)
+    {
         eprintln!("lead-history --verdict: harness disagreement: {note}");
     }
     let payload = json!({
