@@ -660,7 +660,7 @@ pub(crate) fn run_pass(
     let sent = read_sent();
     let mut groups: BTreeMap<String, OwnerGroup> = BTreeMap::new();
     let mut detail: Vec<String> = Vec::new();
-    let mut consumed: Vec<(std::path::PathBuf, Vec<String>)> = Vec::new();
+    let mut consumed: Vec<(std::path::PathBuf, Vec<String>, Option<FileIdentity>)> = Vec::new();
     let paths = crate::territory::workspace_paths(config_cwd);
     // Every workspace project root, plus the config root itself: a repo
     // outside the workspace map still sweeps, and its result must reach an
@@ -673,7 +673,7 @@ pub(crate) fn run_pass(
         if !seen.insert(fno_dir.clone()) {
             continue;
         }
-        if let Some((path, fed, dropped)) = consume_file(
+        if let Some((path, fed, dropped, identity)) = consume_file(
             &fno_dir.join(".reconcile-result.json"),
             &w,
             &mut groups,
@@ -682,9 +682,9 @@ pub(crate) fn run_pass(
             if dropped > 0 {
                 detail.push(format!("suppressed {} settled-node warning(s)", dropped));
             }
-            consumed.push((path, fed));
+            consumed.push((path, fed, identity));
         }
-        if let Some((path, fed, dropped)) = consume_file(
+        if let Some((path, fed, dropped, identity)) = consume_file(
             &fno_dir.join(".orphan-plans-result.json"),
             &w,
             &mut groups,
@@ -693,7 +693,7 @@ pub(crate) fn run_pass(
             if dropped > 0 {
                 detail.push(format!("suppressed {} settled-node warning(s)", dropped));
             }
-            consumed.push((path, fed));
+            consumed.push((path, fed, identity));
         }
     }
     let (acted, terminal) = route_groups(groups, now, &mut detail, &sent);
@@ -702,18 +702,26 @@ pub(crate) fn run_pass(
     // or when the file is older than one reconcile period: one
     // undelivered group must not hold a stale file open forever, and its
     // warnings got this pass's delivery attempt just above.
-    for (path, fed) in consumed {
+    for (path, fed, identity) in consumed {
         let all_terminal = fed.iter().all(|k| terminal.contains(k));
-        if consume_decision(all_terminal, file_age_secs(&path, now)) {
-            if !all_terminal {
-                detail.push(format!(
-                    "consumed a result file older than {}s with undelivered warning(s)",
-                    RECONCILE_PERIOD_S
-                ));
-            }
-            let shown = path.with_extension("json.shown");
-            let _ = std::fs::rename(&path, shown);
+        if !consume_decision(all_terminal, file_age_secs(&path, now)) {
+            continue;
         }
+        // Rename only the instance that was read: the writer publishes by
+        // replacing the path, so a swap between the read and this rename
+        // must leave the fresh file for the next pass, never consume it
+        // uninspected.
+        if path_identity(&path) != identity {
+            continue;
+        }
+        if !all_terminal {
+            detail.push(format!(
+                "consumed a result file older than {}s with undelivered warning(s)",
+                RECONCILE_PERIOD_S
+            ));
+        }
+        let shown = path.with_extension("json.shown");
+        let _ = std::fs::rename(&path, shown);
     }
     if acted == 0 && detail.is_empty() {
         return Ok(crate::lead_wake::Outcome {
@@ -761,8 +769,14 @@ fn consume_file(
     w: &crate::owner_ladder::World,
     groups: &mut BTreeMap<String, OwnerGroup>,
     reader: impl ResultReader,
-) -> Option<(std::path::PathBuf, Vec<String>, usize)> {
-    let raw = std::fs::read_to_string(path).ok()?;
+) -> Option<(std::path::PathBuf, Vec<String>, usize, Option<FileIdentity>)> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let identity = file_identity(&file);
+    let mut raw = String::new();
+    {
+        use std::io::Read;
+        file.read_to_string(&mut raw).ok()?;
+    }
     let warnings = reader.read(&raw);
     let mut dropped = 0usize;
     let warnings: Vec<Warning> = warnings
@@ -816,7 +830,43 @@ fn consume_file(
             group.warnings.push(warning);
         }
     }
-    Some((path.to_path_buf(), fed, dropped))
+    Some((path.to_path_buf(), fed, dropped, identity))
+}
+
+/// The file instance a consume decision names: the fields that change when
+/// the writer replaces the path between the read and the rename. Read off
+/// the open handle, so it describes what was parsed, never whatever sits
+/// at the path later.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct FileIdentity {
+    dev: u64,
+    ino: u64,
+    mtime: i64,
+    len: u64,
+}
+
+/// Identity of what an open handle holds: immune to a later path swap.
+fn file_identity(file: &std::fs::File) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = file.metadata().ok()?;
+    Some(FileIdentity {
+        dev: meta.dev(),
+        ino: meta.ino(),
+        mtime: meta.mtime(),
+        len: meta.len(),
+    })
+}
+
+/// Identity of whatever sits at the path right now.
+fn path_identity(path: &Path) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).ok()?;
+    Some(FileIdentity {
+        dev: meta.dev(),
+        ino: meta.ino(),
+        mtime: meta.mtime(),
+        len: meta.len(),
+    })
 }
 
 /// True when the world read says the warning's node is settled: status
@@ -1971,12 +2021,17 @@ mod tests {
         )
         .unwrap();
         let mut groups = BTreeMap::new();
-        let (_, fed, dropped) =
+        let (_, fed, dropped, identity) =
             consume_file(&res, &w, &mut groups, ReconcileReader).expect("readable result file");
         assert_eq!(dropped, 0);
         assert_eq!(fed.len(), 1);
         let group = groups.values().next().expect("one group");
         assert_eq!(group.warnings.len(), 1);
+        // The identity names the instance that was read: equal to the
+        // path's identity now, unequal after the writer replaces it.
+        assert_eq!(identity, path_identity(&res));
+        std::fs::write(&res, "{\"promise_unmet\": []}").unwrap();
+        assert_ne!(identity, path_identity(&res));
 
         // A file whose every row is settled reports an empty fed list, so
         // the caller consumes it with nothing routed.
@@ -1987,7 +2042,7 @@ mod tests {
         )
         .unwrap();
         let mut done_groups = BTreeMap::new();
-        let (_, fed_done, dropped_done) =
+        let (_, fed_done, dropped_done, _) =
             consume_file(&done_res, &w, &mut done_groups, ReconcileReader)
                 .expect("readable result file");
         assert_eq!(dropped_done, 1);
