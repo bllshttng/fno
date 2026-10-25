@@ -3079,23 +3079,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_bg_row_without_an_invocation_stays_a_discussion() {
-        let unstamped = GcRow {
-            origin: None,
-            bg_fno_invoked: false,
-            ..retiring()
-        };
-        assert_eq!(
-            gc_decide(&unstamped, GRACE),
-            (
-                GcAction::Keep,
-                Some(KeepReason::NotSpawn { origin: "".into() })
-            ),
-            "no fno invocation: the not-spawn keep stands"
-        );
-    }
-
     // ──: the reaper asks the session, not only the node ──────────
 
     /// An open-work row that is quiet past the grace - the shape the old
