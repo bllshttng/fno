@@ -34,8 +34,13 @@ pub fn open_write(path: &Path) -> Result<Connection, String> {
 /// A read-only handle. Never creates the file.
 pub fn open_read(path: &Path) -> Result<Connection, String> {
     refuse_truncated_database(path)?;
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|error| named(path, error))?;
+    // The plain open first so its error stays the named failure; the
+    // immutable retry only fires on the clean-exit mint (header stays WAL,
+    // sidecars gone) that this door's own WAL stores become.
+    let connection = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(connection) => connection,
+        Err(original) => open_read_only_wal_safe(path).ok_or_else(|| named(path, original))?,
+    };
     connection
         .busy_timeout(BUSY_WAIT)
         .map_err(|error| named(path, error))?;
@@ -43,6 +48,32 @@ pub fn open_read(path: &Path) -> Result<Connection, String> {
         .query_row("PRAGMA schema_version", [], |row| row.get::<_, i64>(0))
         .map_err(|error| named(path, error))?;
     Ok(connection)
+}
+
+/// The one read-only open over a WAL-mode store, shared by this door's
+/// readers: an ordinary read-only open, then the immutable retry a store
+/// whose daemon exited clean (the -shm sidecar gone while the header stays
+/// WAL) needs. The URI spelling percent-encodes the path so the
+/// `?immutable=1` query survives reserved characters in the path itself.
+/// The retry fires only when the plain open refused, so a live writer never
+/// takes it. `None` when neither opens. Self-contained because build.rs
+/// copies this module verbatim into the fno twin, which has no graph_store.
+fn open_read_only_wal_safe(path: &Path) -> Option<Connection> {
+    if let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        return Some(conn);
+    }
+    let mut encoded = String::new();
+    for byte in path.to_string_lossy().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b'-' | b'~' => {
+                encoded.push(*byte as char);
+            }
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    let uri = format!("file:{encoded}?immutable=1");
+    let uri_flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
+    Connection::open_with_flags(uri, uri_flags).ok()
 }
 
 fn refuse_truncated_database(path: &Path) -> Result<(), String> {
@@ -129,5 +160,44 @@ mod tests {
                 .contains("file is not a database"));
             assert_eq!(std::fs::read(&junk).unwrap(), bytes);
         }
+    }
+
+    /// The clean-exit mint: a WAL store whose sidecars are gone (the daemon
+    /// exited clean, the -shm left with the -wal) refuses a plain read-only
+    /// open and answers through the immutable retry. Stripping the
+    /// directory's write bit makes the refusal deterministic: the plain
+    /// open cannot create the -shm it wants; the immutable open creates
+    /// nothing and reads.
+    #[test]
+    fn a_minted_wal_store_reads_through_the_immutable_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("minted.db");
+        let writer = open_write(&path).unwrap();
+        writer
+            .execute_batch("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('row');")
+            .unwrap();
+        drop(writer);
+        // A clean close already checkpoints and removes the sidecars; the
+        // header still says WAL. Anything left over is removed by hand so
+        // the fixture is the minted shape regardless of close behavior.
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = path.with_file_name(format!("minted.db{suffix}"));
+            std::fs::remove_file(&sidecar).ok();
+        }
+        assert!(!path.with_file_name("minted.db-wal").exists());
+        let mode = std::fs::metadata(dir.path()).unwrap().permissions();
+        {
+            let mut ro = mode.clone();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut ro, ro.mode() & !0o200);
+            std::fs::set_permissions(dir.path(), ro).unwrap();
+        }
+        let plain = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY);
+        assert!(plain.is_err(), "the minted shape must refuse a plain open");
+        let reader = open_read(&path).unwrap();
+        let value: String = reader
+            .query_row("SELECT v FROM t", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, "row");
+        std::fs::set_permissions(dir.path(), mode).unwrap();
     }
 }
