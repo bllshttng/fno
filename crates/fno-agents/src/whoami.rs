@@ -1419,7 +1419,10 @@ fn foreign_identity_line(ident: &crate::spawn_context::OwnedIdentity) -> Option<
     if flags.is_empty() {
         return None;
     }
-    let names: Vec<&str> = flags.iter().map(|f| f.split_once(' ').unwrap().1).collect();
+    let names: Vec<&str> = flags
+        .iter()
+        .filter_map(|f| f.split_once(' ').map(|x| x.1))
+        .collect();
     let families: Vec<String> = {
         let mut seen: Vec<&str> = Vec::new();
         for name in &names {
@@ -1873,11 +1876,15 @@ fn scan_unread_count(name: &str, exclude_from: Option<&[String]>) -> u64 {
             .get("meta")
             .and_then(|meta| meta.get("withdraws"))
             .and_then(Value::as_str);
-        if let Some(target) = target_id.and_then(|t| by_id.get(t)) {
-            if target.get("from").and_then(Value::as_str) == m.get("from").and_then(Value::as_str)
-                && target.get("to").and_then(Value::as_str) == m.get("to").and_then(Value::as_str)
-            {
-                retracted.insert(target_id.unwrap().to_string());
+        if let Some(target_id) = target_id {
+            if let Some(target) = by_id.get(target_id) {
+                if target.get("from").and_then(Value::as_str)
+                    == m.get("from").and_then(Value::as_str)
+                    && target.get("to").and_then(Value::as_str)
+                        == m.get("to").and_then(Value::as_str)
+                {
+                    retracted.insert(target_id.to_string());
+                }
             }
         }
     }

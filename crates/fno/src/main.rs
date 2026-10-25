@@ -648,12 +648,14 @@ fn classify_whoami(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
             }
             Some((claimed_tail(tail, root_json), false))
         }
-        "status" => Some((
-            std::iter::once(OsString::from("status"))
+        "status" => {
+            let mut tail: Vec<OsString> = std::iter::once(OsString::from("status"))
                 .chain(args[1..].iter().cloned())
-                .collect(),
-            true,
-        )),
+                .collect();
+            let json = root_json.then(|| OsString::from("--json"));
+            let tail = json.into_iter().chain(tail.drain(..)).collect();
+            Some((tail, true))
+        }
         _ => None,
     }
 }
