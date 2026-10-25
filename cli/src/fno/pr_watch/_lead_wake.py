@@ -578,12 +578,15 @@ def run_lead_wake(
                         wait_s=_wait_cap(left, cap if cap is not None else _LEAD_TRUTH_WAIT_S))
 
     if unread_fn is None:
-        from fno.bus.cursor import scan_unread
-        from fno.bus.log import iter_messages
+        from fno import paths, rust_binary
 
-        # One bus read per pass, not one per address: a role has up to nine.
-        scanned, _bus_cut = _setup_bounded(None, lambda: list(iter_messages()))
-        unread_fn = partial(scan_unread, messages=scanned or [])
+        live = str(paths.bus_dir() / "messages.jsonl")
+
+        def _unread(address: str) -> list:
+            args = ["chats", "bus-read", "unread", "--name", address, "--bus", live]
+            return rust_binary.command_call(args, {}).get(address) or []
+
+        unread_fn = _unread
 
     def _note(msg: str) -> None:
         prior = str(summary.get("note") or "")

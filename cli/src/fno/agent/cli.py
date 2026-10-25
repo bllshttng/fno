@@ -23,8 +23,6 @@ paired-state hash invariance. Shared options on the summary and status:
 """
 from __future__ import annotations
 
-import contextlib
-import io
 import json
 import os
 import sys
@@ -140,20 +138,24 @@ def _mail_unread_count(
 
     Each address is guarded independently so one unreadable lane never zeroes the
     others; whoami is the confused-agent recovery command and must never gain a
-    failure mode. stderr is swallowed for the scan: ``warn=False`` silences
-    ``iter_messages`` but not ``read_cursor``'s corrupt-cursor warning."""
+    failure mode. stderr is swallowed for the scan: the door's malformed-line
+    warnings ride the captured stream the command never surfaces."""
     try:
-        from fno.bus.cursor import scan_unread
+        from fno import paths, rust_binary
         from fno.inbox.store import resolve_project
     except Exception:
         return 0
+
+    live = str(paths.bus_dir() / "messages.jsonl")
 
     def _count(addr: Optional[str], exclude: Optional[set[str]]) -> int:
         if not addr:
             return 0
         try:
-            with contextlib.redirect_stderr(io.StringIO()):
-                return len(scan_unread(addr, warn=False, exclude_from=exclude))
+            args = ["chats", "bus-read", "unread", "--name", addr, "--bus", live]
+            if exclude:
+                args += ["--exclude", ",".join(sorted(exclude))]
+            return len(rust_binary.command_call(args, {})[addr])
         except Exception:
             return 0
 
