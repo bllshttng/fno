@@ -1680,7 +1680,7 @@ mod tests {
             Role::AgentsLeadRefreshCanon(os(&["--extra"]))
         );
         assert_eq!(
-            decide_role(&os(&["agents", "lead", "checkin"]), false),
+            decide_role(&os(&["agents", "lead", "done"]), false),
             Role::Forward
         );
         // The mail reader claims its command and refuses the renamed one by
