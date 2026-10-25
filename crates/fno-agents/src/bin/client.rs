@@ -257,9 +257,7 @@ fn main() {
     if args.first().map(String::as_str) == Some("evals-arm") {
         std::process::exit(fno_agents::evals_arm::run_evals_arm(&args[1..]));
     }
-    // `evals`: the family dispatch the forwarding leaf calls, per the port
-    // protocol: Python owns transport only. Transport-only arm, dispatched
-    // here like evals-trend: the shrink law bars a new `run` arm.
+    // `evals`: the leaf's family dispatch; the shrink law bars a new `run` arm (contract in evals.rs).
     if args.first().map(String::as_str) == Some("evals") {
         std::process::exit(fno_agents::evals::run(&args[1..]));
     }
@@ -937,11 +935,9 @@ async fn run(args: Vec<String>) -> i32 {
     // `lead-history`: the team-scope lead_checkin readback for
     // `fno agents org history`. Daemon-free read, `==` dispatch like
     // org-fold: Python resolves the caller's team scope and pins the
-    // journal path (identity and paths are Python-owned), the native side
-    // owns the scan so the file-budget Python-tree ratchet holds.
-    // `--verdict` is the same journals read as a tenure verdict (law
-    // d-fe66560a: the verdict rides this action as an argument, never a
-    // new action).
+    // journal path, the native side owns the scan so the file-budget
+    // Python-tree ratchet holds. `--verdict` reads the same journals as a
+    // tenure verdict and rides as an argument (law d-fe66560a).
     if command == "lead-history" {
         if args.iter().skip(1).any(|a| a == "--verdict") {
             return fno_agents::lead_history::run_lead_verdict(&args[1..]);
@@ -959,9 +955,8 @@ async fn run(args: Vec<String>) -> i32 {
     }
     // `evals-macro`: the macro-eval failure-pattern leaderboard for
     // `fno doctor evals macro`. Daemon-free read, `==` dispatch like
-    // lead-history: Python resolves the journal paths (identity and paths are
-    // Python-owned), the native side owns the fold so the file-budget
-    // Python-tree ratchet holds.
+    // lead-history: Python resolves the journal paths, the native side owns
+    // the fold so the file-budget Python-tree ratchet holds.
     if command == "evals-macro" {
         return fno_agents::evals_macro::run_evals_macro(&args[1..]);
     }
