@@ -457,13 +457,6 @@ fn fingerprint_of(warnings: &[Warning]) -> String {
     hex
 }
 
-/// True when the fingerprint was sent inside the open window.
-fn sent_recently(fingerprint: &str) -> bool {
-    let now = now_epoch();
-    let map = read_sent();
-    sent_recently_in(&map, fingerprint, now)
-}
-
 /// The same window check against a map the caller already read, so one
 /// pass costs one sent-store read no matter how many warnings it weighs.
 fn sent_recently_in(map: &BTreeMap<String, Value>, fingerprint: &str, now: i64) -> bool {
@@ -1658,11 +1651,14 @@ mod tests {
         // AC11: the same fingerprint is not resent inside the open window.
         let _root = crate::paths::DeclaredRoot::declare("notice_sent_dedupe");
         let fp = fingerprint_of(&warnings);
-        assert!(!sent_recently(&fp));
-        record_sent(&fp, "scope-a", now_epoch());
-        assert!(sent_recently(&fp));
+        let now = now_epoch();
+        let sent = read_sent();
+        assert!(!sent_recently_in(&sent, &fp, now));
+        record_sent(&fp, "scope-a", now);
+        let sent = read_sent();
+        assert!(sent_recently_in(&sent, &fp, now));
         let other = fingerprint_of(&orphan_warnings);
-        assert!(!sent_recently(&other));
+        assert!(!sent_recently_in(&sent, &other, now));
 
         // The key: digits and hex runs collapse to one token, so a count
         // or an id inside the error never splits one failure in two.
