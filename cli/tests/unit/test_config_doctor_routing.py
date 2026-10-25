@@ -27,15 +27,22 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def _pin_inventory(monkeypatch: pytest.MonkeyPatch, *, declared: bool):
-    """Pin `resolve_inventory` to a declared / undeclared answer."""
-    from fno import route_resolve
+    """Stub the route-slot door's inventory answer: a declared run carries one
+    row, an undeclared run none (the built-ins stay out so the count reads 0).
+    Every other ask refuses, so the states fold reads empty slots."""
+    from fno import rust_binary
 
-    inv = route_resolve.resolve_inventory()
-    monkeypatch.setattr(
-        route_resolve,
-        "resolve_inventory",
-        lambda **kw: route_resolve.Inventory(rows=inv.rows, declared=declared),
-    )
+    def fake_call(command, payload, *a, **k):
+        if command == "route-slot" and payload.get("mode") == "inventory":
+            rows = (
+                [{"name": "declared-row", "harness": "claude", "model": "m"}]
+                if declared
+                else []
+            )
+            return {"rows": rows, "verbs": []}
+        raise rust_binary.CommandUnavailable(f"{command} hermetic in tests")
+
+    monkeypatch.setattr(rust_binary, "command_call", fake_call)
 
 
 def _pin_roles(monkeypatch: pytest.MonkeyPatch, roles: dict):

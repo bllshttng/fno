@@ -768,7 +768,9 @@ def _spawn_think_worker(
     if reason == REASON_CONVERSATIONAL:
         from fno.agents.harness_map import _load_dispatch_cfg
 
-        dispatch_cfg = _load_dispatch_cfg(settings_obj, command="/think")
+        dispatch_cfg = _load_dispatch_cfg(
+            settings_obj, command="/think", cwd=str(root) if root else None
+        )
         allowed = dispatch_cfg.get("allowed_commands")
         if isinstance(allowed, list):
             dispatch_cfg["allowed_commands"] = [*allowed, "/think"]

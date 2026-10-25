@@ -1577,7 +1577,9 @@ def resolve_dispatch(
     }
 
 
-def _load_dispatch_cfg(settings: object, command: Optional[str] = None) -> dict:
+def _load_dispatch_cfg(
+    settings: object, command: Optional[str] = None, cwd: Optional[str] = None
+) -> dict:
     """Read the dispatch config rung as a plain dict: the stage-table harness
     (with the deprecated ``dispatch.harness`` folded beneath it) plus
     ``config.dispatch`` substrate/command and the ``config.auto_merge.grant``
@@ -1605,10 +1607,13 @@ def _load_dispatch_cfg(settings: object, command: Optional[str] = None) -> dict:
     from fno.rust_binary import CommandUnavailable, command_call
 
     try:
-        answer = command_call(
-            "dispatch-harness",
-            {"mode": "configured", "command": command or "target"},
-        )
+        payload: dict = {"mode": "configured", "command": command or "target"}
+        # A caller holding a foreign repo's settings (the /think worker
+        # targeting another project) names that root, so the rung reads the
+        # node's stage table, never the parent process's.
+        if cwd:
+            payload["cwd"] = cwd
+        answer = command_call("dispatch-harness", payload)
     except CommandUnavailable:
         answer = {}
     harness_value = answer.get("harness")
