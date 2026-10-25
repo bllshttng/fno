@@ -923,7 +923,9 @@ mod stale_team_doc_tests {
         for name in ["history", "hook_beat", "stand_down", "stale_doc", "board"] {
             assert!(phases_ms.contains_key(name), "{phases_ms:?}");
         }
-        assert!(body["pre_drain_total_ms"].as_u64().unwrap() > 0);
+        // Sub-millisecond elapsed between the marks and the receipt reads 0
+        // on a fast machine, so the total claims presence, not a minimum.
+        assert!(body["pre_drain_total_ms"].as_u64().is_some());
         assert!(body["budget_remaining_ms"].as_u64().unwrap() > 0);
         assert!(body.get("harness_margin_remaining_ms").is_some());
     }
