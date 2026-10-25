@@ -1,0 +1,105 @@
+---
+title: "Configuration reference"
+description: "Inspect review, automatic merging, and saved backlog pages without guessing effective values."
+---
+
+This page covers delivery policy and backlog-page settings used by these guides. It is not the complete settings schema.
+
+For a walkthrough, see [review and ship](/guides/review-and-ship) and [manage a backlog](/guides/manage-backlog).
+
+## Read effective values
+
+Run this from your project root:
+
+```bash
+fno config get review.max_rounds
+fno config get auto_merge.enabled
+```
+
+Scalar values print on stdout. The deciding configuration file prints on stderr. A project override can change a global value.
+
+Unknown keys fail. Do not interpret a failed read as the default value.
+
+## Settings summary
+
+| Setting | Type | Required | Default | Allowed values |
+| --- | --- | --- | --- | --- |
+| `review.max_rounds` | Integer | No | `2` | At least `1` |
+| `auto_merge.enabled` | Boolean | No | `false` | `true`, `false` |
+| `backlog.render_targets` | Array of objects | No | Empty array | Rows described below |
+
+These are schema defaults. Your effective values can differ.
+
+## Review rounds
+
+`review.max_rounds` limits review iterations. It does not guarantee that every suggestion will be implemented.
+
+Values below `1` fail schema validation. If the configured round limit is reached, read the PR's remaining findings.
+
+## Automatic merging
+
+`auto_merge.enabled` controls whether the project permits automatic merging. Its default is `false`.
+
+At startup, a target resolves this policy. A per-run refusal can override the configured grant.
+
+Changing the global setting does not rewrite an active run's immutable manifest. To determine authority, inspect that run's resolved policy.
+
+From the active target's worktree, run:
+
+```bash
+fno do state show --field auto_merge_approved
+```
+
+`True` means that run resolved a merge grant. `False` means it did not. Without an active manifest, this is not a policy reading.
+
+The manifest is a run-start record whose fields are read-only after initialization. Do not edit it to change an active run's authority.
+
+The [quickstart](/quickstart) reaches a PR. An enabled merge policy can take the result further and merge it after the gates pass.
+
+## Backlog pages
+
+`backlog.render_targets` adds saved board copies. Each row describes one destination.
+
+| Field | Type | Required | Default | Allowed value or invalid-input behavior |
+| --- | --- | --- | --- | --- |
+| `path` | String | Yes | None | Absolute or `~/`-rooted path; empty, relative, or glob paths are invalid |
+| `scope` | String | No | `all` | Project slug or `all`; empty is invalid |
+| `projection` | String | No | `local` | Use `local`; retired public projections warn and skip |
+| `project` | String | No | Derived from scope | Compatibility spelling; must agree with scope if both are set |
+
+Unknown row keys warn and prevent that row from rendering. A malformed array is warned about and treated as empty.
+
+Choose a destination outside the state root, such as a notes directory. The daemon already maintains `~/.fno/cache/pages/graph.html`.
+
+An exported HTML file shows the last rendered state. A file opened from disk does not become a live editor.
+
+To request one saved board for all projects, run:
+
+```bash
+fno config set --local backlog.render_targets '[{"path":"~/notes/fno/backlog.html","scope":"all","projection":"local"}]'
+```
+
+This replaces that setting's array in the project config. It does not render immediately. Check the file after the next background render.
+
+Change the path to your intended notes directory before running it. The `~/.fno/` directory is fno's state root, not a notes destination.
+
+If no file appears, inspect the background arms:
+
+```bash
+fno agents session status
+```
+
+Find `board_render` and read its latest outcome. A missing or failed renderer is not a successful export. Preserve its literal error for recovery.
+
+## Change settings deliberately
+
+`fno config set` accepts a dotted key and a value. It validates the value before writing config.toml.
+
+The default write scope is global. `--local` writes the project setting instead. Use the local scope for project-specific policy.
+
+For the complete supported fields, use `fno config schema --markdown`. It generates the settings reference from the installed model and registry.
+
+## Next steps
+
+- [Review and ship](/guides/review-and-ship): apply delivery policy to a PR.
+- [Manage a backlog](/guides/manage-backlog): choose a terminal, mux, or saved-page view.

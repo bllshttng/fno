@@ -1,0 +1,69 @@
+---
+title: "Troubleshoot fno"
+description: "Diagnose missing commands, missing workflow skills, refused launches, and unfinished PRs."
+---
+
+Start with the symptom you can observe. Preserve the exact command, exit code, and error before changing configuration.
+
+| What you see | Go to |
+| --- | --- |
+| `command not found` for fno | [CLI not found](#the-shell-cannot-find-fno) |
+| Harness cannot find `fno:target` | [Plugin discovery](#the-harness-cannot-find-fnotarget) |
+| Worker launch is refused | [Launch refusal](#a-worker-launch-is-refused) |
+| PR exists but target continues | [Unfinished delivery](#the-pr-is-open-but-the-run-keeps-going) |
+| Worker is quiet | [Recover a worker](/guides/recover-a-worker) |
+
+## The shell cannot find fno
+
+```text
+command not found
+```
+
+The shell cannot resolve the executable. This does not establish whether plugin files were installed.
+
+**What to do:**
+
+1. Open a new terminal after installation.
+2. Read the installer's tool-directory message and check whether that directory is on PATH.
+3. Run `fno --version` again. If it still fails, retain the installer output and follow [installation checks](/install#check-your-installation).
+
+## The harness cannot find fno:target
+
+The CLI and the harness plugin are separate parts. A working version command does not prove the harness discovered its skills.
+
+**What to do:**
+
+1. Start a new harness session after installing the plugin.
+2. Check the [prompt prefix](/reference/harnesses#workflow-prompts). Codex uses `$fno:target`. Claude Code uses `/fno:target`.
+3. If installation used `FNO_NO_WIRE`, run `fno do wizard` in a terminal to complete plugin wiring. Review its proposed actions before accepting them.
+
+## A worker launch is refused
+
+A valid command can fail a capacity, account, repository, or lane check. The refusal identifies the gate and any available recovery.
+
+**What to do:**
+
+1. Preserve the literal refusal and exit code.
+2. Confirm the selected harness is installed and authenticated.
+3. Check that the task's repository exists and that the requested lane supports its flags.
+4. Follow the gate's named repair. Do not force retries against an unknown refusal.
+
+## The PR is open but the run keeps going
+
+An open PR is one part of delivery. CI, review, or a current-head check can still be incomplete.
+
+**What to do:**
+
+1. Open the PR and read its current checks.
+2. Check the latest commit against the reviewed commit.
+3. Read unresolved findings and the configured review-round policy.
+4. Use [completion concepts](/concepts/completion) to distinguish missing evidence from a failed check.
+
+## Still stuck
+
+Keep the CLI version, repository, session ID, worktree path, exact error, and latest transcript event. Remove credentials before sharing diagnostic output.
+
+## Next steps
+
+- [Install and verify](/install): establish that the CLI and plugin are available.
+- [Recover a worker](/guides/recover-a-worker): inspect a stopped or quiet session without discarding its work.

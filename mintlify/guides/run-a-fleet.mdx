@@ -1,0 +1,73 @@
+---
+title: "Run a fleet"
+description: "Assign a bounded task to a worker and observe its result."
+---
+
+A fleet is a group of agent sessions. Start with one worker so you can verify its task, harness, and result before adding more.
+
+## Before you begin
+
+Install fno through the [quickstart](/quickstart). You need an authenticated coding harness, a Git repository, and access to its model provider.
+
+The [CLI reference](/reference/cli#worker-launches) lists launch options. A harness is the agent program. A provider supplies the model.
+
+## Check the launch options
+
+Read the installed help before choosing a lane:
+
+```bash
+fno agents spawn --help
+```
+
+Help describes the available lanes and flags. Availability can differ between the help surface and the native launch path.
+
+## Start a worker
+
+> **Warning:** This starts a persistent coding session and can incur model costs. Use a repository you trust.
+
+Run this from the repository root:
+
+```bash
+fno agents spawn --name t-docs-example --as thread -H codex "Read README.md and report its purpose. Do not edit files."
+```
+
+`-H codex` chooses Codex CLI. Change the harness only to one you have installed and authenticated.
+
+The launch uses the project's canonical checkout by default. Read the reported working directory before giving the worker file-editing work.
+
+The prompt asks for a read-only result, so no code or PR is expected. The expected result is a report of what README.md describes.
+
+Save the receipt's worker name and full session ID. In this walkthrough the name is `t-docs-example`.
+
+Receipt fields depend on the chosen execution lane. `t-docs-example` is a registered name, not a shortened session ID.
+
+If the launch is refused, read its reason. Do not increase limits until you know whether capacity, credentials, or policy caused it.
+
+## Observe the worker
+
+List sessions from a terminal:
+
+```bash
+fno agents session list
+```
+
+Find your worker's name. Its row distinguishes liveness, progress, and reachability. These readings can differ.
+
+Use the [message guide](/guides/message-agents) to send a follow-up. If it stops responding, use [worker recovery](/guides/recover-a-worker).
+
+## Add parallel work
+
+Give each worker a separate end state and clear file ownership. Keep tasks that edit the same files together until you resolve their dependency.
+
+For implementation work, point a worker at a backlog node and its plan. [Work organization](/concepts/work-contracts) explains ownership and worktrees.
+
+## Clean up
+
+Keep this worker available for the next messaging page. After that page, use [worker recovery](/guides/recover-a-worker#stop-a-worker) to stop it.
+
+If you skip messaging, stop the practice worker after reading its result. Do not stop it before sending a follow-up you need answered.
+
+## Next steps
+
+- [Message agents](/guides/message-agents): follow up with the worker you created.
+- [Harness reference](/reference/harnesses): choose the execution lane you need.

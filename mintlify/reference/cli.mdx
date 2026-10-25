@@ -1,0 +1,104 @@
+---
+title: "CLI reference"
+description: "Look up the terminal commands used by these guides."
+---
+
+This page covers the commands used in the [guides](/guides/ship-a-change). Use the installed help for the complete command menu.
+
+## Terms
+
+A node is a backlog task. A session is one agent's running or resumable context. A worktree is an isolated Git checkout.
+
+A harness is the agent program, such as Codex CLI. A provider supplies a model. A PR is a GitHub pull request.
+
+## Command groups
+
+| Command | Job | Guide |
+| --- | --- | --- |
+| `fno --version` | Show the installed version | [Install](/install) |
+| `fno --help` | Show the terminal menu | [Install](/install) |
+| `fno agents spawn` | Create a worker | [Run a fleet](/guides/run-a-fleet) |
+| `fno agents session list` | List sessions and their readings | [Recover a worker](/guides/recover-a-worker) |
+| `fno agents session peek` | Observe a transcript | [Message agents](/guides/message-agents) |
+| `fno agents mail send` | Send a follow-up to a session | [Message agents](/guides/message-agents) |
+| `fno backlog board` | Show the local work summary | [Manage a backlog](/guides/manage-backlog) |
+| `fno config get` | Read an effective setting | [Configuration](/reference/configuration) |
+| `fno do pr status` | Read the current PR CI verdict | [Review and ship](/guides/review-and-ship) |
+
+Workflow names such as `fno:target` are harness prompts. They are not arguments to the terminal `fno` command.
+
+## Worker launches
+
+The fleet guide gives a complete read-only task. The first positional argument is the prompt, not the worker name.
+
+| Option | Meaning | Default or requirement |
+| --- | --- | --- |
+| `--name` | Worker name | Optional; generated when omitted |
+| `-H`, `--harness` | Agent CLI | Invoking harness, then Claude fallback |
+| `--as` | Execution lane | `thread` |
+| `--cwd` | Repository for the worker | Canonical project checkout by default |
+| `--once` | One exchange followed by teardown | Opt-in headless execution |
+
+A `thread` is persistent and can be attached. A `pane` is hosted in the mux. A `headless` worker is noninteractive.
+
+Pane placement requires the pane lane. Model and effort flags belong to the harness. Provider account selection is separate.
+
+Read launch refusals before retrying. Capacity and account policy can prevent a valid command from starting a worker.
+
+## Agent mail
+
+`fno agents mail send` takes the recipient name or full session ID, then the quoted message. It sends asynchronously.
+
+For Codex, use an exact registered name or the full session ID. Short UUID prefixes can identify several sessions and are refused.
+
+Read the [receipt table](/guides/message-agents#read-the-receipt) before interpreting a successful send as completed work.
+
+`fno agents session peek` takes a recipient handle. `--lines` selects how many transcript records to read. Its default is 15.
+
+Peek observes only. It does not submit a message or wake the worker.
+
+## Session recovery
+
+| Command | Argument | Effect |
+| --- | --- | --- |
+| `fno agents session list` | None | Read registered sessions |
+| `fno agents session peek` | Name or full session ID | Read recent transcript records |
+| `fno agents session resume` | Session name | Try to resume existing context |
+| `fno agents session stop` | Session name | Stop the underlying process |
+
+Resume can refuse recovery. Preserve the exact error and the worker's files rather than assuming it created a new session.
+
+Stop is a process action. It does not mark the task complete or prove that changes were merged.
+
+## Backlog
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `fno backlog idea` | Title and `--difficulty` | Create a task without a plan |
+| `fno backlog get` | Node ID or slug | Read one task |
+| `fno backlog update` | Node ID, then field operators | Edit an existing task |
+| `fno backlog board` | Optional `--project` | Read the local board |
+
+Update operators are `field=value`, `field+=value`, and `field-=value`. Not every field supports every operator.
+
+An invalid field or lifecycle move is refused. Read its required repair instead of writing the graph file directly.
+
+## Pull request status
+
+Run `fno do pr status` followed by the PR number, from its repository. Read its CI verdict and current-head evidence.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Green |
+| `1` | Red |
+| `2` | Pending |
+| `3` | Unknown |
+| `4` | Read failed |
+| `127` | GitHub CLI missing |
+
+CI status is not completed review or merge authority. [Completion concepts](/concepts/completion) describe the complete finish line.
+
+## Next steps
+
+- [Ship a change](/guides/ship-a-change): use the workflows in order.
+- [Configuration reference](/reference/configuration): inspect the policy those commands use.

@@ -7,9 +7,9 @@ For a first installation and task, use the [quickstart](/quickstart). This page 
 
 ## What the installer changes
 
-The quickstart's installer provisions uv when needed, installs the fno CLI, and wires supported agent CLIs it detects.
+The installer provisions uv as needed, installs the fno CLI, and wires supported agent CLIs it detects.
 
-It can add the tool directory to your shell profile. Your existing shell may need a restart to pick up that path.
+It can add the tool directory to your shell profile. Restart your existing shell to pick up that path.
 
 The installer supports these environment variables:
 
@@ -21,6 +21,16 @@ The installer supports these environment variables:
 | `FNO_VERSION` | Install a specific published version. |
 
 Skipping wiring leaves you with a CLI installation. It does not make workflow skills appear in your harness.
+
+To wire a harness interactively, run this in a terminal:
+
+```bash
+fno do wizard
+```
+
+The wizard asks about setup and probes a harness before applying its choices. Review those choices before accepting them.
+
+Inside Claude Code, type `/fno:` and look for `target` in autocomplete. In Codex, look for `fno:target` in its skill picker.
 
 ## Check your installation
 

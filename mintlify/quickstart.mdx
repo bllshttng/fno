@@ -19,7 +19,7 @@ Run this in a terminal:
 curl -fsSL fno.sh | sh
 ```
 
-The installer provisions the CLI and wires supported harnesses it detects. It installs uv if needed and may update your shell profile.
+The installer provisions the CLI and wires supported harnesses it detects. It provisions missing uv installations and can update your shell profile.
 
 Open a new terminal, then check the CLI:
 
@@ -36,6 +36,20 @@ If the command is missing, follow [installation checks](/install#check-your-inst
 Open Claude Code or Codex in the repository you chose. Start a new harness session after installation so it discovers the plugin.
 
 Confirm that the harness exposes the `fno:target` skill. If it does not, follow [plugin troubleshooting](/troubleshooting#the-harness-cannot-find-fnotarget).
+
+Before starting the target, check policy from the project terminal:
+
+```bash
+fno config get auto_merge.enabled
+```
+
+`True` permits automatic merging. For a practice run that must stop at a PR, disable it locally before starting:
+
+```bash
+fno config set --local auto_merge.enabled false
+```
+
+The command prints the setting and project configuration path. This changes the project policy for future runs.
 
 > **Warning:** A target can edit files, run commands, use paid model credentials, and push a branch. Read the task first.
 
@@ -57,13 +71,21 @@ These are harness prompts, not terminal commands. Use one of them for this task.
 
 Target creates an isolated worktree, plans the change, implements it, and reviews the diff. It pushes a branch and opens a PR.
 
+## Watch the work
+
+Read the session transcript as the agent works. Look for the checkout it selected, the files it changed, and the checks it ran.
+
+If it reports a wait, read the named cause. Waiting for CI is different from waiting for input or provider capacity.
+
+Keep the growing diff in view through the harness or the reported worktree. Do not infer progress from a reassuring summary alone.
+
 The agent reports a PR URL. Its wording and generated README text vary. Open that URL to inspect the actual change.
 
 ## 4. Read the result
 
 Check the PR diff, its current checks, and its review findings. A PR URL alone proves neither green checks nor completed review.
 
-Your configuration controls review requirements and automatic merging. Check that policy before the run. See [configuration](/reference/configuration#automatic-merging).
+Your configuration controls review requirements and automatic merging. See [configuration](/reference/configuration#automatic-merging).
 
 By default, automatic merging is disabled. An enabled policy can merge the PR after its gates pass.
 
@@ -73,7 +95,7 @@ You have taken one small task through implementation to a PR. [How completion wo
 
 Close an unwanted practice PR through GitHub. Keep any branch or worktree that contains changes you need.
 
-Do not delete the worktree while an agent is still using it. Merged worktrees follow the project's cleanup policy.
+Do not delete the worktree while an agent is still using it. Leave it in place after this tutorial.
 
 ## Next steps
 

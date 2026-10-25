@@ -5,13 +5,43 @@ description: "Give coding agents a target, follow their work, and check the resu
 
 fno coordinates coding agents from a task to a reviewed pull request. It provides planning, worktrees, a backlog, agent messaging, and completion checks.
 
-Use it when you run coding agents and want to track what they owe you. You need a Git repository and an authenticated coding harness.
+If you run coding agents, use it to track what they owe you. You need a Git repository and an authenticated coding harness.
 
 ## Get started
 
-[Follow the quickstart](/quickstart): install fno and take one small change to a pull request.
+<Card title="Take one change to a PR" icon="code-pull-request" href="/quickstart">
+  Install fno, give an agent a small task, and inspect the resulting PR.
+</Card>
 
-The path is quickstart, completion concepts, then your first fleet. Reference pages stay available when you need an option or default.
+The path is quickstart, completion concepts, then your first fleet. Reference pages list options and defaults.
+
+## See an agent at work
+
+The [fleet walkthrough](/guides/run-a-fleet) starts one worker with a read-only task: explain README.md.
+
+A verification run returned this launch receipt excerpt. The session ID is omitted:
+
+```json
+{"name":"t-docs-example","harness":"codex","status":"live"}
+```
+
+The worker then reported:
+
+```text
+It explains installation, supported agent harnesses, workflow stages,
+completion gates, requirements, and documentation.
+```
+
+These are separate observations. `live` proves a session was started. The transcript supplies the result.
+
+| Follow the work | What to inspect |
+| --- | --- |
+| Task starts | Worker name, session ID and checkout |
+| Agent works | Recent commands and transcript |
+| A change is proposed | Diff and PR link |
+| Delivery is checked | Current CI and review findings |
+
+[Run your first worker](/guides/run-a-fleet): reproduce the read-only task before assigning parallel implementation work.
 
 ## What you can do
 

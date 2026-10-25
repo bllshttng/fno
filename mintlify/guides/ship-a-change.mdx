@@ -1,0 +1,61 @@
+---
+title: "Ship a change"
+description: "Choose one target or separate planning steps, then follow the result to its PR."
+---
+
+To give an agent the delivery loop, use a target. To settle scope first, separate planning from implementation.
+
+## Before you begin
+
+Install fno using the [quickstart](/quickstart). Open an authenticated Claude Code or Codex session in a repository you can push to.
+
+The [harness reference](/reference/harnesses) explains workflow prompt syntax. These prompts run inside the harness, not in your terminal.
+
+## Start with one target
+
+Describe one observable result. Name the files or behavior you care about and say how you will verify it.
+
+For example, ask for a short README overview based on repository facts, as shown in the quickstart.
+
+The agent plans, implements, validates, reviews, and opens the PR. If the change affects credentials or external services, read the proposed scope.
+
+## Plan before implementation
+
+Use the `fno:think` workflow to investigate a question. Use `fno:blueprint` to turn the direction into an implementation plan.
+
+Review the plan's acceptance criteria and files. Then give that plan to `fno:target` in the same harness.
+
+For example, after blueprint reports a saved plan, use its path in Claude Code:
+
+```text
+/fno:target <PLAN_PATH>
+```
+
+Replace `<PLAN_PATH>` with the path blueprint printed. In Codex, use `$fno:target` with the same path instead.
+
+You can also name an existing backlog node. If a plan is bound, target reads it. You do not need to paste it again.
+
+For a worker implementation assignment, replace the read-only task in [the fleet guide](/guides/run-a-fleet) with a target prompt naming that node.
+
+This terminal template starts a Codex worker for an existing task:
+
+```bash
+fno agents spawn --name t-change --as thread -H codex '$fno:target <TASK_ID>'
+```
+
+Replace `<TASK_ID>` with the existing task ID before running it. Keep the single quotes so the shell does not expand `$fno`.
+
+This starts implementation and can incur model costs. Use it only for work you authorize, after checking its ownership and merge policy.
+
+Keep one live owner for the node. Follow its worktree and PR rather than starting another worker on the same task.
+
+## Follow the result
+
+Read the agent's worktree and PR links. At the PR, check the current head, CI, and review findings.
+
+If a check fails, keep the same task owner working on the failure. Creating another task for the same change can duplicate work.
+
+## Next steps
+
+- [Review and ship](/guides/review-and-ship): inspect the finish line.
+- [CLI reference](/reference/cli): look up terminal inspection commands.
