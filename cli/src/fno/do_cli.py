@@ -19,7 +19,7 @@ from fno.plan import plan_app
 from fno.pr_watch.cli import cli as pr_watch_app
 from fno.provenance.cli import think_app
 from fno.research import research_command
-from fno.resume.cli import cli as resume_app
+from fno.resume_receipt_cli import cli as resume_app
 from fno.state.cli import cli as state_app
 from fno.stub_manifest import stub_manifest_app
 from fno.target_cli import target_app
