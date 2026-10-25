@@ -263,6 +263,19 @@ fn run_parsed(a: LeafArgs) -> i32 {
                     let claim = binding.claim;
                     if key.starts_with("node:") {
                         stamp_do_on_acquire(&key, &claim, &a.holder);
+                        // The handover heals what an earlier init refusal
+                        // wrote: the blocked line and the init-authored
+                        // sentinel. Best-effort, after the claim is secured;
+                        // the node guard inside skips non-node keys.
+                        super::manifest_refresh::refresh_manifest_on_handover(
+                            &key,
+                            &a.holder,
+                            if a.ttl.is_empty() {
+                                None
+                            } else {
+                                Some(a.ttl.as_str())
+                            },
+                        );
                     }
                     if a.json_output {
                         println!("{}", claim_json_string(&claim));
