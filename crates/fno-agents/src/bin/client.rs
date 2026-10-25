@@ -822,16 +822,10 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::authorized_merge::run_authorized_merge(&args[1..]);
     }
 
-    // `rename` with no argv is the retask payload door: the Python
-    // `fno agents retask` front sends one JSON payload and reads the receipt
-    // back. No action added (the shrink law); the transaction's contract
-    // lives in retask.rs.
     if command == "rename" && args.len() == 1 {
         return fno_agents::retask::transport::run_payload();
     }
 
-    // `route-slot`: the delivery-slot resolver; Python's spawn seam, advance
-    // and the readouts send one JSON payload, read {status, candidate, chain}.
     if command == "route-slot" {
         return fno_agents::route_slot::run_route_slot(&args[1..]);
     }
@@ -842,8 +836,6 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::dispatch_harness::run(&args[1..]);
     }
 
-    // `spawn-gate`: the ONE spawn gate; the Python transport sends one JSON
-    // payload and reads the admit (with held claim keys) or refusal back.
     if command == "spawn-gate" {
         return fno_agents::spawn_gate_command::run_spawn_gate(&args[1..]);
     }
