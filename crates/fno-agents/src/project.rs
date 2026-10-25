@@ -414,19 +414,45 @@ fn registry_from_toml(text: &str, path: &Path) -> Result<Vec<(String, String)>, 
 /// The `work` table of a config.toml, a `config = { work = ... }` wrapper
 /// lifted and merged over any top-level `work` (wrapper values win on
 /// nested-table conflicts, lists and scalars replace wholesale), matching
-/// the Python reader's unwrap.
+/// the Python reader's unwrap. Both shapes arrive either as standard tables
+/// or as inline ones (`work = { ... }`); tomllib saw no difference, so each
+/// level is normalized to a standard table before the walk.
 fn merged_work_toml(doc: &DocumentMut) -> Option<Table> {
-    let top = doc.get("work").and_then(Item::as_table);
+    let top = item_work_table(doc.get("work"));
     let wrapped = doc
         .get("config")
-        .and_then(Item::as_table)
-        .and_then(|c| c.get("work"))
-        .and_then(Item::as_table);
+        .and_then(|c| item_work_table(c.get("work")));
     match (top, wrapped) {
         (None, None) => None,
-        (Some(one), None) | (None, Some(one)) => Some(one.clone()),
-        (Some(base), Some(wins)) => Some(merge_tables(base, wins)),
+        (Some(one), None) | (None, Some(one)) => Some(one),
+        (Some(base), Some(wins)) => Some(merge_tables(&base, &wins)),
     }
+}
+
+/// The `work` item as a standard table, an inline table converted (recursively,
+/// so nested `{ ... }` levels walk like spread-out ones), or None for any
+/// other kind (a non-table `work` degrades to no registry, as the Python
+/// reader's isinstance gate did).
+fn item_work_table(item: Option<&Item>) -> Option<Table> {
+    match item? {
+        Item::Table(table) => Some(inline_to_tables(table.clone())),
+        Item::Value(toml_edit::Value::InlineTable(inline)) => {
+            Some(inline_to_tables(inline.clone().into_table()))
+        }
+        _ => None,
+    }
+}
+
+/// Convert every inline-table value in `table` into a standard table, down
+/// the whole nesting; arrays of inline tables stay arrays (the projects walk
+/// already reads both spellings).
+fn inline_to_tables(mut table: Table) -> Table {
+    for (_key, item) in table.iter_mut() {
+        if let Item::Value(toml_edit::Value::InlineTable(inline)) = item {
+            *item = Item::Table(inline_to_tables(inline.clone().into_table()));
+        }
+    }
+    table
 }
 
 /// Recursive table merge with the Python reader's direction: `wins` replaces
