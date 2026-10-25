@@ -111,17 +111,22 @@ def _hermetic_append_door(monkeypatch) -> None:
     import fno.agents.register_session as rs
     import fno.rust_binary as rb
 
-    def _fake_command_call(command, payload, unavailable=rb.CommandUnavailable, **_):
-        if command != "question-intake" or payload.get("op") != "append":
-            raise unavailable(f"the stub answers only the append door, not {command}")
-        event = payload["event"]
-        line = _json.dumps(event)
-        for key in ("journal_path", "index_path"):
-            target = Path(payload[key])
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-        return {"exit_code": 0, "lines": [], "qid": event["data"]["question_id"]}
+    real_call = rb.command_call
+
+    def _fake_command_call(command, payload, **kw):
+        if command == "question-intake" and payload.get("op") == "append":
+            event = payload["event"]
+            line = _json.dumps(event)
+            for key in ("journal_path", "index_path"):
+                target = Path(payload[key])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open("a", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+            return {"exit_code": 0, "lines": [], "qid": event["data"]["question_id"]}
+        # Every other seam answers through the real transport: the registry
+        # doors raise the same refusals a binary-less install sees on main,
+        # and the flow's own fail-soft handling covers them.
+        return real_call(command, payload, **kw)
 
     monkeypatch.setattr(rb, "command_call", _fake_command_call)
 

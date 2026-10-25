@@ -263,7 +263,7 @@ fn an_unreadable_machine_index_refuses_the_fold() {
 
 fn refusal(kind: &str, agent: &str, origin: Option<&str>) -> crate::decide_door::DecideRefusal {
     match kind {
-        "origin-authority" => crate::decide_door::DecideRefusal::RefusedAuthority {
+        "origin-authority" | "authority" => crate::decide_door::DecideRefusal::RefusedAuthority {
             agent: agent.to_string(),
             origin: origin.map(str::to_string),
         },
