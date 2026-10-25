@@ -13,6 +13,22 @@ description: >
 runs:
   using: composite
   steps:
+    # The test sandbox, and the cargo build dir pinned inside it, live under
+    # /tmp. Newer runner images mount /tmp as a tmpfs with a per-user quota,
+    # and a cold fno lib-test build there died with "Disk quota exceeded"
+    # (errno 122) while / had 106G free. Back /tmp with the root disk. The
+    # path stays /tmp, so socket paths keep their length.
+    - name: Back /tmp with the runner disk
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        findmnt -T /tmp -o TARGET,SOURCE,FSTYPE,SIZE,AVAIL,OPTIONS
+        if [[ "$(findmnt -n -o FSTYPE -T /tmp)" == tmpfs ]]; then
+          sudo install -d -m 1777 /var/tmp/fno-tmp
+          sudo mount --bind /var/tmp/fno-tmp /tmp
+          findmnt -T /tmp -o TARGET,SOURCE,FSTYPE,SIZE,AVAIL,OPTIONS
+        fi
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
