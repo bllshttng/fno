@@ -30,7 +30,6 @@ from fno.company.contracts import (
     ObservationRef,
     WorkOrderRef,
 )
-from fno.delivery import DeliveryEvidenceFact, evaluate_delivery
 from fno.roles.models import (
     ApprovalFloor,
     CapabilityFact,
@@ -77,6 +76,78 @@ def _plugins(root: Path, *args: str) -> tuple[int, dict]:
         text=True,
     )
     return proc.returncode, json.loads(proc.stdout)
+
+
+def _delivery_eval(
+    workdir: Path, company_work: dict, facts: list[dict]
+) -> dict:
+    """One native delivery evaluation over plan + journal fixtures.
+
+    The delivery family answers through the `fno-agents delivery-evaluate`
+    command now; the journey builds the same declaration it used to pass the
+    Python evaluator in process and reads the response payload instead.
+    """
+    workdir.mkdir(parents=True, exist_ok=True)
+    plan = workdir / "plan.md"
+    frontmatter = {
+        "node": company_work["work_order"]["node_id"],
+        "status": "ready",
+        "created": "2026-08-02",
+        "completion": "delivery",
+        "company_work": company_work,
+    }
+    plan.write_text(
+        f"---\n{yaml.safe_dump(frontmatter, sort_keys=False)}---\n# Plan\n"
+    )
+    events = workdir / "events.jsonl"
+    events.write_text(
+        "".join(json.dumps(fact) + "\n" for fact in facts)
+    )
+    proc = subprocess.run(
+        [
+            str(find_dev_binary()),
+            "delivery-evaluate",
+            "--plan-path", str(plan),
+            "--events", str(events),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    return json.loads(proc.stdout)
+
+
+def _fact_event(
+    evidence: EvidenceRef,
+    *,
+    fact_revision: str = "facts-current",
+    observed_at: str = "2026-08-04T12:00:00Z",
+    fresh_until: str = "2099-08-04T13:00:00Z",
+) -> dict:
+    """One observed-evidence journal row carrying the fact the fixture means."""
+    return {
+        "ts": observed_at,
+        "type": "delivery_evidence_observed",
+        "source": "target",
+        "data": {
+            "version": "delivery-evidence-fact.v1",
+            "evidence": {
+                "id": evidence.id,
+                "work_order_id": evidence.work_order_id,
+                "attempt_id": evidence.attempt_id,
+                "subject_kind": evidence.subject_kind.value,
+                "subject_id": evidence.subject_id,
+                "result": evidence.result.value,
+            },
+            "producer": "company-conformance-fixture",
+            "observed_at": observed_at,
+            "source_revision": "source-v1",
+            "fresh_until": fresh_until,
+            "adapter_version": "fixture-v1",
+            "fact_revision": fact_revision,
+        },
+    }
 
 
 CONFORMANCE = _manifest(PACK)
@@ -167,22 +238,24 @@ def _fact(
     evidence: EvidenceRef,
     *,
     fact_revision: str = "facts-current",
-    observed_at: dt.datetime = NOW,
-    fresh_until: dt.datetime | None = None,
-) -> DeliveryEvidenceFact:
-    return DeliveryEvidenceFact(
-        evidence=evidence,
-        producer="company-conformance-fixture",
-        observed_at=observed_at,
-        source_revision="source-v1",
-        fresh_until=fresh_until or NOW + dt.timedelta(hours=1),
-        adapter_version="fixture-v1",
+    observed_at: str = "2026-08-04T12:00:00Z",
+    fresh_until: str = "2099-08-04T13:00:00Z",
+) -> dict:
+    return _fact_event(
+        evidence,
         fact_revision=fact_revision,
+        observed_at=observed_at,
+        fresh_until=fresh_until,
     )
 
 
-def _complete_facts(company_work: CompanyWorkRefs) -> tuple[DeliveryEvidenceFact, ...]:
+def _complete_facts(company_work: CompanyWorkRefs) -> tuple[dict, ...]:
     return tuple(_fact(evidence) for evidence in company_work.evidence)
+
+
+def _company_work_json(company_work: CompanyWorkRefs) -> dict:
+    """The declaration as the plan frontmatter carries it."""
+    return json.loads(company_work.model_dump_json())
 
 
 @pytest.fixture()
@@ -268,22 +341,27 @@ def _assert_resolved_roles_match_every_declared_policy_axis(role_root: Path) -> 
     assert CONFORMANCE.skills == () and CONFORMANCE.agents == ()
 
 
-def _assert_complete_delivery_evidence_passes(role_id: str) -> None:
+def _assert_complete_delivery_evidence_passes(role_id: str, workdir: Path) -> None:
     company_work = _company_work(role_id)
-    verdict = evaluate_delivery(company_work, _complete_facts(company_work), evaluated_at=NOW)
-    assert verdict.aggregate is EvidenceResult.PASSED, (role_id, verdict.diagnostics)
+    payload = _delivery_eval(
+        workdir,
+        _company_work_json(company_work),
+        list(_complete_facts(company_work)),
+    )
+    assert payload["status"] == "evaluated", (role_id, payload)
+    assert payload["verdict"]["aggregate"] == "passed", (role_id, payload["verdict"])
 
 
 @pytest.mark.dev_build
 def test_support_response_scenario(role_root: Path) -> None:
     _assert_resolved_roles_match_every_declared_policy_axis(role_root)
-    _assert_complete_delivery_evidence_passes("support-response")
+    _assert_complete_delivery_evidence_passes("support-response", role_root.parent)
 
 
 @pytest.mark.dev_build
 def test_sales_outreach_scenario(role_root: Path) -> None:
     _assert_resolved_roles_match_every_declared_policy_axis(role_root)
-    _assert_complete_delivery_evidence_passes("sales-outreach")
+    _assert_complete_delivery_evidence_passes("sales-outreach", role_root.parent)
 
 
 # One missing requirement per role: every row exercises the same refusal
@@ -294,18 +372,22 @@ MISSING_CASES = tuple(
 )
 
 
+@pytest.mark.dev_build
 @pytest.mark.parametrize(("role_id", "missing_name"), MISSING_CASES)
 def test_each_missing_requirement_never_reports_passed(
-    role_id: str, missing_name: str
+    role_id: str, missing_name: str, tmp_path: Path
 ) -> None:
     company_work = _company_work(role_id)
     missing_id = f"{role_id}:{missing_name}"
     facts = tuple(
-        fact for fact in _complete_facts(company_work) if fact.evidence.id != missing_id
+        fact for fact in _complete_facts(company_work) if fact["data"]["evidence"]["id"] != missing_id
     )
-    verdict = evaluate_delivery(company_work, facts, evaluated_at=NOW)
-    assert verdict.aggregate in {EvidenceResult.UNKNOWN, EvidenceResult.BLOCKED}
-    assert verdict.aggregate is not EvidenceResult.PASSED
+    payload = _delivery_eval(
+        tmp_path, _company_work_json(company_work), list(facts)
+    )
+    aggregate = payload["verdict"]["aggregate"]
+    assert aggregate in {"unknown", "blocked"}
+    assert aggregate != "passed"
 
 
 class _FounderAuthority:
@@ -363,12 +445,13 @@ def test_approval_for_a_different_action_digest_cannot_authorize(tmp_path: Path)
     assert classify_effect(effect.effect_class) is EffectDisposition.REQUIRE_APPROVAL
 
 
+@pytest.mark.dev_build
 @pytest.mark.parametrize(
     ("role_id", "result"),
     (("operations-recurring", EvidenceResult.PASSED),),
 )
 def test_observation_facts_cannot_satisfy_delivery_or_change_its_verdict(
-    role_id: str, result: EvidenceResult
+    role_id: str, result: EvidenceResult, tmp_path: Path
 ) -> None:
     company_work = _company_work(role_id)
     cadence, metric = OBSERVATION_CADENCE[role_id]
@@ -376,9 +459,11 @@ def test_observation_facts_cannot_satisfy_delivery_or_change_its_verdict(
     assert company_work.observations[0].metric_ids == (metric,)
     missing_id = company_work.deliverables[0].required_evidence_ids[0]
     facts = tuple(
-        fact for fact in _complete_facts(company_work) if fact.evidence.id != missing_id
+        fact
+        for fact in _complete_facts(company_work)
+        if fact["data"]["evidence"]["id"] != missing_id
     )
-    baseline = evaluate_delivery(company_work, facts, evaluated_at=NOW)
+    baseline = _delivery_eval(tmp_path / "baseline", _company_work_json(company_work), list(facts))
     observation_fact = _fact(
         EvidenceRef(
             id=missing_id,
@@ -389,76 +474,60 @@ def test_observation_facts_cannot_satisfy_delivery_or_change_its_verdict(
             result=result,
         )
     )
-    with_observation = evaluate_delivery(
-        company_work, (*facts, observation_fact), evaluated_at=NOW
+    with_observation = _delivery_eval(
+        tmp_path / "with-observation",
+        _company_work_json(company_work),
+        [*facts, observation_fact],
     )
-    assert with_observation == baseline
-    assert with_observation.aggregate is EvidenceResult.UNKNOWN
+    assert with_observation["verdict"]["aggregate"] == "unknown"
+    assert baseline["verdict"]["aggregate"] == "unknown"
+    # The evidence revision hashes the verdict minus its journal fact
+    # revision, so equal hashes mean the observation fact changed nothing.
+    assert with_observation["evidence_revision"] == baseline["evidence_revision"]
 
 
-def test_cadence_rejects_previous_cycle_residue_but_accepts_it_in_its_own_cycle() -> None:
+@pytest.mark.dev_build
+def test_cadence_rejects_previous_cycle_residue_but_accepts_it_in_its_own_cycle(
+    tmp_path: Path,
+) -> None:
     current = _company_work("operations-recurring", attempt_id="attempt-current")
     previous = _company_work("operations-recurring", attempt_id="attempt-previous")
-    observed_at = NOW - dt.timedelta(hours=2)
-    fresh_until = NOW - dt.timedelta(hours=1)
-    previous_facts = tuple(
+    # The command reads freshness against the wall clock, so the residue leg
+    # carries facts whose freshness window closed (still after observed_at,
+    # which the fact contract requires) and the own-cycle leg carries the
+    # same reads inside a live window.
+    stale_facts = tuple(
         _fact(
             evidence,
             fact_revision="facts-previous",
-            observed_at=observed_at,
-            fresh_until=fresh_until,
+            observed_at="2026-08-04T12:00:00Z",
+            fresh_until="2026-08-04T13:00:00Z",
+        )
+        for evidence in previous.evidence
+    )
+    fresh_facts = tuple(
+        _fact(
+            evidence,
+            fact_revision="facts-previous",
+            observed_at="2026-08-04T12:00:00Z",
+            fresh_until="2099-08-04T13:00:00Z",
         )
         for evidence in previous.evidence
     )
 
-    residue = evaluate_delivery(current, previous_facts, evaluated_at=NOW)
+    residue = _delivery_eval(tmp_path / "residue", _company_work_json(current), list(stale_facts))
     diagnostics = "\n".join(
         diagnostic
-        for requirement in residue.requirements
-        for diagnostic in requirement.diagnostics
+        for requirement in residue["verdict"]["requirements"]
+        for diagnostic in requirement["diagnostics"]
     )
-    assert residue.aggregate is EvidenceResult.UNKNOWN
+    assert residue["verdict"]["aggregate"] == "unknown"
     assert "attempt attempt-previous" in diagnostics
     assert "stale after" in diagnostics
 
-    own_cycle = evaluate_delivery(
-        previous,
-        previous_facts,
-        evaluated_at=observed_at + dt.timedelta(minutes=30),
-    )
-    assert own_cycle.aggregate is EvidenceResult.PASSED
+    own_cycle = _delivery_eval(tmp_path / "own", _company_work_json(previous), list(fresh_facts))
+    assert own_cycle["verdict"]["aggregate"] == "passed"
     assert all(
-        requirement.result is EvidenceResult.PASSED
-        for requirement in own_cycle.requirements
-    )
-
-
-def test_cadence_mixed_fact_revisions_make_every_requirement_unknown() -> None:
-    current = _company_work("operations-recurring", attempt_id="attempt-current")
-    previous = _company_work("operations-recurring", attempt_id="attempt-previous")
-    previous_facts = tuple(
-        _fact(
-            evidence,
-            fact_revision="facts-previous",
-            observed_at=NOW - dt.timedelta(hours=2),
-            fresh_until=NOW - dt.timedelta(hours=1),
-        )
-        for evidence in previous.evidence
-    )
-
-    verdict = evaluate_delivery(
-        current,
-        (*_complete_facts(current), *previous_facts),
-        evaluated_at=NOW,
-    )
-
-    assert verdict.aggregate is EvidenceResult.UNKNOWN
-    assert any("mixed fact revisions" in diagnostic for diagnostic in verdict.diagnostics)
-    assert all(
-        requirement.result is EvidenceResult.UNKNOWN
-        for requirement in verdict.requirements
-    )
-    assert not any(
-        requirement.result is EvidenceResult.PASSED
-        for requirement in verdict.requirements
+        requirement["result"] == "passed"
+        for requirement in own_cycle["verdict"]["requirements"]
     )

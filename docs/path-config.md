@@ -143,7 +143,7 @@ plans_dir = ".fno/plans/"
 enabled = false
 ```
 
-All paths derive from `~/.fno/`. This is also what `fno config setup migrate-paths` writes on first run.
+All paths derive from `~/.fno/`. This is also what the first `fno` run writes.
 
 ## Lookup order for path resolution
 
@@ -183,7 +183,7 @@ When a suspicious path is found:
 [doctor] 1 suspicious path(s) detected:
   - state_dir = /private/tmp/fno: temp directory; data will not survive reboot
 
-Run 'fno config setup migrate-paths --force' to regenerate paths.
+Set a durable path with 'fno config set <key> <path>'.
 ```
 
 Suspicious patterns and their reasons:
@@ -197,17 +197,9 @@ Suspicious patterns and their reasons:
 | `~/OneDrive/` | OneDrive sync; conflicted copies on multi-machine setups |
 | `.git/` | Git internal; may be cleaned by git gc |
 
-## `fno config setup migrate-paths` flow
+## First-run config
 
-On first run after install, the CLI automatically writes `~/.fno/config.toml` with built-in defaults. The sentinel `~/.fno/.path-migration-done` prevents re-running.
-
-To regenerate settings explicitly:
-
-```bash
-fno config setup migrate-paths --force
-```
-
-This rewrites `config.toml` from the built-in defaults. Any custom values are overwritten; back up the file first if you have customizations.
+On the first run after install, the CLI writes `~/.fno/config.toml` with built-in defaults. The sentinel `~/.fno/.path-migration-done` prevents a second write. To change a path afterwards, set its key with `fno config set`, or run `fno do wizard`.
 
 ## Deprecation pathway
 

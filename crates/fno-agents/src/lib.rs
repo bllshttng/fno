@@ -161,6 +161,7 @@ pub mod decide_door;
 pub mod decision_index;
 pub mod decision_trace;
 pub mod delivery_completion;
+pub mod delivery_eval;
 pub mod digest;
 pub mod dispatch_credit;
 pub mod disposition_gate;

@@ -221,7 +221,7 @@ One row per K1 file. A "Kept:" cell lists the surviving tests by name where the 
 | `cli/tests/unit/test_session_cost.py` | 5 | 4 | Missing PR number renders #?, numbered link, None renders ?, delivered mail counted. |
 | `cli/tests/unit/test_session_cost_dedup.py` | 17 | 9 | Duplicates counted once, missing requestId, unpriced model, malformed lines, null usage, compaction count. |
 | `cli/tests/unit/test_session_cost_render.py` | 2 | 0 | Deleted. Repeats test_session_cost. |
-| `cli/tests/unit/test_setup_cli.py` | 2 | 2 | Unchanged: migrate-paths gets state_dir, the summary goes to stderr. |
+| `cli/tests/unit/test_setup_cli.py` | 2 | 0 | Deleted with the retired migrate-paths command. |
 | `cli/tests/unit/test_setup_id.py` | 4 | 2 | A bad prefix and a bad width are each refused with nothing written. |
 | `cli/tests/unit/test_setup_integration.py` | 34 | 16 | One failure never aborts the rest, installed CLI not reinstalled, failures map to failed, pi and agy through Rust. |
 | `cli/tests/unit/test_setup_wizard.py` | 17 | 10 | Defaults validate, re-prompt, project key lands in the project file, cancel keeps earlier writes, a raising doctor is contained. |

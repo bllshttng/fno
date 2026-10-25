@@ -7,7 +7,7 @@ import pytest
 from fno.scoreboard.fold import _is_shipped_reason
 
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_done_delivery_counts_as_shipped_telemetry() -> None:

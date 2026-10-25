@@ -74,7 +74,6 @@ no-flag: cli/src/fno/review/cli.py classify
 no-flag: cli/src/fno/review/cli.py resolve_level
 no-flag: cli/src/fno/route_cli.py set_cmd
 no-flag: cli/src/fno/route_cli.py unset_cmd
-no-flag: cli/src/fno/setup_cli.py plan_cmd
 no-flag: cli/src/fno/state/cli.py show
 no-flag: cli/src/fno/state/cli.py set_field
 no-flag: cli/src/fno/state/cli.py init
