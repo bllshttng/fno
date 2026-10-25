@@ -46,10 +46,10 @@ pub fn classify(args: &[OsString]) -> Option<Cmd> {
         ["setup", ..] => 1,
         _ => return None,
     };
-    let rest = args[at + 1..].to_vec();
+    // A bare `config setup` has no word at `at`, so slice only after a match.
     match words.get(at) {
-        Some(&"plan") => Some(Cmd::Plan(rest)),
-        Some(&"post-merge") => Some(Cmd::PostMerge(rest)),
+        Some(&"plan") => Some(Cmd::Plan(args[at + 1..].to_vec())),
+        Some(&"post-merge") => Some(Cmd::PostMerge(args[at + 1..].to_vec())),
         _ => None,
     }
 }
