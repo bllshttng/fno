@@ -112,6 +112,12 @@ def test_absent_required_shim_restored_from_cargo_bin(bin_dir, tmp_path, monkeyp
     assert main(["--bin-dir", str(bin_dir), "--repair"]) == 0
     assert os.path.realpath(bin_dir / "fno-gh-proxy") == str((cargo / "fno-gh-proxy").resolve())
 
+    # A durable copy under the temp root is no repair: the re-scan would
+    # condemn the new link and fail an install that passed before.
+    (bin_dir / "fno-gh-proxy").unlink()
+    monkeypatch.setattr(shim_check, "_temp_root", lambda: str(tmp_path))
+    assert scan(bin_dir)["healthy"] is True
+
 
 def test_main_exit_codes(bin_dir, tmp_path, monkeypatch):
     # The running-venv candidate is the durable bin: point sys.executable at

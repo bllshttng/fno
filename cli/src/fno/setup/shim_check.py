@@ -58,7 +58,10 @@ def scan(bin_dir: Path | None = None) -> dict:
             if entry.exists() or entry.is_symlink():
                 continue
             defect = _defect(entry, entry, "absent")
-            if defect["repair"]:
+            durable = Path(defect["repair"]).resolve() if defect["repair"] else None
+            # A durable copy under the temp root would relink into the very
+            # defect the re-scan condemns, failing an install that passed.
+            if durable and (durable.is_relative_to(venv_bin) or not durable.is_relative_to(Path(temp_root))):
                 defects.append(defect)
     return {"bin_dir": str(directory), "defects": defects, "healthy": not defects}
 
