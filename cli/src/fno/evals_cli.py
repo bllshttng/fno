@@ -21,12 +21,14 @@ evals_app = typer.Typer(
 )
 
 
-def _forward(command: str, argv: list[str]) -> None:
+def _forward(command: str, argv: list[str], missing_exit: int = 127) -> None:
     """Forward to the bundled fno-agents binary, binary-direct.
 
     Captured and re-emitted through typer: the leaf's output IS the operator
     surface, and a CliRunner-hosted caller (the tests) must see it. Exit
-    codes, stdout bytes, and stderr lines are the door's own.
+    codes, stdout bytes, and stderr lines are the door's own. The fold
+    commands (trend/report/macro) keep the deleted leg's missing-binary
+    contract: exit 2, and the macro arm's own hint text.
     """
     import subprocess
 
@@ -35,13 +37,15 @@ def _forward(command: str, argv: list[str]) -> None:
 
     binary = resolve_binary()
     if binary is None:
-        typer.echo(
+        hint = (
             "fno doctor evals: the fno-agents binary was not found. It ships in the "
             "`pip install fno` wheel and with the plugin; reinstall fno or run "
-            "`fno doctor update --rust`, or set FNO_AGENTS_BIN to its path.",
-            err=True,
+            "`fno doctor update --rust`, or set FNO_AGENTS_BIN to its path."
         )
-        raise typer.Exit(code=127)
+        if command == "macro":
+            hint = hint.replace("evals:", "evals macro:")
+        typer.echo(hint, err=True)
+        raise typer.Exit(code=missing_exit)
     result = subprocess.run(
         [str(binary), "evals", command, *argv],
         capture_output=True,
@@ -70,7 +74,7 @@ def run_cmd(ctx: typer.Context) -> None:
 )
 def trend_cmd(ctx: typer.Context) -> None:
     """Score the recent window against the prior one; exit 4 when regressed."""
-    _forward("trend", list(ctx.args))
+    _forward("trend", list(ctx.args), missing_exit=2)
 
 
 @evals_app.command(
@@ -79,7 +83,7 @@ def trend_cmd(ctx: typer.Context) -> None:
 )
 def report_cmd(ctx: typer.Context) -> None:
     """Fold evals history: tiers, pass@1, pass^k, flakes, alarm. Exit 4 on alarm."""
-    _forward("report", list(ctx.args))
+    _forward("report", list(ctx.args), missing_exit=2)
 
 
 @evals_app.command(
@@ -88,7 +92,7 @@ def report_cmd(ctx: typer.Context) -> None:
 )
 def macro_cmd(ctx: typer.Context) -> None:
     """Find recurring labelled failure patterns in existing event journals."""
-    _forward("macro", list(ctx.args))
+    _forward("macro", list(ctx.args), missing_exit=2)
 
 
 @evals_app.command(
