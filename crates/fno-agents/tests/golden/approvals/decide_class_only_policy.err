@@ -1,0 +1,4 @@
+REFUSED [unauthorized_principal] principal founder may not decide communication.external to mail:list-a
+  conflicting fields: deciding_principal_id
+  authority consulted: config.approvals.authorized_principals
+  recovery: Have an authorized principal decide this request.

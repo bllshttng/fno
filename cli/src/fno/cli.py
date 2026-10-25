@@ -91,7 +91,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     # moved-spellings block no longer renders, so the row teaches
     # nothing and exists only for the release clock.
     "approvals": (
-        "fno.approvals.cli:approvals_app",
+        "fno.approvals_cli:approvals_app",
         "Inspect and decide pending approvals for consequential effects.",
         {"hidden": True},
     ),

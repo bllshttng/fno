@@ -1028,6 +1028,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(argv) = fno::inbox_user::classify_inbox_user(args)
         .or_else(|| fno::inbox_user::classify_inbox_peers(args))
+        .or_else(|| fno::inbox_user::classify_inbox_approvals(args))
     {
         return Role::InboxUser(argv);
     }

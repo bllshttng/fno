@@ -236,7 +236,7 @@ fn payload_of(payload: &str, digest: &str) -> String {
 
 /// Emit owed events, then delete their rows. A failed append leaves the debt
 /// for the next drain, the same at-least-once contract store.py documents.
-fn drain(conn: &Connection, events_path: Option<&Path>) {
+pub(crate) fn drain(conn: &Connection, events_path: Option<&Path>) {
     let Some(events_path) = events_path else {
         return;
     };
@@ -456,7 +456,7 @@ pub fn judge(payload: &Value, cwd: &Path) -> Option<String> {
 
 /// The events file a hook fire drains to: the same resolution
 /// `emit_guard_decision` uses.
-fn events_for(cwd: &Path) -> PathBuf {
+pub(crate) fn events_for(cwd: &Path) -> PathBuf {
     crate::state_path::resolve("events", cwd).unwrap_or_else(|| crate::paths::events_path(cwd))
 }
 
