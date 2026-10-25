@@ -6899,14 +6899,10 @@ def dispatch_send(
                 family1_attemptable = family1_live or family1_state == "unknown" or (
                     existing.harness == "claude" and not existing.mux)
 
-                # W3 write-ahead: a recipient we will not attempt live is asleep,
-                # so it cannot drain during a live window, and there is no live
-                # window to crash in. Write its durable placeholder BEFORE
-                # anything else so a sender crash before the recipient wakes does
-                # not lose the message. A recipient we WILL attempt live gets its
-                # body row staged just before the inject (stage_before_live
-                # below): the bus row is the body's only home. A drain firing
-                # mid-inject can print a duplicate; a duplicate beats a drop.
+                # W3 write-ahead: a recipient we will not attempt live is asleep, so a
+                # sender crash before it wakes must not lose the message; its durable
+                # placeholder writes first. The live lane stages its row before the inject
+                # (the bus row is the body's only home): a duplicate beats a drop.
                 if durable_recipient is not None and not family1_attemptable:
                     _write_durable()
                 delivery = "durable"
@@ -6941,8 +6937,7 @@ def dispatch_send(
                     )
                     bus_live = str(paths.bus_dir() / "messages.jsonl")
                     staged_fields = {k: v for k, v in record.items() if v is not None}
-                    # Stage before the inject; a staging failure demotes to the
-                    # durable floor. An empty recipient (mcp-only row) stages nothing.
+                    # Stage before the inject: a staging failure demotes to the durable floor; an mcp-only row stages nothing.
                     try:
                         if record["recipient"]:
                             rust_binary.chats_command(["stage", bus_live], staged_fields)
@@ -6964,8 +6959,7 @@ def dispatch_send(
                             delivery = "hosted"
                             try:
                                 rust_binary.chats_command(
-                                    ["stage", bus_live, "--delivery", "hosted"],
-                                    staged_fields,
+                                    ["stage", bus_live, "--delivery", "hosted"], staged_fields,
                                 )
                             except Exception as exc:  # noqa: BLE001 - delivery already succeeded
                                 print(f"delivery succeeded; receipt row failed; the staged bus row holds the body; do not retry: {exc}", file=sys.stderr)
