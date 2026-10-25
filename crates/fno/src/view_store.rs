@@ -207,10 +207,10 @@ struct StoreFile {
     /// The backlog board's full-screen toggle. Default absent = false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     board_full: Option<serde_json::Value>,
+    /// The org view's tab. An old `org_mode` or `org_sessions` key reads
+    /// as absent and the next save drops it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    org_mode: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    org_sessions: Option<serde_json::Value>,
+    org_tab: Option<serde_json::Value>,
     /// The Messages tab's per-thread read marks: chat id -> the ts of the
     /// last row the user opened (a ts, not a row id: fmail ids are random
     /// hex, so only a ts answers "rows newer than the mark"). Persisted like
@@ -257,11 +257,13 @@ pub enum SidelineView {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum OrgMode {
+pub enum OrgTab {
     #[default]
-    Tree,
     Table,
+    Recent,
+    Overview,
     Graph,
+    Health,
 }
 
 /// The sideline agents view's group-by axis: the workspace tree the view
@@ -305,52 +307,46 @@ impl AgentGroup {
         }
     }
 }
-impl OrgMode {
-    pub fn next(self) -> Self {
+impl OrgTab {
+    pub const ALL: [OrgTab; 5] = [
+        Self::Table,
+        Self::Recent,
+        Self::Overview,
+        Self::Graph,
+        Self::Health,
+    ];
+    pub fn word(self) -> &'static str {
         match self {
-            Self::Tree => Self::Table,
-            Self::Table => Self::Graph,
-            Self::Graph => Self::Tree,
+            Self::Table => "Table",
+            Self::Recent => "Recent",
+            Self::Overview => "Overview",
+            Self::Graph => "Graph",
+            Self::Health => "Health",
         }
     }
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum OrgSessions {
-    #[default]
-    Current,
-    Former,
-    All,
-}
-impl OrgSessions {
-    pub fn next(self) -> Self {
-        match self {
-            Self::Current => Self::Former,
-            Self::Former => Self::All,
-            Self::All => Self::Current,
-        }
+    /// One step along the tab strip, wrapping at both ends.
+    pub fn step(self, forward: bool) -> Self {
+        let i = Self::ALL.iter().position(|t| *t == self).unwrap_or(0);
+        let n = Self::ALL.len();
+        Self::ALL[if forward {
+            (i + 1) % n
+        } else {
+            (i + n - 1) % n
+        }]
     }
 }
-pub fn load_org_prefs() -> (OrgMode, OrgSessions) {
+pub fn load_org_tab() -> OrgTab {
     #[cfg(test)]
     if TEST_PATH.with(|c| c.borrow().is_none()) {
-        return (OrgMode::default(), OrgSessions::default());
+        return OrgTab::default();
     }
-    let file = read_raw();
-    (
-        file.org_mode
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default(),
-        file.org_sessions
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default(),
-    )
+    read_raw()
+        .org_tab
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
 }
-pub fn save_org_prefs(mode: OrgMode, sessions: OrgSessions) {
-    mutate(|file| {
-        file.org_mode = serde_json::to_value(mode).ok();
-        file.org_sessions = serde_json::to_value(sessions).ok();
-    });
+pub fn save_org_tab(tab: OrgTab) {
+    mutate(|file| file.org_tab = serde_json::to_value(tab).ok());
 }
 
 /// Read the sideline view pref. Absent, corrupt, or unknown reads as
@@ -1135,12 +1131,18 @@ mod tests {
         assert_eq!(load_sideline_view(), SidelineView::Backlog);
         save_sideline_view(SidelineView::Org);
         assert_eq!(load_sideline_view(), SidelineView::Org);
-        for mode in [OrgMode::Tree, OrgMode::Table, OrgMode::Graph] {
-            for sessions in [OrgSessions::Current, OrgSessions::Former, OrgSessions::All] {
-                save_org_prefs(mode, sessions);
-                assert_eq!(load_org_prefs(), (mode, sessions));
-            }
+        for tab in OrgTab::ALL {
+            save_org_tab(tab);
+            assert_eq!(load_org_tab(), tab);
         }
+        // A file from the build with tree, table and graph modes opens on
+        // TABLE, and the next save drops the old key.
+        std::fs::write(view_path(), r#"{"org_mode":"graph","org_sessions":"all"}"#).unwrap();
+        assert_eq!(load_org_tab(), OrgTab::Table);
+        save_org_tab(OrgTab::Health);
+        assert!(!std::fs::read_to_string(view_path())
+            .unwrap()
+            .contains("org_mode"));
         save_sideline_view(SidelineView::Agents);
         assert_eq!(load_sideline_view(), SidelineView::Agents);
         // The Messages read marks: absent reads all-unread, save/load

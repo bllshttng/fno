@@ -69,7 +69,6 @@ plans_dir = ".fno/plans/"   # the legacy default; unset it resolves to <space>/p
 # worktrees_base  = ...   # default: <state_dir>/worktrees/
 # memory_dir      = ...   # default: <state_dir>/memory/
 # hook_logs_dir   = ...   # default: <state_dir>/hook-logs/
-# inbox_dir       = ...   # default: <space>/inbox/
 # handoffs_dir    = ...   # default: <vault>/internal/{project}/handoffs/ when
 #                         # obsidian.enabled, else <state_dir>/handoffs/<project>/
 # spaces_dir      = ...   # default: <state_dir>/spaces/
@@ -160,7 +159,7 @@ The anchor is the key for every path derived from the store: the lock (`graph.js
 
 Under `FNO_TEST_HERMETIC=1`, state accessors reject a resolved path outside the test sandbox. The fence reuses the events `HermeticEscapeError` and allowed-root calculation. `locks_dir()` is the deliberate config-free exception.
 
-Project-relative paths (`plans_dir`, `inbox_dir`) anchor relative strings to the git repo root (or `FNO_REPO_ROOT` in tests).
+Project-relative paths (`plans_dir`) anchor relative strings to the git repo root (or `FNO_REPO_ROOT` in tests).
 
 ## `fno config doctor` output
 

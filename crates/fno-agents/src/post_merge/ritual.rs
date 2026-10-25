@@ -796,10 +796,16 @@ impl Ritual {
     }
 
     fn leg_harvest(&mut self) {
-        let mut argv: Vec<String> = ["retro", "run", "--pr-number", &self.pr.to_string()]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let mut argv: Vec<String> = [
+            "backlog",
+            "retro",
+            "run",
+            "--pr-number",
+            &self.pr.to_string(),
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         if self.autonomous {
             argv.push("--keep-going".to_string());
         }

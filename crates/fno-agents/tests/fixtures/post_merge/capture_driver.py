@@ -141,7 +141,7 @@ elif len(argv) >= 2 and argv[0] == "backlog" and argv[1] == "advance":
     op = "backlog-advance"
 elif len(argv) >= 2 and argv[0] == "backlog" and argv[1] == "find":
     op = "backlog-find"
-elif len(argv) >= 2 and argv[0] == "retro" and argv[1] == "run":
+elif len(argv) >= 3 and argv[0] == "backlog" and argv[1] == "retro" and argv[2] == "run":
     op = "retro-run"
 elif len(argv) >= 2 and argv[0] == "do" and argv[1] == "plan":
     op = "do-plan"

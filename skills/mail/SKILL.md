@@ -1,7 +1,7 @@
 ---
 name: mail
 description: Read, send, reply to, and manage Footnote agent mail from any session.
-argument-hint: "<command> [args]  |  send <name> \"<body>\"  |  reply <msg-id> \"<body>\"  |  hold [minutes|off|status]  |  dnd [off|cancel]  |  unread|list|status [name]"
+argument-hint: "<command> [args]  |  send <name> \"<body>\"  |  reply <msg-id> \"<body>\"  |  hold [minutes|off|status]  |  dnd [off|cancel]  |  unread|show [name]"
 metadata:
   internal: false
   requires:
@@ -85,10 +85,7 @@ the matching section. Messaging is free, so **nothing here confirms** (contrast
 | `reply <msg-id> "<body>"` | `fno agents mail reply --to <msg-id> --body "<body>"` | yes (refuse empty) | free |
 | `unread [name]` | `fno agents mail unread [-n <name>]` | no (read) | free |
 | `ack <msg-id> [name]` | `fno agents mail ack <msg-id> [-n <name>]` | no | free |
-| `list` | `fno agents mail list` | no (read) | free |
 | `show [id]` | `fno agents mail show [id]` | no (read) | own session (--all lifts) |
-| `status` | `fno agents mail status` | no (read) | free |
-| `drain` | `fno agents mail drain` | no | free |
 | `hold [minutes\|off\|status]` | `/fno:dnd` (codex `$fno:dnd`) with the same argument | natural-language duration | free |
 | `dnd [off\|cancel]` | `/fno:dnd` (codex `$fno:dnd`) with the same argument | no | free |
 
@@ -193,16 +190,14 @@ Strip the leading `reply`; the rest is `<msg-id> <body>`.
 
 ---
 
-## `unread [name]` / `list` / `show` / `status` - read your inbox (thin pass-through)
+## `unread [name]` / `show` - read your inbox (thin pass-through)
 
 Reads. No normalize, no confirm. Run the raw command and relay its output faithfully.
 
 ```bash
 fno agents mail unread                 # my default inbox (project 'footnote')
 fno agents mail unread -n "<name>"     # a specific agent/project inbox
-fno agents mail list                   # unread threads in my inbox (-A for all)
 fno agents mail show                   # my session's mail; an id reads one
-fno agents mail status                 # one-screen inbox health snapshot
 ```
 
 `unread`/`ack` take the inbox name as the `-n/--name` **option** (default
@@ -226,18 +221,6 @@ idempotent (re-acking the same id is a safe no-op), so a retry never double-skip
 
 ---
 
-## `drain` - batch-consume at a loop boundary
-
-Drains unread threads with per-kind dispatch (heads-up -> triage; question ->
-wake-signal; fyi -> log/memory). Run it raw and relay the summary:
-
-```bash
-fno agents mail drain            # default cap of 10 threads
-fno agents mail drain --max 25   # raise the per-call cap
-```
-
----
-
 ## Cross-project `--kind` notes: the three axes
 
 A send has three orthogonal axes; keep them separate or a note lands in an inbox
@@ -245,25 +228,21 @@ nothing drains.
 
 - **Addressee** - WHO. A live session handle (`send <name>`) or a project
   (`--to-project <X>`). A session handle is a moving target; a project inbox is
-  a durable mailbox its members drain.
+  a durable mailbox its members read.
 - **Lane** - HOW it travels. Live-inject first, durable bus as the fallback. You
   do not choose this; the delivery model does. A durable receipt names WHY it is
   durable (`[live-miss]`, `[self-send]`, `[param-forced: --kind ...]`).
 - **`[agent-lock-timeout]`** - the odd durable reason. Another command on the same agent held the per-agent lock. `send`, `ask`, `spawn`, `stop` and `rm` all take it. No live attempt ran. The token says nothing about the recipient in either direction. Do not resurrect it on that evidence. Do not read it as healthy either. `peek` first, then withdraw before you re-send.
-- **Kind** - a **project-inbox drain contract**, set with `--kind`. The
-  recipient project's drain dispatches on it: `heads-up` -> LLM triage (may file
-  a graph node with provenance back to your thread); `question` -> drops a
-  wake-signal and stays unread until a human answers; `fyi` -> inform-only
-  (`--persist memory`, fyi-only, writes a recipient memory file future sessions
-  recall). Reply to any of them with `--reply-to <msg-id>` (appends to the thread).
+- **Kind** - a label on the durable row, set with `--kind`: `heads-up`,
+  `question` or `fyi`. A `question` also escalates to a human. Reply to any of
+  them with `--reply-to <msg-id>` (the reply joins its thread).
 
 `--kind` is a **project-inbox flag**, so it needs `--to-project`. A bare
 `--kind question`/`--kind fyi` to a session handle is refused (a handle has no
 drain that reads those kinds) - the error names the two real intents: drop
 `--kind` to inject live, or add `--to-project` to file a durable note.
 `--kind heads-up` to a handle stays accepted (the production notification
-pattern). Architecture and per-kind handler detail:
-[docs/architecture/cross-project-inbox.md](../../docs/architecture/cross-project-inbox.md).
+pattern).
 
 ### Cross-host targets: `<name>@<host>`
 

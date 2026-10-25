@@ -391,6 +391,8 @@ pub fn parse_pane_args(
     let mut guarded = false;
     let mut submit = false;
     let mut raw = false;
+    let mut harness: Option<String> = None;
+    let mut clear_composer = false;
     let mut hold_pass = false;
     let mut style_exception: Option<String> = None;
     let mut provenance: Option<String> = None;
@@ -461,6 +463,14 @@ pub fn parse_pane_args(
             "--guarded" => guarded = true,
             "--submit" => submit = true,
             "--raw" => raw = true,
+            // Composer read-back opt-in: the harness name selects the
+            // capabilities row whose keys drive the recovery loop.
+            "--harness" => {
+                harness = Some(value_of!());
+            }
+            // Send the harness's composer-clear keys and verify the empty
+            // marker before any payload.
+            "--clear-composer" => clear_composer = true,
             // (v94) Hidden: exists for the Rust hold gate's transport arms
             // (own send, control mail, parked replay), never interactive use.
             "--hold-pass" => hold_pass = true,
@@ -568,6 +578,8 @@ pub fn parse_pane_args(
                 style_exception,
                 provenance,
                 hold_pass,
+                harness,
+                clear_composer,
             }
         }
         crate::cli_args::PaneOp::Wait(_) => PaneCmd::Wait {
@@ -808,6 +820,8 @@ mod tests {
                 style_exception: None,
                 provenance: None,
                 hold_pass: false,
+                harness: None,
+                clear_composer: false,
             }
         );
         assert_eq!(
@@ -824,6 +838,8 @@ mod tests {
                 style_exception: None,
                 provenance: None,
                 hold_pass: false,
+                harness: None,
+                clear_composer: false,
             }
         );
         assert_eq!(
@@ -843,6 +859,8 @@ mod tests {
                 style_exception: None,
                 provenance: None,
                 hold_pass: false,
+                harness: None,
+                clear_composer: false,
             }
         );
         // --hold-pass rides beside --raw: the gate-passed delivery's flag.
@@ -863,6 +881,8 @@ mod tests {
                 style_exception: None,
                 provenance: None,
                 hold_pass: true,
+                harness: None,
+                clear_composer: false,
             }
         );
         // Every other source-less form is still a usage error.

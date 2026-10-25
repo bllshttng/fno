@@ -87,3 +87,22 @@ def test_select_provider_rejects_unknown_provider(tmp_path: Path, monkeypatch) -
 
     with pytest.raises(ValueError, match="unknown provider"):
         select_provider(name="x", requested_provider="not-real")
+
+
+def test_dispatch_gate_set_equals_the_roster_read() -> None:
+    """The dispatch gate serves the Rust roster, never a pinned pair.
+
+    The gate once hardcoded ("claude", "codex") beside the roster it
+    mirrors, so a provider Rust asserts dispatchable was refused in Python
+    with the stale pair in the error. Equality is the contract: a subset
+    would let the pair creep back in, and the roster-parity check only
+    holds surfaces as subsets.
+    """
+    from fno.agents.dispatch import _check_known_provider
+    from fno.agents.harnesses import KNOWN_PROVIDERS
+    from fno.harness_names import known_providers
+
+    assert KNOWN_PROVIDERS == known_providers()
+    for name in known_providers():
+        _check_known_provider(name)
+

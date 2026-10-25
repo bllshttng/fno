@@ -3146,7 +3146,9 @@ event_types:
     description: >
       One local test run through `fno doctor test`. A started row lands at
       spawn and a finished row at exit, joined by run_id. A started row with
-      no finished row names a killed runner. A refused run writes nothing.
+      no finished row names a killed runner. A refused run lands one refused
+      row naming the reason, the exit the caller saw and the pid that
+      answered.
     sources: [daemon]
     data:
       required: [run_id, stage]
@@ -3155,7 +3157,7 @@ event_types:
           type: string
         stage:
           type: string
-          enum: [started, finished]
+          enum: [started, finished, refused]
         command:
           type: string
         command_key:
@@ -3170,6 +3172,8 @@ event_types:
           type: string
         exit_code:
           type: integer
+        reason:
+          type: string
         duration_ms:
           type: integer
     consumers: [fno-agents test-run stats]
@@ -4053,6 +4057,9 @@ event_types:
           type: string
           enum: [no_claim, gone, held_by_other, stale, contended, write_failed, harness, not_async, codex_unroutable, emit_failed]
           description: "Optional. Set ONLY when the fire carried a watching intent and the idle was refused: why the watch lease or the idle posture refused. 'no_claim' = the manifest recorded no claim pair at init; 'gone'/'held_by_other'/'stale' are permanent for the session (arming another watcher cannot help); 'contended'/'write_failed' can succeed on retry; 'harness'/'not_async' = the idle posture itself refused before any lease read."
+        dur_ms:
+          type: integer
+          description: "Optional. Milliseconds from fire start to the watching idle decision, on the watching idle rows only: the lease-only idle's own cost, the number the watching-stop latency budget reads."
     consumers: [operator]
 
   - name: pr_watch_draft_flip
@@ -4254,8 +4261,8 @@ event_types:
       properties:
         reason:
           type: string
-          enum: [gate, timeout, error, no_rows]
-          description: "Why the run could not fire: gate (spawn gate refused), timeout (the tick budget killed the subprocess), error (non-zero exit or spawn trouble), no_rows (exit 0 but no history rows appended)."
+          enum: [gate, timeout, error, no_rows, no_bank]
+          description: "Why the run could not fire: gate (spawn gate refused), timeout (the tick budget killed the subprocess), error (non-zero exit or spawn trouble), no_rows (exit 0 but no history rows appended), no_bank (no checkout carries evals/bank, so nothing launched)."
         detail:
           type: string
           description: "Optional. The refusal, exit line, or stderr tail naming the cause."
@@ -6403,6 +6410,25 @@ event_types:
           description: "True when the pane write landed; a false value retries after the interval floor."
         reason:
           type: string
+
+  - name: shell_writers_sweep
+    description: "The daemon's hourly legacy shell-writer rendezvous sweep: entries older than a day under any events.jsonl.shell-writers.d are unlinked and an emptied directory is dropped. The rendezvous is residue of the retired shell append path; no current writer creates entries. Emitted for every run including a zero-count one, so a quiet run is never mistaken for a sweep that did not run."
+    sources: [daemon]
+    data:
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          description: "'ok' when the sweep ran; 'skipped' names why it did not."
+        swept:
+          type: integer
+          description: "Stale rendezvous entries unlinked this pass."
+        dirs_removed:
+          type: integer
+          description: "Rendezvous directories dropped once empty."
+        reason:
+          type: string
+          description: "The dispatch pause's skip reason when outcome is 'skipped'."
 
   - name: pr_watch_tick
     description: "Heartbeat and positive sweep receipt emitted at the end of every successful PR-state watcher poll interval, including quiet ticks with no actionable PRs."

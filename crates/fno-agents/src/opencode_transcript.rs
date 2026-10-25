@@ -63,8 +63,14 @@ pub(crate) fn opencode_stores() -> Vec<PathBuf> {
 }
 
 fn open_read_only(path: &Path) -> Result<rusqlite::Connection, String> {
-    let conn = rusqlite::Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    // The plain open first so its error stays the reported failure; the
+    // immutable retry covers the clean-exit mint (header stays WAL, the
+    // -wal/-shm sidecars gone) this opencode.db family is left in.
+    let conn = match rusqlite::Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(conn) => conn,
+        Err(original) => crate::graph_store::open_read_only_wal_safe(path)
+            .ok_or_else(|| format!("{}: {original}", path.display()))?,
+    };
     conn.busy_timeout(std::time::Duration::from_secs(2))
         .map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(conn)

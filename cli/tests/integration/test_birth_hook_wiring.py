@@ -1,7 +1,7 @@
 """Integration: the v2 A1 birth paths route through on_node_born.
 
 The add/idea hook wiring is native (the golden replays pin its offer, skip
-ladder and events) and the retro path lives in test_retro_land.py. This covers
+ladder and events) and the retro path is native (crates/fno-agents/src/retro/land.rs). This covers
 the remaining birth paths prove they invoke the shared hook.
 
 Decompose is NOT one of them. It used to route unflagged children here,

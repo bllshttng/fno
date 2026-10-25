@@ -51,18 +51,6 @@ pub(super) fn skeleton_cell(width: usize, elapsed_ms: Option<u64>) -> String {
     BREATHE[frame].to_string().repeat(width)
 }
 
-/// The card's context meter, padded to [`CTX_BAR_W`] so the cost and node
-/// after it line up card to card. The bar itself is [`CTX_BAR_CELLS`] wide.
-pub(super) const CTX_BAR_W: usize = 13;
-pub(super) const CTX_BAR_CELLS: usize = 8;
-
-pub(super) fn ctx_bar(pct: Option<u8>) -> String {
-    let Some(pct) = pct else {
-        return format!("{:<CTX_BAR_W$}", "-");
-    };
-    format!("{:<CTX_BAR_W$}", ctx_meter_text(pct, CTX_BAR_CELLS))
-}
-
 /// A priced dollar amount. The `~` marks LIST price: cents price the base
 /// catalog rates, so a tiered model's doubled top band and a subscription's
 /// actual bill both read lower.

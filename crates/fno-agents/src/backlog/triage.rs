@@ -826,11 +826,15 @@ pub fn collect_inbox_items() -> Vec<Value> {
 /// The capture-tier inbox markdown (fno.paths.inbox_path): the config pin,
 /// the parking-lot unification, then the vault and legacy fallbacks.
 pub fn inbox_markdown_path() -> Option<std::path::PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    let root = crate::paths::worktree_repo_root(&cwd);
+    inbox_markdown_path_at(&std::env::current_dir().ok()?)
+}
+
+/// [`inbox_markdown_path`] for the project at `cwd`, not the process cwd.
+pub fn inbox_markdown_path_at(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
+    let root = crate::paths::worktree_repo_root(cwd);
     // 1. config.paths.inbox_path, 2. config.post_merge.parking_lot_path.
     for keys in [["paths", "inbox_path"], ["post_merge", "parking_lot_path"]] {
-        if let Some(pin) = crate::agents_config::config_lookup(&cwd, &keys) {
+        if let Some(pin) = crate::agents_config::config_lookup(cwd, &keys) {
             let raw = pin.as_str().unwrap_or_default();
             if !raw.is_empty() {
                 return Some(std::path::PathBuf::from(

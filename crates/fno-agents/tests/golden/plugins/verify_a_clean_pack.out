@@ -1,0 +1,26 @@
+pack: <PACKS>/alpha
+  identity      pack-id                      checked   passed
+  identity      digest-stability             checked   passed
+  identity      role-ids-safe                checked   passed
+  identity      role-ids-case-unique         checked   passed
+  identity      role-and-function-ids-unique checked   passed
+  identity      function-set                 checked   passed
+  schema        declarations-parse           checked   passed
+  schema        source:workflow:flow         checked   passed
+  schema        source:skill:sk              checked   passed
+  schema        source:agent:alpha-writer    checked   passed
+  schema        source:asset:style-guide     checked   passed
+  schema        agent-role-binding:alpha-writer checked   passed
+  schema        agent-frontmatter-identity:alpha-writer checked   passed
+  schema        agent-tools-bounded:alpha-writer checked   passed
+  dependency    no-declared-dependencies     checked   passed
+  capability    declarations-are-not-grants  checked   passed
+  compatibility footnote-compat-range        checked   passed
+  compatibility role-manifest-schema         checked   passed
+  compatibility topology:writer              checked   passed
+  compatibility topology:editor              checked   passed
+  compatibility resolve:writer               checked   passed
+  compatibility resolve:editor               checked   passed
+  declared-test scenario:smoke               checked   passed
+  schema        evaluator-runnable:check     checked   passed
+ok: True

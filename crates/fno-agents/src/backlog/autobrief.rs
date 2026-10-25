@@ -411,13 +411,13 @@ fn resolve_opencode(session_id: &str, cwd: &str) -> ResolvedTranscript {
     let Some(store) = opencode_db_path().filter(|p| p.exists()) else {
         return unresolved();
     };
-    let ok =
-        rusqlite::Connection::open_with_flags(&store, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .and_then(|conn| {
-                let mut stmt = conn.prepare("SELECT 1 FROM session WHERE id = ?1 LIMIT 1")?;
-                let mut rows = stmt.query([session_id])?;
-                Ok(rows.next()?.is_some())
-            });
+    let ok = crate::graph_store::open_read_only_wal_safe(&store)
+        .ok_or_else(|| rusqlite::Error::InvalidPath(store.clone()))
+        .and_then(|conn| {
+            let mut stmt = conn.prepare("SELECT 1 FROM session WHERE id = ?1 LIMIT 1")?;
+            let mut rows = stmt.query([session_id])?;
+            Ok(rows.next()?.is_some())
+        });
     match ok {
         Ok(true) => ResolvedTranscript {
             resolved: true,
@@ -692,9 +692,7 @@ fn codex_pairs(path: &Path) -> Vec<Pair> {
 }
 
 fn opencode_pairs(db_path: &Path, session_id: &str) -> Vec<Pair> {
-    let Ok(conn) =
-        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-    else {
+    let Some(conn) = crate::graph_store::open_read_only_wal_safe(db_path) else {
         return Vec::new();
     };
     let mut stmt = match conn.prepare(

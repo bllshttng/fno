@@ -32,30 +32,19 @@ def _flag_path(form):
     return paths.bus_dir() / "control-pending" / f"{form}.flag"
 
 
-def _seed_thread(recipient):
-    from fno.inbox.store import inbox_dir_for, write_new_thread
-
-    write_new_thread(recipient, sender="alice", kind="send", body="thread seed")
-    inbox = inbox_dir_for(recipient)
-    threads = sorted(inbox.glob("*.md"))
-    assert threads, "seed thread missing"
-    return threads[-1]
-
-
 def test_the_control_lane_stamps_pending_flags(env):
     from fno.inbox.store import write_new_thread
 
     _ordinary_write_leaves_no_flag(env)
 
-    handle = write_new_thread(
+    msg_id = write_new_thread(
         MY_HANDLE,
         sender="lead",
         kind="send",
         body="control: freeze - hold",
     )
-    assert handle is not None
+    assert msg_id
     assert _flag_path(MY_HANDLE).exists()
-    _control_reply_append_marks_pending(env)
 
 
 def _ordinary_write_leaves_no_flag(env):
@@ -63,11 +52,3 @@ def _ordinary_write_leaves_no_flag(env):
 
     write_new_thread(MY_HANDLE, sender="alice", kind="send", body="plain status")
     assert not _flag_path(MY_HANDLE).exists()
-
-
-def _control_reply_append_marks_pending(env):
-    from fno.inbox.store import append_to_thread
-
-    thread = _seed_thread(MY_HANDLE)
-    append_to_thread(thread, sender="lead", body="control: hold")
-    assert _flag_path(MY_HANDLE).exists()

@@ -20,7 +20,6 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
 | `paths.memory_dir` | str (optional) | _(none)_ | never | Override path to the memory dir. |
 | `paths.hook_logs_dir` | str (optional) | _(none)_ | never | Override path to hook logs. |
-| `paths.inbox_dir` | str (optional) | _(none)_ | never | Override path to the cross-project messaging inbox dir. |
 | `paths.inbox_path` | str (optional) | _(none)_ | never | Override path to the capture-tier inbox/parking-lot file. |
 | `paths.handoffs_dir` | str (optional) | _(none)_ | never | Override path to the handoffs dir. |
 | `paths.retro_pending_dir` | str (optional) | _(none)_ | never | Override path to the retro-pending dir. |
@@ -33,12 +32,12 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `obsidian.vault` | str (optional) | _(none)_ | always | Vault area name (NOT a filesystem path). |
 | `project.id` | str (optional) | _(none)_ | advanced | Project identifier. |
 | `project.vision` | str (optional) | _(none)_ | always | One-paragraph statement of what this codebase is and why. |
-| `inbox.unclaimed_ttl` | int | `1800` | advanced | Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (turn-boundary nudge + `fno agents mail status`). |
+| `inbox.unclaimed_ttl` | int | `1800` | advanced | Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (the turn-boundary nudge). |
 | `inbox.landed_abandon_ttl` | int | `21600` | advanced | Seconds past which an outstanding sent message drops off the nag entirely and is never grepped again. |
 | `inbox.tool_boundary_ordinary` | bool | `false` | advanced | true lands ordinary mail at the next tool call (Claude PreToolUse), so a worker busy in one long turn reads it without waiting for its next prompt. Default false: ordinary mail waits for the prompt boundary; control mail lands at the tool call either way. |
 | `user.name` | str | `` | always | What fno calls you. Empty falls back to `git config user.name`. |
 | `sandbox.on_unavailable` | typing.Literal['refuse', 'warn'] | `refuse` | advanced | When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined. |
-| `blueprint.max_prs_per_epic` | int | `4` | advanced | Default cap on group PRs per decomposed epic; an epic plan-doc's max_children frontmatter overrides it per-epic and --max-prs may only tighten it. |
+| `blueprint.max_prs_per_epic` | int | `4` | advanced | Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agents wave check warns on a plan that declares more. |
 | `blueprint.python_repair_added_lines` | int | `30` | advanced | Added lines a cli/src/fno Python change that does not shrink the tree may add under law d-a9cddc93 (default 30). The push-time tally in check-file-budget.sh passes a change whose Python tree net is negative (a port that deletes more than it adds); this budget binds a change whose net is zero or positive. Also read by the plan gate in validate-plan.sh. |
 | `plan.default_diff_budget` | int | `300` | advanced | Added lines a target session's branch may carry before the commit-time diff-budget guard (hooks/diff-budget-commit.sh) names the overrun; the bound plan's frontmatter diff_budget key overrides it per plan (default 300; 0 is off). |
 | `backlog.maintain.staleness_days` | int | `30` | advanced | Age (days) before an idea is flagged stale. |
@@ -305,6 +304,8 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `mux.card_graph` | typing.Literal['activity', 'context'] | `activity` | advanced | What the sideline card's graph slot plots: activity (default) draws the tool-activity ramp colored ok/warn/error per interval, context draws the context percent's fill bar, steady for the whole session. Latched at mux client start. |
 | `mux.open_with` | typing.Literal['inmux', 'obsidian', 'system'] | `inmux` | advanced | Where a clicked file path opens: inmux (default; text, source files, images and PDFs open in the mux viewer, other files in the platform opener) \| obsidian (files under the configured vault open in Obsidian, others fall back to system) \| system (the platform opener). Read by the Rust client. |
 | `mux.viewer` | typing.Literal['panel', 'modal'] | `panel` | advanced | Shape of the in-mux file viewer: panel (default, docks at the right edge) \| modal. Read by the Rust client. |
+| `mux.wheel_lines` | int | `1` | advanced | Lines one wheel notch scrolls a pane whose app does NOT own the mouse (default 1). A notch here is one cell of trackpad travel; a wheel-mouse user wanting the classic 3-detent step sets 3. Read once at mux server birth. |
+| `mux.wheel_passthrough_rate` | int | `3` | advanced | Wheel ticks forwarded per 100ms to a pane whose app DOES own the mouse (default 3). The app scrolls its own step per tick, so this caps how fast a trackpad flick moves a Claude Code / Codex pane. Raise it if a deliberate notch scroll ever drops. |
 | `dev.source` | str | `` | never | Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) instead of the PyPI wheel when its tool venv is wiped. Unset = PyPI self-provision (end-user default). |
 | `loops` | dict[str, LoopEntry] | `{}` | advanced | Per-loop level overrides: {<name>: {level: report\|assisted\|unattended}} (default report). |
 | `status_sinks` | list[StatusSinkConfig] | `[]` | advanced | Status-fanout subscribers: list of {name, type (json-webhook\|text-webhook\|backlog-progress), events, match, url\|url_env, template, field, cloudevents, enabled}. |

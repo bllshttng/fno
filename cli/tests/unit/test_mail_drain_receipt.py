@@ -92,17 +92,17 @@ def test_sweep_prefers_drain_marker_over_cursor(tmp_path, monkeypatch):
     from fno.inbox.store import DurableOwner, write_new_thread
 
     use_tmpdir(monkeypatch, tmp_path)
-    handle = write_new_thread(
+    msg_id = write_new_thread(
         "cl-abcd1234", "alice", "send", "hi", owner=DurableOwner.DEAD_LETTER.value
     )
     events.emit(
-        events.KIND_AGENT_MAIL_DRAINED, msg_id=handle.thread_id,
+        events.KIND_AGENT_MAIL_DRAINED, msg_id=msg_id,
         recipient="cl-abcd1234", address_form="cl-abcd1234", sender="alice",
     )
     # Positive control: the marker-reading instrument finds the id we planted.
-    assert handle.thread_id in _drained_msg_ids()
+    assert msg_id in _drained_msg_ids()
 
     findings = _stale_dead_letters()
-    assert not [f for f in findings if f.get("msg_id") == handle.thread_id], (
+    assert not [f for f in findings if f.get("msg_id") == msg_id], (
         "a message with a drain marker was escalated as a stale dead letter"
     )

@@ -779,6 +779,70 @@ mod tests {
         );
     }
 
+    /// The filed check-in bug: a failed `workflow_dispatch` release run on
+    /// an older sha read as `main ci: red` while the head's push CI was
+    /// green. The verdict answers the head's push rows alone; the old
+    /// failure rides the `stale` list, and with no head rows at all the
+    /// verdict reads pending, never red.
+    #[test]
+    fn a_failed_dispatch_on_an_older_sha_never_reads_red() {
+        let at_sha = vec![wf_run(
+            "cli-ci",
+            "fresh",
+            "completed",
+            "success",
+            "2026-09-30T11:00:00Z",
+        )];
+        let on_main = vec![
+            wf_run_event(
+                "release",
+                "old",
+                "completed",
+                "failure",
+                "2026-09-28T11:00:00Z",
+                "workflow_dispatch",
+            ),
+            wf_run(
+                "cli-ci",
+                "fresh",
+                "completed",
+                "success",
+                "2026-09-30T11:00:00Z",
+            ),
+        ];
+        assert_eq!(
+            token_at("fresh", &at_sha, &on_main),
+            serde_json::json!({
+                "verdict": "green",
+                "stale": [{
+                    "workflow": "release", "sha": "old",
+                    "created_at": "2026-09-28T11:00:00Z",
+                }],
+            })
+        );
+        assert_eq!(
+            token_at(
+                "fresh",
+                &[],
+                &[wf_run_event(
+                    "release",
+                    "old",
+                    "completed",
+                    "failure",
+                    "2026-09-28T11:00:00Z",
+                    "workflow_dispatch",
+                )],
+            ),
+            serde_json::json!({
+                "verdict": "pending",
+                "stale": [{
+                    "workflow": "release", "sha": "old",
+                    "created_at": "2026-09-28T11:00:00Z",
+                }],
+            })
+        );
+    }
+
     /// The rendered line names the workflow and sha; a plain verdict is the
     /// word alone, legacy string tokens pass through untouched, and a live
     /// platform incident rides the explanation beside the verdict. The

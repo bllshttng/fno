@@ -43,7 +43,7 @@ mod row_menu;
 mod sweep_scope;
 mod wire_version;
 mod workspace_folder;
-use wire_version::{server_has_splitdir, split_skew_notice};
+use wire_version::{server_has_pane_scroll, server_has_splitdir, split_skew_notice};
 
 use sweep_scope::{build_sweep_modal, parse_sweep_receipt, sweep_apply_args, SweepCounts};
 
@@ -998,6 +998,11 @@ pub(crate) struct View {
     /// input line / counter. Client-local: opening never sends a message and
     /// never reserves a row (no Resize -> no reflow -> no dropped highlight).
     search: Option<SearchView>,
+    /// (v118) Keyboard scroll mode (prefix+PgUp): stdin diverts to
+    /// `scroll_mode_keys`; the moves ride the shared server-side offset.
+    scroll_mode: bool,
+    /// Pending escape bytes in scroll mode, the `search_esc` contract.
+    scroll_esc: Vec<u8>,
     /// Pending escape bytes in search mode, carried ACROSS reads so a split
     /// arrow sequence can never half-close the search or leak its tail into the
     /// pane (same split-arrow safety as [`View::sel_esc`]).
@@ -1823,9 +1828,9 @@ pub(crate) use overlay_lines::nav_overlay_lines;
 pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, peek_overlay_lines};
 mod messages_view;
 mod org_board;
-mod org_detail;
-mod org_graph;
-mod org_table;
+mod org_pages;
+mod org_seats;
+mod org_tabs;
 mod overlay_paint;
 mod release_check;
 mod settings_modal;
@@ -1854,6 +1859,8 @@ mod terminal_cursor;
 use overlay_keys::{answer_keys, move_to_keys, nav_goto, nav_keys, recruit_keys, rename_keys};
 
 mod bottom_row;
+
+mod scroll_mode;
 
 use input_folds::{
     fold_modal_keys, fold_nav_input, fold_search_input, fold_selector_keys,
@@ -2048,6 +2055,8 @@ impl View {
             row_slot: None,
             search: None,
             search_esc: Vec::new(),
+            scroll_mode: false,
+            scroll_esc: Vec::new(),
             hover_focus: true,
             card_graph: crate::client::card_line::CardGraph::Activity,
             theme: Theme::default_theme(),
@@ -5085,6 +5094,7 @@ impl View {
             // per-pane indicator is drawn INTO the cells above from each pane
             // frame's own scroll_offset.
             scroll_offset: 0,
+            history_lines: 0,
         }
     }
 
@@ -5318,31 +5328,6 @@ impl View {
         lines.push(pad_to(" hjkl/arrows move · enter move here", W));
         lines.push(pad_to(" 1-9 move to first nine · esc/q cancel", W));
         lines
-    }
-
-    /// Paint the in-scrollback search line over the bottom row (v12).
-    /// Blank first so the divider-fill pass cannot bleed through (gotcha).
-    /// Typing shows `/query_`; browsing shows `[i/n] /query` or `/query - no
-    /// matches` (total 0).
-    fn draw_search_line(&self, cells: &mut [Cell], rows: usize, cols: usize, sv: &SearchView) {
-        let r = rows - 1;
-        for c in 0..cols {
-            cells[r * cols + c] = Cell::default();
-        }
-        let text = match sv.result {
-            Some((0, _)) => format!(" /{} - no matches", sv.query),
-            Some((total, current)) => format!(" [{current}/{total}] /{}", sv.query),
-            // Typing, or submitted but awaiting the first reply: show the input.
-            None => format!(" /{}_", sv.query),
-        };
-        for (i, ch) in text.chars().take(cols).enumerate() {
-            cells[r * cols + i] = Cell {
-                c: ch,
-                fg: Color::Default,
-                bg: Color::Default,
-                flags: cell_flags::BOLD,
-            };
-        }
     }
 
     /// The tab-bar spans in paint order: the active squad's name (inert), its
@@ -7260,7 +7245,7 @@ async fn attach_and_run(
         tokio::sync::mpsc::unbounded_channel::<theme_import_ui::ImportMsg>();
     let (board_tx, mut board_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, backlog_board::BoardMsg)>();
-    let (org_tx, mut org_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, org_detail::OrgMsg)>();
+    let (org_tx, mut org_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, org_board::OrgMsg)>();
     let (share_tx, mut share_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, share_flow::ShareMsg)>();
     view.share_tx = Some(share_tx);
@@ -8009,7 +7994,7 @@ async fn attach_and_run(
                 }
             }
             Some((gen, msg)) = org_rx.recv() => {
-                org_detail::apply(&mut view, gen, msg);
+                org_board::apply(&mut view, gen, msg);
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }
@@ -8960,6 +8945,19 @@ async fn dispatch_event(
                 result: None,
             });
             view.search_esc.clear();
+            return Ok(DispatchFlow::Break);
+        }
+        Event::ScrollModeOpen => {
+            // Enter keyboard scroll mode on the focused pane. Keystrokes
+            // divert to scroll_mode_keys on the next read; the moves ride the
+            // shared server-side scroll offset the wheel drives. A server that
+            // predates the v118 commands gets a bell, never a dead mode.
+            if !server_has_pane_scroll(view.server_proto) {
+                let _ = raw_out(b"\x07");
+                return Ok(DispatchFlow::Continue);
+            }
+            view.scroll_mode = true;
+            view.scroll_esc.clear();
             return Ok(DispatchFlow::Break);
         }
         Event::OpenNav => {

@@ -285,7 +285,7 @@ fn build_rows(
 }
 
 /// `<plan>.artifacts/`: the plan file's name with `.artifacts` appended, the
-/// sidecar layout `cli/src/fno/retro/cli.py` reads and the target stop hook
+/// sidecar layout `crates/fno-agents/src/retro/cli.rs` reads and the target stop hook
 /// writes. A `#fragment` plan_path is stripped before resolving; a relative
 /// path belongs to the node's own checkout, not the caller's CWD.
 fn artifacts_dir(plan_clean: &str, entry: &Value) -> Result<PathBuf, String> {

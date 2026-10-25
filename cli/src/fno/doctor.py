@@ -4233,10 +4233,8 @@ def _pre_push_hook_report(src: Optional[Path]) -> dict[str, Any]:
 
 def build_report(source: Optional[Path] = None) -> dict[str, Any]:
     """Assemble the full doctor result dict: the staleness verdict plus every
-    advisory report. The one place that reads the machine, so `fno doctor`
-    and the setup wizard (`report_machine_blockers` in `setup_cli.py`) stay
-    two callers of one authority instead of two implementations that drift
-."""
+    advisory report. The one place that reads the machine, so every caller
+    reads one authority instead of two implementations that drift."""
     src = _resolve_source(source)
     source_rev = _source_rev(src) if src is not None else None
     marker = _read_marker()
@@ -4377,9 +4375,8 @@ def _emit_blockers(
     err: bool = False,
     echo_fn: Optional[Callable[[str], None]] = None,
 ) -> None:
-    """The one place that formats the blocker block, so `--blockers`, the
-    normal human path, and the setup wizard (`report_machine_blockers` in
-    setup_cli.py) can never print two different shapes of the same list."""
+    """The one place that formats the blocker block, so `--blockers` and the
+    normal human path can never print two different shapes of the same list."""
     out = echo_fn or ((lambda m: typer.echo(m, err=True)) if err else typer.echo)
     out(f"fno doctor: {len(blockers)} BLOCKER(S) - these will make the fleet misbehave:")
     for i, line in enumerate(blockers, start=1):
@@ -4399,7 +4396,7 @@ def doctor_command(
         "--blockers",
         help="Print only the findings that will make the fleet misbehave, and exit 1 if "
         "any exist (0 otherwise). The machine-readable-enough entry point for a new-user "
-        "first run - see `report_machine_blockers` in setup_cli.py.",
+        "first run, beside `fno do wizard`.",
     ),
     json_out: bool = typer.Option(
         False,

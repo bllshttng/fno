@@ -381,6 +381,19 @@ fn listing_answer<'a>(rows: &'a [Value], number: i64, ref_repo: Option<&str>) ->
     })
 }
 
+/// True when the PR row's approved `Retarget <from> <to> <approval>` line
+/// hands `nid` away: the closure line claims the new node and not this one,
+/// so this row is the other node's evidence and never closes `nid`. The
+/// board and the merge owner run the same filter over
+/// `pr_closure::retargeted_from`; the drift scans were the reader that
+/// still closed the handed-away node.
+fn handed_away_by(row: &Value, nid: &str) -> bool {
+    let body = row.get("body").and_then(Value::as_str).unwrap_or("");
+    crate::org_board::pr_closure::retargeted_from(body)
+        .iter()
+        .any(|id| id == nid)
+}
+
 /// Close open nodes with NO PR refs by matching the id in a merged branch.
 pub(crate) fn reverse_map_unstamped(
     entries: &[Value],
@@ -482,7 +495,7 @@ pub(crate) fn reverse_map_unstamped(
                     branch_matches_node(
                         row.get("headRefName").and_then(Value::as_str).unwrap_or(""),
                         nid,
-                    )
+                    ) && !handed_away_by(row, nid)
                 })
                 .collect();
             if hits.is_empty() {
@@ -708,6 +721,12 @@ pub(crate) fn scan_merge_drift(
             // same-numbered PR elsewhere.
             let repo = repo_slug_from_url(url.as_deref());
             if let Some(hit) = listing_answer(&merged_rows, *number, repo.as_deref()) {
+                // A PR whose approved Retarget line hands this node away is
+                // not this node's closing evidence: the retarget moved the
+                // work to another node, and this one waits for its own PR.
+                if handed_away_by(hit, nid) {
+                    continue;
+                }
                 // No mergeCommit oid/files on a listing row - like a
                 // reverse-mapped record.
                 merged = Some(PrMergeState {
@@ -890,6 +909,49 @@ mod tests {
             panic!("an open listing row means no drift")
         });
         assert!(records.is_empty(), "{records:?}");
+    }
+
+    #[test]
+    fn a_retargeted_away_node_does_not_close_on_the_handoff_pr() {
+        // The recorded shape: a PR retargeted from one node to another, with
+        // the old node still carrying the PR binding. The handoff body hands
+        // the old node away, so neither scan closes it on this PR.
+        let body = "Fixes x-bbbb\n\nRetarget x-aaaa x-bbbb msg-123456";
+        let entries = vec![open_node(json!({
+            "pr_number": 7,
+            "pr_url": "https://github.com/o/r/pull/7",
+            "cwd": ".",
+        }))];
+        let mut row = pr_row(7, "feature/x-aaaa-port", "MERGED");
+        row["body"] = json!(body);
+
+        let cache = ListingCache::new();
+        cache
+            .rows_for_with("merged", ".", |_| Ok(vec![row.clone()]))
+            .expect("seed merged");
+        cache
+            .rows_for_with("open", ".", |_| Ok(Vec::new()))
+            .expect("seed open");
+        let records = scan_merge_drift(&entries, None, Some(&cache), |_, _, _, _| {
+            panic!("a handed-away PR is not this node's evidence")
+        });
+        assert!(records.is_empty(), "{records:?}");
+
+        // The same row without the Retarget line still closes the node.
+        let cache = ListingCache::new();
+        cache
+            .rows_for_with("merged", ".", |_| {
+                Ok(vec![pr_row(7, "feature/x-aaaa-port", "MERGED")])
+            })
+            .expect("seed merged");
+        cache
+            .rows_for_with("open", ".", |_| Ok(Vec::new()))
+            .expect("seed open");
+        let records = scan_merge_drift(&entries, None, Some(&cache), |_, _, _, _| {
+            panic!("query owed nothing: the listing answered")
+        });
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert!(records[0].closeable());
     }
 
     #[test]

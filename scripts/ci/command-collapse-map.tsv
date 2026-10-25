@@ -227,7 +227,6 @@ config doctor	T1	config doctor	20
 config get	KEEP	config get	69	deliberate readability slack for a high-traffic distinct operation
 config history	T1	config history	1
 config paths	T1	config paths	36
-config plugins	T1	config plugins	10
 config project	T1	config project	9
 config rm	T1	config rm	0
 config route	T1	config route	16
@@ -411,11 +410,6 @@ plan set-expected	T1	plan set-expected	1
 plan stamp	T1	plan stamp	5
 plan sync	T1	plan sync	3
 plan validate	T1	plan validate	14
-plugins activate	T1	plugins activate	1
-plugins deactivate	T1	plugins deactivate	1
-plugins inspect	T1	plugins inspect	1
-plugins ls	T1	plugins ls	2
-plugins verify	T1	plugins verify	4
 do pr create	T1	do pr create	3
 pr-watch heal	T1	pr-watch heal	3
 pr-watch install	T1	pr-watch install	3
@@ -424,13 +418,9 @@ pr-watch status	T1	pr-watch status	3
 pr-watch tick	T1	pr-watch tick	2
 pr-watch uninstall	T1	pr-watch uninstall	1
 research	KEEP	research	18	single-leaf group
-restart	KEEP	restart	17	single-leaf group
 resume receipt show	T1	resume receipt show	1
 resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2
-retro drain-postmortems	T1	retro drain-postmortems	2
-retro run	T1	retro run	23
-retro sweep-carveouts	T1	retro sweep-carveouts	3
 roles ls	T1	roles ls	1
 route env	T1	route env	4
 route init	T1	route init	0
@@ -444,12 +434,10 @@ setup cli-hooks	T1	setup cli-hooks	8
 setup cli-hooks-codex	T1	setup cli-hooks-codex	4
 config plugin	T1	config plugin	0
 doctor reclaim	T1	doctor reclaim	0
-setup github-cli	T1	setup github-cli	0
 setup migrate-config	T1	setup migrate-config	1
 setup migrate-paths	T1	setup migrate-paths	8
 setup plan	T1	setup plan	7
 setup post-merge	T1	setup post-merge	6
-setup wizard	T1	setup wizard	10
 skill-diff reconcile	T1	skill-diff reconcile	1
 skill-diff tick	T1	skill-diff tick	4
 state archive	T1	state archive	1
