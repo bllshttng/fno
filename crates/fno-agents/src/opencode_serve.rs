@@ -124,12 +124,22 @@ pub(crate) fn http_json(
         .strip_prefix("http://")
         .ok_or_else(|| format!("serve base url {base_url:?} is not http:// loopback"))?;
     let authority = after_scheme.trim_end_matches('/');
-    let addr = std::net::ToSocketAddrs::to_socket_addrs(authority)
-        .ok()
-        .and_then(|mut a| a.next())
-        .ok_or_else(|| format!("resolve {authority}: no address"))?;
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)
-        .map_err(|e| format!("connect {authority}: {e}"))?;
+    // Every resolved address, as TcpStream::connect tries them: `localhost`
+    // can resolve ::1 first while the server binds 127.0.0.1.
+    let mut last = format!("resolve {authority}: no address");
+    let mut stream = None;
+    for addr in std::net::ToSocketAddrs::to_socket_addrs(authority)
+        .map_err(|e| format!("resolve {authority}: {e}"))?
+    {
+        match TcpStream::connect_timeout(&addr, timeout) {
+            Ok(s) => {
+                stream = Some(s);
+                break;
+            }
+            Err(e) => last = format!("connect {authority}: {e}"),
+        }
+    }
+    let mut stream = stream.ok_or(last)?;
     stream
         .set_read_timeout(Some(timeout))
         .map_err(|e| format!("read timeout: {e}"))?;
