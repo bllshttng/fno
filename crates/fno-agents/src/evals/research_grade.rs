@@ -406,7 +406,7 @@ mod tests {
 
     #[test]
     fn a_cited_live_claimed_brief_grades_green() {
-        let (dir, b, g, s) = fixture(
+        let (_dir, b, g, s) = fixture(
             "side.jsonl",
             "## Findings\n\n- the fold is native [S1]\n\n## Sources\n\n[S1]: https://example.test/x\n",
             "## Findings\n\n- fold natively\n",
@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn an_uncited_claim_names_the_section() {
-        let (dir, b, g, s) = fixture(
+        let (_dir, b, g, s) = fixture(
             "side.jsonl",
             "## Findings\n\n- no citation here\n",
             "## Findings\n\n- fold\n",
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn a_dead_source_counts_and_names_the_url() {
-        let (dir, b, g, s) = fixture(
+        let (_dir, b, g, s) = fixture(
             "side.jsonl",
             "## Findings\n\n- cited [S1]\n\n[S1]: https://example.test/dead\n",
             "## Findings\n\n- fold\n",

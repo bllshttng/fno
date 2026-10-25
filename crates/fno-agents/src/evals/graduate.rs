@@ -4,8 +4,6 @@
 
 use regex::Regex;
 
-const USAGE_EXIT: i32 = 2;
-
 pub fn run(args: &[String]) -> i32 {
     let Some(task_id) = args.first().map(String::as_str) else {
         eprintln!("usage: fno-agents evals graduate <task-id> [--bank <dir>]");
