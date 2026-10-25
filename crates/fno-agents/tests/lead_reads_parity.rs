@@ -279,8 +279,15 @@ fn verdict_matches_the_python_goldens() {
             .status()
             .unwrap();
         assert!(init.success());
-        // The capture read a graph with rows: an empty graph answers that a
-        // scope is unknown, not that it names no node.
+        // The capture read a graph with rows and a project map: an empty
+        // graph answers that a scope is unknown, not that it names no node,
+        // and a missing map appends why a project name cannot resolve.
+        fs::create_dir_all(p.join(".fno")).unwrap();
+        fs::write(
+            p.join(".fno/config.toml"),
+            "[work.workspaces.t]\nprojects = [{ name = \"fno\", path = \"/nonexistent\" }]\n",
+        )
+        .unwrap();
         let graph = fno_agents::state_layout::graph_anchor(&p.join(".fno"));
         fs::create_dir_all(graph.parent().unwrap()).unwrap();
         fno_agents::graph_store::seed_rows_with_slugs(
