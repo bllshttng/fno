@@ -126,16 +126,10 @@ fn setup_case(case: &Value) -> (tempfile::TempDir, PathBuf) {
 }
 
 /// Pin the hermetic env for one door call: the state root the fixture lives
-/// under plus the case's backend selection. Returns the guard for the shared
-/// env lock, since the door's backend resolution reads process env.
-struct PinnedEnv {
-    _guard: std::sync::MutexGuard<'static, ()>,
-}
-
-fn pin_env(state: &std::path::Path, case: &Value) -> PinnedEnv {
-    let guard = fno_agents::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+/// under plus the case's backend selection. The door's backend resolution
+/// reads process env, and this binary runs one sequential test, so the pins
+/// need no cross-test lock.
+fn pin_env(state: &std::path::Path, case: &Value) {
     std::env::set_var("FNO_STATE_DIR", state);
     // The door reads the store through the same resolver the Python side
     // pins with FNO_STATE_DIR; FNO_HOME would point it at another root.
@@ -150,7 +144,6 @@ fn pin_env(state: &std::path::Path, case: &Value) -> PinnedEnv {
             std::env::remove_var("FNO_TRACKER_BACKEND");
         }
     }
-    PinnedEnv { _guard: guard }
 }
 
 /// Replace every occurrence of the case root (and its realpath spelling)
@@ -277,7 +270,7 @@ fn tracker_door_matches_the_frozen_python_seam() {
     for (key, case) in &cases {
         let (root, state) = setup_case(case);
         {
-            let _env = pin_env(&state, case);
+            pin_env(&state, case);
             let mut rust = run_case(key, case);
             normalize(&mut rust, root.path());
             if key.starts_with("sidecar_set") {
