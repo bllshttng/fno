@@ -795,7 +795,7 @@ def cmd_spawn(
     if "refusal" in answer:
         print(answer["refusal"], file=sys.stderr)
         raise typer.Exit(code=2)
-    harness = answer.get("harness")
+    harness = answer.get("harness") or ""
     harness_source = answer.get("source")
     # Provenance rides the pane receipt's harness_source field below - it is
     # the HARNESS axis's provenance, not the vendor's. The bg/once stdout
