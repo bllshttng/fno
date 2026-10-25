@@ -466,7 +466,7 @@ pub fn build_pr_body(
     if version_observed != version_against {
         lines.push(
             "- note: the skill file moved between eval and proposal; the diff is \
-             computed against current content."
+             computed against current content (AC9-FR)."
                 .to_string(),
         );
     }
