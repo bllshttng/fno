@@ -79,6 +79,42 @@ mod tests {
         assert_eq!(classify(&argv(&["api", "repos/o/r"])), Action::Delegate);
         assert_eq!(classify(&argv(&["pr", "edit", "5"])), Action::Delegate);
     }
+
+    /// The door is asked only for a draft intent: `pr create --draft` and
+    /// both `pr ready --draft` forms. Everything else - including other
+    /// --draft bearers like `pr edit` - delegates with no door call and no
+    /// stderr line, so ordinary gh reads never pay the graph read.
+    #[test]
+    fn the_draft_door_is_asked_only_for_a_draft_intent() {
+        let draft = |words: &[&str]| is_draft_intent(&argv(words));
+        assert!(draft(&["pr", "create", "--draft"]));
+        assert!(draft(&["pr", "ready", "--draft"]));
+        assert!(draft(&["pr", "ready", "5", "--draft"]));
+        assert!(draft(&["-R", "o/r", "pr", "create", "--draft"]));
+        assert!(!draft(&["pr", "create", "t"]));
+        assert!(!draft(&["pr", "ready", "5"]));
+        assert!(!draft(&["pr", "edit", "5", "--draft"]));
+        assert!(!draft(&["api", "repos/o/r"]));
+        assert!(!draft(&["pr", "view", "5"]));
+    }
+}
+
+/// True only for a draft intent: `pr create ... --draft` or `pr ready
+/// ... --draft` (the numberless DWIM form included). Everything else
+/// delegates with no door call and no stderr line, so ordinary gh reads
+/// pay no graph read and never print the door's lagging-binary noise.
+/// Global gh flags ahead of the subcommand strip away the same way
+/// `classify` strips them.
+fn is_draft_intent(args: &[String]) -> bool {
+    if !args.iter().any(|a| a == "--draft") {
+        return false;
+    }
+    let command = quota::command_args(args);
+    let pair: Option<(&str, &str)> = match command.as_slice() {
+        [first, second, ..] => Some((first.as_str(), second.as_str())),
+        _ => None,
+    };
+    matches!(pair, Some(("pr", "create")) | Some(("pr", "ready")))
 }
 
 /// Replace the proxy so untouched gh commands keep TTY and streaming
@@ -89,24 +125,40 @@ fn delegate(real: &str, args: &[String]) -> ! {
         eprintln!("{refusal}");
         std::process::exit(quota::REFUSED);
     }
-    // The draft guard: an unreachable door admits, the sweep is the second
-    // gate (the Python leg rode the same door through command_call).
-    let ask = json!({
-        "pr_draft_ready": {
-            "check": args,
-            "cwd": std::env::current_dir()
-                .map(|d| d.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+    // The gh-side provenance: every delegated argv feeds record_request,
+    // which self-filters to merge requests, so a bare `gh pr merge` from an
+    // agent still leaves its `merge_requested` row. This used to ride the
+    // draft door's check; the door is now asked only for a draft intent, so
+    // the recording moved here to keep merge provenance complete. Disjoint
+    // from the draft guard: one argv is never both a merge and a draft
+    // intent, so nothing records twice.
+    let cwd = std::env::current_dir()
+        .map(|d| d.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    crate::merge_provenance::record_request(
+        &quota::command_args(args),
+        Some(cwd.as_str()),
+        "gh_proxy",
+    );
+    // The draft guard: only a draft intent reaches the door. The sweep is
+    // the second gate, and an unreachable door still admits a real draft
+    // intent (the Python leg rode the same door through command_call).
+    if is_draft_intent(args) {
+        let ask = json!({
+            "pr_draft_ready": {
+                "check": args,
+                "cwd": cwd,
+            }
+        });
+        let reply = crate::pr_draft_ready::run_door(&ask);
+        if reply.get("admitted").and_then(serde_json::Value::as_bool) != Some(true) {
+            let refusal = reply
+                .get("refusal")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("gh proxy: --draft refused");
+            eprintln!("{refusal}");
+            std::process::exit(REFUSE_EXIT);
         }
-    });
-    let reply = crate::pr_draft_ready::run_door(&ask);
-    if reply.get("admitted").and_then(serde_json::Value::as_bool) != Some(true) {
-        let refusal = reply
-            .get("refusal")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("gh proxy: --draft refused");
-        eprintln!("{refusal}");
-        std::process::exit(REFUSE_EXIT);
     }
     let env = match quota::delegate_environment() {
         Ok(env) => env,
