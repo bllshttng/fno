@@ -678,13 +678,26 @@ fn multiclient_mux_ls_reports_live_counts_and_heals_a_corpse() {
         !scratch.0.join("dead.sock").exists(),
         "ls removes a proven-dead session's socket"
     );
-    let healed = fno::event_store::journal_text(
-        &scratch.0.join("iso-agents").join("events.jsonl"),
-        &["mux_session_healed"],
+    let journal = scratch.0.join("iso-agents").join("events.jsonl");
+    let healed = fno::event_store::journal_text(&journal, &["mux_session_healed"]);
+    // The silent-empty failure mode names nothing, so the panic carries the
+    // checked read's own Err and what the store directory actually holds.
+    let checked = fno::event_store::journal_text_checked(
+        &journal,
+        &fno::event_store::EventQuery::of_types(&["mux_session_healed"]),
     );
+    let listing: Vec<String> = std::fs::read_dir(journal.parent().expect("journal has a parent"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
     assert!(
         healed.contains("mux_session_healed") && healed.contains("dead.sock"),
-        "the heal journals one row naming the session; got: {healed}"
+        "the heal journals one row naming the session; got: {healed:?}; \
+         checked: {checked:?}; store dir: {listing:?}"
     );
     assert!(
         stdout.contains("odd: alive (unqueryable"),

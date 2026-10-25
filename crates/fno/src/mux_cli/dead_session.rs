@@ -47,7 +47,14 @@ pub(super) fn heal_if_dead(name: &str, sock: &Path) -> bool {
         "data": { "mux_session": name, "path": sock.display().to_string() },
     });
     let path = crate::pane_send_audit::pane_send_audit_events_path();
-    let _ = crate::pane_send_audit::append_agents_event(&path, &row);
+    // The row is best-effort, but a silently dropped row reads as a broken
+    // heal downstream (the e2e journal assert): name the refusal here.
+    if let Err(e) = crate::pane_send_audit::append_agents_event(&path, &row) {
+        eprintln!(
+            "fno mux: warn: heal of {name:?} could not journal the row at {}: {e}",
+            path.display()
+        );
+    }
     true
 }
 
