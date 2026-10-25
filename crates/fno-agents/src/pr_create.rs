@@ -921,11 +921,11 @@ mod tests {
 
     fn epic_rows() -> Vec<Value> {
         vec![
-            serde_json::json!({"id": "x-e000", "parent": ""}),
-            serde_json::json!({"id": "x-a111", "parent": "x-e000"}),
-            serde_json::json!({"id": "x-b222", "parent": "x-e000"}),
-            serde_json::json!({"id": "x-c333", "parent": "x-b222", "contained_in": "x-b222"}),
-            serde_json::json!({"id": "x-d444", "parent": "x-e000", "contained_in": "x-a111"}),
+            serde_json::json!({"id": "x-eeee", "parent": ""}),
+            serde_json::json!({"id": "x-aaaa", "parent": "x-eeee"}),
+            serde_json::json!({"id": "x-bbbb", "parent": "x-eeee"}),
+            serde_json::json!({"id": "x-cccc", "parent": "x-bbbb", "contained_in": "x-bbbb"}),
+            serde_json::json!({"id": "x-dddd", "parent": "x-eeee", "contained_in": "x-aaaa"}),
         ]
     }
 
@@ -954,47 +954,47 @@ mod tests {
         let now = at("2026-10-24T12:00:00Z");
         let rows = epic_rows();
         // A contained descendant of the sibling counts as the sibling's.
-        let open = [sibling_pr(40, "Fixes x-b222 x-c333", None)];
-        let refusal = sibling_refusal("x-a111", &rows, "## Summary\n", "feature/me", &open, now)
+        let open = [sibling_pr(40, "Fixes x-bbbb x-cccc", None)];
+        let refusal = sibling_refusal("x-aaaa", &rows, "## Summary\n", "feature/me", &open, now)
             .expect("an open sibling PR refuses");
         assert!(
-            refusal.contains("PR #40 (open) already ships x-b222"),
+            refusal.contains("PR #40 (open) already ships x-bbbb"),
             "{refusal}"
         );
-        assert!(refusal.contains("epic x-e000"), "{refusal}");
+        assert!(refusal.contains("epic x-eeee"), "{refusal}");
         assert!(refusal.contains("Separate PR: <reason>"), "{refusal}");
-        let contained = [sibling_pr(41, "Fixes x-c333", None)];
-        assert!(sibling_refusal("x-a111", &rows, "", "feature/me", &contained, now).is_some());
+        let contained = [sibling_pr(41, "Fixes x-cccc", None)];
+        assert!(sibling_refusal("x-aaaa", &rows, "", "feature/me", &contained, now).is_some());
         // This node's own PR, and a node it contains, never refuse it.
-        let mine = [sibling_pr(42, "Fixes x-b222", None)];
-        assert!(sibling_refusal("x-a111", &rows, "", "feature/42", &mine, now).is_none());
-        let own_leaf = [sibling_pr(43, "Fixes x-d444", None)];
-        assert!(sibling_refusal("x-a111", &rows, "", "feature/me", &own_leaf, now).is_none());
+        let mine = [sibling_pr(42, "Fixes x-bbbb", None)];
+        assert!(sibling_refusal("x-aaaa", &rows, "", "feature/42", &mine, now).is_none());
+        let own_leaf = [sibling_pr(43, "Fixes x-dddd", None)];
+        assert!(sibling_refusal("x-aaaa", &rows, "", "feature/me", &own_leaf, now).is_none());
         // No parent, or no sibling on any PR: silent pass.
-        assert!(sibling_refusal("x-e000", &rows, "", "feature/me", &open, now).is_none());
-        let unrelated = [sibling_pr(44, "Fixes x-ffff", None)];
-        assert!(sibling_refusal("x-a111", &rows, "", "feature/me", &unrelated, now).is_none());
+        assert!(sibling_refusal("x-eeee", &rows, "", "feature/me", &open, now).is_none());
+        let unrelated = [sibling_pr(44, "Fixes x-1111", None)];
+        assert!(sibling_refusal("x-aaaa", &rows, "", "feature/me", &unrelated, now).is_none());
     }
 
     #[test]
     fn a_separate_pr_line_or_an_old_merge_lets_the_sibling_gate_pass() {
         let now = at("2026-10-24T12:00:00Z");
         let rows = epic_rows();
-        let open = [sibling_pr(40, "Fixes x-b222", None)];
+        let open = [sibling_pr(40, "Fixes x-bbbb", None)];
         let body = "## Summary\n\nSeparate PR: the schema change must land first\n";
-        assert!(sibling_refusal("x-a111", &rows, body, "feature/me", &open, now).is_none());
+        assert!(sibling_refusal("x-aaaa", &rows, body, "feature/me", &open, now).is_none());
         // A bare label with no reason is not an escape.
         assert!(
-            sibling_refusal("x-a111", &rows, "Separate PR:", "feature/me", &open, now).is_some()
+            sibling_refusal("x-aaaa", &rows, "Separate PR:", "feature/me", &open, now).is_some()
         );
-        let recent = [sibling_pr(45, "Fixes x-b222", Some("2026-10-24T11:00:00Z"))];
-        let refusal = sibling_refusal("x-a111", &rows, "", "feature/me", &recent, now).unwrap();
+        let recent = [sibling_pr(45, "Fixes x-bbbb", Some("2026-10-24T11:00:00Z"))];
+        let refusal = sibling_refusal("x-aaaa", &rows, "", "feature/me", &recent, now).unwrap();
         assert!(
             refusal.contains("merged in the last two hours"),
             "{refusal}"
         );
-        let old = [sibling_pr(46, "Fixes x-b222", Some("2026-10-24T09:30:00Z"))];
-        assert!(sibling_refusal("x-a111", &rows, "", "feature/me", &old, now).is_none());
+        let old = [sibling_pr(46, "Fixes x-bbbb", Some("2026-10-24T09:30:00Z"))];
+        assert!(sibling_refusal("x-aaaa", &rows, "", "feature/me", &old, now).is_none());
     }
 
     // ── fixtures ────────────────────────────────────────────────────────────
