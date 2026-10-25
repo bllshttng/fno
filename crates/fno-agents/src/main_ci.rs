@@ -521,8 +521,8 @@ pub(crate) fn main_ci_reading_cached(cwd: &Path) -> Result<Value, String> {
 }
 
 /// The `fno do pr status main` receipt for one reading: a JSON line in the
-/// PR status shape and its exit code, 0 green, 1 red, 2 pending, 4 read
-/// failed. A watch on main arms this, never a newest-run listing: the
+/// PR status shape and its exit code, 0 green, 1 red, 2 pending, 3 unknown,
+/// 4 read failed. A watch on main arms this, never a newest-run listing: the
 /// newest row is one workflow, and a red sibling hides behind its pass.
 fn status_main_receipt(reading: Result<Value, String>) -> (Value, i32) {
     match reading {
@@ -536,7 +536,7 @@ fn status_main_receipt(reading: Result<Value, String>) -> (Value, i32) {
                 "green" => 0,
                 "red" => 1,
                 "pending" => 2,
-                _ => 4,
+                _ => 3,
             };
             let line = main_ci_render(Some(&token));
             (
