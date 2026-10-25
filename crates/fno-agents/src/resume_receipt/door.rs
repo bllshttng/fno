@@ -2,7 +2,7 @@
 //!
 //! The Python leaf (`cli/src/fno/resume/cli.py`) forwards here with the same
 //! options; stdout bytes and exit codes are the contract, and the goldens
-//! under `tests/golden/resume_receipt/` pin them. The verbs are hidden
+//! under `tests/golden/resume_receipt/` pin them. The commands are hidden
 //! infrastructure: handoff writes at a phase boundary, a successor session
 //! validates before any write, and `show` prints parse-checked evidence.
 //! The door preserves the deleted typer leg's byte shapes exactly: compact
@@ -20,17 +20,17 @@ use std::path::{Path, PathBuf};
 pub const USAGE: &str = "usage: fno-agents resume-receipt write|validate|show [options]";
 
 pub fn run(args: &[String]) -> i32 {
-    let Some(verb) = args.first() else {
+    let Some(command) = args.first() else {
         eprintln!("{USAGE}");
         return 2;
     };
     let rest = &args[1..];
-    match verb.as_str() {
+    match command.as_str() {
         "write" => run_write(rest),
         "validate" => run_validate(rest),
         "show" => run_show(rest),
         other => {
-            eprintln!("{USAGE} (unknown verb: {other})");
+            eprintln!("{USAGE} (unknown command: {other})");
             2
         }
     }
@@ -595,8 +595,6 @@ fn expand_tilde(raw: &str) -> PathBuf {
     PathBuf::from(raw)
 }
 
-/// Unused in the happy paths but load-bearing for the door's shape: keeps the
-/// module's serde Map import honest when the verbs compile standalone.
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -9,7 +9,7 @@
 //! parity-oracle: fno.resume.receipt
 
 use regex::Regex;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Machine-varying bytes mask before comparison. Longest first, so a 64-char

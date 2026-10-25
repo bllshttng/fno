@@ -1,6 +1,6 @@
 """fno do resume receipt - forwarding leaf over the native resume-receipt door.
 
-The verbs are hidden infrastructure: handoff writes at a phase boundary, a
+The commands are hidden infrastructure: handoff writes at a phase boundary, a
 successor session validates before any write, and `show` prints parse-checked
 evidence. The port moved the leaf's logic (the receipt model, the revalidate
 gate, the byte shapes, output and exit codes) into
@@ -38,7 +38,7 @@ receipt_app = typer.Typer(
 cli.add_typer(receipt_app, name="receipt")
 
 
-def _forward(verb: str, argv: list[str]) -> None:
+def _forward(command: str, argv: list[str]) -> None:
     """Forward to the bundled fno-agents binary, binary-direct.
 
     Captured and re-emitted through typer: the leaf's output IS the operator
@@ -62,7 +62,7 @@ def _forward(verb: str, argv: list[str]) -> None:
         raise typer.Exit(code=127)
     # Captured and re-emitted through typer (a CliRunner caller must see it).
     result = subprocess.run(
-        [str(binary), "resume-receipt", verb, *argv],
+        [str(binary), "resume-receipt", command, *argv],
         capture_output=True,
         text=True,
         check=False,

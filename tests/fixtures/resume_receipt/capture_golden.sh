@@ -19,7 +19,7 @@
 # and asserts the frozen bytes.
 #
 # Determinism: every fixture commit pins author/committer dates, the write
-# verb pins --written-at, and the fixture base is fixed (the receipt's
+# command pins --written-at, and the fixture base is fixed (the receipt's
 # content_sha digests the raw worktree path). Each golden masks the fixture
 # base as FIXTURE.
 set -euo pipefail
@@ -69,8 +69,8 @@ new_fixture() {
 head_of() { git -C "$1/repo" rev-parse HEAD; }
 
 # One case: ensure the fixture, run the door, mask, freeze. The case args
-# keep the old typer-path spelling (`do resume receipt <verb> ...`); the
-# fixed prefix drops here, leaving the verb the door takes.
+# keep the old typer-path spelling (`do resume receipt <command> ...`); the
+# fixed prefix drops here, leaving the command name the door takes.
 #   case_run <name> <fixture-dir> <args...>
 case_run() {
   local name="$1" dir="$2"; shift 2
