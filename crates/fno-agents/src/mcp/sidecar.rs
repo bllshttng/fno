@@ -592,8 +592,10 @@ mod tests {
     }
 
     /// One sidecar per user: a second invocation against a live sidecar
-    /// detects it and exits 0 with the "already running" note.
-    #[tokio::test]
+    /// detects it and exits 0 with the "already running" note. Two workers
+    /// model the two processes production has: the probe blocks its thread,
+    /// and on one worker the server it probes could never answer.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_second_sidecar_detects_a_live_first() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("s.sock");
@@ -602,7 +604,12 @@ mod tests {
         let server = tokio::spawn(async move {
             let _ = bind_and_serve(state, &server_sock).await;
         });
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        // The spawned server binds asynchronously; wait for the socket file
+        // instead of guessing a sleep length that races under runner load.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !sock.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         assert!(matches!(
             prepare_socket_path(&sock),
             PrepareOutcome::AlreadyRunning
@@ -612,7 +619,8 @@ mod tests {
 
     /// The miss case: send_to_channel against an unregistered session
     /// answers `channel_not_registered` (AC1-ERR of the lifecycle file).
-    #[tokio::test]
+    /// Two workers for the same reason as the already-running test above.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_send_to_an_unregistered_channel_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("s.sock");
@@ -621,7 +629,10 @@ mod tests {
         let server = tokio::spawn(async move {
             let _ = bind_and_serve(state, &server_sock).await;
         });
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !sock.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         let resp = rpc(
             &sock,
             &json!({
