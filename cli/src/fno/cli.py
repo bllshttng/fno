@@ -143,11 +143,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Capture left-out work (deferred decisions, out-of-scope bugs) for retro-triage.",
         {"hidden": True},
     ),
-    "outstanding": (
-        "fno.outstanding:outstanding_app",
-        "What is waiting on a human: unharvested carve-outs and open questions.",
-        {"hidden": True},
-    ),
     "annotate": (
         "fno.annotate:annotate_app",
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
@@ -210,11 +205,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "loops": (
         "fno.loops:loops_app",
         "Loop level config + pause-all kill switch (pause-all/resume-all/status/ls)",
-        {"hidden": True},
-    ),
-    "skill-diff": (
-        "fno.skill_diff.cli:skill_diff_app",
-        "Skill-diff proposer: observer failure patterns -> cited SKILL.md diff -> PR (tick/reconcile).",
         {"hidden": True},
     ),
     # Individual commands (plain functions wrapped as single-command apps) -
@@ -295,7 +285,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "roles": set(),
     "route": set(),
     "setup": set(),
-    "skill-diff": set(),
     "state": set(),
     "stub-manifest": set(),
     "target": set(),
