@@ -1134,10 +1134,17 @@ mod tests {
         let cwd = project_cwd.parent().unwrap().join("mail-hold");
         std::fs::create_dir_all(&cwd).unwrap();
         let full = handoff_out(&["--scope".into(), scope.into()], &cwd, Some(&home)).unwrap();
-        let project = project_cwd.to_string_lossy().to_string();
+        // The fixture repo has no git and no project id, so the row's root
+        // resolves to its basename. The dir must key on THAT, never on the
+        // caller's cwd basename.
+        let project = project_cwd
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         assert!(
-            full.contains(project.as_str()) && !full.contains("mail-hold"),
-            "the scope doc must resolve under the row's project, got {full}"
+            full.contains(&format!("handoffs/{project}")) && !full.contains("mail-hold"),
+            "the scope doc must key on the row's project, got {full}"
         );
         let _ = std::fs::remove_dir_all(project_cwd.parent().unwrap());
     }
