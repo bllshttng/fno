@@ -1,6 +1,6 @@
 //! `fno config setup plan` and `fno config setup post-merge`, claimed before
-//! clap like `setup_run`. The root `fno setup <verb>` spelling is claimed too,
-//! because the hidden root `setup` group served the same verbs.
+//! clap like `setup_run`. The root `fno setup <command>` spelling is claimed too,
+//! because the hidden root `setup` group served the same commands.
 //!
 //! `plan` prints the wizard question plan. The plan is generated from the
 //! Python settings model and registry into a crate-local copy, embedded here,
@@ -35,7 +35,7 @@ pub enum Cmd {
 }
 
 /// Claim `config setup plan|post-merge` and the root `setup plan|post-merge`
-/// lexically. Every other setup verb forwards to its owner untouched.
+/// lexically. Every other setup command forwards to its owner untouched.
 pub fn classify(args: &[OsString]) -> Option<Cmd> {
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
     if words.len() != args.len() {
