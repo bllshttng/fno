@@ -19,12 +19,17 @@ use std::path::PathBuf;
 /// ([`crate::agents_config::within_search_ceiling`]); the FNO_CONFIG and
 /// FNO_GLOBAL_SETTINGS_PATH entries are explicit and read as-is.
 fn candidates() -> Vec<PathBuf> {
+    candidates_from(std::env::current_dir().ok())
+}
+
+/// [`candidates`] with the repo-local entry read under `cwd`.
+fn candidates_from(cwd: Option<PathBuf>) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut push_dir = |dir: PathBuf| {
         out.push(dir.join("config.toml"));
         out.push(dir.join("settings.yaml"));
     };
-    if let Ok(cwd) = std::env::current_dir() {
+    if let Some(cwd) = cwd {
         let dir = cwd.join(".fno");
         if crate::agents_config::within_search_ceiling(&dir.join("config.toml")) {
             push_dir(dir);
@@ -77,6 +82,15 @@ fn read_flat(path: &std::path::Path) -> Value {
 /// think_spawn gate and caps).
 pub(crate) fn config_candidates() -> Vec<Value> {
     candidates().iter().map(|p| read_flat(p)).collect()
+}
+
+/// [`config_candidates`] as a process in `cwd` reads them, for an
+/// in-process caller acting for another project.
+pub(crate) fn config_candidates_at(cwd: &std::path::Path) -> Vec<Value> {
+    candidates_from(Some(cwd.to_path_buf()))
+        .iter()
+        .map(|p| read_flat(p))
+        .collect()
 }
 
 /// The configured node-id prefix, or the legacy `ab-`. The first candidate
