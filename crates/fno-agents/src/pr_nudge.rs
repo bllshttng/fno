@@ -256,9 +256,7 @@ fn ladder_run(argv: &[String], cwd: &str) -> (i32, String, String) {
 pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow], grace_secs: i64) {
     let now = crate::daemon::now_epoch_secs();
     for row in rows {
-        let held = merge_order_hold(home, &row.node)
-            || authorized_merge_hold(home, row)
-            || merge_freeze_hold(home, row);
+        let held = merge_hold(home, row);
         let state = load_state(home, &row.session_id);
         apply(
             home,
@@ -274,14 +272,36 @@ pub fn run_ladder(home: &AgentsHome, emitter: &EventEmitter, rows: &[OpenPrRow],
     cleanup_state_files(home, rows);
 }
 
-fn nudge_pause_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
-    if merge_order_hold(home, &row.node)
+/// Every hold that forbids the merge this ladder would drive.
+fn merge_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
+    merge_order_hold(home, &row.node)
         || authorized_merge_hold(home, row)
         || merge_freeze_hold(home, row)
-    {
-        return true;
-    }
-    loop_pause_hold(home, row)
+        || node_dispatch_hold(home, &row.node)
+}
+
+fn nudge_pause_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
+    merge_hold(home, row) || loop_pause_hold(home, row)
+}
+
+/// The node's `dispatch_hold` (plan frontmatter, or the node row when there
+/// is no plan), walked up its ancestors as the merge gate walks it. An
+/// invalid hold also pauses: the gate refuses that merge too.
+fn node_dispatch_hold(home: &AgentsHome, node: &str) -> bool {
+    let Some(entries) = crate::gc_sweep::read_graph_rows(home) else {
+        return false;
+    };
+    node_dispatch_hold_rows(node, &entries)
+}
+
+fn node_dispatch_hold_rows(node: &str, entries: &[Value]) -> bool {
+    let by_id: std::collections::BTreeMap<String, Value> = entries
+        .iter()
+        .filter_map(|e| crate::graph_store::entry_id(e).map(|id| (id.to_string(), e.clone())))
+        .collect();
+    by_id
+        .get(node)
+        .is_some_and(|entry| crate::backlog_ready::hold_verdict_receipt(entry, &by_id).is_some())
 }
 
 fn loop_pause_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
@@ -1016,7 +1036,7 @@ pub fn plan_with(
     rows.iter()
         .map(|row| {
             let state = load_state(home, &row.session_id);
-            let merge_order = merge_order_hold(home, &row.node) || authorized_merge_hold(home, row);
+            let merge_order = merge_hold(home, row);
             let loop_paused = loop_pause_hold(home, row);
             let action = decide_with_read(
                 row,
@@ -1177,6 +1197,26 @@ mod tests {
         assert_eq!(planned[0].1, "paused");
         assert!(!status_read, "a held nudge skips the PR-status read");
         let _ = std::fs::remove_dir_all(&esc_root);
+    }
+
+    /// A lead's `hold-set` writes `dispatch_hold`, on the node row when the
+    /// node has no plan. The nudge must read it: a held node got "drive it to
+    /// merge" retries the merge gate would refuse.
+    #[test]
+    fn dispatch_hold_on_the_node_or_an_ancestor_pauses_the_nudge() {
+        let hold = serde_json::json!({
+            "reason": "main cli-ci red", "release_when": "main green",
+            "review_on": "2099-01-01", "set_by": "lead"
+        });
+        let rows = vec![
+            serde_json::json!({"id": "x-held", "dispatch_hold": hold}),
+            serde_json::json!({"id": "x-child", "parent": "x-held"}),
+            serde_json::json!({"id": "x-free"}),
+        ];
+        assert!(node_dispatch_hold_rows("x-held", &rows));
+        assert!(node_dispatch_hold_rows("x-child", &rows));
+        assert!(!node_dispatch_hold_rows("x-free", &rows));
+        assert!(!node_dispatch_hold_rows("x-missing", &rows));
     }
 
     /// The status payload the real command writes to stdout whatever the exit
