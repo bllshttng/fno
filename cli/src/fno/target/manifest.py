@@ -77,6 +77,7 @@ def read_target_manifest(project_root: Path) -> Optional[dict[str, Any]]:
         if m:
             val = m.group(1).strip().strip("\"'")
             if val and val != "null":
+                raw = raw or {}
                 raw[key] = val
     return raw
 

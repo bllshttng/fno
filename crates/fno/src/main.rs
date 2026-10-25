@@ -631,8 +631,9 @@ fn classify_whoami(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
     let args = if root_json { &args[1..] } else { args };
     match args.first()?.to_str()? {
         "whoami" => {
-            // The exec action prefixes the group name; the tail rides after it.
-            let tail = &args[2..];
+            // args[0] is `whoami` itself; the exec action re-prefixes the
+            // group name, so the tail is everything after it.
+            let tail = &args[1..];
             let mut i = 0usize;
             while i < tail.len() {
                 match tail[i].to_str()? {

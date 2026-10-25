@@ -137,6 +137,18 @@ struct Options {
     no_fleet: bool,
 }
 
+/// The layer suppressions: a suppressed layer renders as absent, the same
+/// replacement the Python leg applied before rendering.
+fn drop_layers(mut state: AgentContext, opts: &Options) -> AgentContext {
+    if opts.no_walker {
+        state.walker = None;
+    }
+    if opts.no_fleet {
+        state.fleet = None;
+    }
+    state
+}
+
 // -------------------------------------------------------------------------
 // State layer
 // -------------------------------------------------------------------------
@@ -689,6 +701,7 @@ fn whoami_render(opts: &Options, home: &AgentsHome) -> i32 {
             return 2;
         }
     };
+    let state = drop_layers(state, opts);
     let get = |name: &str| std::env::var(name).ok();
     let ident = resolve_self_identity(&get, None, None, home);
     // The reply handle. An ambiguous environment is the one refusal the
@@ -719,8 +732,12 @@ fn whoami_render(opts: &Options, home: &AgentsHome) -> i32 {
             });
         }
     }
-    let mail_unread =
-        mail_unread_count(mail.as_deref(), agent_self.as_deref(), &state.project_root);
+    let mail_unread = mail_unread_count(
+        mail.as_deref(),
+        agent_self.as_deref(),
+        ident.session_id.as_deref(),
+        &state.project_root,
+    );
     let context_reading = context_reading(&ident);
     let role = role_text(&ident, home);
     let foreign_identity = foreign_identity_line(&ident);
@@ -855,7 +872,7 @@ fn whoami_render(opts: &Options, home: &AgentsHome) -> i32 {
             }
         }
     }
-    if let Some((pct, used, window)) = &context_reading {
+    if let Some((used, window, pct)) = &context_reading {
         println!(
             "context:  {pct}% used ({used} of {window} tokens)",
             used = with_commas(*used),
@@ -895,6 +912,7 @@ fn status_render(opts: &Options, home: &AgentsHome) -> i32 {
             return 2;
         }
     };
+    let state = drop_layers(state, opts);
     let events_path = state.project_root.join(".fno").join("events.jsonl");
     let tail = tail_events(&events_path, EVENTS_TAIL_BYTES, EVENTS_TAIL_LINES);
     let events_warning: Option<String> = tail
@@ -1751,7 +1769,12 @@ fn role_text(ident: &crate::spawn_context::OwnedIdentity, home: &AgentsHome) -> 
 /// Total unread bus messages across every durable address this session
 /// answers to. Each address guards independently: one unreadable lane never
 /// zeroes the others, and the recovery command never gains a failure mode.
-fn mail_unread_count(handle: Option<&str>, agent_self: Option<&str>, project_root: &Path) -> u64 {
+fn mail_unread_count(
+    handle: Option<&str>,
+    agent_self: Option<&str>,
+    session_id: Option<&str>,
+    project_root: &Path,
+) -> u64 {
     let mut total: u64 = 0;
     let mut seen: Vec<String> = Vec::new();
     for addr in [handle, agent_self] {
@@ -1766,7 +1789,10 @@ fn mail_unread_count(handle: Option<&str>, agent_self: Option<&str>, project_roo
     }
     if let Some(project) = resolve_project(project_root) {
         if !seen.contains(&project) {
-            let self_ids: Vec<String> = [handle, agent_self]
+            // The project read excludes this session's own identities: a
+            // plain scan would count the session's own project broadcasts
+            // as unread dead letters it can never ack.
+            let self_ids: Vec<String> = [handle, agent_self, session_id]
                 .into_iter()
                 .flatten()
                 .map(str::to_string)
