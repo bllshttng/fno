@@ -138,10 +138,34 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
         .unwrap(),
     )
     .unwrap();
+    crate::backlog::save_aggregate(
+        &conn2,
+        &crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": "x-reolder", "slug": "reolder", "title": "O", "type": "bug",
+            "status": "in_progress", "priority": "p2", "domain": "code",
+            "created_at": "2026-10-20T00:00:00+00:00",
+            "pr_number": 960,
+            "pr_url": "https://github.com/o/r/pull/960",
+            "merge_status": "merged",
+            "additional_prs": [
+                {"number": 930, "url": "https://github.com/o/r/pull/930"},
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 
     assert_eq!(
         manifest_node_pr_selector(&cwd, Some("x-multi")).as_deref(),
         Some("940")
+    );
+    // A reopened node's history row: the current primary is stamped merged
+    // and the older row attached below it carries no stamp. The unstamped
+    // row predates the stamp, so it is not live work; the merged current
+    // pr_number pins the gate.
+    assert_eq!(
+        manifest_node_pr_selector(&cwd, Some("x-reolder")).as_deref(),
+        Some("960")
     );
     assert_eq!(
         manifest_node_pr_selector(&cwd, Some("x-reopen")).as_deref(),

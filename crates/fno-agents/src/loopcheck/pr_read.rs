@@ -175,6 +175,11 @@ pub(super) struct PrInfo {
 /// does not stamp terminal - the live one - and among equals takes the
 /// newest number, so a closed or earlier merged primary never pins the gate
 /// to a dead PR.
+///
+/// The lift is age-gated: an unstamped row OLDER than every stamped row is
+/// reopen history, never live work (a reopen demotes the merged primary
+/// into additional_prs), so it stays below the stamped rows and the node's
+/// merged current pr_number still pins the gate.
 pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Option<String> {
     let node_id = node_id?;
     let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
@@ -197,10 +202,22 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
     // lowercase today but GitHub-adjacent prose elsewhere, so the compare is
     // case-insensitive on purpose. `merge_status` is None on every attached
     // row, so an untracked live PR beats a stamped dead one, and a node
-    // whose only PR is merged still pins it.
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
-    rows.sort_by_key(|(_, status)| {
+    // whose only PR is merged still pins it. An unstamped row at or below
+    // the newest stamp shares the stamped rows' key: it predates them.
+    let terminal = |status: &Option<&str>| {
         status.is_some_and(|s| s.eq_ignore_ascii_case("merged") || s.eq_ignore_ascii_case("closed"))
+    };
+    let max_terminal = rows
+        .iter()
+        .filter(|(_, status)| terminal(status))
+        .map(|(number, _)| *number)
+        .max();
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|(number, status)| {
+        if terminal(status) {
+            return true;
+        }
+        max_terminal.is_some_and(|bound| *number <= bound)
     });
     rows.first().map(|(number, _)| number.to_string())
 }
