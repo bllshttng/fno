@@ -1256,7 +1256,10 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take("repeated_asks", crate::repeated_asks::reading());
     take("skill_drift", crate::skill_drift::reading());
     take("main_ci", crate::main_ci::r_main_ci());
-    take("evals", crate::lead_checkin_evals::reading());
+    take(
+        "evals",
+        crate::lead_checkin_evals::reading(&ctx.events_paths),
+    );
     take("control_plane", r_control_plane(ctx));
     take("self_hold", {
         crate::claims::resolve_identity()
