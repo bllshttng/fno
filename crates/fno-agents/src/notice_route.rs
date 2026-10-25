@@ -795,7 +795,7 @@ fn consume_file(
             return None;
         }
         // Every row settled: report the path so the caller consumes it.
-        return Some((path.to_path_buf(), Vec::new(), dropped));
+        return Some((path.to_path_buf(), Vec::new(), dropped, identity));
     }
     let mut fed: Vec<String> = Vec::new();
     for warning in warnings {
