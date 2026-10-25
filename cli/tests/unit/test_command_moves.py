@@ -163,10 +163,12 @@ def test_every_moved_spelling_is_hidden():
         # `do review` itself; a python registration would sit behind an
         # intercept that never reaches it. `pr` joined for the same reason
         # when its root claim moved native (the front door execs the
-        # dispatcher with the argv intact). Every OTHER moved spelling keeps a
+        # dispatcher with the argv intact). `restart` joined when the front
+        # door claimed both spellings and execs `fno-agents restart` itself.
+        # Every OTHER moved spelling keeps a
         # one-release registration, and any registration that exists must be
         # hidden: an advertised moved name teaches a doomed spelling.
-        if name in ("decide", "yard", "review", "pr"):
+        if name in ("decide", "yard", "review", "pr", "restart"):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue
         assert cmd is not None, f"moved spelling {name!r} must stay registered"

@@ -163,7 +163,7 @@ When the install succeeds on a local marketplace and the cache is not the live r
 5. The `installed-rev` marker is written only after a successful install. Absence means "rev unknown", never "fresh".
 6. `fno doctor update --check --json` is the single resolver for mux update readiness. The TUI renders it and computes nothing. Guidance routes restart recovery through `fno agents session restart --mux` only, never `fno mux kill-server` (that routing fix is tracked separately). A command guaranteed to fail in the case it is offered for is worse than no guidance.
 
-Implementation: `cli/src/fno/doctor.py`, `cli/src/fno/update.py`, `cli/src/fno/restart.py`, `crates/fno/src/client.rs`, `crates/fno/src/mux_cli.rs`, `scripts/lib/gates-reality.sh`, `scripts/lib/gate-audit.sh`.
+Implementation: `cli/src/fno/doctor.py`, `crates/fno/src/doctor_update.rs`, `crates/fno-agents/src/restart_run.rs`, `crates/fno/src/client.rs`, `crates/fno/src/mux_cli.rs`, `scripts/lib/gates-reality.sh`, `scripts/lib/gate-audit.sh`.
 
 ## Running processes: what restart reaches
 

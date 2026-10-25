@@ -342,10 +342,6 @@ RUST_CLIENT_COMMANDS = frozenset(
 #: ``_resolve_ask_provider``) is gone; the ``AUTO_ROUTE_COMMANDS`` identity below is
 #: now the whole routing contract except for ``send``.
 PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
-    # The public restart command now folds the former top-level process restart
-    # under agents. It still invokes the Rust daemon restart internally, then
-    # applies the existing mux/revival policy in Python.
-    "restart",
     # Human-attended in-place role grant. Pure shared-registry transaction;
     # spawn-time grant and succession remain on the Rust-backed spawn path.
     "role",

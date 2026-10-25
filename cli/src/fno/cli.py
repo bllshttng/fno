@@ -271,11 +271,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "The updater is native: the Rust front door answers `update` and `doctor update`.",
         {"hidden": True},
     ),
-    "restart": (
-        "fno.restart:restart_command",
-        "Restart running fno processes (agents daemon; mux with --mux) onto fresh builds.",
-        {"hidden": True},
-    ),
 }
 
 # T1 actions are parsed by the group dispatcher and keep their existing typing.
