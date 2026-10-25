@@ -1,7 +1,7 @@
 //! The work-item tracker seam: one interface, the graph, GitHub and Linear
 //! backends, and the stdin JSON door on `graph-get` that serves them.
 //!
-//! The Python seam (`cli/src/fno/tracker/`) is deleted: every verb it
+//! The Python seam (`cli/src/fno/tracker/`) is deleted: every command it
 //! answered now answers here, and the Python callers ride the door through
 //! the small client helpers in `cli/src/fno/rust_binary.py` (backend name,
 //! sidecar get/all/set) plus the guarded graph read in `fno/graph/api.py`.
