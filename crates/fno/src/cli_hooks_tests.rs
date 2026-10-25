@@ -99,6 +99,21 @@ fn codex_appends_refuses_malformed_layers_and_migrates_only_its_own() {
     assert!(res.error.unwrap().contains("malformed") && !res.changed && !res.needs_trust);
     assert!(!fresh.exists());
     assert_eq!(std::fs::read_to_string(&legacy).unwrap(), "{not json");
+
+    // A trust table of the wrong shape is malformed too.
+    std::fs::remove_file(&legacy).unwrap();
+    std::fs::write(&fresh, "[hooks]\nstate = \"bad\"\n").unwrap();
+    let res = install_codex(CMD, &fresh, &legacy, false);
+    assert!(
+        res.error
+            .unwrap()
+            .contains("`hooks.state` is not an object")
+            && !res.changed
+    );
+    assert_eq!(
+        std::fs::read_to_string(&fresh).unwrap(),
+        "[hooks]\nstate = \"bad\"\n"
+    );
 }
 
 #[test]

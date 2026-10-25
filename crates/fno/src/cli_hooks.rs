@@ -349,6 +349,15 @@ fn is_footnote_codex_command(command: &str) -> bool {
             || command.contains("/footnote/hooks/session-start.sh"))
 }
 
+/// Codex keeps hook trust under `hooks.state`, a table. Any other shape is
+/// malformed, and the doctor's reader says so, so the installer refuses it too.
+fn codex_trust_state(data: &Value, source: &str) -> Result<(), String> {
+    match hooks_table(data, source)?.and_then(|h| h.get("state")) {
+        None | Some(Value::Null) | Some(Value::Object(_)) => Ok(()),
+        Some(_) => Err(format!("{source} `hooks.state` is not an object")),
+    }
+}
+
 fn parse_toml(text: &str) -> Result<Value, String> {
     let table: toml::Table = toml::from_str(text).map_err(|e| e.to_string())?;
     serde_json::to_value(table).map_err(|e| e.to_string())
@@ -375,6 +384,7 @@ fn inspect_codex(config_path: &Path, hooks_json_path: &Path) -> CodexLayers {
             .and_then(|t| parse_toml(&t))
             .and_then(|v| {
                 session_start_commands(&v, "config.toml")?;
+                codex_trust_state(&v, "config.toml")?;
                 all_commands(&v, "config.toml")
             });
         match read {
