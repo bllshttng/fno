@@ -440,7 +440,7 @@ pub fn run_task(
         let mut worker_timed_out = false;
         let mut outcome: Option<super::grading::GradeOutcome> = None;
         let mut workdir: Option<std::path::PathBuf> = None;
-        let mut worker_name = String::new();
+        let mut worker_name: Option<String> = None;
         match make_disposable_worktree(repo_root, &checkout_ref, &task.id) {
             Err(e) => {
                 reason = format!("fixture checkout failed ({checkout_ref}); fixture drift? {e}");
@@ -457,12 +457,12 @@ pub fn run_task(
                 gate_blocked = true;
             } else if let Some(prompt) = &task.prompt {
                 let res = default_spawn(prompt, dir, timeout_s, worker_provider, lane);
-                worker_name = res.worker_name.clone();
                 if !res.ok {
                     reason = res.reason.clone();
                     worker_timed_out = res.timed_out;
                 } else {
                     spawned = true;
+                    worker_name = Some(res.worker_name.clone());
                 }
             }
             if reason.is_empty() {
@@ -493,6 +493,9 @@ pub fn run_task(
         obs.insert("grader_ran".into(), json!(outcome.is_some()));
         if let Some(o) = &outcome {
             obs.insert("grader_passed".into(), json!(o.passed));
+        }
+        if let Some(name) = &worker_name {
+            obs.insert("worker".into(), json!(name));
         }
         let attempt_id = uuid_v4();
         let row_payload = json!({"obs": obs.clone(), "bank_rev": bank_rev});

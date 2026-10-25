@@ -11,7 +11,7 @@ pub const VALID_CHECK_KINDS_REPR: &str = "('exit', 'file-exists', 'grep')";
 pub const COHORTS_FILENAME: &str = "cohorts.yaml";
 
 /// One mechanical grade check. `kind` selects the params that matter.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GradeCheck {
     pub kind: String,
     pub command: Option<String>,
@@ -22,7 +22,7 @@ pub struct GradeCheck {
 
 /// A loaded, validated bank task. A task with no prompt is grade-only:
 /// the runner skips the worker spawn and grades the fixture directly.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TaskSpec {
     pub id: String,
     pub tier: String,
@@ -35,6 +35,7 @@ pub struct TaskSpec {
 }
 
 /// The load-time discipline refusals name the id and file.
+#[derive(Debug)]
 pub struct BankError(pub String);
 
 impl std::fmt::Display for BankError {
@@ -186,7 +187,7 @@ fn parse_check(
     require(
         !fpath.trim().is_empty(),
         format!("{where_prefix}: requires a non-empty path"),
-    );
+    )?;
     if kind == "file-exists" {
         return Ok(GradeCheck {
             kind: kind.to_string(),
@@ -201,7 +202,7 @@ fn parse_check(
     require(
         !pattern.is_empty(),
         format!("{where_prefix}: requires a non-empty pattern"),
-    );
+    )?;
     Ok(GradeCheck {
         kind: kind.to_string(),
         command: None,

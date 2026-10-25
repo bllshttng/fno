@@ -169,6 +169,7 @@ fn stem_of(p: &std::path::Path) -> String {
         .unwrap_or_default()
 }
 
+#[derive(Debug)]
 pub struct GradeResult {
     pub uncited_claims: u32,
     pub dead_urls: u32,
