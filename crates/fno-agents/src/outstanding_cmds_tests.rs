@@ -223,7 +223,9 @@ fn reindex_folds_journal_rows_into_the_index_once() {
     // Idempotent: a second fold reports already-indexed, adds nothing.
     let (added, already, total) = reindex_fold(&index, &[journal]).unwrap();
     assert_eq!((added, already, total), (0, 2, 2));
-    let indexed = std::fs::read_to_string(&index).unwrap();
+    // The fold commits through the store, so the committed view is the
+    // reader: the raw journal bytes may never land.
+    let indexed = crate::events::committed_journal_text(&index);
     assert!(indexed.contains("q-r1") && indexed.contains("q-r2"));
 }
 

@@ -1511,10 +1511,12 @@ stops
             "source": "daemon",
             "data": {"question_id": "q-ap2", "question": "wake?"}
         });
+        // A journal parked under a plain FILE cannot take the append: both
+        // the store and the journal need that parent to be a directory.
+        std::fs::write(root.join("no-such-dir"), b"not a directory").unwrap();
         let req = IntakeRequest {
             op: Some("append".to_string()),
             event: Some(event),
-            // A journal under a missing directory cannot take the append.
             journal_path: Some(root.join("no-such-dir").join("events.jsonl")),
             index_path: Some(root.join("questions.jsonl")),
             storage_root: root.clone(),
