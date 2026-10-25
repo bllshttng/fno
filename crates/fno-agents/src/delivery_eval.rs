@@ -44,15 +44,6 @@ const EFFECT_STATES: &[&str] = &[
     "blocked",
     "unknown",
 ];
-const PLAN_STATUSES: &[&str] = &[
-    "idea",
-    "design",
-    "ready",
-    "in_progress",
-    "in_review",
-    "done",
-    "superseded",
-];
 const DIFFICULTY_REQUIRED_AFTER: (i32, u32, u32) = (2026, 8, 26);
 
 fn utc_now() -> DateTime<FixedOffset> {
@@ -587,7 +578,7 @@ fn validate_frontmatter(mapping: &Map<String, Value>) -> Result<(), String> {
             )
         }
     };
-    if !PLAN_STATUSES.contains(&status.as_str()) {
+    if !crate::plan_doc::status::known_statuses().contains(&status.as_str()) {
         return Err(format!(
             "plan is unreadable or invalid: status must be one of the plan statuses, got {status}"
         ));
@@ -635,11 +626,8 @@ fn validate_frontmatter(mapping: &Map<String, Value>) -> Result<(), String> {
 /// The gate's date read: `YYYY-MM-DD` prefix, optionally with a timestamp
 /// after `T` or a space.
 fn created_date(created: &str) -> Result<Option<chrono::NaiveDate>, String> {
-    let refused = || {
-        Err(Some(
-            "plan is unreadable or invalid: created must be a date (YYYY-MM-DD)".to_string(),
-        ))
-    };
+    let refused =
+        || Err("plan is unreadable or invalid: created must be a date (YYYY-MM-DD)".to_string());
     let mut parts = created.split('-');
     let year: i32 = match parts.next().and_then(|p| p.parse().ok()) {
         Some(year) => year,
@@ -742,27 +730,31 @@ fn parse_company_work(value: &Value) -> Result<CompanyWork, String> {
     Ok(work)
 }
 
+/// One duplicate check for the cross-reference validators. A plain fn, not a
+/// closure: elision names the returned lifetime across its reference args,
+/// where a closure's inferred type cannot.
+fn check_duplicate(existing: &mut Vec<&str>, id: &str, kind: &str) -> Result<(), String> {
+    if existing.contains(&id) {
+        return Err(format!("duplicate {kind} id {id}"));
+    }
+    existing.push(id);
+    Ok(())
+}
+
 /// The company work contract's cross-reference validators. A declaration that
 /// breaks one is refused, never evaluated.
 fn validate_company_work(work: &CompanyWork) -> Result<(), String> {
-    let duplicate = |existing: &mut Vec<&str>, id: &str, kind: &str| {
-        if existing.contains(&id) {
-            return Err(format!("duplicate {kind} id {id}"));
-        }
-        existing.push(id);
-        Ok(())
-    };
     let mut deliverable_ids: Vec<&str> = Vec::new();
     for deliverable in &work.deliverables {
-        duplicate(&mut deliverable_ids, &deliverable.id, "deliverable")?;
+        check_duplicate(&mut deliverable_ids, &deliverable.id, "deliverable")?;
     }
     let mut effect_ids: Vec<&str> = Vec::new();
     for effect in &work.effects {
-        duplicate(&mut effect_ids, &effect.id, "effect")?;
+        check_duplicate(&mut effect_ids, &effect.id, "effect")?;
     }
     let mut evidence_ids: Vec<&str> = Vec::new();
     for item in &work.evidence {
-        duplicate(&mut evidence_ids, &item.id, "evidence")?;
+        check_duplicate(&mut evidence_ids, &item.id, "evidence")?;
     }
     let Some((node_id, attempt_id)) = &work.work_order else {
         if !work.deliverables.is_empty() || !work.effects.is_empty() || !work.evidence.is_empty() {
@@ -881,12 +873,18 @@ enum JournalRead {
 
 fn stat_revision(m: &std::fs::Metadata) -> String {
     use std::os::unix::fs::MetadataExt;
-    format!("stat:{}:{}:{}:{}", m.dev(), m.ino(), m.len(), m.mtime_ns())
+    format!(
+        "stat:{}:{}:{}:{}",
+        m.dev(),
+        m.ino(),
+        m.len(),
+        m.mtime_nsec()
+    )
 }
 
 fn stat_identity(m: &std::fs::Metadata) -> (u64, u64, u64, i64) {
     use std::os::unix::fs::MetadataExt;
-    (m.dev(), m.ino(), m.len(), m.mtime_ns())
+    (m.dev(), m.ino(), m.len(), m.mtime_nsec())
 }
 
 fn journal_unreadable(error: &std::io::Error, path: &Path) -> JournalRead {
