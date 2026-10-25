@@ -122,7 +122,6 @@ resume
 roles
 route
 scoreboard
-setup
 skill-diff
 state
 status

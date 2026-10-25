@@ -19,10 +19,23 @@ fn the_claim_and_the_plan_filter() {
         classify(&oss(&["setup", "post-merge"])),
         Some(Cmd::PostMerge(vec![]))
     );
+    assert_eq!(
+        classify(&oss(&["config", "setup", "cli-hooks", "--repair-only"])),
+        Some(Cmd::CliHooks(oss(&["--repair-only"])))
+    );
+    assert_eq!(classify(&oss(&["config", "setup"])), Some(Cmd::Help));
+    assert_eq!(
+        classify(&oss(&["setup", "run"])),
+        Some(Cmd::Moved("run".into()))
+    );
+    assert_eq!(
+        classify(&oss(&["config", "setup", "wizard"])),
+        Some(Cmd::Unknown("wizard".into()))
+    );
+    // run and auto-wire belong to their own modules; other groups pass.
     for sibling in [
         vec!["config", "setup", "run"],
-        vec!["config", "setup", "cli-hooks"],
-        vec!["config", "setup"],
+        vec!["config", "setup", "auto-wire"],
         vec!["config", "plan"],
     ] {
         assert_eq!(classify(&oss(&sibling)), None, "{sibling:?}");
