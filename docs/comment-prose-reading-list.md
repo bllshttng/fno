@@ -421,7 +421,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.2x | 12 | 10 | `cli/src/fno/approvals/store.py:788` | `_drain` |
 | 1.2x | 12 | 10 | `cli/src/fno/dispatch_flags.py:64` | `resolve_dispatch_harness` |
 | 1.2x | 6 | 5 | `cli/src/fno/doctor.py:78` | `_read_marker` |
-| 1.2x | 6 | 5 | `cli/src/fno/evals/history.py:33` | `iter_rows` |
 | 1.2x | 6 | 5 | `cli/src/fno/events/verify_child_promise.py:163` | `complete` |
 | 1.2x | 6 | 5 | `cli/src/fno/executor/__init__.py:6` | `__getattr__` |
 | 1.2x | 6 | 5 | `cli/src/fno/executor/_surface.py:76` | `any_frontend_surface` |
