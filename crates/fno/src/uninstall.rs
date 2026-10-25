@@ -108,14 +108,15 @@ fn on_path(name: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-fn uv_binary() -> Option<PathBuf> {
-    on_path("uv").or_else(|| {
-        let mut candidates = vec![home().join(".local/bin/uv"), home().join(".cargo/bin/uv")];
-        if let Some(dir) = std::env::var_os("XDG_BIN_HOME").filter(|value| !value.is_empty()) {
-            candidates.push(PathBuf::from(dir).join("uv"));
-        }
-        candidates.into_iter().find(|path| path.is_file())
-    })
+/// Where Astral's installer put uv: `$XDG_BIN_HOME`, else `~/.local/bin`.
+/// Never a PATH lookup: the first `uv` on PATH can be the user's own copy.
+fn uv_install_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_BIN_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .into_iter()
+        .chain([home().join(".local/bin")])
+        .find(|dir| dir.join("uv").is_file())
 }
 
 fn read(path: &Path) -> String {
@@ -554,15 +555,15 @@ fn discover() -> Vec<Item> {
         .join(UV_INSTALLED_MARKER)
         .is_file()
     {
-        if let Some(uv) = uv_binary() {
-            add(
-                "uv installed by fno".into(),
-                Action::Run(vec![
-                    uv.to_string_lossy().into_owned(),
-                    "self".into(),
-                    "uninstall".into(),
-                ]),
-            );
+        // uv has no self-uninstall; its documented removal deletes the two
+        // binaries its installer wrote.
+        if let Some(dir) = uv_install_dir() {
+            for bin in ["uv", "uvx"].into_iter().filter(|b| dir.join(b).is_file()) {
+                add(
+                    format!("{bin} installed by fno"),
+                    Action::RemovePath(dir.join(bin)),
+                );
+            }
         }
     }
     let brewed = on_path("brew").is_some()
