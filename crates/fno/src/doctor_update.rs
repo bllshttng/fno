@@ -1119,7 +1119,6 @@ pub(crate) fn revisions_summary(
     if build_revs.is_empty() && pin.is_none() {
         return None;
     }
-    let short = |r: &str| &r[..r.len().min(12)];
     let mut parts: Vec<String> = Vec::new();
     if !build_revs.is_empty() {
         let named: Vec<String> = build_revs
