@@ -1,7 +1,7 @@
 //! `fno project`: isolated per-project fno environments, ported from the
 //! Python project family (the project-family port).
 //!
-//! Two verbs behind the spawn-overlay door (no new fno-agents root command,
+//! Two commands behind the spawn-overlay door (no new fno-agents root command,
 //! the same nesting the plugins family uses):
 //!
 //! - `spawn-overlay project init <ID> [--repo-root <path>]` writes
@@ -32,7 +32,7 @@ const PROJECTS_ROOT: &str = "~/.fno/projects";
 /// The id_prefix validator's reserved families.
 const RESERVED_PREFIXES: [&str; 3] = ["cv-", "fu-", "tgt-"];
 
-/// Entry for the spawn-overlay door: `project` verbs answer natively.
+/// Entry for the spawn-overlay door: `project` commands answer natively.
 pub fn run(args: &[String]) -> i32 {
     match args.split_first() {
         Some((cmd, rest)) if cmd == "init" => cmd_init(rest),
@@ -426,7 +426,7 @@ where
     let Some(canonical) = get("name").filter(|s| !s.is_empty()) else {
         return Ok(());
     };
-    let short = get("short_name").filter(|s| !s.is_empty() && s != canonical);
+    let short = get("short_name").filter(|s| !s.is_empty() && *s != canonical);
     register_pair(map, &canonical, short.as_deref())
 }
 

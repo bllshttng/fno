@@ -36,7 +36,14 @@ fn normalize(text: &str, root: &Path, home: &Path) -> String {
     }
     roots.sort_by_key(|r| std::cmp::Reverse(r.len()));
     for raw in roots {
-        text = text.replace(&raw, if raw.contains(home.to_string_lossy().as_ref()) { "<HOME>" } else { "<ROOT>" });
+        text = text.replace(
+            &raw,
+            if raw.contains(home.to_string_lossy().as_ref()) {
+                "<HOME>"
+            } else {
+                "<ROOT>"
+            },
+        );
     }
     let mut folded = String::new();
     let mut rest = text.as_str();
@@ -115,7 +122,11 @@ fn project_matches_the_python_goldens() {
             .output()
             .unwrap();
         let code = out.status.code();
-        let mut streams = vec![normalize(&String::from_utf8_lossy(&out.stdout), &root, &home)];
+        let mut streams = vec![normalize(
+            &String::from_utf8_lossy(&out.stdout),
+            &root,
+            &home,
+        )];
         if code != Some(0) {
             streams.push(normalize(
                 &String::from_utf8_lossy(&out.stderr),
