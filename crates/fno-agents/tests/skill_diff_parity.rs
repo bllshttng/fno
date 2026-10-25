@@ -137,15 +137,25 @@ fn findings_ranking_and_actionable_goldens() {
                 case.slug
             );
         } else if slug_starts(&case, "ranking_from") {
+            // The goldens freeze the Python dicts; the Rust pairs render as
+            // objects, not two-element arrays.
+            let got: Vec<serde_json::Value> = failure_ranking(&evs, "r1", Some("fno:blueprint"))
+                .into_iter()
+                .map(|(dim, n)| serde_json::json!({"dimension": dim, "fail_count": n}))
+                .collect();
             assert_eq!(
-                serde_json::to_value(failure_ranking(&evs, "r1", Some("fno:blueprint"))).unwrap(),
+                serde_json::to_value(got).unwrap(),
                 case.expected,
                 "case {}",
                 case.slug
             );
         } else if slug_starts(&case, "ranking_fallback") {
+            let got: Vec<serde_json::Value> = failure_ranking(&evs, "r1", Some("fno:blueprint"))
+                .into_iter()
+                .map(|(dim, n)| serde_json::json!({"dimension": dim, "fail_count": n}))
+                .collect();
             assert_eq!(
-                serde_json::to_value(failure_ranking(&evs, "r1", Some("fno:blueprint"))).unwrap(),
+                serde_json::to_value(got).unwrap(),
                 case.expected,
                 "case {}",
                 case.slug

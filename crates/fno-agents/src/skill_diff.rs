@@ -725,14 +725,14 @@ pub fn build_prompt(
          \n\
          RULES:\n\
          - Prefer EDITS and DELETIONS over pure additions. A diff that only adds text is\n\
-           suspect: if you must add more than {ADDITIVE_LINE_THRESHOLD} net new lines with zero\n\
-           removals, you MUST fill \"justification\".\n\
+         \u{20}\u{20}suspect: if you must add more than {ADDITIVE_LINE_THRESHOLD} net new lines with zero\n\
+         \u{20}\u{20}removals, you MUST fill \"justification\".\n\
          - Every hunk MUST cite at least one finding_id from the evidence above. An\n\
-           uncited hunk will be dropped before the PR opens.\n\
+         \u{20}\u{20}uncited hunk will be dropped before the PR opens.\n\
          - old_text must match the current file content EXACTLY (it is applied by literal\n\
-           replacement). Use \"\" for a pure addition appended to the file.\n\
+         \u{20}\u{20}replacement). Use \"\" for a pure addition appended to the file.\n\
          - If no edit will help - the failure is architectural, not a wording problem -\n\
-           return verdict \"no_diff_helps\" with a \"no_diff_reason\".\n\
+         \u{20}\u{20}return verdict \"no_diff_helps\" with a \"no_diff_reason\".\n\
          \n\
          Return ONLY a JSON object:\n\
          {{\"verdict\":\"propose_pr\"|\"no_diff_helps\",\"hunks\":[{{\"file\",\"old_text\",\"new_text\",\"cited_finding_ids\",\"rationale\"}}],\"justification\":null,\"no_diff_reason\":null}}\n"
