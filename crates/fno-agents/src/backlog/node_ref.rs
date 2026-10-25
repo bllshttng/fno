@@ -401,8 +401,8 @@ pub(crate) fn node_pr_refs(node: &Value) -> Vec<(i64, Option<String>)> {
                 continue;
             };
             // A reopen-demoted row carries its recorded outcome and the
-            // history mark: it is record-keeping, not a promised ship, so
-            // no gate waits on it and no split counts it.
+            // history mark: record-keeping, not a promised ship; no gate
+            // waits on it and no split counts it.
             if obj.get("history").and_then(Value::as_bool) == Some(true) {
                 continue;
             }

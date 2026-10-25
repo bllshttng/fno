@@ -177,16 +177,14 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
         manifest_node_pr_selector(&cwd, Some("x-multi")).as_deref(),
         Some("940")
     );
-    // A reopened node's history row: the current primary is stamped merged
-    // and the older row attached below it carries no stamp. The unstamped
-    // row predates the stamp, so it is not live work; the merged current
-    // pr_number pins the gate.
+    // A reopened node's history row: the older unstamped row predates the
+    // stamp, so the merged current pr_number pins the gate.
     assert_eq!(
         manifest_node_pr_selector(&cwd, Some("x-reolder")).as_deref(),
         Some("960")
     );
-    // A marked history row sinks even NEWER than the stamp: the explicit
-    // state beats number order.
+    // A marked history row sinks even newer than the stamp: state beats
+    // number order.
     assert_eq!(
         manifest_node_pr_selector(&cwd, Some("x-marked")).as_deref(),
         Some("900")

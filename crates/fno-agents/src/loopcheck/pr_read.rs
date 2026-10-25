@@ -177,11 +177,9 @@ pub(super) struct PrInfo {
 /// to a dead PR.
 ///
 /// The lift is age-gated: an unstamped row OLDER than every stamped row is
-/// reopen history, never live work, so it stays below the stamped rows and
-/// the node's merged current pr_number still pins the gate. Rows the reopen
-/// demotion writes carry the explicit `history: true` mark and sink
-/// whatever their number; the age rule remains for rows written before the
-/// mark existed.
+/// reopen history, never live work. Rows the reopen demotion writes carry
+/// the explicit `history: true` mark and sink whatever their number; the
+/// age rule remains for rows written before the mark existed.
 pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Option<String> {
     let node_id = node_id?;
     let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));

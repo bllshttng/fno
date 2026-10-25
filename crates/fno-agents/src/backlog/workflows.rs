@@ -3077,8 +3077,8 @@ mod tests {
             extras[0].get("history").and_then(Value::as_bool),
             Some(true)
         );
-        // The OPEN and UNKNOWN verdicts are not terminal outcomes; they
-        // leave the row unstamped for the settle passes to fill.
+        // OPEN and UNKNOWN are not terminal outcomes; the row stays
+        // unstamped for the settle passes to fill.
         let mut row = json!({
             "id": "ab-44444444",
             "status": "done",
