@@ -1,5 +1,6 @@
 //! The lead commands answered natively: `fno agents org` history, verdict,
-//! faq, checkin, `chart shape`, `chart manifest-path`, and `fno inbox board`.
+//! faq, checkin, cancel, term, `chart shape`, `chart manifest-path`, and
+//! `fno inbox board`.
 //!
 //! The agents menu rewrites every `org` spelling to `agents lead <command>`
 //! first, so this route claims that argv, the deprecated root `fno lead
@@ -58,6 +59,20 @@ const ROUTES: &[Route] = &[
         help: "Usage: fno agents org checkin [--scope SCOPE] [--name NAME] [--theme THEME] \
                [--change TEXT] [--no-emit] [--json]\n\n\
                Run the term check-in: gather, print, diff against the last beat, journal.\n",
+    },
+    Route {
+        name: "cancel",
+        native: &["lead-state", "--cancel"],
+        help: "Usage: fno agents org cancel --scope SCOPE [--clear]\n\n\
+               Set or clear the cancel signal beside a role's manifest.\n",
+    },
+    Route {
+        name: "term",
+        native: &["lead-state", "--term"],
+        help: "Usage: fno agents org term span:<N>[smhd]|compactions:<N> [--reason TEXT] \
+               [--scope SCOPE]\n\n\
+               Declare or extend this term: the bound past which the Stop hook asks \
+               for a handoff or a reason.\n",
     },
 ];
 
@@ -191,6 +206,14 @@ mod tests {
                 &["lead-state", "--manifest-path", "--harness-session-id", "x"],
             ),
             (
+                &["agents", "lead", "cancel", "--scope", "s"],
+                &["lead-state", "--cancel", "--scope", "s"],
+            ),
+            (
+                &["agents", "lead", "term", "span:4h"],
+                &["lead-state", "--term", "span:4h"],
+            ),
+            (
                 &["agents", "lead", "checkin", "--no-emit"],
                 &["lead-checkin", "--user-command", "--no-emit"],
             ),
@@ -228,7 +251,7 @@ mod tests {
         // --last-run shares its predicate with the PR watcher's lead wake.
         assert_eq!(classify(&os(&["inbox", "board", "--last-run"])), None);
         // The lifecycle commands are still Python's.
-        for name in ["init", "done", "cancel", "escalate", "drain", "term"] {
+        for name in ["init", "done", "escalate", "drain", "ledger"] {
             assert_eq!(classify(&os(&["agents", "lead", name])), None, "{name}");
         }
         assert_eq!(classify(&os(&["agents", "lead", "board"])), None);

@@ -1,5 +1,5 @@
 //! parity-stage: characterization
-//! parity-oracle: fno.lead.cli (checkin)
+//! parity-oracle: fno.lead.cli (checkin, cancel, term)
 //!
 //! Characterization for the lead lifecycle commands on their native argvs.
 //! The goldens under tests/golden/lead_lifecycle/ were captured on 2026-10-25
@@ -104,12 +104,41 @@ fn world(events: &str) -> tempfile::TempDir {
     tmp
 }
 
+/// The space this world's repo keys.
+fn space(root: &Path) -> PathBuf {
+    root.join("spaces")
+        .join(slug(&fs::canonicalize(root.join("repo")).unwrap()))
+}
+
+/// Arm the scope manifest a promoted lead over epic-y holds.
+fn arm_manifest(root: &Path) {
+    let leads = space(root).join("leads");
+    fs::create_dir_all(&leads).unwrap();
+    fs::copy(fixture("manifest-epic-y.md"), leads.join("epic-y.md")).unwrap();
+}
+
+/// Move every registry row's cwd into this world's repo, so the role's
+/// space is the repo's space on every host.
+fn rows_live_in_the_repo(root: &Path) {
+    let path = root.join("home/registry.json");
+    let repo = serde_json::to_string(&root.join("repo")).unwrap();
+    let text = fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"cwd\":\"/tmp\"", &format!("\"cwd\":{repo}"));
+    fs::write(path, text).unwrap();
+}
+
 /// Run one native argv from the world's repo under its pins, every other
 /// variable cleared, and assert its golden.
 fn case(label: &str, root: &Path, argv: &[&str]) {
+    case_in(label, root, "repo", &[], argv);
+}
+
+/// [`case`] from `cwd` under the root, with extra variables set.
+fn case_in(label: &str, root: &Path, cwd: &str, extra: &[(&str, &str)], argv: &[&str]) {
     let out = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
         .args(argv)
-        .current_dir(root.join("repo"))
+        .current_dir(root.join(cwd))
         .env_clear()
         .env(
             "PATH",
@@ -124,6 +153,7 @@ fn case(label: &str, root: &Path, argv: &[&str]) {
         .env("FNO_SPACES_DIR", root.join("spaces"))
         .env("FNO_EVENTS_PATH", root.join("project/events.jsonl"))
         .envs(fno_agents::test_run::self_owner_env())
+        .envs(extra.iter().copied())
         .output()
         .unwrap();
     let streams = vec![
@@ -162,4 +192,49 @@ fn checkin_matches_the_python_goldens() {
         let tmp = world(events);
         case(label, tmp.path(), &argv);
     }
+}
+
+#[test]
+fn cancel_matches_the_python_goldens() {
+    let tmp = world("events-first.jsonl");
+    let p = tmp.path();
+    let argv = ["lead-state", "--cancel", "--scope", "epic-y"];
+    case("cancel without a manifest", p, &argv);
+    arm_manifest(p);
+    case("cancel sets the signal", p, &argv);
+    let sentinel = space(p).join("leads/epic-y.cancelled");
+    assert!(sentinel.is_file(), "the set left no sentinel");
+    let clear = ["lead-state", "--cancel", "--scope", "epic-y", "--clear"];
+    case("cancel clears the signal", p, &clear);
+    assert!(!sentinel.exists(), "the clear left the sentinel");
+}
+
+#[test]
+fn term_matches_the_python_goldens() {
+    let tmp = world("events-first.jsonl");
+    let p = tmp.path();
+    case("term without a spec", p, &["lead-state", "--term"]);
+    case(
+        "term with a bad spec",
+        p,
+        &["lead-state", "--term", "span:4x"],
+    );
+    case(
+        "term from an attended shell",
+        p,
+        &["lead-state", "--term", "span:4h"],
+    );
+    // The holder runs from outside its repo: the write keys on the row's
+    // cwd, never the process cwd.
+    rows_live_in_the_repo(p);
+    arm_manifest(p);
+    case_in(
+        "term declares the holder's own term",
+        p,
+        "home",
+        &[("CLAUDE_CODE_SESSION_ID", "sess-lead")],
+        &["lead-state", "--term", "span:48h"],
+    );
+    let manifest = fs::read_to_string(space(p).join("leads/epic-y.md")).unwrap();
+    assert!(manifest.contains("term: span:48h"), "{manifest}");
 }

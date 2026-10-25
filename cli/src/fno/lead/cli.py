@@ -20,23 +20,6 @@ def _refuse(msg: str) -> NoReturn:
     raise typer.Exit(2)
 
 
-def _emit_cancel_signal(path: Path, scope: str) -> None:
-    """Record a lead cancel after the sentinel is safely on disk."""
-    try:
-        from fno.events import _build, append_event
-
-        append_event(
-            _build(
-                "cancel_signal_set",
-                "agents",
-                {"lane": "lead", "path": str(path), "scope": scope, "reason": "operator"},
-            ),
-            events_path=path.parent.parent / "events.jsonl",
-        )
-    except Exception as exc:  # noqa: BLE001 - the sentinel remains authoritative
-        typer.echo(f"lead: WARNING: cancel signal event not emitted: {exc}", err=True)
-
-
 @lead_app.command("init")
 def init_cmd(
     scope_values: list[str] = typer.Option(
@@ -469,139 +452,6 @@ def done_cmd(
     )
 
 
-@lead_app.command("cancel")
-def cancel_cmd(
-    scope: str = typer.Option(..., "--scope", help="Role scope whose walk to cancel."),
-    clear: bool = typer.Option(False, "--clear", help="Clear the lead cancel signal."),
-) -> None:
-    """Set or clear the cancel signal beside a canonical role manifest."""
-    from fno.lead.state import lead_manifest_path
-
-    manifest = lead_manifest_path(scope)
-    if not manifest.is_file():
-        typer.echo(
-            f"lead: refusing cancel for {scope!r}; no lead manifest at canonical path "
-            f"{manifest}",
-            err=True,
-        )
-        raise typer.Exit(1)
-    sentinel = manifest.with_suffix(".cancelled")
-    try:
-        if clear:
-            sentinel.unlink(missing_ok=True)
-            typer.echo(f"lead: cancel signal cleared: {sentinel}")
-        else:
-            sentinel.touch()
-            _emit_cancel_signal(sentinel, scope)
-            typer.echo(f"lead: cancel signal set: {sentinel}")
-    except OSError as exc:
-        typer.echo(f"lead: could not update cancel signal {sentinel}: {exc}", err=True)
-        raise typer.Exit(1) from exc
-
-
-def _own_role_argv(command: str, scope: str) -> tuple[list[str], str]:
-    """The caller ladder every ``term-*`` command needs: resolve the caller's
-    own role, refuse an unregistered caller or a foreign scope, resolve the
-    binary, and return the argv prefix (binary, command, --scope, --root, and
-    --session when known) plus the resolved scope. Shared by ``shape`` and
-    ``term`` so the ladder is written once (law d-b6cc1a2a: new logic in
-    crates, this shell only relays).
-    """
-    from fno.agents.role import (
-        AGENT_UNREGISTERED,
-        REGISTRY_UNREADABLE,
-        calling_agent_row,
-    )
-    from fno.lead.state import _owner_state_root
-    from fno.rust_binary import resolve_binary
-
-    caller = calling_agent_row()
-    if caller is REGISTRY_UNREADABLE or caller is AGENT_UNREGISTERED:
-        _refuse(
-            "lead: cannot resolve the caller's role: this session carries an "
-            "agent identity the registry does not resolve to a row. Run /fno-me "
-            "or retry."
-        )
-    if caller is None:
-        _refuse(
-            "lead: an attended shell holds no role; the promoted session "
-            "declares its own term from inside it."
-        )
-    own = getattr(caller, "role_scope", None)
-    if not own:
-        _refuse("lead: this session holds no role, so there is no term to declare on.")
-    if scope.strip() and scope != own:
-        _refuse(
-            f"lead: refusing to act on {scope!r}: this session's role is "
-            f"{own!r}, and a holder declares only its own term."
-        )
-    session_id = (
-        getattr(caller, "harness_session_id", None)
-        or getattr(caller, "cc_session_id", None)
-        or ""
-    )
-    binary = resolve_binary()
-    if binary is None:
-        _refuse(
-            "lead: the fno-agents binary was not found, and the write lives "
-            "there. Reinstall fno, run `fno doctor update --rust`, or set "
-            "FNO_AGENTS_BIN."
-        )
-    root = _owner_state_root(getattr(caller, "cwd", None))
-    argv = [str(binary), command, "--scope", own,
-            "--root", str(root.parent if root.name == ".fno" else root)]
-    if session_id:
-        argv += ["--session", session_id]
-    return argv, own
-
-
-@lead_app.command(
-    "term",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def term_cmd(ctx: typer.Context) -> None:
-    """Declare or extend this term's term: the bound past which the Stop
-    hook demands a handoff receipt (``--succeed``) or a written ``--reason``.
-
-    Usage: ``lead term <spec> [--reason TEXT] [--scope SCOPE]``, spec being
-    ``span:<N>[smhd]`` or ``compactions:<N>``. Undeclared reads a 96h
-    default. Flags pass through as raw args (the flag-registry ratchet bars
-    new ``typer.Option`` calls in this tree; a new command belongs in crates),
-    so this shell scans them by hand rather than declaring them. The write
-    lives in Rust; this shell keeps the caller ladder (Python self-stamp).
-    """
-    import re
-    import subprocess
-
-    from fno._subprocess_util import propagate_returncode
-
-    passed = list(ctx.args)
-    positional = [a for a in passed if not a.startswith("-")]
-    if not positional:
-        _refuse("lead: term needs a spec: span:<N>[smhd] or compactions:<N>.")
-    spec = positional[0]
-    reason = next(
-        (passed[i + 1] for i, t in enumerate(passed) if t == "--reason" and i + 1 < len(passed)),
-        "",
-    )
-    scope = next(
-        (passed[i + 1] for i, t in enumerate(passed) if t == "--scope" and i + 1 < len(passed)),
-        "",
-    )
-    if not re.fullmatch(r"span:[0-9]+[smhd]|compactions:[0-9]+", spec.strip()):
-        _refuse(f"lead: bad term spec {spec!r}; legal forms: span:<N>[smhd], compactions:<N>")
-    argv, own = _own_role_argv("lead-shape", scope)
-    argv += ["--term", spec]
-    if reason.strip():
-        argv += ["--reason", reason]
-    result = subprocess.run(argv, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        typer.echo(f"lead: {result.stderr.strip()}", err=True)
-        raise typer.Exit(code=propagate_returncode(result.returncode))
-    typer.echo(f"lead: term declared: {result.stdout.strip()}")
-    typer.echo(f"scope:  {own}")
-
-
 def ledger_cmd(
     out: Optional[Path] = typer.Option(
         None, "--out", help="Write the page here instead of the layout table's lead page."
@@ -788,13 +638,8 @@ agents_lead_app = typer.Typer(
 )
 agents_lead_app.command("init")(init_cmd)
 agents_lead_app.command("done")(done_cmd)
-agents_lead_app.command("cancel")(cancel_cmd)
 agents_lead_app.command("escalate")(escalate_cmd)
 agents_lead_app.command("drain")(drain_cmd)
-agents_lead_app.command(
-    "term",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)(term_cmd)
 agents_lead_app.command("ledger")(ledger_cmd)
 
 

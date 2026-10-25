@@ -14,7 +14,7 @@ case "${1:-} ${2:-} ${3:-}" in
         set -- agents "${@:3}" ;;
     esac ;;
 esac
-# The lead reads have no Python leg: the front door execs these fno-agents
+# These lead commands have no Python leg: the front door execs these fno-agents
 # argvs (crates/fno/src/lead_route.rs), so the fake does too.
 case "${1:-} ${2:-} ${3:-}" in
   "agents lead history") exec fno-agents lead-history "${@:4}" ;;
@@ -22,4 +22,7 @@ case "${1:-} ${2:-} ${3:-}" in
   "agents lead faq") exec fno-agents lead-state --faq "${@:4}" ;;
   "agents lead shape") exec fno-agents lead-shape --user-command "${@:4}" ;;
   "agents lead manifest-path") exec fno-agents lead-state --manifest-path "${@:4}" ;;
+  "agents lead checkin") exec fno-agents lead-checkin --user-command "${@:4}" ;;
+  "agents lead cancel") exec fno-agents lead-state --cancel "${@:4}" ;;
+  "agents lead term") exec fno-agents lead-state --term "${@:4}" ;;
 esac

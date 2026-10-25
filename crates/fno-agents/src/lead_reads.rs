@@ -308,7 +308,7 @@ fn faq_add(args: &[String]) -> i32 {
 /// The caller ladder a holder's own-term write needs: the caller's own role
 /// scope, its session, and the space root its manifest lives under. A
 /// foreign `--scope` refuses, because a holder declares only its own term.
-fn own_role(scope: &str) -> Result<(String, String, PathBuf), String> {
+pub(crate) fn own_role(scope: &str) -> Result<(String, String, PathBuf), String> {
     let (session, harness) = crate::claims::resolve_identity();
     let Some(session) = session.filter(|s| !s.is_empty()) else {
         return Err(

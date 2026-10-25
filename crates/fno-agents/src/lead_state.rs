@@ -1263,10 +1263,12 @@ pub fn run_org_vacancies(args: &[String]) -> i32 {
 
 /// `fno-agents lead-state`: print one LeadState as JSON, exit 0.
 pub fn run_lead_state(args: &[String]) -> i32 {
-    // The read commands ride this action as arguments (law d-fe66560a).
+    // The lead user commands ride this action as arguments (law d-fe66560a).
     match args.first().map(String::as_str) {
         Some("--manifest-path") => return crate::lead_reads::run_manifest_path(&args[1..]),
         Some("--faq") => return crate::lead_reads::run_faq(&args[1..]),
+        Some("--cancel") => return crate::lead_lifecycle::run_cancel(&args[1..]),
+        Some("--term") => return crate::lead_lifecycle::run_term(&args[1..]),
         _ => {}
     }
     let mut scope: Option<String> = None;
