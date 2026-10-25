@@ -844,9 +844,9 @@ def inspect_freshness(
         or any(marketplace.name == LEGACY_DEV_MARKETPLACE for marketplace in owned_marketplaces)
     )
     if [p.plugin_id for p in installed] == ["fno@footnote"] and len(owned_marketplaces) <= 1:
-        # An install from before the rename still loads fno; install moves it.
         channel = str(marker.get("channel", "release")) if marker else "release"
-        return {"status": "stale", "issue": "legacy-marketplace", "remedy": _remedy(channel)}
+        ids = {"enabled_plugin_ids": [p.plugin_id for p in enabled], "remedy": _remedy(channel)}
+        return {**ids, "status": "stale", "issue": "legacy-marketplace"}
     if ambiguous:
         conflict_channel = str(marker.get("channel", "unknown")) if marker else "unknown"
         return {

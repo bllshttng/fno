@@ -367,6 +367,7 @@ def test_release_convergence_migrates_the_legacy_footnote_marketplace(tmp_path: 
 
     report = inspect_freshness(runner=runner, codex_home=codex_home, source_root=source)
     assert (report["status"], report["issue"]) == ("stale", "legacy-marketplace")
+    assert report["enabled_plugin_ids"] == ["fno@footnote"]
 
     result = converge(
         channel="release",
