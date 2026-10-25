@@ -352,7 +352,21 @@ fn worktree_line(project_root: &Path, node_id: Option<&str>) -> String {
         return project_root.to_string_lossy().to_string();
     }
     let hint = node_id.unwrap_or("<node>");
-    format!("on canonical main -- create with: fno do target start {hint}")
+    // A checkout that is not a linked worktree is canonical whether or not
+    // it sits on main; name the branch it is actually on so the line never
+    // says main when the branch is not.
+    let branch = git_out(project_root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|| "HEAD".to_string());
+    if branch == "main" {
+        format!("on canonical main -- create with: fno do target start {hint}")
+    } else if branch == "HEAD" {
+        // --abbrev-ref answers HEAD on a detached checkout; git_out's None
+        // (git absent or not a repo) lands here too. "unknown branch" stays
+        // honest about both.
+        format!("on canonical (unknown branch) -- create with: fno do target start {hint}")
+    } else {
+        format!("on canonical {branch} -- create with: fno do target start {hint}")
+    }
 }
 
 fn tests_line(project_root: &Path) -> String {
@@ -1187,5 +1201,44 @@ mod marker_tests {
             "x-aaaa",
             None
         ));
+    }
+}
+
+#[cfg(test)]
+mod worktree_line_tests {
+    use super::worktree_line;
+
+    #[test]
+    fn names_the_real_branch_on_a_non_main_canonical_checkout() {
+        // Gap 13: any checkout that is not a linked worktree read as
+        // "canonical main". A plain repo is canonical too, so the line must
+        // keep the byte-exact main form there, and name the branch it
+        // actually sits on everywhere else.
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(dir.path().join("f.txt"), "x").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "init"]);
+        let main_line = worktree_line(dir.path(), Some("x-9"));
+        assert!(
+            main_line.contains("on canonical main -- create with: fno do target start x-9"),
+            "{main_line}"
+        );
+        run(&["checkout", "-q", "-b", "feature/x"]);
+        let branch_line = worktree_line(dir.path(), Some("x-9"));
+        assert!(
+            branch_line.starts_with("on canonical feature/x -- create with:"),
+            "{branch_line}"
+        );
+        assert!(!branch_line.contains("canonical main"), "{branch_line}");
     }
 }
