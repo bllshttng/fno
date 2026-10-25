@@ -359,7 +359,7 @@ fn render_example_toml(table: &Value) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// The verbs
+// The command
 // ---------------------------------------------------------------------------
 
 const SCHEMA_USAGE: &str = "Usage: fno config schema [OPTIONS]

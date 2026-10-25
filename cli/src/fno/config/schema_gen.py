@@ -3,7 +3,7 @@
 The Pydantic ``SettingsModel`` is the single source of truth for what a config
 key is, its type, and its default. This module walks that model (plus the
 presentation ``registry``) and writes ONE derived artifact:
-``crates/fno/config_schema.json``. The native ``fno config schema`` verb
+``crates/fno/config_schema.json``. The native ``fno config schema`` command
 renders every output (JSON Schema, Markdown reference, example TOML, wizard
 plan) from that table, and the drift test regenerates it and compares, so the
 table stays one source and never becomes a second one.
