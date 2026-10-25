@@ -310,7 +310,7 @@ def test_cell6b_retired_form_read_off_a_stored_record_is_migrated(
     assert replies[0].get("delivery") is None
     assert replies[-1]["to"] == LIVE_HANDLE
     drained = _drain_as(runner, monkeypatch, LIVE_SID)
-    assert any(message["id"] == replies[-1].id for message in drained)
+    assert any(message["id"] == replies[-1]["id"] for message in drained)
 
 
 # ---------------------------------------------------------------------------

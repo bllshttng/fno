@@ -154,7 +154,8 @@ def _landed_map(msgs: list[dict], budget_s: float | None = None) -> dict[str, bo
     for (harness, session_id), rows in stores:
         ids = mail_ids_in_transcript(harness, session_id)
         for m in rows:
-            out[m.id] = None if ids is None else m.id in ids
+            mid = str(m.get("id"))
+            out[mid] = None if ids is None else mid in ids
         if stop is not None and monotonic() > stop:
             break
     return out

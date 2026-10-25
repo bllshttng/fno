@@ -635,7 +635,7 @@ def test_dispatch_send_demotion_preserves_envelope(tmp_path: Path, monkeypatch) 
     # Envelope is in the store (survived the failed inject)
     threads = _queued("abcd1234")
     assert len(threads) == 1, f"Envelope must survive inject failure; got {len(threads)} threads"
-    assert "important message" in threads[0].body
+    assert "important message" in threads[0]["body"]
 
 
 # ---------------------------------------------------------------------------
@@ -904,8 +904,8 @@ def test_dispatch_send_queues_to_selected_session_when_live_miss_restamps(
     assert len(original_threads) == 1
     # The durable body is the delivered shape (header line, then the body),
     # and it lives under the ORIGINAL session's thread, not the replacement.
-    assert original_threads[0].body.endswith("\nsecret for A")
-    assert original_threads[0].body.startswith("`@lead · ")
+    assert original_threads[0]["body"].endswith("\nsecret for A")
+    assert original_threads[0]["body"].startswith("`@lead · ")
     assert _queued(canonical_handle(replacement_id)) == []
     assert _queued("victim") == []
     row = registry_mod.load_registry()[0]
@@ -1181,7 +1181,7 @@ def test_dispatch_send_agent_lock_timeout_queues_durable(
 
     threads = _queued("abcd1234")
     assert len(threads) == 1, f"the message must survive the timeout: {threads}"
-    assert "hello" in threads[0].body
+    assert "hello" in threads[0]["body"]
 
 
 def test_dispatch_send_control_refusal_clears_dispatch_context(

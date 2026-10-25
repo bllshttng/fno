@@ -81,8 +81,8 @@ def test_cmd_send_kind_heads_up_writes_durable_thread(isolated, runner) -> None:
     assert "param-forced: --kind heads-up" in result.output
     rows = _rows("acme-docs")
     assert len(rows) == 1
-    assert rows[0].kind == "heads-up"
-    assert rows[0].from_ == "acme-web"
+    assert rows[0]["kind"] == "heads-up"
+    assert rows[0]["from"] == "acme-web"
 
 
 def test_cmd_send_fyi_persist_memory(isolated, runner) -> None:
@@ -95,7 +95,7 @@ def test_cmd_send_fyi_persist_memory(isolated, runner) -> None:
         "lesson: always quote yaml scalars",
     )
     assert result.exit_code == 0, result.output
-    assert _rows("acme-backend")[0].meta["persist_to_memory"] is True
+    assert _rows("acme-backend")[0]["meta"]["persist_to_memory"] is True
 
 
 def test_cmd_send_invalid_kind_rejected(isolated, runner) -> None:
@@ -131,7 +131,7 @@ def test_cmd_send_reply_to_carries_parent_id(isolated, runner) -> None:
         "appended reply",
     )
     assert result.exit_code == 0, result.output
-    assert [m.in_reply_to for m in _rows("acme-docs")][-1] == root
+    assert [m["in_reply_to"] for m in _rows("acme-docs")][-1] == root
 
 
 def test_cmd_send_ref_flags_ride_in_thread(isolated, runner) -> None:
@@ -146,7 +146,7 @@ def test_cmd_send_ref_flags_ride_in_thread(isolated, runner) -> None:
         "--body", "region column needed",
     )
     assert result.exit_code == 0, result.output
-    meta = _rows("acme-web")[0].meta
+    meta = _rows("acme-web")[0]["meta"]
     assert str(meta.get("ref_pr")) == "112"
     assert meta.get("ref_node") == "ab-1f3c9a2b"
 
@@ -185,7 +185,7 @@ def test_cmd_send_from_self_stamps_canonical_handle(isolated, runner, monkeypatc
         "--body", "which auth?",
     )
     assert result.exit_code == 0, result.output
-    assert _rows("acme-docs")[0].from_ == "879d8d26"
+    assert _rows("acme-docs")[0]["from"] == "879d8d26"
 
 
 def test_cmd_send_from_self_without_identity_fails_loud(isolated, runner, monkeypatch) -> None:
