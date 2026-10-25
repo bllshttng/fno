@@ -122,27 +122,18 @@ pub fn file_regression(c: &Candidate, reason: &str) -> Result<String, String> {
         "The recheck_probes of done node {} failed twice in one pass.\n\nplan: {}\nprobe: {reason}",
         c.id, c.plan
     );
+    let fixed = "--separate --difficulty medium --type bug --source-kind from_observation --json";
     let mut args = vec![
         "backlog",
         "idea",
         &title,
-        "--separate",
-        "--difficulty",
-        "medium",
-        "--type",
-        "bug",
         "--related",
         &c.id,
         "--source-node",
         &c.id,
-        "--source-kind",
-        "from_observation",
-        "--origin-evidence",
-        &c.plan,
-        "--details",
-        &details,
-        "--json",
     ];
+    args.extend(["--origin-evidence", &c.plan, "--details", &details]);
+    args.extend(fixed.split(' '));
     if !c.cwd.is_empty() {
         args.extend(["--cwd", &c.cwd]);
     }
