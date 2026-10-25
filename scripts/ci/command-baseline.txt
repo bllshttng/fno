@@ -75,6 +75,9 @@ event
 event emit
 fno-agents
 help
+inbox approvals decide
+inbox approvals ls
+inbox approvals show
 inbox board
 inbox day end
 inbox day start
