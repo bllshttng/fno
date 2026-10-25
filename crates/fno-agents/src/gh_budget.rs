@@ -42,6 +42,12 @@ const HALF_OPEN_MS: i64 = 30_000;
 const ESCALATION_WINDOW_MS: i64 = 900_000;
 const BASE_BACKOFF_MS: i64 = 60_000;
 const MAX_BACKOFF_MS: i64 = 900_000;
+/// The flock wait bound: LOCK_NB retries, not a blocking LOCK_EX. The
+/// critical section after the shared-hold hoist is a ledger read-write, so
+/// 20 x 100ms covers a normal handoff while naming the wait instead of
+/// queueing the merge path behind a stalled holder.
+const LOCK_RETRY_MAX_TRIES: u32 = 20;
+const LOCK_RETRY_SLEEP_MS: u64 = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerState {
@@ -333,7 +339,26 @@ impl FileLock {
     /// flocked (a read-only or uncreatable state directory). The budget
     /// consult degrades to a lock-free read instead of aborting the process
     /// on every gh call - the module's fail-open rule.
+    ///
+    /// The flock is LOCK_NB with a short retry, never a blocking LOCK_EX: a
+    /// blocking wait queued every gh shim call behind the lock holder, and
+    /// one holder reading the claims store inside its critical section made
+    /// the queue minutes deep (measured 2026-10-24: 25s per call, 13
+    /// holders). The bound keeps a brief handoff while naming the wait in
+    /// the error, so a starved caller degrades lock-free instead of
+    /// stalling the merge path.
     pub(crate) fn try_acquire(path: &Path) -> Result<FileLock, String> {
+        Self::try_acquire_with(path, LOCK_RETRY_MAX_TRIES, LOCK_RETRY_SLEEP_MS)
+    }
+
+    /// The parametric form, tries and sleep handed in so a test drives the
+    /// bound without waiting out the real one.
+    pub(crate) fn try_acquire_with(
+        path: &Path,
+        max_tries: u32,
+        sleep_ms: u64,
+    ) -> Result<FileLock, String> {
+        let max_tries = max_tries.max(1);
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -342,11 +367,21 @@ impl FileLock {
             .append(true)
             .open(path)
             .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
-        let locked = unsafe { libc::flock(handle.as_raw_fd(), libc::LOCK_EX) };
-        if locked != 0 {
-            return Err(format!("cannot flock {}: {locked}", path.display()));
+        for try_no in 1..=max_tries {
+            let locked = unsafe { libc::flock(handle.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if locked == 0 {
+                return Ok(FileLock { handle });
+            }
+            if try_no == max_tries {
+                return Err(format!(
+                    "cannot flock {path} after {try_no} tries (locked elsewhere; \
+                     the holder may be stalled): {locked}",
+                    path = path.display(),
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
         }
-        Ok(FileLock { handle })
+        unreachable!("the loop returns on every arm")
     }
 }
 
@@ -516,6 +551,18 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
 /// lock actually holds instead of a straggler copy.
 fn admit_with(ledger_override: Option<&Path>, argv: &[String], now: i64, cap: u32) -> Verdict {
     let points = points_for(argv);
+    // The shared hold rides only the REAL ledger: tests stage temp paths,
+    // and a test's world must not read (or inherit) the dev machine's fleet
+    // hold. The read runs BEFORE the ledger flock: it reaches the claims
+    // store (a graph read), and holding the flock across it queued every
+    // other shim call behind a network answer (measured 2026-10-24: 25s per
+    // call, 13 holders). record_refusal_real reads outside the lock the
+    // same way.
+    let shared_until = if ledger_override.is_none() {
+        shared_hold(now).0
+    } else {
+        0
+    };
     let (_lock, path) = ledger_lock(ledger_override);
     let (mut ledger, state) = read_ledger(&path);
 
@@ -566,14 +613,6 @@ fn admit_with(ledger_override: Option<&Path>, argv: &[String], now: i64, cap: u3
         }
     }
 
-    // The shared hold rides only the REAL ledger: tests stage temp paths,
-    // and a test's world must not read (or inherit) the dev machine's fleet
-    // hold.
-    let shared_until = if ledger_override.is_none() {
-        shared_hold(now).0
-    } else {
-        0
-    };
     let backoff_until_ms = ledger.backoff_until_ms.max(shared_until);
 
     if now < backoff_until_ms {
@@ -1317,6 +1356,34 @@ mod tests {
             "the lock was retaken on the moved folder, not the stray"
         );
         assert_ne!(lock_path(&path), stray, "the stray inode was dropped");
+    }
+
+    /// A held flock must name itself fast instead of queueing the next shim
+    /// call behind a blocking LOCK_EX. The bound is driven through the
+    /// parametric form so the test waits 2ms, not the real 2s; the released
+    /// lock must free for the next caller.
+    #[test]
+    fn a_held_flock_names_itself_instead_of_queueing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("github-request-budget.json.lock");
+        let held = FileLock::try_acquire(&path).expect("the first caller takes the lock");
+        let started = std::time::Instant::now();
+        let err = FileLock::try_acquire_with(&path, 2, 1)
+            .expect_err("a held lock refuses the second caller");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the bound is short, not a blocking wait: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            err.contains("locked elsewhere"),
+            "the error names the wait: {err}"
+        );
+        drop(held);
+        assert!(
+            FileLock::try_acquire(&path).is_ok(),
+            "the lock frees for the next caller"
+        );
     }
 
     #[test]
