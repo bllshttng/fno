@@ -22,8 +22,385 @@ pub fn dispatch(word: &str, rest: &[String]) -> Option<i32> {
     match word {
         "mine" => Some(run_mine(rest)),
         "reindex" => Some(run_reindex(rest)),
+        "clear" => Some(run_clear_cmd(rest)),
         _ => None,
     }
+}
+
+/// The delivery body's style-gate bypass: the answer is quoted decision text
+/// passing through, not prose the sender authored.
+const STYLE_EXCEPTION: &str = "operator answer verbatim: quoted decision text, not authored prose";
+
+/// The system-sender arm the delivery mails from: a named `fno/<arm>` voice
+/// the recipient can answer, ending the bare `unknown` stamp the Python leg
+/// produced whenever no session resolved.
+const DELIVERY_SENDER: &str = "fno/questions";
+
+/// The clear arm: validate the authority claim, resolve provenance once,
+/// close through the clear core, then deliver every answer to its asker.
+fn run_clear_cmd(args: &[String]) -> i32 {
+    let mut ids: Vec<String> = Vec::new();
+    let mut answer_text: Option<String> = None;
+    let mut authority: Option<String> = None;
+    let mut origin: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "-h" | "--help" => {
+                println!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--origin <origin>]");
+                return 0;
+            }
+            "--answer" => match args.get(index + 1) {
+                Some(value) => {
+                    answer_text = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --answer needs a value");
+                    return 2;
+                }
+            },
+            "--authority" => match args.get(index + 1) {
+                Some(value) => {
+                    authority = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --authority needs a value");
+                    return 2;
+                }
+            },
+            "--origin" => match args.get(index + 1) {
+                Some(value) => {
+                    origin = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --origin needs a value");
+                    return 2;
+                }
+            },
+            other if other.starts_with('-') => {
+                eprintln!("outstanding: unknown argument {other:?}");
+                return 2;
+            }
+            other => ids.push(other.to_string()),
+        }
+        index += 1;
+    }
+    if ids.is_empty() {
+        eprintln!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--origin <origin>]");
+        return 2;
+    }
+    if let Some(source) = &authority {
+        if !matches!(source.as_str(), "operator" | "role" | "agent" | "beastmode") {
+            eprintln!(
+                "outstanding: --authority '{}' is not one of operator, role, agent, beastmode. Nothing was closed.",
+                source
+            );
+            return 2;
+        }
+    }
+    // The truncation note rides stderr before anything is written; the clear
+    // core cuts at the cap on its side.
+    if let Some(text) = &answer_text {
+        let chars = text.chars().count();
+        let cap = crate::question_intake::QUESTION_CAP;
+        if chars > cap {
+            eprintln!(
+                "outstanding: recorded truncated: the answer is {chars} characters, the event stores {cap}."
+            );
+        }
+    }
+    let provenance = match &answer_text {
+        Some(_) => {
+            let enforced_origin = crate::decide_door::enforce_origin_floor(
+                origin.as_deref(),
+                crate::decide_door::DecideIdentity::Ambient,
+            );
+            match crate::decide_door::resolve_decider_lanes(
+                crate::decide_door::DecideIdentity::Ambient,
+                None,
+                authority.as_deref(),
+                enforced_origin.as_deref(),
+            ) {
+                Ok(p) => json!({
+                    "decided_by": p.decided_by,
+                    "authority_source": p.authority_source,
+                    "attested_by": p.attested_by,
+                    "relayed_by": p.relayed_by,
+                    "origin": enforced_origin,
+                }),
+                Err(refusal) => {
+                    let (kind, text, refused_origin) = provenance_refusal(refusal);
+                    let remedy = provenance_remedy(&kind, refused_origin.as_deref().unwrap_or(""));
+                    let mut line = format!(
+                        "outstanding: refused: {text}. Nothing was closed; all {} question(s) stay open.",
+                        ids.len()
+                    );
+                    if !remedy.is_empty() {
+                        line.push('\n');
+                        line.push_str(&remedy);
+                    }
+                    eprintln!("{line}");
+                    return 3;
+                }
+            }
+        }
+        None => json!({}),
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let home = crate::paths::AgentsHome::from_env();
+    let request = crate::question_clear::ClearRequest {
+        ids,
+        answer: answer_text.clone(),
+        cap: crate::question_intake::QUESTION_CAP,
+        provenance,
+        closed_by: crate::outstanding::session_id(&cwd),
+        caller: None,
+        journal_path: crate::paths::events_path(&cwd),
+        index_path: crate::provider_cap::questions_path(&home),
+        decisions_path: crate::decision_index::default_state_path("decisions.jsonl"),
+        graph: crate::graph_get::default_graph_path(),
+        repo_root: cwd,
+    };
+    let result = crate::question_clear::run_clear(&request);
+    if !result.lines.is_empty() {
+        println!("{}", result.lines.join("\n"));
+    }
+    // Delivery runs outside the close's own error path: the close is durable
+    // before delivery starts, so one bad recipient never costs the count.
+    let raw_answer = answer_text.unwrap_or_default();
+    for delivery in &result.deliveries {
+        eprintln!(
+            "{}",
+            deliver_answer(
+                &delivery.qid,
+                &delivery.question,
+                &delivery.asker,
+                delivery.session_id.as_deref(),
+                &delivery.decision_id,
+                &raw_answer,
+            )
+        );
+    }
+    result.exit_code
+}
+
+/// The remedy line a provenance refusal carries after its refusal sentence:
+/// one named fix per kind, the refused origin quoted Python-repr style.
+fn provenance_remedy(kind: &str, refused_origin: &str) -> String {
+    match kind {
+        "unknown-origin" => String::new(),
+        "unattributed" => "This process has no session identity and no terminal, so it is not an agent and has no chat to compose in. Run it from an attended terminal, or from a real agent session, and answer again.".to_string(),
+        "authority" => "An agent answers as agent or role. The superuser lane is not an agent's to claim. Drop --authority operator and answer again.".to_string(),
+        "origin-authority" => format!(
+            "The refusal is about the claimed --origin {}, not about who you are. Drop --origin (or drop --authority operator) and answer again.",
+            crate::mail_cli::send_raw::py_repr(refused_origin)
+        ),
+        _ => String::new(),
+    }
+}
+
+/// The refusal the provenance resolver raised, as the (kind, text, origin)
+/// triple the remedy lines key on.
+fn provenance_refusal(
+    refusal: crate::decide_door::DecideRefusal,
+) -> (String, String, Option<String>) {
+    match refusal {
+        crate::decide_door::DecideRefusal::UnknownOrigin(origin) => (
+            "unknown-origin".to_string(),
+            format!(
+                "mail origin '{origin}' is unknown; use one of {}",
+                crate::decide_door::MAIL_ORIGINS.join(", ")
+            ),
+            None,
+        ),
+        crate::decide_door::DecideRefusal::RefusedAuthority { agent, origin } => (
+            if origin.is_some() {
+                "origin-authority"
+            } else {
+                "authority"
+            }
+            .to_string(),
+            match &origin {
+                Some(o) => {
+                    format!("agent {agent} cannot record under superuser authority from {o} origin")
+                }
+                None => format!("agent {agent} cannot record under superuser authority"),
+            },
+            origin,
+        ),
+        crate::decide_door::DecideRefusal::UnattributedAuthority => (
+            "unattributed".to_string(),
+            "the provenance resolver refused".to_string(),
+            None,
+        ),
+    }
+}
+
+/// The posture line for one answered close. Never fails: every way delivery
+/// cannot happen is a stated line, because the close is already durable and
+/// one bad recipient must not cost the remaining count.
+fn deliver_answer(
+    qid: &str,
+    question: &str,
+    asker: &str,
+    session_id: Option<&str>,
+    decision_id: &str,
+    answer: &str,
+) -> String {
+    let did = if decision_id.is_empty() {
+        "the decision record"
+    } else {
+        decision_id
+    };
+    let recovery = format!("Decision {did}; recover it via: fno backlog decisions");
+    if asker.is_empty() {
+        return format!(
+            "outstanding: {qid} answered; no asker on record (lead escalation), nobody to wake. {recovery}"
+        );
+    }
+    // Resolve by the full session id first, falling back to the eight-digit
+    // handle: the full id was in hand at ask time and is unique by
+    // construction.
+    let token = session_id.filter(|s| !s.is_empty()).unwrap_or(asker);
+    let reach = crate::mail_cli::send::resolve::resolve_reachable(token);
+    if !reach.ambiguous.is_empty() {
+        return format!(
+            "outstanding: {qid} answered; asker {asker} is ambiguous across {} stored sessions, not delivered (never guess). Decision {did}",
+            reach.ambiguous.len()
+        );
+    }
+    let Some(session) = reach.hit else {
+        return format!(
+            "outstanding: {qid} answered; asker {asker} has no stored session, nobody to wake. {recovery}"
+        );
+    };
+    let full_id = if session.session_id.is_empty() {
+        token.to_string()
+    } else {
+        session.session_id.clone()
+    };
+    if crate::mail_cli::send::resolve::resolve_reachable(&full_id)
+        .hit
+        .is_none()
+    {
+        return format!(
+            "outstanding: {qid} answered; asker {asker} is not live, so nobody was woken. {recovery}"
+        );
+    }
+    let body = format!("Answer to your question {qid} \"{question}\": {answer}.");
+    let argv = vec![
+        crate::mail_cli::send_raw::agents_binary(),
+        "mail".to_string(),
+        "send".to_string(),
+        full_id.clone(),
+        body,
+        "--style-exception".to_string(),
+        STYLE_EXCEPTION.to_string(),
+        "--origin".to_string(),
+        "operator".to_string(),
+        "--from-name".to_string(),
+        DELIVERY_SENDER.to_string(),
+    ];
+    let (code, detail) = mail_send_captured(&argv);
+    if code != 0 {
+        return format!(
+            "outstanding: {qid} answered; delivery failed ({detail}). Retry: fno agents mail send {full_id} \"<the answer>\" --style-exception \"operator answer verbatim\""
+        );
+    }
+    let evidence = if detail.is_empty() {
+        String::new()
+    } else {
+        format!(": {detail}")
+    };
+    format!("outstanding: {qid} answered; mail to {asker}{evidence} (decision {did})")
+}
+
+/// One bounded `fno-agents mail send` with both pipes captured: the child's
+/// stderr is the failure detail the posture lines quote, and its last stdout
+/// line is the evidence the delivered posture leads with. Returns
+/// `(code, detail)` with Python's failure codes: 124 timed out, 127 spawn.
+fn mail_send_captured(argv: &[String]) -> (u32, String) {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(&argv[0]);
+    command.args(&argv[1..]);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => return (127, "fno-agents mail send could not be started".to_string()),
+    };
+    // Feed and close stdin so a prompt-reading child cannot hang the send.
+    if let Some(stdin) = child.stdin.take() {
+        drop(stdin);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(30.0);
+    let stdout_handle = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = out.read_to_string(&mut buf);
+            buf
+        })
+    });
+    let stderr_handle = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = err.read_to_string(&mut buf);
+            buf
+        })
+    });
+    let mut code = 0u32;
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                code = status.code().unwrap_or(1).max(0) as u32;
+                break;
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    timed_out = true;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(_) => {
+                code = 127;
+                break;
+            }
+        }
+    }
+    let _ = stdout_handle;
+    let stdout = stdout_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    if timed_out {
+        return (124, "mail send timed out after 30s".to_string());
+    }
+    if code != 0 {
+        let first = stderr
+            .lines()
+            .chain(stdout.lines())
+            .find(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| "no detail".to_string());
+        return (code, first);
+    }
+    // The command's own evidence line ("delivered (hosted)", "queued
+    // (durable)") is the delivery truth; exit 0 alone cannot tell landed
+    // from parked.
+    let detail = stdout.trim().lines().last().unwrap_or("").to_string();
+    (0, detail)
 }
 
 /// The reindex arm: fold every ask/close identity from graph-named project

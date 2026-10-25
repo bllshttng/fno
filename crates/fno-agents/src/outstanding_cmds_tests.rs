@@ -260,3 +260,69 @@ fn an_unreadable_machine_index_refuses_the_fold() {
     let err = reindex_fold(&index, &[journal]).unwrap_err();
     assert!(!err.is_empty(), "the index read failure names itself");
 }
+
+fn refusal(kind: &str, agent: &str, origin: Option<&str>) -> crate::decide_door::DecideRefusal {
+    match kind {
+        "origin-authority" => crate::decide_door::DecideRefusal::RefusedAuthority {
+            agent: agent.to_string(),
+            origin: origin.map(str::to_string),
+        },
+        _ => crate::decide_door::DecideRefusal::UnknownOrigin(origin.unwrap_or("nope").to_string()),
+    }
+}
+
+#[test]
+fn provenance_refusals_map_to_their_posture_kinds_and_texts() {
+    let (kind, text, origin) = provenance_refusal(refusal("unknown-origin", "a1", Some("nope")));
+    assert_eq!(kind, "unknown-origin");
+    assert!(text.contains("mail origin 'nope' is unknown"), "{text}");
+    assert_eq!(origin, None);
+    let (kind, text, origin) = provenance_refusal(refusal("authority", "a1", None));
+    assert_eq!(kind, "authority");
+    assert!(
+        text.contains("cannot record under superuser authority"),
+        "{text}"
+    );
+    assert_eq!(origin, None);
+    let (kind, text, origin) =
+        provenance_refusal(refusal("origin-authority", "a1", Some("operator")));
+    assert_eq!(kind, "origin-authority");
+    assert!(text.contains("from operator origin"), "{text}");
+    assert_eq!(origin.as_deref(), Some("operator"));
+    let (kind, text, _) =
+        provenance_refusal(crate::decide_door::DecideRefusal::UnattributedAuthority);
+    assert_eq!(kind, "unattributed");
+    assert_eq!(text, "the provenance resolver refused");
+}
+
+#[test]
+fn provenance_remedy_lines_name_the_one_fix_per_kind() {
+    assert_eq!(provenance_remedy("unknown-origin", "nope"), "");
+    assert!(
+        provenance_remedy("unattributed", "").starts_with("This process has no session identity")
+    );
+    assert!(provenance_remedy("authority", "").contains("Drop --authority operator"));
+    let remedy = provenance_remedy("origin-authority", "operator");
+    assert!(
+        remedy.contains("The refusal is about the claimed --origin 'operator'"),
+        "{remedy}"
+    );
+}
+
+#[test]
+fn a_delivery_without_an_asker_names_the_lead_escalation_lane() {
+    let line = deliver_answer("q-d1", "ship?", "", None, "d-abc1", "yes");
+    assert_eq!(
+        line,
+        "outstanding: q-d1 answered; no asker on record (lead escalation), nobody to wake. Decision d-abc1; recover it via: fno backlog decisions"
+    );
+}
+
+#[test]
+fn the_delivery_stamp_and_exception_are_the_named_ones() {
+    assert_eq!(DELIVERY_SENDER, "fno/questions");
+    assert_eq!(
+        STYLE_EXCEPTION,
+        "operator answer verbatim: quoted decision text, not authored prose"
+    );
+}

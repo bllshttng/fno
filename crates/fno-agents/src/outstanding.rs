@@ -1025,7 +1025,7 @@ pub(crate) fn storage_root(cwd: &Path) -> PathBuf {
 
 /// This session's id: the target manifest's `fno_id` or `session_id`, else
 /// `CLAUDECODE_SESSION_ID`.
-fn session_id(cwd: &Path) -> Option<String> {
+pub(crate) fn session_id(cwd: &Path) -> Option<String> {
     let manifest = crate::state_path::resolve("target-state", cwd);
     if let Some(Ok(text)) = manifest.map(std::fs::read_to_string) {
         let mut lines = text.lines();
