@@ -1,4 +1,0 @@
-fno do target init: needs the footnote plugin (skills + hooks), which a bare `pip install fno` does not ship - the bundled CLI has no pipeline to bootstrap.
-Install the plugin and run from its checkout:
-  clone the footnote repo, then run `claude --plugin-dir /path/to/footnote`
-Or set CLAUDE_PLUGIN_ROOT / FNO_REPO_ROOT to an existing plugin checkout. (resolved, not on disk: <TMP>/empty-plugin/hooks/helpers/init-target-state.sh)

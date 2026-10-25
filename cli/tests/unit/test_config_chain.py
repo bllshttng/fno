@@ -22,6 +22,8 @@ def test_repo_loader_preserves_a_real_worktree_config_file(monkeypatch, tmp_path
     )
     monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "global.toml"))
     monkeypatch.delenv("FNO_CONFIG", raising=False)
+    # The hermetic env drops the canonical candidate this test reads.
+    monkeypatch.delenv("FNO_NO_CANONICAL_CONFIG", raising=False)
     monkeypatch.setattr(
         "fno.paths.resolve_canonical_worktree",
         lambda root=None, timeout=None: canonical,
