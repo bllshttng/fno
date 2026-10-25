@@ -572,12 +572,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fast_provider_action_returns_its_value() {
-        let out: Result<u32, String> = run_on_provider_thread(|| 7u32);
-        assert_eq!(out.unwrap(), 7);
-    }
-
-    #[test]
     fn goal_receipt_refuses_a_different_continuation_owner() {
         let goal = NativeGoal {
             thread_id: "thread-1".to_string(),

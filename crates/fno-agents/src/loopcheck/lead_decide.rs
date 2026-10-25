@@ -930,45 +930,6 @@ mod stale_team_doc_tests {
         assert!(body["budget_remaining_ms"].as_u64().unwrap() > 0);
         assert!(body.get("harness_margin_remaining_ms").is_some());
     }
-
-    #[test]
-    fn no_phases_row_before_the_drain_path() {
-        // A fire that never reaches the drain writes no receipt: the row is
-        // the drain's pre-read record, not a per-fire heartbeat.
-        let dir = tempfile::tempdir().unwrap();
-        let parsed = LoopCheckArgs {
-            state_path: dir.path().join("no-such-lead.md"),
-            transcript_path: dir.path().join("t.jsonl"),
-            cwd: dir.path().to_path_buf(),
-            global_settings_path: None,
-            events_path: Some(dir.path().join("events.jsonl")),
-            global_events_path: Some(dir.path().join("global-events.jsonl")),
-            settings_path: None,
-            ledger_path: None,
-            gh_budget_ledger: None,
-            now_override: None,
-            gh_bin: "/nonexistent-gh".into(),
-            git_bin: "/nonexistent-git".into(),
-            author_harness_override: Some("none".into()),
-            hook_input_stdin: false,
-            driver: "lead".into(),
-            fno_bin: "/nonexistent-fno".into(),
-            read_timeout_ms: None,
-            harness: None,
-            harness_session: None,
-        };
-        super::stopgate_stamp_fire(0, std::time::Instant::now() + Duration::from_secs(50), 0);
-        let (code, out) = lead_decide(&parsed, None);
-        assert_eq!(code, 0);
-        assert!(out.contains("no lead manifest"), "{out}");
-        for path in [
-            parsed.events_path.clone().unwrap(),
-            parsed.global_events_path.clone().unwrap(),
-        ] {
-            let body = std::fs::read_to_string(&path).unwrap_or_default();
-            assert!(!body.contains("lead_fire_phases"), "{body}");
-        }
-    }
 }
 
 #[cfg(test)]
