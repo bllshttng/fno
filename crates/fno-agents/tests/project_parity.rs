@@ -18,7 +18,7 @@
 
 use common::{assert_golden, Golden};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 mod common;
