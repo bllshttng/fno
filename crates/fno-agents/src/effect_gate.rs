@@ -346,17 +346,37 @@ pub fn authorized(cwd: &Path, principal: &str, effect_class: &str) -> bool {
     named(effect_class) || named("*")
 }
 
+/// Whether anyone at all may decide `effect_class`: the policy names a
+/// non-empty list for the class or the `*` wildcard. Unconfigured or empty,
+/// the decide door refuses every decision, so the hook refusal says so.
+fn policy_configured(cwd: &Path, effect_class: &str) -> bool {
+    let Some(entries) =
+        crate::agents_config::config_table_merged(cwd, &["approvals", "authorized_principals"])
+    else {
+        return false;
+    };
+    let named = |class: &str| {
+        entries
+            .get(class)
+            .and_then(|v| v.as_array())
+            .map(|list| !list.is_empty())
+            .unwrap_or(false)
+    };
+    named(effect_class) || named("*")
+}
+
 // -- The hook verdict --------------------------------------------------------
 
 /// The request a hook fire files for one mapped effect. The digest must be
 /// STABLE across unchanged retries, so the expiry is floored to the hour and
 /// the window rides 24 to 25 hours: a retry in the same hour re-reads the
 /// same request, and a boundary retry re-files (fail toward re-approval).
-/// ponytail: the 24h window is a constant; a config key waits for a second
-/// caller.
+/// The request binds the action, never the tool call: a retry mints a fresh
+/// tool_use_id, so an id derived from it would make every approval dead on
+/// arrival. ponytail: the 24h window is a constant; a config key waits for a
+/// second caller.
 pub fn hook_request(
     session: &str,
-    effect_id: &str,
     mapped: &MappedEffect,
     now: chrono::DateTime<chrono::Utc>,
 ) -> EffectRequest {
@@ -372,7 +392,7 @@ pub fn hook_request(
         principal_id: session.to_string(),
         work_order_id: "unclaimed".to_string(),
         attempt_id: session.to_string(),
-        effect_id: effect_id.to_string(),
+        effect_id: format!("tool-{}", &mapped.action_digest[..16]),
         effect_class: mapped.effect_class.to_string(),
         destination: mapped.destination.clone(),
         action_digest: mapped.action_digest.clone(),
@@ -404,13 +424,7 @@ pub fn judge(payload: &Value, cwd: &Path) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .unwrap_or("unknown-session");
-    let effect_id = payload
-        .get("tool_use_id")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("tool-{}", &mapped.action_digest[..16]));
-    let mut request = hook_request(session, &effect_id, &mapped, now);
+    let mut request = hook_request(session, &mapped, now);
     // request_id is not a bound field, so it may derive from the request
     // digest: two sessions making the same call file different digests, and
     // each needs its own request row rather than a UNIQUE clash on a shared
@@ -449,7 +463,18 @@ pub fn judge(payload: &Value, cwd: &Path) -> Option<String> {
     };
     match verdict(&conn, cwd, &digest, now) {
         Ok(true) => None,
-        Ok(false) => refusal(&digest, ""),
+        Ok(false) => {
+            // A fresh install names nobody under the policy, so the approve
+            // command this refusal suggests cannot decide. Say so and name
+            // the key, the same words the decide door prints.
+            let reason = if policy_configured(cwd, &mapped.effect_class) {
+                ""
+            } else {
+                " (no approval policy is configured: set \
+                 config.approvals.authorized_principals before deciding)"
+            };
+            refusal(&digest, reason)
+        }
         Err(e) => refusal(&digest, &format!(" (verdict unread: {e})")),
     }
 }
@@ -566,7 +591,7 @@ pub fn run_op(op: &str, payload: &Value) -> String {
                 .and_then(Value::as_str)
                 .unwrap_or("unknown-session");
             let now = chrono::Utc::now();
-            let request = hook_request(session, "door", &mapped, now);
+            let request = hook_request(session, &mapped, now);
             let digest = request.request_digest();
             match verdict(&conn, &cwd, &digest, chrono::Utc::now()) {
                 Ok(true) => json!({"verdict": "allow"}).to_string(),

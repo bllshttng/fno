@@ -8,7 +8,7 @@ use fno_agents::effect_gate::{
     default_db_path, hook_request, judge, map_tool_call, open_db, run_op, submit, verdict,
     EffectRequest,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 
 fn tmp_root(tag: &str) -> PathBuf {
@@ -157,16 +157,10 @@ fn hook_and_door_flows_refuse_recover_and_allow() {
     )
     .unwrap();
     let now = chrono::Utc.timestamp_opt(1787998200, 0).single().unwrap();
-    let a = hook_request("sess-1", "tool-1", &mapped, now);
+    let a = hook_request("sess-1", &mapped, now);
     assert_eq!(
         a.request_digest(),
-        hook_request(
-            "sess-1",
-            "tool-1",
-            &mapped,
-            now + chrono::Duration::minutes(3)
-        )
-        .request_digest()
+        hook_request("sess-1", &mapped, now + chrono::Duration::minutes(3)).request_digest()
     );
     let edited = map_tool_call(
         "mcp__claude_ai_Gmail__send_message",
@@ -175,7 +169,7 @@ fn hook_and_door_flows_refuse_recover_and_allow() {
     .unwrap();
     assert_ne!(
         a.request_digest(),
-        hook_request("sess-1", "tool-1", &edited, now).request_digest()
+        hook_request("sess-1", &edited, now).request_digest()
     );
 
     let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -308,4 +302,121 @@ fn hook_and_door_flows_refuse_recover_and_allow() {
         "allow"
     );
     assert!(run_op("effect-nonsense", &json!({})).contains("unknown op"));
+}
+
+fn publish_payload(root: &std::path::Path, db: &std::path::Path, tool_use_id: &str) -> Value {
+    json!({
+        "tool_name": "mcp__site__publish_page",
+        "tool_input": {"site": "acme", "page": "index"},
+        "session_id": "sess-9",
+        "tool_use_id": tool_use_id,
+        "cwd": root.display().to_string(),
+        "db": db.display().to_string(),
+    })
+}
+
+/// The repro: every real harness payload mints a fresh tool_use_id per call,
+/// so an approval keyed to the filed request must still admit the unchanged
+/// retry whose only difference is that id.
+#[test]
+fn approved_request_admits_a_retry_with_a_new_tool_use_id() {
+    let root = tmp_root("retry-tooluse");
+    write_config(&root, AUTHORIZED_CONFIG);
+    let db = root.join("approvals.db");
+    let payload = publish_payload(&root, &db, "toolu_first");
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("FNO_SPACES_DIR", root.join("spaces"));
+    let refusal = judge(&payload, &root).unwrap();
+    assert!(refusal.contains("needs approval"), "{refusal}");
+    let conn = open_db(&db).unwrap();
+    let digest: String = conn
+        .query_row("SELECT request_digest FROM requests", [], |row| row.get(0))
+        .unwrap();
+    seed_approved(&conn, &digest, "boss");
+    let retry = publish_payload(&root, &db, "toolu_second");
+    assert!(
+        judge(&retry, &root).is_none(),
+        "the approved retry must pass"
+    );
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM requests", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        count, 1,
+        "the retry re-read the same request, not a new one"
+    );
+    std::env::remove_var("FNO_SPACES_DIR");
+}
+
+/// A fresh install names nobody under the policy, so the approve command the
+/// refusal suggests cannot decide. The refusal says so and names the key.
+#[test]
+fn refusal_names_the_config_key_when_no_policy_is_configured() {
+    let root = tmp_root("no-policy");
+    let empty = root.join("empty.toml");
+    std::fs::write(&empty, "[approvals.authorized_principals]\n").unwrap();
+    let absent = root.join("absent.toml");
+    std::fs::write(&absent, "[unrelated]\nkey = 1\n").unwrap();
+    let configured = root.join("ok.toml");
+    std::fs::write(&configured, AUTHORIZED_CONFIG).unwrap();
+    struct PinRestore(Option<std::ffi::OsString>);
+    impl Drop for PinRestore {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("FNO_CONFIG", value),
+                None => std::env::remove_var("FNO_CONFIG"),
+            }
+        }
+    }
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _pin = PinRestore(std::env::var_os("FNO_CONFIG"));
+    std::env::set_var("FNO_SPACES_DIR", root.join("spaces"));
+    let case = |db: &str, refusal_has_hint: bool| {
+        let payload = publish_payload(&root, &root.join(db), "toolu_a");
+        let refusal = judge(&payload, &root).unwrap();
+        assert!(refusal.contains("needs approval"), "{refusal}");
+        assert_eq!(
+            refusal.contains("authorized_principals"),
+            refusal_has_hint,
+            "{refusal}"
+        );
+    };
+    std::env::set_var("FNO_CONFIG", &empty);
+    case("empty.db", true);
+    std::env::set_var("FNO_CONFIG", &absent);
+    case("absent.db", true);
+    std::env::set_var("FNO_CONFIG", &configured);
+    case("ok.db", false);
+    std::env::remove_var("FNO_SPACES_DIR");
+}
+
+/// The authorized-merge door reads the same request the hook filed: one
+/// approved request admits the action through both surfaces.
+#[test]
+fn effect_verdict_door_reads_the_request_the_hook_filed() {
+    let root = tmp_root("door");
+    write_config(&root, AUTHORIZED_CONFIG);
+    let db = root.join("approvals.db");
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::set_var("FNO_SPACES_DIR", root.join("spaces"));
+    let payload = publish_payload(&root, &db, "toolu_first");
+    assert!(judge(&payload, &root).is_some());
+    let conn = open_db(&db).unwrap();
+    let digest: String = conn
+        .query_row("SELECT request_digest FROM requests", [], |row| row.get(0))
+        .unwrap();
+    seed_approved(&conn, &digest, "boss");
+    let out = run_op(
+        "effect-verdict",
+        &json!({
+            "tool_name": "mcp__site__publish_page",
+            "tool_input": {"site": "acme", "page": "index"},
+            "session": "sess-9",
+            "cwd": root.display().to_string(),
+            "db": db.display().to_string(),
+        }),
+    );
+    let receipt = serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    assert_eq!(receipt["verdict"], "allow", "{out}");
+    std::env::remove_var("FNO_SPACES_DIR");
 }
