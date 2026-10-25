@@ -855,9 +855,8 @@ mod stale_team_doc_tests {
     #[test]
     fn a_spent_fire_skips_the_transcript_gates() {
         // The identical fixture unspent blocks (the test above); a spent
-        // fire takes the fail-open silence BEFORE the scan, so the drain's
-        // slice is never spent on a transcript read. The reserve literal is
-        // the production 16s.
+        // fire takes the fail-open silence before scanning. 16_000 is the
+        // production reserve.
         let tmp = tempfile::tempdir().unwrap();
         let transcript = write_transcript(tmp.path(), "t.jsonl", 4);
         let handoffs = tmp.path().join("handoffs");
