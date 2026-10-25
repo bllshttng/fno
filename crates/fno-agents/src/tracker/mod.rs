@@ -1,13 +1,14 @@
 //! The work-item tracker seam: one interface, the graph, GitHub and Linear
 //! backends, and the stdin JSON door on `graph-get` that serves them.
 //!
-//! The Python seam (`cli/src/fno/tracker/`) was the only implementation of
-//! this surface, and `cli/src/fno` bars new Python, so the seam lives here and
-//! Python became a thin exec client. A backend is one file implementing
-//! [`Tracker`] plus one arm in [`backend`]; refusals ride in the door's JSON
-//! payload with exit 0, the same contract `gh_budget` uses on
-//! `fleet-incident`, so the Python `command_call` never mistakes a refusal for a
-//! crash.
+//! The Python seam (`cli/src/fno/tracker/`) is deleted: every verb it
+//! answered now answers here, and the Python callers ride the door through
+//! the small client helpers in `cli/src/fno/rust_binary.py` (backend name,
+//! sidecar get/all/set) plus the guarded graph read in `fno/graph/api.py`.
+//! A backend is one file implementing [`Tracker`] plus one arm in
+//! [`backend`]; refusals ride in the door's JSON payload with exit 0, the
+//! same contract `gh_budget` uses on `fleet-incident`, so a caller never
+//! mistakes a refusal for a crash.
 //!
 //! A new top-level command is not allowed (law d-fe66560a), so the door rides the
 //! existing `graph-get` action: no positional ids plus a non-terminal stdin
@@ -88,6 +89,26 @@ pub trait Tracker {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         sidecar::load(&sidecar::root(&cwd), id)
     }
+    /// Every id's sidecar fields: the scan primitive the whole-store readers
+    /// call. Default: the per-id files in the sidecar root. The graph backend
+    /// projects its rows instead (archived residents excluded, invalid
+    /// projections skipped).
+    fn sidecar_all(&self) -> Result<Vec<(String, serde_json::Map<String, Value>)>, TrackerError> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        Ok(sidecar::load_all_files(&sidecar::root(&cwd)))
+    }
+    /// Merge `fields` into the id's sidecar under the backend's own store.
+    /// Default: the per-id file. The graph backend merges into the graph row
+    /// through the store's optimistic write cycle, refusing not_found on a
+    /// missing row.
+    fn set_sidecar(
+        &self,
+        id: &str,
+        fields: &serde_json::Map<String, Value>,
+    ) -> Result<std::path::PathBuf, TrackerError> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        sidecar::save(&sidecar::root(&cwd), id, fields)
+    }
     fn close(&self, id: &str) -> Result<(), TrackerError>;
 }
 
@@ -160,20 +181,36 @@ pub fn run_door(payload: &Value) -> Value {
             },
             None => error_value(&TrackerError::Refused("close needs an id".into())),
         },
+        "sidecar-get" => {
+            let Some(id) = id else {
+                return error_value(&TrackerError::Refused("sidecar-get needs an id".into()));
+            };
+            match tracker.sidecar(id) {
+                Ok(fields) => json!({ "sidecar": sidecar::served_shape(id, Some(fields)) }),
+                Err(e) => error_value(&e),
+            }
+        }
+        "sidecar-all" => {
+            let all = match tracker.sidecar_all() {
+                Ok(all) => all,
+                Err(e) => return error_value(&e),
+            };
+            let mut map = serde_json::Map::new();
+            for (sid, fields) in all {
+                map.insert(
+                    sid,
+                    Value::Object(sidecar::served_shape(&sid, Some(fields))),
+                );
+            }
+            json!({ "sidecars": map })
+        }
         "sidecar-set" => {
             let fields = payload.get("fields").and_then(Value::as_object);
             match (id, fields) {
-                (Some(id), Some(fields)) => {
-                    let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-                    let saved = match payload.get("path").and_then(Value::as_str) {
-                        Some(path) => sidecar::save_at(std::path::Path::new(path), id, fields),
-                        None => sidecar::save(&sidecar::root(&cwd), id, fields),
-                    };
-                    match saved {
-                        Ok(path) => json!({ "saved": path }),
-                        Err(e) => error_value(&e),
-                    }
-                }
+                (Some(id), Some(fields)) => match tracker.set_sidecar(id, fields) {
+                    Ok(path) => json!({ "saved": path }),
+                    Err(e) => error_value(&e),
+                },
                 _ => error_value(&TrackerError::Refused(
                     "sidecar-set needs an id and a fields object".into(),
                 )),
