@@ -235,10 +235,8 @@ pub fn grade(
         ));
     }
     let rows = read_sources(&sidecar_path).map_err(|e| {
-        format!(
-            "failed to read sources sidecar {}: {e}",
-            sidecar_path.display()
-        )
+        let sc = sidecar_path.display().to_string();
+        format!("failed to read sources sidecar {sc}: {e}")
     })?;
     let sidecar_urls: std::collections::HashSet<&str> =
         rows.iter().map(|r| r.url.as_str()).collect();

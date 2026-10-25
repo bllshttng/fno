@@ -126,14 +126,12 @@ fn make_disposable_worktree(
 ) -> Result<std::path::PathBuf, String> {
     let base = evals_worktree_base();
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
-    let name = format!(
-        "{tag}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
-    );
+    let pid = std::process::id();
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let name = format!("{tag}-{pid}-{millis}");
     let path = base.join(name);
     let out = std::process::Command::new("git")
         .args(["worktree", "add", "--detach"])
@@ -287,9 +285,9 @@ pub fn resolve_lane(name: &str) -> Result<LaneRow, String> {
             .unwrap_or_default();
         names.sort();
         let joined: Vec<String> = names.iter().map(|n| format!("'{n}'")).collect();
+        let declared = joined.join(", ");
         return Err(format!(
-            "unknown lane '{name}'; declared lanes: [{}]",
-            joined.join(", ")
+            "unknown lane '{name}'; declared lanes: [{declared}]"
         ));
     };
     Ok(LaneRow {

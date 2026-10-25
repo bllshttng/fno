@@ -20,15 +20,14 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
     let Some(task) = tasks.iter().find(|t| t.id == task_id) else {
-        eprintln!("Error: no bank task '{task_id}' in {}", bank_dir.display());
+        let bank = bank_dir.display().to_string();
+        eprintln!("Error: no bank task '{task_id}' in {bank}");
         return 1;
     };
     match graduate_task_file(&task.source_path) {
         Ok(()) => {
-            println!(
-                "graduated '{task_id}' -> regression ({})",
-                task.source_path.display()
-            );
+            let source = task.source_path.display().to_string();
+            println!("graduated '{task_id}' -> regression ({source})");
             0
         }
         Err(text) => {

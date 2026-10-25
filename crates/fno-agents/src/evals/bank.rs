@@ -81,12 +81,11 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
         )));
     };
     let id = id.to_string();
+    let where_ = path.display().to_string();
     let tier = map.get(serde_yaml_ng::Value::String("tier".into()));
     let tier = tier.and_then(|v| v.as_str()).unwrap_or("");
-    let tiers = format!(
-        "task '{id}' ({0}): tier must be one of {VALID_TIERS_REPR}, got '{tier}'",
-        path.display()
-    );
+    let tiers =
+        format!("task '{id}' ({where_}): tier must be one of {VALID_TIERS_REPR}, got '{tier}'");
     require(tier == "capability" || tier == "regression", tiers)?;
 
     let mut prompt: Option<String> = map
@@ -113,10 +112,7 @@ pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
     let timeout = timeout.and_then(|v| v.as_i64()).unwrap_or(15);
     require(
         timeout > 0,
-        format!(
-            "task '{id}' ({0}): 'timeout_minutes' must be a positive int",
-            path.display()
-        ),
+        format!("task '{id}' ({where_}): 'timeout_minutes' must be a positive int"),
     )?;
     let tags: Vec<String> = map
         .get(serde_yaml_ng::Value::String("tags".into()))
@@ -223,10 +219,9 @@ pub fn warn_if_decorative(task_id: &str, path: &std::path::Path, checks: &[Grade
                     .unwrap_or(false)
         });
     if all_trivial {
+        let where_ = path.display().to_string();
         eprintln!(
-            "WARNING: bank task '{task_id}' ({}): every grade check is a trivial exit-only command ({}); this task always passes and grades nothing task-specific.",
-            path.display(),
-            TRIVIAL_COMMANDS_REPR,
+            "WARNING: bank task '{task_id}' ({where_}): every grade check is a trivial exit-only command ({TRIVIAL_COMMANDS_REPR}); this task always passes and grades nothing task-specific."
         );
     }
 }

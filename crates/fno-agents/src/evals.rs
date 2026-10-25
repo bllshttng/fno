@@ -270,10 +270,8 @@ fn run_verb(rest: &[String]) -> i32 {
     let total_runs = selected.len() as u32 * repeat;
     let yes = rest.iter().any(|a| a == "--yes" || a == "-y");
     if total_runs > 20 && !yes {
-        println!(
-            "About to run {} task(s) x {repeat} = {total_runs} live runs.",
-            selected.len()
-        );
+        let count = selected.len();
+        println!("About to run {count} task(s) x {repeat} = {total_runs} live runs.");
         print!("Proceed? [y/N]: ");
         use std::io::Write as _;
         let _ = std::io::stdout().flush();
