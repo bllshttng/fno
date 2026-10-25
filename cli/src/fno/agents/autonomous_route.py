@@ -61,7 +61,7 @@ def launch_is_pinned(
     ):
         return True
     try:
-        from fno.rust_binary import CommandUnavailable, command_call
+        from fno.rust_binary import command_call
 
         # One read for the whole configured-harness rung: the stage table with
         # the deprecated dispatch.harness folded beneath it, so a launch routed
