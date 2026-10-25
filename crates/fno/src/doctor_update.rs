@@ -1055,6 +1055,13 @@ pub(crate) fn component_lines(report: Option<&Value>, prefix: &str) -> Vec<Strin
         .unwrap_or_default()
 }
 
+/// The 12-char display form of a build rev, shared by the side-by-side
+/// lines. A plain fn, not a closure: elision names the returned lifetime
+/// here, where a closure's inferred type cannot.
+fn short_rev(rev: &str) -> &str {
+    &rev[..rev.len().min(12)]
+}
+
 /// The component name and self-reported build rev of every cargo row whose
 /// probe answered. The python-tool row stays out: its marker carries the
 /// source HEAD the wheel installed from, not the crates/ rev the cargo rows
@@ -1086,7 +1093,6 @@ pub(crate) fn mixed_component_line(components: Option<&Value>) -> Option<String>
     let revs = component_build_revs(components);
     let (_, first) = revs.first()?;
     let (_, other) = revs.iter().find(|(_, rev)| rev != first)?;
-    let short = |r: &str| &r[..r.len().min(12)];
     let at = |rev: &str| -> String {
         revs.iter()
             .filter(|(_, r)| r == rev)
@@ -1097,9 +1103,9 @@ pub(crate) fn mixed_component_line(components: Option<&Value>) -> Option<String>
     Some(format!(
         "mixed component builds: {} at {} vs {} at {}",
         at(first),
-        short(first),
+        short_rev(first),
         at(other),
-        short(other)
+        short_rev(other)
     ))
 }
 
@@ -1118,12 +1124,12 @@ pub(crate) fn revisions_summary(
     if !build_revs.is_empty() {
         let named: Vec<String> = build_revs
             .iter()
-            .map(|(n, r)| format!("{n} {}", short(r)))
+            .map(|(n, r)| format!("{n} {}", short_rev(r)))
             .collect();
         parts.push(format!("build revs: {}", named.join(", ")));
     }
     if let Some(pin) = pin {
-        parts.push(format!("crates/ pin {}", short(pin)));
+        parts.push(format!("crates/ pin {}", short_rev(pin)));
     }
     Some(parts.join("; "))
 }
@@ -3096,8 +3102,8 @@ pub(crate) fn update_readiness(source: Option<&Path>) -> Value {
         .unwrap_or(Value::Null),
         _ => Value::Null,
     };
-    let build_revs = component_build_revs(components.as_ref());
-    let mixed_line = mixed_component_line(components.as_ref());
+    let build_revs = component_build_revs(Some(&components));
+    let mixed_line = mixed_component_line(Some(&components));
     let summary = revisions_summary(&build_revs, subtree.as_deref());
     let observed: serde_json::Map<String, Value> = build_revs
         .into_iter()
