@@ -10,7 +10,6 @@
 # L1 install and prove it
 version
 doctor
-setup wizard
 config doctor
 update
 restart

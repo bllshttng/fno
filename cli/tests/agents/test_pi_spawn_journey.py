@@ -278,11 +278,15 @@ def test_AC1_HP_the_spawn_seam_journey_on_a_real_pi_thread(
     monkeypatch.setenv("USERPROFILE", str(real_home))
 
     # Install the shipped extension through the REAL integration arm - the
-    # same code `fno config setup` runs. Snapshot first so the finally can
-    # restore exactly what was there.
+    # same fno-agents door auto-wire runs. Snapshot first so the finally can
+    # restore exactly what was there; the door's own status receipt names
+    # the destination.
+    from fno.rust_binary import call_binary_json
     from fno.setup import integration as I
 
-    dest = I._pi_extension_dest()
+    _err, status = call_binary_json("plugin-install", ["pi", "--status", "--json"])
+    assert status and status.get("dest"), f"the pi status door named no dest: {_err}"
+    dest = Path(status["dest"])
     pre_text = dest.read_text(encoding="utf-8") if dest.exists() else None
     install_res = I._pi_install()
     assert install_res.ok, f"the pi extension install failed: {install_res.note}"

@@ -63,7 +63,7 @@ platform_wheel_notice() {
 }
 # Printed after a successful install so a new user knows the one configuration
 # step exists (install never prompts). Optional: defaults work without it.
-next_steps() { log "Next: run 'fno setup wizard' to configure (optional; defaults work)."; }
+next_steps() { log "Next: run 'fno do wizard' to configure (optional; defaults work)."; }
 
 if [[ ! -f "$CLI_DIR/pyproject.toml" ]]; then
   err "expected cli/ at $CLI_DIR but pyproject.toml is missing."
