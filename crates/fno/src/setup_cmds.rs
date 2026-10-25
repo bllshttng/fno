@@ -210,12 +210,18 @@ pub fn scaffold(io: &mut dyn Io, repo_name: &str) -> Outcome {
 /// The terminal and `fno` side of [`Io`].
 struct Terminal {
     exe: PathBuf,
+    root: PathBuf,
 }
 
 impl Terminal {
+    /// Every child runs in `root` with `FNO_REPO_ROOT` pinned to it. The
+    /// readiness read resolves the repo from git at its cwd, and `config set`
+    /// resolves it from the env, so both must name the same repo.
     fn fno(&self, args: &[&str]) -> std::io::Result<std::process::Output> {
         std::process::Command::new(&self.exe)
             .args(args)
+            .current_dir(&self.root)
+            .env("FNO_REPO_ROOT", &self.root)
             .stdin(std::process::Stdio::null())
             .output()
     }
@@ -292,7 +298,7 @@ fn run_post_merge(rest: &[OsString]) -> i32 {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno"));
     let root = crate::setup_run::repo_root();
     let name = repo_name(&root);
-    let mut term = Terminal { exe };
+    let mut term = Terminal { exe, root };
     match scaffold(&mut term, &name) {
         Outcome::Written(_) => {
             // The fresh verdict line, so the person sees the gate turn ready.
