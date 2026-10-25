@@ -92,6 +92,14 @@ pub(crate) fn build_codex_thread_entry(
         requested_provider: None,
         requested_effort: effort.filter(|v| !v.is_empty()).map(str::to_string),
         harness: Some("codex".into()),
+        // The seed the thread was started with, verbatim from the request, so
+        // the attended guard can exempt the machine's own spawn turn by exact
+        // match. An empty seed records nothing, as the other mints do.
+        spawn_payload: spawn_params
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .filter(|m| !m.is_empty())
+            .map(str::to_string),
         predecessor_session_ids: Vec::new(),
         forked_from_session_id: None,
         // non-claude harness; the account axis does not apply.

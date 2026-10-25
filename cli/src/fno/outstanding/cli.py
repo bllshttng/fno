@@ -13,8 +13,7 @@ from typing import List
 
 import typer
 
-from fno.lead.lane import read_lane
-from fno.outstanding.core import OutstandingError, collect, render
+from fno.outstanding.core import OutstandingError
 from fno.outstanding.mine import mine_app
 from fno.user import display_name
 
@@ -87,70 +86,14 @@ def _session_id() -> "str | None":
     return env_session.strip() if env_session and env_session.strip() else None
 
 
-def _is_promoted() -> bool:
-    """True only when this session's registry row carries a role.
-
-    ``FNO_AGENT_SELF`` (tier 1 of ``resolve_self``) answers with no
-    session-id dependency, which is what lets a spawned lead resolve this at
-    session start before the harness has written anything else. Any
-    exception degrades to "not promoted" and never fails the command:
-    `fno outstanding` runs on the session-start path under a bound, and
-    degrading this way costs one missing action line, not a missing lane.
-    """
-    try:
-        from fno.agents.registry import RegistryVersionError, load_registry
-        from fno.agents.whoami import resolve_self
-        from fno.harness_identity import resolve_harness_identity
-
-        registry: list = []
-        try:
-            registry = load_registry()
-        except RegistryVersionError:
-            pass
-        # READ-ONLY (LD5): resolves the role holder to display it.
-        ident = resolve_harness_identity()
-        result = resolve_self(
-            env=os.environ,
-            registry=registry,
-            session_uuid=ident.session_id,
-            harness=ident.harness,
-        )
-    except Exception:  # noqa: BLE001 - an unresolved role is not an error here
-        return False
-    return result.role is not None
-
-
 @outstanding_app.callback(invoke_without_command=True)
-def report(
-    ctx: typer.Context,
-    as_json: bool = typer.Option(
-        False,
-        "--json",
-        "-J",
-        help="Emit one JSON object carrying both legs instead of the human block.",
-    ),
-) -> None:
-    """Report unharvested carve-outs and open operator questions."""
+def report(ctx: typer.Context) -> None:
+    """Report what is outstanding for you (bare form and --json run natively)."""
     if ctx.invoked_subcommand is not None:
         return
-
-    root = _storage_root()
-    try:
-        outstanding = collect(root, lane=read_lane())
-    except OutstandingError as exc:
-        # A present-but-unreadable store is a FAILED read, never "nothing
-        # outstanding": reporting an empty queue here would tell the operator
-        # the pile is clear when it is merely unreadable.
-        typer.echo(f"outstanding: failed to read: {exc}", err=True)
-        raise typer.Exit(1)
-
-    if as_json:
-        typer.echo(json.dumps(outstanding.as_dict(), separators=(",", ":")))
-        return
-
-    block = render(outstanding, session_id=_session_id(), promoted=_is_promoted())
-    if block:
-        typer.echo(block, nl=False)
+    # The front door runs the listing in fno-agents and forwards only the
+    # commands here, so a bare call that reaches Python prints the group help.
+    typer.echo(ctx.get_help())
 
 
 def _law_rows() -> "list[dict]":

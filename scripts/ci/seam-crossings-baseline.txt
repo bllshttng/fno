@@ -33,6 +33,7 @@ crossing	crates/fno-agents/src/daemon.rs	let mut child = match std::process::Com
 crossing	crates/fno-agents/src/daemon.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/daemon/fleet_arms.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/daemon/fleet_arms.rs	std::process::Command::new(crate::scrape::fno_bin())
+crossing	crates/fno-agents/src/daemon/fleet_arms.rs	std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/delivery_completion.rs	let fno_bin = crate::loopcheck::loopcheck_fno_bin();
 crossing	crates/fno-agents/src/distress.rs	std::ffi::OsStr::new(&loopcheck_fno_bin()),
 crossing	crates/fno-agents/src/finalize.rs	let mut command = Command::new(crate::scrape::fno_bin());
@@ -122,7 +123,7 @@ crossing	crates/fno/src/server/agent_launch.rs	let fno = super::fno_bin().displa
 crossing	crates/fno/src/yard_overlay.rs	fn fno_bin() -> PathBuf {
 crossing	crates/fno/src/yard_overlay.rs	crate::server::fno_bin()
 crossing	crates/fno/src/yard_overlay.rs	let mut command = crate::process_admission::tokio_command(fno_bin());
-resolver	crates/fno-agents/src/backlog/triage.rs	pub fn inbox_markdown_path() -> Option<std::path::PathBuf> {
+resolver	crates/fno-agents/src/backlog/triage.rs	pub fn inbox_markdown_path_at(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
 resolver	crates/fno-agents/src/board_render_arm.rs	fn run_render_pass_within(deadline: Duration) -> Result<(), (i32, String)> {
 resolver	crates/fno-agents/src/census.rs	fn resolve_fno() -> Option<PathBuf> {
 resolver	crates/fno-agents/src/harness_reader.rs	pub fn establish(harness: &str) -> Result<IsolatedRoot, String> {

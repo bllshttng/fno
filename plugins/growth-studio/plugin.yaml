@@ -1,6 +1,6 @@
 # Function-pack manifest for the growth studio.
 #
-# This is content, not code: nothing in cli/src/fno/plugins/ branches on the pack
+# This is content, not code: nothing in crates/fno-agents/src/plugins/ branches on the pack
 # id or on any function name below. The pack is discovered by path and validated
 # by schema. Every role declares approval_floor founder for external publication
 # and an authority_ceiling no higher than internal for drafting, so a higher layer

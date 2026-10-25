@@ -7,6 +7,14 @@
 
 use super::*;
 
+// Declared here, not in daemon.rs: that file is over its line budget and
+// may only shrink. This arm block plus this declaration is the sweep's
+// whole wiring footprint. The #[path] pins resolution beside the sibling
+// daemon modules: a mod declared in fleet_arms.rs otherwise looks for a
+// fleet_arms/ child directory, and the packaged crate fails with E0583.
+#[path = "shell_writers_sweep.rs"]
+pub(crate) mod shell_writers_sweep;
+
 /// Arm state used only by the tick arms. The idle-probe locals
 /// (`idle_probe_in_flight`, `idle_probe_verdict`, `drift_flag`) stay in
 /// `run()`: they serve the idle-exit tail, not the fleet.
@@ -76,6 +84,15 @@ pub(super) struct FleetArms {
     // only new transcript bytes since its offset state, so an extra run is
     // cheap; the gate exists so a large first-contact scan never stacks.
     sandbox_ingest_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Codex folder-trust auto-answer: same one-in-flight discipline. The
+    // pass reads one mux listing plus one grid per joined pane, so an extra
+    // run is cheap; the gate exists so a slow scrape never stacks.
+    trust_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Legacy shell-writer rendezvous sweep: same one-in-flight discipline.
+    // The pass is a few read_dir walks over the state root and the spaces,
+    // so an extra run is cheap; the gate exists so a machine carrying the
+    // full leaked residue never stacks unbounded passes.
+    shell_writers_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The merged-cleanup command the sweep arm runs, shared by the apply
@@ -141,6 +158,8 @@ impl FleetArms {
             stale_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             park_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             sandbox_ingest_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            trust_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shell_writers_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -446,6 +465,42 @@ impl FleetArms {
             tokio::task::spawn_blocking(move || {
                 let _gate = SweepGate(flag);
                 sandbox_ingest::sandbox_ingest(&home, &emitter, now_epoch_secs());
+            });
+        }
+        // Codex folder-trust auto-answer: the arm beside the other sweeps
+        // (same one-in-flight shape, doc comment on the sweep body). The run
+        // closure presses the modal's first option through the pane.
+        if !self
+            .trust_sweep_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.trust_sweep_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                sweeps::trust_answer_sweep(&home, &emitter, now_epoch_secs(), &|pane, key| {
+                    std::process::Command::new(crate::scrape::fno_bin())
+                        .args(["mux", "pane", "send", &pane.to_string(), "--raw", key])
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false)
+                });
+            });
+        }
+        // Legacy shell-writer rendezvous sweep: hourly, off-loop. The module
+        // owns its cadence and stamp, the siblings' shape; the residue is
+        // static, so the pass is a quiet no-op on current machines.
+        if !self
+            .shell_writers_sweep_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.shell_writers_sweep_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                shell_writers_sweep::shell_writers_sweep(&home, &emitter, now_epoch_secs());
             });
         }
         crate::question_sweep::daemon_tick(&ctx.home, now_epoch_secs());

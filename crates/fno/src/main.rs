@@ -318,6 +318,10 @@ enum Role {
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
     AccountsCli(Vec<OsString>),
+    /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
+    /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
+    /// The bool is the moved spelling, which prints its one stderr note.
+    PluginsCli(Vec<OsString>, bool),
     /// `fno backlog ...`: the whole backlog namespace execs the sibling Rust
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
@@ -343,6 +347,9 @@ enum Role {
     /// `fno inbox user|operator status`: the native queue read; the carried
     /// tail is the `fno-agents compaction` argv.
     InboxUser(Vec<OsString>),
+    /// `fno inbox outstanding [--json|-J]`: the native listing; the carried
+    /// tail is the `fno-agents compaction outstanding` argv.
+    InboxOutstanding(Vec<OsString>),
     /// `fno board-render`: the local board's snapshot writer, a native front
     /// command because the page and the read model both live in this crate.
     BoardRender(Vec<String>),
@@ -535,6 +542,14 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
         return None;
     }
     Some(args[2..].to_vec())
+}
+
+/// `fno config plugins ...` or `fno plugins ...`: the args after the group.
+fn classify_plugins(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
+    if args.first()?.to_str()? == "plugins" {
+        return Some((args[1..].to_vec(), true));
+    }
+    classify_group_command(args, "config", "plugins").map(|rest| (rest, false))
 }
 
 /// `fno agents claim backlog|export ...`: the shared-store commands live only
@@ -787,6 +802,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
     }
+    if let Some((rest, moved)) = classify_plugins(args) {
+        return Role::PluginsCli(rest, moved);
+    }
     if let Some(rest) = fno::doctor_update::classify(args) {
         return Role::DoctorUpdate(rest);
     }
@@ -909,6 +927,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::law_cli::classify_inbox_decide(args) {
         return Role::InboxDecide(rest);
+    }
+    if let Some(rest) = fno::inbox_user::classify_inbox_outstanding(args) {
+        return Role::InboxOutstanding(rest);
     }
     if let Some(argv) = fno::inbox_user::classify_inbox_user(args)
         .or_else(|| fno::inbox_user::classify_inbox_peers(args))
@@ -1221,6 +1242,16 @@ fn main() {
             &["spawn-overlay", "accounts"],
             &rest,
         )),
+        Role::PluginsCli(rest, moved) => {
+            if moved {
+                eprintln!("fno plugins is now fno config plugins");
+            }
+            std::process::exit(fno_agents_exec(
+                "fno config plugins",
+                &["spawn-overlay", "plugins"],
+                &rest,
+            ))
+        }
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
         Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),
@@ -1409,6 +1440,11 @@ fn main() {
         Role::InboxUser(argv) => {
             std::process::exit(fno_agents_exec("fno inbox", &["compaction"], &argv))
         }
+        Role::InboxOutstanding(rest) => std::process::exit(fno_agents_exec(
+            "fno inbox outstanding",
+            &["compaction", "outstanding"],
+            &rest,
+        )),
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
         Role::MuxStats(json) => std::process::exit(mux_cli::stats(json)),
         Role::MuxNotify(title, message, json) => {
@@ -1870,6 +1906,19 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["agents", "roles", "promote"]), false),
             Role::Forward
+        );
+        // The function-pack group is native whole, under both spellings.
+        assert_eq!(
+            decide_role(&os(&["config", "plugins", "-J", "ls"]), false),
+            Role::PluginsCli(os(&["-J", "ls"]), false)
+        );
+        assert_eq!(
+            decide_role(&os(&["plugins", "verify", "p"]), false),
+            Role::PluginsCli(os(&["verify", "p"]), true)
+        );
+        assert_ne!(
+            decide_role(&os(&["config", "plugin", "claude"]), false),
+            Role::PluginsCli(os(&["claude"]), false)
         );
     }
 

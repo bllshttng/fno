@@ -42,14 +42,14 @@ fn xml_block<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
     Some(body.trim())
 }
 
-/// True when a CommandInvocation turn's text is the row's recorded spawn
-/// payload: the machine's seed, never a person's turn. Two shapes on the
-/// wire - the raw payload (harnesses that log the prompt verbatim) and
-/// claude's rendering of a seeded slash command, where the payload's first
-/// token becomes `<command-name>` and the remainder lands inside
-/// `<command-args>`. Compared on the reminder-stripped text the classifier
-/// reads; anything subtler fails open, keeping today's hold rather than
-/// exempting a turn a person typed.
+/// True when a typed turn's text is the row's recorded spawn payload: the
+/// machine's seed, never a person's turn. Two shapes on the wire - the raw
+/// payload (harnesses that log the prompt verbatim) and claude's rendering
+/// of a seeded slash command, where the payload's first token becomes
+/// `<command-name>` and the remainder lands inside `<command-args>`.
+/// Compared on the reminder-stripped text the classifier reads; anything
+/// subtler fails open, keeping today's hold rather than exempting a turn a
+/// person typed.
 fn is_spawn_seed_turn(text: &str, seed: &str) -> bool {
     let text = crate::provenance::system_reminder_re()
         .replace_all(text, "")
@@ -105,12 +105,14 @@ fn typed_age_in_file(
             continue;
         }
         let prov = classify_turn(&obj, bus, session);
-        if matches!(prov, Provenance::Harness(HarnessKind::CommandInvocation))
-            && spawn_payload.is_some_and(|seed| is_spawn_seed_turn(&turn_text(&obj), seed))
-        {
+        if !typed(prov) {
             continue;
         }
-        if !typed(prov) {
+        // The recorded seed exempts the machine's own turn on every typed
+        // shape: a prose brief classifies Unknown, not CommandInvocation, and
+        // the exact match below is what proves it the machine's, so the
+        // classified kind never gates the comparison.
+        if spawn_payload.is_some_and(|seed| is_spawn_seed_turn(&turn_text(&obj), seed)) {
             continue;
         }
         let Some(ts) = turn_ts_epoch(&obj) else {
@@ -125,8 +127,8 @@ fn typed_age_in_file(
 /// Age in seconds of the newest typed user turn across `paths`, `None`
 /// when no transcript holds one. A row without a parseable timestamp
 /// cannot testify; a future stamp reads as now. `spawn_payload` is the
-/// row's recorded seed: a CommandInvocation turn matching it is the
-/// machine's spawn payload, never a person, and never holds.
+/// row's recorded seed: a typed turn matching it is the machine's spawn
+/// payload, never a person, and never holds.
 pub(crate) fn newest_typed_turn_age_s(
     paths: &[PathBuf],
     bus: &BusIndex,
@@ -333,6 +335,43 @@ mod tests {
             newest_typed_turn_age_s(&[person_path], &bus, "w", now, Some(seed)),
             Some(30),
             "a hand-run command that is not the seed still counts as the operator"
+        );
+    }
+
+    #[test]
+    fn a_prose_seed_never_holds_once_the_row_records_it() {
+        // A thread worker seeded with a prose brief classifies Unknown, not
+        // CommandInvocation: the exemption must ride the recorded payload's
+        // exact match, not the classified kind. Unrecorded, the same turn
+        // keeps today's hold - the honest residual for a row that cannot
+        // prove which turns were the machine's.
+        let dir = tempfile::tempdir().unwrap();
+        let now = crate::daemon::now_epoch_secs();
+        let ts = |age: i64| {
+            chrono::DateTime::from_timestamp(now - age, 0)
+                .unwrap()
+                .to_rfc3339()
+        };
+        let seed = "Build the node from its details in one PR; report when blocked.";
+        let path = dir.path().join("seeded.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n",
+                json!({"type":"user","timestamp":ts(60),"message":{"role":"user","content":seed}})
+            ),
+        )
+        .unwrap();
+        let bus = BusIndex::empty();
+        assert_eq!(
+            newest_typed_turn_age_s(&[path.clone()], &bus, "w", now, Some(seed)),
+            None,
+            "the recorded prose seed is the machine's own turn"
+        );
+        assert_eq!(
+            newest_typed_turn_age_s(&[path], &bus, "w", now, None),
+            Some(60),
+            "with no recorded seed the prose turn still holds"
         );
     }
 }

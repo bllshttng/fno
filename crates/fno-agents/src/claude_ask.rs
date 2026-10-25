@@ -3370,6 +3370,12 @@ fn create(
         // session by hand" is no, and saying so beats leaving an absence a
         // later reader has to guess at.
         origin: Some("spawn".to_string()),
+        // The seed as bg_create renders it for claude, so the attended guard
+        // can exempt the machine's own spawn turn by exact match: without it
+        // a fresh thread worker holds as attended until the window expires.
+        // An empty payload records nothing, as the pane mint does.
+        spawn_payload: (!message.is_empty())
+            .then(|| crate::provider::render_command_seed(message, "claude")),
         spawn_trigger: None,
         // The required identity/lineage args ride the struct-update base below.
         // The session id itself is NOT folded into it: a bounded miss is a

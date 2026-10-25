@@ -100,11 +100,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Evaluate generic delivery evidence.",
         {"hidden": True},
     ),
-    "plugins": (
-        "fno.plugins.cli:plugins_app",
-        "Install, verify, activate, and inspect function packs.",
-        {"hidden": True},
-    ),
     "mail": (
         "fno.mail.cli:mail_app",
         "Durable polled mailbox: send/unread/ack/reply/drain/status.",
@@ -305,7 +300,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "observer": set(),
     "paths": set(),
     "plan": set(),
-    "plugins": set(),
     "pr-watch": set(),
     "resume": set(),
     "retro": set(),

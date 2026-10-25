@@ -250,6 +250,32 @@ fn build_codex_thread_entry_stamps_the_launch_posture() {
     assert_eq!(modeled.route_provider_id.as_deref(), Some("openai"));
     assert_eq!(modeled.model_name.as_deref(), Some("gpt-5.6-sol"));
     assert_eq!(modeled.account_record_id.as_deref(), Some("default"));
+    // The seed rides the row for the attended guard's exemption: a request
+    // message lands verbatim, and a request without one records absence -
+    // every row built above ran Null params, which is that absent shape.
+    let seeded = build_codex_thread_entry(
+        "t",
+        worktree.path(),
+        &start,
+        None,
+        None,
+        None,
+        None,
+        &[],
+        &json!({"message": "probe the gate, then report"}),
+        None,
+        None,
+        None,
+    );
+    assert_eq!(
+        seeded.spawn_payload.as_deref(),
+        Some("probe the gate, then report"),
+        "the request's message is the delivered seed, recorded verbatim"
+    );
+    assert_eq!(
+        modeled.spawn_payload, None,
+        "a request with no message records no seed, never a guess"
+    );
 }
 
 /// AC16: a codex PANE row (mux ref set) must refuse from the ask lane

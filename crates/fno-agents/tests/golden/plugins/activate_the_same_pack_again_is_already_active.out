@@ -1,0 +1,17 @@
+{
+  "already_active": true,
+  "pack_digest": "90c203a5275de46f4babd8b8e1e0f7cdc1ffcd162e060081a40f21fb085569e4",
+  "pack_id": "alpha",
+  "resolved_version": "1.0.0",
+  "unconfigured_artifacts": [
+    {
+      "example_source": "assets/style.md",
+      "identifier": "style-guide"
+    }
+  ],
+  "version": 1,
+  "written_paths": [
+    "plugin/alpha/writer.json",
+    "plugin/alpha/editor.json"
+  ]
+}

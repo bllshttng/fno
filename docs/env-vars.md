@@ -104,7 +104,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CURSOR_AGENT_MODEL` | py+rs | unclear: cli/src/fno/agents/harnesses/cursor_agent.py:326 |
 | `FNO_CURSOR_AGENT_PROVIDER` | py+rs | unclear: cli/src/fno/agents/harnesses/cursor_agent.py:321 |
 | `FNO_DEBUG` | py | unclear: cli/src/fno/agents/mux_spawn.py:1854 |
-| `FNO_DIE_WITH_PARENT` | py | Names the spawner pid; only a direct child honors it. The reader removes the var from its own environment when the flight arms, so descendants never inherit it. A value that does not name the reader's parent is ignored, unless that parent is already gone (ppid 1). When the named parent dies the holder releases its flight and exits 129; the `FNO_FLIGHT_BUDGET_S` budget trip keeps 124. Opt-in: unset means the holder never trips on parent death. |
 | `FNO_DISPATCH_ACCOUNT_ENV` | py | unclear: cli/src/fno/agents/cli.py:1905 |
 | `FNO_DRIVER_LIB` | rs | unclear: crates/fno-agents/src/finalize.rs:849 |
 | `FNO_DRIVER_LIB_DIR` | rs | unclear: crates/fno-agents/src/loop_target.rs:616 |
@@ -114,7 +113,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_E2E_DROP_RESIZE_FRAME` | rs | E2E fault seam: with `FNO_E2E` set, drops the first n (default 1) keeper resize frames the server sends, holding panes at their pre-change sizes the way a full keeper frame queue or a pre-ResizeAck keeper build would; the 1s grid reconciliation pass then converges the diff. |
 | `FNO_E2E_PTY_OUTPUT_DELAY_MS` | rs | unclear: crates/fno/src/pty.rs:1873 |
 | `FNO_EVENTS_PATH` | py+rs | Redirects the agents journal (events.jsonl) to one file; the hermetic guard honors it on both legs. |
-| `FNO_FLIGHT_BUDGET_S` | py | Overrides the seconds a live single-flight holder tolerates before its watchdog releases the flight and exits 124; the default trips a minute before the 30-minute TTL. |
 | `FNO_FOOTNOTE_BIN` | rs | The `footnote` harness binary `-H footnote` launches, built from bllshttng/fnh; unset, fno-agents looks beside its own executable, then on PATH. |
 | `FNO_GH_BUDGET_POINTS_PER_MIN` | rs | Overrides the fleet GitHub request budget cap in points per 60s window (default 450). |
 | `FNO_GH_BUDGET_TEST_ARMED` | rs | Re-arms the in-process budget consult inside a unit-test build, which disarms it by default so the suite's gh-named stubs never stamp the machine-wide ledger; production builds ignore it. |
@@ -213,7 +211,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_RECLAIM_TEMP_ROOT` | rs | unclear: crates/fno-agents/src/reclaim.rs:80 |
 | `FNO_REGISTRY_ALLOW_ROW_LOSS` | rs | Set to 1 when a registry write that drops live rows is deliberate. The bulk-loss guard refuses otherwise. |
 | `FNO_RELEASE_REPO` | rs | The `owner/repo` whose `bin-cache` pre-release `fno update` downloads the CI-built binaries from; the default is bllshttng/fno (`crates/fno/src/update_prebuilt.rs`, `crates/fno-agents/src/sync_canonical.rs`, `scripts/install/fno.sh`), pending the GitHub repo rename. The curl installer reads the same name for the nightly. |
-| `FNO_REPO_ROOT` | py+rs | unclear: cli/src/fno/outstanding/cli.py:38; the law matcher reads it to place the project events journal (crates/fno-agents/src/law_match.rs). |
+| `FNO_REPO_ROOT` | py+rs | unclear: cli/src/fno/outstanding/cli.py:35; the law matcher reads it to place the project events journal (crates/fno-agents/src/law_match.rs). |
 | `FNO_REVIEW_HOLD_GH` | rs | Overrides the gh binary the review-hold door's PR head read shells out to (review_hold.rs `pr_head_ref_and_oid`); unset resolves plain `gh`. A test suite pins a stub here so no real gh call escapes the sandbox. |
 | `FNO_REVIEW_INVOCATION_ID` | rs | unclear: crates/fno/src/mux_cli.rs:6090 |
 | `FNO_REVIEW_ROUND` | rs | The verified round a --verify-fixes pass declares, carried to the disposition comment when the shell producer emits; the attest flow's function argument outranks it. Set by skills/review/scripts/emit-attestation.sh, read in crates/fno-agents/src/review_findings.rs `resolve_round`. |
@@ -275,7 +273,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_THINK_SPAWN_WAVE0` | rs | unclear: crates/fno-agents/src/backlog/decompose.rs:2382 |
 | `FNO_THREAD_TURN_REFRESH_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:105 |
 | `FNO_TOUCH_EMIT` | rs | unclear: crates/fno/src/server.rs:10464 |
-| `FNO_TRACKER_BACKEND` | py+rs | unclear: cli/src/fno/outstanding/core.py:457 |
+| `FNO_TRACKER_BACKEND` | py+rs | unclear: cli/src/fno/outstanding/core.py:365 |
 | `FNO_TRACKER_GITHUB_REPO` | rs | unclear: crates/fno-agents/src/tracker/github.rs:113 |
 | `FNO_TRACKER_LINEAR_API_KEY` | rs | Linear API key for the linear tracker backend, read once at construction. Every backend op refuses without it, naming this var. Auth rides env only, no config key. |
 | `FNO_TRACKER_LINEAR_TEAM` | rs | Linear team key (e.g. ENG) scoping the linear tracker backend's list_open and list_closed_since, the way FNO_TRACKER_GITHUB_REPO scopes github. Without it the listings warn and return empty. |

@@ -118,7 +118,7 @@ fn split_priority(raw_title: &str) -> (String, Option<String>) {
 /// (`{"id","title","priority","status","line"}`). By default only `open`
 /// (`[ ]`) items are returned; `include_struck` also surfaces
 /// promoted/dismissed lines.
-fn parse_items(text: &str, include_struck: bool) -> Vec<Value> {
+pub(crate) fn parse_items(text: &str, include_struck: bool) -> Vec<Value> {
     let item_re = compile(ITEM_RE);
     let mut items = Vec::new();
     for (idx, line) in text.lines().enumerate() {

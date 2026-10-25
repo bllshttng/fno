@@ -1,0 +1,48 @@
+pack: <PACKS>/broken
+  identity      pack-id                      checked   passed
+  identity      digest-stability             checked   passed
+  identity      role-ids-safe                checked   passed
+  identity      role-ids-case-unique         checked   failed
+      role id 'Lead' collides case-insensitively
+  identity      role-and-function-ids-unique checked   passed
+  identity      function-set                 checked   passed
+  schema        declarations-parse           checked   passed
+  schema        source:agent:shell           checked   passed
+  schema        source:agent:bare            checked   passed
+  schema        source:agent:away            checked   failed
+      ../alpha/agents/writer.md missing or escapes the pack directory
+  schema        source:asset:gone            checked   failed
+      assets/gone.md missing or escapes the pack directory
+  schema        agent-role-binding:shell     checked   failed
+      role ghost is not declared by this pack
+  schema        agent-frontmatter-identity:shell checked   failed
+      frontmatter identity mismatch: name='shell' pack='broken' role='lead' vs declaration id='shell' pack='broken' role='ghost'
+  schema        agent-tools-bounded:shell    checked   failed
+      tools outside the bounded allowlist: Bash, mcp__x__y
+  schema        agent-role-binding:bare      checked   passed
+  schema        agent-frontmatter-identity:bare checked   passed
+  schema        agent-tools-bounded:bare     checked   failed
+      no tools frontmatter; the agent would inherit the harness default tool set
+  schema        agent-role-binding:away      checked   passed
+  schema        agent-tools-bounded:away     checked   blocked
+      ../alpha/agents/writer.md escapes the pack directory; not read
+  schema        agent-frontmatter-identity:away checked   blocked
+      ../alpha/agents/writer.md escapes the pack directory; not read
+  dependency    dependency:missing-pack      checked   blocked
+      declared dependency missing-pack (1.0.0..open) is not installed
+  capability    declarations-are-not-grants  checked   passed
+  compatibility footnote-compat-range        checked   failed
+      running footnote <VERSION> outside 0.0.1..0.0.2
+  compatibility role-manifest-schema         checked   passed
+  compatibility topology:Lead                checked   failed
+      Lead default_topology 'solo': set default_topology to one of: direct, loop, squad, pipeline
+  compatibility topology:lead                checked   passed
+  compatibility resolve:Lead                 checked   passed
+  compatibility resolve:lead                 checked   passed
+  declared-test scenario:ghost               checked   blocked
+      ghost command 'bash' is absent or not executable
+  declared-test scenario:flaky               checked   unknown
+      flaky command runnable; recorded=unknown
+  schema        evaluator-runnable:absent    checked   blocked
+      absent command 'no-such-runner-xyz' is absent or not executable
+ok: False

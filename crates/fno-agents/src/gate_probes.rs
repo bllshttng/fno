@@ -709,10 +709,9 @@ pub(crate) fn dispatch_hold_rows(root: &Path, facts: &PrFacts, entries: &[Value]
             by_id.insert(id.to_string(), e.clone());
         }
     }
-    let Some(project) = crate::backlog_ready::detect_project(entries, &root.to_string_lossy())
-    else {
-        return ProbeOutcome::Clear;
-    };
+    // A graph that names no project for this root scopes nothing: every row
+    // stays a candidate, never an assumed clear (`row_matches_project`).
+    let project = crate::backlog_ready::detect_project(entries, &root.to_string_lossy());
     let keys = crate::org_board::prs::pr_binding_keys(
         facts.number as i64,
         &facts.head_ref,
@@ -734,7 +733,7 @@ pub(crate) fn dispatch_hold_rows(root: &Path, facts: &PrFacts, entries: &[Value]
         let Some(entry) = by_id.get(id.as_str()) else {
             continue;
         };
-        if !crate::backlog_ready::row_matches_project(entry, Some(&project)) {
+        if !crate::backlog_ready::row_matches_project(entry, project.as_deref()) {
             continue;
         }
         if let Some(v) = crate::backlog_ready::hold_verdict_receipt(entry, &by_id) {
@@ -758,7 +757,7 @@ pub(crate) fn dispatch_hold_rows(root: &Path, facts: &PrFacts, entries: &[Value]
         let url = e.get("pr_url").and_then(Value::as_str).unwrap_or("");
         if number_ok
             && url.is_empty()
-            && crate::backlog_ready::row_matches_project(e, Some(&project))
+            && crate::backlog_ready::row_matches_project(e, project.as_deref())
         {
             bare.push(e);
         }

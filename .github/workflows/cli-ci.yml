@@ -229,18 +229,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # The generator fail-closes when it cannot verify pack manifests through
-      # the in-tree fno-py (`uv run --project cli`); without uv the job dies
-      # refusing every pack, never green.
+      # uv is the generator's fallback route to PyYAML.
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
           version: "0.12.20"
       - name: Install PyYAML
         run: python3 -m pip install --quiet "pyyaml>=6"
-      # Pack verify resolves each role through fno-agents (roles resolve is
-      # Rust-owned), so the in-tree fno-py needs a binary built from this
-      # checkout. Without one every pack refuses.
+      # Pack verify is native (`fno-agents spawn-overlay plugins verify`), so
+      # the generator needs a binary built from this checkout. Without one
+      # every pack refuses.
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -634,18 +632,26 @@ jobs:
             echo "$1 outran the job-level timeout-minutes cap; the run was never cancelled."
             echo "Read the shard's smoke-duration line: the EXIT trap prints it on every exit, with seconds and verdict."
           }
-          echo "smoke-pytest=${{ needs.smoke-pytest.result }} smoke-rest=${{ needs.smoke-rest.result }}"
+          echo "pr-affected=${{ needs.pr-affected.result }} smoke-pytest=${{ needs.smoke-pytest.result }} smoke-rest=${{ needs.smoke-rest.result }}"
           capped smoke-pytest "${{ needs.smoke-pytest.result }}"
           capped smoke-rest "${{ needs.smoke-rest.result }}"
+          # A cancelled selector (queue-storm cancellation, or its own job
+          # cap) leaves every output empty: the shards skip on `== 'true'`,
+          # and this aggregator used to read that as red with zero real
+          # failures. An empty output alongside a cancelled pr-affected now
+          # reads as lane-off. A FAILED selector stays red on purpose: it
+          # broke, so nobody measured anything.
           [ "${{ needs.smoke-pytest.result }}" = "success" ] || {
             [ "${{ needs.smoke-pytest.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.python_full }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.python_full }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.smoke-rest.result }}" = "success" ] || {
             [ "${{ needs.smoke-rest.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.python_full }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.python_full }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
 
   # TODO: graduate to blocking in the next release - remove continue-on-error
@@ -1301,26 +1307,36 @@ jobs:
     steps:
       - name: All shards passed
         run: |
-          echo "test-agents=${{ needs.test-agents.result }} test-agents-integration=${{ needs.test-agents-integration.result }} test-mux=${{ needs.test-mux.result }} test-mux-integration=${{ needs.test-mux-integration.result }}"
+          echo "pr-affected=${{ needs.pr-affected.result }} test-agents=${{ needs.test-agents.result }} test-agents-integration=${{ needs.test-agents-integration.result }} test-mux=${{ needs.test-mux.result }} test-mux-integration=${{ needs.test-mux-integration.result }}"
+          # A cancelled selector (queue-storm cancellation, or its own job
+          # cap) leaves every output empty: the shards skip on `== 'true'`,
+          # and this aggregator used to read that as red with zero real
+          # failures. An empty output alongside a cancelled pr-affected now
+          # reads as lane-off. A FAILED selector stays red on purpose: it
+          # broke, so nobody measured anything.
           [ "${{ needs.test-agents.result }}" = "success" ] || {
             [ "${{ needs.test-agents.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-agents-integration.result }}" = "success" ] || {
             [ "${{ needs.test-agents-integration.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-mux.result }}" = "success" ] || {
             [ "${{ needs.test-mux.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
           [ "${{ needs.test-mux-integration.result }}" = "success" ] || {
             [ "${{ needs.test-mux-integration.result }}" = "skipped" ] \
               && [ "${{ github.event_name }}" = "pull_request" ] \
-              && [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ]
+              && { [ "${{ needs.pr-affected.outputs.cargo }}" = "false" ] \
+                || [ "${{ needs.pr-affected.result }}" = "cancelled" ]; }
           } || exit 1
 
   # Selection half of the paint-artifact pair. Runs the same read the merge
