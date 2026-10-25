@@ -239,13 +239,10 @@ fn reindex_skips_decision_rows_and_unreadable_journals() {
     assert_eq!((added, already, total), (0, 0, 0));
     // A journal path parked on a directory is unreadable, and that is not
     // fatal: the fold degrades to zero rows from it.
-    let mut broken = journal.clone();
-    broken.pop();
-    std::fs::remove_dir_all(&broken).ok();
-    let as_dir = broken;
-    std::fs::create_dir_all(&as_dir).unwrap();
-    std::fs::write(as_dir.join("events.jsonl"), ask_row("q-x", "x?")).unwrap();
-    let (added, _already, _total) = reindex_fold(&index, &[as_dir.join("events.jsonl")]).unwrap();
+    let broken = journal.clone();
+    std::fs::remove_file(&broken).ok();
+    std::fs::create_dir_all(&broken).unwrap();
+    let (added, _already, _total) = reindex_fold(&index, &[broken]).unwrap();
     assert_eq!(added, 0, "an unreadable journal contributes nothing");
 }
 
