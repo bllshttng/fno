@@ -282,7 +282,11 @@ pub fn pull_requests_section(outcome: &Outcome) -> Value {
     if let Some(e) = outcome.1.as_deref().filter(|e| !e.is_empty()) {
         return json!({"status": "unavailable", "matches": [], "detail": e});
     }
-    let raw = outcome.0.as_deref().filter(|s| !s.is_empty()).unwrap_or("[]");
+    let raw = outcome
+        .0
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("[]");
     match serde_json::from_str::<Value>(raw) {
         Err(e) => json!({
             "status": "error",
@@ -334,7 +338,10 @@ fn schema_is_stale(artifact: &Path, signal_paths: &[PathBuf]) -> std::io::Result
             mtimes.push(std::fs::metadata(path)?.modified()?);
         }
     }
-    Ok(mtimes.iter().max().is_some_and(|newest| *newest > artifact_mtime))
+    Ok(mtimes
+        .iter()
+        .max()
+        .is_some_and(|newest| *newest > artifact_mtime))
 }
 
 /// Database detection and schema grounding against the space's codemap.
@@ -348,9 +355,7 @@ pub fn database_section(repo: &Path, artifact: Option<&Path>) -> Value {
             signal_paths.push(path);
         }
     }
-    if let Some(re) =
-        regex(r"(?m)^\s*(DATABASE_URL|SUPABASE_DB_URL|POSTGRES_URL|DIRECT_URL)\s*=")
-    {
+    if let Some(re) = regex(r"(?m)^\s*(DATABASE_URL|SUPABASE_DB_URL|POSTGRES_URL|DIRECT_URL)\s*=") {
         for name in DB_ENV_FILES {
             let path = repo.join(name);
             let Some(body) = read_text(&path) else {
@@ -452,7 +457,10 @@ pub fn pitfalls_section(repo: &Path, plans_path: &Path, home: &Path) -> Value {
     retros.sort();
     retros.reverse();
     retros.truncate(5);
-    let candidates = home.join(".fno").join("history").join("lesson-candidates.jsonl");
+    let candidates = home
+        .join(".fno")
+        .join("history")
+        .join("lesson-candidates.jsonl");
     let count = read_text(&candidates)
         .map(|body| {
             py_splitlines(&body)
@@ -594,8 +602,8 @@ pub fn resolve_exact<'a>(query: &str, entries: &'a [Value]) -> Option<&'a Value>
     }) {
         return Some(hit);
     }
-    let bare_hex = (4..=8).contains(&q.len())
-        && q.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let bare_hex =
+        (4..=8).contains(&q.len()) && q.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if bare_hex {
         let mut prefixes = vec![crate::backlog::settings::node_id_prefix()];
         prefixes.push("ab-".to_string());
@@ -759,7 +767,11 @@ pub fn graph_section(
     decisions: &dyn Fn(&str) -> Result<Vec<Value>, String>,
 ) -> Value {
     let archive_error = archive_error.filter(|e| !e.is_empty());
-    let archive_status = if archive_error.is_some() { "error" } else { "ok" };
+    let archive_status = if archive_error.is_some() {
+        "error"
+    } else {
+        "ok"
+    };
     let Some(entries) = entries else {
         let mut out = Map::new();
         out.insert("status".to_string(), json!("error"));
@@ -771,7 +783,9 @@ pub fn graph_section(
         out.insert("archive_status".to_string(), json!(archive_status));
         out.insert(
             "detail".to_string(),
-            json!(error.filter(|e| !e.is_empty()).unwrap_or("graph unavailable")),
+            json!(error
+                .filter(|e| !e.is_empty())
+                .unwrap_or("graph unavailable")),
         );
         extend(&mut out, no_decisions());
         return Value::Object(out);
@@ -786,14 +800,13 @@ pub fn graph_section(
             .filter(|(id, _)| !active_by_id.contains_key(id.as_str()))
             .map(|(_, row)| row.clone()),
     );
-    let archived_only =
-        |id: &str| archive_by_id.contains_key(id) && !active_by_id.contains_key(id);
+    let archived_only = |id: &str| archive_by_id.contains_key(id) && !active_by_id.contains_key(id);
     let row_for = |id: &str| active_by_id.get(id).or_else(|| archive_by_id.get(id));
 
     let resolved: Option<Value> = resolve_exact(seed, &combined).cloned();
-    let probe = resolved.clone().unwrap_or_else(|| {
-        json!({"id": "__think_seed__", "title": seed, "slug": seed, "details": seed})
-    });
+    let probe = resolved.clone().unwrap_or_else(
+        || json!({"id": "__think_seed__", "title": seed, "slug": seed, "details": seed}),
+    );
     // A free-text seed has no domain to share, so it can never earn the
     // domain bonus a resolved row can; its floor drops by exactly that bonus.
     // The seed lane takes no cap: a small k lets higher-Jaccard rows evict
@@ -831,7 +844,9 @@ pub fn graph_section(
         })
         .cloned()
         .collect();
-    let exclude_id = resolved.as_ref().map(|r| py_str(r.get("id").unwrap_or(&Value::Null)));
+    let exclude_id = resolved
+        .as_ref()
+        .map(|r| py_str(r.get("id").unwrap_or(&Value::Null)));
     let ranked = discovery_candidates(
         &probe_title,
         &probe_details,
@@ -903,7 +918,11 @@ pub fn graph_section(
     let mut out = Map::new();
     out.insert(
         "status".to_string(),
-        json!(if archive_error.is_some() { "partial" } else { "ok" }),
+        json!(if archive_error.is_some() {
+            "partial"
+        } else {
+            "ok"
+        }),
     );
     out.insert("resolved".to_string(), resolved_summary);
     out.insert("parent".to_string(), parent);
@@ -943,10 +962,7 @@ pub fn graph_section(
 
 /// Sibling plans' `consolidation.rejected` rows naming the node. A scan
 /// that could not run shows in status/detail, never as a clean "no ruling".
-pub fn plan_rulings_section(
-    node_id: Option<&str>,
-    plans_dir: Option<&Path>,
-) -> Map<String, Value> {
+pub fn plan_rulings_section(node_id: Option<&str>, plans_dir: Option<&Path>) -> Map<String, Value> {
     let mut out = Map::new();
     let node_id = node_id.filter(|id| !id.is_empty());
     let (rulings, status, detail) = match (node_id, plans_dir) {
@@ -991,7 +1007,8 @@ pub fn plan_rulings_section(
 /// shown, the way the keeper's wire rows read. An error keeps "graph
 /// unreadable" apart from "node absent".
 fn load_graph(path: &Path) -> Result<Vec<Value>, String> {
-    let rows = crate::backlog::api::rows(&crate::backlog::api::Store::new(path)).map_err(|e| e.0)?;
+    let rows =
+        crate::backlog::api::rows(&crate::backlog::api::Store::new(path)).map_err(|e| e.0)?;
     Ok(rows
         .into_iter()
         .filter(|row| !truthy(row.get("archived_at")))
@@ -1023,11 +1040,7 @@ fn configured_plans_path(repo: &Path) -> PathBuf {
 
 /// The decisions listing for one subject at `--state live`: the owner's read
 /// in decisions_cli, capped at the door's default limit.
-fn live_rows_for(
-    subject: &str,
-    rows: Vec<Value>,
-    entries: &mut Option<Vec<Value>>,
-) -> Vec<Value> {
+fn live_rows_for(subject: &str, rows: Vec<Value>, entries: &mut Option<Vec<Value>>) -> Vec<Value> {
     let mut kept = crate::backlog::decisions_cli::live_rows_over(rows, entries, subject);
     kept.truncate(DECISIONS_DOOR_LIMIT);
     kept
@@ -1239,8 +1252,14 @@ pub fn render_receipt(receipt: &Value) -> String {
         Some(x) if truthy(Some(x)) => py_str(x),
         _ => "-".to_string(),
     };
-    let complete = receipt.get("complete").and_then(Value::as_bool).unwrap_or(false);
-    let detected = database.get("detected").and_then(Value::as_bool).unwrap_or(false);
+    let complete = receipt
+        .get("complete")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let detected = database
+        .get("detected")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     // "candidates", never "duplicates": the list is ranked at the reading
     // floor, so a seed with no true duplicate still returns a full top-K.
     let mut lines = vec![
