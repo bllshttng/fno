@@ -240,6 +240,13 @@ fn main() {
     if args.first().map(String::as_str) == Some("mail-hold") {
         std::process::exit(fno_agents::mail_hold::run_mail_hold(&args[1..]));
     }
+    // The resume receipt's argv door: transport-only, like mail-hold. The
+    // forwarding leaf (cli/src/fno/resume_receipt_cli.py) shells the do
+    // command here with the same options; the menu counter never sees
+    // transport arms.
+    if args.first().map(String::as_str) == Some("resume-receipt") {
+        std::process::exit(fno_agents::resume_receipt::run(&args[1..]));
+    }
     // `delivery-evaluate`: the native evaluator behind the `fno delivery
     // evaluate` forward leaf; transport-only (no client action - the shrink
     // law allows none), answers in microseconds, so it dispatches before the

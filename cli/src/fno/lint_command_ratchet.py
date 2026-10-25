@@ -105,6 +105,7 @@ NATIVE_SERVED_LEAVES = {
     "config route",
     "config routing",
     "doctor route",
+    "config schema",
     "do review resolve-level",
     "do review post-dispositions",
     "do review classify",

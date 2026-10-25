@@ -134,7 +134,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "resume": (
-        "fno.resume.cli:cli",
+        "fno.resume_receipt_cli:cli",
         "Durable typed resume receipts (evidence, never write authority)",
         {"hidden": True},
     ),
