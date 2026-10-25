@@ -48,7 +48,7 @@ fn run_door(projects: &std::path::Path, id: &str) -> (i32, String) {
     )
 }
 
-fn plant(root: &std::path::Path, files: &[(&str, &str)]) -> PathBuf {
+fn plant(root: &std::path::Path, files: &[(String, String)]) -> PathBuf {
     let projects = root.join("projects");
     for (dir, name) in files {
         let target = projects.join(dir);
