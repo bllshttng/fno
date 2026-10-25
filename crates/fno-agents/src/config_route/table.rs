@@ -105,7 +105,7 @@ fn table_row(role: &str, eff: &Map<String, Value>, providers: &Value, source: &s
                 "provider_model": format!("{raw} (malformed)"),
                 "protocol": "-",
                 "key": "-",
-                "assigned_by": provenance("config"),
+                "assigned_by": provenance(source),
             })
         }
     };
@@ -119,7 +119,7 @@ fn table_row(role: &str, eff: &Map<String, Value>, providers: &Value, source: &s
             "provider_model": format!("{pname}/{model}"),
             "protocol": "unknown provider",
             "key": "-",
-            "assigned_by": provenance("config"),
+            "assigned_by": provenance(source),
         });
     }
     let protocol = provider
@@ -154,6 +154,6 @@ fn table_row(role: &str, eff: &Map<String, Value>, providers: &Value, source: &s
         "provider_model": format!("{pname}/{model}"),
         "protocol": protocol,
         "key": key_status,
-        "assigned_by": provenance("config"),
+        "assigned_by": provenance(source),
     })
 }
