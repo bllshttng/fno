@@ -168,6 +168,7 @@ fn run_case(plan: Option<&str>, journal: Option<&str>, json_flag: bool) -> (i32,
     }
     let mut command = Command::new(BIN);
     command
+        .envs(fno_agents::test_run::self_owner_env())
         .arg("delivery-evaluate")
         .arg("--plan-path")
         .arg(&plan_path)
