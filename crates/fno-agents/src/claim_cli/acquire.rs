@@ -266,15 +266,19 @@ fn run_parsed(a: LeafArgs) -> i32 {
                         // The handover heals what an earlier init refusal
                         // wrote: the blocked line and the init-authored
                         // sentinel. Best-effort, after the claim is secured;
-                        // the node guard inside skips non-node keys.
+                        // the node guard inside skips non-node keys. The
+                        // manifest ttl derives from the effective lease, so
+                        // an engine-flag ttl is not silently widened to the
+                        // reader's 2h default.
                         super::manifest_refresh::refresh_manifest_on_handover(
                             &key,
                             &a.holder,
                             if a.ttl.is_empty() {
-                                None
+                                ttl_ms.map(|ms| format!("{}s", ms / 1000))
                             } else {
-                                Some(a.ttl.as_str())
-                            },
+                                Some(a.ttl.clone())
+                            }
+                            .as_deref(),
                         );
                     }
                     if a.json_output {
@@ -385,15 +389,18 @@ fn ordinary_acquire(
                 // The session now owns the node through the ordinary door:
                 // fresh init, or a recovery that reaped a dead window claim.
                 // Heal what a refused earlier init may have written, the same
-                // way the handover arm below does.
+                // way the handover arm below does. The ttl derives from the
+                // effective lease for the same reason the handover arm's
+                // does.
                 super::manifest_refresh::refresh_manifest_on_handover(
                     &key,
                     &a.holder,
                     if a.ttl.is_empty() {
-                        None
+                        ttl_ms.map(|ms| format!("{}s", ms / 1000))
                     } else {
-                        Some(a.ttl.as_str())
-                    },
+                        Some(a.ttl.clone())
+                    }
+                    .as_deref(),
                 );
             }
             if a.json_output {

@@ -32,6 +32,45 @@ fn scan_field(content: &str, field: &str) -> Option<String> {
     })
 }
 
+/// The flock handle for `<manifest>.lock`. Dropping it closes the file and
+/// releases the lock.
+struct ManifestLock {
+    _file: std::fs::File,
+}
+
+/// Take the same `<manifest>.lock` flock `fno do state set` holds while it
+/// rewrites the manifest (cli/src/fno/state/io.py uses the filelock package,
+/// which flocks this path on unix). Best-effort: `None` after ~5s of
+/// contention means the refresh skips rather than racing the other writer.
+fn lock_manifest(manifest: &Path) -> Option<ManifestLock> {
+    use std::os::fd::AsRawFd;
+    let name = manifest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("target-state.md");
+    let lock_path = manifest.with_file_name(format!("{name}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path)
+        .ok()?;
+    let fd = file.as_raw_fd();
+    for try_index in 0..10 {
+        let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            return Some(ManifestLock { _file: file });
+        }
+        if try_index + 1 < 10 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+    eprintln!(
+        "claim handover: manifest refresh skipped: {} stayed locked",
+        lock_path.display()
+    );
+    None
+}
+
 /// The entry point the acquire leaf calls: resolves the manifest for this
 /// process's cwd.
 pub(crate) fn refresh_manifest_on_handover(key: &str, new_holder: &str, ttl: Option<&str>) {
@@ -68,6 +107,13 @@ pub(crate) fn refresh_manifest_on_handover_at(
         // exists to heal.
         return;
     }
+    // Serialize with `fno do state set`, which rewrites the manifest under
+    // the same `<path>.lock` flock. A lost update in either direction would
+    // either erase a legal plan_path first-fill or resurrect the blocked
+    // line.
+    let Some(_lock) = lock_manifest(&manifest_path) else {
+        return;
+    };
     let Ok(content) = std::fs::read_to_string(&manifest_path) else {
         eprintln!(
             "claim handover: manifest refresh skipped for {key}: unreadable {}",
@@ -90,6 +136,26 @@ pub(crate) fn refresh_manifest_on_handover_at(
             eprintln!("claim handover: manifest refresh skipped for {key}: manifest names no node");
             return;
         }
+    }
+    // Only the manifest's own session takes over its claim identity. A manual
+    // or programmatic acquire under any other holder must not rewrite this
+    // manifest's claim lines or consume its init sentinel.
+    let own_session = new_holder
+        .strip_prefix("target-session:")
+        .is_some_and(|holder_session| {
+            [
+                scan_field(&content, "session_id"),
+                scan_field(&content, "harness_session_id"),
+            ]
+            .iter()
+            .flatten()
+            .any(|sid| sid == holder_session)
+        });
+    if !own_session {
+        eprintln!(
+            "claim handover: manifest refresh skipped for {key}: holder {new_holder} is not this manifest's session"
+        );
+        return;
     }
     let blocked_marker = "target_claim_blocked_reason:";
     let had_blocked = content
@@ -143,22 +209,35 @@ pub(crate) fn refresh_manifest_on_handover_at(
 /// refusal (`author: init` + `reason: claim_held_by_other`). Any other author,
 /// reason, or a `via: user` cancel stays.
 fn consume_init_sentinel(path: &Path) {
-    let Ok(content) = std::fs::read_to_string(path) else {
+    let claim_path = path.with_file_name(format!(
+        ".{}.consumed-{}",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("target-cancelled"),
+        std::process::id()
+    ));
+    // Rename first, judge second: the file leaves the sentinel path
+    // atomically, so an operator cancel written between the read and the
+    // remove can never be consumed - the worst case renames the operator's
+    // fresh sentinel aside and best-effort renames it back.
+    if std::fs::rename(path, &claim_path).is_err() {
+        return;
+    }
+    let Ok(content) = std::fs::read_to_string(&claim_path) else {
+        // The renamed claim vanished; nothing left to restore or judge.
         return;
     };
     let (author, reason, _via) = crate::cancel_sentinel::parse_cancel_payload(&content);
     if author.as_deref() != Some("init") || reason.as_deref() != Some("claim_held_by_other") {
+        // Not ours to consume: put it back, best-effort.
+        let _ = std::fs::rename(&claim_path, path);
         return;
     }
-    match std::fs::remove_file(path) {
-        Ok(()) => eprintln!(
-            "claim handover: consumed init cancel sentinel at {}",
-            path.display()
-        ),
-        Err(e) => eprintln!(
-            "claim handover: could not consume init cancel sentinel at {} ({e})",
-            path.display()
-        ),
+    if let Err(e) = std::fs::remove_file(&claim_path) {
+        eprintln!(
+            "claim handover: could not remove the consumed init sentinel copy at {} ({e})",
+            claim_path.display()
+        );
     }
 }
 
@@ -242,7 +321,7 @@ mod tests {
         assert!(status.success(), "git init failed for {}", dir.display());
     }
 
-    const POISONED_MANIFEST: &str = "---\nfno_id: f\ntitle: t\ncreated_at: '2026-10-25T00:00:00Z'\ninput: x-test1\n---\n# Target Session State\n\ntarget_claim_blocked_reason: claim_held_by_other\ngraph_node_id: x-test1\n";
+    const POISONED_MANIFEST: &str = "---\nfno_id: f\nsession_id: s1\nharness_session_id: h1\ncreated_at: '2026-10-25T00:00:00Z'\ninput: x-test1\n---\n# Target Session State\n\ntarget_claim_blocked_reason: claim_held_by_other\ngraph_node_id: x-test1\n";
 
     /// One canonical-repo session: the manifest resolves to
     /// `<spaces>/<slug>/target-state.md` and the sentinel beside it is the
@@ -348,7 +427,65 @@ mod tests {
             user_sentinel.exists(),
             "a user cancel is never consumed by a claim refresh"
         );
+        assert_eq!(
+            fs::read_to_string(&user_sentinel).unwrap(),
+            "author: operator\nvia: user\nreason: done for the night\n",
+            "the user sentinel round-trips byte-identical"
+        );
         assert!(!fno_sentinel.exists());
+        let litter: Vec<_> = fs::read_dir(s.manifest.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains(".consumed-"))
+            .collect();
+        assert!(
+            litter.is_empty(),
+            "no consumed-copy litter stays behind: {litter:?}"
+        );
+    }
+
+    #[test]
+    fn heal_skips_a_holder_that_is_not_the_manifests_session() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let s = Session::new("foreign", POISONED_MANIFEST);
+        let before = fs::read_to_string(&s.manifest).unwrap();
+        write_init_sentinel(&s.sentinel_beside_manifest());
+
+        refresh_manifest_on_handover_at(
+            &s.repo,
+            "node:x-test1",
+            "target-session:someone-else",
+            None,
+        );
+
+        let after = fs::read_to_string(&s.manifest).unwrap();
+        assert_eq!(
+            before, after,
+            "a foreign holder never rewrites the manifest"
+        );
+        assert!(
+            s.sentinel_beside_manifest().exists(),
+            "a foreign holder never consumes the init sentinel"
+        );
+    }
+
+    #[test]
+    fn heal_accepts_the_harness_session_id_as_the_own_holder() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let s = Session::new("harness", POISONED_MANIFEST);
+
+        refresh_manifest_on_handover_at(&s.repo, "node:x-test1", "target-session:h1", Some("30m"));
+
+        let healed = fs::read_to_string(&s.manifest).unwrap();
+        assert!(
+            healed.contains("target_claim_holder: \"target-session:h1\""),
+            "the harness-id holder heals: {healed}"
+        );
+        assert!(healed.contains("target_claim_ttl: \"30m\""), "{healed}");
     }
 
     #[test]
@@ -397,10 +534,10 @@ mod tests {
         let _lock = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let with_pair = "---\ninput: x-test1\n---\ntarget_claim_blocked_reason: claim_held_by_other\ntarget_claim_key: \"node:x-test1\"\ntarget_claim_holder: \"target-session:orig\"\ntarget_claim_ttl: \"2h\"\ngraph_node_id: x-test1\n";
+        let with_pair = "---\nsession_id: s1\nharness_session_id: h1\ninput: x-test1\n---\ntarget_claim_blocked_reason: claim_held_by_other\ntarget_claim_key: \"node:x-test1\"\ntarget_claim_holder: \"target-session:orig\"\ntarget_claim_ttl: \"2h\"\ngraph_node_id: x-test1\n";
         let s = Session::new("healthy", with_pair);
 
-        refresh_manifest_on_handover_at(&s.repo, "node:x-test1", "target-session:new", None);
+        refresh_manifest_on_handover_at(&s.repo, "node:x-test1", "target-session:s1", None);
 
         let healed = fs::read_to_string(&s.manifest).unwrap();
         assert!(!healed.contains("target_claim_blocked_reason:"), "{healed}");
