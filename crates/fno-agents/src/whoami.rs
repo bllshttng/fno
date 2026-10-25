@@ -2063,4 +2063,11 @@ mod tests {
 
         assert!(foreign_identity_line(&ident("opencode")).is_none());
     }
+
+    #[test]
+    fn the_context_line_formats_thousands_with_commas() {
+        assert_eq!(with_commas(1_000_000), "1,000,000");
+        assert_eq!(with_commas(307_850), "307,850");
+        assert_eq!(with_commas(999), "999");
+    }
 }
