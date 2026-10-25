@@ -260,9 +260,9 @@ pub(crate) fn explorer(
         let on = e.key == sel;
         let (label, count, role, seat) = match (&e.item, fleet) {
             (Item::Root, f) => (
-                "\u{25ce} fleet".to_string(),
+                "Fleet".to_string(),
                 f.map(|f| f.seats().count()),
-                BRole::Body,
+                BRole::Head,
                 None,
             ),
             (Item::Host(m), Some(f)) => {
@@ -620,11 +620,11 @@ pub(crate) fn graph(
     const CAP: usize = 6;
     let ncol = (width.saturating_sub(5) / COLW).max(1);
     let title = match item {
-        Item::Host(m) => format!("machine {}", fleet.machines[*m].host),
+        Item::Host(m) => format!("Machine {}", fleet.machines[*m].host),
         Item::Lead(m, p) | Item::Seat(m, p, _) => {
-            format!("lead {}", fleet.machines[*m].leads[*p].name)
+            format!("Lead {}", fleet.machines[*m].leads[*p].name)
         }
-        _ => "fleet".into(),
+        _ => "Fleet".into(),
     };
     let mut out = vec![Lb::default()
         .s(" ", BRole::Meta)
