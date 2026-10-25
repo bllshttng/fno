@@ -23,7 +23,9 @@ pub type GhRunner = dyn Fn(&[String]) -> (i32, String, String);
 
 /// The real runner: `gh <args>`, rc 127 when gh cannot start.
 pub fn default_gh_runner(args: &[String]) -> (i32, String, String) {
-    match std::process::Command::new("gh").args(args).output() {
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(args);
+    match crate::gh_budget::output(cmd) {
         Ok(out) => (
             out.status.code().unwrap_or(1),
             String::from_utf8_lossy(&out.stdout).into_owned(),
