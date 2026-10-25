@@ -212,11 +212,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Loop level config + pause-all kill switch (pause-all/resume-all/status/ls)",
         {"hidden": True},
     ),
-    "skill-diff": (
-        "fno.skill_diff.cli:skill_diff_app",
-        "Skill-diff proposer: observer failure patterns -> cited SKILL.md diff -> PR (tick/reconcile).",
-        {"hidden": True},
-    ),
     # Individual commands (plain functions wrapped as single-command apps) -
     "whoami": (
         "fno.agent.cli:whoami_app",
@@ -295,7 +290,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "roles": set(),
     "route": set(),
     "setup": set(),
-    "skill-diff": set(),
     "state": set(),
     "stub-manifest": set(),
     "target": set(),
