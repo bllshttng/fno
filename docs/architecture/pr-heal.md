@@ -70,6 +70,14 @@ Unarmed it names the arm command. Armed with no `pr_heal_tick` row it reads `Hea
 
 `fno config set auto_heal.enabled true`. The key defaults to false; the measurement that justified arming was taken 2026-09-16 over 15 red open PRs: 1 push, 3 cancelled-run reruns, 11 escalations, 0 failures inherited from main. One tick interval later the journal holds a `pr_heal_tick` row and status prints `last run`.
 
+## After a push: the cadence arm
+
+The drive loop skips a PR whose node a worker holds. The daemon's `ci_cadence` arm covers that PR. Each `fno do pr push` that lands writes one `pr_push_landed` row with the branch, the full sha, the checkout and the pushing session. The arm reads the PR's cached status at 1, 15, 30 and 55 minutes after the push. It reads only the newest push on a branch. A daemon that was down reads once, at the latest offset that has passed.
+
+A red is checked against this page's flake ledger first. A red whose every failing check has a `pr_heal_flake` row is a candidate flake. While its runs still test, the arm waits for the next offset. Once they finish, it reruns the failed jobs once. A red after that rerun is real. A red with any check off the ledger is real at once.
+
+A real red cancels the head's runs still in flight, through the same reader `fno do pr wait` uses. The arm then mails the pushing session the failing checks, the cancelled runs and the tail of the failing job's log. A green, a newer head, a closed PR or a delivered wake ends the series. Each read lands one `ci_cadence_check` row. Its `outcome` says what the arm did. Read them with `fno doctor event find --field type=ci_cadence_check --since 2h`. A worker's own `fno do pr wait` stays valid. It wakes sooner, and the arm then finds the series already settled.
+
 ## How to add a signature
 
 Make two edits, both in `crates/fno-agents/src/heal.rs`. Add one row to the `SIGNATURES` table. Add one test that carries a real log excerpt.
