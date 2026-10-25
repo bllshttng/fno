@@ -257,7 +257,7 @@ const BUILD_SLOT_LOST: i32 = 3;
 /// The try-lock refusal: every run slot was busy. Policy, not breakage, so
 /// the wrapper exits with it instead of failing open; the door has already
 /// printed the answer on stderr.
-const SLOT_BUSY: i32 = 86;
+pub(crate) const SLOT_BUSY: i32 = 86;
 const SLOT_BUSY_LINE: &str = "[cargo slots] every run slot is busy: commit, push, CI runs it. The slots are a try-lock, never a queue; a queue strands the turn (idle turn end, reap, lost node). A whole-suite run that must queue runs backgrounded with FNO_TEST_FULL=1.";
 
 /// Where cargo's own arguments start, when `argv` is a cargo test run:
@@ -1274,6 +1274,17 @@ fn run_build_admit(args: &[String]) -> i32 {
     // build in progress instead of letting it run to completion.
     if refuses_frozen_build(&worktree) {
         eprintln!("{AGENT_FREEZE_LINE}");
+        let argv = ["cargo".to_string(), "build-admit".to_string()];
+        crate::test_run_journal::record_refused(
+            &crate::test_run_journal::Run {
+                run_id: "build-admit",
+                argv: &argv,
+                whole: false,
+            },
+            "agent-freeze",
+            SLOT_BUSY,
+            cargo_pid,
+        );
         return SLOT_BUSY;
     }
     let holder = format!("cargo:{}:{cargo_pid}", worktree.display());
@@ -2502,8 +2513,10 @@ fn leaked_members(pgid: i32) -> Vec<String> {
 /// The durable fleet incident stop, read as a refusal for this run: `Some`
 /// exit code with a `suite_refused` receipt when the tests scope is held or
 /// the incident state is unreadable, `None` otherwise. `extra` fields ride
-/// the receipt; the post-admission recheck names its wait there.
-fn fleet_refusal(run_id: &str, extra: &[(&str, String)]) -> Option<i32> {
+/// the receipt; the post-admission recheck names its wait there. The
+/// refusal also lands a durable `test_run` row: a refused run spawns no
+/// child, so no started/finished pair would ever name it.
+fn fleet_refusal(run: &crate::test_run_journal::Run<'_>, extra: &[(&str, String)]) -> Option<i32> {
     match crate::fleet_incident::verdict_for("tests") {
         crate::fleet_incident::Verdict::Clear(_) => None,
         crate::fleet_incident::Verdict::Stopped(record) => {
@@ -2513,7 +2526,13 @@ fn fleet_refusal(run_id: &str, extra: &[(&str, String)]) -> Option<i32> {
                 ("incident", record.reason.clone()),
             ];
             fields.extend_from_slice(extra);
-            emit(run_id, "suite_refused", &fields);
+            emit(run.run_id, "suite_refused", &fields);
+            crate::test_run_journal::record_refused(
+                run,
+                "fleet-stop",
+                crate::fleet_incident::EXIT_CHECK_STOPPED,
+                std::process::id(),
+            );
             Some(crate::fleet_incident::EXIT_CHECK_STOPPED)
         }
         crate::fleet_incident::Verdict::Unavailable(detail) => {
@@ -2522,7 +2541,13 @@ fn fleet_refusal(run_id: &str, extra: &[(&str, String)]) -> Option<i32> {
                 ("detail", detail),
             ];
             fields.extend_from_slice(extra);
-            emit(run_id, "suite_refused", &fields);
+            emit(run.run_id, "suite_refused", &fields);
+            crate::test_run_journal::record_refused(
+                run,
+                "fleet-stop-unavailable",
+                crate::fleet_incident::EXIT_CHECK_UNAVAILABLE,
+                std::process::id(),
+            );
             Some(crate::fleet_incident::EXIT_CHECK_UNAVAILABLE)
         }
     }
@@ -2556,7 +2581,19 @@ pub fn run_test_run(args: &[String]) -> i32 {
     // suite_refused receipt naming the generation, so absence never reads as
     // evidence. An unreadable state fails closed with its own marker.
     let run_id = new_run_id();
-    if let Some(code) = fleet_refusal(&run_id, &[]) {
+    // The user ruling of 2026-09-25: a direct-set run (the tests covering the
+    // files a worker changed) never queues on test:suite; only a whole-suite
+    // run is admitted through it. Nested runs inherit as before. Bound before
+    // the first refusal so a refused row labels its command_key truthfully.
+    let whole = !selects_direct_set(&opts.argv);
+    if let Some(code) = fleet_refusal(
+        &crate::test_run_journal::Run {
+            run_id: &run_id,
+            argv: &opts.argv,
+            whole,
+        },
+        &[],
+    ) {
         return code;
     }
 
@@ -2579,10 +2616,6 @@ pub fn run_test_run(args: &[String]) -> i32 {
     let worktree = std::env::current_dir()
         .ok()
         .map(|cwd| crate::paths::worktree_repo_root(&cwd));
-    // The user ruling of 2026-09-25: a direct-set run (the tests covering the
-    // files a worker changed) never queues on test:suite; only a whole-suite
-    // run is admitted through it. Nested runs inherit as before.
-    let whole = !selects_direct_set(&opts.argv);
     let nested = nested_owner();
     let mut claimed = false;
     if nested.is_none() && whole {
@@ -2594,6 +2627,16 @@ pub fn run_test_run(args: &[String]) -> i32 {
             whole,
             opts.timeout,
         ) {
+            crate::test_run_journal::record_refused(
+                &crate::test_run_journal::Run {
+                    run_id: &run_id,
+                    argv: &opts.argv,
+                    whole,
+                },
+                "suite-claim-interrupted",
+                code,
+                std::process::id(),
+            );
             return code;
         }
         claimed = true;
@@ -2601,7 +2644,11 @@ pub fn run_test_run(args: &[String]) -> i32 {
         // queued must not spawn mid-incident, and the wait has no timer of
         // its own to bound that window.
         if let Some(code) = fleet_refusal(
-            &run_id,
+            &crate::test_run_journal::Run {
+                run_id: &run_id,
+                argv: &opts.argv,
+                whole,
+            },
             &[("waited_s", wait_started.elapsed().as_secs().to_string())],
         ) {
             let _ = crate::claims::release(SUITE_CLAIM_KEY, &holder, claims_root.as_deref(), None);
@@ -2618,7 +2665,19 @@ pub fn run_test_run(args: &[String]) -> i32 {
             worktree.as_deref(),
         ) {
             Ok(slot) => slot,
-            Err(code) => return code,
+            Err(code) => {
+                crate::test_run_journal::record_refused(
+                    &crate::test_run_journal::Run {
+                        run_id: &run_id,
+                        argv: &opts.argv,
+                        whole,
+                    },
+                    "local-slots-full",
+                    code,
+                    std::process::id(),
+                );
+                return code;
+            }
         }
     } else {
         None
