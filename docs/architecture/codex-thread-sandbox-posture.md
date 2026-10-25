@@ -21,7 +21,7 @@ The machine-level `sandbox_mode = "danger-full-access"` in `~/.codex/config.toml
 
 ## The grant
 
-Every thread now carries `granted_roots` on every `turn/start`. The roots are the caller's state dirs plus the repo's git common dir. The exec lane grants with the same `provider::git_common_dir` resolver. The roots are additive to the workspace. When the server reports a resolved posture, the policy echoes it, so nothing else about the posture changes. Both resolvers are fail-open: an unresolvable root is skipped, never a failed spawn.
+Every thread now carries `granted_roots` on every `turn/start`. The roots are the caller's state dirs plus the repo's git write roots: the common dir, and in a linked worktree its own gitdir, which codex keeps read-only inside the common dir. The exec lane grants with the same `provider::git_write_roots` resolver. The roots are additive to the workspace. When the server reports a resolved posture, the policy echoes it, so nothing else about the posture changes. Both resolvers are fail-open: an unresolvable root is skipped, never a failed spawn.
 
 The grant rides every turn rather than only the first, because a turn-level policy becomes the thread default and a resumed thread re-resolves its posture. Sending it per turn makes resume carry it for free.
 

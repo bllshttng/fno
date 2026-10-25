@@ -210,7 +210,7 @@ The grant is per THREAD, never per daemon. One shared app-server owns every thre
 
 ## Posture, grant, and the two failure lanes
 
-`workspace-write` grants the worker's checkout but does not grant the repository's `.git` metadata. A plain checkout has `.git` as a directory. A linked worktree has `.git` as a file pointing into the repository's common Git directory. The common directory is the one path that covers the linked-worktree gitdir, shared objects, refs, and index without widening the worker to full access.
+`workspace-write` grants the worker's checkout but does not grant the repository's `.git` metadata. A plain checkout has `.git` as a directory. A linked worktree has `.git` as a file pointing into the repository's common Git directory. The common directory holds the shared objects and refs. It also contains the linked-worktree gitdir, but granting it alone is not enough there: codex marks the gitdir named by the cwd's `.git` file read-only inside every writable root. So a linked worktree also grants its own gitdir `<repo>/.git/worktrees/<name>` (`provider::git_write_roots`, measured on codex-cli 0.164.0). Neither grant widens the worker to full access.
 
 The registry row records two separate facts. `sandbox_posture` says which sandbox mode the worker launched with. `git_grant` is the resolved absolute Git common-directory path that the policy carried, so a reader can identify the repository covered by the grant. `None` means the grant did not resolve. It is not an empty-string success and it is distinct from a row written before the field existed.
 
