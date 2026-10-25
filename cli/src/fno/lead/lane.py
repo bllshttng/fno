@@ -1,8 +1,10 @@
 """Read the operator's own ranked lane (``my-priorities.md``).
 
-The Python implementation. `fno outstanding` reads through this module. The
-Rust board (`fno inbox board`) parses the same file in
-`crates/fno-agents/src/org_board/scope.rs`, so a format change edits both.
+The single Python implementation; the native `fno inbox outstanding mine`
+reads the same bytes through the mirrored parser, and the Rust board parses
+the same file in `crates/fno-agents/src/org_board/scope.rs`, so a format
+change edits both. A second parser anywhere else in the tree is the drift
+this file exists to prevent.
 
 A MISSING file is an empty lane, not an error: most installs keep no lane,
 and the correct steady state there is silence. A file that EXISTS and cannot

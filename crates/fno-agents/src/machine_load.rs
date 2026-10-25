@@ -219,6 +219,8 @@ pub fn outside_question(groups: &[StoredGroup]) -> IntakeRequest {
         journal_path: None,
         display_name: None,
         render_cap: None,
+        op: None,
+        event: None,
     }
 }
 
@@ -549,6 +551,8 @@ pub fn file_budget_question(
         journal_path: Some(crate::paths::space_dir(cwd).join("events.jsonl")),
         display_name: None,
         render_cap: None,
+        op: None,
+        event: None,
     };
     let answer = crate::question_intake::run_intake(&req, home);
     // A dedup names the still-open question: adopt its id so the answer
