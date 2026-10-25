@@ -168,7 +168,9 @@ def test_every_moved_spelling_is_hidden():
         # dispatcher with the argv intact). `retro` joined when its family
         # ported native: the move is a leaf-alias that refuses with the new
         # spelling. `restart` joined when the front door claimed both
-        # spellings and execs `fno-agents restart` itself. `skill-diff`
+        # spellings and execs `fno-agents restart` itself. `project` joined
+        # the same way: the front door claims both spellings, prints the
+        # rename notice, and execs `spawn-overlay project` itself. `skill-diff`
         # joined when its family ported: the front door claims both
         # spellings and execs the native ops, so a python registration
         # would forward into nothing. `setup` joined when every setup
@@ -176,7 +178,10 @@ def test_every_moved_spelling_is_hidden():
         # and answers it. Every OTHER moved spelling keeps a one-release
         # registration, and any registration that exists must be hidden:
         # an advertised moved name teaches a doomed spelling.
-        if name in ("decide", "yard", "review", "pr", "retro", "restart", "skill-diff", "setup"):
+        if name in (
+            "decide", "yard", "review", "pr", "retro", "restart", "project", "skill-diff",
+            "setup",
+        ):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue
         assert cmd is not None, f"moved spelling {name!r} must stay registered"

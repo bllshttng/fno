@@ -106,7 +106,6 @@ paths
 phase kill-check
 plan
 pr-watch
-project init
 research
 resume
 roles

@@ -205,11 +205,28 @@ def _canonical_project(name: str) -> Optional[str]:
     `a` sit as two live roles over one project (the guard compares scopes by
     equality), and naming both at once would read as a two-project portfolio
     instead of one project named twice.
+
+    The resolver is native (``fno-agents spawn-overlay project resolve``); any
+    failure degrades to None exactly as the in-process import once did.
     """
     try:
-        from fno.projects.resolve import resolve_project_name
+        import subprocess
 
-        return resolve_project_name(name)
+        from fno.rust_binary import resolve_binary
+
+        binary = resolve_binary()
+        if binary is None:
+            return None
+        proc = subprocess.run(
+            [str(binary), "spawn-overlay", "project", "resolve", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            return None
+        return proc.stdout.strip()
     except Exception:
         return None
 
