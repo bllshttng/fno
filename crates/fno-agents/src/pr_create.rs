@@ -431,7 +431,9 @@ struct SiblingPr {
 
 /// The ids that ship elsewhere in `node`'s epic: every other child of its
 /// parent and the nodes contained in each. Nodes contained in `node` itself
-/// ship with it and are left out. Empty when the node has no parent.
+/// ship with it and are left out. A decompose group child is a declared PR
+/// unit, so a group child never counts another group child (or its leaves)
+/// as a sibling. Empty when the node has no parent.
 fn epic_sibling_ids(entries: &[Value], node: &str) -> (String, Vec<String>) {
     let text = |e: &Value, k: &str| e.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let Some(row) = entries.iter().find(|e| text(e, "id") == node) else {
@@ -441,9 +443,11 @@ fn epic_sibling_ids(entries: &[Value], node: &str) -> (String, Vec<String>) {
     if parent.is_empty() {
         return (parent, Vec::new());
     }
+    let is_group = !text(row, "group_slug").is_empty();
     let children: Vec<String> = entries
         .iter()
         .filter(|e| text(e, "parent") == parent && text(e, "contained_in") != node)
+        .filter(|e| !(is_group && !text(e, "group_slug").is_empty()))
         .map(|e| text(e, "id"))
         .filter(|id| !id.is_empty() && id != node)
         .collect();
@@ -974,6 +978,15 @@ mod tests {
         assert!(sibling_refusal("x-eeee", &rows, "", "feature/me", &open, now).is_none());
         let unrelated = [sibling_pr(44, "Fixes x-1111", None)];
         assert!(sibling_refusal("x-aaaa", &rows, "", "feature/me", &unrelated, now).is_none());
+        // Two decompose group children are each a declared PR: neither
+        // refuses the other, but a plain sibling still refuses a group.
+        let mut grouped = rows.clone();
+        grouped[1]["group_slug"] = serde_json::json!("1");
+        grouped[2]["group_slug"] = serde_json::json!("2");
+        assert!(sibling_refusal("x-aaaa", &grouped, "", "feature/me", &open, now).is_none());
+        grouped.push(serde_json::json!({"id": "x-2222", "parent": "x-eeee"}));
+        let leaf = [sibling_pr(47, "Fixes x-2222", None)];
+        assert!(sibling_refusal("x-aaaa", &grouped, "", "feature/me", &leaf, now).is_some());
     }
 
     #[test]
