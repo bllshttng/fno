@@ -1238,7 +1238,6 @@ mod tests {
         std::env::set_var("TARGET_ABORT_REASON", "operator-cancelled");
         let entry = build_entry(dir.path(), &state, "tid", None, None);
         std::env::remove_var("TARGET_ABORT_REASON");
-        drop(lock);
         assert_eq!(entry["reason"], "operator-cancelled");
 
         // An unknown status preserves the raw value.
