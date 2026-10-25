@@ -76,7 +76,7 @@ The drive loop skips a PR whose node a worker holds. The daemon's `ci_cadence` a
 
 A red is checked against this page's flake ledger first. A red whose every failing check has a `pr_heal_flake` row is a candidate flake. While its runs still test, the arm waits for the next offset. Once they finish, it reruns the failed jobs once. A red after that rerun is real. A red with any check off the ledger is real at once.
 
-A real red cancels the head's runs still in flight, through the same reader `fno do pr wait` uses. The arm then mails the pushing session the failing checks, the cancelled runs and the tail of the failing job's log. A green, a newer head, a closed PR or a delivered wake ends the series. Each read lands one `ci_cadence_check` row. Its `outcome` says what the arm did. Read them with `fno doctor event find --field type=ci_cadence_check --since 2h`. A worker's own `fno do pr wait` stays valid. It wakes sooner, and the arm then finds the series already settled.
+A real red cancels the head's runs still in flight, through the same reader `fno do pr wait` uses. The arm then mails the pushing session one line. It names the failing checks and the `fno do pr logs <n>` command that prints the log. Mail refuses a multi-line body, so the log itself does not ride in the wake. A green, a newer head, a closed PR or a delivered wake ends the series. Each read lands one `ci_cadence_check` row. Its `outcome` says what the arm did. Read them with `fno doctor event find --field type=ci_cadence_check --since 2h`. A worker's own `fno do pr wait` stays valid. It wakes sooner, and the arm then finds the series already settled.
 
 ## How to add a signature
 

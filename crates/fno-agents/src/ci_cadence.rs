@@ -8,10 +8,10 @@
 //! heal's flake ledger is rerun once (or waited on while its runs still
 //! test). Any other red is real: the head's in-flight runs are cancelled to
 //! free the shared runners, and the pushing session is woken with the
-//! failing checks and the log tail. A green, a newer head, a closed PR or a
-//! delivered wake ends the series. Every read, cancel and wake rides an
-//! existing reader: the status cache, `wait::cancel_in_flight`,
-//! `pr_status::logs`, and burn-watch's mail/resume lane.
+//! failing checks and the `fno do pr logs` line that prints the log. A green,
+//! a newer head, a closed PR or a delivered wake ends the series. Every read,
+//! cancel and wake rides an existing reader: the status cache,
+//! `wait::cancel_in_flight`, and burn-watch's mail/resume lane.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -28,7 +28,6 @@ const INTERVAL: Duration = Duration::from_secs(60);
 const WINDOW_MS: i64 = 2 * 60 * 60 * 1000;
 const MAX_EVENTS: u32 = 10_000;
 const RERUN_TIMEOUT: Duration = Duration::from_secs(60);
-const LOG_LINES: u64 = 30;
 pub(crate) const OFFSETS_S: [i64; 4] = [60, 900, 1800, 3300];
 pub(crate) const PUSH_EVENT: &str = "pr_push_landed";
 pub(crate) const CHECK_EVENT: &str = "ci_cadence_check";
@@ -111,14 +110,15 @@ pub(crate) fn decide(
     flakes: &HashSet<String>,
     rerun_before: bool,
 ) -> Verdict {
+    // A degraded serve proves nothing about this head, not even that it
+    // moved on, so it never ends the series.
+    if payload.get("stale_reason").is_some() {
+        return Verdict::Pending;
+    }
     let head = payload.get("head").and_then(Value::as_str).unwrap_or("");
     let open = payload.get("pr_state").and_then(Value::as_str) == Some("OPEN");
     if !open || (!head.is_empty() && head != sha) {
         return Verdict::Superseded;
-    }
-    // A degraded serve cannot prove its verdict belongs to this head.
-    if payload.get("stale_reason").is_some() {
-        return Verdict::Pending;
     }
     if payload.get("green").and_then(Value::as_bool) == Some(true) {
         return Verdict::Green;
@@ -142,20 +142,22 @@ pub(crate) fn decide(
     }
 }
 
-pub(crate) fn wake_text(
-    pr: u64,
-    push: &Push,
-    offset_s: i64,
-    cancelled: &[String],
-    logs: &str,
-) -> String {
-    let short: String = push.sha.chars().take(8).collect();
+/// One line in short sentences: mail send refuses a newline and style-checks
+/// the body, so the log stays behind `fno do pr logs` instead of riding here.
+pub(crate) fn wake_text(pr: u64, sha: &str, offset_s: i64, failing: &[&str]) -> String {
+    let short: String = sha.chars().take(8).collect();
+    let mut named = failing
+        .iter()
+        .take(3)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if failing.len() > 3 {
+        named.push_str(&format!(" and {} more", failing.len() - 3));
+    }
     format!(
-        "Automatic CI notice from the fno daemon. PR {pr} ({}) is red at {short}, {} minutes after the push. {} Fix it, commit, and push with `fno do pr push --force-ci-cancel`.\n\n{}",
-        push.branch,
-        offset_s / 60,
-        cancelled.join(" "),
-        logs.trim_end()
+        "Automatic CI notice from the fno daemon. PR {pr} is red at {short}, {} minutes after your push. Failing: {named}. The daemon cancelled the runs still in flight. Read the log with `fno do pr logs {pr}`. Then fix it, commit, and run `fno do pr push --force-ci-cancel`.",
+        offset_s / 60
     )
 }
 
@@ -335,19 +337,27 @@ fn check_one(
         Verdict::Superseded => ("superseded", fields),
         Verdict::FlakeWait => ("flake_wait", fields),
         Verdict::FlakeRerun(runs) => {
+            fields.insert("runs".into(), json!(runs));
             for run in &runs {
                 let id = run.to_string();
-                if let Err(e) = crate::pr_push::run_labeled(
+                // Only a rerun gh accepted spends the head's one rerun.
+                match crate::pr_push::run_labeled(
                     "ci-cadence",
                     "gh",
                     &["run", "rerun", &id, "--failed"],
                     cwd,
                     RERUN_TIMEOUT,
                 ) {
-                    eprintln!("ci-cadence: rerun of run {id} failed: {e}");
+                    Ok((true, _, _)) => {}
+                    Ok((false, _, err)) | Err(err) => {
+                        fields.insert(
+                            "reason".into(),
+                            json!(format!("rerun {id}: {}", err.trim())),
+                        );
+                        return ("unreadable", fields);
+                    }
                 }
             }
-            fields.insert("runs".into(), json!(runs));
             ("flake_rerun", fields)
         }
         Verdict::Real => {
@@ -359,10 +369,7 @@ fn check_one(
             let Some(sid) = push.session_id.as_deref() else {
                 return ("red_no_session", fields);
             };
-            let (_, logs, _) = crate::pr_status::logs::run_logs_door(
-                &json!({"cwd": push.cwd, "pr": pr, "lines": LOG_LINES}),
-            );
-            let text = wake_text(pr, push, offset_s, &cancelled, &logs);
+            let text = wake_text(pr, &push.sha, offset_s, &names);
             let (delivered, via) =
                 crate::burn_watch::wake_with_text(sid, false, &text, "ci-cadence", runner);
             fields.insert("session_id".into(), json!(sid));
@@ -482,6 +489,11 @@ mod tests {
 
     #[test]
     fn a_red_on_known_flakes_waits_or_reruns_once_and_any_other_red_is_real() {
+        // The real-red wake must pass mail send: one line, house style.
+        let names = ["a", "b", "c", "d"];
+        let text = wake_text(42, SHA, 900, &names);
+        assert!(!text.contains('\n') && text.contains("c and 1 more"));
+        assert!(crate::backlog::style_check::check(&text, "mail", None).is_empty());
         let flakes: HashSet<String> = ["stress".to_string()].into();
         let flaky = vec![("stress".to_string(), Some(7))];
         assert_eq!(
@@ -521,6 +533,12 @@ mod tests {
         );
         let mut stale = red();
         stale["stale_reason"] = json!("backoff");
+        assert_eq!(
+            decide(SHA, &stale, &failing, true, &none, false),
+            Verdict::Pending
+        );
+        // A degraded row for the previous head does not end the series either.
+        stale["head"] = json!("ffff");
         assert_eq!(
             decide(SHA, &stale, &failing, true, &none, false),
             Verdict::Pending
