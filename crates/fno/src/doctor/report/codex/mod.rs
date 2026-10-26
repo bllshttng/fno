@@ -21,8 +21,11 @@ pub(crate) fn codex_app_server_report() -> Value {
     let present = std::os::unix::net::SocketAddr::from_pathname(&socket_path)
         .ok()
         .and_then(|addr| {
-            std::os::unix::net::UnixStream::connect_timeout(&addr, std::time::Duration::from_secs(1))
-                .ok()
+            std::os::unix::net::UnixStream::connect_timeout(
+                &addr,
+                std::time::Duration::from_secs(1),
+            )
+            .ok()
         })
         .is_some();
     json!({

@@ -148,4 +148,5 @@ pub mod wordmark;
 pub mod yard_overlay;
 
 pub mod doctor_cost;
+pub mod doctor;
 pub mod otel_read;

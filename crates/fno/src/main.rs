@@ -270,6 +270,8 @@ enum Role {
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
+    DoctorHome(Vec<OsString>),
+    DoctorAgentsExec(&'static str, Vec<OsString>),
     /// `fno agents mail show ...`: the native one-message reader, lexically
     /// classified beside agents_history. The Python CLI keeps the rest of
     /// the mail tree; the carried tail runs `fno-agents chats show`.
@@ -897,6 +899,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_group_command(args, "doctor", "builds") {
         return Role::DoctorBuilds(rest);
     }
+    match fno::doctor::classify(args) {
+        Some(fno::doctor::Claim::Home(rest)) => return Role::DoctorHome(rest),
+        Some(fno::doctor::Claim::AgentsExec(label, argv)) => {
+            return Role::DoctorAgentsExec(label, argv)
+        }
+        None => {}
+    }
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
     }
@@ -1473,6 +1482,12 @@ fn main() {
             "fno doctor builds",
             &["test-run", "builds"],
             &rest,
+        )),
+        Role::DoctorHome(rest) => std::process::exit(fno::doctor::run(&rest)),
+        Role::DoctorAgentsExec(label, argv) => std::process::exit(fno_agents_exec(
+            label,
+            &argv.iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>(),
+            &[],
         )),
         Role::DoctorSkillDiff(rest) => {
             std::process::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))

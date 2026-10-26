@@ -6,8 +6,8 @@
 
 mod advisors;
 mod bus;
-mod collectors;
 mod codex;
+mod collectors;
 mod dl_bus;
 mod dl_hooks;
 mod dl_report;
@@ -22,8 +22,8 @@ use serde_json::{Map, Value};
 
 use super::{bounded_command, echo_stderr};
 
-pub(crate) use collectors::*;
 pub(crate) use codex::*;
+pub(crate) use collectors::*;
 
 // ---------------------------------------------------------------------------
 // Transports
@@ -62,7 +62,9 @@ pub(crate) fn front_door() -> Option<String> {
         .map(PathBuf::from)
         .unwrap_or_else(|| home_dir().join(".cargo"));
     let candidate = cargo_home.join("bin").join("fno");
-    candidate.is_file().then(|| candidate.to_string_lossy().into_owned())
+    candidate
+        .is_file()
+        .then(|| candidate.to_string_lossy().into_owned())
 }
 
 /// Resolve `fno-agents` in the `resolve_binary` order (env, sibling of this
@@ -123,15 +125,16 @@ pub(crate) fn resolve_binary() -> Option<String> {
                 root.join("crates/fno-agents/target/debug/fno-agents"),
                 root.join("target/debug/fno-agents"),
             ];
-            let best = candidates
-                .iter()
-                .filter(|c| runnable(c))
-                .max_by_key(|c| {
-                    std::fs::metadata(c)
-                        .and_then(|m| m.modified())
-                        .map(|t| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0))
-                        .unwrap_or(0)
-                });
+            let best = candidates.iter().filter(|c| runnable(c)).max_by_key(|c| {
+                std::fs::metadata(c)
+                    .and_then(|m| m.modified())
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis())
+                            .unwrap_or(0)
+                    })
+                    .unwrap_or(0)
+            });
             if let Some(found) = best {
                 return Some(found.to_string_lossy().into_owned());
             }
@@ -150,7 +153,11 @@ fn shellexpand_home(raw: &str) -> PathBuf {
 /// One `fno-agents <command>` round-trip: JSON payload in, parsed JSON out
 /// (the `command_call` shape). Dev binary resolution: a dev build outranks
 /// an installed copy.
-pub(crate) fn command_call(command: &[&str], payload: Value, timeout_secs: u64) -> Result<Value, String> {
+pub(crate) fn command_call(
+    command: &[&str],
+    payload: Value,
+    timeout_secs: u64,
+) -> Result<Value, String> {
     let Some(binary) = resolve_binary() else {
         return Err("the fno-agents binary was not found; reinstall fno, run `fno doctor update --rust`, or set FNO_AGENTS_BIN".to_string());
     };
@@ -219,11 +226,15 @@ pub(crate) fn call_binary_json(
     timeout_secs: u64,
 ) -> (Option<String>, Value) {
     let Some(binary) = resolve_binary() else {
-        return (Some("the fno-agents binary was not found".to_string()), Value::Null);
+        return (
+            Some("the fno-agents binary was not found".to_string()),
+            Value::Null,
+        );
     };
     let mut argv: Vec<String> = vec![binary, command.to_string()];
     argv.extend(args.iter().map(|s| s.to_string()));
-    let mut child = match Command::new(&argv[0]).args(&argv[1..])
+    let mut child = match Command::new(&argv[0])
+        .args(&argv[1..])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -267,7 +278,10 @@ pub(crate) fn call_binary_json(
     }
     match serde_json::from_str(&stdout) {
         Ok(v) => (None, v),
-        Err(_) => (Some(format!("{command} emitted unparseable output")), Value::Null),
+        Err(_) => (
+            Some(format!("{command} emitted unparseable output")),
+            Value::Null,
+        ),
     }
 }
 
@@ -293,7 +307,11 @@ impl Probes {
         Probes(crate::doctor_update::update_readiness(source.as_deref()))
     }
     pub(crate) fn get(&self, key: &str) -> Value {
-        self.0.get("probes").and_then(|p| p.get(key)).cloned().unwrap_or(Value::Null)
+        self.0
+            .get("probes")
+            .and_then(|p| p.get(key))
+            .cloned()
+            .unwrap_or(Value::Null)
     }
     fn or_empty(&self, key: &str) -> Vec<Value> {
         match self.get(key) {
@@ -329,10 +347,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 pub(crate) fn plugin_file_report(active_raw: &str) -> Value {
     let active_path = PathBuf::from(active_raw);
-    let active_path = match active_path
-        .expand_home()
-        .canonicalize()
-    {
+    let active_path = match active_path.expand_home().canonicalize() {
         Ok(p) => p,
         // A nonexistent path stays literal (Python resolve() never raises).
         Err(_) => active_path.expand_home(),
@@ -376,23 +391,24 @@ pub(crate) fn plugin_file_report(active_raw: &str) -> Value {
         .is_file()
         .then(|| source.join(&relative))
         .unwrap_or_else(|| source.parent().unwrap_or(&source).join(&relative));
-    let (active_bytes, source_bytes) = match (
-        std::fs::read(&active_path),
-        std::fs::read(&source_path),
-    ) {
-        (Ok(a), Ok(s)) => (a, s),
-        (Err(e), _) | (_, Err(e)) => {
-            let mut rep = unknown(&format!("could not read active/source bytes: {e}"));
-            if let Value::Object(map) = &mut rep {
-                map.insert("source_path".into(), Value::String(source_path.to_string_lossy().into_owned()));
-                // keep the field order: source_path after relative_path, detail last
-                if let Some(detail) = map.remove("detail") {
-                    map.insert("detail".into(), detail);
+    let (active_bytes, source_bytes) =
+        match (std::fs::read(&active_path), std::fs::read(&source_path)) {
+            (Ok(a), Ok(s)) => (a, s),
+            (Err(e), _) | (_, Err(e)) => {
+                let mut rep = unknown(&format!("could not read active/source bytes: {e}"));
+                if let Value::Object(map) = &mut rep {
+                    map.insert(
+                        "source_path".into(),
+                        Value::String(source_path.to_string_lossy().into_owned()),
+                    );
+                    // keep the field order: source_path after relative_path, detail last
+                    if let Some(detail) = map.remove("detail") {
+                        map.insert("detail".into(), detail);
+                    }
                 }
+                return rep;
             }
-            return rep;
-        }
-    };
+        };
     let active_digest = sha256_hex(&active_bytes);
     let source_digest = sha256_hex(&source_bytes);
     let stale = active_digest != source_digest;
@@ -530,9 +546,10 @@ fn verdict(
         && rust_installed_rev.is_some()
         && rust_source_rev.is_some()
         && rust_installed_rev != rust_source_rev)
-        || component_statuses
-            .iter()
-            .any(|(name, word)| name.starts_with("fno-agents") && matches!(word.as_str(), "stale" | "missing" | "failed"));
+        || component_statuses.iter().any(|(name, word)| {
+            name.starts_with("fno-agents")
+                && matches!(word.as_str(), "stale" | "missing" | "failed")
+        });
     if rust_stale && status != "stale" {
         status = "stale".to_string();
     }
@@ -585,7 +602,10 @@ impl Blockers {
                     .to_string(),
             );
         }
-        let sync = rep.get("source_checkout_sync").cloned().unwrap_or(Value::Null);
+        let sync = rep
+            .get("source_checkout_sync")
+            .cloned()
+            .unwrap_or(Value::Null);
         if sync.get("status").and_then(Value::as_str) == Some("behind") {
             let behind = sync.get("behind").and_then(Value::as_i64).unwrap_or(0);
             let unit = if behind == 1 { "commit" } else { "commits" };

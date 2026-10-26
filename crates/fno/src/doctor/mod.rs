@@ -78,7 +78,10 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
         None => Some(Claim::Home(vec![])),
         Some("bundle") | Some("plugin-file") => Some(Claim::Home(args[1..].to_vec())),
         Some(word) if FOREIGN_LEAVES.contains(&word) => None,
-        Some("intel") => Some(Claim::AgentsExec("fno doctor intel", vec![OsString::from("intel")])),
+        Some("intel") => Some(Claim::AgentsExec(
+            "fno doctor intel",
+            vec![OsString::from("intel")],
+        )),
         Some("stalls") => {
             let mut argv = vec![OsString::from("stalls")];
             argv.extend(args[2..].iter().cloned());
@@ -113,7 +116,9 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
         }
         // A leading flag: native unless the context-audit family rides along.
         Some(word) if word.starts_with('-') => {
-            let context = args[1..].iter().any(|a| a.to_str() == Some("--context-audit"));
+            let context = args[1..]
+                .iter()
+                .any(|a| a.to_str() == Some("--context-audit"));
             if context {
                 return None;
             }
@@ -140,9 +145,7 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
 }
 
 fn usage_error(message: &str) -> i32 {
-    eprintln!(
-        "Usage: fno doctor [OPTIONS]\nTry 'fno doctor --help' for help.\n\nError: {message}"
-    );
+    eprintln!("Usage: fno doctor [OPTIONS]\nTry 'fno doctor --help' for help.\n\nError: {message}");
     2
 }
 
@@ -261,7 +264,10 @@ fn run_bounded(argv: &[String], deadline: std::time::Instant) -> Option<(i32, St
 
 /// The entry the front door dispatches: the argv after `doctor`.
 pub fn run(tail: &[OsString]) -> i32 {
-    let words: Vec<String> = tail.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    let words: Vec<String> = tail
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     match words.first().map(String::as_str) {
         Some("bundle") => run_bundle(&words[1..]),
         Some("plugin-file") => run_plugin_file(&words[1..]),
@@ -277,7 +283,9 @@ fn run_plugin_file(args: &[String]) -> i32 {
     while i < args.len() {
         match args[i].as_str() {
             "--json" | "-J" => json = true,
-            w if w.starts_with('-') => return usage_error(&format!("Got unexpected extra argument ({w})")),
+            w if w.starts_with('-') => {
+                return usage_error(&format!("Got unexpected extra argument ({w})"))
+            }
             w => positional.push(w),
             _ => {}
         }
@@ -309,10 +317,12 @@ fn sort_keys(v: &mut Value) {
             keys.sort();
             let rebuilt: serde_json::Map<String, Value> = keys
                 .into_iter()
-                .filter_map(|k| map.remove(&k).map(|mut val| {
-                    sort_keys(&mut val);
-                    (k, val)
-                }))
+                .filter_map(|k| {
+                    map.remove(&k).map(|mut val| {
+                        sort_keys(&mut val);
+                        (k, val)
+                    })
+                })
                 .collect();
             *map = rebuilt;
         }
@@ -403,9 +413,7 @@ fn run_home(args: &[String]) -> i32 {
 
     if codex_hooks {
         if fix || cost_check || codex_bind {
-            return usage_error(
-                "--codex-hooks may only be combined with --json",
-            );
+            return usage_error("--codex-hooks may only be combined with --json");
         }
         let result = report::codex_hooks_report();
         if json {
@@ -426,7 +434,10 @@ fn run_home(args: &[String]) -> i32 {
         } else {
             human::emit_codex_bind_report(&result);
         }
-        let bound = result.get("bound").and_then(Value::as_bool).unwrap_or(false);
+        let bound = result
+            .get("bound")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         return if bound { 0 } else { 1 };
     }
     if cost_check {
@@ -473,7 +484,11 @@ fn run_home(args: &[String]) -> i32 {
 
     let dead_agents = rep
         .get("launch_agents")
-        .map(|a| a.get("dead").map(|d| !d.is_null() && !d.as_array().map(|a| a.is_empty()).unwrap_or(true)).unwrap_or(false))
+        .map(|a| {
+            a.get("dead")
+                .map(|d| !d.is_null() && !d.as_array().map(|a| a.is_empty()).unwrap_or(true))
+                .unwrap_or(false)
+        })
         .unwrap_or(false);
     let stage_stale = rep
         .get("plugin_cache")
@@ -501,10 +516,18 @@ fn run_home(args: &[String]) -> i32 {
             let (cure, argv): (&str, Vec<String>) = if pw_verdict.as_deref() == Some("wedged") {
                 (
                     "refresh",
-                    vec!["refresh".into(), "--force-bounce".into(), "--caller".into(), "doctor-fix".into()],
+                    vec![
+                        "refresh".into(),
+                        "--force-bounce".into(),
+                        "--caller".into(),
+                        "doctor-fix".into(),
+                    ],
                 )
             } else {
-                ("heal", vec!["heal".into(), "--caller".into(), "doctor-fix".into()])
+                (
+                    "heal",
+                    vec!["heal".into(), "--caller".into(), "doctor-fix".into()],
+                )
             };
             let binary = report::resolve_binary();
             let said = match binary {
@@ -533,7 +556,10 @@ fn run_home(args: &[String]) -> i32 {
         }
         let gr = rep.get("groom").cloned().unwrap_or(Value::Null);
         let gr_stale = gr.get("stale").and_then(Value::as_bool).unwrap_or(false);
-        let gr_agent = gr.get("agent_installed").and_then(Value::as_bool).unwrap_or(false);
+        let gr_agent = gr
+            .get("agent_installed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if cfg!(target_os = "macos") && gr_stale && !gr_agent && !json {
             let receipt = report::groom_install_agent();
             let status = receipt.get("status").and_then(Value::as_str).unwrap_or("");
@@ -542,15 +568,23 @@ fn run_home(args: &[String]) -> i32 {
                 .and_then(Value::as_str)
                 .or_else(|| receipt.get("plist").and_then(Value::as_str))
                 .unwrap_or("");
-            echo_stderr(&format!("fno doctor: --fix groom agent: {status} ({detail})"));
+            echo_stderr(&format!(
+                "fno doctor: --fix groom agent: {status} ({detail})"
+            ));
         }
         if json {
             echo_stderr(
                 "fno doctor: --fix skipped under --json (would pollute the JSON stdout); run `fno doctor --fix` without --json to repair.",
             );
         } else {
-            let python_stale = rep.get("python_stale").and_then(Value::as_bool).unwrap_or(false);
-            let rust_stale = rep.get("rust_stale").and_then(Value::as_bool).unwrap_or(false);
+            let python_stale = rep
+                .get("python_stale")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let rust_stale = rep
+                .get("rust_stale")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             if python_stale || rust_stale {
                 match report::front_door() {
                     None => {
@@ -561,12 +595,16 @@ fn run_home(args: &[String]) -> i32 {
                     }
                     Some(door) => {
                         echo_stderr("fno doctor: --fix running `fno doctor update`...");
-                        let mut argv = vec![door.clone(), "doctor".to_string(), "update".to_string()];
+                        let mut argv =
+                            vec![door.clone(), "doctor".to_string(), "update".to_string()];
                         if let Some(src) = &source {
                             argv.push("--source".to_string());
                             argv.push(src.clone());
                         }
-                        match std::process::Command::new(&argv[0]).args(&argv[1..]).status() {
+                        match std::process::Command::new(&argv[0])
+                            .args(&argv[1..])
+                            .status()
+                        {
                             Ok(status) => return status.code().unwrap_or(1),
                             Err(_) => return 1,
                         }
@@ -606,10 +644,18 @@ fn cost_check_report() -> i32 {
     };
     let (theirs, reason) = report::run_ref_cost_tool(&session_id);
     let Some(theirs) = theirs else {
-        return skip(reason.as_deref().unwrap_or("reference cost tool unavailable"));
+        return skip(
+            reason
+                .as_deref()
+                .unwrap_or("reference cost tool unavailable"),
+        );
     };
     let divergence = if theirs == 0.0 {
-        if ours == 0.0 { 0.0 } else { f64::INFINITY }
+        if ours == 0.0 {
+            0.0
+        } else {
+            f64::INFINITY
+        }
     } else {
         (ours - theirs).abs() / theirs
     };
