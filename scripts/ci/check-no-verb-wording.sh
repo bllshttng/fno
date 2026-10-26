@@ -51,6 +51,10 @@ ALLOW_FILES+='|^crates/fno-agents/tests/fixtures/graph_db_schema_v3\.sql$'
 # The config-route settings golden: the deleted python leg spelled the slot
 # key "verb", and the frozen bytes replay it until both legs rename together.
 ALLOW_FILES+='|^crates/fno-agents/tests/golden/config_route/cases\.json$'
+# The rule-9 glue wordlists: English dictionaries (a dwyl protection tier and
+# a google-10000 split tier) whose entries collide as substrings (feverblossom,
+# beaverkill, deverbative). The lists are data, not prose teaching the word.
+ALLOW_FILES+='|^crates/fno-agents/src/backlog/style_(words|protect)\.txt$'
 
 scan() {
     # stdin: path:line:text rows (git grep -n). stdout: the refused rows.

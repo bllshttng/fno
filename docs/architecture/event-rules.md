@@ -85,7 +85,11 @@ The fixed match lives in `event_rules.rs::predicate`. A row names any of these, 
 | `inform`, `deliver = "notify"` | `notify` | One operator notice through `notify_operator`, once per matched event. Never blocks. |
 | `inform`, `deliver = "emit"` | `emit` | Marks the matched event seen (the cursor is the record). No span. |
 
-Every fire writes a `decision_span` row with `span_kind` `block`, `nudge` or `notify` and the attrs `rule` and `matched_event`. `rule` + `matched_event` is the dedupe ledger. A nudge or notify fires once per matched event. A block counts its prior fires per turn key.
+Every fire writes a `decision_span` row with `span_kind` `block`, `nudge` or `notify` and the attrs `rule` and `matched_event`. `rule` + `matched_event` is the dedupe ledger. A nudge or notify fires once per matched event. A block counts its prior fires per turn key. A block span also keeps `excerpt`, the last 600 characters of the reply it fired on.
+
+## Measuring a rule
+
+Each row is a guess about a failure, so check it against its fires. `fno-agents intel --lens rules` reads the fire spans in the window. It prints fires, sessions and the last 7 days for each rule. It also samples fires with their excerpt, unlabeled fires first (`--sample N` or `all`, default 5). To judge them, write one line per fire to a file: `{"span_id":"s-...","verdict":"false"}`. A `true` verdict means the fire was right. Then pass `--labels <file>`, and the lens prints each rule's false-fire count and rate. Fix a noisy rule, or turn it off with `event_rules.<id> = false`. A fire with no excerpt prints its matched event instead. That is a question id, a span id, or the `stop:<session>:<turn>` key of the transcript turn. The lens reads this project's journal only, so it refuses the scope flags.
 
 ## Overrides
 
