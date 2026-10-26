@@ -20,9 +20,10 @@ def _commands(app) -> set[str]:
     return set(command.list_commands(click.Context(command)))
 
 
-def test_agents_registers_the_seven_folded_roots() -> None:
+def test_agents_registers_the_six_folded_roots() -> None:
     # One launch command, and it is spawn. `restart` answers at the Rust front
-    # door, so it is no folded root.
+    # door, so it is no folded root. The worker family port retired `worker`;
+    # its answers live at `fno do pr`, `fno backlog reconcile`, and spawn.
     from fno.agents.cli import agents_app
 
     assert {
@@ -32,7 +33,6 @@ def test_agents_registers_the_seven_folded_roots() -> None:
         "mail",
         "mcp",
         "roles",
-        "worker",
     } <= _commands(agents_app)
 
 

@@ -277,7 +277,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "stub-manifest": set(),
     "target": set(),
     "think": set(),
-    "worker": set(),
     "worktree": set(),
 }
 
