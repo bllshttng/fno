@@ -32,7 +32,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.93x | 27 | 14 | `cli/src/fno/relay/roundtrip.py:791` | `deliver_attached` |
 | 1.91x | 42 | 22 | `cli/src/fno/target_cli.py:924` | `check_contained` |
 | 1.87x | 28 | 15 | `cli/src/fno/relay/roundtrip.py:454` | `deliver_session` |
-| 1.86x | 41 | 22 | `cli/src/fno/provenance/spawn_think.py:954` | `on_node_born` |
 | 1.81x | 29 | 16 | `cli/src/fno/config/__init__.py:3525` | `_settings_yaml_locations` |
 | 1.78x | 32 | 18 | `cli/src/fno/agents/rust_runtime.py:542` | `_pick_account_at_seam` |
 | 1.77x | 23 | 13 | `cli/src/fno/agents/model_routing.py:776` | `read_route_settings` |
@@ -51,7 +50,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 4.2x | 21 | 5 | `cli/src/fno/agents/harnesses/codex.py:266` | `_effective_yolo` |
 | 4.2x | 21 | 5 | `cli/src/fno/target_cli.py:824` | `check_review_gate` |
 | 4.0x | 24 | 6 | `cli/src/fno/worktree.py:393` | `archive` |
-| 3.8x | 19 | 5 | `cli/src/fno/provenance/spawn_think.py:677` | `_worker_agent_name` |
 | 3.75x | 15 | 4 | `cli/src/fno/claims/hostid.py:113` | `machine_id` |
 | 3.75x | 15 | 4 | `cli/src/fno/dispatch.py:349` | `_cutover_command` |
 | 3.56x | 32 | 9 | `cli/src/fno/agents/harnesses/codex.py:846` | `load_known_session_ids` |
@@ -165,7 +163,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.87x | 28 | 15 | `cli/src/fno/relay/roundtrip.py:454` | `deliver_session` |
 | 1.86x | 13 | 7 | `cli/src/fno/claims/staleness.py:53` | `is_live` |
 | 1.86x | 13 | 7 | `cli/src/fno/graph/collision.py:174` | `parse_files_to_modify` |
-| 1.86x | 41 | 22 | `cli/src/fno/provenance/spawn_think.py:954` | `on_node_born` |
 | 1.83x | 11 | 6 | `cli/src/fno/_lazy_group.py:374` | `make_lazy_group_cls` |
 | 1.83x | 11 | 6 | `cli/src/fno/agents/trace_cli.py:41` | `_parse_iso8601` |
 | 1.83x | 11 | 6 | `cli/src/fno/config/__init__.py:411` | `_coerce_self_reap` |
@@ -198,7 +195,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.75x | 7 | 4 | `cli/src/fno/graph/render.py:41` | `_orphan_ids` |
 | 1.75x | 7 | 4 | `cli/src/fno/paths.py:793` | `retro_pending_dir` |
 | 1.75x | 7 | 4 | `cli/src/fno/recovery.py:332` | `load_counts` |
-| 1.75x | 7 | 4 | `cli/src/fno/research/core.py:398` | `acquire_topic` |
 | 1.75x | 7 | 4 | `cli/src/fno/rust_binary.py:38` | `_env_binary` |
 | 1.75x | 14 | 8 | `cli/src/fno/worktree.py:159` | `_worktrees_base_override` |
 | 1.71x | 12 | 7 | `cli/src/fno/graph/rollup.py:83` | `is_orphan` |
@@ -332,7 +328,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.33x | 8 | 6 | `cli/src/fno/graph/maintain.py:874` | `contained_path_exists` |
 | 1.33x | 8 | 6 | `cli/src/fno/handoff/output.py:63` | `write_output_file` |
 | 1.33x | 8 | 6 | `cli/src/fno/pr_watch/cli.py:35` | `_resolve_fno_binary` |
-| 1.33x | 32 | 24 | `cli/src/fno/provenance/spawn_think.py:1118` | `dispatch_conversational` |
 | 1.33x | 8 | 6 | `cli/src/fno/scoreboard/fold.py:1826` | `_plan_key` |
 | 1.33x | 8 | 6 | `cli/src/fno/target_cli.py:1765` | `_resolve_fno_cmd` |
 | 1.32x | 33 | 25 | `cli/src/fno/target_cli.py:855` | `resolve_owned_identity_cmd` |
@@ -380,7 +375,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.25x | 10 | 8 | `cli/src/fno/paths.py:249` | `_remote_url_to_slug` |
 | 1.25x | 10 | 8 | `cli/src/fno/plan/_stamp.py:478` | `cmd_stamp` |
 | 1.25x | 10 | 8 | `cli/src/fno/pr/_status.py:47` | `_classify` |
-| 1.25x | 10 | 8 | `cli/src/fno/provenance/spawn_think.py:290` | `_bump_daily_count` |
 | 1.25x | 10 | 8 | `cli/src/fno/recovery.py:742` | `_target_projects_dir` |
 | 1.25x | 5 | 4 | `cli/src/fno/relay/roundtrip.py:353` | `snapshot_via_worker` |
 | 1.25x | 5 | 4 | `cli/src/fno/scoreboard/cli.py:262` | `_fmt` |
@@ -433,7 +427,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.17x | 7 | 6 | `cli/src/fno/inbox/store.py:317` | `_slug_for` |
 | 1.17x | 7 | 6 | `cli/src/fno/pr_watch/_discover.py:102` | `_resolve_repo_dir` |
 | 1.17x | 7 | 6 | `cli/src/fno/pr_watch/cli.py:410` | `ensure_watcher_activated` |
-| 1.17x | 7 | 6 | `cli/src/fno/provenance/spawn_think.py:343` | `_scan_md_field` |
 | 1.17x | 7 | 6 | `cli/src/fno/relay/envelope.py:88` | `frame_envelope` |
 | 1.17x | 7 | 6 | `cli/src/fno/target_cli.py:2286` | `_read_node_claim` |
 | 1.16x | 44 | 38 | `cli/src/fno/graph/_reconcile.py:1141` | `emit_gate_escape_for_record` |
@@ -479,7 +472,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.11x | 10 | 9 | `cli/src/fno/agents/dispatch.py:1275` | `_anchor_claim_for_unknown_orphan` |
 | 1.11x | 10 | 9 | `cli/src/fno/graph/relatedness.py:410` | `get_related` |
 | 1.11x | 10 | 9 | `cli/src/fno/pr_watch/cli.py:98` | `_reviewers_for` |
-| 1.11x | 20 | 18 | `cli/src/fno/provenance/spawn_think.py:388` | `classify_presence` |
 | 1.1x | 11 | 10 | `cli/src/fno/backlog/groom.py:546` | `refresh_groom_agent` |
 | 1.1x | 11 | 10 | `cli/src/fno/cost/_register.py:235` | `_pr_url_for` |
 | 1.1x | 11 | 10 | `cli/src/fno/graph/types.py:221` | `_validate_rank` |
@@ -487,7 +479,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.1x | 11 | 10 | `cli/src/fno/target_cli.py:2303` | `_classify_node_claim` |
 | 1.09x | 12 | 11 | `cli/src/fno/graph/store.py:1018` | `_node_matches_repo_pr` |
 | 1.09x | 12 | 11 | `cli/src/fno/mail/envelope.py:67` | `wrap_fno_mail` |
-| 1.09x | 12 | 11 | `cli/src/fno/provenance/spawn_think.py:186` | `think_spawn_enabled` |
 | 1.09x | 12 | 11 | `cli/src/fno/target_cli.py:2258` | `_holder_is_ours` |
 | 1.08x | 14 | 13 | `cli/src/fno/agents/model_routing.py:635` | `resolve_explicit_route` |
 | 1.08x | 13 | 12 | `cli/src/fno/agents/self_stamp.py:161` | `resolve_own_transcript` |

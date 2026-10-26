@@ -522,6 +522,16 @@ fn list_core(
     ))
 }
 
+/// One subject's `--state live` listing over injected store rows: the read
+/// the think-inspect receipt grounds its decisions section on.
+pub(crate) fn live_rows_over(
+    rows: Vec<Value>,
+    entries: &mut Option<Vec<Value>>,
+    subject: &str,
+) -> Vec<Value> {
+    list_core_over(rows, 0, entries, Some(subject), None, Some("live"), false).rows
+}
+
 /// The pure listing over injected store rows: flatten, derive, filter,
 /// sort, scope.
 fn list_core_over(
