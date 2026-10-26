@@ -191,8 +191,8 @@ fn failure_body(home: &AgentsHome, worker: &RegistryEntry, reason: &str) -> Stri
 }
 
 /// The canonical re-entry plan's argv when one resolves; otherwise the
-/// seed-a-new-session form the 2026-10-11 outage used, built from the row's
-/// own route fields. Best effort by design: the lead reruns or repairs it.
+/// row-name resume form the row's own route settings serve. Best effort by
+/// design: the lead reruns or repairs it.
 fn respawn_line(home: &AgentsHome, worker: &RegistryEntry) -> String {
     if let Ok(plan) = crate::reentry::resolve_reentry(
         &home.registry_json(),
@@ -208,16 +208,7 @@ fn respawn_line(home: &AgentsHome, worker: &RegistryEntry) -> String {
         .as_deref()
         .filter(|s| !s.is_empty())
     {
-        Some(sid) => {
-            let mut line = format!("fno agents spawn --resume {sid}");
-            if let (Some(provider), Some(model)) = (
-                worker.route_provider_id.as_deref(),
-                worker.model_name.as_deref(),
-            ) {
-                line.push_str(&format!(" --route {provider}/{model}"));
-            }
-            line
-        }
+        Some(_) => format!("fno agents session resume {}", worker.name),
         None => "no session id on the row; see fno-agents reentry-plan".to_string(),
     }
 }
@@ -591,11 +582,7 @@ mod tests {
         assert!(body.contains("kestrel"), "{body}");
         assert!(body.contains("x-1"), "{body}");
         assert!(body.contains("reason: launch account zai"), "{body}");
-        assert!(
-            body.contains("fno agents spawn --resume 22223333-worker"),
-            "{body}"
-        );
-        assert!(body.contains("--route zai/glm-5.3-flash[1m]"), "{body}");
+        assert!(body.contains("fno agents session resume kestrel"), "{body}");
         assert!(body.contains("claim release node:x-1 --force"), "{body}");
     }
 
