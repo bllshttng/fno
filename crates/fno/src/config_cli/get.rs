@@ -324,7 +324,7 @@ fn py_float(float: f64) -> String {
 
 /// Python `json.dumps` text: `", "` and `": "` separators, `ensure_ascii`
 /// escaping, compact enough containers rendered exactly as the old leg's.
-fn py_json(value: &Value) -> String {
+pub(super) fn py_json(value: &Value) -> String {
     match value {
         Value::Null => "null".to_string(),
         Value::Bool(true) => "true".to_string(),

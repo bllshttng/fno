@@ -374,7 +374,7 @@ const WORKTREE_LOCAL_KEYS: [&str; 1] = ["project.id"];
 
 /// `_worktree_local_override`: the local file reduced to the allowlisted
 /// leaves, nested back into blocks.
-fn worktree_local_override(local_raw: &Value) -> Option<Value> {
+pub(super) fn worktree_local_override(local_raw: &Value) -> Option<Value> {
     let mut leaves: Vec<(String, Value)> = Vec::new();
     flatten_leaf_paths(local_raw, "", &mut leaves);
     let mut override_map = Map::new();
