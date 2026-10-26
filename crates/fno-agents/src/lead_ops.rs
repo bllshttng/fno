@@ -598,7 +598,14 @@ pub fn overlay_kind(payload: &Value) -> Result<Value, String> {
             int("since_s", 86_400),
             now(),
         )}),
-        Some("graph-ident") => json!({"ident": graph_ident(&cwd())}),
+        // The caller's own store when it names one: a configured graph path
+        // must not key its memo on the default store's version.
+        Some("graph-ident") => json!({"ident": match s("path") {
+            "" => graph_ident(&cwd()),
+            p => crate::backlog::version(Path::new(p))
+                .ok()
+                .filter(|v| !v.is_empty()),
+        }}),
         // The term reader over one scope, the manifests under the owner's
         // space and the alias map from this checkout.
         Some("term") => {

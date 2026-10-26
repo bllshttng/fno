@@ -486,7 +486,7 @@ def graph_entries(path: Optional[Path] = None) -> list:
         if active_backend_name() != "graph":
             return []
         gpath = path or graph_json()
-        ident = _lead_op("graph-ident").get("ident")
+        ident = _lead_op("graph-ident", path=str(gpath)).get("ident")
         if ident is not None and _GRAPH_ENTRIES_MEMO["ident"] == ident:
             return _GRAPH_ENTRIES_MEMO["entries"]
         entries = wire_rows(path=gpath)
