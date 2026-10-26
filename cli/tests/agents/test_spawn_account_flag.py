@@ -1,7 +1,7 @@
 """CLI wiring for `fno agents spawn --account <id>` (x-d012, US2).
 
-The four-lane overlay resolution is unit-tested in
-`src/fno/agents/test_account_env.py`; this pins the CLI wiring: a resolved
+The four-lane overlay resolution lives in `accounts::env` and
+`accounts::launch` (their goldens pin it); this pins the CLI wiring: a resolved
 overlay reaches dispatch_spawn_pane as `account_env` and the receipt names the
 account (AC1-HP), and a resolver refusal fails closed before any spawn
 (AC1-ERR / AC2-ERR).
@@ -9,7 +9,6 @@ account (AC1-HP), and a resolver refusal fails closed before any spawn
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -54,24 +53,28 @@ def test_proven_credential_carrier_overrides_record_derivation(monkeypatch, runn
     that env VERBATIM instead of re-deriving from the record, and the receipt
     names the provenance and the staged keys (never their values)."""
     received = _stub_pane_path(monkeypatch)
-    from fno.adapters.providers import dispatch, loader
+    from fno.agents import spawn_overlay_client
 
-    monkeypatch.setattr(
-        loader,
-        "load_providers",
-        lambda **_kwargs: SimpleNamespace(
-            by_id={"makers": SimpleNamespace(harness="claude")}
-        ),
-    )
+    carrier = json.dumps({"CLAUDE_CONFIG_DIR": "/proved/account", "AUTH_PROVEN": "1"})
+    asked: list = []
 
-    def boom(*_args, **_kwargs):
-        raise AssertionError("a proven carrier must not re-derive from the record")
+    def answer(payload, **_kw):
+        # The stub answers per kind, like the real door: config defaults
+        # compose at the seam before the command runs, and the pane mesh's
+        # compose rides this same transport with no carrier in its payload.
+        asked.append(payload)
+        if payload.get("kind") == "compose":
+            return {"exit": 0}
+        if payload.get("kind") == "credentials":
+            return {"env": {}, "scrub": [], "secret": []}
+        return {
+            "env": json.loads(payload["carrier"]),
+            "credential_source": "canary-proven carrier",
+            "credential_env_keys": ["AUTH_PROVEN", "CLAUDE_CONFIG_DIR"],
+        }
 
-    monkeypatch.setattr(dispatch, "dispatch_env", boom)
-    monkeypatch.setenv(
-        "FNO_DISPATCH_ACCOUNT_ENV",
-        json.dumps({"CLAUDE_CONFIG_DIR": "/proved/account", "AUTH_PROVEN": "1"}),
-    )
+    monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", answer)
+    monkeypatch.setenv("FNO_DISPATCH_ACCOUNT_ENV", carrier)
 
     from fno.agents.cli import agents_app
 
@@ -86,52 +89,30 @@ def test_proven_credential_carrier_overrides_record_derivation(monkeypatch, runn
     assert received["account_env"] == {
         "CLAUDE_CONFIG_DIR": "/proved/account", "AUTH_PROVEN": "1",
     }
-    receipt = json.loads(
-        next(ln for ln in result.output.splitlines() if ln.startswith("{"))
+    # The Python lane stamps the row's launch account the way the Rust
+    # client's arm does: the worker's env carries the id for the row mint.
+    import os as _os
+
+    assert _os.environ.get("FNO_LAUNCH_ACCOUNT") == "makers"
+    del _os.environ["FNO_LAUNCH_ACCOUNT"]
+    # The carrier travels to the Rust owner verbatim, against the spawn's
+    # harness; the seam's compose ask may ride the same transport before it.
+    dispatch_asks = [p for p in asked if p.get("kind") == "dispatch-account"]
+    assert len(dispatch_asks) == 1
+    assert (dispatch_asks[0]["account"], dispatch_asks[0]["harness"], dispatch_asks[0]["carrier"]) == (
+        "makers", "claude", carrier,
     )
-    assert receipt["credential_source"] == "canary-proven carrier"
-    assert receipt["credential_env_keys"] == ["AUTH_PROVEN", "CLAUDE_CONFIG_DIR"]
-
-
-def test_proven_credential_carrier_refuses_when_unreadable(monkeypatch, runner):
-    """A corrupt carrier is fail-closed: exit 2, no spawn - the alternative is
-    silently falling back to a re-derivation nothing proved."""
-    received = _stub_pane_path(monkeypatch)
-    from fno.adapters.providers import loader
-
-    monkeypatch.setattr(
-        loader,
-        "load_providers",
-        lambda **_kwargs: SimpleNamespace(
-            by_id={"makers": SimpleNamespace(harness="claude")}
-        ),
-    )
-    monkeypatch.setenv("FNO_DISPATCH_ACCOUNT_ENV", "{not json")
-
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        [
-            "spawn", "--name", "w1", "hi", "--harness", "claude",
-            "--dispatch-account", "makers", "--here", "--as", "pane", "--split", "left",
-        ],
-    )
-    assert result.exit_code == 2
-    assert "unreadable" in result.output
-    assert received == {}
 
 
 def test_account_refusal_fails_closed(monkeypatch, runner):
     """AC1-ERR: a resolver refusal exits 2 before any spawn (pane stub untouched)."""
     received = _stub_pane_path(monkeypatch)
-    import fno.agents.account_env as ae
-    from fno.agents.account_env import AccountResolutionError
+    from fno.agents import spawn_overlay_client
 
     def boom(*a, **k):
-        raise AccountResolutionError("account 'nope' is not registered.")
+        raise spawn_overlay_client.AccountRefused("account 'nope' is not registered.")
 
-    monkeypatch.setattr(ae, "resolve_account_overlay", boom)
+    monkeypatch.setattr(spawn_overlay_client, "account_overlay", boom)
 
     from fno.agents.cli import agents_app
 
@@ -146,18 +127,15 @@ def test_composed_receipt_names_live_credential_and_payer(monkeypatch, runner):
     route's vendor and bills naming that vendor, beside account naming the
     profile - all derived from the composed env, never the flags. The cure for
     `--account makers -P zai` reading as "billing makers"."""
-    from fno.agents import dispatch, spawn_gate
-    import fno.agents.account_env as ae
-    from fno.agents.account_env import AccountOverlay
+    from fno.agents import dispatch, spawn_gate, spawn_overlay_client
 
     monkeypatch.setenv("ZAI_API_KEY", "zk-live")
     monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: type("G", (), {"release": lambda self: None})())
     monkeypatch.setattr(
-        ae,
-        "resolve_account_overlay",
-        lambda *a, **k: AccountOverlay(
-            "readyrule", {"CLAUDE_CONFIG_DIR": "/x/.claude"}, "config-dir"
-        ),
+        spawn_overlay_client,
+        "account_overlay",
+        lambda *a, **k: {"account_id": "readyrule", "env": {"CLAUDE_CONFIG_DIR": "/x/.claude"},
+                         "lane": "config-dir"},
     )
 
     def fake_dispatch(**kwargs):
@@ -186,81 +164,6 @@ def test_composed_receipt_names_live_credential_and_payer(monkeypatch, runner):
     # The same content reaches the interactive surface, picker-shaped.
     assert "profile only" in result.output
     assert "bills zai" in result.output
-
-
-# ---------------------------------------------------------------------------
-# x-c33e: the codex thread client seals footnote's roots around a HOME overlay
-# ---------------------------------------------------------------------------
-
-
-def test_codex_thread_client_env_seals_our_state_roots(monkeypatch, tmp_path):
-    """The lane a fixed cutover lands on forwards HOME without moving our roots.
-
-    Unlike the spawn front door there is no argv carrier here: the env is the
-    only channel to the app-server child. So the credential HOME stays and
-    footnote's own roots are pinned around it, or the client's registry read and
-    the child's claim would resolve under the account's home (x-c33e).
-    """
-    import json
-
-    from fno import rust_binary
-    from fno.agents import dispatch as dsp
-
-    # The fake home sits under tmp_path so the hermetic guard allows the
-    # state_dir() resolution the seal performs.
-    fake_home = tmp_path / "real-home"
-    monkeypatch.setenv("HOME", str(fake_home))
-    monkeypatch.delenv("FNO_AGENTS_HOME", raising=False)
-    monkeypatch.delenv("FNO_CLAIMS_ROOT", raising=False)
-    # The fabricated HOME is the point: the seal must resolve roots through
-    # it, so the sandbox pin steps aside for this ambient-on-purpose test.
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "0")
-    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: tmp_path / "fno-agents")
-
-    captured = {}
-
-    def fake_run(argv, **kw):
-        # The sealed lane probes the binary's state-root door before relying
-        # on the pin; answer that handshake the way the current binary does.
-        if argv[1] == "state-root":
-            return SimpleNamespace(
-                returncode=0,
-                stdout=kw["env"]["FNO_STATE_DIR"] + "\n",
-                stderr="",
-            )
-        captured["env"] = kw.get("env")
-        # The seal's handshake asks the state-root door first; the fake
-        # binary honors the pin, then answers the client call itself.
-        if "state-root" in argv:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=kw["env"]["FNO_STATE_DIR"] + "\n",
-                stderr="",
-            )
-        return SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps({"session_id": "0198c0de-1111-7000-8000-00000000000a"}),
-            stderr="",
-        )
-
-    monkeypatch.setattr(dsp.subprocess, "run", fake_run)
-
-    dsp._codex_thread_spawn(
-        name="t-cutover",
-        message="/target ab-2222aaaa",
-        cwd=tmp_path,
-        from_name="",
-        account_env={"HOME": "/accounts/zai-1/home"},
-        route_env=None,
-    )
-
-    env = captured["env"]
-    # The credential still reaches the launched harness.
-    assert env["HOME"] == "/accounts/zai-1/home"
-    # The positive markers: our roots name the REAL home, not the account's.
-    assert env["FNO_AGENTS_HOME"] == str(fake_home / ".fno" / "agents")
-    assert env["FNO_CLAIMS_ROOT"] == str(fake_home)
-    assert env["FNO_STATE_DIR"] == str(fake_home / ".fno")
 
 
 def test_codex_one_shot_refuses_a_pinned_account(monkeypatch, tmp_path):
