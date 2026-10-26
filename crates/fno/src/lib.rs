@@ -10,6 +10,7 @@
 
 pub mod accounts_route;
 pub mod agents_history;
+pub mod agents_mcp_route;
 pub mod agents_menu;
 pub mod agents_view;
 pub mod argv_witness;
@@ -55,8 +56,8 @@ pub mod keys;
 pub mod lane_colors_panel;
 pub(crate) mod lattice;
 pub mod law_cli;
-pub mod lead_reads_route;
 pub mod lead_refresh_canon;
+pub mod lead_route;
 pub mod link;
 pub mod lint_cli;
 pub mod live_store_fence;

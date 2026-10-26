@@ -191,7 +191,7 @@ There are no CLI commands here any more.
 `register-channel`, `unregister-channel`, and `push-channel` were removed: nothing shelled them, and `fno agents <command>` now refuses each by name with a pointer (see `cli/src/fno/tombstones.py`).
 
 The `channel.*` daemon RPCs they fronted are live and untouched.
-The path in use is `fno.mcp.sidecar`, which speaks its own socket protocol (`register_channel` / `unregister_channel` ops) rather than going through the CLI.
+The path in use is the native sidecar (`fno-agents-worker --mcp-exec sidecar`), which speaks its own socket protocol (`register_channel` / `unregister_channel` ops) rather than going through the CLI.
 The channel reaches only sessions launched with the channel wired; it is a claude-only transport this release.
 
 ## Commands: loop and harness plumbing

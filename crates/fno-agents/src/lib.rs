@@ -281,6 +281,7 @@ pub mod lead_eval;
 pub mod lead_goal;
 pub mod lead_history;
 pub mod lead_hygiene;
+pub mod lead_lifecycle;
 pub mod lead_mail;
 pub mod lead_pushback;
 pub mod lead_reads;
@@ -331,6 +332,7 @@ pub mod main_ci_proof;
 pub mod main_ci_transition;
 pub mod manifest;
 pub mod manifest_lookup;
+pub mod mcp;
 pub mod memory_groups;
 pub mod merge_close;
 pub mod merge_command;
@@ -1385,9 +1387,10 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), four
+        // The allowed files: production binary repair (install_verify), five
         // production dir modes (paths, fleet_incident, chats, the
-        // session-state pin dir), two dir-mode
+        // session-state pin dir, the mcp sidecar's socket-parent tightening),
+        // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
         // production mode-preserve on its atomic plan-file replace
@@ -1402,6 +1405,7 @@ mod tests {
             ("plan_doc/codec.rs", 1),
             ("fleet_incident.rs", 1),
             ("chats.rs", 1),
+            ("mcp/sidecar.rs", 1),
         ];
         let allowed_counts: std::collections::HashMap<&str, usize> =
             ALLOWED.iter().copied().collect();
