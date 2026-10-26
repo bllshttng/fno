@@ -100,18 +100,13 @@ def _resolve_role(root: Path, role_id: str, function_id: str, *, extra_definitio
             "clock": datetime.now(UTC).isoformat(),
             "snapshot_revision": revision,
             "bundle_bounds": {
-                "max_references": 32,
-                "max_bytes": 10_000_000,
-                "max_sensitivity": "sensitive",
-                "max_combinations": 4096,
+                "max_references": 32, "max_bytes": 10_000_000,
+                "max_sensitivity": "sensitive", "max_combinations": 4096,
             },
             "unchecked_definitions": [
                 {
-                    "layer": r["layer"],
-                    "source": r["source"],
-                    "status": r["status"],
-                    "role": r["role"],
-                    "has_definition": r["definition"] is not None,
+                    "layer": r["layer"], "source": r["source"], "status": r["status"],
+                    "role": r["role"], "has_definition": r["definition"] is not None,
                     "error": r["error"],
                 }
                 for r in rows
