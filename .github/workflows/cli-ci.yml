@@ -1019,7 +1019,14 @@ jobs:
           cargo test --test hook_latency hook_sources_stay_small
           cargo test --test test_owned_keeper_reap every_triad_spawning_test_file_declares_its_owner
 
-      - name: cargo test --lib --bins (fno-agents)
+      - name: Install cargo-nextest
+        # One process per test: the fno-agents lib suite's PATH and FNO_HOME mutations become process-local, so the cross-test env races that keep reddening clean branches are structurally impossible instead of lock-guarded. nextest never runs doctests, but plain `cargo test --lib --bins` never ran them either.
+        timeout-minutes: 3
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: cargo nextest --lib --bins (fno-agents)
         id: lib
         working-directory: crates/fno-agents
         env:
@@ -1027,7 +1034,9 @@ jobs:
           CARGO_HOME: /home/runner/.cargo
           RUSTUP_HOME: /home/runner/.rustup
           FNO_TEST_HERMETIC: "0"
-        run: cargo test --lib --bins --no-fail-fast
+        # No --no-fail-fast: nextest runs every test and reports all
+        # failures by default.
+        run: cargo nextest run --lib --bins
 
       - name: Write-gate shell test (relay + state-root policy)
         # The Rust unit tests cover refuse_for's verdicts; this runs the real
