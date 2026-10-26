@@ -24,6 +24,11 @@ step() { log "== $*"; }
 command -v jq >/dev/null 2>&1 || fail "jq is required (brew install jq)"
 command -v script >/dev/null 2>&1 || fail "script(1) is required for the viewer leg"
 
+# The sandboxed build-dir lands under TMPDIR, whose quota a full debug build
+# exceeds on runners (os error 122); pin the classic workspace target instead,
+# the same escape the smoke shards use for their journey builds.
+export CARGO_BUILD_BUILD_DIR="$REPO_ROOT/target"
+
 step "building the real binaries (cargo build)"
 cargo build --manifest-path crates/fno/Cargo.toml --bin fno -q || fail "fno build"
 cargo build --manifest-path crates/fno-agents/Cargo.toml -q || fail "runtime binaries build"

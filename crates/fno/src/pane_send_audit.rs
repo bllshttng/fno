@@ -130,7 +130,12 @@ impl PaneSendAudit {
             "source": "daemon",
             "data": data,
         });
-        let _ = append_agents_event(path, &event);
+        if let Err(e) = append_agents_event(path, &event) {
+            eprintln!(
+                "fno mux: agent_raw_inject emit failed at {}: {e}",
+                path.display()
+            );
+        }
     }
 }
 
