@@ -1,7 +1,6 @@
 //! The codex user-level hook-layer inspection, ported from
 //! `fno/setup/cli_hooks.py::inspect_codex_hooks` (read-only, no mutation).
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde_json::{json, Map, Value};
