@@ -789,13 +789,15 @@ def cmd_spawn(
             "route-slot",
             {"mode": "resolve", "explicit": harness, "env": dict(os.environ)},
         )
-    except CommandUnavailable as exc:
-        print(f"spawn: {exc}", file=sys.stderr)
-        raise typer.Exit(code=2) from exc
+    except CommandUnavailable:
+        # No binary: the explicit flag stands alone and inference stands
+        # down, so the spawn reaches the gate's own fail-closed refusal
+        # (87, gate_unavailable) instead of dying here.
+        answer = {}
     if "refusal" in answer:
         print(answer["refusal"], file=sys.stderr)
         raise typer.Exit(code=2)
-    harness = answer.get("harness") or ""
+    harness = answer.get("harness") or harness or ""
     harness_source = answer.get("source")
     # Provenance rides the pane receipt's harness_source field below - it is
     # the HARNESS axis's provenance, not the vendor's. The bg/once stdout
