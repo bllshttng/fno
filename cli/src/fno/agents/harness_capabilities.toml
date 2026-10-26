@@ -479,13 +479,13 @@ autonomous_pane = false
 route_on_pane = false
 # gemini, measured 2026-08-28, and the old "native" was WRONG. Nothing in this
 # tree wires a gemini stop boundary. `fno config setup cli-hooks` installs
-# exactly one gemini hook, `install_gemini_hook` in cli/src/fno/setup/cli_hooks.py,
+# exactly one gemini hook, `install_gemini` in crates/fno/src/cli_hooks.rs,
 # and it merges a SessionStart group only. hooks/hooks-gemini.json, named in
 # docs/architecture/multi-cli-hooks.md, does not exist on disk. docs/harnesses/gemini.md
 # lists the SessionStart context hook and no other. No file in hooks/ reaches
 # loop-check under a gemini lifecycle event. The searches: every `loop-check`
 # caller in hooks/ and scripts/ (five files, none gemini), and every gemini
-# installer in cli/src/fno/setup/ (SessionStart only). The CLI is deprecated
+# installer in crates/fno/src/cli_hooks.rs (SessionStart only). The CLI is deprecated
 # upstream and `command_surface` already reads "refused", so this is a coherent
 # result rather than a regression; it is recorded plainly instead of inherited.
 loop_participation = "none"

@@ -175,11 +175,15 @@ def test_every_moved_spelling_is_hidden():
         # spellings and execs the native ops, so a python registration
         # would forward into nothing. `mcp` joined the same way: the send
         # family ported native and the front door claims both spellings.
-        # Every OTHER moved spelling keeps a
-        # one-release registration, and any registration that exists must
-        # be hidden: an advertised moved name teaches a doomed spelling.
+        # `setup` joined when every setup command ported native: the front
+        # door claims the root spelling and answers it. Every OTHER moved
+        # spelling keeps a one-release registration, and any registration
+        # that exists must be hidden: an advertised moved name teaches a
+        # doomed spelling.
         if name in (
-            "decide", "yard", "review", "pr", "retro", "restart", "project", "skill-diff", "mcp",
+            "decide", "yard", "review", "pr", "retro", "restart", "project", "skill-diff",
+            "mcp", "setup",
+
         ):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue
