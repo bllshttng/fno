@@ -126,7 +126,7 @@ pub fn run_last_run(args: &[String]) -> i32 {
             return 2;
         }
     };
-    let events = crate::paths::events_path(&cwd());
+    let events = crate::paths::project_events_path();
     let fresh = last_run_is_fresh(&events, window, chrono::Utc::now().timestamp());
     println!(
         "last lead walk within {since}: {}",
@@ -262,6 +262,11 @@ fn cache_store(cwd: &Path, scope: &str, ident: &str, undelivered: i64) {
 /// version it recorded is still current; the count is stored only when the
 /// version did not move across the read.
 pub(crate) fn drain(scope: &str, cwd: &Path) -> Result<(i64, bool), String> {
+    // A local graph left behind under an external tracker is not the scope:
+    // its zero would read as drained and end the walk with work pending.
+    if crate::graph_get::external_backend_selected() {
+        return Err("tracker metadata unavailable under an external tracker backend".to_string());
+    }
     let before = graph_ident(cwd);
     if let Some(ident) = &before {
         if let Some(cached) = cache_load(cwd, scope, ident) {
@@ -1303,6 +1308,19 @@ mod tests {
         ];
         let ids = vec!["x-a".to_string(), "x-b".to_string()];
         assert_eq!(undelivered_of(&ids, &rows), 1);
+    }
+
+    #[test]
+    fn a_drain_under_an_external_tracker_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("FNO_TRACKER_BACKEND", "github");
+        let answer = drain("epic-x", dir.path());
+        std::env::remove_var("FNO_TRACKER_BACKEND");
+        let err = answer.expect_err("an external tracker has no local scope");
+        assert!(err.contains("tracker metadata unavailable"), "{err}");
     }
 
     #[test]
