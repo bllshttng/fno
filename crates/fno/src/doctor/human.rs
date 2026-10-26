@@ -766,6 +766,10 @@ fn emit_surface_lines(rep: &Value, err: bool) {
                     .collect()
             })
             .unwrap_or_default();
+        let remedy = plugin
+            .get("remedy")
+            .and_then(Value::as_str)
+            .unwrap_or("None");
         emit(
             err,
             &format!(
@@ -776,7 +780,8 @@ fn emit_surface_lines(rep: &Value, err: bool) {
                     "none".to_string()
                 } else {
                     enabled.join(", ")
-                }
+                },
+                remedy
             ),
         );
     }

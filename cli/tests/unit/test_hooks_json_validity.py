@@ -191,8 +191,11 @@ def test_every_manifest_hook_references_an_existing_script() -> None:
                     for tail in _re.findall(
                         r"\$\{(?:CLAUDE_)?PLUGIN_ROOT\}(\S+)", command
                     ):
-                        if not (REPO_ROOT / tail).is_file():
-                            failures.append(f"{rel}: missing script {tail}")
+                        # The command string quotes its path, and the
+                        # placeholder replacement is root-anchored.
+                        script = tail.rstrip("\"';").lstrip("/")
+                        if not (REPO_ROOT / script).is_file():
+                            failures.append(f"{rel}: missing script {script}")
     assert not failures, (
         "manifest hooks reference missing scripts:\n  " + "\n  ".join(failures)
     )

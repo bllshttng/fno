@@ -53,6 +53,15 @@ sibling-of-binary lookup finds no `fno-agents`, matching the capture machine.
   after this PR answers `fno doctor <anything>` on Python-only installs with
   the signpost teaching, per the plan's signpost acceptance. The families
   must land before that release.
+- **The Python forward (plan bug fixed inline).** Change 2 (foreign leaves
+  forward to Python) and change 5 (a hidden doctor entry signposts any
+  `fno doctor` spelling) contradicted each other: the signpost swallowed
+  `fno doctor test` and the 490+ documented doctor-prefixed spellings, and
+  five CI lanes proved it (command matrix, real-codex, packet-size, publish
+  dry-run, two-machine). `cli/src/fno/doctor_forward.py` is the fix: it
+  mounts the foreign leaves exactly as the deleted group did, and signposts
+  the family's own leaves. Its rows die in the PR whose family ports the
+  leaf.
 
 ## Expected CI findings, pre-declared
 
