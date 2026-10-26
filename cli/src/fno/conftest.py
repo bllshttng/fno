@@ -5,7 +5,7 @@ applied over there protects nothing here. A targeted ``pytest cli/src/fno/...``
 reaches target_cli.py and the carveout/done/log readers with the live session's
 markers still set, and resolves the identity of the session running the tests.
 
-Both trees apply the SAME native env (the ``test-env`` door on the
+Both trees apply the SAME native env (the ``test-run env`` door on the
 ``fno-agents`` binary), so they cannot drift on what counts as ambient - which
 is the failure that produced three specimens through three different channels
 on 2026-08-11.
@@ -67,7 +67,7 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ANN001
 
     binary = shutil.which("fno-agents")
     if binary is not None:
-        subprocess.run([binary, "keeper-sweep", "15.0"], check=False)
+        subprocess.run([binary, "test-run", "sweep", "15.0"], check=False)
 
 
 @pytest.fixture(autouse=True)

@@ -8,7 +8,7 @@ This is a different thing from the environment preflight (`fno do target` Step 3
 
 ### `fno doctor test smoke` - the step registry
 
-One ordered list of the cli-ci smoke job's test and lint steps is code-owned in `crates/fno-agents/src/test_smoke_registry.rs` (`STRUCTURAL_STEPS`) plus auto-discovered owned shell harnesses. The workflow calls `fno-agents test smoke` from eight full-gate matrix legs: four `smoke-pytest` legs and four `smoke-rest` legs. A third job named `smoke` aggregates both matrices into the required check. `fno doctor test smoke` is the same runner locally, so there is no second list to drift. Environment provisioning (checkout, Python/uv setup, the Rust toolchain install, the cargo cache, the system PyYAML install) stays in the workflow yaml. Those are CI-runner concerns, and that divergence is deliberate. Everything a test needs at run time (the `uv sync` / `uv build`, the `fno-agents` debug build) lives in the runner.
+One ordered list of the cli-ci smoke job's test and lint steps is code-owned in `crates/fno-agents/src/test_smoke_registry.rs` (`STRUCTURAL_STEPS`) plus auto-discovered owned shell harnesses. The workflow calls `fno-agents test-run verb smoke` from eight full-gate matrix legs: four `smoke-pytest` legs and four `smoke-rest` legs. A third job named `smoke` aggregates both matrices into the required check. `fno doctor test smoke` is the same runner locally, so there is no second list to drift. Environment provisioning (checkout, Python/uv setup, the Rust toolchain install, the cargo cache, the system PyYAML install) stays in the workflow yaml. Those are CI-runner concerns, and that divergence is deliberate. Everything a test needs at run time (the `uv sync` / `uv build`, the `fno-agents` debug build) lives in the runner.
 
 Coverage boundary: the `smoke-pytest` and `smoke-rest` matrices are the full-gate shards on main and pull requests. `changed-smoke` has `if: github.event_name == 'pull_request'`, so it is skipped on main and its changed-subset selector never supplies main-branch coverage.
 
@@ -77,7 +77,7 @@ The `smoke` aggregator is the required check. It asserts that every matrix lane 
 
 ### `scripts/ci/preflight.sh` - the hermetic runner
 
-One command runs before pushing on an opted-in project (`preflight.required = true`) or for a worker that chose the rehearsal. It validates the invoking checkout's **committed HEAD** inside a persistent, hermetic preflight worktree. It then runs the changed packet, `fno-agents test smoke --keep-going`, and the rust-ci legs. Those legs are pinned `cargo +1.94.1 fmt --check`, then `cargo test --lib --bins` and `cargo test --test '*' -- --test-threads=1` for both crates, and advisory `cargo audit`.
+One command runs before pushing on an opted-in project (`preflight.required = true`) or for a worker that chose the rehearsal. It validates the invoking checkout's **committed HEAD** inside a persistent, hermetic preflight worktree. It then runs the changed packet, `fno-agents test-run verb smoke --keep-going`, and the rust-ci legs. Those legs are pinned `cargo +1.94.1 fmt --check`, then `cargo test --lib --bins` and `cargo test --test '*' -- --test-threads=1` for both crates, and advisory `cargo audit`.
 
 The changed packet goes first and stops the whole run on its own failure, so a
 broken nearest-neighbour test costs seconds rather than a full suite. It is

@@ -38,7 +38,7 @@ def apply_env(mode: str, env: dict, sandbox=None, fixtures=None) -> dict:
         )
         raise SystemExit(3)
     proc = subprocess.run(
-        [binary, "test-env", json.dumps(payload)], capture_output=True, text=True
+        [binary, "test-run", "env", json.dumps(payload)], capture_output=True, text=True
     )
     if proc.returncode != 0:
         sys.stderr.write(proc.stderr)
@@ -46,6 +46,6 @@ def apply_env(mode: str, env: dict, sandbox=None, fixtures=None) -> dict:
     try:
         env = json.loads(proc.stdout)["env"]
     except (json.JSONDecodeError, KeyError, TypeError):
-        sys.stderr.write("conftest: test-env door printed no env object\n")
+        sys.stderr.write("conftest: test-run env door printed no env object\n")
         raise SystemExit(3)
     return {str(k): str(v) for k, v in env.items()}

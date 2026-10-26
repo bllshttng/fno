@@ -80,7 +80,7 @@ jobs:
         # delete its line from _DISCOVERY_DEFERRED (discovery then covers it
         # by shebang). Three entries are known macOS-green / Linux-red and are
         # expected to stay red HERE - see the comment above the set.
-        run: $FNO_AGENTS_FRONT test --census-deferred
+        run: $FNO_AGENTS_FRONT test-run verb --census-deferred
 
       - name: Explain a red census
         if: failure()

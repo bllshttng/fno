@@ -164,7 +164,7 @@ if [[ $rc -eq 0 && "${PREFLIGHT_TEST_SIGNAL_LOCK:-0}" == "1" \
 fi
 exit "$rc"
 EOF
-# preflight calls `fno-agents test smoke [flags]`; stub the binary to
+# preflight calls `fno-agents test-run verb smoke [flags]`; stub the binary to
 # behave like the retired smoke.sh stub (red iff POISON is checked out).
 # The changed packet is a distinct invocation (--changed) and must be stubbable
 # independently of the full run: several cases below turn one red while the

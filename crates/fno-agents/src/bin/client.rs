@@ -702,29 +702,22 @@ async fn run(args: Vec<String>) -> i32 {
     // treatment as `probe-run`/`state` so it stays out of CLIENT_COMMAND_USAGE /
     // RUST_CLIENT_COMMANDS and the routable-command parity guard: not an `fno
     // agents` command; callers are `cli/src/fno/test_runner.py` and the wrapper.
+    // `test-run`: the bounded suite runner, plus the test family's raw
+    // doors as its arguments (the shrink law allows no new action, so
+    // `env`, `sweep` and `verb` are arguments, not actions): `test-run env`
+    // is the hermetic child env door, `test-run sweep` the orphaned-keeper
+    // sweep for the pytest conftest, and `test-run verb <argv>` the whole
+    // native test verb (pytest/rust/smoke/census; the advertised surface is
+    // the `fno doctor test` front).
     if command == "test-run" {
-        return fno_agents::test_run::run_test_run(&args[1..]);
-    }
-
-    // `test-env`: the hermetic child env door (test_env.rs). Direct
-    // dispatch: the env assembly must answer without a daemon. Unregistered
-    // in ALL_CLIENT_ACTIONS (the shrink law); the conftest calls it by name.
-    if command == "test-env" {
-        return fno_agents::test_env::run_test_env(&args[1..]);
-    }
-
-    // `test`: the whole test-verb family, native (test_verb.rs). Direct
-    // dispatch, no daemon RPC. Unregistered in ALL_CLIENT_ACTIONS (the
-    // shrink law): the advertised surface is the `fno doctor test` front.
-    if command == "test" {
-        return fno_agents::test_verb::run_test(&args[1..]);
-    }
-
-    // `keeper-sweep`: the orphaned-keeper sweep door (graph_keeper.rs), for
-    // the pytest conftest. Direct dispatch, no daemon RPC; unregistered in
-    // ALL_CLIENT_ACTIONS (the shrink law).
-    if command == "keeper-sweep" {
-        return fno_agents::graph_keeper::run_keeper_sweep(&args[1..]);
+        let rest = &args[1..];
+        match rest.first().map(String::as_str) {
+            Some("env") => return fno_agents::test_env::run_test_env(&rest[1..]),
+            Some("sweep") => return fno_agents::graph_keeper::run_keeper_sweep(&rest[1..]),
+            Some("verb") => return fno_agents::test_verb::run_test(&rest[1..]),
+            _ => {}
+        }
+        return fno_agents::test_run::run_test_run(rest);
     }
 
     // `fleet-incident`: the durable fleet incident breaker (see

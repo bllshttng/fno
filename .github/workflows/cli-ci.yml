@@ -140,7 +140,7 @@ jobs:
           CHANGED_BASE: ${{ github.event.pull_request.base.sha }}
           CHANGED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          est="$("$FNO_AGENTS_FRONT" test smoke --changed \
+          est="$("$FNO_AGENTS_FRONT" test-run verb smoke --changed \
             --base "$CHANGED_BASE" --head "$CHANGED_HEAD" --list 2>/dev/null \
             | sed -n 's/.*changed-estimate minutes=\([0-9][0-9]*\).*/\1/p' \
             | tail -1)"
@@ -346,7 +346,7 @@ jobs:
             exit 0
           fi
           set +e
-          "$FNO_AGENTS_FRONT" test smoke --changed \
+          "$FNO_AGENTS_FRONT" test-run verb smoke --changed \
             --base "$CHANGED_BASE" --head "$CHANGED_HEAD" \
             --shard "${{ matrix.shard }}/${{ needs.changed-packet-size.outputs.shard_count }}"
           rc=$?
@@ -512,7 +512,7 @@ jobs:
           start=$SECONDS
           trap 'bash scripts/ci/smoke-duration-report.sh smoke-pytest-${{ matrix.shard }} "$(( SECONDS - start ))" 12 || true' EXIT
           : "$start"
-          "$FNO_AGENTS_FRONT" test smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/4
+          "$FNO_AGENTS_FRONT" test-run verb smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/4
 
   slow-e2e:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
@@ -530,7 +530,7 @@ jobs:
       - name: Run the slow pane lane
         env:
           FNO_PYTEST_SHARD: "1/1"
-        run: $FNO_AGENTS_FRONT test --stream cli/tests/agents/test_pane_journeys.py -- -m slow_e2e
+        run: $FNO_AGENTS_FRONT test-run verb --stream cli/tests/agents/test_pane_journeys.py -- -m slow_e2e
 
   smoke-rest:
     needs: [pr-affected]
@@ -577,7 +577,7 @@ jobs:
           start=$SECONDS
           trap 'bash scripts/ci/smoke-duration-report.sh smoke-rest-${{ matrix.shard }} "$(( SECONDS - start ))" 30 || true' EXIT
           : "$start"
-          "$FNO_AGENTS_FRONT" test smoke --skip 'Pytest*' --shard ${{ matrix.shard }}/4
+          "$FNO_AGENTS_FRONT" test-run verb smoke --skip 'Pytest*' --shard ${{ matrix.shard }}/4
 
       # Static dead-import guard: a module move down a layer can leave
       # test-only callers on the old `from fno.agents import moved` path that
