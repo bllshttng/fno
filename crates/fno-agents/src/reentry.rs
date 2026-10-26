@@ -789,9 +789,10 @@ fn same_route_file(saved: &str, route: &str) -> bool {
 }
 
 /// The revive pane's script. A relaunch can take seconds, so the pane says
-/// what it waits on. A failed relaunch keeps its error on screen: a pane that
-/// just exits reads as a blank, dead tap.
-const REVIVE_SCRIPT: &str = r#"printf 'reviving %s...\n' "$0"; "$@" && exec claude attach "$0"; printf 'revive of %s failed (exit %s); close this pane\n' "$0" "$?"; exec cat"#;
+/// what it waits on. A failed relaunch keeps its error on screen until Enter:
+/// a pane that just exits reads as a blank, dead tap. While it is held the
+/// seat counts as a live viewer, so a re-tap retries only after Enter.
+const REVIVE_SCRIPT: &str = r#"printf 'reviving %s...\n' "$0"; "$@" && exec claude attach "$0"; printf 'revive of %s failed (exit %s). Press Enter to close, then tap the row to retry.\n' "$0" "$?"; read -r _"#;
 
 /// One argv that runs the relaunch, then becomes `claude attach <short>`:
 /// the revive's pane shows the session it just brought back. The ids ride as
