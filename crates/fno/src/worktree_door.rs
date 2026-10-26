@@ -8,6 +8,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// One resolved launch: the sibling binary's argv, or the lifecycle script.
+#[derive(Debug)]
 pub enum Launch {
     /// Exec `fno-agents <argv>` (stdio inherited, exit code returned).
     Agents(Vec<String>),
