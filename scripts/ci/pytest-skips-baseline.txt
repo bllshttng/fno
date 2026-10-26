@@ -42,7 +42,6 @@ cli/tests/events/test_producer_equivalence.py::test_codex_stop_path_reaches_the_
 cli/tests/events/test_producer_equivalence.py::test_producer_emits_review_attestation_with_no_second_call::pytest.skip  # only the code-review param drives the hook, whose classify runs through the Rust front; peer and declare emit through fno-py and still run without it
 cli/tests/events/test_producer_equivalence.py::test_resolver_reads_the_code_review_attestation_at_head::mark.skipif  # second site, added with the front pin: the drive leg needs the front, the resolver leg the door
 cli/tests/integration/test_backlog_alias.py::_native_backlog::pytest.skip  # on main before this ratchet
-cli/tests/integration/test_codex_plugin_real_boundary.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/integration/test_first_run_documentation.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/integration/test_graph_cli.py::_native_get::pytest.skip  # on main before this ratchet
 cli/tests/integration/test_graph_cli.py::_rank::pytest.skip  # on main before this ratchet
@@ -70,7 +69,6 @@ cli/tests/unit/test_blueprint_batching_rule.py::test_behavioral_dispatch_plan_ba
 cli/tests/unit/test_claim_rebind.py::test_rebind_live_different_pid_refuses_concurrent_writer::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::TestSessionWitnessVerdicts.test_status_live_session_never_reads_stale::marker.requires_rust  # on main before this ratchet
-cli/tests/unit/test_evals_bank.py::test_seed_bank_loads::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_events_schema.py::_require_schema_loaded::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_hooks_json_validity.py::test_every_manifest_hook_is_wired_and_pretooluse_launches::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_keeper_lane.py::_build_worker_bin::pytest.skip  # on main before this ratchet

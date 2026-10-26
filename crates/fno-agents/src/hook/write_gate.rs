@@ -1057,9 +1057,16 @@ fn generated_target(t: &str, payload_cwd: &str) -> Option<String> {
             abs_str[i + "/plugin-stage/fno/".len()..].to_string(),
         ));
     }
-    if let Some(i) = abs_str.find("/plugins/cache/footnote") {
-        if let Some(j) = abs_str[i..].find("/fno/") {
-            return Some(plugin_msg(abs_str[i + j + "/fno/".len()..].to_string()));
+    // The marketplace dir is "fno", or a "footnote" name on an install made
+    // before the rename.
+    for prefix in [
+        "/plugins/cache/fno/fno/",
+        "/plugins/cache/footnote/fno/",
+        "/plugins/cache/footnote-dev/fno/",
+        "/plugins/cache/footnote-local/fno/",
+    ] {
+        if let Some(i) = abs_str.find(prefix) {
+            return Some(plugin_msg(abs_str[i + prefix.len()..].to_string()));
         }
     }
 

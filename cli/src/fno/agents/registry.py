@@ -403,7 +403,7 @@ class AgentEntry:
     # None/absent means "an operator asked for this directly." Format is
     # "<dispatcher>:<reason>", e.g. "think_spawn:work-start" or
     # "think_spawn:conversational" - the only producer today is
-    # fno.provenance.spawn_think._spawn_think_worker. Before the only
+    # the Rust think dispatch (think_dispatch.rs). Before the only
     # evidence for "did a birth trigger spawn this?" was a timestamp gap
     # between a node's created_at and a worker's registry row.
     spawn_trigger: Optional[str] = None
@@ -928,8 +928,6 @@ def resolve_agent(
     token: str,
     *,
     path: Optional[Path] = None,
-    scope_cwd: Optional[str] = None,
-    cross_project: bool = False,
 ) -> ResolvedAgent:
     """Resolve ``token`` to one registry entry, loading the registry first.
 
@@ -950,13 +948,7 @@ def resolve_agent(
             f"registry unreadable ({exc}); cannot resolve {token!r}",
             unavailable=True,
         ) from exc
-    return resolve_agent_across_sources(
-        entries,
-        token,
-        path=path,
-        scope_cwd=scope_cwd,
-        cross_project=cross_project,
-    )
+    return resolve_agent_across_sources(entries, token, path=path)
 
 
 def resolve_agent_across_sources(
@@ -964,14 +956,12 @@ def resolve_agent_across_sources(
     token: str,
     *,
     path: Optional[Path] = None,
-    scope_cwd: Optional[str] = None,
-    cross_project: bool = False,
 ) -> ResolvedAgent:
     """Resolve one token against a registry snapshot and every harness store.
 
-    ``scope_cwd`` and ``cross_project`` are selection inputs only. They flow to
-    the single store-healing owner so every caller keeps the same confinement
-    and complete-namespace rules.
+    Resolution is machine-wide: a store hit adopts from any project (the
+    retired ``--cross-project`` flag had authorized exactly that), so the
+    single store-healing owner takes no selection inputs.
     """
     try:
         return resolve_registered_agent_across_sources(entries, token)
@@ -984,8 +974,6 @@ def resolve_agent_across_sources(
         entry = resolve_from_harness_store(
             token,
             registry_path=path,
-            scope_cwd=scope_cwd,
-            cross_project=cross_project,
         )
         if entry is None:
             raise
@@ -1082,7 +1070,6 @@ def _ensure_unique_across_stores(
 
 def resolve_from_harness_store(
     token: str, *, registry_path: Optional[Path] = None,
-    scope_cwd: Optional[str] = None, cross_project: bool = False,
 ) -> Optional[AgentEntry]:
     """The registry-miss healer, isolated so every resolution surface
     reaches it identically -- including ``resume``, which loads its own entries
@@ -1092,15 +1079,12 @@ def resolve_from_harness_store(
     unchanged error. Propagates :class:`AgentResolutionError` on an ambiguous
     token: refusing to guess is the designed outcome, not a miss.
 
-    ``scope_cwd``/``cross_project`` carry the project-confinement contract
-    through to :func:`heal_from_harness_store`; the default (process cwd, no
-    override) confines adoption to the caller's project. ``resume`` bypasses this
-    healer entirely, so it is uncovered by design."""
+    Healing is machine-wide: adoption resolves from any project. ``resume``
+    bypasses this healer entirely, so it is uncovered by design."""
     from fno.agents.store_fallback import heal_from_harness_store
 
     return heal_from_harness_store(
         token, registry_path=registry_path,
-        scope_cwd=scope_cwd, cross_project=cross_project,
     )
 
 

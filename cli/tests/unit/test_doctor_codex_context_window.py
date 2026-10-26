@@ -125,10 +125,11 @@ def test_the_harness_surface_report_carries_and_gates_the_check(tmp_path, monkey
     _write(tmp_path, configured=1000000)
 
     # Opening the codex gate also opens the sibling plugin check, which shells
-    # out to the real `codex` binary.  Stub it so this stays a unit test.
-    import fno.setup.codex_plugin as codex_plugin
-
-    monkeypatch.setattr(codex_plugin, "inspect_freshness", lambda: {"status": "fresh"})
+    # out to fno-agents and the real `codex` binary.  Stub it so this stays a
+    # unit test.
+    monkeypatch.setattr(
+        "fno.rust_binary.call_binary_json", lambda *_a, **_k: (None, {"status": "fresh"})
+    )
 
     monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
     assert "codex_context_window" not in doctor._harness_surface_report()

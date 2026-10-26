@@ -132,6 +132,7 @@ pub mod client;
 pub mod client_commands;
 pub mod client_render;
 pub mod codex_ask;
+pub mod codex_converge;
 pub mod codex_daemon_readiness;
 pub mod codex_daemon_upgrade;
 /// Test support: a fake shared codex app-server daemon. Public because the
@@ -179,6 +180,7 @@ pub mod escalation;
 pub mod eval_attempt;
 pub mod eval_part4;
 pub mod eval_reap;
+pub mod evals;
 pub mod evals_arm;
 pub mod evals_climb;
 pub mod evals_macro;
@@ -280,6 +282,7 @@ pub mod lead_eval;
 pub mod lead_goal;
 pub mod lead_history;
 pub mod lead_hygiene;
+pub mod lead_lifecycle;
 pub mod lead_mail;
 pub mod lead_pushback;
 pub mod lead_reads;
@@ -330,6 +333,7 @@ pub mod main_ci_proof;
 pub mod main_ci_transition;
 pub mod manifest;
 pub mod manifest_lookup;
+pub mod mcp;
 pub mod memory_groups;
 pub mod merge_close;
 pub mod merge_command;
@@ -465,6 +469,7 @@ pub mod release_notes;
 pub mod removals;
 pub mod rename;
 pub mod repeated_asks;
+pub mod research;
 pub mod reserve;
 pub(crate) mod resolve_tier;
 pub mod restart_run;
@@ -603,6 +608,8 @@ pub mod test_hold;
 pub mod test_run;
 mod test_run_journal;
 pub mod think_daily;
+pub mod think_dispatch;
+pub mod think_inspect;
 pub mod thread_host;
 pub mod tick_ledger;
 pub mod tool_activity;
@@ -1384,9 +1391,10 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), four
+        // The allowed files: production binary repair (install_verify), five
         // production dir modes (paths, fleet_incident, chats, the
-        // session-state pin dir), two dir-mode
+        // session-state pin dir, the mcp sidecar's socket-parent tightening),
+        // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
         // production mode-preserve on its atomic plan-file replace
@@ -1401,6 +1409,7 @@ mod tests {
             ("plan_doc/codec.rs", 1),
             ("fleet_incident.rs", 1),
             ("chats.rs", 1),
+            ("mcp/sidecar.rs", 1),
         ];
         let allowed_counts: std::collections::HashMap<&str, usize> =
             ALLOWED.iter().copied().collect();
@@ -1521,6 +1530,9 @@ mod tests {
 /// output; only include kinds that appear as the first string argument to an
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
+    // A standalone research round ships its brief and records the
+    // DoneAdvisory terminal (research/deliverable.rs).
+    "termination",
     // The daemon trust-answer sweep: one row per attempt to answer a parked
     // codex folder-trust modal itself (daemon/sweeps.rs).
     "trust_prompt_answered",
