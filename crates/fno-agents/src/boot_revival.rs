@@ -3,23 +3,33 @@
 //! On the first daemon start of a boot, every registry worker that was live
 //! at the boot comes back without a tap: `claude agents --json --all` lists
 //! its job as stopped or failed, so `claude respawn <job id>` restarts it.
-//! A worker whose node is done, merged or superseded stays stopped. Leads go
+//! A worker whose node is done or superseded stays stopped. Leads go
 //! first. A revival re-seats a row that already held a seat, so it never
 //! asks the spawn gate. One receipt row per worker lands in
 //! `<agents home>/boot-revival.json`, and that file's boot stamp is what
 //! makes the pass run once per boot.
+//!
+//! The receipt is not the whole delivery: after the pass, a failed row
+//! reaches its spawned_by lead as durable mail (reason, re-spawn line,
+//! stale claim), and a revived worker reaches its own row with its open PR
+//! and that PR's CI verdict, so nobody wakes idle.
 
 use std::collections::HashSet;
 use std::path::Path;
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::claude_roster::ClaudeAgentsSnapshot;
 use crate::paths::AgentsHome;
 use crate::state::RegistryEntry;
 
 const RECEIPT_FILE: &str = "boot-revival.json";
+
+/// The sender stamp the pass's mail carries, so a drain attributes the rows
+/// to the boot pass the way `lead_mail::SETTLE_SENDER` does for the settle
+/// arm.
+pub(crate) const SENDER: &str = "fno/boot-revival";
 
 /// macOS moves `kern.boottime` when the wall clock is stepped, so two reads
 /// in one boot can differ by a few seconds.
@@ -92,7 +102,230 @@ pub(crate) fn start(home: &AgentsHome) {
             }
         }
         write_receipt(&receipt, boot, &rows);
+        notify(&home, &rows);
     });
+}
+
+/// Post-pass delivery: a failed row reaches its spawned_by lead with the
+/// reason, the exact re-spawn line and the stale claim to release; a revived
+/// worker reaches its own row with its open PR and that PR's CI verdict. A
+/// send failure prints and never unwinds the pass - the revival already
+/// happened, and a mail outage must not read as one.
+fn notify(home: &AgentsHome, rows: &[ReceiptRow]) {
+    let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
+        return;
+    };
+    for row in rows.iter().filter(|r| r.outcome == "failed") {
+        let Some(worker) = registry.entries.iter().find(|e| e.name == row.name) else {
+            continue;
+        };
+        if let Err(error) = mail_failure(home, &registry.entries, worker, &row.reason) {
+            eprintln!("boot revival: lead mail for {} unsent ({error})", row.name);
+        }
+    }
+    for row in rows.iter().filter(|r| r.outcome == "revived") {
+        let Some(worker) = registry.entries.iter().find(|e| e.name == row.name) else {
+            continue;
+        };
+        // A lead's wake rides its own loop; the idle-wake gap is a worker's.
+        if worker.role_level.is_some() {
+            continue;
+        }
+        if let Err(error) = mail_wake(worker) {
+            eprintln!("boot revival: wake mail for {} unsent ({error})", row.name);
+        }
+    }
+}
+
+/// One durable envelope to the lead the worker's spawned_by session names,
+/// falling back to the row's scope team. Neither resolves: receipt-only,
+/// the mail cannot invent an address.
+fn mail_failure(
+    home: &AgentsHome,
+    entries: &[RegistryEntry],
+    worker: &RegistryEntry,
+    reason: &str,
+) -> Result<(), String> {
+    let body = failure_body(home, worker, reason);
+    match spawned_lead_name(entries, worker) {
+        Some(lead) => crate::lead_mail::send_to_name(SENDER, &lead, &body),
+        None => match worker.role_scope.as_deref() {
+            Some(scope) => crate::lead_mail::send(SENDER, scope, &body).map(|_| ()),
+            None => Err("no spawner row and no scope on the worker row".to_string()),
+        },
+    }
+}
+
+/// The registry row the worker's `spawned_by_session` names. The full
+/// session id is the join key (the registry's keying law); a finished row
+/// loses to a live one, and the first row wins among equals.
+fn spawned_lead_name(entries: &[RegistryEntry], worker: &RegistryEntry) -> Option<String> {
+    let sid = worker.spawned_by_session.as_deref()?;
+    let mut matches: Vec<&RegistryEntry> = entries
+        .iter()
+        .filter(|e| e.harness_session_id.as_deref() == Some(sid))
+        .collect();
+    matches.sort_by_key(|e| !crate::daemon::is_non_terminal(e.status));
+    matches.first().map(|e| e.name.clone())
+}
+
+/// The lead's brief: who failed and why, the exact line to bring it back,
+/// and the stale claim to release so the board stops counting a ghost
+/// driver.
+fn failure_body(home: &AgentsHome, worker: &RegistryEntry, reason: &str) -> String {
+    let node = worker.node.as_deref().unwrap_or("none");
+    let mut lines = vec![
+        format!(
+            "boot revival could not bring back {} (node {node}).",
+            worker.name
+        ),
+        format!("reason: {reason}"),
+        format!("re-spawn: {}", respawn_line(home, worker)),
+    ];
+    if let Some(node) = worker.node.as_deref() {
+        lines.push(format!(
+            "stale claim to release: fno agents claim release node:{node} --force --reason \"boot revival failed this worker\""
+        ));
+    }
+    lines.join("\n")
+}
+
+/// The canonical re-entry plan's argv when one resolves; otherwise the
+/// seed-a-new-session form the 2026-10-11 outage used, built from the row's
+/// own route fields. Best effort by design: the lead reruns or repairs it.
+fn respawn_line(home: &AgentsHome, worker: &RegistryEntry) -> String {
+    if let Ok(plan) = crate::reentry::resolve_reentry(
+        &home.registry_json(),
+        &worker.name,
+        crate::reentry::ReentryTransition::Revive,
+        None,
+        None,
+    ) {
+        return plan.argv.join(" ");
+    }
+    match worker
+        .harness_session_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        Some(sid) => {
+            let mut line = format!("fno agents spawn --resume {sid}");
+            if let (Some(provider), Some(model)) = (
+                worker.route_provider_id.as_deref(),
+                worker.model_name.as_deref(),
+            ) {
+                line.push_str(&format!(" --route {provider}/{model}"));
+            }
+            line
+        }
+        None => "no session id on the row; see fno-agents reentry-plan".to_string(),
+    }
+}
+
+/// One line to the revived worker: its node, the open PR on it, that PR's
+/// CI verdict, and the watcher to re-arm. A node with no recorded PR sends
+/// nothing - a worker between ships wakes to its node context alone.
+fn mail_wake(worker: &RegistryEntry) -> Result<(), String> {
+    let Some(node) = worker.node.as_deref() else {
+        return Ok(());
+    };
+    let Some((number, url, merged)) = open_pr(node) else {
+        return Ok(());
+    };
+    let verdict = if merged {
+        "merged".to_string()
+    } else {
+        ci_verdict(worker, number)
+    };
+    let body = format!(
+        "Revived after the reboot. Node {node}: {url} CI {verdict}. Re-arm your watcher, continue."
+    );
+    crate::lead_mail::send_to_name(SENDER, &worker.name, &body)
+}
+
+/// The node's recorded PR: number, url, and whether the primary ship already
+/// merged. A read failure answers None - the wake line does not invent a PR.
+fn open_pr(node: &str) -> Option<(u64, String, bool)> {
+    let rows = crate::graph_store::read_rows_where(
+        &crate::graph_get::default_graph_path(),
+        &crate::backlog::RowQuery {
+            fields: Some(
+                ["id", "pr_number", "pr_url", "merge_status"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
+            with_blockers: false,
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    let row = rows
+        .iter()
+        .find(|r| crate::graph_store::entry_id(r) == Some(node))?;
+    let number = row.get("pr_number").and_then(Value::as_u64)?;
+    let url = row.get("pr_url").and_then(Value::as_str)?.to_string();
+    let merged = row.get("merge_status").and_then(Value::as_str) == Some("merged");
+    Some((number, url, merged))
+}
+
+/// The PR's CI verdict through the status door's cache - the same read the
+/// merge guard's checks read answers through - or "unread" when the door
+/// refuses. The wake line never guesses a verdict it could not read.
+fn ci_verdict(worker: &RegistryEntry, pr: u64) -> String {
+    let (_code, stdout, _stderr) =
+        crate::pr_status::cache::run_door("status-read", &json!({ "cwd": worker.cwd, "pr": pr }));
+    serde_json::from_str::<Value>(&stdout)
+        .ok()
+        .and_then(|v| v.get("verdict").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_else(|| "unread".to_string())
+}
+
+/// The failed rows of THIS boot, for the lead check-in's reading. A receipt
+/// from an older boot, or no receipt at all, reads empty: a stale failure is
+/// not this boot's news. `None` means the receipt exists but is unreadable -
+/// the caller renders that as a failed reading, never a silent zero.
+pub(crate) fn failed_rows_this_boot(home: &AgentsHome) -> Option<Vec<ReceiptRow>> {
+    let raw = std::fs::read_to_string(home.root().join(RECEIPT_FILE)).ok()?;
+    let boot = boot_time()?;
+    if !ran_this_boot(recorded_boot_value(&raw), boot) {
+        return Some(Vec::new());
+    }
+    let v: Value = serde_json::from_str(&raw).ok()?;
+    Some(
+        parse_rows(v.get("rows"))
+            .into_iter()
+            .filter(|r| r.outcome == "failed")
+            .collect(),
+    )
+}
+
+fn recorded_boot_value(raw: &str) -> Option<u64> {
+    serde_json::from_str::<Value>(raw)
+        .ok()?
+        .get("boot")
+        .and_then(Value::as_u64)
+}
+
+fn parse_rows(rows: Option<&Value>) -> Vec<ReceiptRow> {
+    rows.and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| {
+                    Some(ReceiptRow {
+                        name: r.get("name").and_then(Value::as_str)?.to_string(),
+                        outcome: match r.get("outcome").and_then(Value::as_str)? {
+                            "revived" => "revived",
+                            "skipped" => "skipped",
+                            "failed" => "failed",
+                            _ => return None,
+                        },
+                        reason: r.get("reason").and_then(Value::as_str)?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Split the registry into leads to revive, workers to revive, and the rows
@@ -131,7 +364,7 @@ pub(crate) fn plan(
             skipped.push(ReceiptRow::new(
                 &e.name,
                 "skipped",
-                format!("node {node} is done, merged or superseded"),
+                format!("node {node} is done or superseded"),
             ));
             continue;
         }
@@ -184,7 +417,16 @@ fn revive(home: &AgentsHome, name: &str) -> ReceiptRow {
     }
 }
 
-/// The nodes a revival must leave alone: done, superseded, or merged.
+/// The nodes a revival must leave alone: done or superseded. A merged PR
+/// under a live node is a multi-ship node mid-flight; its worker comes back.
+/// The node's own status is the authority - the primary PR's merge state
+/// once read a multi-ship node closed and left its worker down (x-fcb4,
+/// 2026-10-10).
+fn closed_row(row: &Value) -> bool {
+    crate::graph_store::is_terminal_entry(row)
+}
+
+/// The closed set for this boot's pass.
 fn closed_nodes() -> HashSet<String> {
     let rows = crate::graph_store::read_rows_where(
         &crate::graph_get::default_graph_path(),
@@ -196,7 +438,6 @@ fn closed_nodes() -> HashSet<String> {
                     "completed_at",
                     "id",
                     "status",
-                    "merge_status",
                 ]
                 .into_iter()
                 .map(str::to_string)
@@ -208,10 +449,7 @@ fn closed_nodes() -> HashSet<String> {
     )
     .unwrap_or_default();
     rows.iter()
-        .filter(|row| {
-            crate::graph_store::is_terminal_entry(row)
-                || row.get("merge_status").and_then(Value::as_str) == Some("merged")
-        })
+        .filter(|row| closed_row(row))
         .filter_map(|row| crate::graph_store::entry_id(row).map(str::to_string))
         .collect()
 }
@@ -326,6 +564,86 @@ mod tests {
         assert!(skipped.iter().all(|r| r.outcome == "skipped"));
         assert!(skipped[0].reason.contains("x-done"), "{skipped:?}");
         assert!(skipped[1].reason.contains("working"), "{skipped:?}");
+    }
+
+    #[test]
+    fn the_done_check_reads_node_status() {
+        let in_progress_merged =
+            json!({"id": "x-a", "status": "in_progress", "merge_status": "merged"});
+        let done = json!({"id": "x-b", "status": "done"});
+        let superseded = json!({"id": "x-c", "superseded_by": "x-d"});
+        assert!(!closed_row(&in_progress_merged));
+        assert!(closed_row(&done));
+        assert!(closed_row(&superseded));
+    }
+
+    #[test]
+    fn a_failed_row_names_its_spawner_and_the_respawn() {
+        let mut spawner = row("lead-quill", "aaaa1111-lead", AgentStatus::Live);
+        spawner.role_level = Some(1);
+        let mut dead_lead = row("lead-old", "aaaa1111-lead", AgentStatus::Exited);
+        dead_lead.exited_at = Some("2026-01-01T00:00:00Z".into());
+        let mut worker = row("kestrel", "22223333-worker", AgentStatus::Orphaned);
+        worker.spawned_by_session = Some("aaaa1111-lead".into());
+        worker.node = Some("x-1".into());
+        worker.harness_session_id = Some("22223333-worker".into());
+        worker.route_provider_id = Some("zai".into());
+        worker.model_name = Some("glm-5.3-flash[1m]".into());
+        let entries = vec![spawner, dead_lead, worker.clone()];
+        // The live spawner row wins over the finished one for the same sid.
+        assert_eq!(
+            spawned_lead_name(&entries, &worker).unwrap(),
+            "lead-quill".to_string()
+        );
+        let mut worker_no_lead = worker.clone();
+        worker_no_lead.spawned_by_session = Some("ffff0000-gone".into());
+        assert!(spawned_lead_name(&entries, &worker_no_lead).is_none());
+        let home = AgentsHome::at(tempfile::tempdir().unwrap().keep());
+        let body = failure_body(&home, &worker, "launch account zai rides an api-key lane");
+        assert!(body.contains("kestrel"), "{body}");
+        assert!(body.contains("x-1"), "{body}");
+        assert!(body.contains("reason: launch account zai"), "{body}");
+        assert!(
+            body.contains("fno agents spawn --resume 22223333-worker"),
+            "{body}"
+        );
+        assert!(body.contains("--route zai/glm-5.3-flash[1m]"), "{body}");
+        assert!(body.contains("claim release node:x-1 --force"), "{body}");
+    }
+
+    #[test]
+    fn failed_rows_this_boot_reads_this_boot_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(dir.path());
+        std::fs::create_dir_all(home.root()).unwrap();
+        let receipt = dir.path().join(RECEIPT_FILE);
+        let this_boot = boot_time().unwrap();
+        let rows = serde_json::json!([
+            {"name": "kestrel", "outcome": "failed", "reason": "zai lane cannot ride a re-entry plan"},
+            {"name": "folio", "outcome": "revived", "reason": "claude respawn 33334444"}
+        ]);
+        std::fs::write(
+            &receipt,
+            serde_json::json!({"boot": this_boot, "rows": rows}).to_string(),
+        )
+        .unwrap();
+        let failed = failed_rows_this_boot(&home).unwrap();
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert_eq!(failed[0].name, "kestrel");
+        assert!(failed[0].reason.contains("zai lane"));
+        // A previous boot's receipt is not this boot's news.
+        std::fs::write(
+            &receipt,
+            serde_json::json!({"boot": this_boot - 86_400, "rows": rows}).to_string(),
+        )
+        .unwrap();
+        assert!(failed_rows_this_boot(&home).unwrap().is_empty());
+        // A corrupted receipt reads unmeasured, never a silent zero.
+        std::fs::write(&receipt, "{not json").unwrap();
+        assert!(failed_rows_this_boot(&home).is_none());
+        // No receipt at all is a clean none.
+        std::fs::remove_file(&receipt).unwrap();
+        assert!(failed_rows_this_boot(&home).unwrap().is_empty());
     }
 
     #[test]
