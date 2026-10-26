@@ -283,12 +283,11 @@ fn pr_number_from_ship_artifact(root_path: &str, session_id: &str) -> Option<i64
 /// Last-resort PR number: ask gh for the current branch's PR. Best-effort and
 /// silent - a no_ship run or a detached worktree simply yields None.
 fn pr_number_from_gh(cwd: &Path) -> Option<i64> {
-    let out = Command::new("gh")
-        .args(["pr", "view", "--json", "number", "-q", ".number"])
+    let mut cmd = Command::new("gh");
+    cmd.args(["pr", "view", "--json", "number", "-q", ".number"])
         .current_dir(cwd)
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+        .stderr(std::process::Stdio::null());
+    let out = crate::gh_budget::output(cmd).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -411,18 +410,18 @@ fn pr_url_for(cwd: &Path, pr_number: Option<i64>, remote_url: &str) -> Option<St
         }
     }
     let slug = slug_from_remote(remote_url).or_else(|| {
-        Command::new("gh")
-            .args([
-                "repo",
-                "view",
-                "--json",
-                "nameWithOwner",
-                "-q",
-                ".nameWithOwner",
-            ])
-            .current_dir(cwd)
-            .stderr(std::process::Stdio::null())
-            .output()
+        let mut cmd = Command::new("gh");
+        cmd.args([
+            "repo",
+            "view",
+            "--json",
+            "nameWithOwner",
+            "-q",
+            ".nameWithOwner",
+        ])
+        .current_dir(cwd)
+        .stderr(std::process::Stdio::null());
+        crate::gh_budget::output(cmd)
             .ok()
             .filter(|out| out.status.success())
             .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
