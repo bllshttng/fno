@@ -33,6 +33,53 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
+thread_local! {
+    static FAILURES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run one case's assertions and record a failure instead of raising it, so
+/// one CI run names every diverging case, not only the first.
+fn soft(label: &str, f: impl FnOnce()) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        let msg = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_else(|| "non-string panic".to_string());
+        FAILURES.with(|f| f.borrow_mut().push(format!("[{label}] {msg}")));
+    }
+}
+
+/// Held for a whole test: on drop it raises every case `soft` recorded.
+struct Collect;
+
+impl Collect {
+    fn new() -> Collect {
+        FAILURES.with(|f| f.borrow_mut().clear());
+        Collect
+    }
+}
+
+impl Drop for Collect {
+    fn drop(&mut self) {
+        let failures = FAILURES.with(|f| std::mem::take(&mut *f.borrow_mut()));
+        if failures.is_empty() {
+            return;
+        }
+        let report = format!(
+            "{} case(s) diverged:\n{}",
+            failures.len(),
+            failures.join("\n\n")
+        );
+        // A hard panic is already unwinding: print the list, never panic twice.
+        if std::thread::panicking() {
+            eprintln!("{report}");
+        } else {
+            panic!("{report}");
+        }
+    }
+}
+
 /// Pinned git dates keep commit shas stable, so goldens carrying a sha
 /// (the apply case) stay valid across runs and machines.
 fn run_git(cwd: &Path, args: &[&str]) -> String {
@@ -370,6 +417,7 @@ fn write_repo_config(repo: &Path, text: &str) {
 #[test]
 fn policy_cases() {
     let _guard = lock();
+    let _collect = Collect::new();
     let tmp = tempfile::tempdir().expect("tempdir");
     let (root, home) = (tmp.path().join("root"), tmp.path().join("home"));
     fixture(&root, &home);
@@ -566,6 +614,7 @@ fn policy_cases() {
 #[test]
 fn ensure_cases() {
     let _guard = lock();
+    let _collect = Collect::new();
     let tmp = tempfile::tempdir().expect("tempdir");
     let (root, home) = (tmp.path().join("root"), tmp.path().join("home"));
     fixture(&root, &home);
@@ -770,6 +819,7 @@ fn ensure_cases() {
 #[test]
 fn status_and_list_cases() {
     let _guard = lock();
+    let _collect = Collect::new();
     let tmp = tempfile::tempdir().expect("tempdir");
     let (root, home) = (tmp.path().join("root"), tmp.path().join("home"));
     fixture(&root, &home);
@@ -922,6 +972,7 @@ fn classify_case(
 #[test]
 fn stranded_and_resolve_cases() {
     let _guard = lock();
+    let _collect = Collect::new();
     let tmp = tempfile::tempdir().expect("tempdir");
     let (root, home) = (tmp.path().join("root"), tmp.path().join("home"));
     fixture(&root, &home);
@@ -1115,6 +1166,7 @@ fn stranded_and_resolve_cases() {
 #[test]
 fn sweep_and_apply_cases() {
     let _guard = lock();
+    let _collect = Collect::new();
     let tmp = tempfile::tempdir().expect("tempdir");
     let (root, home) = (tmp.path().join("root"), tmp.path().join("home"));
     fixture(&root, &home);
@@ -1187,6 +1239,7 @@ fn sweep_and_apply_cases() {
 #[test]
 fn apply_case() {
     let _guard = lock();
+    let _collect = Collect::new();
     let tmp = tempfile::tempdir().expect("tempdir");
     let (root, home) = (tmp.path().join("root"), tmp.path().join("home"));
     fixture(&root, &home);
@@ -1235,10 +1288,12 @@ fn apply_case() {
     } else {
         std::env::remove_var("FNO_STATE_DIR");
     }
-    assert!(
-        journal_text.contains("stranded_sweep") && journal_text.contains("x-c000"),
-        "the apply journal row must record the sweep with its node"
-    );
+    soft("apply journal", || {
+        assert!(
+            journal_text.contains("stranded_sweep") && journal_text.contains("x-c000"),
+            "the apply journal row must record the sweep with its node"
+        )
+    });
     let pushed = run_git(
         &root.join("ap-origin.git"),
         &["rev-parse", "--verify", "feature/apply-node-xc00"],
@@ -1319,7 +1374,7 @@ fn check2(label: &str, code: i32, out: String, err: String, root: &Path, home: &
             normalize(&err, root, home, base),
         ],
     };
-    assert_golden("worktree", label, &golden, None);
+    soft(label, || assert_golden("worktree", label, &golden, None));
 }
 
 /// The out-only form for cases whose capture wrote no .err golden.
@@ -1328,7 +1383,7 @@ fn check(label: &str, code: i32, out: String, root: &Path, home: &Path, base: &P
         exit: Some(code),
         streams: vec![normalize(&out, root, home, base)],
     };
-    assert_golden("worktree", label, &golden, None);
+    soft(label, || assert_golden("worktree", label, &golden, None));
 }
 
 /// The `worktree-policy` op driven like the capture ran it: per-case repo
@@ -1381,6 +1436,7 @@ fn policy_case(
 #[test]
 fn overlap_dispatch_register_cases() {
     let _guard = lock();
+    let _collect = Collect::new();
     let tmp = tempfile::tempdir().expect("tempdir");
     let (root, home) = (tmp.path().join("root"), tmp.path().join("home"));
     fixture(&root, &home);
@@ -1525,6 +1581,7 @@ fn overlap_dispatch_register_cases() {
 #[test]
 fn dispatch_and_register_cases() {
     let _guard = lock();
+    let _collect = Collect::new();
     let tmp = tempfile::tempdir().expect("tempdir");
     let (root, home) = (tmp.path().join("root"), tmp.path().join("home"));
     fixture(&root, &home);
@@ -1608,8 +1665,10 @@ fn dispatch_and_register_cases() {
         &base,
     );
     let registry_text = std::fs::read_to_string(&workers).unwrap_or_default();
-    assert!(
-        registry_text.contains("t-fixture-worker") && registry_text.contains("camp-x"),
-        "the worker row lands in the registry file"
-    );
+    soft("register worker registry", || {
+        assert!(
+            registry_text.contains("t-fixture-worker") && registry_text.contains("camp-x"),
+            "the worker row lands in the registry file"
+        )
+    });
 }
