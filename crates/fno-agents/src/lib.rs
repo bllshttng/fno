@@ -571,6 +571,7 @@ pub mod subscribe;
 pub mod succession_txn;
 pub mod supervisor;
 pub mod surface_check;
+pub mod symptom_recheck;
 pub mod sync_canonical;
 pub mod system_sender;
 pub mod target_blast;

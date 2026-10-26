@@ -175,6 +175,11 @@ pub(super) struct PrInfo {
 /// does not stamp terminal - the live one - and among equals takes the
 /// newest number, so a closed or earlier merged primary never pins the gate
 /// to a dead PR.
+///
+/// The lift is age-gated: an unstamped row OLDER than every stamped row is
+/// reopen history, never live work. Rows the reopen demotion writes carry
+/// the explicit `history: true` mark and sink whatever their number; the
+/// age rule remains for rows written before the mark existed.
 pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Option<String> {
     let node_id = node_id?;
     let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
@@ -182,14 +187,18 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
         Ok(Some(n)) => n,
         _ => return None,
     };
-    let mut rows: Vec<(i64, Option<&str>)> = node
+    let mut rows: Vec<(i64, Option<&str>, bool)> = node
         .primary_pr
         .iter()
         .chain(node.additional_prs.iter().flatten())
         .filter_map(|pr| {
-            pr.number
-                .filter(|number| *number > 0)
-                .map(|n| (n, pr.merge_status.as_deref()))
+            pr.number.filter(|number| *number > 0).map(|n| {
+                (
+                    n,
+                    pr.merge_status.as_deref(),
+                    pr.extras.get("history").and_then(Value::as_bool) == Some(true),
+                )
+            })
         })
         .collect();
     // Newest first, then a stable pass that lifts non-terminal rows above
@@ -197,12 +206,31 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
     // lowercase today but GitHub-adjacent prose elsewhere, so the compare is
     // case-insensitive on purpose. `merge_status` is None on every attached
     // row, so an untracked live PR beats a stamped dead one, and a node
-    // whose only PR is merged still pins it.
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
-    rows.sort_by_key(|(_, status)| {
+    // whose only PR is merged still pins it. An unstamped row at or below
+    // the newest stamp shares the stamped rows' key: it predates them, and
+    // a row the reopen marked history sinks whatever its number.
+    let terminal = |status: &Option<&str>| {
         status.is_some_and(|s| s.eq_ignore_ascii_case("merged") || s.eq_ignore_ascii_case("closed"))
+    };
+    let max_terminal = rows
+        .iter()
+        .filter(|(_, status, _)| terminal(status))
+        .map(|(number, _, _)| *number)
+        .max();
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    // Key 0 = live, 1 = settled (stamped, or age-gated history), 2 = an
+    // explicitly marked history row. A marked row sinks below even the
+    // stamped rows: state, not number order, decides for it.
+    rows.sort_by_key(|(number, status, history)| {
+        if *history {
+            2
+        } else if terminal(status) || max_terminal.is_some_and(|bound| *number <= bound) {
+            1
+        } else {
+            0
+        }
     });
-    rows.first().map(|(number, _)| number.to_string())
+    rows.first().map(|(number, _, _)| number.to_string())
 }
 
 /// The node's live replacement PR when the bound one reads CLOSED: the
