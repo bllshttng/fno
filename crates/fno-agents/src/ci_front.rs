@@ -62,11 +62,12 @@ fn seconds_flag(tail: &[String], name: &str, default: u64) -> Result<u64, String
     let Some(raw) = option_value(tail, name) else {
         return Ok(default);
     };
-    let secs = raw
-        .parse::<u64>()
-        .or_else(|_| crate::duration::parse_duration_secs(&raw).ok_or(()));
+    let secs = match raw.parse::<u64>() {
+        Ok(n) => Some(n),
+        Err(_) => crate::duration::parse_duration_secs(&raw),
+    };
     match secs {
-        Ok(secs) if secs > 0 => Ok(secs),
+        Some(secs) if secs > 0 => Ok(secs),
         _ => Err(format!("{name} wants a positive duration, got {raw:?}")),
     }
 }
@@ -187,7 +188,7 @@ pub(crate) fn verdict_from_runs(runs: &[Value]) -> (String, bool, Vec<Value>) {
     // The fold's newest-completed slot stays unused here on purpose: once
     // the newest run has landed it IS the newest completed one, so the
     // newest pointer alone decides, in flight or landed.
-    for (name, newest, _newest_completed) in folds {
+    for (name, newest, _newest_completed) in &folds {
         let newest_status = newest.get("status").and_then(Value::as_str).unwrap_or("");
         let row = if newest_status != "completed" {
             pending = true;
