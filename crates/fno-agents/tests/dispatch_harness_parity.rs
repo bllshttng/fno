@@ -31,6 +31,7 @@ fn dispatch_harness_goldens_replay_every_payload() {
             .env("FNO_NO_CANONICAL_CONFIG", "1")
             .env("FNO_STATE_DIR", root.join("state"))
             .env("FNO_AGENTS_HOME", root.join("agents"))
+            .envs(fno_agents::test_run::self_owner_env())
             .args(["route-slot"])
             .arg(input)
             .output()

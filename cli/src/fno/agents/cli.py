@@ -862,13 +862,18 @@ def cmd_spawn(
         node_seed_env = seed.env
         node_seed_receipt = seed.receipt
         if cwd is None and not here:
-            ensured = seed.ensure_launch_workdir(harness)
+            ensured = seed.ensure_launch_workdir(harness or "")
             if ensured is None:
                 raise typer.Exit(code=2)
             workdir = ensured.resolve()
             _moved_cwd = str(workdir) if workdir != Path(os.getcwd()).resolve() else None
 
     from fno.agents.spawn_defaults import resolve_spawn_gates, seedless_thread_refusal
+
+    # From here down the transport reads the unset harness as the empty
+    # default: the seed path needed the None distinction (unset resolves its
+    # own config rung), the transport layer does not.
+    harness = harness or ""
 
     # Retired spellings bind the same options; name the replacement when the
     # argv used one. The process argv is exact for the real door; a test

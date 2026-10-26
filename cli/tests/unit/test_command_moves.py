@@ -176,13 +176,17 @@ def test_every_moved_spelling_is_hidden():
         # would forward into nothing. `mcp` joined the same way: the send
         # family ported native and the front door claims both spellings.
         # `setup` joined when every setup command ported native: the front
-        # door claims the root spelling and answers it. Every OTHER moved
+        # door claims the root spelling and answers it. `route` joined when
+        # the route family ported native: the front classifier claims the
+        # root spelling (route, config route, config routing, doctor route)
+        # and execs the slot resolver itself, so a python registration would
+        # sit behind an intercept that never reaches it. Every OTHER moved
         # spelling keeps a one-release registration, and any registration
         # that exists must be hidden: an advertised moved name teaches a
         # doomed spelling.
         if name in (
             "decide", "yard", "review", "pr", "retro", "restart", "project", "skill-diff",
-            "mcp", "setup",
+            "mcp", "setup", "route",
 
         ):
             assert cmd is None, f"{name}'s registration was removed with the move"

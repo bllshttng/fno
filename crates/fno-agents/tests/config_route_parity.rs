@@ -19,7 +19,8 @@ fn command(tmp: &std::path::Path) -> Command {
         .env("FNO_NO_CANONICAL_CONFIG", "1")
         .env("FNO_AGENTS_HOME", tmp.join("agents-home"))
         .env("FNO_STATE_DIR", tmp.join("state"))
-        .env_remove("ZAI_API_KEY");
+        .env_remove("ZAI_API_KEY")
+        .envs(fno_agents::test_run::self_owner_env());
     cmd
 }
 
