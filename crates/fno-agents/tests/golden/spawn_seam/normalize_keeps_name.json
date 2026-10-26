@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "spawn",
+    "--name",
+    "w1",
+    "hi"
+  ],
+  "stderr": []
+}
