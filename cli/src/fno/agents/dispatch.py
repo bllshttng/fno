@@ -1794,7 +1794,7 @@ def _claude_create_path(
                 )
                 role_declined = True
         if entry.role_level is not None and entry.role_scope:
-            from fno.lead.state import arm_lead_manifest
+            from fno.agents.role import arm_lead_manifest
 
             try:
                 lead_loop_armed = arm_lead_manifest(

@@ -62,7 +62,6 @@ no-flag: cli/src/fno/graph/triage.py cmd_validate
 no-flag: cli/src/fno/graph/triage.py cmd_apply
 no-flag: cli/src/fno/graph/triage.py cmd_projects
 no-flag: cli/src/fno/inbox/operator_turns.py cmd_ack
-no-flag: cli/src/fno/lead/cli.py drain_cmd
 no-flag: cli/src/fno/mail/cli.py cmd_hold_release
 no-flag: cli/src/fno/pr/cli.py coverage_publish
 no-flag: cli/src/fno/pr/cli.py info

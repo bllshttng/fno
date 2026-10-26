@@ -4458,7 +4458,7 @@ def dispatch_spawn_pane(
                     account_record_id=account_record_id,
                 )
             if entry.role_level is not None and entry.role_scope:
-                from fno.lead.state import arm_lead_manifest
+                from fno.agents.role import arm_lead_manifest
 
                 try:
                     lead_loop_armed = arm_lead_manifest(

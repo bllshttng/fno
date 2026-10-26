@@ -599,6 +599,19 @@ pub fn overlay_kind(payload: &Value) -> Result<Value, String> {
             now(),
         )}),
         Some("graph-ident") => json!({"ident": graph_ident(&cwd())}),
+        // The term reader over one scope, the manifests under the owner's
+        // space and the alias map from this checkout.
+        Some("term") => {
+            let state = crate::lead_state::lead_state_in_repo(
+                &root(),
+                &cwd(),
+                Some(s("scope")).filter(|v| !v.is_empty()),
+                None,
+                None,
+                &crate::paths::AgentsHome::from_env().registry_json(),
+            );
+            serde_json::to_value(state).map_err(|e| e.to_string())?
+        }
         Some("sidecar-update") => {
             let fields = payload
                 .get("fields")
@@ -613,7 +626,7 @@ pub fn overlay_kind(payload: &Value) -> Result<Value, String> {
         other => {
             return Err(format!(
                 "lead: unknown op {other:?}; expected path|read|remove|for-session|admit-wake|\
-                 bill-wake|read-wakes|scope|last-run|graph-ident|sidecar-update"
+                 bill-wake|read-wakes|scope|last-run|graph-ident|term|sidecar-update"
             ))
         }
     };
@@ -1180,4 +1193,125 @@ pub fn run_escalate(args: &[String]) -> i32 {
         None => println!("operator:{qid}"),
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const T0: i64 = 1_788_000_000;
+
+    fn manifest(dir: &Path, body: &str) -> PathBuf {
+        let path = dir.join("leads").join("epic-x.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    fn lines(path: &Path) -> Vec<String> {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn admit_refuses_inside_the_debounce_and_at_the_ceiling_then_bills() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = manifest(dir.path(), "---\nfno_id: k-1\nrespawn_count: 0\n---\n");
+        assert_eq!(admit_wake(&path, T0, 2, 600, 32).unwrap(), ("", 1));
+        // The stamp lands after the last lead field, never at the top.
+        assert_eq!(lines(&path)[3], format!("wake_times: {}", format_stamp(T0)));
+        assert_eq!(
+            admit_wake(&path, T0 + 60, 2, 600, 32).unwrap(),
+            ("debounce", 1)
+        );
+        assert_eq!(admit_wake(&path, T0 + 700, 2, 600, 32).unwrap(), ("", 2));
+        assert_eq!(
+            admit_wake(&path, T0 + 1400, 2, 600, 32).unwrap(),
+            ("ceiling", 2)
+        );
+        // A ceiling of 0 is unbounded; the keep then bounds the line alone.
+        assert_eq!(admit_wake(&path, T0 + 2100, 0, 600, 1).unwrap(), ("", 1));
+    }
+
+    #[test]
+    fn a_stamp_a_full_day_old_leaves_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = format!(
+            "---\nwake_times: {},{}\n---\n",
+            format_stamp(T0),
+            format_stamp(T0 + 60)
+        );
+        let path = manifest(dir.path(), &body);
+        assert_eq!(read_wakes(&path, T0 + WAKE_WINDOW_S), vec![T0 + 60]);
+        assert_eq!(bill_wake(&path, T0 + WAKE_WINDOW_S, 32).unwrap(), 2);
+        let absent = dir.path().join("absent.md");
+        assert_eq!(admit_wake(&absent, T0, 2, 0, 32).unwrap(), ("debounce", 0));
+    }
+
+    #[test]
+    fn the_respawn_budget_defaults_to_four_like_the_walk() {
+        let read = |body: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            respawn_budget(&parse_manifest(&manifest(dir.path(), body)))
+        };
+        assert_eq!(read("respawn_count: 4\n"), (true, 4));
+        assert_eq!(read("respawn_count: 3\n"), (false, 4));
+        assert_eq!(read("respawn_count: 9\nrespawn_ceiling: 0\n"), (false, 0));
+    }
+
+    #[test]
+    fn parse_manifest_decodes_a_quoted_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = manifest(
+            dir.path(),
+            "---\nmodel: \"glm-5.3[1m]\"\nscope: epic-x\n---\n",
+        );
+        let fields = parse_manifest(&path);
+        assert_eq!(field(&fields, "model"), "glm-5.3[1m]");
+        assert_eq!(field(&fields, "scope"), "epic-x");
+    }
+
+    #[test]
+    fn removal_keeps_a_manifest_another_session_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = manifest(dir.path(), "---\nharness_session_id: successor\n---\n");
+        assert!(!remove_manifest(dir.path(), "epic-x", Some("expired")));
+        assert!(path.exists());
+        assert!(remove_manifest(dir.path(), "epic-x", Some("successor")));
+        assert!(!path.exists());
+        assert!(!remove_manifest(dir.path(), "../escape", None));
+    }
+
+    #[test]
+    fn a_driven_but_unshipped_row_stays_undelivered() {
+        // Assignment is not delivery: an in-progress row with a PR counts.
+        let rows = vec![
+            json!({"id": "x-root", "type": "epic", "status": "in_progress"}),
+            json!({"id": "x-a", "parent": "x-root", "status": "in_progress", "pr": 1497}),
+            json!({"id": "x-b", "parent": "x-root", "status": "done"}),
+        ];
+        let ids = vec!["x-a".to_string(), "x-b".to_string()];
+        assert_eq!(undelivered_of(&ids, &rows), 1);
+    }
+
+    #[test]
+    fn a_window_reads_its_unit() {
+        assert_eq!(parse_window("90m"), Ok(5400));
+        assert_eq!(parse_window("7d"), Ok(604_800));
+        assert_eq!(parse_window("30"), Ok(30));
+        assert_eq!(
+            parse_window("4x"),
+            Err("unparseable window '4x'; use e.g. 24h, 90m, 7d".to_string())
+        );
+    }
+
+    #[test]
+    fn the_dedupe_key_is_the_python_channel_key() {
+        // sha256("x-1\nx-2")[:12], the key stale_escalate.dedupe_key minted.
+        let ids = vec!["x-2".to_string(), "x-1".to_string(), "x-1".to_string()];
+        assert_eq!(dedupe_key(&ids), "c16cde8900b4");
+    }
 }
