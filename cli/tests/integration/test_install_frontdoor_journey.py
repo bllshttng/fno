@@ -222,12 +222,11 @@ def test_authorized_target_init_journey(clean_machine):
     assert proc.returncode == 0, proc.stderr
     node = json.loads(proc.stdout)["id"]
 
-    # 2. Setup answers through the same CLI before init: `config setup plan`
-    #    (the wizard's scriptable twin) returns a schema-derived question plan.
-    plan = _run_fno(repo, home, "config", "setup", "plan")
+    # 2. Setup answers before init: `config setup plan` (the wizard's
+    #    scriptable twin, native in the front) returns the question plan.
+    plan = _run_front_door(front, repo, "config", "setup", "plan")
     assert plan.returncode == 0, plan.stderr
-    # The banner line precedes the JSON; parse from the first "{".
-    assert json.loads(plan.stdout[plan.stdout.index("{"):])["fields"], plan.stdout
+    assert json.loads(plan.stdout)["fields"], plan.stdout
 
     # 3. Authorized target init: a declared denominator, no plan, no remote.
     init = _run_fno(repo, home, "do", "target", "init", "--input", node, "--deliverables", "1")

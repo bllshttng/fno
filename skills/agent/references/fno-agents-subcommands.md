@@ -52,7 +52,7 @@ The three **(typer, hidden)** subcommands are the only machine subcommands that 
 | Subcommand | State |
 |------|-------|
 | `subscribe` | Streams registry state transitions and pane exits. The surviving half of the pub/sub avenue for the MCP-route comms channel. |
-| ~~`register-channel` / `unregister-channel` / `push-channel`~~ | **Removed.** The CLI wrappers had no caller in any language, and the sidecar that actually registers channels (`fno.mcp.sidecar`) never went through them. `fno agents <command>` refuses each by name; the table lives in `cli/src/fno/tombstones.py`. |
+| ~~`register-channel` / `unregister-channel` / `push-channel`~~ | **Removed.** The CLI wrappers had no caller in any language, and the sidecar that actually registers channels (the native `fno-agents-worker --mcp-exec sidecar`) never went through them. `fno agents <command>` refuses each by name; the table lives in `cli/src/fno/tombstones.toml`. |
 
 A subcommand with zero shell call sites is *not-yet-wired*, not dead.
 Cutting requires proving no shell call site **and** no internal dispatch **and** no forward intent.

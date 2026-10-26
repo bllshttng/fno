@@ -2435,7 +2435,7 @@ fn render_lines_with(
 // ---------------------------------------------------------------------------
 // faq prompt + emit
 
-fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String> {
+pub(crate) fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String> {
     let mut entries: Vec<(SystemTime, String)> = Vec::new();
     let Ok(it) = std::fs::read_dir(faqs_dir) else {
         return Vec::new();
@@ -2645,12 +2645,16 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     let mut theme: Option<String> = None;
     let mut keep_name_from: Option<String> = None;
     let mut queue_arg: Option<String> = None;
+    let mut user_command = false;
     let mut i = 0;
     while i < args.len() {
         let flag = |name: &str| args[i] == name && i + 1 < args.len();
         if flag("--scope") {
             ctx.scope = args[i + 1].clone();
             i += 2;
+        } else if args[i] == "--user-command" {
+            user_command = true;
+            i += 1;
         } else if flag("--change") {
             model_change = Some(args[i + 1].clone());
             i += 2;
@@ -2704,9 +2708,33 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
                  [--faqs-dir PATH] [--board-state PATH] [--emit-path PATH] \
                  [--change TEXT] [--name NAME] [--theme THEME] \
                  [--keep-name-from OLD-SCOPE] [--queue IDS] \
-                 [--no-emit] [--json]"
+                 [--no-emit] [--json] [--user-command]"
             );
             return 2;
+        }
+    }
+    if user_command {
+        // `fno agents org checkin`: the paths the retired Python shell passed,
+        // resolved here for any the caller left out.
+        if ctx.events_paths.is_empty() {
+            ctx.events_paths = crate::lead_history::default_journals(&ctx.cwd);
+        }
+        if ctx.graph.as_os_str().is_empty() {
+            ctx.graph = crate::paths_cli::graph_json(&ctx.cwd);
+        }
+        if ctx.handoffs_dir.as_os_str().is_empty() {
+            ctx.handoffs_dir = crate::paths_cli::handoffs_dir(&ctx.cwd);
+        }
+        if ctx.faqs_dir.is_none() {
+            ctx.faqs_dir = crate::backlog::autobrief::briefs_dir().map(|d| d.join("lead-faqs"));
+        }
+        if ctx.emit_path.is_none() {
+            ctx.emit_path = Some(
+                std::env::var_os("FNO_EVENTS_PATH")
+                    .filter(|p| !p.is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| crate::paths::events_path(&ctx.cwd)),
+            );
         }
     }
     if ctx.events_paths.is_empty()

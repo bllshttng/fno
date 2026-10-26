@@ -1,0 +1,5 @@
+{"ts":"2026-10-24T09:00:00Z","type":"lead_checkin","session_id":"sess-lead","data":{"scope":"epic-y","beat":1,"change":"first beat: three workers seated"}}
+{"ts":"2026-10-24T09:20:00Z","type":"lead_checkin","session_id":"sess-lead","data":{"scope":"epic-y","beat":2,"change":"PR 3854 ready, merge held"}}
+{"ts":"2026-10-24T09:25:00Z","type":"lead_checkin","session_id":"sess-bare","data":{"scope":"epic-z","beat":1,"change":"another scope"}}
+{"ts":"2026-10-24T09:30:00Z","type":"lead_checkin","session_id":"sess-lead","data":{"role_scope":"epic-y","beat":3,"change":"legacy alias row"}}
+{"ts":"2026-10-24T09:40:00Z","type":"session_end","session_id":"sess-lead","data":{"scope":"epic-y"}}

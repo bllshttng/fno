@@ -1,6 +1,6 @@
 # House style for agent-authored text
 
-Agent text is re-read by every recipient on every turn. It must read once. A machine checks eight rules at the tool boundary, on every surface. Mail and encounter evidence carry rule 7 as well, the 80-word cap, its number config-driven per surface.
+Agent text is re-read by every recipient on every turn. It must read once. A machine checks nine rules at the tool boundary, on every surface. Mail and encounter evidence carry rule 7 as well, the 80-word cap, its number config-driven per surface, and rule 9, the glue refusal.
 
 ## The house style
 
@@ -29,7 +29,7 @@ A worker who reads both rules without this section picks one and drops the other
 
 ## What the checker enforces
 
-The house style above is the standard a person writes to. The list below is the part a machine can decide. The two lists are different things, and one counts six while the other counts eight. The checker is the floor, never the whole style. A draft that passes it can still bury the point, and no gate catches that.
+The house style above is the standard a person writes to. The list below is the part a machine can decide. The two lists are different things, and one counts six while the other counts nine. The checker is the floor, never the whole style. A draft that passes it can still bury the point, and no gate catches that.
 
 1. A list-item sentence is 20 words or fewer. Every other sentence is 25 words or fewer.
 2. No semicolon. Write two sentences.
@@ -39,6 +39,7 @@ The house style above is the standard a person writes to. The list below is the 
 6. A paragraph is one physical line. A newline starts the next block.
 7. Mail prose and encounter evidence are 80 masked words or fewer, or whatever `config.style.word_cap.<surface>` sets. This rule does not run on PR bodies, comments, changed markdown, or progress notes.
 8. No filler or pleasantries: "please", "thanks", "basically", and the phrases "thank you", "of course", "happy to", "feel free". This rule runs on every surface, and its list is closed.
+9. No glued tokens on mail and encounter. A glued token joins two wordlist words with no separator, or a word and four or more digits. "staticprogress" and "PIDs76751" are the shapes. This rule runs only where rule 7 runs, because the cap is the pressure that pays for gluing.
 
 Until 2026-09-11 mail ran the word cap only, and rules 1 to 6 never saw a mail body. That was a decision, recorded in this file and in the checker's docstring. The premise aged: agent mail is read by a human in the transcript, and every mail is re-read by a model whose context it spends. Mail now runs the full rule set. Measured on 2026-09-11 against 6,964 authored bodies from the bus corpus, rules 1 to 6 refuse 18.6 percent, and rule 8 adds about 3 percent. The 80-word cap refuses as before. The gate cannot wedge the bus: the `control:` lane, a `style-exception:` line, and `FNO_STYLE_ENFORCE=0` all bypass.
 
@@ -154,6 +155,20 @@ Rule 8 bans three words ("please", "thanks", "basically") and four phrases ("tha
 A word that reads as filler in other houses can carry load here. To add one to the list, meet its corpus occurrences first and show they carry no task content.
 
 Name the cost honestly: "please" and "thanks" are the only social register agents have with each other, and this rule removes them. That is what the requested compression costs, and it was accepted knowingly.
+
+## Rule 9 refuses glued tokens
+
+Fleet mail measured on 2026-10-03 showed leads gluing words to fit the 80-word cap: "Staticprogress underhold", "readyplan omitted requiredgate", "same9dflogicalID", "Oldbuild PIDs76751". The cap counts whitespace tokens, so glue hides content from the counter while the reader pays for it. Rule 9 closes that dodge at any mail length. It runs only on the capped surfaces, mail and encounter, because the cap is the pressure that pays for gluing.
+
+The trigger set has three reads. The first covers pure words. It fires on eight or more letters, absent from the wordlist, with no inflection hit, and a greedy split into two or more wordlist words. "underhold" is "under" plus "hold". The second covers digits. A word and a run of four or more digits with no separator refuses: "PIDs76751". The third covers short digit runs. At least two letters on both sides refuse: "same9dflogicalID".
+
+The refusal names the split and points at the honest repairs: write the words apart, or put the detail in a linked node note. Quoting a token is the mention escape: a quoted or backticked span is masked to one placeholder before any rule runs.
+
+Two vendored wordlists carry the rule, both closed. The split tier at `crates/fno-agents/src/backlog/style_words.txt` validates split parts: google-10000-english (MIT), filtered to ASCII words of three or more letters, plus a tech and fleet supplement. Entries that serve speech only as prefix or suffix ("pre", "con", "ing", "able") are removed, so a split through one cannot happen. The protection tier at `crates/fno-agents/src/backlog/style_protect.txt` covers the whole token. It is the dwyl english-words list (public domain), kept to entries of ten or more letters or attested words. The attestation source is the top-200k slice of a subtitle frequency list. An established compound such as "beforehand" or "bottleneck" sits in the protection tier and never fires. Obscure junk that shields fabricated glue stays outside it, "underhold" among them. A stem pass protects inflections, so "backfilled" is covered by "backfill" and "footnotes" by "footnote". Hex-shaped tokens are bare ids and shas, and never fire.
+
+The false-positive posture was measured before the rule landed, in the rule-8 manner. A prototype ran over 2,658 live bus bodies. The tuned rule fires ten times, and none of the ten is a real word. Nine are bare CamelCase identifiers like "SettingsModel". One is a glued ISO timestamp. The probe also fired on real words in earlier rounds: "ownership", "footnote", "conflicting", "withheld", "override", "outranks", "backfilled", and, in review, "beforehand", "alongside", "bottleneck", "bookkeeping", "aftermath". The protection tier exists because of that last class. A miss list cannot tell an established compound from glued words. The whole token must clear a wide lexicon before its parts count against it. Dictionary coverage, the stem pass, and the removed morphology entries spare every one. An identifier written bare reads as prose. Quote it to name it.
+
+## Rule 5 has a sharp edge
 
 ## Rule 5 has a sharp edge
 

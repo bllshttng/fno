@@ -13,7 +13,6 @@ cli/tests/agents/test_role.py::_prepare_role_cli::pytest.skip  # the team comman
 cli/tests/agents/test_grok_spawn_journey.py::test_grok_spawn_journey_public_surface_reaches_a_live_row::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_harness_capability_parity.py::test_resolved_rows_match_between_readers::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_lead_drain_cache.py::graph::pytest.skip  # on main before this ratchet
-cli/tests/agents/test_lead_shape_cli.py::test_shape_team_lands_on_the_manifest_and_echoes::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_lane_b_thread_spawn.py::_rust_posture_door::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_lane_b_thread_spawn.py::test_lane_b_journey_real_keeper_hosts_the_thread::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_pi_journey.py::test_AC10_HP_live_a_stopped_pi_session_resumes_by_id_and_cwd::mark.skipif  # on main before this ratchet
@@ -43,7 +42,6 @@ cli/tests/events/test_producer_equivalence.py::test_codex_stop_path_reaches_the_
 cli/tests/events/test_producer_equivalence.py::test_producer_emits_review_attestation_with_no_second_call::pytest.skip  # only the code-review param drives the hook, whose classify runs through the Rust front; peer and declare emit through fno-py and still run without it
 cli/tests/events/test_producer_equivalence.py::test_resolver_reads_the_code_review_attestation_at_head::mark.skipif  # second site, added with the front pin: the drive leg needs the front, the resolver leg the door
 cli/tests/integration/test_backlog_alias.py::_native_backlog::pytest.skip  # on main before this ratchet
-cli/tests/integration/test_codex_plugin_real_boundary.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/integration/test_first_run_documentation.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/integration/test_graph_cli.py::_native_get::pytest.skip  # on main before this ratchet
 cli/tests/integration/test_graph_cli.py::_rank::pytest.skip  # on main before this ratchet

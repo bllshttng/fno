@@ -147,7 +147,12 @@ fn append_review_invocation_at(
         "source": "daemon",
         "data": data,
     });
-    let _ = crate::pane_send_audit::append_agents_event(path, &event);
+    if let Err(e) = crate::pane_send_audit::append_agents_event(path, &event) {
+        eprintln!(
+            "fno mux: review_invocation emit failed at {}: {e}",
+            path.display()
+        );
+    }
 }
 
 /// Wall-clock RFC3339 UTC timestamp, seconds precision, no chrono in the

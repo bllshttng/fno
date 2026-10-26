@@ -26,7 +26,7 @@ crossing	crates/fno-agents/src/bin/client.rs	let out = std::process::Command::ne
 crossing	crates/fno-agents/src/bin/client.rs	let err = std::process::Command::new(fno_agents::scrape::fno_bin())
 crossing	crates/fno-agents/src/bin/client.rs	let mut cmd = Command::new(fno_agents::scrape::fno_bin());
 crossing	crates/fno-agents/src/blueprint_judge.rs	return match Command::new(crate::scrape::fno_bin())
-crossing	crates/fno-agents/src/blueprint_judge.rs	let mut child = Command::new(crate::scrape::fno_bin())
+crossing	crates/fno-agents/src/blueprint_judge.rs	let child = Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/claim_cli/reap.rs	let bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
 crossing	crates/fno-agents/src/claim_cli/reap.rs	let bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
 crossing	crates/fno-agents/src/daemon.rs	let mut child = match std::process::Command::new(crate::scrape::fno_bin())
@@ -93,6 +93,7 @@ crossing	crates/fno-agents/src/scrape.rs	let bin = fno_bin();
 crossing	crates/fno-agents/src/scratch.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/select_read.rs	.unwrap_or_else(|_| crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/session_report.rs	let fno = crate::loopcheck::loopcheck_fno_bin();
+crossing	crates/fno-agents/src/skill_diff.rs	Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/spawn_gate.rs	let _ = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/spawn_gate_lanes.rs	Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/spawn_gate_lanes.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
@@ -133,6 +134,8 @@ resolver	crates/fno-agents/src/loopcheck.rs	pub(crate) fn loopcheck_fno_bin() ->
 resolver	crates/fno-agents/src/loopcheck.rs	fn best_effort_notify(title: &str, body: &str) {
 resolver	crates/fno-agents/src/loops_pause.rs	fn fno_cli_binary() -> PathBuf {
 resolver	crates/fno-agents/src/mail_cli/pane_prepare.rs	fn run_mux_captured(args: &[String], timeout_s: u64) -> Result<Output, String> {
+resolver	crates/fno-agents/src/mcp/client.rs	fn state_log_path() -> PathBuf {
+resolver	crates/fno-agents/src/mcp/sidecar.rs	pub fn socket_path() -> PathBuf {
 resolver	crates/fno-agents/src/opencode_install.rs	fn resolve_source(cwd: &Path) -> Result<PathBuf, String> {
 resolver	crates/fno-agents/src/operator_notice.rs	pub fn notify_operator(title: &str, body: &str, pointer: Option<&str>) -> bool {
 resolver	crates/fno-agents/src/operator_notice.rs	pub fn notify_operator_confirmed(title: &str, body: &str, pointer: Option<&str>) -> bool {

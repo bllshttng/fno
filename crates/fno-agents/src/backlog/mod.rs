@@ -1107,6 +1107,7 @@ fn mutate_single_row_once(
     // written, so a refusal rolls back with the dropped transaction.
     crate::backlog::done_evidence::enforce(&rows, &working)?;
     let now_iso = crate::graph_store::now_isoformat();
+    crate::graph_store::stamp_parent_edges(&rows, &mut working, &now_iso);
     for row in working.iter_mut() {
         let (Some(id), true) = (
             crate::graph_store::entry_id(row).map(str::to_string),
@@ -1199,11 +1200,17 @@ pub(crate) fn save_aggregate(connection: &Connection, node: &Node) -> Result<(),
         &node.id,
         node.encounters.as_deref().unwrap_or(&[]),
     )?;
-    let mut prs: Vec<crate::backlog::model::PullRequest> = Vec::new();
+    // Seq 0 is the primary slot: the primary parks there, and the extras
+    // follow from 1 whether or not a primary exists. A primary-less row
+    // never parks an extra in seq 0, where the status recompute would read
+    // it back as a live primary.
+    let mut prs: Vec<(i64, crate::backlog::model::PullRequest)> = Vec::new();
     if let Some(primary) = &node.primary_pr {
-        prs.push(primary.clone());
+        prs.push((0, primary.clone()));
     }
-    prs.extend(node.additional_prs.iter().flatten().cloned());
+    for (index, pr) in node.additional_prs.iter().flatten().cloned().enumerate() {
+        prs.push((index as i64 + 1, pr));
+    }
     pull_requests::save(connection, &node.id, &prs)?;
     relations::save(connection, &node.id, &node.relations)?;
     costs::save(connection, &node.id, node.costs.as_deref().unwrap_or(&[]))?;
@@ -2560,6 +2567,50 @@ mod tests {
         let journal = crate::paths::events_path(&std::env::current_dir().unwrap());
         let text = crate::events::committed_journal_text(&journal);
         assert!(text.contains("graph_write_gate") && text.contains("comment_create"));
+    }
+
+    #[test]
+    fn a_reparent_after_a_reopen_never_expires_the_epic_hold() {
+        // The kid was filed before the epic's reopen and moved under it
+        // afterwards. Its created_at predates the reopen, so only the
+        // parented_at stamp this write sets under the lock can say it joined
+        // late. Without it the kid's close re-arms the epic's auto-close.
+        let _env_lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let spaces = tempfile::TempDir::new().unwrap();
+        declare_test_roots(spaces.path());
+        let (_dir, graph) = fixture("graph.json");
+        let rows = serde_json::json!([
+            {"id": "ab-epic", "slug": "ab-epic", "title": "Epic", "type": "feature",
+             "status": "idea", "priority": "p2", "domain": "code",
+             "created_at": "2025-01-01T00:00:00+00:00",
+             "reopened_at": "2026-01-01T00:00:00+00:00"},
+            {"id": "ab-kid", "slug": "ab-kid", "title": "Kid", "type": "feature",
+             "status": "done", "priority": "p2", "domain": "code",
+             "created_at": "2025-06-01T00:00:00+00:00",
+             "completed_at": "2026-06-01T00:00:00+00:00", "completion_note": "shipped"}
+        ]);
+        crate::graph_store::seed_rows(&graph, rows.as_array().unwrap()).unwrap();
+        let ok = mutate_single_row(&graph, "node_update", |rows| {
+            for row in rows.iter_mut() {
+                if entry_id_from(row) == Some("ab-kid") {
+                    row["parent"] = Value::String("ab-epic".into());
+                }
+            }
+            Ok(true)
+        })
+        .unwrap();
+        assert!(ok);
+        let after = export_rows(&open(&graph).unwrap()).unwrap();
+        let kid = after
+            .iter()
+            .find(|row| entry_id_from(row) == Some("ab-kid"))
+            .unwrap();
+        assert!(kid["parented_at"]
+            .as_str()
+            .is_some_and(|s| s > "2026-01-01"));
+        assert!(crate::backlog::closures::strandable_epic_ids(&after).is_empty());
     }
 
     #[test]

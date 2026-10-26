@@ -15,7 +15,7 @@ test -f "$scratch/tree/docs/architecture/help-routing.md"
 claude plugin validate "$scratch/tree" --strict
 mkdir "$scratch/codex-home"
 CODEX_HOME="$scratch/codex-home" codex plugin marketplace add "$scratch/tree" --json
-CODEX_HOME="$scratch/codex-home" codex plugin add fno@footnote --json
+CODEX_HOME="$scratch/codex-home" codex plugin add fno@fno --json
 find "$scratch/codex-home" -name SOURCE_COMMIT -print > "$scratch/installed-stamps"
 [[ -s "$scratch/installed-stamps" ]]
 while IFS= read -r stamp; do cmp "$stamp" "$scratch/tree/SOURCE_COMMIT"; done < "$scratch/installed-stamps"

@@ -11,8 +11,8 @@ A receipt is durable **evidence** of where a session left off, never write
 **authority**. The authority to resume is the live claim + liveness + git HEAD,
 revalidated against the receipt before any successor write.
 
-- Schema + writer + validator: `cli/src/fno/resume/receipt.py`.
-- CLI: `fno do resume receipt write|validate|show`.
+- Schema + writer + validator: `crates/fno-agents/src/resume_receipt/` (the native module; the former `cli/src/fno/resume/receipt.py` leg is deleted).
+- CLI: `fno do resume receipt write|validate|show` (the forwarding leaf shells the `fno-agents resume-receipt` door).
 - Producer call site: `skills/target/scripts/handoff.sh` writes one at every
   handoff boundary, alongside the human-readable brief.
 - No resume database. Canonicalization reuses the scoreboard reducers

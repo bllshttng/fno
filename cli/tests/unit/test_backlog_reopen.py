@@ -68,6 +68,35 @@ def test_a_node_closed_in_error_reopens(tmp_path):
 
 
 # -- what it deliberately does not undo --
+# (the completed PR record is not erased; it is demoted into additional_prs
+# with its recorded outcome, so the reopened node stops deriving in_review
+# and the next ship can attach the replacement)
+
+
+def test_a_reopen_demotes_the_completed_pr_into_additional_prs(tmp_path):
+    """pr_number left set keeps the store deriving in_review over the rung
+    status and holds every later status move, so reopen moves the completed
+    PR into additional_prs with its recorded outcome instead."""
+    root = sandbox(
+        tmp_path,
+        _node(
+            "ab-11111111",
+            pr_number=41,
+            pr_url="https://github.com/o/r/pull/41",
+        ),
+    )
+    write_pr_stub(root, {41: "CLOSED"})
+    code, out, err = door(
+        root,
+        ["reopen", "ab-11111111", "--reason", "work remains"],
+        path_prepend=str(root / "stubbin"),
+    )
+    assert code == 0, err
+    node = _read(root)["ab-11111111"]
+    assert node["pr_number"] is None
+    extras = node.get("additional_prs") or []
+    assert [e["number"] for e in extras] == [41]
+    assert node["status"] == "idea"
 
 
 # -- refusals --

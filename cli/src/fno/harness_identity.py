@@ -1182,7 +1182,7 @@ def resolve_attester_identity(
             # such a directory, because the emitter then sees a family ancestor
             # that is really pytest.
             exe_name = os.path.basename(argv[0] if argv else proc.name()).lower()
-        except psutil.Error:
+        except (psutil.Error, PermissionError):
             exe_name = ""
         carrier_is_family.append(family_token in exe_name)
         if carrier_is_family[-1]:
@@ -1194,7 +1194,7 @@ def resolve_attester_identity(
             break
         try:
             proc = proc.parent()
-        except psutil.Error:
+        except (psutil.Error, PermissionError):
             break
         depth += 1
     witness = _attester_witness(marker_name, session_id, chain, carrier_is_family)

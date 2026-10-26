@@ -478,6 +478,10 @@ def node_pr_refs(node: dict) -> list[tuple[int, Optional[str]]]:
     for extra in node.get("additional_prs") or []:
         if not isinstance(extra, dict):
             continue
+        # A reopen-demoted row carries its recorded outcome and the history
+        # mark: record-keeping, not a promised ship; the gates skip it.
+        if extra.get("history") is True:
+            continue
         num = extra.get("number")
         if not isinstance(num, int) or num in seen:
             continue
@@ -1346,6 +1350,25 @@ def _reopen_outranks_child_closes(parent: dict, kids: list[dict]) -> bool:
     return True
 
 
+def _reopen_holds_epic(parent: dict, kids: list[dict]) -> bool:
+    """The epic close paths' reopen guard. Only a child that joined at or before
+    the reopen can expire it. A child that joined after proves nothing about the
+    unfiled work the reopen named. The join stamp is ``parented_at``, which the
+    store sets under its lock, else ``created_at``. An unreadable stamp counts
+    as after. Twin of ``reopen_holds_epic`` in
+    ``crates/fno-agents/src/graph_store.rs``.
+    """
+    reopened = _parse_iso(parent.get("reopened_at"))
+    if reopened is not None:
+        kids = [
+            k
+            for k in kids
+            if (f := _parse_iso(k.get("parented_at") or k.get("created_at"))) is not None
+            and f <= reopened
+        ]
+    return _reopen_outranks_child_closes(parent, kids)
+
+
 def _reopen_outranks_merge(node: dict, merged_at: object) -> bool:
     """True when a deliberate reopen postdates the merge being closed on.
     Merge-keyed twin of :func:`_reopen_outranks_child_closes`; full contract:
@@ -1393,8 +1416,8 @@ def cascade_close_should_stop(parent: dict, kids: list[dict], child: object) -> 
     clear_reopen_warning_if_child_matches(parent, child)
     if parent.get("completed_at"):
         return True
-    if _reopen_outranks_child_closes(parent, kids):
-        return True  # reopened after its children finished -> the human call holds
+    if _reopen_holds_epic(parent, kids):
+        return True  # no child that joined before the reopen closed after it -> the human call holds
     if parent.get("plan_path") and not (
         parent.get("pr_number") or parent.get("additional_prs")
     ):

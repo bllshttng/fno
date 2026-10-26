@@ -50,6 +50,10 @@ ALLOW_FILES+='|^crates/fno-agents/tests/fixtures/lead/lead-2026-08-05\.json$'
 ALLOW_FILES+='|^crates/fno-agents/src/research/html5_entities\.tsv$'
 # The v3 graph schema a migration test replays: the column it names is history.
 ALLOW_FILES+='|^crates/fno-agents/tests/fixtures/graph_db_schema_v3\.sql$'
+# The rule-9 glue wordlists: English dictionaries (a dwyl protection tier and
+# a google-10000 split tier) whose entries collide as substrings (feverblossom,
+# beaverkill, deverbative). The lists are data, not prose teaching the word.
+ALLOW_FILES+='|^crates/fno-agents/src/backlog/style_(words|protect)\.txt$'
 
 scan() {
     # stdin: path:line:text rows (git grep -n). stdout: the refused rows.

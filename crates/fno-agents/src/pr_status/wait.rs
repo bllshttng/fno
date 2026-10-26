@@ -452,7 +452,7 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
 /// Cancel the Actions runs still testing a red `head`, one line per run;
 /// None when the live rows show the red belongs to an earlier attempt.
 /// A failed read or cancel is printed, never hidden.
-fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Option<Vec<String>> {
+pub(crate) fn cancel_in_flight(gh_bin: &str, cwd: &Path, head: &str) -> Option<Vec<String>> {
     let short: String = head.chars().take(8).collect();
     if head.is_empty() {
         return Some(vec![

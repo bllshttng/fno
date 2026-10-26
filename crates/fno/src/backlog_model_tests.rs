@@ -419,12 +419,12 @@ fn node_lists_children_blockers_and_live_sessions() {
     assert_eq!(view.sessions[1].action, "none");
     assert_eq!(
         view.sessions[1].command.as_deref(),
-        Some("fno agents adopt s-dead --cross-project")
+        Some("fno agents adopt s-dead")
     );
     assert_eq!(view.sessions[2].action, "resume");
     assert_eq!(
         view.sessions[2].command.as_deref(),
-        Some("fno agents resume s-park --cross-project --cwd '/tmp/it'\\''s here'")
+        Some("fno agents resume s-park --cwd '/tmp/it'\\''s here'")
     );
     assert_eq!(
         view.sessions[3].command, None,

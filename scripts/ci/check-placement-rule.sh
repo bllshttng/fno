@@ -38,7 +38,7 @@
 #      scripts/save-session.py's read of the ~/.claude/.session-context.json
 #      statusline sidecar (its OWN transcript writes were re-homed to
 #      ${FNO_HOME}/saved-sessions - see below - so only the sidecar READ remains).
-#      setup/cli_hooks.py WRITES ~/.claude/settings.json for the same reason
+#      crates/fno/src/cli_hooks.rs WRITES ~/.claude/settings.json for the same reason
 #      its siblings write ~/.gemini/settings.json and ~/.codex/config.toml:
 #      it wires a hook into the CLI's OWN config. `claude rm` runs with no
 #      agent session and so never loads plugin hooks, which leaves the
@@ -195,7 +195,7 @@
 #      boundary is hermetic. Read-only against real roots; nothing
 #      accumulates there.
 #      crates/fno/src/uninstall.rs reads Claude Code's plugin registry and
-#      removes the hook entry cli_hooks.py merged into its settings.json:
+#      removes the hook entry cli_hooks.rs merged into its settings.json:
 #      the reverse of that write, in Claude Code's own config. It stores
 #      nothing there.
 #      crates/fno-agents/src/mail_cli/send/resolve.rs reads Claude Code's
@@ -346,8 +346,6 @@ cli/src/fno/paths.py
 cli/src/fno/scratch_cli.py
 cli/src/fno/provenance/resolver.py
 cli/src/fno/recovery.py
-cli/src/fno/relay/registry.py
-cli/src/fno/relay/roundtrip.py
 cli/src/fno/review/confidence_scorer.py
 cli/src/fno/review/runners/agents_spawn_runner.py
 cli/src/fno/review/runners/claude_runner.py
@@ -355,8 +353,6 @@ cli/src/fno/review/scorers/__init__.py
 cli/src/fno/runtime/cli.py
 cli/src/fno/runtime/worktree.py
 cli/src/fno/scoreboard/fold.py
-cli/src/fno/setup_cli.py
-cli/src/fno/setup/cli_hooks.py
 cli/src/fno/setup/doctor.py
 cli/src/fno/setup/integration.py
 crates/fno/src/setup_autowire.rs
@@ -392,6 +388,7 @@ crates/fno-agents/src/plans_dirs.rs
 crates/fno-agents/src/plans_path.rs
 crates/fno-agents/src/plugin_install.rs
 crates/fno/src/uninstall.rs
+crates/fno/src/cli_hooks.rs
 crates/fno-agents/src/provider.rs
 crates/fno-agents/src/gh_spend.rs
 crates/fno-agents/src/reclaim.rs

@@ -6,7 +6,7 @@ It needs Claude Code 2.1.287 or later. You do not need fno, but with the `fno` C
 
 ## Install
 
-1. Run `/plugin install buddy@footnote`.
+1. Run `/plugin install buddy@fno`.
 2. Type `/buddy` to watch it hatch and see its card. Press any key to close the card.
 3. Type `/buddy statusline` to put it beside your status line.
 

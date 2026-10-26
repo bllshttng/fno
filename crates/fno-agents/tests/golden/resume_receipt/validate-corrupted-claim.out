@@ -1,0 +1,2 @@
+1
+{"ok": false, "reason": "corrupted_claim", "node": "x-1", "receipt": "/privateFIXTURE/corruptclaim/repo/.fno/artifacts/handoff/receipt-x-1-do-g1-02a5dd7474c2.json", "claim_error": null, "checked": {"live_claim_state": "corrupted"}}

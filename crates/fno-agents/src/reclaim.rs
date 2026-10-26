@@ -178,6 +178,9 @@ fn plugin_cache_copies() -> Vec<PathBuf> {
     found
 }
 
+/// The marketplace names a codex converge records and quarantines under.
+const CODEX_MARKETPLACES: [&str; 3] = ["fno", "footnote", "footnote-dev"];
+
 fn codex_cache_quarantines() -> (Lane, Option<std::fs::File>) {
     let mut lane = Lane::new("codex_cache_quarantines", Vec::new());
     let Some(home) = crate::codex_store::codex_home() else {
@@ -219,7 +222,8 @@ fn codex_cache_quarantines() -> (Lane, Option<std::fs::File>) {
         return (lane, None);
     };
     let (marketplace, source) = marker;
-    if marketplace != "footnote" && marketplace != "footnote-dev" {
+    // "fno" since the marketplace rename; the older names stay readable.
+    if !CODEX_MARKETPLACES.contains(&marketplace.as_str()) {
         lane.note = "kept: live copy unreadable (plugin-channel.json)".to_string();
         return (lane, None);
     }
@@ -270,9 +274,11 @@ fn codex_cache_quarantines() -> (Lane, Option<std::fs::File>) {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let suffix = name
-            .strip_prefix(".footnote.")
-            .or_else(|| name.strip_prefix(".footnote-dev."));
+        let suffix = CODEX_MARKETPLACES.iter().find_map(|marketplace| {
+            name.strip_prefix('.')?
+                .strip_prefix(marketplace)?
+                .strip_prefix('.')
+        });
         let Some(suffix) = suffix else {
             continue;
         };
@@ -1305,14 +1311,15 @@ pub(crate) mod tests {
         let temp = temp_lane_root("codex-safety-temp");
         let state = temp_lane_root("codex-safety-state");
         let codex = codex_home_fixture("codex-safety-home");
-        let live = codex_live_cache(&codex, "footnote");
+        let live = codex_live_cache(&codex, "fno");
         let source = codex_backup(&codex, ".footnote.", "abcdefabcdefabcdefabcdefabcdefab");
-        write_codex_marker(&codex, "footnote", &source.display().to_string());
+        write_codex_marker(&codex, "fno", &source.display().to_string());
         let link = codex
             .join("footnote")
             .join(".footnote.0123456789abcdef0123456789abcdef");
         std::os::unix::fs::symlink(&live, &link).unwrap();
-        let stale = codex_backup(&codex, ".footnote.", "fedcbafedcbafedcbafedcbafedcbafe");
+        let stale = codex_backup(&codex, ".fno.", "fedcbafedcbafedcbafedcbafedcbafe");
+        let legacy = codex_backup(&codex, ".footnote.", "11111111111111111111111111111111");
 
         let _ = run_codex_reclaim(&codex, &state, &temp);
 
@@ -1320,6 +1327,7 @@ pub(crate) mod tests {
         assert!(source.exists());
         assert!(link.exists());
         assert!(!stale.exists());
+        assert!(!legacy.exists());
         let _ = std::fs::remove_dir_all(temp);
         let _ = std::fs::remove_dir_all(state);
         let _ = std::fs::remove_dir_all(codex);
