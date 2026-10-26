@@ -64,11 +64,12 @@ fn block_enabled(settings: &Value, block: &str, default: bool) -> bool {
 }
 
 /// The env override's truthy read, byte-parity with the Python legs:
-/// `env.strip().lower() in {"1", "true", "yes", "on"}`.
-fn env_truthy(name: &str) -> Option<bool> {
-    let env = std::env::var(name).ok()?;
-    let value = env.trim().to_ascii_lowercase();
-    Some(["1", "true", "yes", "on"].contains(&value.as_str()))
+/// `env.strip().lower() in {"1", "true", "yes", "on"}`. Takes the raw value,
+/// not the name: the env-registry scanner only sees literal `env::var*` call
+/// shapes, so each override reads its name at its own call site.
+fn env_truth(raw: &str) -> bool {
+    let value = raw.trim().to_ascii_lowercase();
+    ["1", "true", "yes", "on"].contains(&value.as_str())
 }
 
 /// spawn_think's precedence: master switch, then `FNO_THINK_SPAWN`, then
@@ -77,8 +78,8 @@ fn spawn_think_resolve(root: Option<&Path>) -> (Option<bool>, &'static str) {
     if !autonomy_master_enabled(root) {
         return (Some(false), "autonomy");
     }
-    if let Some(truthy) = env_truthy("FNO_THINK_SPAWN") {
-        return (Some(truthy), "env");
+    if let Ok(raw) = std::env::var("FNO_THINK_SPAWN") {
+        return (Some(env_truth(&raw)), "env");
     }
     let settings = load_merged(root);
     (
@@ -95,8 +96,8 @@ fn keep_going_resolve(root: Option<&Path>) -> (Option<bool>, &'static str) {
     if !autonomy_master_enabled(root) {
         return (Some(false), "autonomy");
     }
-    if let Some(truthy) = env_truthy("FNO_KEEP_GOING") {
-        return (Some(truthy), "env");
+    if let Ok(raw) = std::env::var("FNO_KEEP_GOING") {
+        return (Some(env_truth(&raw)), "env");
     }
     let settings = load_merged(root);
     (

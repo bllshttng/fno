@@ -169,7 +169,6 @@ fn write_payload(path: &Path, payload: &Value) -> std::io::Result<()> {
 /// at most one lost link, which the next tick re-records.
 struct SidecarLock {
     file: Option<std::fs::File>,
-    contended: bool,
 }
 
 impl SidecarLock {
@@ -184,40 +183,36 @@ impl SidecarLock {
             .write(true)
             .open(&lock_path)
         else {
-            return Self {
-                file: None,
-                contended: false,
-            };
+            return Self { file: None };
         };
         let deadline = std::time::Instant::now() + Duration::from_secs_f64(LOCK_TIMEOUT_S);
         loop {
             match file.try_lock() {
-                Ok(()) => {
-                    return Self {
-                        file: Some(file),
-                        contended: false,
-                    }
-                }
+                Ok(()) => return Self { file: Some(file) },
                 Err(std::fs::TryLockError::WouldBlock) => {
                     if std::time::Instant::now() >= deadline {
                         eprintln!(
                             "fleet_state: lock contention on {}; writing unlocked",
                             path.display()
                         );
-                        return Self {
-                            file: Some(file),
-                            contended: true,
-                        };
+                        return Self { file: Some(file) };
                     }
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(std::fs::TryLockError::Error(_)) => {
-                    return Self {
-                        file: Some(file),
-                        contended: true,
-                    };
+                    return Self { file: Some(file) };
                 }
             }
+        }
+    }
+}
+
+impl Drop for SidecarLock {
+    fn drop(&mut self) {
+        // The advisory lock dies with the descriptor; release it explicitly
+        // so the field's load-bearing role reads as code, not dead state.
+        if let Some(file) = self.file.as_ref() {
+            let _ = file.unlock();
         }
     }
 }
