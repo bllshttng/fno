@@ -1,0 +1,4 @@
+Usage: fno do pr stub-manifest reconcile-finalize [OPTIONS]
+Try 'fno do pr stub-manifest reconcile-finalize --help' for help.
+
+Error: Missing option '--node'.
