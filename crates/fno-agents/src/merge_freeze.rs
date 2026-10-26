@@ -8,16 +8,24 @@
 //! pr-watch merge arm and the finalize auto-merge arm. The pr-watch pre-check
 //! in Python asks the `freeze-check` op for its early skip.
 //!
-//! Only the user lifts a freeze: a live superuser-lane ruling (operator or
-//! chat_attested) at `merge-freeze:<repo>@<pin key>`. A team set with a new pin
+//! Only the user lifts a freeze: a live `operator` ruling at
+//! `merge-freeze:<repo>@<pin key>`. Any harness session can mint a
+//! `chat_attested` row, so that lane never lifts. A team set with a new pin
 //! over a lifted one re-arms the freeze, because the new pin has its own lift
 //! subject and no ruling there. A PR on the pin's PR list merges normally: the
 //! freeze scopes a release window, it is not a full stop. An unreadable record
 //! or decision store fails closed; absence is a real answer.
+//!
+//! With `store.remote_url` set, the record lives on the shared primary, so a
+//! freeze set on one machine holds a merge made from another. The local file
+//! still reads when the primary holds no record, so a freeze an older build
+//! wrote keeps holding. An unreachable primary fails closed like an
+//! unreadable file.
 
 use crate::authorized_merge::{PrFacts, ProbeOutcome};
 use crate::decision_index::{self, Index};
 use crate::paths::AgentsHome;
+use crate::store_remote::{Remote, SqlValue};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -25,13 +33,89 @@ use std::path::{Path, PathBuf};
 /// repo) still reads, as a PR pin over every repo.
 pub const STATE_VERSION: u32 = 2;
 
-/// The record's home, beside `fleet-stop.json`.
-pub fn merge_freeze_json() -> PathBuf {
-    record_path(&AgentsHome::from_env().root())
-}
+/// The primary's table: one row, the same JSON the local file holds.
+const TABLE: &str = "merge_freeze";
 
 fn record_path(home: &Path) -> PathBuf {
     home.join("merge-freeze.json")
+}
+
+/// The record's homes: the local file beside `fleet-stop.json`, and the
+/// shared primary when one is configured. A write goes to the primary when
+/// there is one.
+struct Store {
+    file: PathBuf,
+    primary: Option<Remote>,
+}
+
+impl Store {
+    fn from_env() -> Result<Self, String> {
+        Ok(Self {
+            file: record_path(&AgentsHome::from_env().root()),
+            primary: crate::store_remote::configured()?,
+        })
+    }
+
+    fn read_text(&self) -> Result<Option<(String, String)>, String> {
+        if let Some(remote) = &self.primary {
+            let label = format!("the {TABLE} row on {}", remote.url());
+            let reply =
+                match remote.execute(&format!("SELECT record FROM {TABLE} WHERE id = 1"), &[]) {
+                    Ok(reply) => reply,
+                    // A primary that never saw a set has no table: no record.
+                    Err(e) if e.contains("no such table") => Default::default(),
+                    Err(e) => return Err(format!("read {label}: {e}")),
+                };
+            if let Some(cell) = reply.rows.first().and_then(|row| row.first()) {
+                let text = cell.text().ok_or_else(|| format!("{label} is not text"))?;
+                return Ok(Some((text.to_string(), label)));
+            }
+        }
+        match std::fs::read_to_string(&self.file) {
+            Ok(text) => Ok(Some((text, self.file.display().to_string()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("read {}: {e}", self.file.display())),
+        }
+    }
+
+    fn write(&self, text: &str) -> Result<(), String> {
+        if let Some(remote) = &self.primary {
+            remote.script(&format!(
+                "CREATE TABLE IF NOT EXISTS {TABLE} (\
+                     id INTEGER PRIMARY KEY CHECK (id = 1), \
+                     record TEXT NOT NULL)"
+            ))?;
+            return remote
+                .execute(
+                    &format!("INSERT OR REPLACE INTO {TABLE} (id, record) VALUES (1, ?)"),
+                    &[SqlValue::Text(text.to_string())],
+                )
+                .map(drop);
+        }
+        if let Some(parent) = self.file.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = self.file.with_extension("json.tmp");
+        std::fs::write(&tmp, text).map_err(|e| format!("freeze write failed: {e}"))?;
+        std::fs::rename(&tmp, &self.file).map_err(|e| format!("freeze rename failed: {e}"))
+    }
+
+    /// Removes the record from both homes, so a local copy an older build
+    /// wrote cannot re-surface after the primary row goes.
+    fn remove(&self) -> Result<(), String> {
+        if let Some(remote) = &self.primary {
+            match remote.execute(&format!("DELETE FROM {TABLE}"), &[]) {
+                Ok(_) => {}
+                Err(e) if e.contains("no such table") => {}
+                Err(e) => return Err(e),
+            }
+        }
+        match std::fs::remove_file(&self.file) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
 }
 
 /// The decision-store read the lift fold uses. A parameter so tests seed a
@@ -98,15 +182,11 @@ fn lift_subject(repo: &str, key: &str) -> String {
 }
 
 /// `Ok(None)` is no record; `Err` is an unreadable one.
-fn read_record(home: &Path) -> Result<Option<Record>, String> {
-    let path = record_path(home);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("read {}: {e}", path.display())),
+fn read_record(store: &Store) -> Result<Option<Record>, String> {
+    let Some((text, path)) = store.read_text()? else {
+        return Ok(None);
     };
-    let v: Value =
-        serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("parse {path}: {e}"))?;
     let text_of = |key: &str| v.get(key).and_then(Value::as_str).map(str::to_string);
     let numbers = |list: Option<&Value>| -> Vec<u64> {
         list.and_then(Value::as_array)
@@ -124,13 +204,12 @@ fn read_record(home: &Path) -> Result<Option<Record>, String> {
         ),
         _ => {
             return Err(format!(
-                "{} is not a version-1 or version-{STATE_VERSION} freeze record",
-                path.display()
+                "{path} is not a version-1 or version-{STATE_VERSION} freeze record"
             ))
         }
     };
     if sha.is_none() && prs.is_empty() {
-        return Err(format!("{} names no pin", path.display()));
+        return Err(format!("{path} names no pin"));
     }
     Ok(Some(Record {
         subject: text_of("subject").unwrap_or_else(|| "unnamed freeze".to_string()),
@@ -141,15 +220,18 @@ fn read_record(home: &Path) -> Result<Option<Record>, String> {
     }))
 }
 
-/// A live superuser-lane row at `subject`.
+/// A live operator row at `subject`: the one row that lifts.
+fn is_operator_lift(row: &Value, subject: &str) -> bool {
+    decision_index::is_law(row)
+        && row.get("authority_source").and_then(Value::as_str) == Some("operator")
+        && row
+            .get("subject")
+            .and_then(Value::as_str)
+            .is_some_and(|s| s.eq_ignore_ascii_case(subject))
+}
+
 fn lift_row<'a>(index: &'a Index, subject: &str) -> Option<&'a Value> {
-    index.rows.iter().find(|row| {
-        decision_index::is_law(row)
-            && row
-                .get("subject")
-                .and_then(Value::as_str)
-                .is_some_and(|s| s.eq_ignore_ascii_case(subject))
-    })
+    index.rows.iter().find(|row| is_operator_lift(row, subject))
 }
 
 /// `Ok(true)` when the user lifted this record's pin.
@@ -160,8 +242,8 @@ fn is_lifted(record: &Record, laws: Laws) -> Result<bool, String> {
 
 /// The verdict for one PR. `repo` is the PR's `owner/repo`; `None` (the
 /// pr-watch pre-check sends none) reads as inside the freeze's repo.
-fn verdict_for_in(home: &Path, pr: Option<u64>, repo: Option<&str>, laws: Laws) -> Verdict {
-    let record = match read_record(home) {
+fn verdict_for_in(store: &Store, pr: Option<u64>, repo: Option<&str>, laws: Laws) -> Verdict {
+    let record = match read_record(store) {
         Ok(None) => return Verdict::Clear,
         Ok(Some(r)) => r,
         Err(detail) => return Verdict::Unavailable { detail },
@@ -189,8 +271,24 @@ fn verdict_for_in(home: &Path, pr: Option<u64>, repo: Option<&str>, laws: Laws) 
 fn lift_doors(lift: &str) -> String {
     format!(
         "only the user lifts it: `fno inbox decide '{lift}' 'lift' --authority operator` \
-         at a terminal, or `/fno:law` in chat with that subject"
+         at their own terminal; a chat-attested row does not lift it"
     )
+}
+
+/// True when a live freeze holds this PR. The pr-nudge ladder reads it so
+/// a frozen PR gets no "drive it to merge" retry. An unreadable record
+/// reads false here: the merge owner still fails closed on its own read.
+pub(crate) fn holds_pr(home: &AgentsHome, pr: u64, repo: Option<&str>) -> bool {
+    let store = crate::store_remote::configured().map(|primary| Store {
+        file: record_path(&home.root()),
+        primary,
+    });
+    store.is_ok_and(|store| {
+        matches!(
+            verdict_for_in(&store, Some(pr), repo, &decision_index::default_store_live),
+            Verdict::Frozen { .. }
+        )
+    })
 }
 
 /// The merge owner's probe. Frozen refuses (the owner's fail_closed reads it
@@ -199,12 +297,15 @@ fn lift_doors(lift: &str) -> String {
 /// inconclusive, which also fails closed.
 pub(crate) fn probe(facts: &PrFacts) -> ProbeOutcome {
     let repo = crate::merge_grant::repo_slug_from_pr_url(&facts.url);
-    let verdict = verdict_for_in(
-        &AgentsHome::from_env().root(),
-        Some(facts.number),
-        repo.as_deref(),
-        &decision_index::default_store_live,
-    );
+    let verdict = match Store::from_env() {
+        Ok(store) => verdict_for_in(
+            &store,
+            Some(facts.number),
+            repo.as_deref(),
+            &decision_index::default_store_live,
+        ),
+        Err(detail) => Verdict::Unavailable { detail },
+    };
     probe_outcome(verdict, facts, &|n| {
         crate::merge_hold::disarm_automerge(n);
     })
@@ -242,13 +343,21 @@ fn probe_outcome(verdict: Verdict, facts: &PrFacts, disarm: &dyn Fn(u64)) -> Pro
 /// Run one freeze op from an `authorized-merge` payload. Same receipt
 /// contract as the hold ops.
 pub fn run(op: &str, payload: &Value) -> String {
-    run_in(
-        &AgentsHome::from_env().root(),
-        op,
-        payload,
-        &decision_index::default_store_live,
-        &real_gh,
-    )
+    match Store::from_env() {
+        Ok(store) => run_in(
+            &store,
+            op,
+            payload,
+            &decision_index::default_store_live,
+            &real_gh,
+        ),
+        Err(e) => receipt(
+            "refused",
+            5,
+            format!("the freeze store is unreadable ({e})"),
+        )
+        .to_string(),
+    }
 }
 
 fn real_gh(args: &[&str]) -> Result<(bool, String), String> {
@@ -260,11 +369,11 @@ fn real_gh(args: &[&str]) -> Result<(bool, String), String> {
     Ok((out.status.success(), text))
 }
 
-fn run_in(home: &Path, op: &str, payload: &Value, laws: Laws, gh: GhRun) -> String {
+fn run_in(store: &Store, op: &str, payload: &Value, laws: Laws, gh: GhRun) -> String {
     match op.strip_prefix("freeze-").unwrap_or(op) {
-        "set" => set_in(home, payload, laws, gh),
-        "clear" => clear_in(home, payload, laws),
-        "check" => check_in(home, payload, laws),
+        "set" => set_in(store, payload, laws, gh),
+        "clear" => clear_in(store, payload, laws),
+        "check" => check_in(store, payload, laws),
         other => receipt("refused", 2, format!("unknown freeze op: {other}")).to_string(),
     }
 }
@@ -277,7 +386,7 @@ fn payload_str<'a>(payload: &'a Value, key: &str) -> Option<&'a str> {
     payload.get(key).and_then(Value::as_str)
 }
 
-fn set_in(home: &Path, payload: &Value, laws: Laws, gh: GhRun) -> String {
+fn set_in(store: &Store, payload: &Value, laws: Laws, gh: GhRun) -> String {
     let subject = payload_str(payload, "subject").unwrap_or("");
     let set_by = payload_str(payload, "set_by").unwrap_or("");
     let repo = payload_str(payload, "repo").unwrap_or("");
@@ -324,7 +433,7 @@ fn set_in(home: &Path, payload: &Value, laws: Laws, gh: GhRun) -> String {
     };
     // Re-arm: an unlifted record refuses; a lifted one yields to a new pin
     // only, because the user lifted that pin and not the window after it.
-    match read_record(home) {
+    match read_record(store) {
         Ok(None) => {}
         Ok(Some(current)) => match is_lifted(&current, laws) {
             Ok(false) => {
@@ -377,20 +486,12 @@ fn set_in(home: &Path, payload: &Value, laws: Laws, gh: GhRun) -> String {
         "repo": repo,
         "pin": pin,
     });
-    let path = record_path(home);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let tmp = path.with_extension("json.tmp");
-    if let Err(e) = std::fs::write(&tmp, format!("{record}\n")) {
-        return receipt("error", 2, format!("freeze write failed: {e}")).to_string();
-    }
-    if let Err(e) = std::fs::rename(&tmp, &path) {
-        return receipt("error", 2, format!("freeze rename failed: {e}")).to_string();
+    if let Err(e) = store.write(&format!("{record}\n")) {
+        return receipt("error", 2, e).to_string();
     }
     // Readback: the writer proves the record says what it wrote.
-    if read_record(home).ok().flatten().as_ref() != Some(&next) {
-        let _ = std::fs::remove_file(&path);
+    if read_record(store).ok().flatten().as_ref() != Some(&next) {
+        let _ = store.remove();
         return receipt(
             "error",
             1,
@@ -461,12 +562,12 @@ fn disarm_off_pin(gh: GhRun, repo: &str, pin_prs: &[u64]) -> (Vec<u64>, Vec<Stri
     (disarmed, failed)
 }
 
-/// Removes the record only on a live superuser ruling at its lift subject,
+/// Removes the record only on a live operator ruling at its lift subject,
 /// named by decision id. The lift itself already clears every gate read;
 /// this op only tidies the file.
-fn clear_in(home: &Path, payload: &Value, laws: Laws) -> String {
+fn clear_in(store: &Store, payload: &Value, laws: Laws) -> String {
     let evidence = payload_str(payload, "evidence").unwrap_or("").trim();
-    let record = match read_record(home) {
+    let record = match read_record(store) {
         Ok(None) => {
             return receipt("refused", 3, "no merge freeze is active; nothing to lift").to_string()
         }
@@ -501,25 +602,20 @@ fn clear_in(home: &Path, payload: &Value, laws: Laws) -> String {
                 .and_then(Value::as_str)
                 .is_some_and(|id| id.eq_ignore_ascii_case(evidence))
     });
-    let lawful = row.is_some_and(|r| {
-        decision_index::is_law(r)
-            && r.get("subject")
-                .and_then(Value::as_str)
-                .is_some_and(|s| s.eq_ignore_ascii_case(&lift))
-    });
+    let lawful = row.is_some_and(|r| is_operator_lift(r, &lift));
     if !lawful {
         return receipt(
             "refused",
             3,
             format!(
-                "clear needs --evidence naming a live superuser ruling at {lift}, got \
+                "clear needs --evidence naming a live operator ruling at {lift}, got \
                  '{evidence}'; {}",
                 lift_doors(&lift)
             ),
         )
         .to_string();
     }
-    if let Err(e) = std::fs::remove_file(record_path(home)) {
+    if let Err(e) = store.remove() {
         return receipt("error", 2, format!("freeze clear failed: {e}")).to_string();
     }
     let mut out = receipt("lifted", 0, "");
@@ -529,10 +625,10 @@ fn clear_in(home: &Path, payload: &Value, laws: Laws) -> String {
     out.to_string()
 }
 
-fn check_in(home: &Path, payload: &Value, laws: Laws) -> String {
+fn check_in(store: &Store, payload: &Value, laws: Laws) -> String {
     let pr = payload.get("pr").and_then(Value::as_u64);
     let repo = payload_str(payload, "repo");
-    match verdict_for_in(home, pr, repo, laws) {
+    match verdict_for_in(store, pr, repo, laws) {
         Verdict::Clear => receipt("clear", 0, "").to_string(),
         Verdict::Frozen {
             subject,
@@ -551,12 +647,15 @@ mod tests {
 
     const SHA: &str = "abc123abc123abc123abc123abc123abc123abc1";
 
-    fn home(test: &str) -> (tempfile::TempDir, PathBuf) {
+    fn home(test: &str) -> (tempfile::TempDir, Store) {
         let dir = tempfile::TempDir::new_in(std::env::temp_dir()).unwrap();
         let root = dir.path().join(test);
         std::fs::create_dir_all(&root).unwrap();
-        let clone = root.clone();
-        (dir, clone)
+        let store = Store {
+            file: record_path(&root),
+            primary: None,
+        };
+        (dir, store)
     }
 
     fn row(id: &str, subject: &str, authority: &str) -> Value {
@@ -577,7 +676,7 @@ mod tests {
         Ok((true, "[]".to_string()))
     }
 
-    fn set(home: &Path, sha: &str, laws: Laws) -> Value {
+    fn set(home: &Store, sha: &str, laws: Laws) -> Value {
         let out = run_in(
             home,
             "freeze-set",
@@ -614,7 +713,7 @@ mod tests {
             "{frozen:?}"
         );
 
-        // AC2: only a superuser row at this pin's subject lifts it.
+        // AC2: only an operator row at this pin's subject lifts it.
         let team = store(vec![row("d-1", &lift, "team")]);
         assert!(matches!(
             verdict_for_in(&home, Some(8), Some("o/r"), &team),
@@ -634,11 +733,12 @@ mod tests {
             verdict_for_in(&home, Some(8), Some("o/r"), &lifted),
             Verdict::Clear
         );
+        // Any harness session can mint a chat_attested row, so it holds.
         let chat = store(vec![row("d-4", &lift, "chat_attested")]);
-        assert_eq!(
+        assert!(matches!(
             verdict_for_in(&home, Some(8), Some("o/r"), &chat),
-            Verdict::Clear
-        );
+            Verdict::Frozen { .. }
+        ));
 
         // AC4: an unreadable store fails closed.
         let broken = || -> Result<Index, String> { Err("gone".to_string()) };
@@ -656,10 +756,18 @@ mod tests {
             &no_gh,
         );
         assert!(
-            free.contains("--authority operator") && free.contains("/fno:law"),
+            free.contains("--authority operator") && !free.contains("/fno:law"),
             "{free}"
         );
-        assert!(record_path(&home).exists());
+        let by_chat = run_in(
+            &home,
+            "freeze-clear",
+            &json!({"evidence": "d-4"}),
+            &chat,
+            &no_gh,
+        );
+        assert!(by_chat.contains("\"refused\""), "{by_chat}");
+        assert!(home.file.exists());
         let again = set(&home, SHA, &empty);
         assert!(
             again["detail"].as_str().unwrap().contains("already active"),
@@ -690,7 +798,7 @@ mod tests {
             &no_gh,
         );
         assert!(cleared.contains("\"lifted\""), "{cleared}");
-        assert!(!record_path(&home).exists());
+        assert!(!home.file.exists());
 
         unreadable_and_v1_contract();
         probe_disarm_contract();
@@ -699,13 +807,13 @@ mod tests {
     fn unreadable_and_v1_contract() {
         let (_dir, home) = home("freeze-v1");
         let empty = store(vec![]);
-        std::fs::write(record_path(&home), "{").unwrap();
+        std::fs::write(&home.file, "{").unwrap();
         assert!(matches!(
             verdict_for_in(&home, Some(42), None, &empty),
             Verdict::Unavailable { .. }
         ));
         std::fs::write(
-            record_path(&home),
+            &home.file,
             r#"{"version":1,"subject":"old","set_by":"t","allow":[5]}"#,
         )
         .unwrap();
@@ -775,7 +883,7 @@ mod tests {
             .any(|c| c.starts_with("pr merge 7") || c.starts_with("pr merge 9")));
 
         // AC10: a failed disarm still writes the record and names the by-hand command.
-        std::fs::remove_file(record_path(&home)).unwrap();
+        std::fs::remove_file(&home.file).unwrap();
         *fail_merge.borrow_mut() = true;
         let out: Value =
             serde_json::from_str(&run_in(&home, "freeze-set", &payload, &empty, &gh)).unwrap();
@@ -784,6 +892,72 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("--disable-auto by hand"));
-        assert!(record_path(&home).exists());
+        assert!(home.file.exists());
+    }
+
+    #[test]
+    fn freeze_on_the_primary_binds_every_machine() {
+        let primary = crate::store_remote::test_primary::start();
+        let on = |test: &str| {
+            let (dir, local) = home(test);
+            let store = Store {
+                file: local.file,
+                primary: Some(primary.remote.clone()),
+            };
+            (dir, store)
+        };
+        let (_a_dir, macbook) = on("macbook");
+        let (_b_dir, imac) = on("imac");
+        let empty = store(vec![]);
+
+        // A set on one machine holds an off-pin merge on the other, and
+        // writes no local file on either.
+        assert_eq!(set(&macbook, SHA, &empty)["outcome"], "frozen");
+        assert!(!macbook.file.exists() && !imac.file.exists());
+        assert!(matches!(
+            verdict_for_in(&imac, Some(8), Some("o/r"), &empty),
+            Verdict::Frozen { .. }
+        ));
+        assert!(set(&imac, SHA, &empty)["detail"]
+            .as_str()
+            .unwrap()
+            .contains("already active"));
+
+        // A clear on the other machine lifts it for both.
+        let lift = format!("merge-freeze:o/r@sha:{},prs:7", &SHA[..12]);
+        let ruled = store(vec![row("d-1", &lift, "operator")]);
+        let cleared = run_in(
+            &imac,
+            "freeze-clear",
+            &json!({"evidence": "d-1"}),
+            &ruled,
+            &no_gh,
+        );
+        assert!(cleared.contains("\"lifted\""), "{cleared}");
+        assert_eq!(
+            verdict_for_in(&macbook, Some(8), Some("o/r"), &empty),
+            Verdict::Clear
+        );
+
+        // A record an older build left in the local file still holds.
+        std::fs::write(
+            &imac.file,
+            r#"{"version":1,"subject":"old","set_by":"t","allow":[5]}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            verdict_for_in(&imac, Some(6), Some("o/r"), &empty),
+            Verdict::Frozen { .. }
+        ));
+
+        // An unreachable primary fails closed.
+        let dead = Store {
+            file: macbook.file.clone(),
+            primary: Some(crate::store_remote::test_primary::dead()),
+        };
+        assert!(matches!(
+            verdict_for_in(&dead, Some(8), Some("o/r"), &empty),
+            Verdict::Unavailable { .. }
+        ));
     }
 }

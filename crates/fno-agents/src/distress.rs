@@ -124,6 +124,19 @@ pub(crate) fn help_distress_stuck(reason: String, evidence: Option<String>) -> H
     }
 }
 
+/// The held row the stop gate writes when the run is held on its own
+/// dispatch: the spawn gate refused the node (share or provider cap) and
+/// the node reads undispatched. Same shape as the parsed distresses; only
+/// the door differs (built by the gate, not parsed from a message).
+pub(crate) fn help_distress_held(reason: String, evidence: Option<String>) -> HelpDistress {
+    HelpDistress {
+        reason,
+        evidence,
+        kind: DistressKind::Help,
+        class: HelpClass::Held,
+    }
+}
+
 /// First `<help ...>` opening tag whose name is exactly `help` (a raw
 /// `find("<help")` would also match `<helper>`). An empty or missing reason
 /// still parses: the events schema permits a reason-less blocked row, and the
@@ -830,6 +843,21 @@ mod tests {
         let reason_only =
             extract_help_distress(r#"<help reason="x">"#).expect("reason-only parses");
         assert_eq!(reason_only.reason, "x");
+        // Typographic and single quotes delimit values like ASCII double quotes.
+        for tag in [
+            "<help class=\u{201c}wait\u{201d} reason=\u{201c}quota\u{201d} evidence=\u{201c}rate limit\u{201d}>",
+            "<help class=\u{201c}wait\u{201c} reason=\u{201c}quota\u{201c} evidence=\u{201c}rate limit\u{201c}>",
+            "<help class='wait' reason='quota' evidence='rate limit'>",
+            "<help class=\u{2018}wait\u{2019} reason=\u{2018}quota\u{2019} evidence=\u{2018}rate limit\u{2019}>",
+        ] {
+            let d = extract_help_distress(tag).expect("quoted tag parses");
+            assert_eq!(d.class, HelpClass::Wait, "{tag}");
+            assert_eq!(d.reason, "quota", "{tag}");
+            assert_eq!(d.evidence.as_deref(), Some("rate limit"), "{tag}");
+        }
+        // Prose quotes inside an ASCII-quoted value do not end it.
+        let inner = extract_help_distress("<help reason=\"the \u{201c}x\u{201d} gate\">").unwrap();
+        assert_eq!(inner.reason, "the \u{201c}x\u{201d} gate");
         // A longer tag name sharing the prefix must NOT match.
         assert_eq!(extract_help_distress("use <helper> here"), None);
         // Absence stays absence.

@@ -35,7 +35,7 @@ When every id succeeds, clear exits 0. An unknown id exits 4, a different-answer
 
 Every read derives an authority lane in the engine. `operator` authority is `law`. Agent and role authority are both `coord`. `beastmode` authority is `grant`. The human list leads with `LAW`, `coord`, or `grant`, and `--lane law|coord|grant|unattributed` filters at that same engine seam.
 
-`--authority` takes exactly four values: `operator`, `role`, `agent`, `beastmode`. Anything else is refused on the write path, and nothing is recorded. Pass `role` for a lead ruling inside its own role scope. That value exists because three rows on disk carry invented `role-l1` and `role-l2-<node>` spellings. Leads wrote them because no correct value existed. The scope belongs on the role row, so the value carries no suffix.
+`--authority` takes exactly four values: `operator`, `role`, `agent`, `beastmode`. Anything else is refused on the write path, and nothing is recorded. Pass `role` for a lead ruling inside its own role scope. The door checks the claim. An agent session must hold a live team in the registry. When the subject names a node, that node must sit inside the caller's territory. A caller with no session identity and no terminal is refused. The visual-approval gate clears on a role row at the PR's bound node. A role row from any other session is a hole in that gate. That value exists because three rows on disk carry invented `role-l1` and `role-l2-<node>` spellings. Leads wrote them because no correct value existed. The scope belongs on the role row, so the value carries no suffix.
 
 The closed set is NOT in `schema.yaml`. The index already holds those invented spellings. A schema enum makes `fno backlog decide-reindex` reject them, which drops recall for real rulings.
 
@@ -52,14 +52,14 @@ A row is quoted far more often than it is read in the list, and a quoted row car
 Three caller states decide which of those get written, and the third fails closed.
 
 1. A session identity resolves. The handle is stamped into `decided_by`, and the row reads as coordination.
-2. No identity, and a terminal on stdin. `attested_by` is written, and `--authority operator` is accepted.
+2. No identity, and a terminal on stdin. `attested_by` is written. With no `--authority`, the row records as operator law, the same lane `fno inbox law set` gives this caller.
 3. No identity, and no terminal. Superuser authority is REFUSED. `decided_by` says `unattributed-caller`.
 
-Law is never DEFAULTED, in any state. A caller who wants the superuser lane passes `--authority operator`. Omit it at a terminal and the row records with no authority, which reads as `unattributed`.
+Law is defaulted in state 2 only, and only for the person at the terminal. A `--decided-by` name other than `operator`, or a mail origin below operator, is someone else's ruling and records with no authority. On 2026-10-23 a user's own `fno backlog decide` at a terminal recorded with no authority. It read `unattributed`, so the merge hold it answered refused it. A flag the law door never asked for bought no protection, because the law door already gives this caller the operator lane.
 
 State 3 exists because state 2 used to be everything that was not state 1. That made attendance an ABSENCE, and `env -u CLAUDE_CODE_SESSION_ID fno backlog decide --authority operator` was enough to forge an attested row in the law lane.
 
-Say the residual limit out loud, because it is narrower than the rule it satisfies. A tty is OBTAINABLE: `script -q /dev/null <cmd>` reports one from a context with no person in it, measured on this box. So the terminal raises the cost of forging law and does not prevent it. Forging law THROUGH THIS COMMAND now takes two deliberate acts, a wrapped tty and an explicit flag, and neither happens by accident.
+Say the residual limit out loud, because it is narrower than the rule it satisfies. A tty is OBTAINABLE: `script -q /dev/null <cmd>` reports one from a context with no person in it, measured on this box. So the terminal raises the cost of forging law and does not prevent it. Forging law through this command takes one deliberate act, a wrapped tty, which is also the cost at `fno inbox law set`. It does not happen by accident.
 
 ### Chat-origin probe
 

@@ -38,7 +38,18 @@ fn the_argv_surface_parses_and_refuses() {
             && o.out.is_none()
             && o.join.is_none()
             && !o.check
+            && !o.help
     );
+    // Help reads in both spellings, so a stranger's `--help` exits 0.
+    assert!(parse_opts(&oss(&["--help"])).unwrap().help);
+    assert!(parse_opts(&oss(&["-h"])).unwrap().help);
+    // The prerequisite git floor: Apple's suffix parses, an old minor fails.
+    assert!(git_version_at_least(
+        "git version 2.39.5 (Apple Git-154)\n",
+        (2, 31)
+    ));
+    assert!(!git_version_at_least("git version 2.30.1", (2, 31)));
+    assert!(!git_version_at_least("garbage", (2, 31)));
     assert_eq!(o.scope, Scope::Both);
     // Every flag reads.
     let o = parse_opts(&oss(&[
@@ -404,4 +415,24 @@ fn the_check_side_helpers_parse_and_refuse() {
     // The drift word spells strings bare and keeps TOML's other forms.
     assert_eq!(value_word(&toml::Value::String("fn".into())), "fn");
     assert_eq!(value_word(&toml::Value::Boolean(true)), "true");
+    // A red verify names its reason: the cap, the problem line, or the re-run.
+    assert_eq!(
+        verify_reason("fno doctor --blockers", "/x/fno: timed out after 10s"),
+        "timed out after 10s"
+    );
+    assert_eq!(
+        verify_reason(
+            "fno config doctor",
+            "`fno config doctor` exited 1: [doctor] schema_version: 1\n[doctor] 1 state-root write issue(s):\n  - claims not writable\nlater"
+        ),
+        "[doctor] 1 state-root write issue(s): - claims not writable"
+    );
+    assert_eq!(
+        verify_reason("fno config doctor", "`fno config doctor` exited 1: quiet"),
+        "run `fno config doctor` to read why"
+    );
+    assert_eq!(
+        verify_reason("fno-agents daemon serving", "daemon is not serving"),
+        "daemon is not serving"
+    );
 }

@@ -1,0 +1,1 @@
+{"op": "update-health", "state": null, "id": "a1", "rule": {"backoff": true, "cooldown_ms": null}, "locked": true, "expect": {"result": {"provider_id": "a1", "backoff_level": 0, "rate_limited_until": null, "last_error_at": null, "model_locks": {}}, "file": null}}

@@ -1,0 +1,15 @@
+Usage: fno agents roles resolve [OPTIONS] ROLE
+
+  Resolve exactly one immutable role or one typed blocked result.
+
+Arguments:
+  ROLE  ROLE or FUNCTION/ROLE.  [required]
+
+Options:
+  --work-order TEXT    Authorized graph node identity.  [required]
+  --attempt TEXT       Immutable attempt identity.  [required]
+  --capabilities PATH  Read-only JSON array of CapabilityFact observations.
+  --context PATH       Read-only JSON array of ContextReference observations.
+  --snapshot TEXT      Expected input snapshot revision.
+  -J, --json           Emit stable structured JSON.
+  --help               Show this message and exit.

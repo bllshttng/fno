@@ -42,6 +42,19 @@ const HALF_OPEN_MS: i64 = 30_000;
 const ESCALATION_WINDOW_MS: i64 = 900_000;
 const BASE_BACKOFF_MS: i64 = 60_000;
 const MAX_BACKOFF_MS: i64 = 900_000;
+/// The flock wait bound: LOCK_NB retries, not a blocking LOCK_EX. The
+/// critical section after the shared-hold hoist is a ledger read-write, so
+/// 20 x 100ms covers a normal handoff while naming the wait instead of
+/// queueing the merge path behind a stalled holder.
+const LOCK_RETRY_MAX_TRIES: u32 = 20;
+const LOCK_RETRY_SLEEP_MS: u64 = 100;
+/// How old the stored core reading may be and still vouch for the bucket.
+/// The bucket is account-wide, so a reading goes stale the moment the OTHER
+/// machine (or any plain read whose headers nobody sees) spends it: the
+/// 2026-10-25 outage ran five hours on a reading stamped early in the
+/// window while the true count sat at 0. A quarter of the one-hour window
+/// bounds how far a positive reading may bless refusals and downgrades.
+pub(crate) const CORE_READING_FRESH_MS: i64 = 900_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerState {
@@ -124,6 +137,14 @@ pub struct Snapshot {
     pub core_remaining: i64,
     /// Seconds until the stored core reading resets; 0 when unknown or past.
     pub core_reset_in_s: i64,
+    /// Seconds since the stored core reading was observed; -1 never. A
+    /// positive reading this old is a memory of a bucket other spenders
+    /// have long since drained, never a present answer.
+    pub core_seen_age_s: i64,
+    /// Whether the stored reading is young enough to vouch for the bucket
+    /// ([`CORE_READING_FRESH_MS`]). A refusal classifier consults this
+    /// before trusting `core_remaining`.
+    pub core_reading_fresh: bool,
     /// The active reserve; 0 disables the reserve refusals.
     pub core_reserve: u32,
 }
@@ -301,12 +322,51 @@ fn window_points(ledger: &Ledger, now: i64) -> i64 {
 /// The shared hold's (until, kind) on the real store; (0, "") when absent
 /// or unreadable. `admit` reads the deadline, `snapshot` also prefers the
 /// peer's kind whenever a peer hold stands past the local one.
+///
+/// Every gh call asks, so the answer is cached on disk for
+/// [`SHARED_HOLD_TTL_MS`] across processes, and a failed read is cached too.
+/// Without the cache each gh call paid one remote round trip, and a primary
+/// that stalled for its 15s reply wait made every gh call on the machine wait
+/// that long. A hold lasts at least [`BASE_BACKOFF_MS`], so a short-stale
+/// answer still sees it.
 fn shared_hold(now: i64) -> (i64, String) {
-    crate::claim_store::budget_hold_read(None, now)
+    shared_hold_cached(&shared_hold_cache_path(), now, || {
+        crate::claim_store::budget_hold_read(None, now)
+            .ok()
+            .flatten()
+            .map(|(until, _, _, kind)| (until, kind))
+    })
+}
+
+const SHARED_HOLD_TTL_MS: i64 = 15_000;
+
+fn shared_hold_cache_path() -> PathBuf {
+    PathBuf::from(format!("{}.fleet-hold", ledger_path().display()))
+}
+
+fn shared_hold_cached(
+    cache: &Path,
+    now: i64,
+    read: impl FnOnce() -> Option<(i64, String)>,
+) -> (i64, String) {
+    let cached = std::fs::read_to_string(cache)
         .ok()
-        .flatten()
-        .map(|(until, _, _, kind)| (until, kind))
-        .unwrap_or((0, String::new()))
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    if let Some(row) = cached {
+        let read_at = row.get("read_at").and_then(Value::as_i64).unwrap_or(0);
+        if (0..SHARED_HOLD_TTL_MS).contains(&(now - read_at)) {
+            let until = row.get("until").and_then(Value::as_i64).unwrap_or(0);
+            let kind = row.get("kind").and_then(Value::as_str).unwrap_or("");
+            return (until, kind.to_string());
+        }
+    }
+    let (until, kind) = read().unwrap_or((0, String::new()));
+    let tmp = PathBuf::from(format!("{}.{}", cache.display(), std::process::id()));
+    let body = json!({"read_at": now, "until": until, "kind": kind}).to_string();
+    if std::fs::write(&tmp, body).is_ok() {
+        let _ = std::fs::rename(&tmp, cache);
+    }
+    (until, kind)
 }
 
 pub(crate) fn lock_path(path: &Path) -> PathBuf {
@@ -316,6 +376,7 @@ pub(crate) fn lock_path(path: &Path) -> PathBuf {
 /// flock held for the scope of one read-modify-write, following
 /// `loop_lead::bump_respawn_count`. Shared with the pr-park store so the
 /// daemon sweep and the watcher tick serialize on the same `.lock` file.
+#[derive(Debug)]
 pub(crate) struct FileLock {
     handle: std::fs::File,
 }
@@ -333,7 +394,26 @@ impl FileLock {
     /// flocked (a read-only or uncreatable state directory). The budget
     /// consult degrades to a lock-free read instead of aborting the process
     /// on every gh call - the module's fail-open rule.
+    ///
+    /// The flock is LOCK_NB with a short retry, never a blocking LOCK_EX: a
+    /// blocking wait queued every gh shim call behind the lock holder, and
+    /// one holder reading the claims store inside its critical section made
+    /// the queue minutes deep (measured 2026-10-24: 25s per call, 13
+    /// holders). The bound keeps a brief handoff while naming the wait in
+    /// the error, so a starved caller degrades lock-free instead of
+    /// stalling the merge path.
     pub(crate) fn try_acquire(path: &Path) -> Result<FileLock, String> {
+        Self::try_acquire_with(path, LOCK_RETRY_MAX_TRIES, LOCK_RETRY_SLEEP_MS)
+    }
+
+    /// The parametric form, tries and sleep handed in so a test drives the
+    /// bound without waiting out the real one.
+    pub(crate) fn try_acquire_with(
+        path: &Path,
+        max_tries: u32,
+        sleep_ms: u64,
+    ) -> Result<FileLock, String> {
+        let max_tries = max_tries.max(1);
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -342,11 +422,21 @@ impl FileLock {
             .append(true)
             .open(path)
             .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
-        let locked = unsafe { libc::flock(handle.as_raw_fd(), libc::LOCK_EX) };
-        if locked != 0 {
-            return Err(format!("cannot flock {}: {locked}", path.display()));
+        for try_no in 1..=max_tries {
+            let locked = unsafe { libc::flock(handle.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if locked == 0 {
+                return Ok(FileLock { handle });
+            }
+            if try_no == max_tries {
+                return Err(format!(
+                    "cannot flock {path} after {try_no} tries (locked elsewhere; \
+                     the holder may be stalled): {locked}",
+                    path = path.display(),
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
         }
-        Ok(FileLock { handle })
+        unreachable!("the loop returns on every arm")
     }
 }
 
@@ -516,6 +606,18 @@ pub fn admit(path: &Path, argv: &[String], now: i64, cap: u32) -> Verdict {
 /// lock actually holds instead of a straggler copy.
 fn admit_with(ledger_override: Option<&Path>, argv: &[String], now: i64, cap: u32) -> Verdict {
     let points = points_for(argv);
+    // The shared hold rides only the REAL ledger: tests stage temp paths,
+    // and a test's world must not read (or inherit) the dev machine's fleet
+    // hold. The read runs BEFORE the ledger flock: it reaches the claims
+    // store (a graph read), and holding the flock across it queued every
+    // other shim call behind a network answer (measured 2026-10-24: 25s per
+    // call, 13 holders). record_refusal_real reads outside the lock the
+    // same way. An exempt shape (zero points) never reads it.
+    let shared_until = if ledger_override.is_none() && points != 0 {
+        shared_hold(now).0
+    } else {
+        0
+    };
     let (_lock, path) = ledger_lock(ledger_override);
     let (mut ledger, state) = read_ledger(&path);
 
@@ -566,14 +668,6 @@ fn admit_with(ledger_override: Option<&Path>, argv: &[String], now: i64, cap: u3
         }
     }
 
-    // The shared hold rides only the REAL ledger: tests stage temp paths,
-    // and a test's world must not read (or inherit) the dev machine's fleet
-    // hold.
-    let shared_until = if ledger_override.is_none() {
-        shared_hold(now).0
-    } else {
-        0
-    };
     let backoff_until_ms = ledger.backoff_until_ms.max(shared_until);
 
     if now < backoff_until_ms {
@@ -860,11 +954,11 @@ pub(crate) fn refused_output(line: String) -> std::process::Output {
 
 /// Command::output() behind the budget: the door for a direct gh spawn. A
 /// refusal never spawns a child; everything else is the command's own output.
-pub(crate) fn output(mut cmd: std::process::Command) -> std::io::Result<std::process::Output> {
+pub(crate) fn output(cmd: std::process::Command) -> std::io::Result<std::process::Output> {
     if let Some(line) = admit_command(&cmd) {
         return Ok(refused_output(line));
     }
-    cmd.output()
+    crate::pr_status::quota::dispatch_helper(cmd).output()
 }
 
 /// Whether the in-process consult is armed. A unit-test build runs dozens of
@@ -941,7 +1035,12 @@ fn record_refusal_body(
         0
     };
     ledger.refusal_kind = kind.to_string();
-    let shift = ledger.backoff_step.min(4) as u32;
+    // The clamp is load-bearing, not tidy: this shift runs on the admit
+    // path of every gh call, and a negative step in the ledger (a torn or
+    // hand-edited write) wrapped `as u32` into a shift past the type width
+    // and panicked the whole process on CI. A corrupt step degrades to the
+    // base window - the module's fail-open rule - it never panics.
+    let shift = ledger.backoff_step.clamp(0, 4) as u32;
     let backoff = (BASE_BACKOFF_MS << shift).min(MAX_BACKOFF_MS);
     ledger.backoff_until_ms = now + backoff;
     ledger.last_refusal_ms = now;
@@ -1036,6 +1135,33 @@ pub(crate) fn core_recording_armed() -> bool {
     !(cfg!(test) && std::env::var_os("FNO_GH_BUDGET_TEST_ARMED").is_none())
 }
 
+/// The core bucket of a `gh api rate_limit` payload, as (remaining, reset
+/// epoch s): the account-wide reading the exempt probe already paid for.
+pub(crate) fn core_from_rate_limit(payload: &Value) -> Option<(i64, i64)> {
+    let core = payload.pointer("/resources/core")?;
+    let remaining = core.get("remaining")?.as_i64()?;
+    let reset = core.get("reset")?.as_i64()?;
+    Some((remaining, reset))
+}
+
+/// One core reading lands in the ledger from an exempt `rate_limit` answer:
+/// the probe the GraphQL broker runs before every discretionary call, the
+/// spend report, and the failure classifiers all fetch this payload, and
+/// each fetch is a fresh account-wide observation. Without it the ledger's
+/// core bucket only moved at conditional-read moments, and a positive
+/// reading stamped early in the hour held calls open while the true count
+/// sat at 0 (the 2026-10-25 five-hour outage). The same arming and
+/// no-op-under-a-unit-test-build rule as [`record_core_observation`].
+pub(crate) fn record_core_from_rate_limit(payload: &Value) {
+    let Some((remaining, reset)) = core_from_rate_limit(payload) else {
+        return;
+    };
+    if !core_recording_armed() {
+        return;
+    }
+    record_core_real(remaining, reset, now_ms());
+}
+
 /// Read-only projection for status surfaces and the loop gate's pre-read.
 pub fn snapshot(path: &Path, now: i64) -> Snapshot {
     let (ledger, state) = read_ledger(path);
@@ -1055,6 +1181,11 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
         ledger.refusal_kind.clone()
     };
     let until = ledger.backoff_until_ms.max(shared_until);
+    let core_seen_age_s = if ledger.core_seen_ms > 0 {
+        ((now - ledger.core_seen_ms).max(0)) / 1000
+    } else {
+        -1
+    };
     Snapshot {
         points_60s: window_points(&ledger, now),
         cap: cap_from_env(),
@@ -1067,6 +1198,16 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
         } else {
             0
         },
+        core_seen_age_s,
+        // Fresh means the reading still describes THIS bucket: recent AND
+        // taken against a reset that is still in the future - the same
+        // currency the core gate requires. A reading whose window has
+        // rolled over describes a bucket that no longer exists; trusting
+        // its positivity near a boundary would downgrade a real core
+        // refusal in the new window.
+        core_reading_fresh: ledger.core_seen_ms > 0
+            && now - ledger.core_seen_ms <= CORE_READING_FRESH_MS
+            && now < ledger.core_reset_ms,
         core_reserve: core_reserve(),
     }
 }
@@ -1133,6 +1274,8 @@ fn print_status() {
             "refusal_kind": s.refusal_kind,
             "core_remaining": s.core_remaining,
             "core_reset_in_s": s.core_reset_in_s,
+            "core_seen_age_s": s.core_seen_age_s,
+            "core_reading_fresh": s.core_reading_fresh,
             "core_reserve": s.core_reserve,
         })
     );
@@ -1204,7 +1347,15 @@ fn dispatch_op(payload: &Value) -> i32 {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                Some(crate::gh_spend::rate_limit_probe())
+                // The probe the report is about to print is a fresh
+                // account-wide reading; the diagnostic also feeds the
+                // ledger, so a status read right after names the truth it
+                // just observed.
+                let probe = crate::gh_spend::rate_limit_probe();
+                if let Ok(reading) = &probe {
+                    record_core_from_rate_limit(reading);
+                }
+                Some(probe)
             } else {
                 None
             };
@@ -1255,6 +1406,38 @@ mod tests {
         } else {
             verdict.refusal
         }
+    }
+
+    #[test]
+    fn shared_hold_read_is_cached_and_a_failed_read_is_cached_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("budget.json.fleet-hold");
+        let reads = std::cell::Cell::new(0);
+        let failing = || {
+            reads.set(reads.get() + 1);
+            None
+        };
+        assert_eq!(
+            shared_hold_cached(&cache, 1_000, failing),
+            (0, String::new())
+        );
+        // Inside the TTL the failed read answers from the cache: no second
+        // round trip to a primary that just stalled.
+        assert_eq!(
+            shared_hold_cached(&cache, 9_000, failing),
+            (0, String::new())
+        );
+        assert_eq!(reads.get(), 1);
+        let held = || Some((90_000, "secondary".to_string()));
+        let later = 1_000 + SHARED_HOLD_TTL_MS;
+        assert_eq!(
+            shared_hold_cached(&cache, later, held),
+            (90_000, "secondary".into())
+        );
+        assert_eq!(
+            shared_hold_cached(&cache, later + 1, || panic!("cached")),
+            (90_000, "secondary".into())
+        );
     }
 
     /// The injected refusal seam with the fleet row staged by the test.
@@ -1317,6 +1500,34 @@ mod tests {
             "the lock was retaken on the moved folder, not the stray"
         );
         assert_ne!(lock_path(&path), stray, "the stray inode was dropped");
+    }
+
+    /// A held flock must name itself fast instead of queueing the next shim
+    /// call behind a blocking LOCK_EX. The bound is driven through the
+    /// parametric form so the test waits 2ms, not the real 2s; the released
+    /// lock must free for the next caller.
+    #[test]
+    fn a_held_flock_names_itself_instead_of_queueing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("github-request-budget.json.lock");
+        let held = FileLock::try_acquire(&path).expect("the first caller takes the lock");
+        let started = std::time::Instant::now();
+        let err = FileLock::try_acquire_with(&path, 2, 1)
+            .expect_err("a held lock refuses the second caller");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the bound is short, not a blocking wait: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            err.contains("locked elsewhere"),
+            "the error names the wait: {err}"
+        );
+        drop(held);
+        assert!(
+            FileLock::try_acquire(&path).is_ok(),
+            "the lock frees for the next caller"
+        );
     }
 
     #[test]
@@ -1755,6 +1966,102 @@ mod tests {
         record_core_at(&path3, 0, now / 1000 - 100, now);
         let v = admit(&path3, &core_read, now, 450);
         assert!(v.admitted, "a passed reset ignores core state: {v:?}");
+    }
+
+    #[test]
+    fn a_rate_limit_payload_stamps_the_core_bucket_and_engages_the_gate() {
+        // The exempt probe's payload names both buckets; the core half is a
+        // fresh account-wide reading. Parse: remaining and reset come off
+        // /resources/core, and a payload without the bucket reads None.
+        let reset_s = now_ms() / 1000 + 600;
+        let payload = json!({
+            "resources": {
+                "core": {"limit": 5000, "used": 5000, "remaining": 0, "reset": reset_s},
+                "graphql": {"remaining": 4900, "reset": reset_s},
+            }
+        });
+        assert_eq!(core_from_rate_limit(&payload), Some((0, reset_s)));
+        assert_eq!(core_from_rate_limit(&json!({"resources": {}})), None);
+
+        // The full entry under the real ledger: disarmed (the unit-test
+        // default) it writes nothing anywhere; armed over a staged state
+        // dir it stamps the ledger, and the gate holds the next core read.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _state = DoorEnvGuard::set("FNO_STATE_DIR", tmp.path().as_os_str());
+        let ledger = ledger_path();
+        record_core_from_rate_limit(&payload);
+        assert!(!ledger.exists(), "a disarmed stamp writes nothing");
+
+        let _armed = DoorEnvGuard::set("FNO_GH_BUDGET_TEST_ARMED", std::ffi::OsStr::new("1"));
+        record_core_from_rate_limit(&payload);
+        let (stamped, _) = read_ledger(&ledger);
+        assert_eq!(stamped.core_remaining, 0);
+        assert_eq!(stamped.core_reset_ms, reset_s * 1000);
+        let v = admit_with(
+            None,
+            &argv(&["api", "repos/o/r/pulls/1"]),
+            stamped.core_seen_ms,
+            450,
+        );
+        assert!(!v.admitted, "the fresh exhaustion holds the next core read");
+        assert_eq!(v.cause, Some("core"));
+    }
+
+    #[test]
+    fn the_snapshot_reports_the_core_reading_age_and_freshness() {
+        // AC: a positive reading past the freshness bound stops vouching
+        // for the bucket, and a never-seen ledger reads unknown, never
+        // fresh. This is the field the refusal downgrade consults.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let now = 1_760_000_000_000i64;
+        record_core_at(&path, 4706, now / 1000 + 3_000, now);
+        let s = snapshot(&path, now + 1_000);
+        assert!(s.core_reading_fresh, "a just-stamped reading is fresh");
+        assert_eq!(s.core_seen_age_s, 1);
+        let s = snapshot(&path, now + CORE_READING_FRESH_MS + 2_000);
+        assert!(!s.core_reading_fresh, "an old positive vouches for nothing");
+        assert_eq!(s.core_seen_age_s, (CORE_READING_FRESH_MS + 2_000) / 1000);
+        let empty = tmp.path().join("empty.json");
+        let s = snapshot(&empty, now);
+        assert_eq!(s.core_seen_age_s, -1);
+        assert!(!s.core_reading_fresh);
+        // A recent reading against a window that has already rolled over
+        // describes a bucket that no longer exists: never fresh, no matter
+        // how young it is (the boundary-downgrade finding).
+        let rolled = tmp.path().join("rolled.json");
+        record_core_at(&rolled, 4706, now / 1000 - 100, now);
+        let s = snapshot(&rolled, now + 1_000);
+        assert_eq!(s.core_seen_age_s, 1);
+        assert!(
+            !s.core_reading_fresh,
+            "a past-reset reading vouches for nothing"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_negative_backoff_step_degrades_to_the_base_window() {
+        // The shift on the admit path must be panic-free for ANY stored
+        // step: a negative one wrapped `as u32` past the type width and
+        // killed the process on CI. The clamp reads it as the base window.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let t0 = 1_760_000_000_000i64;
+        std::fs::write(
+            &path,
+            r#"{"stamps":[],"backoff_until_ms":0,"backoff_step":-1,"refusal_kind":"unknown","last_refusal_ms":1759999990000,"last_half_open_ms":0}"#,
+        )
+        .unwrap();
+        record_refusal(&path, t0, "secondary").unwrap();
+        let (ledger, _) = read_ledger(&path);
+        assert_eq!(
+            ledger.backoff_until_ms,
+            t0 + 60_000,
+            "a corrupt step opens the base window, no shift"
+        );
     }
 
     // --- the guard against a new bare gh spawn ------------------------------

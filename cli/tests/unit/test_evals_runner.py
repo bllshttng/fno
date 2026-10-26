@@ -131,6 +131,36 @@ def test_config_disabled_skips_the_default_spawn(tmp_path: Path, monkeypatch) ->
     assert "config.evals.enabled is false" in results[0].reason
 
 
+def test_default_spawn_trial_leaves_no_claude_project_dir(tmp_path: Path, monkeypatch) -> None:
+    """A real trial's claude projects dir goes after grading; others stay."""
+    root = _git_repo(tmp_path)
+    projects = tmp_path / "cfg" / "projects"
+    keep = projects / "-Users-me-repo"
+    keep.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setattr(_runner, "evals_enabled", lambda: True)
+    seen: list[Path] = []
+
+    def _fake(prompt, workdir, timeout_s, **kw):
+        trial = projects / str(workdir).replace("/", "-").replace(".", "-")
+        trial.mkdir()
+        (trial / "s.jsonl").write_text("{}\n")
+        seen.append(trial)
+        return SpawnResult(True, worker_name="ev-th-evals-1-2")
+
+    monkeypatch.setattr(_runner, "_default_spawn", _fake)
+    run_task(_task(prompt="x"), repeat=1, repo_root=root, history_path=tmp_path / "h.jsonl")
+    assert seen and not seen[0].exists()
+    assert keep.exists()
+    # An account lane's trial lands under that account's config dir.
+    acct = tmp_path / "acct" / "projects" / "-w-t"
+    acct.mkdir(parents=True)
+    overlay = {"env": {"CLAUDE_CONFIG_DIR": str(tmp_path / "acct")}}
+    monkeypatch.setattr(_runner._overlay, "account_overlay", lambda account: overlay)
+    _runner._forget_trial_transcripts(Path("/w/t"), type("Lane", (), {"account": "a1"})())
+    assert not acct.exists() and keep.exists()
+
+
 # AC3-ERR: spawn failure is a graded fail, remaining repeats still run.
 def test_spawn_failure_is_graded_fail_not_crash(tmp_path: Path) -> None:
     root = _git_repo(tmp_path)

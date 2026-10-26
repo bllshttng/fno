@@ -23,7 +23,6 @@ import pytest
 
 from fno.agents.stale_escalate import dedupe_key
 from fno.lead.escalate import escalate
-from fno.outstanding.core import read_open_questions
 
 STALLED = ["undispatched:x-1234", "undispatched:x-5678"]
 
@@ -147,7 +146,8 @@ def test_an_empty_refused_set_never_reaches_the_transport(
         _run(tmp_path, [])
 
     assert captured == []
-    assert read_open_questions(tmp_path) == []
+    # The refusal precedes any write: the machine question index never appears.
+    assert not (tmp_path / "questions.jsonl").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +212,16 @@ def test_mail_presiding_lead_true_only_on_a_zero_exit(monkeypatch) -> None:
         lambda *a, **k: _Proc(0, "msg-1 delivered (hosted)\n"),
     )
     assert mail_presiding_lead("l1-lead", STALLED, "NoProgress") is True
+    # The verdict rides the render, and a refused render reads False, never
+    # a KeyError on the missing mail.
+    seen: list = []
+    monkeypatch.setattr(
+        "fno.lead.escalate._render",
+        lambda *a, verdict=None, **k: seen.append(verdict) or {"ok": False},
+    )
+    assert mail_presiding_lead("l1-lead", STALLED, "Verdict", verdict="degraded") is False
+    assert seen == ["degraded"]
+    monkeypatch.setattr("fno.lead.escalate._render", _fake_render)
 
     monkeypatch.setattr(
         "subprocess.run",

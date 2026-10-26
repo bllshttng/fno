@@ -1,5 +1,5 @@
-//! The `mail send` wrapped command: agent, project, kind, job, lead and ruling
-//! lanes plus the durable floor.
+//! The `mail send` wrapped command: agent, project, kind, job and lead lanes
+//! plus the durable floor.
 //!
 //! Port of the Python `cmd_send` body (`cli/src/fno/mail/cli.py`) with the
 //! dispatch engine it drove (`agents/dispatch.py::dispatch_send`,
@@ -217,17 +217,14 @@ pub(crate) fn own_identity() -> Option<(String, String)> {
     }
 }
 
-/// Python `stamp_from`: explicit `--from-name` wins verbatim, else the own
-/// canonical handle, else the `"fno"` floor.
-/// `pub(crate)`: the reply leaf stamps its origin row's sender.
-pub(crate) fn stamp_from(from_name: Option<&str>) -> String {
-    match from_name {
-        Some(name) => name.to_string(),
-        None => match own_identity() {
-            Some((sid, _)) => crate::identity::canonical_handle(&sid),
-            None => "fno".to_string(),
-        },
-    }
+/// Explicit `--from-name` wins, else the own canonical handle, else the
+/// `unknown` floor ([`crate::system_sender::stamp_or_unknown`]).
+/// Public: the reply leaf, the ask and spawn routes and the bin stamp
+/// through it.
+pub fn stamp_from(from_name: Option<&str>) -> String {
+    crate::system_sender::stamp_or_unknown(from_name, || {
+        own_identity().map(|(sid, _)| crate::identity::canonical_handle(&sid))
+    })
 }
 
 fn resolve_self_session() -> Option<String> {
@@ -326,15 +323,11 @@ fn state_dir() -> PathBuf {
     crate::agents_config::state_dir(&cwd).unwrap_or_else(|| PathBuf::from(".fno"))
 }
 
-/// `fno/inbox/store.py::inbox_dir_for` and `bus_log_path` live under the
-/// state root the Python paths module resolves; the crate keeps its own
-/// mirrors on `AgentsHome`. The inbox threads tree is
-/// `<state>/inbox/<recipient>/inbox/`, the bus log `<bus_dir>/messages.jsonl`.
-fn inbox_dir_for(project: &str) -> Result<PathBuf, String> {
+/// The recipient check every durable write passes before its bus row: a
+/// crafted address never reaches a store key with a path separator or `..`.
+fn validate_recipient(project: &str) -> Result<(), String> {
     let mapped = system_arm_inbox_key(project);
     let project = mapped.as_deref().unwrap_or(project);
-    // store.py inbox_dir_for: strict validation closes the traversal hole a
-    // crafted recipient would open into the inbox tree.
     if project.contains('/') || project.contains('\\') {
         return Err(format!(
             "project name must not contain path separators: {project:?}"
@@ -356,23 +349,7 @@ fn inbox_dir_for(project: &str) -> Result<PathBuf, String> {
             "project name must match ^[A-Za-z0-9][A-Za-z0-9._:-]*$: {project:?}"
         ));
     }
-    if let Some(root) = std::env::var_os("FNO_INBOX_ROOT").filter(|v| !v.is_empty()) {
-        return Ok(PathBuf::from(root).join(project).join("inbox"));
-    }
-    // Production: config.paths.inbox_dir substitutes the RECIPIENT for
-    // {project} before template resolution, so the sender's own project id
-    // never leaks into the recipient's path (paths.inbox_root_for).
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if let Some(dir) = crate::agents_config::config_lookup(&cwd, &["paths", "inbox_dir"])
-        .and_then(|v| v.as_str().map(str::to_string))
-    {
-        let substituted = dir.replace("{project}", project);
-        let repo_root = git_repo_root(&cwd);
-        return crate::plans_path::resolve_template(&substituted, repo_root.as_deref());
-    }
-    let agents_root =
-        obsidian_agents_root(&cwd).unwrap_or_else(|| state_dir().join("inbox").join("agents"));
-    Ok(agents_root.join(project).join("inbox"))
+    Ok(())
 }
 
 /// A system arm address (`fno/quiet-recovery`) has exactly one slash between
@@ -386,39 +363,6 @@ fn system_arm_inbox_key(name: &str) -> Option<String> {
         return None;
     }
     Some(format!("{project}.{arm}"))
-}
-
-/// paths.vault_root + inbox_agents_root: `<vault>/internal/agents` when a
-/// vault is configured, else None for the neutral state-dir default.
-fn obsidian_agents_root(cwd: &Path) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let mut candidates = vec![cwd.join(".fno").join("config.toml")];
-    if let Some(h) = &home {
-        candidates.push(h.join(".fno").join("config.toml"));
-    }
-    let vault = crate::finalize::resolve_obsidian_vault(&candidates)?;
-    let vroot = crate::finalize::resolve_vault_root(&vault, home.as_deref())?;
-    Some(vroot.join("internal").join("agents"))
-}
-
-/// store_fallback._git_common_dir's toplevel twin: the shared git root for
-/// cwd, or None outside a repository (the caller then skips the anchor).
-fn git_repo_root(cwd: &Path) -> Option<PathBuf> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(s))
-    }
 }
 
 fn bus_log_path() -> PathBuf {
@@ -645,7 +589,6 @@ struct SendArgs {
     provider_tombstone: Option<String>,
     from_name: Option<String>,
     origin: Option<String>,
-    ruling: Option<String>,
     from_self: bool,
     to_project: Option<String>,
     to_lead: Option<String>,
@@ -680,7 +623,6 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
         provider_tombstone: None,
         from_name: None,
         origin: None,
-        ruling: None,
         from_self: false,
         to_project: None,
         to_lead: None,
@@ -725,14 +667,13 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
             }
             "--cwd" | "-c" => {
                 // Python's `workdir`: every repo-scoped read below (project
-                // resolution, the kind sender, config lookups, the ruling
-                // child) resolves against this directory, not the ambient
-                // one. run() chdir's to it before any consumer reads.
+                // resolution, the kind sender, config lookups) resolves
+                // against this directory, not the ambient one. run() chdir's
+                // to it before any consumer reads.
                 out.cwd = Some(PathBuf::from(take_arg(args, &mut index, "--cwd")?));
             }
             "--from-name" => out.from_name = Some(take_arg(args, &mut index, "--from-name")?),
             "--origin" => out.origin = Some(take_arg(args, &mut index, "--origin")?),
-            "--ruling" => out.ruling = Some(take_arg(args, &mut index, "--ruling")?),
             "--from-self" => out.from_self = true,
             "--to-project" => out.to_project = Some(take_arg(args, &mut index, "--to-project")?),
             "--to-lead" => out.to_lead = Some(take_arg(args, &mut index, "--to-lead")?),
@@ -869,6 +810,10 @@ fn is_unsafe_short_address(token: &str) -> bool {
 const BUDGET_WINDOW_SECONDS: f64 = 600.0;
 
 const BUDGET_CONTROL_CAP: i64 = 60;
+
+/// The lane that reaches an underway worker with no pane and no word cap.
+/// Every refusal on the correction path names it.
+pub(crate) const CORRECTION_HINT: &str = "To correct an underway worker, write it on its node: `fno backlog note <node> --body-file <file>` mails the node's holder a pointer.";
 
 /// Python `budget.pair_label`.
 fn budget_pair_label(sender: &str, recipient: &str) -> String {
@@ -1113,7 +1058,7 @@ pub(crate) fn reserve_send_budget(
             Ok(Some(r))
         }
         BudgetOutcome::Refused(pair, running, current, cap) => Err((
-            format!("refused: control word budget for {pair}: running {running} + {current} over cap {cap}"),
+            format!("refused: control word budget for {pair}: running {running} + {current} over cap {cap}. {CORRECTION_HINT}"),
             1,
         )),
         BudgetOutcome::Unavailable(pair, detail) => Err((format!("refused: {pair}: {detail}"), 1)),
@@ -1137,6 +1082,49 @@ pub(crate) fn release_budget(reservation: &Option<BudgetReservation>) {
     }
 }
 
+/// Drop every ledger entry charged to `msg_id`; the count removed. A
+/// withdrawal proves non-delivery, so its words stop blocking the retry.
+/// Scan by id: the envelope carries handles, and the ledger key may be a
+/// session id or the control prefix. Best-effort like [`release_budget`].
+pub(crate) fn release_budget_by_id(msg_id: &str) -> usize {
+    let Some(ledgers) = budget_ledger_path("").parent().map(Path::to_path_buf) else {
+        return 0;
+    };
+    let Ok(dir) = std::fs::read_dir(ledgers) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for path in dir.flatten().map(|e| e.path()) {
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if !raw.contains(msg_id) {
+            continue;
+        }
+        let Some(pair) = serde_json::from_str::<Value>(&raw)
+            .ok()
+            .and_then(|v| v.get("pair").and_then(Value::as_str).map(str::to_string))
+        else {
+            continue;
+        };
+        let Ok(lock) = lock_dir_acquire(&path, 10.0) else {
+            continue;
+        };
+        if let Ok(mut entries) = budget_load(&path, &pair) {
+            let before = entries.len();
+            entries.retain(|e| e.get("id").and_then(Value::as_str) != Some(msg_id));
+            if entries.len() < before && budget_store(&path, &pair, &entries).is_ok() {
+                removed += before - entries.len();
+            }
+        }
+        lock_dir_release(lock);
+    }
+    removed
+}
+
 // ---------------------------------------------------------------------------
 // Durable write (inbox/store.py write_new_thread + bus append)
 // ---------------------------------------------------------------------------
@@ -1147,31 +1135,6 @@ pub(crate) fn generate_msg_id() -> String {
     crate::announce::new_msg_id()
 }
 
-/// Python `_slug_for`: the body's first words, 40-char cap, lowercase, path
-/// safe; the msg-id is the fallback.
-fn slug_for(body: &str, fallback: &str) -> String {
-    let mut slug = String::new();
-    for word in body.split_whitespace().take(5) {
-        if !slug.is_empty() {
-            slug.push('-');
-        }
-        slug.push_str(word);
-    }
-    let mut safe = String::new();
-    for ch in slug.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' {
-            safe.push(ch.to_ascii_lowercase());
-        } else {
-            safe.push('-');
-        }
-    }
-    let safe = safe.trim_matches('-');
-    if safe.is_empty() {
-        return fallback.to_string();
-    }
-    safe.chars().take(40).collect()
-}
-
 fn format_dt(ts_secs: f64) -> String {
     chrono::DateTime::from_timestamp(ts_secs as i64, 0)
         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
@@ -1180,77 +1143,6 @@ fn format_dt(ts_secs: f64) -> String {
 
 fn utc_now_iso() -> String {
     now_iso()
-}
-
-/// Python `_format_thread`: the derived markdown render. Best-effort; the bus
-/// row is the system of record.
-fn format_thread_render(
-    msg_id: &str,
-    ts: &str,
-    sender: &str,
-    recipient: &str,
-    kind: &str,
-    body: &str,
-    replies_to: Option<&str>,
-    origin: Option<&str>,
-    persist: bool,
-    refs: Option<Value>,
-) -> String {
-    // store.py _format_thread's write-path shape: owner/ttl_at ride the bus
-    // meta only, read_at is absent on a fresh thread, origin precedes refs.
-    let mut front: Vec<(String, Value)> = vec![
-        ("thread_id".to_string(), json!(msg_id)),
-        ("from".to_string(), json!(sender)),
-        ("to".to_string(), json!(front_recipient(recipient))),
-        ("kind".to_string(), json!(kind)),
-        ("created".to_string(), json!(ts)),
-    ];
-    if let Some(r) = replies_to {
-        front.push(("replies_to".to_string(), json!(r)));
-    }
-    if persist {
-        front.push(("persist_to_memory".to_string(), json!(true)));
-    }
-    if let Some(o) = origin {
-        front.push(("origin".to_string(), json!(o)));
-    }
-    if let Some(refs) = refs {
-        if let Some(map) = refs.as_object() {
-            for key in ["ref_pr", "ref_node", "ref_gate"] {
-                if let Some(v) = map.get(key) {
-                    if !v.is_null() {
-                        front.push((key.to_string(), v.clone()));
-                    }
-                }
-            }
-        }
-    }
-    let mut out = String::from("---\n");
-    for (k, v) in &front {
-        out.push_str(&format!("{}: {}\n", k, yaml_scalar(v)));
-    }
-    out.push_str("---\n\n");
-    let body = body.trim_end_matches('\n');
-    out.push_str(&format!("## {msg_id} · {ts} · from:{sender}\n\n{body}\n"));
-    out
-}
-
-fn front_recipient(recipient: &str) -> String {
-    recipient.to_string()
-}
-
-fn yaml_scalar(v: &Value) -> String {
-    match v {
-        Value::Null => "null".to_string(),
-        Value::String(s) => {
-            if s.contains(':') || s.contains('\n') || s.starts_with(' ') {
-                format!("{s:?}").replace("\\\"", "\"")
-            } else {
-                s.clone()
-            }
-        }
-        other => other.to_string(),
-    }
 }
 
 /// The wire envelope row Python `_append_to_bus` wrote through the bus door:
@@ -1311,8 +1203,11 @@ fn bus_envelope_row(
 
 /// Python `_append_to_bus` + `write_new_thread`: the durable-first bus append
 /// plus the best-effort markdown render. Returns the thread file path.
+/// The durable write: one bus row, the system of record. The chats store
+/// records it and every reader reads the store, so no file is rendered.
+/// `thread` is the parent's thread for a reply, else the row's own id.
 #[allow(clippy::too_many_arguments)]
-/// `pub(crate)`: the reply leaf's orphan self-note writes through it.
+/// `pub(crate)`: the reply leaf writes through the same choke point.
 pub(crate) fn write_durable_thread(
     recipient: &str,
     sender: &str,
@@ -1329,72 +1224,38 @@ pub(crate) fn write_durable_thread(
     origin: Option<&str>,
     subject: Option<&str>,
     replies_to: Option<&str>,
+    thread: Option<&str>,
     persist: bool,
     refs: Option<Value>,
-) -> Result<PathBuf, String> {
-    let inbox = inbox_dir_for(recipient)?;
-    std::fs::create_dir_all(&inbox).map_err(|e| format!("inbox mkdir failed: {e}"))?;
+) -> Result<(), String> {
+    validate_recipient(recipient)?;
     let now = now_unix();
     let ts = format_dt(now);
-    let date_part: String = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let slug = slug_for(body, msg_id);
-    let base = format!("{date_part}-{slug}");
-    let target = 'alloc: {
-        let mut suffix = String::new();
-        let mut n = 0u32;
-        loop {
-            let candidate = inbox.join(format!("{base}{suffix}.md"));
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&candidate)
-            {
-                Ok(_) => break 'alloc candidate,
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    n += 1;
-                    suffix = format!("-{n}");
-                    if n > 1000 {
-                        return Err(format!(
-                            "could not allocate a thread filename under {} (tried {n} suffixes)",
-                            inbox.display()
-                        ));
-                    }
-                }
-                Err(e) => return Err(format!("thread create failed: {e}")),
-            }
-        }
-    };
     let ttl_hours = owner_ttl_hours(owner);
-    let ttl_at: Option<String> = if ttl_hours > 0.0 {
-        Some(format_dt(now + ttl_hours * 3600.0))
-    } else {
-        None
-    };
     let mut meta = serde_json::Map::new();
-    // Python omitted the owner key when its caller passed None; the reply
-    // leaf's orphan self-note passes empty for the same shape.
+    // The reply leaf's orphan self-note passes an empty owner: no owner key.
     if !owner.is_empty() {
         meta.insert("owner".to_string(), json!(owner));
     }
-    if let Some(ttl) = &ttl_at {
-        meta.insert("ttl_at".to_string(), json!(ttl));
+    if ttl_hours > 0.0 {
+        meta.insert(
+            "ttl_at".to_string(),
+            json!(format_dt(now + ttl_hours * 3600.0)),
+        );
     }
-    meta.insert(
-        "render_path".to_string(),
-        json!(target.display().to_string()),
-    );
-    if let Some(refs) = &refs {
-        if let Some(map) = refs.as_object() {
-            for (rk, rv) in map {
-                if !rv.is_null() {
-                    meta.insert(rk.clone(), rv.clone());
-                }
+    if persist {
+        meta.insert("persist_to_memory".to_string(), json!(true));
+    }
+    if let Some(map) = refs.as_ref().and_then(Value::as_object) {
+        for (rk, rv) in map {
+            if !rv.is_null() {
+                meta.insert(rk.clone(), rv.clone());
             }
         }
     }
     let row = bus_envelope_row(
         msg_id,
-        msg_id,
+        thread.unwrap_or(msg_id),
         sender,
         recipient,
         kind,
@@ -1416,202 +1277,39 @@ pub(crate) fn write_durable_thread(
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    if let Err(exc) = crate::announce::append_line_open(&live, &row, &chats_dir) {
-        let _ = std::fs::remove_file(&target);
-        return Err(format!("bus append failed: {exc}"));
-    }
-    let render = format_thread_render(
-        msg_id, &ts, sender, recipient, kind, body, replies_to, origin, persist, refs,
-    );
-    let _ = std::fs::write(&target, render);
-    Ok(target)
+    crate::announce::append_line_open(&live, &row, &chats_dir)
+        .map_err(|exc| format!("bus append failed: {exc}"))
 }
 
-/// The frontmatter fields the append path needs; one scan, no YAML crate.
-/// `pub(crate)`: the reply leaf reads the parent thread's `from:` off it.
-pub(crate) fn thread_frontmatter_field(text: &str, key: &str) -> Option<String> {
-    let mut lines = text.lines().peekable();
-    match lines.peek() {
-        Some(first) if first.trim_end() == "---" => {
-            lines.next();
-        }
-        _ => return None,
-    }
-    for line in lines {
-        let trimmed = line.trim_end();
-        if trimmed == "---" {
-            return None;
-        }
-        if let Some(rest) = trimmed.strip_prefix(key).and_then(|r| r.strip_prefix(':')) {
-            let value = rest.trim();
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
-        }
-        if trimmed == "body:" || trimmed.starts_with("body:") {
-            return None;
-        }
-        if trimmed == "body |" {
-            return None;
-        }
-    }
-    None
+/// A reply's parent, read from the chats store: its thread (the parent's
+/// own id for a root), its sender and its kind. `None` when no chat holds
+/// the id.
+pub(crate) struct ReplyParent {
+    pub thread: String,
+    pub from: String,
+    pub kind: String,
 }
 
-/// store.py find_thread_by_msg_id: the thread file under the recipient that
-/// carries the msg id as a root id or an appended reply, else None.
-/// `pub(crate)`: the reply leaf's thread-store path reads it.
-pub(crate) fn find_thread_by_msg_id(recipient: &str, msg_id: &str) -> Option<PathBuf> {
+pub(crate) fn reply_parent(msg_id: &str) -> Option<ReplyParent> {
     if msg_id.is_empty() {
         return None;
     }
-    let inbox = inbox_dir_for(recipient).ok()?;
-    let entries = std::fs::read_dir(&inbox).ok()?;
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.is_file())
-        .collect();
-    files.sort();
-    for f in files {
-        let Ok(text) = std::fs::read_to_string(&f) else {
-            continue;
-        };
-        if thread_carries_msg_id(&text, msg_id) {
-            return Some(f);
-        }
-    }
-    None
-}
-
-/// A msg id shows up as a `## <id> ` message header or the frontmatter
-/// thread_id; one scan of the render, no full YAML parse.
-fn thread_carries_msg_id(text: &str, msg_id: &str) -> bool {
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("## ") {
-            if rest.split_whitespace().next() == Some(msg_id) {
-                return true;
-            }
-        }
-    }
-    text.contains(&format!("thread_id: {msg_id}"))
-}
-
-/// store.py append_to_thread: the durable-first bus append addressed to the
-/// thread's owner (kind and thread id read off the thread file), then the
-/// best-effort markdown append that resurfaces the thread for drain. The
-/// render is derived, so a render failure logs and moves on.
-#[allow(clippy::too_many_arguments)]
-/// `pub(crate)`: the reply leaf appends through the same choke point.
-pub(crate) fn append_to_kind_thread(
-    thread_path: &Path,
-    sender: &str,
-    body: &str,
-    msg_id: &str,
-    word_count: Option<i64>,
-    origin: Option<&str>,
-) -> Result<PathBuf, String> {
-    let text =
-        std::fs::read_to_string(thread_path).map_err(|e| format!("thread read failed: {e}"))?;
-    let thread_id = thread_frontmatter_field(&text, "thread_id")
-        .ok_or_else(|| format!("malformed thread file: {}", thread_path.display()))?;
-    let to_project = thread_frontmatter_field(&text, "to").unwrap_or_default();
-    let kind = thread_frontmatter_field(&text, "kind").unwrap_or_default();
-    let now = now_unix();
-    let ts = format_dt(now);
-    let meta = json!({
-        "thread_id": thread_id,
-        "render_path": thread_path.display().to_string(),
-    });
-    let row = bus_envelope_row(
-        msg_id,
-        &thread_id,
-        sender,
-        &to_project,
-        &kind,
-        body,
-        &ts,
-        Some(thread_id.as_str()),
-        meta,
-        None,
-        None,
-        None,
-        None,
-        None,
-        word_count,
-        origin,
-        None,
-    );
-    let live = bus_log_path();
-    let chats_dir = live
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    if let Err(exc) = crate::announce::append_line_open(&live, &row, &chats_dir) {
-        return Err(format!("bus append failed: {exc}"));
-    }
-    append_render_block(&text, thread_path, sender, body, msg_id, &ts);
-    Ok(thread_path.to_path_buf())
-}
-
-/// The thread header block the render append adds, matching the writer's
-/// message headers.
-fn append_render_block(
-    text: &str,
-    thread_path: &Path,
-    sender: &str,
-    body: &str,
-    msg_id: &str,
-    ts: &str,
-) {
-    let mut out = String::from(text);
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str(&format!("\n## {msg_id} · {ts} · from:{sender}\n\n"));
-    out.push_str(body);
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    let _ = std::fs::write(thread_path, out);
-}
-
-/// Python `_ruling_graph_path` + `_append_ruling_to_node`: append a dated
-/// ruling block to a governed node's details. The native backlog note command
-/// owns that write today; the lane refuses the same shapes the Python lane
-/// refused before the append.
-fn append_ruling(ruling: &str, message: &str, graph_path: Option<&Path>) -> Result<(), i32> {
-    // The graph write rides the native note command, the post-port home of the
-    // same transaction, so the gate the graph store enforces stays the one
-    // gate. The Python leg resolved the graph from --cwd or the ambient
-    // project; the native command resolves identically.
-    // Refuse an unknown node by name before any mail moves, through the same
-    // id/slug read and store the note command uses. An unreadable store falls
-    // through so the note command reports its own cause.
-    let graph = graph_path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(crate::graph_get::default_graph_path);
-    if let Ok(None) = crate::graph_store::read_one(&graph, ruling) {
-        eprintln!("error: ruling node not found: {}", py_repr(ruling));
-        return Err(2);
-    }
-    let front = crate::mail_remote::fno_binary();
-    let argv = vec![
-        front.to_string_lossy().into_owned(),
-        "backlog".to_string(),
-        "note".to_string(),
-        ruling.to_string(),
-        format!("ruling ({}) {}", now_iso(), message),
-    ];
-    let captured = run_captured(&argv, "", true, 30.0);
-    if captured.status != Some(0) {
-        eprintln!(
-            "error: --ruling could not append to {}: run `fno backlog note` by hand",
-            py_repr(ruling)
-        );
-        return Err(2);
-    }
-    Ok(())
+    let row = crate::chats::message_row(msg_id)?;
+    let field = |key: &str| {
+        row.get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    Some(ReplyParent {
+        thread: field("thread").unwrap_or_else(|| msg_id.to_string()),
+        from: field("from").unwrap_or_default(),
+        // An announce parent is a fleet broadcast: its reply keeps the
+        // caller's kind, or the reply would land on the channel.
+        kind: field("kind")
+            .filter(|k| matches!(k.as_str(), "send" | "fyi" | "heads-up" | "question"))
+            .unwrap_or_default(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1794,8 +1492,6 @@ pub fn run(args: &[String]) -> i32 {
             Some("--force")
         } else if args.any_live {
             Some("--any")
-        } else if args.ruling.is_some() {
-            Some("--ruling")
         } else {
             None
         };
@@ -1810,26 +1506,19 @@ pub fn run(args: &[String]) -> i32 {
 
     let mut name = name;
     let mut message = message;
-    if args.ruling.is_some() {
-        let combined = args.raw
-            || args.kind.is_some()
-            || args.to_project.is_some()
-            || args.to_lead.is_some()
-            || args.to_self;
-        if combined {
-            eprintln!(
-                "error: --ruling supports only send <worker> <message>; drop --raw, --kind, --to-project, --to-lead, or --to-self"
-            );
+
+    // --from-self resolves before the origin record stamps a sender, so a
+    // refused self-stamp never first stamps the unknown floor.
+    if args.from_self {
+        if from_name.is_some() {
+            eprintln!("error: --from-self and --from-name are mutually exclusive");
             return 2;
         }
-        let worker_only = match &name {
-            Some(n) => !n.is_empty() && !is_job_token(n),
-            None => false,
+        let Some((sid, _harness)) = own_identity() else {
+            eprintln!("error: --from-self: no ambient harness identity - cannot self-stamp");
+            return 2;
         };
-        if !worker_only || message.is_none() {
-            eprintln!("error: --ruling supports only send <worker> <message>");
-            return 2;
-        }
+        from_name = Some(crate::identity::canonical_handle(&sid));
     }
 
     let classified_origin = match classify_origin(args.origin.as_deref()) {
@@ -1967,18 +1656,6 @@ pub fn run(args: &[String]) -> i32 {
         return 2;
     }
 
-    if args.from_self {
-        if from_name.is_some() {
-            eprintln!("error: --from-self and --from-name are mutually exclusive");
-            return 2;
-        }
-        let Some((sid, _harness)) = own_identity() else {
-            eprintln!("error: --from-self: no ambient harness identity - cannot self-stamp");
-            return 2;
-        };
-        from_name = Some(crate::identity::canonical_handle(&sid));
-    }
-
     if args.kind.is_some() {
         let recipient = args
             .to_project
@@ -2111,14 +1788,6 @@ pub fn run(args: &[String]) -> i32 {
         }
         if let Err(code) = vet_body(&body, args.style_exception.as_deref()) {
             return code;
-        }
-        if let Some(ruling) = args.ruling.as_deref() {
-            // The ruling is an annotation on top of the delivery, not a
-            // terminal lane: append, then fall through and send.
-            match append_ruling(ruling, &body, None) {
-                Ok(()) => {}
-                Err(code) => return code,
-            }
         }
         if args.force {
             return run_name_lane_force(
@@ -2301,6 +1970,32 @@ mod style_gate_tests {
         assert!(rule7.detail.contains("runs 81 words"), "{}", rule7.detail);
     }
 
+    /// A spent control window refuses and names the node lane. Withdrawing
+    /// the charged message frees the window for its retry.
+    #[test]
+    fn a_withdrawn_control_send_frees_its_words_and_the_refusal_names_the_node_lane() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let scratch = tempfile::tempdir().unwrap();
+        let _bus = EnvVarGuard::set("FNO_BUS_DIR", scratch.path().to_str().unwrap());
+        let body = format!("control: {}", style_clean_body(45));
+        assert!(matches!(
+            reserve_send_budget("a", "b", &body, "msg-A"),
+            Ok(Some(_))
+        ));
+        let Err((refusal, 1)) = reserve_send_budget("a", "b", &body, "msg-R") else {
+            panic!("a second 46-word control send must overrun the 60-word window");
+        };
+        assert!(refusal.contains(CORRECTION_HINT), "{refusal}");
+        assert_eq!(release_budget_by_id("msg-A"), 1);
+        assert_eq!(release_budget_by_id("msg-A"), 0);
+        assert!(matches!(
+            reserve_send_budget("a", "b", &body, "msg-R"),
+            Ok(Some(_))
+        ));
+    }
+
     fn style_clean_body(n_words: usize) -> String {
         let words: Vec<String> = (0..n_words).map(|i| format!("w{i}")).collect();
         words
@@ -2371,20 +2066,12 @@ mod ask_anycast_tests {
 #[cfg(test)]
 mod system_arm_inbox_tests {
     use super::*;
-    use crate::claims::EnvVarGuard;
 
     #[test]
     fn a_system_arm_address_maps_to_one_safe_segment_and_other_slashes_stay_refused() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _root = EnvVarGuard::set("FNO_INBOX_ROOT", "/tmp/fno-arm-inbox");
-        assert_eq!(
-            inbox_dir_for("fno/quiet-recovery").unwrap(),
-            PathBuf::from("/tmp/fno-arm-inbox/fno.quiet-recovery/inbox")
-        );
+        assert!(validate_recipient("fno/quiet-recovery").is_ok());
         for bad in ["a/b/c", "/arm", "fno/", "a/..", "../x", "./x", "a\\b"] {
-            assert!(inbox_dir_for(bad).is_err(), "{bad} must stay refused");
+            assert!(validate_recipient(bad).is_err(), "{bad} must stay refused");
         }
     }
 }

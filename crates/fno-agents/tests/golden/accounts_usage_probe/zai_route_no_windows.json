@@ -1,0 +1,1 @@
+{"op": "detail", "record": {"id": "z1", "name": "z", "harness": "claude", "auth": "api_key", "route": "zai/glm-4.6"}, "route_env": {"ANTHROPIC_AUTH_TOKEN": "zk", "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic"}, "http": [{"status": 200, "body": "{\"success\": true, \"code\": 200, \"data\": {\"limits\": []}}"}], "expect": {"snapshot": null, "reason": "probe-failed"}}

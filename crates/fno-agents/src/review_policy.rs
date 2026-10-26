@@ -20,10 +20,9 @@ use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+use crate::accounts::state::{parse_health, parse_usage};
 use crate::client_commands::{expand_eq, to_python_json};
-use crate::fallback_chain::{
-    headroom, health_from_map, parse_provider_health, parse_usage, snapshot_from_map, Verdict,
-};
+use crate::fallback_chain::{headroom, Verdict};
 
 pub(crate) const CLAUDE: &str = "claude";
 
@@ -190,11 +189,9 @@ fn is_locked(payload: &Value, account: &str, now: f64) -> bool {
 /// One account's `headroom(pid).state is EXHAUSTED` verdict through the
 /// shared `fallback_chain` port.
 fn account_exhausted(payload: &Value, account: &str, now: f64) -> bool {
-    let health_map = parse_provider_health(payload);
-    let usage_map = parse_usage(payload);
-    let health = health_from_map(health_map.get(account));
-    let usage = snapshot_from_map(usage_map.get(account));
-    headroom(health.as_ref(), usage.as_ref(), now).verdict == Verdict::Exhausted
+    let health = parse_health(payload);
+    let usage = parse_usage(payload);
+    headroom(health.get(account), usage.get(account), now).verdict == Verdict::Exhausted
 }
 
 /// The dispatchable kinds whose provider records are ALL exhausted, `None`

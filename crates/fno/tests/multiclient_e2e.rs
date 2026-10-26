@@ -350,6 +350,9 @@ while :; do sleep 0.2; done\n",
     // the only event inside the measured window.
     a.pump(Duration::from_millis(2500));
     let settled = a.wait_layout(10, "settled", |l| l.panes.len() == 2);
+    // Client b compares against the same settled layout, so it must hold
+    // the split before the delivery, not catch up on it afterwards.
+    b.wait_layout(10, "b settled", |l| l.panes == settled.panes);
     let baseline = [count("r"), count("n")];
 
     let mut paste = b"\x1b[200~".to_vec();
@@ -635,7 +638,7 @@ fn plant_stale_socket(path: &Path) {
 }
 
 #[test]
-fn multiclient_mux_ls_reports_live_counts_and_stale_without_unlinking() {
+fn multiclient_mux_ls_reports_live_counts_and_heals_a_corpse() {
     let scratch = Scratch::new("ls");
     let _server = sh_server(&scratch); // session "main"
     let cwd = scratch.dir("w");
@@ -665,14 +668,52 @@ fn multiclient_mux_ls_reports_live_counts_and_stale_without_unlinking() {
         stdout.contains(needle),
         "live row with counts; got: {stdout}"
     );
-    assert!(stdout.contains("dead: stale"), "stale row; got: {stdout}");
+    // A refused socket with no pid sidecar is a proven corpse: ls heals it
+    // away instead of listing it, and the files go with it.
+    assert!(
+        !stdout.contains("dead:"),
+        "corpse row healed; got: {stdout}"
+    );
+    assert!(
+        !scratch.0.join("dead.sock").exists(),
+        "ls removes a proven-dead session's socket"
+    );
+    let journal = scratch.0.join("iso-agents").join("events.jsonl");
+    let healed = fno::event_store::journal_text(&journal, &["mux_session_healed"]);
+    // The silent-empty failure mode names nothing, so the panic carries the checked read's own Err and what the store directory actually holds.
+    let checked = fno::event_store::journal_text_checked(
+        &journal,
+        &fno::event_store::EventQuery::of_types(&["mux_session_healed"]),
+    );
+    let listing: Vec<String> = std::fs::read_dir(journal.parent().expect("journal has a parent"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    // The store's dead-letter names the commit error a finally-lost row died
+    // of; unreadable reads as a placeholder so the assert never masks itself.
+    let lost = std::fs::read_to_string(
+        journal
+            .parent()
+            .expect("journal has a parent")
+            .join("events.db.lost.jsonl"),
+    )
+    .unwrap_or_else(|e| format!("unreadable: {e}"));
+    assert!(
+        healed.contains("mux_session_healed") && healed.contains("dead.sock"),
+        "the heal journals one row naming the session; got: {healed:?}; \
+         checked: {checked:?}; store dir: {listing:?}; lost: {lost:?}"
+    );
     assert!(
         stdout.contains("odd: alive (unqueryable"),
         "unanswering server degrades per-row (AC4-ERR); got: {stdout}"
     );
     assert!(
-        scratch.0.join("dead.sock").exists(),
-        "ls is read-only: it never unlinks (AC4-HP)"
+        scratch.0.join("odd.sock").exists(),
+        "a socket that accepts is never removed"
     );
     // The probed live session is unharmed: the client still works.
     let pane = c.focus();

@@ -1,8 +1,8 @@
 """fno agents mail: durable polled mailbox CLI.
 
 One namespace over the jsonl-canon bus log. Publish appends a durable envelope;
-consume is a per-recipient cursor scan over the log; the per-recipient markdown
-thread is a derived render (see ``fno.inbox.store`` for the data model).
+consume is a per-recipient cursor scan over the log, and the chats store
+records every message. No per-message file is written.
 This replaces the retired ``inbox`` namespace and the messaging half of
 ``agents`` (whose send/inbox/ack commands moved here).
 
@@ -11,10 +11,6 @@ Commands:
     unread         - list bus messages addressed to me past my cursor
     ack            - advance my read cursor
     reply          - answer a message by id; name-lane -> back to its sender
-    list           - list threads in own render (default: unread only)
-    triage         - run LLM triage on a heads-up thread
-    drain          - drain unread threads (per-kind dispatch)
-    status         - one-screen health snapshot for own mailbox
     view           - render the jsonl bus as an inbox projection
 
 Call shape (one rule, because the commands used to disagree):
@@ -38,17 +34,12 @@ Exit codes:
 """
 from __future__ import annotations
 
-import dataclasses
-import json
 import os
-import re
 import subprocess
 import sys
 from fno.mail.receipts import _escalate_to_human, _recipient_is_attended
-from datetime import datetime, timedelta, timezone
-from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, TypedDict
+from typing import Any, Optional
 
 import typer
 
@@ -61,44 +52,14 @@ from fno.mail.receipts import (
 )
 from fno.inbox.store import (
     ProjectIdentificationError,
-    ThreadHandle,
-    find_thread_by_msg_id,
-    inbox_dir_for,
-    read_all_threads,
     resolve_project,
 )
 from fno import paths
 from fno.mail.thread_force import resolve_pane_entry as _resolve_pane_entry
 
 
-class DaemonState(str, Enum):
-    """Result of probing launchctl for the per-project watch daemon."""
-
-    LOADED = "loaded"
-    NOT_INSTALLED = "not_installed"
-    UNKNOWN_TIMEOUT = "unknown:timeout"
-
-
-class StatusSnapshot(TypedDict):
-    """Public --json contract returned by `fno agents mail status`.
-
-    Nine keys; field names are part of the CLI surface that downstream
-    tooling reads by name, so additions/removals are breaking changes.
-    """
-
-    daemon: str
-    inbox_path: str
-    unread: int
-    acked_24h: int
-    last_drain: str
-    active_session: str
-    wake_signals: int
-    errors_24h: int
-    sent_unclaimed: int
-
-
 mail_app = typer.Typer(
-    help="Durable polled mailbox: send/unread/ack/reply/list/drain/status/view.",
+    help="Durable polled mailbox: send/unread/ack/reply/view.",
     no_args_is_help=True,
 )
 
@@ -183,173 +144,6 @@ def _release_budget(reservation) -> None:
     budget.release(reservation)
 
 
-def _daemon_loaded(project: str) -> DaemonState:
-    import subprocess
-
-    try:
-        res = subprocess.run(
-            ["launchctl", "list", f"com.fno.watch.{project}"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=5,
-        )
-    except subprocess.TimeoutExpired:
-        print(f"warning: launchctl list timed out after 5s for project={project!r}", file=sys.stderr)
-        return DaemonState.UNKNOWN_TIMEOUT
-    except FileNotFoundError:
-        return DaemonState.NOT_INSTALLED
-    return DaemonState.LOADED if res.returncode == 0 else DaemonState.NOT_INSTALLED
-
-
-_LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) drain complete")
-
-
-def _last_drain_relative(log_path: Path) -> str:
-    if not log_path.exists():
-        return "never"
-    last_ts: Optional[datetime] = None
-    try:
-        with log_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                m = _LOG_TS_RE.match(line)
-                if m:
-                    try:
-                        last_ts = datetime.strptime(
-                            m.group(1), "%Y-%m-%dT%H:%M:%SZ"
-                        ).replace(tzinfo=timezone.utc)
-                    except ValueError:
-                        continue
-    except OSError as exc:
-        print(f"warning: cannot read {log_path}: {exc}", file=sys.stderr)
-        return "never"
-    if last_ts is None:
-        return "never"
-    return _humanize_age(datetime.now(tz=timezone.utc) - last_ts)
-
-
-def _humanize_age(delta: timedelta) -> str:
-    total = int(delta.total_seconds())
-    if total < 0:
-        total = 0
-    if total < 60:
-        return f"{total}s ago"
-    if total < 3600:
-        return f"{total // 60}m ago"
-    if total < 86400:
-        return f"{total // 3600}h ago"
-    return f"{total // 86400}d ago"
-
-
-def _count_acked_24h(threads: list[ThreadHandle]) -> int:
-    cutoff = datetime.now(tz=timezone.utc).timestamp() - 86400
-    n = 0
-    for h in threads:
-        if h.read_at is None:
-            continue
-        if h.read_at.timestamp() >= cutoff:
-            n += 1
-    return n
-
-
-def _count_errors_24h(repo_root: Path) -> int:
-    from fno.paths import project_log
-
-    errors_path = project_log("inbox-errors.jsonl", project_root=repo_root)
-    if not errors_path.exists():
-        return 0
-    cutoff = datetime.now(tz=timezone.utc).timestamp() - 86400
-    n = 0
-    try:
-        with errors_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                ts_str = entry.get("ts")
-                if not ts_str:
-                    continue
-                try:
-                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                except ValueError:
-                    continue
-                if ts.timestamp() >= cutoff:
-                    n += 1
-    except OSError as exc:
-        print(f"warning: cannot read {errors_path}: {exc}", file=sys.stderr)
-        return 0
-    return n
-
-
-def _count_wake_signals(repo_root: Path) -> int:
-    wake_dir = repo_root / ".fno" / "wake-signals"
-    if not wake_dir.is_dir():
-        return 0
-    return sum(1 for p in wake_dir.glob("wake-*.json") if p.is_file())
-
-
-def _active_session(repo_root: Path) -> str:
-    try:
-        from fno.wake.detect import detect_session_state
-
-        return detect_session_state(repo_root).value
-    except Exception as exc:  # noqa: BLE001
-        print(
-            f"warning: detect_session_state failed for {repo_root}: "
-            f"{type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
-        return "unknown"
-
-
-def _sent_unclaimed_count() -> int:
-    """Count of THIS session's sent mail unclaimed past config.inbox.unclaimed_ttl.
-
-    Session-scoped (keyed on my canonical handle), so a no-identity surface
-    honestly reports 0 rather than a project-wide figure. Shares the status
-    read's same predicate; never raises (a broken read degrades to 0).
-    """
-    from fno.agents.self_stamp import resolve_self_identity
-    from fno.config import load_settings
-    from fno.harness_identity import canonical_handle
-    from fno.mail.landed import _sent_unclaimed
-
-    ident = resolve_self_identity()
-    if not ident.harness or not ident.session_id:
-        return 0
-    try:
-        handle = canonical_handle(ident.session_id)
-        return len(_sent_unclaimed(handle, load_settings().inbox.unclaimed_ttl))
-    except Exception as exc:  # noqa: BLE001 - status is advisory; never crash on it
-        # Advisory-degrade to 0, but leave a breadcrumb (matches _active_session)
-        # so a structural break doesn't render `sent unclaimed: 0` forever silently.
-        print(f"warning: sent-unclaimed count failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 0
-
-
-def _collect_status(project: str, repo_root: Path) -> StatusSnapshot:
-    threads = read_all_threads(project)
-    unread = sum(1 for h in threads if h.is_unread)
-    inbox = inbox_dir_for(project)
-
-    log_path = repo_root / ".fno" / "fno-watch.log"
-    return StatusSnapshot(
-        daemon=_daemon_loaded(project).value,
-        inbox_path=str(inbox),
-        unread=unread,
-        acked_24h=_count_acked_24h(threads),
-        last_drain=_last_drain_relative(log_path),
-        active_session=_active_session(repo_root),
-        wake_signals=_count_wake_signals(repo_root),
-        errors_24h=_count_errors_24h(repo_root),
-        sent_unclaimed=_sent_unclaimed_count(),
-    )
-
-
 @mail_app.command("reply", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def mail_reply_forward(ctx: typer.Context) -> None:
     """Reply to a message, routed by the answered message's lane.
@@ -362,120 +156,33 @@ def mail_reply_forward(ctx: typer.Context) -> None:
     _forward_mail(["reply", *ctx.args], label="fno agents mail reply")
 
 
-@mail_app.command("list")
-def cmd_list(
-    all_msgs: bool = typer.Option(False, "--all", "-A", help="Show all threads (default: unread only)"),
-    json_out: bool = typer.Option(False, "--json", "-J", help="Output as JSON"),
-    from_project: Optional[str] = typer.Option(None, "--from", help="Project to read inbox for"),
-) -> None:
-    """List threads in own inbox (default: unread only)."""
-    project = _resolve_from(from_project)
-    threads = read_all_threads(project)
-    if not all_msgs:
-        threads = [h for h in threads if h.is_unread]
-
-    if json_out:
-        typer.echo(json.dumps([_thread_to_dict(h) for h in threads]))
-        return
-
-    if not threads:
-        label = "threads" if all_msgs else "unread threads"
-        typer.echo(f"no {label}")
-        return
-
-    for h in threads:
-        _print_thread_summary(h)
+# The markdown inbox these read is gone. Each stub stays one release so a
+# caller learns the chats-store replacement, then the stubs retire.
+_RETIRED_READERS = {
+    "list": "fno agents mail unread [-n NAME] [--json]",
+    "drain": "fno agents mail drain-self",
+    "status": "fno agents mail unread",
+    "triage": "fno agents mail show <id>",
+}
 
 
-@mail_app.command("triage")
-def cmd_triage(
-    msg_id: str = typer.Argument(..., help="Any msg-id contained in the thread to triage"),
-    json_out: bool = typer.Option(False, "--json", "-J", help="Output plan as JSON"),
-    from_project: Optional[str] = typer.Option(None, "--from", help="Project (overrides settings.yaml)"),
-) -> None:
-    """Run LLM triage on a heads-up thread; output a JSON action plan."""
-    from fno.inbox.triage import (
-        TriageFailedError,
-        read_triage_settings,
-        triage_thread,
+def _retired_reader(name: str, replacement: str) -> None:
+    @mail_app.command(
+        name,
+        context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+        help=f"Retired: the markdown inbox is gone. Use {replacement}.",
     )
-
-    project = _resolve_from(from_project)
-    handle = find_thread_by_msg_id(project, msg_id)
-    if handle is None:
-        typer.echo(f"error: msg-id not found in {project!r} inbox: {msg_id}", err=True)
-        raise typer.Exit(code=1)
-
-    settings = read_triage_settings()
-    try:
-        plan = triage_thread(handle, settings=settings, project_override=project)
-    except TriageFailedError:
-        typer.echo("error: triage failed twice; see .fno/inbox-errors.jsonl", err=True)
-        raise typer.Exit(code=2)
-
-    plan_dict = dataclasses.asdict(plan)
-    typer.echo(json.dumps(plan_dict))
-
-
-@mail_app.command("drain")
-def cmd_drain(
-    json_out: bool = typer.Option(False, "--json", "-J", help="Output DrainResults as JSON"),
-    max_messages: int = typer.Option(10, "--max", help="Cap on threads drained per call"),
-    from_project: Optional[str] = typer.Option(None, "--from", help="Project (overrides settings.yaml)"),
-) -> None:
-    """Drain unread threads. Per-kind dispatch:
-    heads-up -> triage + create graph node; question -> drop wake-signal;
-    fyi -> dismiss or write a memory file (when persist_to_memory)."""
-    from fno.inbox.drain import drain_inbox
-    from fno.inbox.store import _git_root
-
-    project = _resolve_from(from_project)
-    repo_root = _git_root()
-
-    results = drain_inbox(repo_root, project, max_threads=max_messages)
-
-    if json_out:
-        typer.echo(json.dumps([dataclasses.asdict(r) for r in results]))
-        return
-    for r in results:
-        typer.echo(f"{r.thread_id}  kind:{r.kind}  action:{r.action}")
-
-
-@mail_app.command("status")
-def cmd_status(
-    json_out: bool = typer.Option(False, "--json", "-J", help="Output as JSON"),
-    from_project: Optional[str] = typer.Option(None, "--from", help="Project (overrides settings.yaml)"),
-) -> None:
-    """One-screen health snapshot for the current project's inbox."""
-    from fno.inbox.store import _git_root
-
-    project = _resolve_from(from_project)
-    repo_root = _git_root()
-
-    try:
-        snapshot = _collect_status(project, repo_root)
-    except OSError as exc:
+    def _stub(ctx: typer.Context) -> None:
         typer.echo(
-            f"error: cannot read inbox state for project {project!r}: "
-            f"{type(exc).__name__}: {exc}",
+            f"fno agents mail {name} is retired: the markdown inbox is gone. "
+            f"Use {replacement}.",
             err=True,
         )
-        raise typer.Exit(code=2)
+        raise typer.Exit(1)
 
-    if json_out:
-        typer.echo(json.dumps(dict(snapshot)))
-        return
 
-    typer.echo(f"project: {project}")
-    typer.echo(f"daemon: {snapshot['daemon']}")
-    typer.echo(f"inbox path: {snapshot['inbox_path']}")
-    typer.echo(f"unread: {snapshot['unread']}")
-    typer.echo(f"acked_24h: {snapshot['acked_24h']}")
-    typer.echo(f"last drain: {snapshot['last_drain']}")
-    typer.echo(f"active session: {snapshot['active_session']}")
-    typer.echo(f"wake signals: {snapshot['wake_signals']}")
-    typer.echo(f"errors_24h: {snapshot['errors_24h']}")
-    typer.echo(f"sent unclaimed: {snapshot['sent_unclaimed']}")
+for _name, _replacement in _RETIRED_READERS.items():
+    _retired_reader(_name, _replacement)
 
 
 @mail_app.command("pane-prepare", hidden=True)
@@ -516,46 +223,6 @@ def cmd_pane_prepare_forward(
     if style_exception is not None:
         argv.extend(["--style-exception", style_exception])
     _forward_mail_pane_prepare(argv)
-
-
-# Output helpers
-
-def _thread_to_dict(h: ThreadHandle) -> dict:
-    return {
-        "thread_id": h.thread_id,
-        "path": str(h.path),
-        "from": h.from_project,
-        "to": h.to_project,
-        "kind": h.kind,
-        "created": h.created.isoformat(),
-        "read_at": h.read_at.isoformat() if h.read_at else None,
-        "replies_to": h.replies_to,
-        "persist_to_memory": h.persist_to_memory,
-        "refs": h.refs,
-        "messages": [
-            {
-                "msg_id": m.msg_id,
-                "timestamp": m.timestamp.isoformat(),
-                "from": m.from_project,
-                "body": m.body,
-            }
-            for m in h.messages
-        ],
-    }
-
-
-def _print_thread_summary(h: ThreadHandle) -> None:
-    created = h.created.strftime("%Y-%m-%d %H:%M")
-    read_marker = "" if h.is_unread else " [read]"
-    typer.echo(
-        f"{h.thread_id}  {created}  from:{h.from_project}  kind:{h.kind}"
-        f"  msgs:{len(h.messages)}{read_marker}"
-    )
-    if h.messages:
-        first_line = h.messages[0].body.split("\n")[0].strip()
-        if first_line:
-            typer.echo(f"  {first_line[:80]}")
-    typer.echo(f"  {h.path}")
 
 
 # Publish + cursor-consume (relocated from `fno agents`, Move B)
@@ -1422,7 +1089,7 @@ def _name_lane_send(
     # and a receipt that says so instead of reading as a live-miss.
     bus_only = live_reason == BUS_ONLY_POLICY
     try:
-        th = write_new_thread(
+        sent_id = write_new_thread(
             recipient=recipient,
             sender=stamp_from(from_name),
             kind="send",
@@ -1490,7 +1157,7 @@ def _name_lane_send(
             "(the socket must exist before the codex TUI starts)"
         )
     print(json_receipt(
-        th.thread_id,
+        sent_id,
         to=recipient,
         status=f"queued (durable){live}{corr} [{reason}]{window_tail}",
         subject=subject,
@@ -1630,11 +1297,6 @@ def mail_send_forward(
         hidden=True,
         help="Stamped machine mail origin: operator, peer, scheduler, or recovery.",
     ),
-    ruling: str | None = typer.Option(
-        None,
-        "--ruling",
-        help="Append the message to the governed node's details as a dated ruling block.",
-    ),
     from_self: bool = typer.Option(
         False, "--from-self",
         help=(
@@ -1770,8 +1432,6 @@ def mail_send_forward(
         argv += ["--from-name", from_name]
     if origin is not None:
         argv += ["--origin", origin]
-    if ruling is not None:
-        argv += ["--ruling", ruling]
     if from_self:
         argv.append("--from-self")
     if to_project is not None:

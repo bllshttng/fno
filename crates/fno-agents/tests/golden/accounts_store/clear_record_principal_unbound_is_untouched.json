@@ -1,0 +1,1 @@
+{"op": "clear_principal", "args": {"id": "makers"}, "store": {"makers/meta.json": "{\"harness\": \"claude\"}"}, "now": 1800000000.0, "expect": {"result": null, "error": null, "store": {"makers/meta.json": {"harness": "claude"}}, "modes": {"makers/meta.json": false}, "files": {}, "keychain_writes": []}}

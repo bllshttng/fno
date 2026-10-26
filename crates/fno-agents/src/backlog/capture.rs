@@ -118,7 +118,7 @@ fn split_priority(raw_title: &str) -> (String, Option<String>) {
 /// (`{"id","title","priority","status","line"}`). By default only `open`
 /// (`[ ]`) items are returned; `include_struck` also surfaces
 /// promoted/dismissed lines.
-fn parse_items(text: &str, include_struck: bool) -> Vec<Value> {
+pub(crate) fn parse_items(text: &str, include_struck: bool) -> Vec<Value> {
     let item_re = compile(ITEM_RE);
     let mut items = Vec::new();
     for (idx, line) in text.lines().enumerate() {
@@ -1637,6 +1637,21 @@ pub fn run_capture(tail: &[String]) -> i32 {
             2
         }
     }
+}
+
+/// The locked inbox append for an in-process writer (the retro nit tier),
+/// through the same writer and lock as `capture add`.
+pub(crate) fn add_inbox_item(
+    title: &str,
+    source: &str,
+    why: &str,
+    priority: &str,
+) -> Result<(), String> {
+    add_item(&inbox_path(), title, source, why, None, priority)
+        .map(|_| ())
+        .map_err(|e| match e {
+            CaptureError::Validation(m) | CaptureError::Refusal(m) | CaptureError::Lock(m) => m,
+        })
 }
 
 fn cmd_add(rest: &[String]) -> i32 {

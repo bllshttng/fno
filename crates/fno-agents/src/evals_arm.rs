@@ -48,7 +48,7 @@ use crate::spawn_gate;
 
 const CLAIM_KEY: &str = "evals:scheduled-run";
 const EXIT_USAGE: i32 = 2;
-const USAGE: &str = "usage: fno-agents evals-arm --history <jsonl> --events <jsonl> --fno-bin <path> --schedule-days N --stale-days N [--summary-json <json|null>] [--questions-store <jsonl>] [--run --started <rfc3339>] [--run-timeout-s S] [--claims-root DIR]";
+const USAGE: &str = "usage: fno-agents evals-arm --history <jsonl> --events <jsonl> --fno-bin <path> --schedule-days N --stale-days N [--summary-json <json|null>] [--questions-store <jsonl>] [--repo DIR] [--run --started <rfc3339>] [--run-timeout-s S] [--claims-root DIR]";
 
 /// One JSON receipt line on stdout; the tick phase parses acted/skip_reason/detail.
 fn receipt(acted: u8, skip_reason: Option<&str>, detail: &str) -> i32 {
@@ -73,6 +73,7 @@ struct Opts {
     started: Option<String>,
     run_timeout_s: u64,
     claims_root: Option<PathBuf>,
+    repo: Option<PathBuf>,
 }
 
 fn parse_args(args: &[String]) -> Result<Opts, String> {
@@ -88,6 +89,7 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
         started: None,
         run_timeout_s: 3600,
         claims_root: None,
+        repo: None,
     };
     let mut i = 0usize;
     while i < args.len() {
@@ -135,6 +137,7 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
                     .map_err(|_| "evals-arm: --run-timeout-s needs an integer".to_string())?;
             }
             "--claims-root" => o.claims_root = Some(PathBuf::from(value("--claims-root")?)),
+            "--repo" => o.repo = Some(PathBuf::from(value("--repo")?)),
             _ => return Err(format!("evals-arm: unknown flag {name}")),
         }
     }
@@ -150,6 +153,31 @@ fn parse_args(args: &[String]) -> Result<Opts, String> {
         return Err("evals-arm: --run needs --started".into());
     }
     Ok(o)
+}
+
+/// The checkout whose `evals/bank` the scheduled run grades. `fno doctor
+/// evals run` resolves the bank from its cwd, and the launchd tick runs from
+/// `$HOME`, so the child must be handed a repo: `--repo` when the caller
+/// names one, else the plugin root, else the cwd or an ancestor, else the
+/// first registered project that carries a bank. None means no bank
+/// anywhere, and the tick skips instead of launching a run that can only
+/// fail. The plugin root counts only as a git checkout: every task cuts a
+/// disposable worktree from the root, so a staged copy grades all false.
+fn bank_repo(o: &Opts) -> Option<PathBuf> {
+    let has_bank = |root: &PathBuf| root.join("evals").join("bank").is_dir();
+    if let Some(repo) = &o.repo {
+        return Some(repo.clone()).filter(has_bank);
+    }
+    let plugin = crate::provider::plugin_root().filter(|root| root.join(".git").exists());
+    let cwd = std::env::current_dir().ok();
+    plugin
+        .into_iter()
+        .chain(
+            cwd.iter()
+                .flat_map(|c| c.ancestors().map(Path::to_path_buf)),
+        )
+        .chain(crate::backlog::settings::project_roots())
+        .find(has_bank)
 }
 
 /// The spawn-gate readings the launch check reads: a durable stop and low
@@ -362,7 +390,7 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
 
 /// The child argv, shared by the production spawner and the tests that
 /// assert on it.
-fn run_argv(o: &Opts, started_rfc3339: &str) -> Vec<String> {
+fn run_argv(o: &Opts, repo: &Path, started_rfc3339: &str) -> Vec<String> {
     let mut argv = vec![
         self_exe(),
         "evals-arm".into(),
@@ -381,6 +409,8 @@ fn run_argv(o: &Opts, started_rfc3339: &str) -> Vec<String> {
         o.run_timeout_s.to_string(),
         "--started".into(),
         started_rfc3339.to_string(),
+        "--repo".into(),
+        repo.to_string_lossy().into_owned(),
     ];
     if let Some(sj) = &o.summary_json {
         argv.push("--summary-json".into());
@@ -464,6 +494,14 @@ fn run_tick_mode(
     }
     let escalates = summary.never_ran || age_days.map_or(false, |a| a > 2.0 * o.stale_days as f64);
 
+    let Some(repo) = bank_repo(o) else {
+        let detail = "no evals/bank in the cwd or any registered project";
+        if escalates {
+            journal_stale(o, age_days, summary.never_ran, "no_bank", detail);
+        }
+        return receipt(0, Some("no_bank"), detail);
+    };
+
     // 3. The gate, read-only: a durable stop outranks everything, and low
     // ram still gates. The slot counters do not - the bank's reserved slot
     // launches at a full fleet, and the cross-tick claim keeps it to one
@@ -495,7 +533,7 @@ fn run_tick_mode(
 
     // 4. Detached launch, then the cross-tick claim on the child's pid.
     let started = Utc::now().to_rfc3339();
-    let argv = run_argv(o, &started);
+    let argv = run_argv(o, &repo, &started);
     match spawner(&argv) {
         Err(e) => {
             if escalates {
@@ -648,6 +686,9 @@ fn run_run_mode(o: &Opts) -> i32 {
     let deadline = t0 + Duration::from_secs(o.run_timeout_s);
 
     let mut cmd = Command::new(&o.fno_bin);
+    if let Some(repo) = bank_repo(o) {
+        cmd.current_dir(repo);
+    }
     cmd.args(["doctor", "evals", "run", "--tier", "regression", "-y"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

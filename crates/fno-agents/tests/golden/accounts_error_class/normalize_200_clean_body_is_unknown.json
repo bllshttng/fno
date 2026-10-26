@@ -1,0 +1,1 @@
+{"op": "normalize", "status": 200, "body": "{\"unexpected\":\"shape\"}", "expect": {"error_class": "unknown", "raw_status": 200, "raw_exit_code": null, "body_excerpt": "{\"unexpected\":\"shape\"}", "triggers_swap": false, "model": null, "resets_at": null, "reset_stamp_unparsed": null, "reset_is_derived": false}}

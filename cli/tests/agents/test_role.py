@@ -23,7 +23,7 @@ from fno.paths_testing import use_tmpdir
 # --- the stored scope encoding ----------------------------------------------
 #
 # There is no `--promote` spec parser any more. The flag takes scopes directly and
-# the rung is derived (see test_role_level_derivation), so what remains to pin
+# the rung is derived (see crates/fno-agents/tests/role_ladder_parity.rs), so what remains to pin
 # here is the ENCODING: a portfolio has to reduce to one canonical string,
 # because the one-live-role guard compares scopes by equality and would
 # otherwise miss a duplicate spelled in a different order.
@@ -38,42 +38,6 @@ def test_a_portfolio_canonicalizes_regardless_of_spelling() -> None:
     assert split_scope(canonical_scope(["web", "etl"])) == ["etl", "web"]
     # A corrupted row's non-string scope degrades instead of crashing a read.
     assert split_scope(5) == []  # type: ignore[arg-type]
-
-
-def test_scope_contains_canonicalizes_an_alias_project(monkeypatch, tmp_path) -> None:
-    """scope_contains must canonicalize the graph node's project field before
-    comparing it to the canonicalized role scope. Graph intake stores the
-    project field RAW (the short_name alias a node was filed under), so without
-    canonicalization a lead over 'alpha' is falsely refused an epic filed as
-    'a' - a legitimate delegation blocked."""
-    import fno.projects.resolve as proj_resolve
-
-    cfg = tmp_path / "config.toml"
-    cfg.write_text(
-        '[work.workspaces.ws1]\nprojects = [{ name = "alpha", short_name = "a" }]\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", cfg)
-    proj_resolve._clear_cache()
-
-    from fno.agents import role
-
-    # An epic filed under the alias 'a' (the raw spelling intake stores).
-    # The containment resolves the index once, so the stub sits there.
-    monkeypatch.setattr(
-        role,
-        "_graph_index",
-        lambda: {"epic-1": {"id": "epic-1", "type": "epic", "project": "a"}},
-    )
-    assert role.scope_contains("alpha", "epic-1") is True
-
-    # A genuinely different project is still not contained.
-    monkeypatch.setattr(
-        role,
-        "_graph_index",
-        lambda: {"epic-1": {"id": "epic-1", "type": "epic", "project": "beta"}},
-    )
-    assert role.scope_contains("alpha", "epic-1") is False
 
 
 # --- spawn stamps the role, grantor is provenance not self-declared ---------
@@ -370,7 +334,6 @@ def _seed(monkeypatch, tmp_path, rows) -> None:
 
 def _prepare_role_cli(monkeypatch, tmp_path, rows) -> None:
     from fno.harness_identity import AMBIENT_IDENTITY_ENV
-    from fno.projects import resolve as proj_resolve
 
     # The lock-time identity match runs through Rust's role-identity kind
     # (the lock-time identity match runs through Rust now), so pin this
@@ -388,14 +351,31 @@ def _prepare_role_cli(monkeypatch, tmp_path, rows) -> None:
     _seed(monkeypatch, tmp_path, [replace(row, cwd=str(tmp_path)) for row in rows])
     for name in AMBIENT_IDENTITY_ENV:
         monkeypatch.delenv(name, raising=False)
-    config = tmp_path / "config.toml"
-    config.write_text(
-        '[work.workspaces.ws1]\n'
-        'projects = [{ name = "alpha", short_name = "a" }, { name = "beta" }]\n',
+    # The project resolver is native (the project-family port): _canonical_project
+    # answers through one fno-agents round trip, so the fixture registry
+    # rides a stub binary pinned over FNO_AGENTS_BIN (env outranks the dev
+    # build) instead of a pinned settings path. $4 is the name to resolve;
+    # every other spawn-overlay shape execs the real binary (the ladder
+    # door rides the same env pin).
+    stub = tmp_path / "agents-stub"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = "project" ]; then\n'
+        '  if [ "$3" = "map" ]; then\n'
+        "    echo '{\"alpha\":\"alpha\",\"a\":\"alpha\",\"beta\":\"beta\"}'\n"
+        "    exit 0\n"
+        "  fi\n"
+        '  case "$4" in\n'
+        "    alpha|a) echo alpha; exit 0;;\n"
+        "    beta) echo beta; exit 0;;\n"
+        "    *) exit 1;;\n"
+        "  esac\n"
+        "fi\n"
+        f'exec "{binary}" "$@"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", config)
-    proj_resolve._clear_cache()
+    stub.chmod(0o755)
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(stub))
 
 
 def _invoke_role(*args: str):
@@ -875,7 +855,6 @@ def test_a_lead_cannot_role_itself_even_to_a_strict_subset(
         "beta": {"id": "beta", "type": "epic", "status": "ready"},
     }
     monkeypatch.setattr(role_mod, "_graph_index", lambda: rows)
-    monkeypatch.setattr(role_mod, "_graph_entry", lambda node_id: rows.get(node_id))
     before = [asdict(row) for row in load_registry()]
     monkeypatch.setenv("CODEX_THREAD_ID", "caller-session")
 
@@ -983,7 +962,7 @@ def test_a_self_widen_fails_closed_without_the_binary(
     real_call = spawn_overlay_client.spawn_overlay_call
 
     def _unavailable(payload):
-        if payload.get("kind") == "role-resolve":
+        if payload.get("kind") in ("role-resolve", "role-grant"):
             return real_call(payload)
         raise spawn_overlay_client.SpawnOverlayUnavailable("no binary")
 
@@ -1022,7 +1001,6 @@ def test_a_lead_drops_a_done_epic_and_keeps_the_prior_grantor(
         "e-2": {"id": "e-2", "type": "epic", "status": "done"},
     }
     monkeypatch.setattr(role_mod, "_graph_index", lambda: rows)
-    monkeypatch.setattr(role_mod, "_graph_entry", lambda node_id: rows.get(node_id))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", WIDEN_LEAD_SESSION)
 
     result = _invoke_role("lead-a", "--scope", "e-1")
@@ -1102,7 +1080,7 @@ def test_a_self_add_answer_without_a_grantor_refuses_fail_closed(
     real_call = spawn_overlay_client.spawn_overlay_call
 
     def _old_binary(payload):
-        if payload.get("kind") == "role-resolve":
+        if payload.get("kind") in ("role-resolve", "role-grant"):
             return real_call(payload)
         return {"widen": True, "added": ["e-2"], "hint": None}
 
@@ -1249,7 +1227,7 @@ def test_in_place_role_refuses_when_the_identity_check_is_unavailable(
     real_call = spawn_overlay_client.spawn_overlay_call
 
     def unavailable(payload, *args, **kwargs):
-        if payload.get("kind") == "role-resolve":
+        if payload.get("kind") in ("role-resolve", "role-grant"):
             return real_call(payload, *args, **kwargs)
         raise spawn_overlay_client.SpawnOverlayUnavailable("not built")
 

@@ -1,0 +1,1 @@
+{"op": "stamp", "args": {"cli": "claude", "id": "makers"}, "now": 1800000000.0, "expect": {"result": null, "error": null, "store": {".active-claude": "makers"}, "modes": {".active-claude": true}, "files": {}, "keychain_writes": []}}

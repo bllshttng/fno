@@ -39,17 +39,11 @@ class TestRouteActions:
     def test_ac4_hp_real_probe_cuts_over_to_the_healthy_record(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
+        import json
         import time
-        from fno.adapters.providers.error_taxonomy import ErrorRule
         from fno.adapters.providers.model import QuotaConfig
         from fno.adapters.providers.rotation import Combo, next_healthy_provider
-        from fno.adapters.providers.runtime_state import (
-            PROVIDER_HEALTH_TTL_SECONDS,
-            UsageSnapshot,
-            UsageWindow,
-            update_provider_health,
-            write_usage_snapshot,
-        )
+        from fno.adapters.providers.runtime_state import PROVIDER_HEALTH_TTL_SECONDS
         monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(tmp_path / "runtime.json"))
         quota = QuotaConfig(observe=True, defer_dispatch=True)
         monkeypatch.setattr(
@@ -57,20 +51,18 @@ class TestRouteActions:
             lambda repo_root=None: quota,
         )
         now = time.time()
-        write_usage_snapshot(
-            UsageSnapshot(
-                provider_id="source",
-                windows=(UsageWindow("5h", 100.0, now + 3600),),
-                probed_at=now,
-                source="quota-endpoint",
-            ),
-            now=now,
-        )
-        update_provider_health(
-            "healthy", ErrorRule(status=429, backoff=True),
-            now=now - PROVIDER_HEALTH_TTL_SECONDS - 1,
-            resets_at=now + 3600,
-        )
+        # "source" is exhausted; "healthy" holds a long lock from a refusal
+        # older than the health TTL, so the lock no longer binds.
+        (tmp_path / "runtime.json").write_text(json.dumps({
+            "usage": {"source": {
+                "windows": [{"label": "5h", "used_pct": 100.0, "resets_at": now + 3600}],
+                "probed_at": now, "source": "quota-endpoint",
+            }},
+            "provider_health": {"healthy": {
+                "backoff_level": 1, "rate_limited_until": now + 3600,
+                "last_error_at": now - PROVIDER_HEALTH_TTL_SECONDS - 1,
+            }},
+        }))
         def destination(_cwd, _exhausted):
             chosen = next_healthy_provider(
                 Combo(name="fallback", providers=("healthy",)), quota=quota

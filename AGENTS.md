@@ -33,13 +33,7 @@ Traps a fresh agent re-hits because no lint, guard or refusal catches them yet. 
 
 AC9 delivery sentinel (echoed verbatim by a fresh worker, asserted by unit test): `kdc-delivery-sentinel-1932`.
 
-### Codex RPC
-
-`fno agents mail send <full-session-id> --raw <payload>` types any single-line payload verbatim. /fno:command and $fno:command both name an fno command. The lane rewrites the command to the form of the receiving harness. The codex app-server lane sends a non-review payload over turn/start.
-
-- specimens: mail_inject.rs, mux_cli.rs
-- graduates-to: Codex RPC dispatch returns a submit receipt naming the accepted command.
-- added: 2026-08-24
+No entries today. The last one aged out to [Sending a raw command to a worker](docs/harness-command-matrix.md#sending-a-raw-command-to-a-worker).
 
 ## Repository
 
@@ -112,7 +106,7 @@ Day-to-day usage (create/edit/columns/lifecycle/roadmap) is in [docs/backlog-usa
 
 NEVER edit these directly (a `PreToolUse` hook detects it). Use `fno backlog` / `fno do state`:
 - `~/.fno/db/graph.db` - the backlog graph. Mutate via `fno backlog` only.
-- `<space>/worktrees/<name>/target-state.md` - immutable manifest. Only post-init write is first-fill of `plan_path` via `fno do state set`.
+- `<space>/worktrees/<name>/target-state.md` - immutable manifest for agent tools. Native post-init writes stay legal: the plan_path first-fill via `fno do state set`, and the claim-handover refresh. When a `--handover-from` acquire lands for the manifest's node, the refresh drops the stale line and appends the claim lines.
 - Generated copies named in `generated-artifacts.tsv` or `skill-bundles.yaml`, and the installed plugin copy. Edit, Write, and Bash writes are refused. The refusal names the source and regen command.
 
 | File | Default | Purpose | Owner |

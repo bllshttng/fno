@@ -500,10 +500,9 @@ pub fn run(args: &[String]) -> i32 {
         _ => None,
     };
     let self_harness = ident.harness.clone();
-    let sender = self_session
-        .as_deref()
-        .map(canonical_handle)
-        .unwrap_or_else(|| "fno".to_string());
+    let sender = crate::system_sender::stamp_or_unknown(None, || {
+        self_session.as_deref().map(canonical_handle)
+    });
 
     let registry_path = AgentsHome::shared_registry_json();
     let registry = load_registry(&registry_path).ok();

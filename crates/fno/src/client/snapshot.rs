@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--font <family>] [--message <fmail-id>] \
-[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-tree|org-table|org-graph|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model]";
+[--view bell|bell-wide|bell-full|feed|row-menu|tab-menu|sideline-menu|composer|split-menu|settings|keys|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -71,12 +71,16 @@ pub enum ViewKind {
     /// The expanded org fold block on the sideline (the prefix+C surface),
     /// with one inline machine fold so the lines carry real readings.
     OrgBlock,
-    /// The org board in Tree mode.
-    OrgTree,
-    /// The org board in Table mode.
+    /// The org view at one of its five tabs over the whole fleet.
     OrgTable,
-    /// The org board in Graph mode: the node-link canvas.
+    OrgRecent,
+    OrgOverview,
     OrgGraph,
+    OrgHealth,
+    /// The org view's first seat page, its FEED page or its SYSTEM page.
+    OrgSeat,
+    OrgFeed,
+    OrgSystem,
     /// The Messages board with focus on column 1, 2 or 3.
     MessagesTree,
     MessagesChats,
@@ -92,6 +96,18 @@ pub enum ViewKind {
     NavigatorPr,
     /// The prefix+f navigator filtered by the model name `opus`.
     NavigatorModel,
+    /// The prefix+f navigator with the sideline's row menu (Ctrl-o) open on
+    /// the first agent row.
+    NavigatorMenu,
+    /// The event provenance modal on the first feed row that is not a
+    /// question, with a mouse selection dragged across its longest line.
+    FeedDetail,
+    /// The question page on the first open question, with a mouse selection
+    /// dragged across its longest line.
+    QuestionDetail,
+    /// The connections overlay (prefix+A) on its Accounts tab, with the
+    /// reads the live open kicks run inline.
+    Connections,
 }
 
 /// The seeded demo mail id a Messages view opens on when no --message
@@ -114,6 +130,16 @@ fn open_navigator(view: &mut View, query: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Select the longest line of the open modal's body, the way a drag does:
+/// compose once so the frame is recorded, then select. The caller's compose
+/// paints the selection.
+fn select_modal_line(view: &mut View) -> Result<(), String> {
+    let _ = view.compose();
+    crate::modal_select::select_longest_line()
+        .map(|_| ())
+        .ok_or_else(|| "the modal painted no body text to select".to_string())
+}
+
 fn parse_view(v: &str) -> Option<ViewKind> {
     match v {
         "bell" => Some(ViewKind::Bell),
@@ -128,9 +154,14 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "settings" => Some(ViewKind::Settings),
         "keys" => Some(ViewKind::Keys),
         "org-block" => Some(ViewKind::OrgBlock),
-        "org-tree" => Some(ViewKind::OrgTree),
         "org-table" => Some(ViewKind::OrgTable),
+        "org-recent" => Some(ViewKind::OrgRecent),
+        "org-overview" => Some(ViewKind::OrgOverview),
         "org-graph" => Some(ViewKind::OrgGraph),
+        "org-health" => Some(ViewKind::OrgHealth),
+        "org-seat" => Some(ViewKind::OrgSeat),
+        "org-feed" => Some(ViewKind::OrgFeed),
+        "org-system" => Some(ViewKind::OrgSystem),
         "messages-tree" => Some(ViewKind::MessagesTree),
         "messages-chats" => Some(ViewKind::MessagesChats),
         "messages-thread" => Some(ViewKind::MessagesThread),
@@ -140,6 +171,10 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "backlog-kanban" => Some(ViewKind::BacklogKanban),
         "navigator-pr" => Some(ViewKind::NavigatorPr),
         "navigator-model" => Some(ViewKind::NavigatorModel),
+        "navigator-menu" => Some(ViewKind::NavigatorMenu),
+        "feed-detail" => Some(ViewKind::FeedDetail),
+        "question-detail" => Some(ViewKind::QuestionDetail),
+        "connections" => Some(ViewKind::Connections),
         _ => None,
     }
 }
@@ -216,7 +251,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr or navigator-model")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -360,6 +395,14 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
     let page = dir.join("shot.html");
     std::fs::write(&page, page_html(svg)).map_err(|e| format!("temp page: {e}"))?;
     let out_abs = std::path::absolute(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    // The png on disk is the success signal below, so an earlier shot at the
+    // same path would read as this one landing and pass off the stale image.
+    match std::fs::remove_file(&out_abs) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("{}: {e}", out_abs.display()));
+        }
+        _ => {}
+    }
     let mut cmd = std::process::Command::new(&chrome);
     // Chrome hangs on macOS under a HOME that is not the user's, and the demo
     // script sets one so paths read `~/...`. Hand it the passwd home back.
@@ -615,7 +658,7 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
                 _ => {}
             }
         }
-        Some(ViewKind::Feed) => {
+        Some(ViewKind::Feed) | Some(ViewKind::FeedDetail) => {
             // The `e` key's state flip plus the fold the live panel's run
             // loop kicks, run inline: one Head page lands, newest first.
             view.feed = Some(super::feed_view::open_overlay(None, 0));
@@ -635,6 +678,30 @@ shoot a root seeded with questions, mail or backlog activity \
 (scripts/ops/mux-demo-snapshot.sh seeds one)"
                     .into());
             }
+            if let Some(ViewKind::FeedDetail) = kind {
+                // A question row opens the question page, so the provenance
+                // modal opens on the first row that is not one.
+                let item = view
+                    .feed
+                    .as_ref()
+                    .and_then(|f| f.win.items.iter().find(|i| i.kind != "question_asked"))
+                    .cloned()
+                    .ok_or("feed-detail: the feed holds only question rows to open")?;
+                view.feed_detail = Some(super::feed_detail::modal(&view, item));
+                select_modal_line(&mut view)?;
+            }
+        }
+        Some(ViewKind::QuestionDetail) => {
+            // The same gather the bell shots run, then the page the bell
+            // opens on a row.
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
+            let id = super::bell::first_question_id(&view).ok_or(
+                "question-detail: no open question to show; shoot a root seeded with \
+questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
+            )?;
+            view.open_detail_on(&id);
+            select_modal_line(&mut view)?;
         }
         Some(ViewKind::RowMenu) => {
             let i = view
@@ -664,6 +731,37 @@ shoot a root seeded with questions, mail or backlog activity \
         Some(ViewKind::Keys) => {
             view.open_keys_modal();
         }
+        Some(ViewKind::Connections) => {
+            view.open_connections();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            runtime.block_on(crate::connections_view::load_all(tx, view.conn_gen));
+            let cv = view
+                .connections
+                .as_mut()
+                .ok_or("connections overlay did not open")?;
+            // A throwaway root reaches no real account, so the live probe and
+            // identity legs only fail. Paint the cached reading the root seeds.
+            let mut cached = true;
+            while let Ok((_, outcome)) = rx.try_recv() {
+                use crate::connections_view::ReadOutcome as R;
+                match outcome {
+                    R::UsageFailed(_) | R::IdentityFailed(_) => {}
+                    R::Usage(_) if !cached => {}
+                    R::Usage(cells) => {
+                        cached = false;
+                        cv.apply_read(R::Usage(cells));
+                    }
+                    other => cv.apply_read(other),
+                }
+            }
+            if cv.accounts.is_empty() {
+                return Err(
+                    "connections view rendered empty: this root registers no accounts; \
+shoot a root whose config lists accounts (scripts/ops/mux-demo-snapshot.sh seeds them)"
+                        .into(),
+                );
+            }
+        }
         Some(ViewKind::OrgBlock) => {
             // The prefix+C fold runs expanded-only in a reading: flip the
             // same state the key flips, then run the fold and the gate
@@ -684,39 +782,58 @@ shoot from a host where the lanes command answers"
                 );
             }
         }
-        Some(ViewKind::OrgTree) | Some(ViewKind::OrgTable) | Some(ViewKind::OrgGraph) => {
-            // The prefix+V org board at one mode: open it the way the key
-            // does, run one synchronous org gather, then set the mode the
-            // shot names. A root with no leads, nodes or unowned workers
-            // paints the degenerate footer only.
+        Some(
+            ViewKind::OrgTable
+            | ViewKind::OrgRecent
+            | ViewKind::OrgOverview
+            | ViewKind::OrgGraph
+            | ViewKind::OrgHealth
+            | ViewKind::OrgSeat
+            | ViewKind::OrgFeed
+            | ViewKind::OrgSystem,
+        ) => {
+            // The org view at one tab or page: open it the way the key
+            // does, run one synchronous fleet read, then select what the
+            // shot names. A fleet map with no seat refuses the shot.
             view.experimental_org_board = true;
             super::backlog_board::toggle_org_view(&mut view);
             view.board_full = true;
-            let inputs = runtime.block_on(crate::org_model::gather(
+            let inputs = runtime.block_on(super::org_seats::gather(
                 &crate::backlog_view::graph_path(),
                 view.layout.agents.clone(),
             ));
             let gen = view.org_generation;
             super::org_board::apply_fold(&mut view, gen, inputs);
-            let mode = match kind {
-                Some(ViewKind::OrgTable) => crate::view_store::OrgMode::Table,
-                Some(ViewKind::OrgGraph) => crate::view_store::OrgMode::Graph,
-                _ => crate::view_store::OrgMode::Tree,
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
+            let Some(b) = view.org_board.as_mut() else {
+                return Err("org view did not open".into());
             };
-            if let Some(b) = view.org_board.as_mut() {
-                b.mode = mode;
-            }
-            let populated = view
-                .org_board
-                .as_ref()
-                .is_some_and(|b| !b.mode_rows(0, 0).is_empty());
-            if !populated {
-                return Err(
-                    "org view rendered empty: this root has no leads, nodes or unowned workers; \
-shoot a root seeded with backlog nodes and leads \
+            let first = b.fleet.as_ref().and_then(|f| {
+                f.machines.iter().find_map(|m| {
+                    m.leads
+                        .iter()
+                        .find_map(|p| p.seats.first().map(|s| super::org_board::seat_key(m, p, s)))
+                })
+            });
+            let Some(first) = first else {
+                return Err("org view rendered empty: fleet top answered no seat; \
+shoot a root whose fleet map has seats \
 (scripts/ops/mux-demo-snapshot.sh seeds one)"
-                        .into(),
-                );
+                    .into());
+            };
+            b.tab = match kind {
+                Some(ViewKind::OrgRecent) => crate::view_store::OrgTab::Recent,
+                Some(ViewKind::OrgOverview) => crate::view_store::OrgTab::Overview,
+                Some(ViewKind::OrgGraph) => crate::view_store::OrgTab::Graph,
+                Some(ViewKind::OrgHealth) => crate::view_store::OrgTab::Health,
+                _ => crate::view_store::OrgTab::Table,
+            };
+            match kind {
+                Some(ViewKind::OrgSeat) => b.select(&first),
+                Some(ViewKind::OrgFeed) => b.select("feed"),
+                Some(ViewKind::OrgSystem) => b.select("system"),
+                _ => {}
             }
         }
         Some(ViewKind::BacklogList) | Some(ViewKind::BacklogKanban) => {
@@ -761,6 +878,18 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
             open_navigator(&mut view, pr.to_string())?;
         }
         Some(ViewKind::NavigatorModel) => open_navigator(&mut view, "opus".into())?,
+        Some(ViewKind::NavigatorMenu) => {
+            open_navigator(&mut view, String::new())?;
+            let at = view
+                .nav_filtered(view.nav.as_ref().ok_or("navigator did not open")?)
+                .iter()
+                .position(|r| matches!(r.menu, super::row_menu::NavMenu::Agent(_)))
+                .ok_or("no agent rows to open a navigator menu on")?;
+            if let Some(n) = view.nav.as_mut() {
+                n.cursor = at;
+            }
+            view.nav_open_menu();
+        }
         Some(ViewKind::SidelineMenu) => view.open_sideline_menu(Anchor::Center),
         Some(ViewKind::Composer) => {
             super::agent_launcher::open(&mut view);
@@ -939,9 +1068,14 @@ mod tests {
             ("settings", ViewKind::Settings),
             ("keys", ViewKind::Keys),
             ("org-block", ViewKind::OrgBlock),
-            ("org-tree", ViewKind::OrgTree),
             ("org-table", ViewKind::OrgTable),
+            ("org-recent", ViewKind::OrgRecent),
+            ("org-overview", ViewKind::OrgOverview),
             ("org-graph", ViewKind::OrgGraph),
+            ("org-health", ViewKind::OrgHealth),
+            ("org-seat", ViewKind::OrgSeat),
+            ("org-feed", ViewKind::OrgFeed),
+            ("org-system", ViewKind::OrgSystem),
             ("messages-tree", ViewKind::MessagesTree),
             ("messages-chats", ViewKind::MessagesChats),
             ("messages-thread", ViewKind::MessagesThread),
@@ -951,6 +1085,10 @@ mod tests {
             ("backlog-kanban", ViewKind::BacklogKanban),
             ("navigator-pr", ViewKind::NavigatorPr),
             ("navigator-model", ViewKind::NavigatorModel),
+            ("navigator-menu", ViewKind::NavigatorMenu),
+            ("feed-detail", ViewKind::FeedDetail),
+            ("question-detail", ViewKind::QuestionDetail),
+            ("connections", ViewKind::Connections),
         ] {
             let args = parse_extra(&["--view", name]).expect(name);
             assert_eq!(args.view, Some(kind), "{name}");
@@ -965,7 +1103,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-tree, org-table, org-graph, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr or navigator-model"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections"
             ),
             "{e}"
         );

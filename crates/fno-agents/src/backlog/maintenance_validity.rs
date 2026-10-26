@@ -80,7 +80,7 @@ const VALIDITY_PROMPT: &str = concat!(
     "confidence (0-1), rationale, evidence_ids, target?}]}. One result per packet.",
 );
 
-fn retro_trailer_re() -> &'static Regex {
+pub(crate) fn retro_trailer_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // The full HTML-comment shape `land` writes, so prose that merely
     // mentions the trailer never reads as a filed retro node.
@@ -1301,17 +1301,21 @@ fn blake2b(data: &[u8], out_len: usize) -> Vec<u8> {
         .collect()
 }
 
-/// The retro finding hash: badges stripped, whitespace collapsed,
-/// lowercased, then the 8-byte BLAKE2b the trailer carries.
-pub(crate) fn retro_content_hash(text: &str) -> String {
+/// The retro hash input: badges stripped, whitespace collapsed, lowercased.
+pub(crate) fn retro_normalize_finding(text: &str) -> String {
     static BADGE: OnceLock<Regex> = OnceLock::new();
     static WS: OnceLock<Regex> = OnceLock::new();
     let badge =
         BADGE.get_or_init(|| Regex::new(r"!\[[^\]]*\]\([^)]*\)|!\[[^\]]*\]").expect("badge regex"));
     let ws = WS.get_or_init(|| Regex::new(r"\s+").expect("ws regex"));
     let stripped = badge.replace_all(text, "");
-    let normalized = ws.replace_all(&stripped, " ").trim().to_lowercase();
-    blake2b(normalized.as_bytes(), 8)
+    ws.replace_all(&stripped, " ").trim().to_lowercase()
+}
+
+/// The retro finding hash: the 8-byte BLAKE2b of the normalized finding,
+/// which the trailer carries.
+pub(crate) fn retro_content_hash(text: &str) -> String {
+    blake2b(retro_normalize_finding(text).as_bytes(), 8)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()

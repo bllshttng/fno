@@ -9,11 +9,17 @@
 //! equality. `answer` is the fourth kind the Rust write adds; its ledger row
 //! matches the same shape, and it additionally lands one user_ask_answered
 //! row (covered by unit tests in operator_turns.rs).
+//!
+//! The command surface has its own goldens (`cli_*`), captured from the
+//! Python `fno inbox user ack` before the forward swap: the row as
+//! `json.dumps` printed it, the failed-write refusal and the no-identity
+//! refusal.
 
 use common::{assert_golden, Golden};
 use fno_agents::operator_turns::ack_turn;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 mod common;
 
@@ -100,4 +106,67 @@ fn answer_ack_matches_and_names_the_answer() {
     // No Python oracle exists for answer (the old leg refused it): the
     // frozen file pins the new contract from its first run.
     assert_golden("user_ack", "answer_ack", &golden_of(&dir, "s"), None);
+}
+
+/// The row's `ts` is the clock, so it freezes before the byte compare.
+fn freeze_ts(stdout: &str) -> String {
+    let Some(start) = stdout.find("\"ts\": \"").map(|i| i + 7) else {
+        return stdout.to_string();
+    };
+    let end = start + stdout[start..].find('"').unwrap_or(0);
+    format!("{}<TS>{}", &stdout[..start], &stdout[end..])
+}
+
+#[test]
+fn the_ack_command_matches_the_python_command() {
+    let cases: [(&str, Option<&str>, &[&str]); 4] = [
+        (
+            "nothing",
+            Some("s-golden"),
+            &["u-1", "--outcome", "nothing"],
+        ),
+        (
+            "answer",
+            Some("s-golden"),
+            &[
+                "u-2",
+                "--outcome",
+                "answer:use the cache",
+                "--why",
+                "asked twice",
+            ],
+        ),
+        (
+            "invalid",
+            Some("s-golden"),
+            &["u-3", "--outcome", "nonsense"],
+        ),
+        ("no_identity", None, &["u-4", "--outcome", "nothing"]),
+    ];
+    for (label, session, flags) in cases {
+        let dir = tmp_dir(&format!("cli-{label}"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
+        cmd.env_clear()
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .env("HOME", &dir)
+            .env("FNO_AGENTS_HOME", dir.join("agents-home"))
+            .env("FNO_TEST_HERMETIC", "1")
+            .envs(fno_agents::test_run::self_owner_env())
+            .env("FNO_OPERATOR_CAPTURE_DIR", dir.join("capture"))
+            .current_dir(&dir)
+            .args(["compaction", "ack"])
+            .args(flags);
+        if let Some(session) = session {
+            cmd.env("FNO_OPERATOR_SESSION_ID", session);
+        }
+        let out = cmd.output().unwrap();
+        let rust = Golden {
+            exit: out.status.code(),
+            streams: vec![
+                freeze_ts(&String::from_utf8_lossy(&out.stdout)),
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+            ],
+        };
+        assert_golden("user_ack", &format!("cli_{label}"), &rust, None);
+    }
 }

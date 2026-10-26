@@ -1,4 +1,4 @@
-"""Integration tests for `fno setup migrate-paths`.
+"""Integration tests for the first-run path migration (`run_migration`).
 
 Tests cover:
 - AC2b-EDGE: Race - two threads call run_migration concurrently; filelock serializes

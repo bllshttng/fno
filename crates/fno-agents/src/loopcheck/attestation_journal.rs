@@ -257,7 +257,10 @@ pub fn unattested_reviewers_scan_text(
         .iter()
         .any(|(name, p)| !*p && fail_carries.get(name) == Some(&true));
     let disposition_clear = any_answerable_fail && {
-        let blockers = disposition_blockers_on_chain(&chain);
+        // The mirror holds attestation rows only: no review_invocation trace
+        // rides beside them, so the verify-fixes witness has no evidence
+        // here and the scan stays on the head-move rule alone (fail closed).
+        let blockers = disposition_blockers_on_chain(&chain, &std::collections::HashSet::new());
         !blockers_withhold(&blockers, rounds_exhausted)
     };
     let out = reviewers

@@ -1,37 +1,9 @@
-"""`fno agents spawn --promote` routing: load-bearing on the autonomous substrates.
-
-Grant-at-spawn (``--promote level=N,scope=X``) is implemented only in the Python
-``cmd_spawn`` path; the Rust client does not parse ``--promote``. The role
-detector (``_is_promotion_bearing_spawn``) is what diverts every ``--promote``
-spawn to Python: a BARE ``spawn --promote`` (pane default) carves through it
-too, now that plain pane spawns route to the binary. The defect this file pins
-lived on the autonomous substrates (``--substrate bg`` and the headless
-spellings ``--substrate headless``/``--once``/``-o``), where no detector fires
-and the spawn would reach the Rust client and die with
-``unknown flag: --promote``. Those are exactly the
-substrates where succession matters most (a stepping-down lead grants on a worker).
-
-So these tests do NOT exercise a bare spawn (that passes before AND after the
-fix and proves nothing). They exercise the autonomous substrates and assert the
-role detector is what diverts them.
+"""`fno agents spawn` routing detectors: the Python-only flags keep a spawn on
+the Python door. ``--promote`` is not one of them: the Rust client's promote
+door (``spawn_promote``) owns a team spawn, so these detectors pin the flags
+that still divert.
 """
 from __future__ import annotations
-
-
-
-def test_role_bearing_spawn_detected_across_forms() -> None:
-    from fno.agents.rust_runtime import _is_promotion_bearing_spawn
-
-    assert _is_promotion_bearing_spawn(
-        "spawn", ["spawn", "--name", "w", "--promote", "level=1,scope=x-d7e4"]
-    )
-    assert _is_promotion_bearing_spawn(
-        "spawn", ["spawn", "w", "--promote=level=1,scope=x-d7e4"]
-    )
-    assert not _is_promotion_bearing_spawn("spawn", ["spawn", "w", "-k", "x"])
-    # A non-role flag does not trip it; only spawn carries it.
-    assert not _is_promotion_bearing_spawn("spawn", ["spawn", "w", "--role", "build"])
-    assert not _is_promotion_bearing_spawn("role", ["role", "w", "--promote", "level=1,scope=x"])
 
 
 def test_resume_and_route_detectors_catch_attached_short_forms() -> None:

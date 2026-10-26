@@ -104,7 +104,6 @@ def _settings_key() -> _SettingsKey:
     return (
         env("FNO_CONFIG"),
         env("FNO_GLOBAL_SETTINGS_PATH"),
-        env("FNO_CONFIG_SEARCH_ROOT"),
         env("FNO_NO_CANONICAL_CONFIG"),
         env("HOME"),
         str(repo_root),
@@ -113,7 +112,7 @@ def _settings_key() -> _SettingsKey:
 
 
 _SettingsKey = tuple[
-    Optional[str], Optional[str], Optional[str], Optional[str], Optional[str],
+    Optional[str], Optional[str], Optional[str], Optional[str],
     str, tuple[tuple[str, int, int], ...],
 ]
 
@@ -143,6 +142,10 @@ def _load_settings_at(key: _SettingsKey) -> "SettingsModel":
     # alias pass (whose deprecation warnings fire once per process per chain,
     # not once per consumer) live in exactly one place.
     candidates = _candidate_paths()
+    from fno.config.writer import drop_retired_dispatch_keys
+
+    for receipt in drop_retired_dispatch_keys(candidates):  # retired keys leave disk once
+        print(f"fno config: {receipt}", file=sys.stderr)
     layers = list(_aliased_layers(tuple(candidates)))
 
     # Deep-merge lowest priority first so the highest-priority file wins per

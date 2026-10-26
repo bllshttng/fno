@@ -22,7 +22,7 @@ def test_notify_degrades_loudly_when_no_tool(monkeypatch):
     one-line message - never a silent no-op, never a traceback."""
     # Force the no-tool path: non-Darwin platform and notify-send absent.
     monkeypatch.setattr(_impl.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(_impl.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(_impl.shutil, "which", lambda *_a, **_k: None)
 
     result = runner.invoke(app, ["notify", "title", "message"])
     assert result.exit_code != 0
@@ -63,7 +63,7 @@ def test_notify_impl_darwin_dispatches_osascript(monkeypatch, tmp_path):
 def _headless(monkeypatch):
     """A host with neither notifier: Linux, no notify-send, dispatch suppressed."""
     monkeypatch.setattr(_impl.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(_impl.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(_impl.shutil, "which", lambda *_a, **_k: None)
     monkeypatch.setenv("FNO_TEST_HERMETIC", "0")
 
 

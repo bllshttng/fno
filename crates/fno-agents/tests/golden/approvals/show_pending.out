@@ -1,0 +1,11 @@
+request     af049f91f18a05935616a288220b3ee251fe90a054f68fb14611c8ab9e72a668
+  principal   agent-1
+  work order  wo-1
+  attempt     att-1
+  effect      eff-1
+  class       communication.external
+  destination mail:list-a
+  action      act-1
+  expires     <FUTURE>
+  decision    pending
+  effect      not prepared

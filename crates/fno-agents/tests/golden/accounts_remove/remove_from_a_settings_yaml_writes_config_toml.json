@@ -1,0 +1,27 @@
+{
+ "yaml": "accounts:\n  active: alt\n  records:\n    - id: work\n      name: work\n      harness: claude\n      auth: managed\n      priority: 10\n    - id: alt\n      name: alt\n      harness: claude\n      auth: managed\n      priority: 20\n",
+ "args": [
+  "work"
+ ],
+ "expect": {
+  "exit": 0,
+  "stdout": "Account 'work' removed (scope=global).\n",
+  "stderr": "",
+  "global": {
+   "accounts": {
+    "active": "alt",
+    "records": [
+     {
+      "id": "alt",
+      "name": "alt",
+      "harness": "claude",
+      "auth": "managed",
+      "priority": 20,
+      "account_id": "alt"
+     }
+    ]
+   }
+  },
+  "project": null
+ }
+}

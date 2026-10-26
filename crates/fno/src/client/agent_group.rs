@@ -1,5 +1,5 @@
 //! The sideline agents view's group-by axes (workspace / team / cwd /
-//! status) and the manual-reorder editor behind the Manual sort column.
+//! status / harness) and the manual-reorder editor behind the Manual sort column.
 //! Split from client.rs under the file-budget gate; everything here reaches
 //! the client's private items through `super::*`.
 
@@ -46,8 +46,7 @@ fn group_key_of(view: &View, name: &str) -> String {
             .find(|s| a.squad == Some(s.id))
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "~ elsewhere".into()),
-        AgentGroup::Team => team_lead_name(view, a).unwrap_or_else(|| "~ unteamed".into()),
-        AgentGroup::Cwd => a.cwd_base.clone().unwrap_or_else(|| "(no cwd)".into()),
+        AgentGroup::Team | AgentGroup::Cwd | AgentGroup::Harness => keyed_label(view, a),
         AgentGroup::Status => match agent_lattice_state(a) {
             LatticeState::Blocked | LatticeState::DoneUnseen => "Needs input".into(),
             LatticeState::Working | LatticeState::Unmeasured | LatticeState::Empty => {
@@ -56,6 +55,46 @@ fn group_key_of(view: &View, name: &str) -> String {
             LatticeState::Idle | LatticeState::Exited => "Completed".into(),
         },
     }
+}
+
+/// The band a row joins on an axis whose bands are named by a row field.
+fn keyed_label(view: &View, a: &AgentRow) -> String {
+    match view.agent_group {
+        AgentGroup::Team => team_lead_name(view, a).unwrap_or_else(|| "~ unteamed".into()),
+        AgentGroup::Cwd => a.cwd_base.clone().unwrap_or_else(|| "(no cwd)".into()),
+        _ => a.harness.clone().unwrap_or_else(|| "(no harness)".into()),
+    }
+}
+
+/// What a harness band spent: its rows' session cost and tokens summed, or
+/// `None` off the harness axis or when no row in the band carries a figure.
+pub(super) fn band_spend(view: &View, label: &str) -> Option<String> {
+    if view.agent_group != AgentGroup::Harness {
+        return None;
+    }
+    let (mut cents, mut tokens, mut seen) = (0u64, 0u64, false);
+    for a in view
+        .layout
+        .agents
+        .iter()
+        .filter(|a| keyed_label(view, a) == label)
+    {
+        if let Some(c) = a.session_cost_cents {
+            cents += c;
+            seen = true;
+        }
+        if let Some(t) = a.session_tokens {
+            tokens += t;
+            seen = true;
+        }
+    }
+    seen.then(|| {
+        format!(
+            "{} · {}",
+            super::row_meter::cost_cell(cents),
+            super::row_meter::token_cell(tokens)
+        )
+    })
 }
 
 type Bucket<'a> = (String, Vec<&'a AgentRow>);
@@ -74,19 +113,10 @@ fn push<'a>(buckets: &mut Vec<Bucket<'a>>, key: String, a: &'a AgentRow) {
 pub(super) fn grouped_rows_with_depths(view: &View) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
     let buckets: Vec<Bucket<'_>> = match view.agent_group {
         AgentGroup::Workspace => Vec::new(), // unreachable: the caller guards
-        AgentGroup::Team => {
+        AgentGroup::Team | AgentGroup::Cwd | AgentGroup::Harness => {
             let mut buckets: Vec<Bucket<'_>> = Vec::new();
             for a in &view.layout.agents {
-                let key = team_lead_name(view, a).unwrap_or_else(|| "~ unteamed".into());
-                push(&mut buckets, key, a);
-            }
-            buckets
-        }
-        AgentGroup::Cwd => {
-            let mut buckets: Vec<Bucket<'_>> = Vec::new();
-            for a in &view.layout.agents {
-                let key = a.cwd_base.clone().unwrap_or_else(|| "(no cwd)".into());
-                push(&mut buckets, key, a);
+                push(&mut buckets, keyed_label(view, a), a);
             }
             buckets
         }

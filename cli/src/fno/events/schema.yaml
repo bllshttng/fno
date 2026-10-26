@@ -39,10 +39,10 @@ envelope:
     source:
       type: string
       # single unified envelope. 'active-backlog' added (real emitter at
-      # daemon.rs). 'cli' added: provider_window_closing declared it in its
-      # own sources: list, but it was never in this enum, so every real emit
-      # (adapters/providers/cli.py:538) silently failed inside its own
-      # broad try/except and no row ever landed. Per-agent worker sources
+      # daemon.rs). 'cli' is the source of the Python CLI's own emits. An
+      # event type that names a source missing from this enum fails every
+      # real emit, and a broad try/except around the emit hides that no
+      # row landed. Per-agent worker sources
       # (worker:<id>, stream-worker:<id>) are pattern sources, validated by
       # both the Python and bash validators via the `patterns` list below
       # (previously only the parity-script layer checked them).
@@ -91,13 +91,23 @@ event_types:
     consumers: [operator]
 
   - name: native_bg_parent_backfilled
-    description: "A native-bg registry row born with no parent gained its spawner from the launch record its child claimed. One row per fill."
+    description: "A claude registry row born with no parent gained its spawner from the launch record its child claimed: a native-bg adopted row, or a row the mail-hold register minted first with no origin. One row per fill."
     sources: [daemon]
     data:
       required: [name, spawned_by_session]
       properties:
         name: { type: string, description: "The registry row's name" }
         spawned_by_session: { type: string, description: "The launcher session the claimed record names" }
+    consumers: [operator]
+
+  - name: native_bg_renamed
+    description: "A claude registry row still named by its short id took a real name: the launch record's, the agents.naming.worker name of its node, or the claude agents listing's. The old name stays in aliases. One row per rename."
+    sources: [daemon]
+    data:
+      required: [name, from]
+      properties:
+        name: { type: string, description: "The row's new name" }
+        from: { type: string, description: "The short-id name it replaced" }
     consumers: [operator]
 
   - name: native_bg_mint_deferred
@@ -3131,6 +3141,43 @@ event_types:
         pid:
           type: integer
 
+  - name: test_run
+    retention: durable
+    description: >
+      One local test run through `fno doctor test`. A started row lands at
+      spawn and a finished row at exit, joined by run_id. A started row with
+      no finished row names a killed runner. A refused run lands one refused
+      row naming the reason, the exit the caller saw and the pid that
+      answered.
+    sources: [daemon]
+    data:
+      required: [run_id, stage]
+      properties:
+        run_id:
+          type: string
+        stage:
+          type: string
+          enum: [started, finished, refused]
+        command:
+          type: string
+        command_key:
+          type: string
+        pid:
+          type: integer
+        node_id:
+          type: string
+        session_id:
+          type: string
+        worktree:
+          type: string
+        exit_code:
+          type: integer
+        reason:
+          type: string
+        duration_ms:
+          type: integer
+    consumers: [fno-agents test-run stats]
+
   - name: orphan_test_binary_reaped
     description: "An orphaned cargo deps/ test binary (parentless or holding 20+ zombie children, CACHEDIR.TAG-confirmed) was SIGKILLed by the daemon's 300s reap sweep, past the config.test.orphan_min_elapsed_seconds age guard. The payload is the reap row: pid, command, zombie count, elapsed_seconds."
     sources: [daemon]
@@ -4010,6 +4057,9 @@ event_types:
           type: string
           enum: [no_claim, gone, held_by_other, stale, contended, write_failed, harness, not_async, codex_unroutable, emit_failed]
           description: "Optional. Set ONLY when the fire carried a watching intent and the idle was refused: why the watch lease or the idle posture refused. 'no_claim' = the manifest recorded no claim pair at init; 'gone'/'held_by_other'/'stale' are permanent for the session (arming another watcher cannot help); 'contended'/'write_failed' can succeed on retry; 'harness'/'not_async' = the idle posture itself refused before any lease read."
+        dur_ms:
+          type: integer
+          description: "Optional. Milliseconds from fire start to the watching idle decision, on the watching idle rows only: the lease-only idle's own cost, the number the watching-stop latency budget reads."
     consumers: [operator]
 
   - name: pr_watch_draft_flip
@@ -4211,8 +4261,8 @@ event_types:
       properties:
         reason:
           type: string
-          enum: [gate, timeout, error, no_rows]
-          description: "Why the run could not fire: gate (spawn gate refused), timeout (the tick budget killed the subprocess), error (non-zero exit or spawn trouble), no_rows (exit 0 but no history rows appended)."
+          enum: [gate, timeout, error, no_rows, no_bank]
+          description: "Why the run could not fire: gate (spawn gate refused), timeout (the tick budget killed the subprocess), error (non-zero exit or spawn trouble), no_rows (exit 0 but no history rows appended), no_bank (no checkout carries evals/bank, so nothing launched)."
         detail:
           type: string
           description: "Optional. The refusal, exit line, or stderr tail naming the cause."
@@ -5073,6 +5123,21 @@ event_types:
         panes:
           type: integer
           description: "How many panes the server held at exit."
+    consumers: [operator]
+
+  - name: mux_session_healed
+    retention: durable
+    description: "A mux reader (ls, the picker, doctor, the workspace sweep) found a dead server's leftover session files and removed them: every connect was refused, no starter held the startup marker, and the pid sidecar named no live process. One row per healed session, so a SIGKILLed server's cleanup is visible without a user step."
+    sources: [daemon]
+    data:
+      required: [mux_session, path]
+      properties:
+        mux_session:
+          type: string
+          description: "The dead session's name."
+        path:
+          type: string
+          description: "The socket path that was removed with its sidecars."
     consumers: [operator]
 
   - name: portal_opened
@@ -6017,8 +6082,8 @@ event_types:
     consumers: [operator]
 
   - name: quota_required_bot_exhausted
-    description: "Emitted at the pre-promise checkpoint (x-ffff US5) when a config.review required-bot's provider snapshot is EXHAUSTED with a known reset. Surfaces the coming review-gate wedge immediately (with the reset time) instead of the gate hanging silently for hours. Advisory + read-only; in attended mode the skill also raises a <help> tag with the same facts."
-    sources: [backlog, target]
+    description: "Emitted at the pre-promise checkpoint (x-ffff US5) when a config.review required-bot's provider snapshot is EXHAUSTED with a known reset. Surfaces the coming review-gate wedge immediately (with the reset time) instead of the gate hanging silently for hours. Advisory + read-only; in attended mode the skill also raises a <help> tag with the same facts. Rust-owned: fno-agents spawn-overlay accounts required-bot-check emits it."
+    sources: [daemon]
     data:
       required: [bot, provider, headroom]
       properties:
@@ -6326,8 +6391,44 @@ event_types:
           type: integer
         total:
           type: integer
+  - name: trust_prompt_answered
+    description: "The daemon answered a fno-spawned codex pane's folder-trust modal itself: the modal's first option trusts the worker's own launch cwd. One event per attempt; sent names whether the keystroke landed. Every other parked prompt (approvals, permissions) stays report-only."
+    sources: [daemon]
+    data:
+      required: [pane_id, answer, sent]
+      properties:
+        holder:
+          type: string
+          description: "The parked worker's registry name; 'unknown' when the join lost it."
+        pane_id:
+          type: integer
+        answer:
+          type: string
+          description: "The keystroke pressed, the modal's first option (typically '1')."
+        sent:
+          type: boolean
+          description: "True when the pane write landed; a false value retries after the interval floor."
         reason:
           type: string
+
+  - name: shell_writers_sweep
+    description: "The daemon's hourly legacy shell-writer rendezvous sweep: entries older than a day under any events.jsonl.shell-writers.d are unlinked and an emptied directory is dropped. The rendezvous is residue of the retired shell append path; no current writer creates entries. Emitted for every run including a zero-count one, so a quiet run is never mistaken for a sweep that did not run."
+    sources: [daemon]
+    data:
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          description: "'ok' when the sweep ran; 'skipped' names why it did not."
+        swept:
+          type: integer
+          description: "Stale rendezvous entries unlinked this pass."
+        dirs_removed:
+          type: integer
+          description: "Rendezvous directories dropped once empty."
+        reason:
+          type: string
+          description: "The dispatch pause's skip reason when outcome is 'skipped'."
 
   - name: pr_watch_tick
     description: "Heartbeat and positive sweep receipt emitted at the end of every successful PR-state watcher poll interval, including quiet ticks with no actionable PRs."
@@ -7021,8 +7122,8 @@ event_types:
     consumers: [operator]
 
   - name: provider_window_closing
-    description: "A provider record's PROJECTED usage window is within the configured warning threshold of closing. A projection from a recorded window open plus a configured length, never a utilization measurement - a record with no probe still reads UNKNOWN for headroom. Emitted once per window so a long tick loop does not re-warn."
-    sources: [daemon, cli]
+    description: "A provider record's PROJECTED usage window is within the configured warning threshold of closing. A projection from a recorded window open plus a configured length, never a utilization measurement - a record with no probe still reads UNKNOWN for headroom. Emitted once per window so a long tick loop does not re-warn. Rust-owned: fno-agents spawn-overlay accounts window emits it."
+    sources: [daemon]
     data:
       required: [provider_id, closes_in_s]
       properties:
@@ -7845,9 +7946,9 @@ event_types:
   # The `decision` and `state` enums below are ADVISORY at the validator layer,
   # matching the `outcome` crumb further down: both validators check required
   # fields and envelope shape, not per-type data enums, unless a type opts into a
-  # hardcoded check. Real enforcement is at the only emitter -- fno.approvals'
-  # DecisionKind and EffectState are typed enums, so an out-of-vocabulary value
-  # cannot be constructed. Promote to a hardcoded check in BOTH validators (and
+  # hardcoded check. Real enforcement is at the emitter -- the Rust effect gate
+  # and approvals module write only the vocabulary below, so an out-of-vocabulary
+  # value cannot be produced. Promote to a hardcoded check in BOTH validators (and
   # add invalid corpus fixtures) if a second, untyped emitter ever appears.
 
   - name: approval_requested
@@ -8261,7 +8362,7 @@ event_types:
       required: [session_id, writer]
       properties:
         session_id: { type: string }
-        writer: { type: string, enum: [conversation_arm, hold_verb] }
+        writer: { type: string, enum: [conversation_arm, hold_verb, register_command] }
         pid: { type: integer }
         ppid: { type: integer }
         argv: { type: array }
@@ -8583,8 +8684,8 @@ event_types:
     data:
       required: []
   - name: account_switched
-    description: "The provider switch materialized one record's stored credential into the active slot."
-    sources: [agents]
+    description: "The provider switch materialized one record's stored credential into the active slot. Rust-owned: fno-agents spawn-overlay accounts use and switch, and the daemon's slot cutover."
+    sources: [daemon]
     data:
       required: [provider, account_id]
   - name: node_undeferred

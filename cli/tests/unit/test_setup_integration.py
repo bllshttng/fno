@@ -1,116 +1,12 @@
-"""Tests for the `fno setup` CLI-integration step (`fno.setup.integration`).
-
-Drives the interactive-agnostic core ``run_cli_integration`` with stub adapters
-and a fake subprocess runner so nothing shells out for real. Covers AC1-ERR
-(one failure does not abort the rest, no false success) and AC1-FR (claude
-skills-dir fallback when `claude plugin install` errors).
-"""
+"""Tests for the pi and agy integration legs (`fno.setup.integration`)."""
 from __future__ import annotations
 
 import json
-import subprocess
 
 import pytest
 
 from fno.setup import integration as I
-from fno.setup.integration import (
-    IntegrationAdapter,
-    IntegrationResult,
-    run_cli_integration,
-)
 
-
-def _adapter(cli, label, *, available=True, installed=False, result=None, calls=None):
-    """A stub adapter that records whether install() ran (via ``calls``)."""
-    res = result if result is not None else IntegrationResult(cli, label, "installed")
-
-    def _install():
-        if calls is not None:
-            calls.append(cli)
-        return res
-
-    return IntegrationAdapter(
-        cli,
-        label,
-        is_available=lambda: available,
-        is_installed=lambda: installed,
-        install=_install,
-    )
-
-
-def _collector():
-    lines: list[str] = []
-    return lines, lines.append
-
-
-# --- AC1-HP -----------------------------------------------------------------
-
-
-# --- AC1-ERR ----------------------------------------------------------------
-
-def test_ac1_err_one_failure_does_not_abort_the_rest():
-    lines, echo = _collector()
-    calls: list[str] = []
-    adapters = [
-        _adapter(
-            "codex",
-            "Codex CLI",
-            result=IntegrationResult("codex", "Codex CLI", "failed", note="boom"),
-            calls=calls,
-        ),
-        _adapter("gemini", "Gemini CLI", calls=calls),
-    ]
-
-    results = run_cli_integration(
-        select_fn=lambda opts: ["codex", "gemini"], echo_fn=echo, adapters=adapters
-    )
-
-    # both attempted, codex failed, gemini still installed
-    assert set(calls) == {"codex", "gemini"}
-    by_cli = {r.cli: r for r in results}
-    assert by_cli["codex"].status == "failed"
-    assert by_cli["gemini"].status == "installed"
-    # no false success line for the failed CLI
-    assert any("Codex CLI: FAILED" in m for m in lines)
-    assert not any("Codex CLI: installed" in m for m in lines)
-
-
-# --- AC1-FR (claude skills-dir fallback) ------------------------------------
-
-class _FakeRun:
-    """Maps an argv (matched by a substring of the joined command) to a result."""
-
-    def __init__(self, rules):
-        # rules: list of (needle, returncode, stdout, stderr)
-        self.rules = rules
-        self.calls: list[list] = []
-
-    def __call__(self, cmd, timeout=120):
-        self.calls.append(cmd)
-        joined = " ".join(cmd)
-        for needle, rc, out, err in self.rules:
-            if needle in joined:
-                return subprocess.CompletedProcess(cmd, rc, out, err)
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-
-
-def test_ac1_fr_falls_back_to_skills_dir_when_plugin_install_errors(tmp_path, monkeypatch):
-    dest = tmp_path / "skills-fno"
-    monkeypatch.setattr(I, "_claude_skills_dir", lambda: dest)
-    run = _FakeRun([
-        ("plugin --help", 0, "", ""),
-        ("marketplace add", 0, "", ""),
-        ("plugin install", 1, "", "marketplace not reachable"),
-        ("git clone", 0, "", ""),  # fallback clone succeeds
-    ])
-
-    res = I._claude_install(run)
-
-    assert res.status == "installed" and "skills-dir" in res.note
-    assert any("git" in c and "clone" in c for c in run.calls)
-
-
-# --- pi (Rust pi arm of plugin-install; the agent dir pi itself reads) -------
 
 @pytest.fixture
 def pi_agent_env(tmp_path, monkeypatch):

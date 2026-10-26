@@ -458,7 +458,7 @@ pub enum Event {
     /// layer interprets that, not here.
     OpenTeam,
     /// Open or close the Org board view in one press: the sideline's org
-    /// board (tree, table, graph), from any sideline view. From Org it
+    /// board (fleet, machines, leads, seats), from any sideline view. From Org it
     /// closes back to the agents list. The client's view layer interprets
     /// this, like OpenTeam.
     OpenOrgView,
@@ -492,7 +492,7 @@ pub enum Event {
     /// round trip through slim.
     ToggleAgentSort,
     /// Cycle the sideline agents view's group-by axis: workspace -> team ->
-    /// cwd -> status (prefix+G). Persisted like the density.
+    /// cwd -> status -> harness (prefix+W). Persisted like the density.
     CycleAgentGroup,
     /// Show or hide the card's `node · PR` header row (prefix+Y). The header
     /// shows at every width now; this is the operator's off switch.
@@ -519,6 +519,13 @@ pub enum Event {
     /// client enters a local typing mode; the query and n/N/Esc are interpreted
     /// by the client's view layer, not here (like OpenSelector / OpenAnswers).
     SearchOpen,
+    /// Enter keyboard scroll mode on the focused pane (prefix+PgUp, tmux
+    /// copy-mode convention). While the mode holds the keyboard, j/k move one
+    /// line, PgUp/PgDn a page, Ctrl-u/Ctrl-d a half page, g/G jump to the
+    /// top/bottom, q/Esc leaves; the moves ride the SHARED server-side scroll
+    /// offset the wheel drives, so co-viewers track. The mode is interpreted
+    /// by the client's view layer, not here (like SearchOpen).
+    ScrollModeOpen,
     /// Open the session navigator (prefix+f): a global goto picker over
     /// a flat catalog of every squad/tab/agent/card. The client owns the typing
     /// mode (text filter, Tab state pane focus, Ctrl-n/p cursor, Enter goto); the
@@ -541,6 +548,9 @@ pub enum Event {
     /// `sweep threads` row, on the keyboard. The modal still asks before
     /// anything is reaped.
     OpenSweepThreads,
+    /// Lift the machine-wide fleet hold the status row names (prefix+U),
+    /// when the machine armed it.
+    LiftHold,
     /// Share the focused pane and copy the join link (prefix+X); pressed
     /// again while sharing, it copies the link again. The experimental
     /// `pane share` toggle gates it client-side.
@@ -1336,7 +1346,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "org-view",
             OpenOrgView,
             Global,
-            "org view (tree, table, graph)",
+            "org view (fleet, machines, leads, seats)",
         ),
         b(
             b'q',
@@ -1399,7 +1409,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "cycle-agent-group",
             CycleAgentGroup,
             Global,
-            "group agents by workspace, lead, cwd, or status",
+            "group agents by workspace, lead, cwd, status, or harness",
         ),
         b(
             b'Y',
@@ -1422,6 +1432,13 @@ fn default_bindings() -> Vec<KeyBinding> {
             OpenSweepThreads,
             Global,
             "sweep threads (close, reap)",
+        ),
+        b(
+            b'U',
+            "lift-hold",
+            LiftHold,
+            Global,
+            "lift the fleet hold (reserve, overload)",
         ),
         b(
             b'X',
@@ -1749,6 +1766,11 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
             "move the pane".into(),
             KeySection::GlobalNoPrefix,
         ),
+        (
+            format!("{p} PgUp"),
+            "scroll mode: j/k line, PgUp/PgDn page, g/G ends, q/Esc leaves".into(),
+            KeySection::GlobalNoPrefix,
+        ),
         // The dead-row removal paths. Bare sideline keys, not chords -
         // listed here so the reference names them; Enter on them BELs.
         (
@@ -1946,12 +1968,22 @@ fn esc_chord(seq: &[u8]) -> EscScan {
         }
     };
     // Complete plain arrow: ESC [ X
-    if seq.len() == 3 && seq.starts_with(PLAIN) {
+    if seq.len() >= 3 && seq.starts_with(PLAIN) {
         if let Some(dir) = arrow(seq[2]) {
             return EscScan::Complete(Event::Cmd(Command::FocusDir(dir)));
         }
         // Might still be the Ctrl-arrow prefix (ESC [ 1 ...).
         if seq[2] != b'1' {
+            // PageUp (`ESC [ 5 ~`, 4 bytes here - the prefix byte is consumed
+            // by the Prefix state before PrefixEsc starts) enters keyboard
+            // scroll mode; PgDn after the prefix is unbound (the mode's own
+            // folder consumes it inside).
+            if seq.len() == 4 && seq[2] == b'5' && seq[3] == b'~' {
+                return EscScan::Complete(Event::ScrollModeOpen);
+            }
+            if seq.len() < 4 && seq[2] == b'5' {
+                return EscScan::Partial;
+            }
             return EscScan::Invalid;
         }
     }
@@ -2008,6 +2040,7 @@ pub fn hardcoded_chords() -> Vec<(&'static str, Event)> {
     use Event::*;
     vec![
         ("Ctrl+Opt+Left", OpenSelector),
+        ("PgUp", ScrollModeOpen),
         ("Up", Cmd(C::FocusDir(Dir::Up))),
         ("Down", Cmd(C::FocusDir(Dir::Down))),
         ("Left", Cmd(C::FocusDir(Dir::Left))),
@@ -2905,7 +2938,10 @@ mod tests {
         // The ladder rungs are PREFIX-GATED (the global chord is the only
         // prefix-free one), so every ladder sequence carries the default
         // prefix byte the Scanner::default binds.
-        let mut sequences: Vec<(Vec<u8>, &str)> = vec![(b"\x1b[1;7D".to_vec(), "Ctrl+Opt+Left")];
+        let mut sequences: Vec<(Vec<u8>, &str)> = vec![
+            (b"\x1b[1;7D".to_vec(), "Ctrl+Opt+Left"),
+            (b"\x02\x1b[5~".to_vec(), "PgUp"),
+        ];
         for (final_byte, _dir) in dir_seq {
             let f = final_byte as char;
             sequences.push((format!("\x02\x1b[{f}").into_bytes(), "arrows"));
@@ -2936,6 +2972,7 @@ mod tests {
             format!("{p} arrows"),
             format!("{p} Ctrl+arrows"),
             format!("{p} Shift+arrows"),
+            format!("{p} PgUp"),
         ] {
             assert!(
                 rows.iter()

@@ -45,7 +45,7 @@ mod posture;
 mod peer_blocked;
 
 #[path = "lead_checkin_prompt_parked.rs"]
-mod prompt_parked;
+pub(crate) mod prompt_parked;
 
 /// The numeric keys this command owns and diffs versus the previous beat.
 const NUMERIC_DIFF_KEYS: [&str; 11] = [
@@ -1162,6 +1162,17 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     };
     take("user_notes", r_user_notes(ctx));
     take("board", r_board(&beat.board, &beat.folded, open_pr_count()));
+    // The scope compile rides the beat once: the blueprint, answered, and
+    // quiet readings share it, and the idle-scope attention reads the two
+    // counts it feeds.
+    let scope_ids =
+        crate::lead_answers::scope_node_ids(&ctx.graph, &ctx.cwd, &ctx.scope, ctx.level);
+    // One graph read feeds both surfaces: the blueprint's skip line and the
+    // scope_idea_children reading the coverage line sees.
+    let idea_children = scope_ids
+        .as_ref()
+        .map_err(Clone::clone)
+        .and_then(|ids| crate::lead_answers::idea_children_reading(&ctx.graph, ids));
     take("blueprint", {
         let (session_id, _harness) = crate::claims::resolve_identity();
         let claims = crate::claims::list(Some("node:"), None, false)
@@ -1188,6 +1199,12 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
             slots,
             &floor,
             &other_owned,
+            &idea_children.as_ref().map_err(Clone::clone).and_then(|v| {
+                v.get("count")
+                    .and_then(Value::as_u64)
+                    .map(|c| c as usize)
+                    .ok_or_else(|| "idea children unreadable".to_string())
+            }),
         )
     });
     take(
@@ -1222,10 +1239,20 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
             .map_err(Clone::clone)
             .and_then(crate::lead_answers::workers_summary),
     );
+    // The lineup reads the payload rows for the seated nodes' observed
+    // harness/model: memory-only, never journaled.
+    take(
+        "worker_rows",
+        workers_payload
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|p| {
+                crate::lead_answers::payload_workers(p).map(|rows| Value::Array(rows.to_vec()))
+            }),
+    );
     take("watch_expiry", watch_projection::read());
-    // The scope-answer readings share one scope compile and one top call.
-    let scope_ids =
-        crate::lead_answers::scope_node_ids(&ctx.graph, &ctx.cwd, &ctx.scope, ctx.level);
+    // The scope-answer readings share the scope compile hoisted beside the
+    // blueprint reading and one top call.
     take(
         "answered",
         scope_ids
@@ -1241,6 +1268,16 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
             (_, Err(e)) => Err(e.clone()),
         }
     });
+    take("scope_live_workers", {
+        let top = workers_payload.as_ref().ok();
+        match (top, scope_ids.as_ref()) {
+            (Some(top), Ok(ids)) => crate::lead_answers::payload_workers(top)
+                .map(|rows| json!(crate::lead_answers::scope_live_worker_count(rows, ids))),
+            (None, _) => Err("the workers reading failed; scope workers are unreadable".into()),
+            (_, Err(e)) => Err(e.clone()),
+        }
+    });
+    take("scope_idea_children", idea_children.clone());
     take("team", r_team());
     take("posture", posture::reading());
     take("refusal_rate", r_refusal_rate());
@@ -1256,7 +1293,10 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take("repeated_asks", crate::repeated_asks::reading());
     take("skill_drift", crate::skill_drift::reading());
     take("main_ci", crate::main_ci::r_main_ci());
-    take("evals", crate::lead_checkin_evals::reading());
+    take(
+        "evals",
+        crate::lead_checkin_evals::reading(&ctx.events_paths),
+    );
     take("control_plane", r_control_plane(ctx));
     take("self_hold", {
         crate::claims::resolve_identity()
@@ -1301,6 +1341,15 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
             bp.value["target_ready"].clone(),
         );
         data.insert("blueprint_skips".into(), bp.value["skips"].clone());
+        // The idle-scope attention reads these; deliberately NOT diff keys
+        // (NUMERIC_DIFF_KEYS), so every historical baseline stays measurable.
+        data.insert(
+            "scope_idea_children".into(),
+            bp.value["idea_children"].clone(),
+        );
+    }
+    if let Some(lw) = get("scope_live_workers").filter(|r| r.ok) {
+        data.insert("scope_live_workers".into(), lw.value.clone());
     }
     if let Some(esc) = get("escalations").filter(|r| r.ok) {
         if esc.value.get("unreadable").is_none() {
@@ -1608,6 +1657,36 @@ fn derive_change(
         .unwrap_or(false)
     {
         attention.push("lead posture drifted from its teamed sandbox".into());
+    }
+    // An idle scope holding unplanned work is never "no change": an epic's
+    // idea children never dispatch alone, so an empty unplanned queue and a
+    // zero worker count can both read clean while the scope starves
+    // (observed 2026-10-24: 76 idea children, zero workers, free slots,
+    // beat said no change).
+    let scope_workers = data
+        .get("scope_live_workers")
+        .and_then(Value::as_u64)
+        .map(|v| v == 0);
+    let idea_children = data
+        .get("scope_idea_children")
+        .and_then(Value::as_u64)
+        .map(|v| v > 0);
+    let free_slots = data
+        .get("blueprint_slots")
+        .and_then(Value::as_u64)
+        .map(|v| v > 0);
+    if scope_workers == Some(true) && idea_children == Some(true) && free_slots == Some(true) {
+        let children = data
+            .get("scope_idea_children")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let slots = data
+            .get("blueprint_slots")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        attention.push(format!(
+            "scope idle with {children} unplanned idea children under its epics and {slots} free build slots"
+        ));
     }
     // Attention outranks silence: a control plane failing for 30 minutes,
     // or a refusal rate climbing two beats running, is never journaled as
@@ -1924,6 +2003,7 @@ fn render_lines_with(
                         lineup.queue,
                         graph_rows,
                         lineup.registry,
+                        lineup.live,
                         lineup.planned,
                     );
                     lines.extend(crate::lead_checkin_lineup::render_lineup(&built));
@@ -2355,7 +2435,7 @@ fn render_lines_with(
 // ---------------------------------------------------------------------------
 // faq prompt + emit
 
-fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String> {
+pub(crate) fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String> {
     let mut entries: Vec<(SystemTime, String)> = Vec::new();
     let Ok(it) = std::fs::read_dir(faqs_dir) else {
         return Vec::new();
@@ -2799,6 +2879,15 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         memo.borrow_mut().insert(key, resolved.clone());
         resolved
     };
+    // The live rows ride the beat's one top payload: a seated node whose
+    // worker answers shows the worker's observed harness/model, never the
+    // dispatch default the registry row stamped.
+    let live_rows: Vec<Value> = readings
+        .iter()
+        .find(|r| r.name == "worker_rows")
+        .filter(|r| r.ok)
+        .and_then(|r| r.value.get("rows").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
     let lineup = crate::lead_checkin_lineup::LineupSources {
         queue: &manifest_queue,
         graph: match &graph_error {
@@ -2807,6 +2896,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         },
         registry: registry.as_ref(),
         registry_error: registry_error.as_deref(),
+        live: &live_rows,
         planned: &planned,
     };
     let mut lines = render_lines_with(
@@ -3354,6 +3444,7 @@ mod tests {
                 graph: Ok(&graph),
                 registry: Some(&registry),
                 registry_error: None,
+                live: &[],
                 planned: &planned,
             },
         );
@@ -3385,6 +3476,7 @@ mod tests {
                 graph: Err("the graph read returned 0 nodes"),
                 registry: None,
                 registry_error: None,
+                live: &[],
                 planned: &planned,
             },
         );
@@ -3406,6 +3498,7 @@ mod tests {
                 graph: Ok(&graph),
                 registry: None,
                 registry_error: Some("registry unreadable (x)"),
+                live: &[],
                 planned: &planned,
             },
         );
@@ -4278,6 +4371,49 @@ mod tests {
         let previous = previous.expect("the newest loop row is the baseline");
         assert_eq!(s_str(&previous, "source"), Some("loop"));
         assert_eq!(previous["data"]["open_prs"], 9);
+    }
+
+    /// An idle scope holding unplanned work is never "no change": the
+    /// derived line names the children and the free slots, and any leg
+    /// missing keeps the ordinary derivation. The baseline carries the full
+    /// diff-key set so the legs measure only the three scope keys.
+    #[test]
+    fn an_idle_scope_with_idea_children_is_attention_not_silence() {
+        let legs: [(&str, u64, u64, u64); 4] = [
+            ("attention", 0, 76, 4),
+            ("worker alive", 2, 76, 4),
+            ("queue clean", 0, 0, 4),
+            ("no free slot", 0, 76, 0),
+        ];
+        for (name, workers, children, slots) in legs {
+            let mut data = Map::new();
+            data.insert("scope_live_workers".into(), json!(workers));
+            data.insert("scope_idea_children".into(), json!(children));
+            data.insert("blueprint_slots".into(), json!(slots));
+            let previous = json!({
+                "open_prs": 3,
+                "free_claim_no_driver": 0,
+                "blocked": 1,
+                "escalations_open": 0,
+                "escalations_overdue": 0,
+                "owned_active": 2,
+                "live_workers": 9,
+                "undelivered": 0,
+                "held_open": 0,
+                "blueprint_running": 0,
+                "blueprint_ceiling": 4,
+            });
+            let expected = if name == "attention" {
+                "attention: scope idle with 76 unplanned idea children under its epics and 4 free build slots".to_string()
+            } else {
+                "no change".to_string()
+            };
+            assert_eq!(
+                derive_change(Some(&previous), &data, ""),
+                expected,
+                "leg {name}: {data:?}"
+            );
+        }
     }
 
     fn pause_row(arm: &str) -> crate::tick_ledger::ArmStatus {

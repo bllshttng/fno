@@ -282,6 +282,17 @@ fn curl_to(url: &str, dest: &Path) -> Result<(), String> {
     }
 }
 
+/// Ok when CI published a tarball for `crates_rev`: its `.sha256` answers.
+pub(crate) fn probe_published(crates_rev: &str, platform: &str) -> Result<(), String> {
+    let dest = std::env::temp_dir().join(format!("fno-probe-{}.sha256", std::process::id()));
+    let got = curl_to(
+        &format!("{}.sha256", asset_url(crates_rev, platform)),
+        &dest,
+    );
+    let _ = std::fs::remove_file(&dest);
+    got
+}
+
 /// Download, verify and unpack the tarball for `crates_rev` into a fresh dir
 /// under `staging_parent`. Returns the dir holding the four binaries. Every
 /// Err names why, so the caller's compile fallback says what it replaced. A

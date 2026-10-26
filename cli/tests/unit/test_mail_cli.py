@@ -101,47 +101,21 @@ def _hosted_dispatch(monkeypatch):
     return calls
 
 
-def test_send_ruling_unknown_node_refuses_before_mail(
+def test_send_has_no_ruling_option_and_touches_no_node(
     runner, ruling_graph, monkeypatch
 ):
+    # `fno backlog note` is the one lane that puts a correction on a node.
     calls = _hosted_dispatch(monkeypatch)
 
     sent = runner.invoke(
         app,
-        [
-            "agents", "mail", "send", "worker-one",
-            "This ruling names no real node.", "--from-name", "lead",
-            "--ruling", "x-dead",
-        ],
+        ["agents", "mail", "send", "w", "msg", "--ruling", "x-511a"],
     )
 
-    assert sent.exit_code != 0
+    assert sent.exit_code == 2
+    assert "No such option" in sent.output and "--ruling" in sent.output
     assert calls == []
     assert _graph_details(ruling_graph) == "Original node details."
-    assert "ruling node not found" in sent.stderr
-
-
-@pytest.mark.parametrize(
-    "lane_args",
-    [
-        ["worker-one", "/review", "--raw"],
-    ],
-    ids=["raw"],
-)
-def test_send_ruling_refuses_non_named_worker_lanes_before_side_effects(
-    runner, ruling_graph, monkeypatch, lane_args
-):
-    calls = _hosted_dispatch(monkeypatch)
-
-    sent = runner.invoke(
-        app,
-        ["agents", "mail", "send", *lane_args, "--ruling", "x-511a"],
-    )
-
-    assert sent.exit_code != 0
-    assert calls == []
-    assert _graph_details(ruling_graph) == "Original node details."
-    assert "--ruling supports only send <worker> <message>" in sent.stderr
 
 
 def test_send_then_unread_then_ack(runner, mailbox):
@@ -203,7 +177,7 @@ def test_ack_refuses_hosted_audit_without_skipping_durable_mail(runner, mailbox)
     assert result.exit_code == 2
     assert "already delivered (hosted)" in (result.stderr or "")
     assert read_cursor("web") is None
-    assert [m.id for m in scan_unread("web")] == [durable.thread_id]
+    assert [m.id for m in scan_unread("web")] == [durable]
 
 
 def test_unknown_agent_heads_up_exits_16_without_writing(
@@ -453,3 +427,23 @@ def test_full_and_legacy_ambient_self_queue_to_canonical_without_inject(
     payload = json.loads(drained.stdout.strip().splitlines()[-1])
     assert payload and payload[0]["to"] == "019fb417"
 
+
+
+@pytest.mark.parametrize(
+    ("name", "replacement"),
+    [
+        ("list", "fno agents mail unread"),
+        ("drain", "fno agents mail drain-self"),
+        ("status", "fno agents mail unread"),
+        ("triage", "fno agents mail show <id>"),
+    ],
+)
+def test_retired_markdown_readers_exit_1_and_name_their_replacement(
+    runner, name, replacement
+):
+    from fno.mail.cli import mail_app
+
+    res = runner.invoke(mail_app, [name, "--any", "args"])
+    assert res.exit_code == 1
+    assert f"mail {name} is retired" in res.stderr
+    assert replacement in res.stderr

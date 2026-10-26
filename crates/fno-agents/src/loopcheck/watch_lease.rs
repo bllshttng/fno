@@ -189,9 +189,9 @@ pub(super) fn claim_pair(manifest: &str) -> Option<(String, String)> {
 /// will help, arms one on every stop, and never idles once.
 pub(super) const NO_CLAIM_REFUSAL: &str =
     "watching ignored: this session recorded no node claim at init, so no watch lease can \
-ever renew, and arming another watcher will not change that. Get the claim back with \
-`fno do target start <node>` from inside this worktree, then resume; or hand the PR to \
-a session that holds the claim.";
+ever renew, and arming another watcher will not change that. The manifest is write-once, \
+so rerunning `fno do target start` cannot restore the claim. Hand the PR to a session \
+that holds the claim.";
 
 /// The lead of the arm-and-tag hint. One literal, shared by the writer (the
 /// Step-5 continue message) and the idle-refusal tests, so the cut can never
@@ -352,8 +352,14 @@ pub(super) fn idle_refusal(
     claim_present: bool,
     lease_cause: Option<&RenewCause>,
 ) -> WatchRefusal {
+    // Session-level causes outrank PR-level ones: a missing claim is
+    // permanent for the life of the session (the manifest is write-once), so
+    // no PR state can ever cure it. An unclaimed session with no PR must
+    // read the no-claim refusal, never "not in an async wait class".
     let reason = if !can_idle {
         watching_harness_refusal(author_harness, is_loop_run_child)
+    } else if !claim_present {
+        NO_CLAIM_REFUSAL.to_string()
     } else if blocker_none && unaddressed_findings > 0 {
         format!(
             "watching ignored: {unaddressed_findings} unaddressed findings, this is not \
@@ -361,8 +367,6 @@ an async wait"
         )
     } else if blocker_none {
         "watching ignored: PR is not in an async wait class".to_string()
-    } else if !claim_present {
-        NO_CLAIM_REFUSAL.to_string()
     } else if let Some(cause) = lease_cause.filter(|c| c.is_permanent()) {
         renewal_refusal(cause)
             .unwrap_or_else(|| "watching ignored: watch lease could not be renewed".to_string())
@@ -371,14 +375,30 @@ an async wait"
     };
     let kind = if !can_idle {
         "harness"
-    } else if blocker_none {
-        "not_async"
     } else if !claim_present {
         "no_claim"
+    } else if blocker_none {
+        "not_async"
     } else {
         lease_cause.map(|c| c.as_str()).unwrap_or("write_failed")
     };
     WatchRefusal { reason, kind }
+}
+
+/// Whether a watching tag may idle with no claim lease behind it: a LOCAL
+/// watch's wake is the session's own harness-tracked task exit, and an
+/// unclaimed session holds no node claim a renewal could keep alive. A PR
+/// wait (ci, review, merge_slot) never qualifies: the renewed lease is what
+/// holds the node across the idle window. A local tag without a task id has
+/// no task-exit wake at all, so it does not qualify either. The daemon's
+/// expiry arm skips claimless sessions, so this idle has no daemon backstop;
+/// the watcher's own hard time bound is the deadline.
+pub(super) fn local_watch_without_claim(
+    claim_present: bool,
+    reason: &str,
+    task_id: Option<&str>,
+) -> bool {
+    !claim_present && reason == "local" && task_id.is_some_and(|t| !t.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -560,5 +580,42 @@ mod tests {
         assert_eq!(watch_target("ci", Some("")), ("ci", None));
         assert_eq!(watch_target("ci", Some("-3")), ("ci", None));
         assert_eq!(watch_target("local", Some("0")), ("local", None));
+    }
+
+    #[test]
+    fn unclaimed_session_reads_no_claim_even_without_a_pr() {
+        // Session-level causes outrank PR-level ones. An unclaimed session
+        // with no PR (blocker_none) gets the no-claim refusal and kind, never
+        // "not in an async wait class" - the missing claim is permanent, the
+        // PR state is not.
+        let r = idle_refusal(true, Some("claude"), false, true, 0, false, None);
+        assert_eq!(r.reason, NO_CLAIM_REFUSAL);
+        assert_eq!(r.kind, "no_claim");
+        // Findings outstanding: the refusal still names the claim. The caller
+        // appends the block reason (which names the findings) beside it.
+        let r = idle_refusal(true, Some("claude"), false, true, 2, false, None);
+        assert_eq!(r.reason, NO_CLAIM_REFUSAL);
+        assert_eq!(r.kind, "no_claim");
+    }
+
+    #[test]
+    fn claimed_session_without_a_pr_still_reads_not_async() {
+        let r = idle_refusal(true, Some("claude"), false, true, 0, true, None);
+        assert_eq!(
+            r.reason,
+            "watching ignored: PR is not in an async wait class"
+        );
+        assert_eq!(r.kind, "not_async");
+    }
+
+    #[test]
+    fn only_an_unclaimed_local_tag_with_a_task_id_skips_the_lease() {
+        // The carve-out is exactly: no claim, reason=local, a task id. A
+        // claim present, another reason class, or no task id each refuse.
+        assert!(local_watch_without_claim(false, "local", Some("task-123")));
+        assert!(!local_watch_without_claim(true, "local", Some("task-123")));
+        assert!(!local_watch_without_claim(false, "ci", Some("task-123")));
+        assert!(!local_watch_without_claim(false, "local", None));
+        assert!(!local_watch_without_claim(false, "local", Some("  ")));
     }
 }

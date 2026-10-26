@@ -46,6 +46,11 @@ pub(crate) struct UpdateReadiness {
     /// payload); only `behind` is read here.
     #[serde(default)]
     pub(crate) source_pin: Option<SourcePinView>,
+    /// The named revisions block: the side-by-side rev line and the
+    /// mixed-build flag, from the same resolver. Tolerated absent (an
+    /// older fno's payload); both rows skip when it is.
+    #[serde(default)]
+    pub(crate) revisions: Option<RevisionsView>,
 }
 
 /// The slice of the source-pin answer the menu needs. Serde ignores
@@ -54,6 +59,17 @@ pub(crate) struct UpdateReadiness {
 pub(crate) struct SourcePinView {
     #[serde(default)]
     pub(crate) behind: Option<u64>,
+}
+
+/// The slice of the readiness payload's `revisions` block the modal
+/// renders: the ready-made side-by-side line and the mixed-build detail.
+/// The resolver formats both; the TUI only prints them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub(crate) struct RevisionsView {
+    #[serde(default)]
+    pub(crate) summary: Option<String>,
+    #[serde(default)]
+    pub(crate) mixed_detail: Option<String>,
 }
 
 /// One release-notes line: the plain-English summary, the PR number for the
@@ -288,24 +304,42 @@ pub(crate) fn build_sideline_menu(
         }
         _ => {}
     }
+    // A hold the machine armed is liftable from here; the row exists only
+    // while one stands, so the menu never offers a no-op.
+    let prefix_hint = |id: &str| {
+        crate::keys::key_for(id)
+            .map(|k| format!("prefix {k}"))
+            .unwrap_or_default()
+    };
+    if let Some(held) = hold::current().filter(hold::Hold::liftable) {
+        rows.push(PopupRow::Entry {
+            glyph: "⏸".into(),
+            label: format!("lift hold on {}", held.holds.join(",")),
+            hint: prefix_hint("lift-hold"),
+            enabled: true,
+        });
+        actions.push(AuxAction::LiftHold);
+    }
     rows.push(entry("♺", "sweep threads"));
     rows.push(entry("＋", "new agent"));
     // The open row's hint names the prefix chord that opens the board from
     // anywhere the menu is not.
-    let open_hint = crate::keys::key_for("open-backlog-board")
-        .map(|k| format!("prefix {k}"))
-        .unwrap_or_default();
     rows.push(PopupRow::Entry {
         glyph: "▦".into(),
         label: "backlog".into(),
-        hint: open_hint,
+        hint: prefix_hint("open-backlog-board"),
         enabled: true,
     });
     let (share_rows, share_actions) = share_flow::menu_entries(flags.pane_share, flags.share);
     rows.extend(share_rows);
     rows.push(entry("⌨", "keybindings"));
     rows.push(entry("⚙", "settings"));
-    rows.push(entry("⇄", "connections"));
+    rows.push(PopupRow::Entry {
+        glyph: "⇄".into(),
+        label: "connections (accounts, usage)".into(),
+        hint: prefix_hint("connections"),
+        enabled: true,
+    });
     rows.push(entry("⏏", "detach"));
     actions.push(AuxAction::OpenSweep);
     actions.push(AuxAction::OpenAgentLauncher);
@@ -425,6 +459,17 @@ pub(crate) fn build_update_modal(probe: Option<&UpdateProbe>) -> AuxPopup {
                         short(r.installed_rev.as_deref()),
                         short(r.source_rev.as_deref())
                     ))),
+                }
+            }
+            // The named revisions line and the mixed-build flag, printed
+            // verbatim from the resolver so every surface words them
+            // identically.
+            if let Some(revs) = &r.revisions {
+                if let Some(summary) = &revs.summary {
+                    rows.push(PopupRow::Text(summary.clone()));
+                }
+                if let Some(detail) = &revs.mixed_detail {
+                    rows.push(PopupRow::Header(detail.clone()));
                 }
             }
             // Shaped notes win; the raw changelog stays the fallback for an

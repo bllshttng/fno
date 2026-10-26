@@ -68,9 +68,43 @@ pub(super) fn in_scope_chain(events_text: &str, head_branch: &str, head_sha: &st
     chain
 }
 
+/// The invocation ids whose `review_invocation` row carried `--verify-fixes`.
+/// The started row is the one writer of flags on the invocation trace; a row
+/// without flags, an unjoined id, or an unparseable line contributes nothing,
+/// and the disposition gate then keeps its head-move requirement (fail
+/// closed). Pure: scans the events text, no IO.
+pub(crate) fn verify_invocation_ids(events_text: &str) -> std::collections::HashSet<String> {
+    let mut ids = std::collections::HashSet::new();
+    for line in events_text.lines() {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if val.get("type").and_then(|v| v.as_str()) != Some("review_invocation") {
+            continue;
+        }
+        let Some(id) = val
+            .pointer("/data/invocation_id")
+            .and_then(|v| v.as_str())
+            .filter(|id| !id.is_empty() && *id != "UNJOINED")
+        else {
+            continue;
+        };
+        let carries = val
+            .pointer("/data/flags")
+            .and_then(|v| v.as_array())
+            .map(|flags| flags.iter().any(|f| f.as_str() == Some("--verify-fixes")))
+            .unwrap_or(false);
+        if carries {
+            ids.insert(id.to_string());
+        }
+    }
+    ids
+}
+
 /// The non-terminal blocking findings in the PR's attestation chain.
 ///
-/// Terminal means: fixed (and a LATER round reviewed the fix delta),
+/// Terminal means: fixed (and a LATER round reviewed the fix delta, or the
+/// disposing round carried --verify-fixes),
 /// non-blocking by the gate's own re-derivation, or declined WITH a recorded
 /// reason. Origin never gates: whoever attested the disposition, the
 /// terminality is the same. Pure: scans the events text, no IO. An empty
@@ -81,7 +115,8 @@ pub fn disposition_blockers(
     head_sha: &str,
 ) -> Vec<DispositionBlocker> {
     let chain = in_scope_chain(events_text, head_branch, head_sha);
-    disposition_blockers_on_chain(&chain)
+    let verify = verify_invocation_ids(events_text);
+    disposition_blockers_on_chain(&chain, &verify)
 }
 
 /// The PR's review-round total, on two evidence axes. The operator's ruling

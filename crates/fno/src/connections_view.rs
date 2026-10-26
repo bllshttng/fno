@@ -18,10 +18,18 @@ use std::time::Duration;
 // the modal's shell-outs and the server never drift (PR #421 review).
 use crate::server::fno_bin;
 
-/// Fail-open budget for a read shell-out, matching the needs/digest overlays: a
-/// read slower than this degrades the modal with a visible banner (AC2-ERR),
-/// never blocks the UI loop.
-const READ_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Fail-open budget for a phase-1 read shell-out: a read slower than this
+/// degrades the modal with a visible banner (AC2-ERR), never blocks the UI
+/// loop. Phase 1 starts three `fno` Python processes at once; on 2026-10-22
+/// at load 63 they took 1.1 to 1.5 s each warm, so 1.5 s failed the first open.
+const READ_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// How often an idle, open Accounts tab re-measures usage: the usage cache's
+/// own 300 s freshness window. Each re-measure probes every claude account's
+/// usage endpoint, so a faster tick multiplies those calls while nobody
+/// presses a key. Opening the tab and R still re-measure at once, and the AGE
+/// column says how old each reading is.
+const USAGE_TICK: Duration = Duration::from_secs(300);
 
 /// Budget for the phase-2 identity read (plain `config accounts list`, whose
 /// last column is the identity cell). Wider than phase 1: the binding fold
@@ -51,7 +59,7 @@ pub struct Account {
     #[serde(default = "unknown_headroom")]
     pub headroom: String,
     /// Snapshot age label for managed accounts; None for oauth/api-key records.
-    /// Today's `-J` names it `cred-snapshot`; the alias is what fills SNAP.
+    /// Today's `-J` names it `cred-snapshot`; the alias is what fills LOGIN.
     #[serde(default, alias = "cred-snapshot")]
     pub snapshot: Option<String>,
     /// The identity cell parsed from plain `list`'s own last column (the
@@ -75,6 +83,8 @@ fn unknown_headroom() -> String {
 pub struct UsageCell {
     pub text: String,
     pub relogin: bool,
+    /// When the reading was taken (epoch secs), for the AGE column.
+    pub probed_at: Option<u64>,
 }
 
 /// Budget for the live usage read. Each claude account costs a profile
@@ -351,6 +361,8 @@ pub struct ConnectionsView {
     /// Real records whose login pane `r` opened; the next `r` on that row
     /// saves the new login with `register`.
     pub relogin: std::collections::BTreeSet<String>,
+    /// When this modal last armed a read, for the [`USAGE_TICK`] refresh.
+    pub last_read: std::time::Instant,
 }
 
 /// The phase-2 identity read's lifecycle.
@@ -386,7 +398,24 @@ impl ConnectionsView {
             active_account: None,
             identity_phase: IdentityPhase::Pending,
             relogin: Default::default(),
+            last_read: std::time::Instant::now(),
         }
+    }
+
+    /// Whether an idle Accounts tab is due its [`USAGE_TICK`] re-read. A
+    /// true answer restarts the clock, so the caller arms one read per tick.
+    /// A tab mid-action, mid-form or degraded waits for the operator.
+    pub fn usage_due(&mut self) -> bool {
+        let idle = self.tab == Tab::Accounts
+            && self.state == ModalState::Ready
+            && !self.acting
+            && self.wizard.is_none()
+            && self.confirm.is_none();
+        if !idle || self.last_read.elapsed() < USAGE_TICK {
+            return false;
+        }
+        self.last_read = std::time::Instant::now();
+        true
     }
 
     /// Seed the "active for spawns" marker from the client's current
@@ -1134,13 +1163,20 @@ impl ConnectionsView {
     /// inverse-video block is a clean rectangle (draw_lines_overlay does no
     /// padding of its own).
     pub fn render(&self) -> Vec<String> {
+        self.render_with(&[], usize::MAX)
+    }
+
+    /// [`Self::render`] with the live layout rows, so each account names how
+    /// many running workers bill it, and the overlay's text width, which the
+    /// accounts table fits.
+    pub fn render_with(&self, agents: &[crate::proto::AgentRow], max_cols: usize) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         out.push(self.tab_bar());
         out.push(String::new());
         match &self.state {
             ModalState::Loading => out.push("loading…".to_string()),
             ModalState::Degraded(reason) => {
-                out.push(format!("fno unreachable: {reason}"));
+                out.push(format!("could not read accounts: {reason}"));
                 out.push("actions disabled - press R to retry".to_string());
             }
             ModalState::Ready => {
@@ -1150,7 +1186,7 @@ impl ConnectionsView {
                     self.render_combo_input(ci, &mut out);
                 } else {
                     match self.tab {
-                        Tab::Accounts => self.render_accounts(&mut out),
+                        Tab::Accounts => self.render_accounts(&mut out, agents, max_cols),
                         Tab::Order => self.render_order(&mut out),
                     }
                 }
@@ -1178,15 +1214,17 @@ impl ConnectionsView {
         format!("connections   {a}{o}")
     }
 
-    fn render_accounts(&self, out: &mut Vec<String>) {
+    fn render_accounts(
+        &self,
+        out: &mut Vec<String>,
+        agents: &[crate::proto::AgentRow],
+        max_cols: usize,
+    ) {
         if self.accounts.is_empty() && self.pending.is_empty() {
             out.push("no accounts registered - press a to add".to_string());
             return;
         }
-        // One width per column, shared by the header and every row, so the
-        // body reads as a table. A column with no values still gets its
-        // header's width (AC4-EDGE). The name column is as wide as the
-        // longest name; the overlay wraps a row too wide for the screen.
+        // The name column is as wide as the longest name.
         let name_w = |id: &str| crate::chrome::str_cols(id);
         let w_name = self
             .accounts
@@ -1210,6 +1248,13 @@ impl ConnectionsView {
             .collect();
         let auths: Vec<String> = self.accounts.iter().map(|a| a.auth.clone()).collect();
         let headrooms: Vec<String> = self.accounts.iter().map(|a| self.usage_text(a)).collect();
+        let now = epoch_now();
+        let ages: Vec<String> = self.accounts.iter().map(|a| usage_age(a, now)).collect();
+        let riders: Vec<String> = self
+            .accounts
+            .iter()
+            .map(|a| workers_on(a, agents).to_string())
+            .collect();
         let snaps: Vec<String> = self
             .accounts
             .iter()
@@ -1220,60 +1265,33 @@ impl ConnectionsView {
             .iter()
             .map(|a| self.identity_cell(a))
             .collect();
-        let w = |label: &str, cells: &[String]| -> usize {
-            cells
-                .iter()
-                .map(|c| c.chars().count())
-                .max()
-                .unwrap_or(0)
-                .max(label.chars().count())
-        };
-        let w_cli = w("CLI", &clis);
-        let w_auth = w("AUTH", &auths);
-        let w_head = w("USAGE", &headrooms);
-        let w_snap = w("SNAP", &snaps);
-        // Header is inert: no cursor row ever points at it (selection clamps
-        // to data rows), so nothing routes a keypress here.
-        out.push(format!(
-            "    {name:<wname$}  {cli:<wcli$}  {auth:<wauth$}  {head:<whead$}  {snap:<wsnap$}  {ident}",
-            name = "ACCOUNT",
-            wname = w_name,
-            cli = "CLI",
-            wcli = w_cli,
-            auth = "AUTH",
-            wauth = w_auth,
-            head = "USAGE",
-            whead = w_head,
-            snap = "SNAP",
-            wsnap = w_snap,
-            ident = "IDENTITY",
-        ));
-        for (i, a) in self.accounts.iter().enumerate() {
-            let cursor = if i == self.acct_sel { ">" } else { " " };
-            let badge = if a.active { "●" } else { " " };
-            // A distinct billing marker for the active-for-spawns
-            // account, kept separate from the global-active `●` (Locked
-            // Decision 1). Always a column so alignment never shifts.
-            let spawn = if self.active_account.as_deref() == Some(a.id.as_str()) {
-                "$"
-            } else {
-                " "
-            };
-            out.push(format!(
-                "{cursor}{badge}{spawn} {name:<wname$}  {cli:<wcli$}  {auth:<wauth$}  {head:<whead$}  {snap:<wsnap$}  {ident}",
-                name = crate::client::pad_to(&names[i], w_name),
-                wname = w_name,
-                cli = a.harness,
-                wcli = w_cli,
-                auth = a.auth,
-                wauth = w_auth,
-                head = headrooms[i],
-                whead = w_head,
-                snap = snaps[i],
-                wsnap = w_snap,
-                ident = idents[i],
-            ));
+        let w_cli = clis
+            .iter()
+            .map(|c| crate::chrome::str_cols(c))
+            .max()
+            .unwrap_or(0);
+        // LOGIN is the stored credential's age (`cred-snapshot`), never the
+        // usage reading's: AGE is that one.
+        let mut cols: Vec<(&str, Vec<String>, usize)> = vec![
+            ("CLI", clis[..self.accounts.len()].to_vec(), w_cli),
+            ("AUTH", auths, 0),
+            ("USAGE", headrooms, 0),
+            ("AGE", ages, 0),
+            ("LOGIN", snaps, 0),
+            ("WORKERS", riders, 0),
+            ("IDENTITY", idents, 0),
+        ];
+        // A row wider than the overlay wraps and loses its alignment, so the
+        // table drops the columns read least, in this order, until it fits.
+        for drop in ["AUTH", "IDENTITY", "LOGIN", "AGE", ""] {
+            let rows = self.account_rows(&names, w_name, &cols);
+            if drop.is_empty() || rows.iter().all(|r| crate::chrome::str_cols(r) <= max_cols) {
+                out.extend(rows);
+                break;
+            }
+            cols.retain(|(label, _, _)| *label != drop);
         }
+        let w_cli = w_cli.max("CLI".len());
         // Session-local pending logins render after the real records; `r`
         // registers the selected one into a managed account.
         for (j, _p) in self.pending.iter().enumerate() {
@@ -1287,6 +1305,55 @@ impl ConnectionsView {
                 wcli = w_cli,
             ));
         }
+    }
+
+    /// The accounts table's header and one line per record, over the shown
+    /// columns. One width per column, shared by the header and every row, so
+    /// the body reads as a table; a column with no values still gets its
+    /// header's width (AC4-EDGE).
+    fn account_rows(
+        &self,
+        names: &[String],
+        w_name: usize,
+        cols: &[(&str, Vec<String>, usize)],
+    ) -> Vec<String> {
+        use crate::chrome::str_cols;
+        let widths: Vec<usize> = cols
+            .iter()
+            .map(|(label, cells, min)| {
+                cells
+                    .iter()
+                    .map(|c| str_cols(c))
+                    .fold((*min).max(label.len()), usize::max)
+            })
+            .collect();
+        let line = |lead: String, name: &str, cell: &dyn Fn(usize) -> String| {
+            let mut s = lead + &crate::client::pad_to(name, w_name);
+            for (k, w) in widths.iter().enumerate() {
+                s.push_str("  ");
+                s.push_str(&crate::client::pad_to(&cell(k), *w));
+            }
+            s.trim_end().to_string()
+        };
+        // Header is inert: no cursor row ever points at it (selection clamps
+        // to data rows), so nothing routes a keypress here.
+        let mut rows = vec![line("    ".into(), "ACCOUNT", &|k| cols[k].0.to_string())];
+        for (i, a) in self.accounts.iter().enumerate() {
+            let cursor = if i == self.acct_sel { ">" } else { " " };
+            let badge = if a.active { "●" } else { " " };
+            // A distinct billing marker for the active-for-spawns
+            // account, kept separate from the global-active `●` (Locked
+            // Decision 1). Always a column so alignment never shifts.
+            let spawn = if self.active_account.as_deref() == Some(a.id.as_str()) {
+                "$"
+            } else {
+                " "
+            };
+            rows.push(line(format!("{cursor}{badge}{spawn} "), &names[i], &|k| {
+                cols[k].1[i].clone()
+            }));
+        }
+        rows
     }
 
     /// The usage cell for one row: the latest reading, or the list's headroom
@@ -1473,9 +1540,14 @@ pub fn parse_identity_cells(stdout: &[u8]) -> Option<Vec<(String, String)>> {
 }
 
 /// Parse `fno config accounts usage -J` into `(id, cell)` pairs. A reading
-/// renders each window's used percent; an unknown renders its reason in plain
-/// words. `None` on output that is not a JSON object.
+/// renders each window's used percent and, when the probe gave one, how long
+/// until the window resets (`5h 10% ↻2h`); an unknown renders its reason in
+/// plain words. `None` on output that is not a JSON object.
 pub fn parse_usage(stdout: &[u8]) -> Option<Vec<(String, UsageCell)>> {
+    parse_usage_at(stdout, epoch_now())
+}
+
+fn parse_usage_at(stdout: &[u8], now: u64) -> Option<Vec<(String, UsageCell)>> {
     let map: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(stdout).ok()?;
     let cells = map
         .into_iter()
@@ -1485,25 +1557,57 @@ pub fn parse_usage(stdout: &[u8]) -> Option<Vec<(String, UsageCell)>> {
                 .into_iter()
                 .flatten()
                 .filter_map(|w| {
-                    Some(format!(
-                        "{} {:.0}%",
-                        w["label"].as_str()?,
-                        w["used_pct"].as_f64()?
-                    ))
+                    let mut cell =
+                        format!("{} {:.0}%", w["label"].as_str()?, w["used_pct"].as_f64()?);
+                    if let Some(at) = w["resets_at"].as_f64().filter(|at| *at as u64 > now) {
+                        cell.push_str(" ↻");
+                        cell.push_str(&crate::client::humanize_ago(at as u64 - now));
+                    }
+                    Some(cell)
                 })
                 .collect();
-            let cell = if windows.is_empty() {
+            let mut cell = if windows.is_empty() {
                 unknown_usage(row["reason"].as_str().unwrap_or("no reading"))
             } else {
                 UsageCell {
                     text: windows.join(" "),
                     relogin: false,
+                    probed_at: None,
                 }
             };
+            cell.probed_at = row["probed_at"].as_f64().map(|at| at as u64);
             (id, cell)
         })
         .collect();
     Some(cells)
+}
+
+fn epoch_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// How many live workers bill `a`: rows that name it, plus rows on the
+/// default login of its harness when it is that harness's active account.
+fn workers_on(a: &Account, agents: &[crate::proto::AgentRow]) -> usize {
+    agents
+        .iter()
+        .filter(|r| !r.exited)
+        .filter(|r| match &r.account {
+            Some(id) => *id == a.id,
+            None => a.active && r.harness.as_deref() == Some(a.harness.as_str()),
+        })
+        .count()
+}
+
+/// The AGE cell: how old the usage reading is, blank before one lands.
+fn usage_age(a: &Account, now: u64) -> String {
+    a.usage
+        .as_ref()
+        .and_then(|u| u.probed_at)
+        .map(|at| crate::client::humanize_ago(now.saturating_sub(at)))
+        .unwrap_or_default()
 }
 
 /// The plain-words cell for a usage probe's unknown reason (the slugs
@@ -1519,12 +1623,14 @@ fn unknown_usage(reason: &str) -> UsageCell {
             return UsageCell {
                 text: format!("no reading ({other})"),
                 relogin: false,
+                probed_at: None,
             }
         }
     };
     UsageCell {
         text: text.to_string(),
         relogin,
+        probed_at: None,
     }
 }
 
@@ -1633,7 +1739,7 @@ async fn read_json(args: &[&str], budget: Duration) -> Result<Vec<u8>, String> {
     let fut = crate::process_admission::tokio_output(&mut command);
     let output = tokio::time::timeout(budget, fut)
         .await
-        .map_err(|_| "timed out".to_string())?
+        .map_err(|_| format!("no answer within {}s", budget.as_secs()))?
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
         return Err(format!("exit {}", output.status.code().unwrap_or(-1)));
@@ -1816,6 +1922,60 @@ mod tests {
         assert!(out.contains("no usage meter for this account"), "{out}");
         assert!(parse_usage(b"[]").is_none());
 
+        // accounts_usage: a window names when it resets, the cell keeps when
+        // it was probed, and a past reset says nothing.
+        let at = parse_usage_at(
+            br#"{"ccm": {"probed_at": 1000, "windows": [
+                   {"label": "5h", "used_pct": 10, "resets_at": 8200},
+                   {"label": "weekly", "used_pct": 13, "resets_at": 900}]}}"#,
+            1000,
+        )
+        .expect("usage json");
+        assert_eq!(at[0].1.text, "5h 10% ↻2h weekly 13%");
+        assert_eq!(at[0].1.probed_at, Some(1000));
+
+        // Workers: a row naming ccr, plus two default-login claude rows that
+        // bill the active claude account (ccm); an exited row counts nowhere.
+        let row = |account: Option<&str>, exited: bool| crate::proto::AgentRow {
+            harness: Some("claude".into()),
+            account: account.map(str::to_string),
+            exited,
+            ..Default::default()
+        };
+        let rows = [
+            row(Some("ccr"), false),
+            row(None, false),
+            row(None, false),
+            row(None, true),
+        ];
+        let workers: Vec<usize> = v.accounts.iter().map(|a| workers_on(a, &rows)).collect();
+        assert_eq!(workers, vec![2, 1, 0]);
+        let out = v.render_with(&rows, usize::MAX).join("\n");
+        assert!(
+            out.contains("WORKERS") && out.contains("LOGIN") && out.contains("AGE"),
+            "{out}"
+        );
+        // An overlay one column narrower than the table drops AUTH first and
+        // keeps every table row on one line, so the overlay never wraps it.
+        let cols = |l: &str| crate::chrome::str_cols(l.trim_end());
+        let table = |lines: &[String]| -> Vec<String> {
+            lines
+                .iter()
+                .filter(|l| {
+                    l.contains("ACCOUNT") || v.accounts.iter().any(|a| l.contains(a.id.as_str()))
+                })
+                .cloned()
+                .collect()
+        };
+        let full = table(&v.render_with(&rows, usize::MAX));
+        let fit = full.iter().map(|l| cols(l)).max().unwrap() - 1;
+        let narrow = table(&v.render_with(&rows, fit));
+        assert!(
+            !narrow[0].contains("AUTH") && narrow[0].contains("WORKERS"),
+            "{narrow:?}"
+        );
+        assert!(narrow.iter().all(|l| cols(l) <= fit), "{narrow:?}");
+
         v.apply_read(ReadOutcome::Ok {
             accounts: sample_accounts(),
             combos: sample_combos(),
@@ -1934,7 +2094,7 @@ mod tests {
         let mut v = ConnectionsView::new();
         v.apply_read(ReadOutcome::Degraded("fno: not found".into()));
         let out = v.render().join("\n");
-        assert!(out.contains("fno unreachable: fno: not found"));
+        assert!(out.contains("could not read accounts: fno: not found"));
         assert!(out.contains("press R to retry"));
         // j/k are inert while degraded (bell, no move); R still refreshes.
         assert_eq!(v.on_key(b'j'), ConnIntent::Bell);
@@ -2519,7 +2679,7 @@ mod tests {
             combos: sample_combos(),
         });
         let out = v.render().join("\n");
-        // renders at all and the SNAP header exists even with no values
-        assert!(out.contains("SNAP"));
+        // renders at all and the LOGIN header exists even with no values
+        assert!(out.contains("LOGIN"));
     }
 }

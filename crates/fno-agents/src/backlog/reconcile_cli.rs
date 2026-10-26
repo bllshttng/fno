@@ -1600,25 +1600,12 @@ fn apply_ledger_rollup(node: &mut Value, rollup: Option<&crate::backlog::workflo
     }
 }
 
-/// The configured required review bots (config.review.github_apps), for
-/// the dead-bot escape. Unresolvable config reads empty: fail open, no
-/// emit.
+/// The configured required review bots (config.review.github_apps, or its
+/// legacy required_bots alias), for the dead-bot escape. Unresolvable config
+/// reads empty: fail open, no emit.
 fn required_bots_for(cwd: Option<&str>) -> Vec<String> {
-    let anchor = Path::new(cwd.unwrap_or("."));
-    let Some(value) = crate::agents_config::config_value_deep(anchor, &["review", "github_apps"])
-    else {
-        return Vec::new();
-    };
-    value
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|v| v.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+    let (bots, _) = crate::accounts::required_bot::review_bots(Path::new(cwd.unwrap_or(".")));
+    bots.into_iter().filter(|s| !s.trim().is_empty()).collect()
 }
 
 /// The state root the retro sentinel resolves against: the configured

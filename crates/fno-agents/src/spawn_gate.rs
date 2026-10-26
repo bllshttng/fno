@@ -1350,12 +1350,19 @@ pub fn run_gate(
             );
             // Every gate refusal leaves a feed-visible row: a refused
             // launch previously wrote nothing, so the feed showed nothing
-            // for a launch the operator watched refuse.
-            let _ = crate::events::EventEmitter::new(home.events_jsonl(), "spawn-gate").emit(
+            // for a launch the operator watched refuse. The node rides the
+            // row when the payload named one: the stop gate's held-refusal
+            // fold reads the freshest cap refusal FOR A NODE back, and only
+            // a row that names the node can prove the hold. The source is
+            // the schema's one allowed source for this type (`daemon`, the
+            // dispatch door's own refusal rows); "spawn-gate" was refused by
+            // the judge at write time, so the feed showed nothing after all.
+            let _ = crate::events::EventEmitter::new(home.events_jsonl(), "daemon").emit(
                 "agent_spawn_refused",
                 &serde_json::json!({
                     "argv": std::env::args().skip(1).collect::<Vec<String>>(),
                     "exit_code": r.exit_code,
+                    "node": node,
                     "reason": verdict_line(&r),
                 }),
             );
@@ -2588,15 +2595,26 @@ pub fn machine_reading_notes() -> (Option<String>, Option<String>) {
     (footer, keeper)
 }
 
-/// The footprint payload's admission split, `(fleet_cores, machine_cores)`,
-/// as the one fleet-share answer for the machine arm and the spawn CPU
-/// axis alike. `None` when the probe or the parse fails, which classifies
-/// as fleet load.
-pub(crate) fn fleet_split() -> Option<(f64, f64)> {
-    let raw = footprint_cause_raw().ok()?;
-    let payload: FootprintCausePayload = serde_json::from_str(&raw).ok()?;
-    let admission = payload.admission?;
-    Some((admission.fleet_cores, admission.machine_cores))
+/// The decider's admission inside one raw footprint payload, `None` when
+/// the payload does not parse or carries none.
+pub(crate) fn admission_of(raw: &str) -> Option<AdmissionPayload> {
+    serde_json::from_str::<FootprintCausePayload>(raw)
+        .ok()?
+        .admission
+}
+
+/// The footprint admission from a live probe: the one fleet-share answer
+/// the machine arm's split and the capacity loop read in one tick. `None`
+/// when the probe or the parse fails, which classifies as fleet load.
+pub(crate) fn fleet_admission() -> Option<AdmissionPayload> {
+    admission_of(&footprint_cause_raw().ok()?)
+}
+
+/// The fleet's CPU share the spawn gate decides on, as one number: the
+/// upper bound, so an attribution gap reads as load, never as headroom.
+/// `None` on an unreadable instrument (axis `cpu_instrument`).
+pub(crate) fn fleet_share(admission: &AdmissionPayload) -> Option<f64> {
+    (admission.axis == "fleet_cpu_share").then_some(admission.share_high)
 }
 
 pub(crate) fn footprint_cause_raw() -> Result<String, String> {
@@ -3647,8 +3665,8 @@ Swapouts: 3444531.\n";
         );
     }
 
-    /// workers hold its full share refuses exit 80 even with fleet slots free,
-    /// because waiting cannot help while the caller's own workers hold it.
+    /// workers hold its full share refuses exit 80 even with a fleet slot
+    /// free, when that slot is owed to a lead still under its share.
     #[test]
     fn lead_share_refuses_when_the_caller_holds_its_full_share() {
         let _g = claims::test_env_lock()
@@ -3695,18 +3713,20 @@ Swapouts: 3444531.\n";
                 r#"{{"name":"{name}","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","role_level":1,"harness_session_id":"{session}"}}"#
             )
         };
-        // 2 leads -> share 2; the caller holds its full share with 2 rows, so
-        // 2 slots remain fleet-wide and the lead share still refuses.
+        // 2 leads -> share 2; the caller holds its full share with 2 rows and
+        // an unteamed session's row takes a third seat. The one free slot is
+        // owed to lead-b, so there is none to borrow and the lead share refuses.
         let reg = dir.join("registry.json");
         std::fs::write(
             &reg,
             format!(
-                r#"{{"schema_version":{},"entries":[{},{},{},{}]}}"#,
+                r#"{{"schema_version":{},"entries":[{},{},{},{},{}]}}"#,
                 crate::state::REGISTRY_SCHEMA_VERSION,
                 teamed("lead-a", "session-aaaaaaaa"),
                 teamed("lead-b", "session-bbbbbbbb"),
                 live("w1", "session-aaaaaaaa"),
                 live("w2", "session-aaaaaaaa"),
+                live("w-other", "session-cccccccc"),
             ),
         )
         .unwrap();

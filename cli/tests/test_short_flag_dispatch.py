@@ -9,8 +9,9 @@ imports the command tree. Registration of every lazy command is proved by
 short-vs-long parity proof per previously-untested risk:
 
 * ``backlog find`` short-vs-long parity (read-only graph path, native binary).
-* ``config accounts add`` short-vs-long parity (the one Phase 2 command with no
-  prior CLI test of any kind).
+
+``config accounts add`` is answered by fno-agents; its goldens in
+``crates/fno-agents/tests/golden/accounts_add`` hold both spellings.
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
@@ -19,11 +20,7 @@ import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.cli import app
-
-runner = CliRunner()
 
 # --------------------------------------------------------------------------- #
 # Parity: backlog find (read-only graph path).
@@ -75,46 +72,3 @@ def test_backlog_find_short_flags_match_long(tmp_graph: Path) -> None:
     assert short_code == long_code
     assert short_out == long_out
     assert "ab-sf000001" in short_out
-
-
-# --------------------------------------------------------------------------- #
-# Parity: config accounts add (no prior CLI coverage at all).
-# --------------------------------------------------------------------------- #
-
-def _add_provider(monkeypatch, workdir: Path, argv: list[str]):
-    """Run `config accounts add` isolated to workdir (project scope, no global)."""
-    workdir.mkdir(parents=True, exist_ok=True)
-    # _resolve_cwd() and save_providers(scope="project") both honor $PWD;
-    # /dev/null disables the real per-user global settings candidate.
-    monkeypatch.setenv("PWD", str(workdir))
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", "/dev/null")
-    return runner.invoke(app, argv)
-
-
-def test_accounts_add_short_flags_match_long(tmp_path, monkeypatch) -> None:
-    """AC4: `config accounts add -H/-a/-s/-p` writes the same record as the longs."""
-    creds = tmp_path / "oauth"
-    creds.mkdir()
-    short_dir = tmp_path / "short"
-    long_dir = tmp_path / "long"
-
-    short_res = _add_provider(monkeypatch, short_dir, [
-        "config", "accounts", "add", "prov-x",
-        "-H", "claude", "-a", "oauth_dir",
-        "--credentials-source", str(creds),
-        "-s", "project", "-p", "50",
-    ])
-    long_res = _add_provider(monkeypatch, long_dir, [
-        "config", "accounts", "add", "prov-x",
-        "--harness", "claude", "--auth", "oauth_dir",
-        "--credentials-source", str(creds),
-        "--scope", "project", "--priority", "50",
-    ])
-    assert short_res.exit_code == 0, short_res.output
-    assert long_res.exit_code == 0, long_res.output
-    assert short_res.stdout == long_res.stdout
-
-    short_yaml = (short_dir / ".fno" / "config.toml").read_text()
-    long_yaml = (long_dir / ".fno" / "config.toml").read_text()
-    assert short_yaml == long_yaml
-    assert "prov-x" in short_yaml

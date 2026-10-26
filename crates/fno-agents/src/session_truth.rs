@@ -522,9 +522,7 @@ fn ambient_opencode_db() -> PathBuf {
 /// `None`. `time_updated` is epoch millis. A locked or schema-drifted store
 /// answers `None` (age-unknown), never an error.
 fn opencode_activity_epoch(db: &Path, session_id: &str) -> Option<f64> {
-    let conn =
-        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .ok()?;
+    let conn = crate::graph_store::open_read_only_wal_safe(db)?;
     conn.busy_timeout(std::time::Duration::from_secs(2)).ok()?;
     conn.query_row(
         "SELECT MAX(time_updated) FROM message WHERE session_id = ?1",
@@ -541,12 +539,9 @@ fn opencode_activity_epoch(db: &Path, session_id: &str) -> Option<f64> {
 /// text, `tool` parts render `[tool_use: name]`, no renderable text drops
 /// the turn.
 fn opencode_records_db(db: &Path, session_id: &str, n: usize) -> Vec<TruthRecord> {
-    let conn =
-        match rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        {
-            Ok(conn) => conn,
-            Err(_) => return Vec::new(),
-        };
+    let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
+        return Vec::new();
+    };
     let _ = conn.busy_timeout(std::time::Duration::from_secs(2));
     let Ok(mut stmt) = conn.prepare(
         "SELECT id, data FROM message WHERE session_id = ?1 \
@@ -1023,14 +1018,10 @@ fn claude_holder_proven(session_id: &str) -> bool {
 /// 120 chars classify, and with no HTTP status the only swap-triggering
 /// class reachable is the quota one. The error-class strings stay verbatim.
 fn provider_refusal_of(last_text: &str) -> Option<String> {
-    const QUOTA_MARKERS: [&str; 3] = ["rate limit", "quota exceeded", "usage limit"];
+    use crate::accounts::error_class::{matches_quota_body, ErrorClass};
     let collapsed: String = last_text.split_whitespace().collect::<Vec<_>>().join(" ");
     let lead: String = collapsed.chars().take(120).collect();
-    let lead_lower = lead.to_lowercase();
-    QUOTA_MARKERS
-        .iter()
-        .find(|marker| lead_lower.contains(*marker))
-        .map(|_| "provider_4xx_quota".to_string())
+    matches_quota_body(&lead).then(|| ErrorClass::Provider4xxQuota.as_str().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1362,9 +1353,7 @@ fn opencode_summary<C: CursorAccess>(
 /// A cheap change marker for one opencode session: newest part write and
 /// part count. `None` when the store cannot answer, which always rebuilds.
 fn opencode_version(db: &Path, session_id: &str) -> Option<i64> {
-    let conn =
-        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .ok()?;
+    let conn = crate::graph_store::open_read_only_wal_safe(db)?;
     conn.busy_timeout(std::time::Duration::from_secs(2)).ok()?;
     let (newest, count): (Option<i64>, i64) = conn
         .query_row(
@@ -1634,5 +1623,30 @@ mod tests {
         );
         assert_eq!(payload["state"], "working", "{payload}");
         assert_eq!(payload["observed_model"]["model"], "claude-opus-5-5");
+    }
+
+    #[test]
+    fn opencode_reader_reads_a_wal_store_whose_shm_is_gone() {
+        // The exact state a daemon's clean exit leaves: the header stays WAL
+        // while the checkpoint removed the -wal and -shm sidecars. The plain
+        // read-only open refuses it, which degraded every opencode truth read
+        // to age-unknown. The immutable retry must answer.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;\n\
+             CREATE TABLE message (session_id TEXT, time_updated REAL);\n\
+             INSERT INTO message VALUES ('s-1', 1791460800000.0);\n\
+             PRAGMA wal_checkpoint(TRUNCATE);",
+        )
+        .unwrap();
+        drop(conn);
+        assert!(!dir.path().join("opencode.db-shm").exists());
+        assert_eq!(
+            opencode_activity_epoch(&db, "s-1"),
+            Some(1791460800.0),
+            "the immutable retry must read the checkpointed store"
+        );
     }
 }

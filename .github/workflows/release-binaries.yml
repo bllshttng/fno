@@ -40,7 +40,7 @@ jobs:
           # the universal macOS SDK links it; packaging only archives the files,
           # so nothing here executes the x86_64 binaries.
           - { name: macos-x64, runs-on: macos-14, rust-target: x86_64-apple-darwin }
-          - { name: linux-x64, runs-on: ubuntu-latest, rust-target: x86_64-unknown-linux-musl }
+          - { name: linux-x64, runs-on: ubuntu-24.04, rust-target: x86_64-unknown-linux-musl }
           - { name: linux-arm64, runs-on: ubuntu-24.04-arm, rust-target: aarch64-unknown-linux-musl }
     steps:
       - name: Checkout
@@ -107,7 +107,6 @@ jobs:
           tar -czf "fno-agents-${{ matrix.target.name }}.tar.gz" \
             -C "$PWD/crates/fno-agents/target/${{ matrix.target.rust-target }}/release" \
               "fno-agents" "fno-agents-daemon" "fno-agents-worker" \
-              "fno-gh-proxy" "fno-gh-loopcheck" "fno-gh-coverage" \
             -C "$PWD/crates/fno/target/${{ matrix.target.rust-target }}/release" "footnote" "fno"
 
       - name: Upload build artifact

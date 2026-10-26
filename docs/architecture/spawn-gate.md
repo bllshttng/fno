@@ -67,6 +67,12 @@ The queue gives up after 240 seconds with exit 75. It used to wait 600 seconds. 
 
 A `--no-wait` pass takes no ticket. Its refusal receipt carries `queue_place`, `queue_size` and `waiting_on`, where the place is the back of the queue. A queue timeout carries them too. A refused native launch line names the place: `spawn gate refused the native launch (no_wait, place 3 of 3 waiting on max_live): ...`. The ticket leaves the queue as the gate returns.
 
+## Lead share: the floor, the spare seat, and finished workers
+
+Each teamed lead gets an even share of the cap: `max_live` divided by the lead count. The share is a floor that every lead keeps. Take the free seats, less every seat the other leads still lack to reach their share. If one is left over, a lead at its share can borrow it. A lead under its share always passes this axis. With `max_live` 16 and leads holding 5, 1 and 1, the first lead borrows the spare sixth seat. When the second lead then spawns, it admits, and the first lead's seventh is refused. At `max_live` 15 there is no spare seat, so the first lead is refused at 5.
+
+A worker that finished stops charging its lead. Two facts mark it finished: its hook reported `done` for its turn, and the graph records every node it names as merged. The reaper's own verdict reads the merge, so the gate and the reaper agree. The row still takes a fleet seat until the reaper removes it. On 2026-10-24 seven such workers held one lead at 7 of 7, and the gate refused that lead with a 15-node queue. A worker whose run left a terminal-run receipt is skipped the same way. The refusal receipt carries `free` and `owed` beside `held` and `share`.
+
 ## The exit-code allocation table
 
 One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py` and is mirrored in `spawn_gate.rs`. `cli/tests/unit/test_exit_code_allocation.py` keeps it unique. Values >= 64 claim a number once. The same NAME at the same number in both trees is byte-parity.
@@ -92,7 +98,7 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 
 ## Overriding the learned cap
 
-`agents.max_live` is the ceiling, and the burst is the one rule that passes it. Under it, the machine watch learns a working cap per machine. A first run starts the cap at the ceiling. A long run queue cuts the cap by 25 percent. Calm adds one slot per 900 seconds. The learned cap lives in `<agents home>/capacity/<machine-id>.json`. Every cap display reads it through `capacity::effective`.
+`agents.max_live` is the ceiling, and the burst is the one rule that passes it. Under it, the machine watch learns a working cap per machine. A first run starts the cap at the ceiling. The loop reads the fleet CPU share the spawn gate reads, so the two never read the machine two ways. A share over `[agents.capacity] cut_fleet_share` (default 0.75) for 600 seconds cuts the cap by 25 percent. A share under `raise_fleet_share` (default 0.35) adds one slot per 900 seconds. An unreadable share moves no streak and no cap. The learned cap lives in `<agents home>/capacity/<machine-id>.json`. Every cap display reads it through `capacity::effective`.
 
 Only a measured cut binds below the ceiling. An older first run stamped a cap it guessed from the machine budget (`seeded from machine budget`), and a cap can sit at an older and lower ceiling. The reader treats both as no measurement, so `agents.max_live = 32` with no floor reads an effective cap of 32 at once, not 24. The next tick writes the same answer to the file.
 

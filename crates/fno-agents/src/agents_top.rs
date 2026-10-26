@@ -239,6 +239,81 @@ fn opt_str(value: Option<&str>) -> Value {
     value.map_or(Value::Null, |s| json!(s))
 }
 
+/// The longest `last_message` a row carries, in characters.
+const LAST_MESSAGE_CHARS: usize = 240;
+
+/// The project a directory belongs to: its own `[project] id`, else its git
+/// remote slug, else its basename. The home config is not consulted: it
+/// names the caller's project, not the seat's. Cached for the process,
+/// because the remote read shells out to git and the daemon reads every
+/// worker on every beat.
+fn project_of(dir: &str) -> String {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(dir) {
+        return hit.clone();
+    }
+    let name = crate::finalize::resolve_project_name(None, None, Path::new(dir));
+    cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(dir.to_string(), name.clone());
+    name
+}
+
+/// The seat facts a fleet page shows beside the status: the full session
+/// id, the model and where it was read, the start, the newest turn and its
+/// stamp, the directory and its project, and the context reading. A fact
+/// no source answers is null.
+fn seat_facts(
+    w: &Worker,
+    entry: Option<&RegistryEntry>,
+    probe: Option<&crate::truth_probe::TruthProbe>,
+) -> Map<String, Value> {
+    let registry_model = entry
+        .and_then(|e| e.model.as_deref())
+        .filter(|m| !m.is_empty());
+    let observed_model = probe
+        .map(|p| &p.observed_model)
+        .filter(|om| om.get("kind").and_then(Value::as_str) == Some("observed"))
+        .and_then(|om| om.get("model").and_then(Value::as_str))
+        .filter(|m| !m.is_empty());
+    // The live worker's observed model wins: the registry row carries the
+    // dispatch default the spawn stamped, and a worker serving a different
+    // model must read as the model it serves. The registry value
+    // is the fallback for a seat no probe reached.
+    let (model, model_basis) = match (observed_model, registry_model) {
+        (Some(m), _) => (Some(m), Some("observed")),
+        (None, Some(m)) => (Some(m), Some("registry")),
+        (None, None) => (None, None),
+    };
+    let cwd = entry.map(|e| e.cwd.as_str()).filter(|d| !d.is_empty());
+    let root = entry
+        .map(|e| e.project_root.as_str())
+        .filter(|d| !d.is_empty());
+    let project = root.or(cwd).map(project_of);
+    let last_message = probe
+        .and_then(|p| p.last_message.as_deref())
+        .map(|m| m.chars().take(LAST_MESSAGE_CHARS).collect::<String>());
+    let facts = json!({
+        "session_id": w.session_id.as_deref().or(entry.and_then(|e| e.harness_session_id.as_deref())),
+        "model": model,
+        "model_basis": model_basis,
+        "started_at": entry.map(|e| e.created_at.as_str()).filter(|s| !s.is_empty()),
+        "last_message": last_message,
+        "last_message_at": probe.and_then(|p| p.last_event_at.as_deref()),
+        "cwd": cwd,
+        "project_root": root,
+        "project": project,
+        "context_pct": entry.and_then(|e| e.context_used_pct),
+    });
+    match facts {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    }
+}
+
 /// The worker rows: the census joined to truth, the session-to-node map,
 /// and the process-table RSS. Heaviest first.
 fn worker_rows(
@@ -277,7 +352,8 @@ fn worker_rows(
                 .as_deref()
                 .and_then(|s| sessions.get(&s.trim().to_ascii_lowercase()));
             let pid = w.session_pid.or(w.pid);
-            json!({
+            let seat = seat_facts(w, entry, probe);
+            let mut row = json!({
                 "source": w.source,
                 "name": w.name,
                 "handle": handle,
@@ -303,7 +379,11 @@ fn worker_rows(
                 "pr": joined.and_then(|j| j.get("pr")).cloned().unwrap_or(Value::Null),
                 "pr_basis": joined.and_then(|j| j.get("pr_basis")).cloned().unwrap_or(Value::Null),
                 "role": entry.and_then(role_label),
-            })
+            });
+            if let Value::Object(map) = &mut row {
+                map.extend(seat);
+            }
+            row
         })
         .collect();
     out.sort_by(|a, b| {

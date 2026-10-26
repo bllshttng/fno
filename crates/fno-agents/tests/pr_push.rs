@@ -967,4 +967,37 @@ fn cite_rows() {
     assert_eq!(log_of(&d, "git.log").matches("git push").count(), 1);
 }
 
-// AC4-HP: live ids read clean and the push path continues unchanged.
+// A worktree branch that tracks a PR head under another name pushes to that
+// head and makes no stray remote branch; with no open PR on either name it
+// refuses and names the remedy.
+#[test]
+fn target_rows() {
+    let (_t, root, a, _b) = real_repo();
+    let remote = root.join("remote.git");
+    let (code, out, err) = run_command_real(&a, &root);
+    assert_eq!(code, 0, "first push: {out}\n{err}");
+    git_in(&a, &["checkout", "-b", "x-land", "origin/feature/x"]);
+    commit_file(&a, "two.txt", "two\n", "two");
+    let head = git_in(&a, &["rev-parse", "HEAD"]);
+    let (code, out, err) = run_command_real(&a, &root);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("ref=refs/heads/feature/x pushed=1"), "{out}");
+    assert_eq!(
+        git_in(&remote, &["rev-parse", "refs/heads/feature/x"]).trim(),
+        head.trim()
+    );
+    assert_eq!(git_in(&remote, &["for-each-ref", "refs/heads/x-land"]), "");
+
+    std::fs::write(root.join("no-pr"), "").unwrap();
+    git_in(&a, &["checkout", "-b", "y-land", "origin/feature/x"]);
+    commit_file(&a, "three.txt", "three\n", "three");
+    let (code, out, err) = run_command_real(&a, &root);
+    assert_eq!(code, 3, "{out}\n{err}");
+    assert!(err.contains("tracks origin/feature/x"), "{err}");
+    assert!(err.contains("--set-upstream-to"), "{err}");
+    assert_eq!(
+        git_in(&remote, &["rev-parse", "refs/heads/feature/x"]).trim(),
+        head.trim()
+    );
+    assert_eq!(git_in(&remote, &["for-each-ref", "refs/heads/y-land"]), "");
+}

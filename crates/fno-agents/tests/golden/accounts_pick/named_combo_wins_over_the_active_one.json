@@ -1,0 +1,29 @@
+{
+  "args": [
+    "--combo",
+    "solo"
+  ],
+  "files": [
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "config.toml",
+      "text": "[accounts]\nactive = \"readyrule\"\nactive_combo = \"pair\"\n\n[[accounts.records]]\nid = \"readyrule\"\nname = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-alt\"\n\n[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-main\"\n\n[accounts.combos.pair]\nproviders = [\n    \"makers\",\n    \"readyrule\",\n]\n\n[accounts.combos.solo]\nproviders = [\n    \"readyrule\",\n]\n"
+    },
+    {
+      "rel": "runtime-state.json",
+      "text": "{\"usage\": {\"readyrule\": {\"windows\": [{\"label\": \"5h\", \"used_pct\": 100.0, \"resets_at\": 1789403600.0}], \"probed_at\": 1789400000.0, \"source\": \"oauth-endpoint\"}}}"
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "  readyrule: exhausted\npick: every launchable candidate is exhausted\n",
+    "exit": 3
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "args": [
+    "--exclude",
+    "readyrule"
+  ],
+  "files": [
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}"
+    },
+    {
+      "rel": "config.toml",
+      "text": "[accounts]\nactive = \"readyrule\"\n\n[[accounts.records]]\nid = \"readyrule\"\nname = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-alt\"\n\n[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-main\"\n"
+    }
+  ],
+  "expect": {
+    "stdout": "makers\n",
+    "stderr": "  readyrule: excluded\n  makers: unknown\npick: first launchable candidate with headroom\n",
+    "exit": 0
+  }
+}

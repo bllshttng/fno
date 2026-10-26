@@ -1025,7 +1025,7 @@ fn receipt_node(stdout: &str) -> Option<String> {
     obj.get("id").and_then(|v| v.as_str()).map(str::to_string)
 }
 
-fn last_json_object(stdout: &str) -> Option<serde_json::Value> {
+pub(crate) fn last_json_object(stdout: &str) -> Option<serde_json::Value> {
     // Reverse scan: the receipt is the LAST stdout block, and an earlier
     // object (or a nested one) can parse from a prefix only when the JSON
     // extends to end-of-string, which the true last block does.

@@ -373,10 +373,8 @@ pub(super) fn text_frame(rows: u16, cols: u16, ch: char) -> Frame {
             };
             rows as usize * cols as usize
         ],
-        cursor_row: 0,
-        cursor_col: 0,
         cursor_visible: true,
-        scroll_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -6553,8 +6551,7 @@ fn left_click(row: u16, col: u16) -> crate::mouse::MouseReport {
     mrep(MouseKind::Press(MouseButton::Left), row, col)
 }
 
-/// The update modal's footer words are a target, not a label: a left
-/// click on them closes the popup.
+/// A left click on the update modal's footer words closes the popup.
 #[tokio::test]
 async fn update_modal_footer_esc_close_click_closes() {
     let mut v = view_with_agents(vec![]);
@@ -6571,6 +6568,7 @@ async fn update_modal_footer_esc_close_click_closes() {
                     text: l.text.clone(),
                     roles: l.roles.clone(),
                     hits: l.hits.clone(),
+                    body: None,
                 })
                 .collect(),
             width: r.width,
@@ -14029,10 +14027,8 @@ fn a_long_name_wraps_so_the_whole_name_and_cursor_show() {
             rows: rows as u16,
             cols: cols as u16,
             cells: cells.to_vec(),
-            cursor_row: 0,
-            cursor_col: 0,
             cursor_visible: false,
-            scroll_offset: 0,
+            ..Default::default()
         })
     };
     let shot = screen(&cells);

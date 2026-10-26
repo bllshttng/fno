@@ -1178,27 +1178,6 @@ def evals_history() -> Path:
     return _guard_state_path(_resolve("~/.fno/") / "history" / "evals-history.jsonl")
 
 
-def benchmarks_json() -> Path:
-    """Return the path to the OpenRouter benchmark snapshot (``benchmarks.json``).
-
-    The snapshot is cross-project by nature (one cached routing source of truth
-    per machine), so it follows an absolute ``config.state_dir`` (the ``~/.fno``
-    default and test sandboxes both qualify) and otherwise pins to user-global
-    ``~/.fno`` rather than forking into a repo checkout. No dedicated
-    ``config.paths`` override: callers that need isolation pass an explicit path
-    to the benchmarks module (the refresh/show/load functions all accept one).
-
-    Resolves under ``cache/`` per the state-root tidiness law, renaming the
-    legacy root spelling on first resolve (the same move ladder
-    :func:`state_runtime_file` runs).
-    """
-    settings = _settings()
-    raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
-    if os.path.isabs(raw):
-        return _state_subfile_at(state_dir(), "cache", "benchmarks.json", "benchmarks.json")
-    return _state_subfile_at(_resolve("~/.fno/"), "cache", "benchmarks.json", "benchmarks.json")
-
-
 def runtime_state_json() -> Path:
     """Return the machine-wide provider runtime-state path.
 
@@ -1206,7 +1185,7 @@ def runtime_state_json() -> Path:
     rate-limited from one repo is rate-limited everywhere: the state file must
     be one per machine, not one per process cwd (the relative-path defect M5
     measured as two disjoint files). Follows an absolute ``config.state_dir``
-    exactly like :func:`benchmarks_json`, EXCEPT that a config that fails to
+    the way the other machine-wide state paths do, EXCEPT that a config that fails to
     load falls back to ``~/.fno`` instead of raising: this path sits on the
     429-lock WRITE path, and a bad config must never turn a rate-limit into a
     crash that loses the lock. Tests pin an explicit file via the
@@ -1555,21 +1534,6 @@ def agents_runtime_registry_path() -> Path:
     return agents_home_dir() / "registry.json"
 
 
-def inbox_dir(project_root: Optional[Path] = None) -> Path:
-    """Return the inbox directory.
-
-    Default is the space: <space>/inbox/.
-    """
-    settings = _settings()
-    override = settings.paths.inbox_dir
-    if override is not None:
-        return _resolve(override, project_root=project_root)
-    root = project_root or resolve_repo_root()
-    space = space_dir(root) / "inbox"
-    migrate_from_checkout(root / ".fno" / "inbox", space)
-    return space.resolve()
-
-
 def project_log(name: str, project_root: Optional[Path] = None) -> Path:
     """Return ``<space>/<name>`` for a project log/state file.
 
@@ -1591,9 +1555,6 @@ def status_sinks_dir(project_root: Optional[Path] = None) -> Path:
     return project_log("status-sinks", project_root=project_root)
 
 
-_INBOX_PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-
-
 def vault_root(*, settings: Optional[SettingsModel] = None) -> Optional[Path]:
     """Filesystem path of the configured Obsidian vault, or None.
 
@@ -1611,83 +1572,11 @@ def vault_root(*, settings: Optional[SettingsModel] = None) -> Optional[Path]:
     return expanded if expanded.is_absolute() else Path.home() / expanded
 
 
-def inbox_agents_root() -> Path:
-    """Base directory holding per-project cross-project inbox folders.
-
-    Each project's inbox lives at ``<base>/<project>/inbox``. The base is:
-
-      1. Vault-derived ``<vault>/internal/agents`` when ``obsidian.enabled``
-         and ``obsidian.vault`` are set. For a ``myvault`` vault this resolves
-         to ``~/myvault/internal/agents`` - the path live cross-project
-         messaging has always used - so this default is behavior-preserving
-         for vault-based setups.
-      2. A neutral ``state_dir()/inbox/agents`` fallback otherwise, so a
-         fresh install with no Obsidian vault never points at a stranger's
-         ``~/myvault``.
-
-    ``config.paths.inbox_dir`` still overrides everything; callers that
-    resolve a concrete per-project path consult it first.
-    """
-    root = vault_root()
-    if root is not None:
-        return root / "internal" / "agents"
-    return state_dir() / "inbox" / "agents"
-
-
-def inbox_root_for(project_name: str) -> Path:
-    """Return the inbox directory for a SPECIFIC project (not the current one).
-
-    Unlike inbox_dir(), this explicitly substitutes the `{project}` template
-    with the given project_name rather than the sender's config.project.id.
-    Used by cross-project messaging: when sender fno writes to
-    recipient acme-web, the recipient's inbox path must use
-    "acme-web" as the project name regardless of which project the
-    sender's git repo lives in.
-
-    Strict validation: project_name must match ``[A-Za-z0-9][A-Za-z0-9._-]*``
-    and contain no path separators or ``..`` segments. paths.py is a shared
-    utility module - the validation belongs here at the entry point, not
-    only at one call site up the stack (e.g. inbox.store.inbox_dir_for).
-    This closes the path-traversal class first surfaced in PR #225
-    (feedback_project_name_path_traversal).
-
-    Resolution order:
-      1. config.paths.inbox_dir from settings.yaml (substitute {project},
-         then run the standard {vault}/$VAR/~ resolution).
-      2. Otherwise ``inbox_agents_root()/{project_name}/inbox`` - vault-derived
-         when Obsidian is enabled (``<vault>/internal/agents/...``), else a
-         neutral ``state_dir()/inbox/agents/...`` default.
-    """
-    if "/" in project_name or "\\" in project_name:
-        raise ValueError(f"project name must not contain path separators: {project_name!r}")
-    if ".." in project_name:
-        raise ValueError(f"project name must not contain '..': {project_name!r}")
-    if not _INBOX_PROJECT_NAME_RE.match(project_name):
-        raise ValueError(
-            f"project name must match {_INBOX_PROJECT_NAME_RE.pattern}: {project_name!r}"
-        )
-    settings = _settings()
-    override = settings.paths.inbox_dir
-    if override is not None:
-        # Substitute {project} explicitly with project_name BEFORE handing
-        # off to _resolve, so the standard {project}-from-config-or-cwd
-        # behavior in _resolve doesn't pick up the sender's name.
-        substituted = override.replace("{project}", project_name)
-        # Pass project_root=repo_root so any relative `paths.inbox_dir`
-        # (e.g. `.fno/inbox/{project}`) anchors at the git root
-        # instead of the caller's cwd. Without this, inbox commands run
-        # from subdirectories read/write distinct inbox locations and
-        # cross-project messages are lost (Codex review P2 on PR #267).
-        return _resolve(substituted, project_root=resolve_repo_root())
-    return (inbox_agents_root() / project_name / "inbox").resolve()
-
-
 def inbox_path(project_root: Optional[Path] = None) -> Path:
     """Return the path to the backlog *capture-tier* inbox markdown file.
 
-    Distinct from inbox_dir() above: that resolver owns the cross-project
-    messaging inbox; this one owns the markdown holding-pen of fu-* items
-    that sits below idea nodes. Do not conflate them.
+    This is the markdown holding-pen of fu-* items that sits below idea
+    nodes, not agent mail.
 
     Resolution order:
       1. ``config.paths.inbox_path`` explicit override (template-expanded).
@@ -1898,6 +1787,23 @@ def resolve_plugin_script(relpath: str) -> Path:
     if persisted is not None and (persisted / relpath).exists():
         return persisted / relpath
     return resolve_repo_root() / relpath
+
+
+def installed_plugin_script(relpath: str) -> "Path | None":
+    """The installed plugin's copy of ``relpath``, ignoring every env hint.
+
+    ``resolve_plugin_script`` honors ``FNO_REPO_ROOT`` raw, and in a foreign
+    repo that names the project, which ships none of the plugin's scripts. A
+    caller that must find the script anyway asks here after the hinted path
+    misses. None when neither the package root nor the persisted plugin
+    pointer holds the file."""
+    pkg_root = Path(__file__).resolve().parents[3]
+    if _is_plugin_root(pkg_root) and (pkg_root / relpath).is_file():
+        return pkg_root / relpath
+    persisted = _read_persisted_plugin_root()
+    if persisted is not None and (persisted / relpath).is_file():
+        return persisted / relpath
+    return None
 
 
 def resolve_plugin_script_durable(relpath: str) -> Path:

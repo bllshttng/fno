@@ -1,4 +1,4 @@
-"""fno config setup migrate-paths
+"""First-run path migration (the auto-fire in cli._check_migration).
 
 Idempotent migration. Detects existing install by probing the schema's
 path-key enumeration; writes a settings.yaml that reproduces it; sets
@@ -186,8 +186,10 @@ def write_settings_yaml(
 
 
 def print_summary(detected: dict[str, Any], settings_path: Path) -> None:
-    """Print a stable one-screen migration summary (5 lines max) to stderr.
+    """Print a one-line migration summary to stderr.
 
+    The first CLI run triggers this ahead of whatever the person asked for, so
+    it stays one line: a `--help` call should not open with a five-line banner.
     Writing to stderr (not stdout) keeps stdout clean for commands consumed via
     command substitution (e.g. ``source "$(fno config paths shell-stub)"``).
     Migration is a side-effect; its output belongs on stderr.
@@ -196,11 +198,10 @@ def print_summary(detected: dict[str, Any], settings_path: Path) -> None:
     vault_info = (
         f"vault at {obsidian['vault']}" if obsidian.get("enabled") else "fresh install"
     )
-    print("[setup] path migration complete", file=sys.stderr)
-    print(f"  detected install: {vault_info}", file=sys.stderr)
-    print(f"  settings written to: {settings_path}", file=sys.stderr)
-    print(f"  obsidian enabled: {obsidian.get('enabled', False)}", file=sys.stderr)
-    print(f"  sentinel: {settings_path.parent / '.path-migration-done'}", file=sys.stderr)
+    print(
+        f"[setup] path migration complete ({vault_info}); settings: {settings_path}",
+        file=sys.stderr,
+    )
 
 
 def run_migration(

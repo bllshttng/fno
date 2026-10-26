@@ -38,18 +38,6 @@ path = "src/bin/daemon.rs"
 name = "fno-agents-worker"
 path = "src/bin/worker.rs"
 
-[[bin]]
-name = "fno-gh-loopcheck"
-path = "src/bin/fno-gh-loopcheck.rs"
-
-[[bin]]
-name = "fno-gh-proxy"
-path = "src/bin/fno-gh-proxy.rs"
-
-[[bin]]
-name = "fno-gh-coverage"
-path = "src/bin/fno-gh-coverage.rs"
-
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"
@@ -114,6 +102,8 @@ chrono-tz = "0.10"
 # moves, and a SIGWINCH-aware resize event.
 crossterm = { version = "0.29", features = ["event-stream"] }
 toml = "0.8"
+# Format-preserving edits of the accounts config: comments survive a write.
+toml_edit = "0.22"
 regex = "1"
 # The store's version-conflict digest (file_content_version) and the dedup
 # keys are SHA256 on both legs; blake3 cannot stand in for them.
@@ -148,6 +138,10 @@ serde_json = "1"
 
 [dev-dependencies]
 proptest = "1"
+# Goldens frozen from Python hold correctly rounded floats. serde_json's
+# default parser can land one ULP off (0.9696969696969697 reads back as
+# ...696), so a parity compare needs the exact parse.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 # Tests feed a refusal's printed `fno mux pane kill ...` command to the real
 # parser rather than a copy of its grammar, so the two cannot drift apart.
 # Dev-only: fno never links fno-agents, it shells the binary at runtime, and

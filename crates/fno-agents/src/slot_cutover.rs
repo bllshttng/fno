@@ -61,7 +61,7 @@ pub fn decide(
     // the coarse low/exhausted label is all there is (today's behavior).
     let worst = usage
         .and_then(|rows| rows.get(from))
-        .and_then(crate::fallback_chain::Snapshot::from_refresh_row);
+        .and_then(crate::accounts::state::parse_snapshot);
     let eligible = match crate::fallback_chain::worst_binding_used_pct(worst.as_ref(), now as f64) {
         Some(pct) => exhausted || pct >= threshold_pct,
         None => matches!(state, Some("low" | "exhausted")),
@@ -132,6 +132,7 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
             &home,
             &config_cwd,
             crate::provider_cap::now_epoch_secs(),
+            |to| switch_slot(&config_cwd, to),
             |title, body| {
                 crate::operator_notice::notify_operator(title, body, None);
             },
@@ -156,10 +157,31 @@ impl Drop for InFlight {
     }
 }
 
+/// The global `use` in process: the daemon never runs the interactive login
+/// a dead stored credential asks for.
+fn switch_slot(config_cwd: &Path, to: &str) -> bool {
+    let outside = crate::accounts::use_switch::SystemOutside {
+        cwd: config_cwd.to_path_buf(),
+        interactive: false,
+    };
+    crate::accounts::use_switch::use_account(
+        to,
+        "global",
+        Some(config_cwd),
+        config_cwd,
+        crate::accounts::use_switch::PinPolicy::Warn,
+        &crate::accounts::store::SystemHost,
+        &outside,
+    )
+    .code
+        == 0
+}
+
 fn tick_once(
     home: &crate::paths::AgentsHome,
     config_cwd: &Path,
     now: i64,
+    switch: impl Fn(&str) -> bool,
     notify: impl Fn(&str, &str),
 ) {
     let (acted, skip, detail, notice) = if !crate::agents_config::slot_cutover_enabled(config_cwd) {
@@ -176,31 +198,7 @@ fn tick_once(
         );
         let capacity =
             crate::route_capacity::capacity(&json!({}), config_cwd, now as f64, refreshed.as_ref());
-        let global_ids = crate::agents_config::config_lookup_global(&["accounts", "records"])
-            .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|record| {
-                record
-                    .get("id")
-                    .and_then(|id| id.as_str())
-                    .map(str::to_string)
-            })
-            .collect::<Vec<_>>();
-        let records = crate::agents_config::config_lookup(config_cwd, &["accounts", "records"])
-            .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|record| {
-                let mut record = serde_json::to_value(record).ok()?;
-                let id = record.get("id").and_then(Value::as_str)?.to_string();
-                record.as_object_mut()?.insert(
-                    "global".to_string(),
-                    json!(global_ids.iter().any(|global| global == &id)),
-                );
-                Some(record)
-            })
-            .collect::<Vec<_>>();
+        let records = tagged_records(config_cwd);
         match decide(
             &capacity["claude"],
             &records,
@@ -216,12 +214,7 @@ fn tick_once(
                 None,
             ),
             Decision::Cutover { from, to } => {
-                let result = crate::provider_cap_commands::run_fno_output(
-                    &["config", "accounts", "use", &to, "--scope", "global"],
-                    Some(config_cwd),
-                    Duration::from_secs(30),
-                );
-                if result.is_none() {
+                if !switch(&to) {
                     let detail = format!("could not switch shared Claude slot to {to}");
                     (0, Some("use_failed"), detail.clone(), Some(detail))
                 } else {
@@ -291,35 +284,40 @@ fn is_shared_managed_claude(record: &Value) -> bool {
         && shared_dir
 }
 
-/// Shared-slot managed claude record ids, the merge of the global and the
-/// project config rows, exactly the rows the cutover arm may act on.
-fn shared_slot_ids(config_cwd: &Path) -> Vec<String> {
-    let global_ids: Vec<String> =
-        crate::agents_config::config_lookup_global(&["accounts", "records"])
-            .and_then(|value| value.as_array().cloned())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|record| {
-                record
-                    .get("id")
-                    .and_then(|id| id.as_str())
-                    .map(str::to_string)
-            })
-            .collect();
-    crate::agents_config::config_lookup(config_cwd, &["accounts", "records"])
-        .and_then(|value| value.as_array().cloned())
+/// The account records merged across the config layers, each tagged
+/// `global` when the global config declares its id.
+fn tagged_records(config_cwd: &Path) -> Vec<Value> {
+    let global_ids: Vec<String> = crate::agents_config::global_config_path()
+        .map(|path| crate::accounts::records::layer_records(&path))
         .unwrap_or_default()
+        .iter()
+        .filter_map(|record| {
+            record
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(str::to_string)
+        })
+        .collect();
+    crate::accounts::records::raw_records(None, config_cwd)
         .iter()
         .filter_map(|record| {
             let mut record = serde_json::to_value(record).ok()?;
             let id = record.get("id").and_then(Value::as_str)?.to_string();
-            let merged = record.as_object_mut()?;
-            merged.insert(
-                "global".to_string(),
-                json!(global_ids.iter().any(|g| g == &id)),
-            );
-            is_shared_managed_claude(&record).then_some(id)
+            record
+                .as_object_mut()?
+                .insert("global".to_string(), json!(global_ids.contains(&id)));
+            Some(record)
         })
+        .collect()
+}
+
+/// Shared-slot managed claude record ids, the merge of the global and the
+/// project config rows, exactly the rows the cutover arm may act on.
+fn shared_slot_ids(config_cwd: &Path) -> Vec<String> {
+    tagged_records(config_cwd)
+        .into_iter()
+        .filter(is_shared_managed_claude)
+        .filter_map(|record| record.get("id").and_then(Value::as_str).map(str::to_string))
         .collect()
 }
 
@@ -546,14 +544,32 @@ mod tests {
         let providers = state_dir.join("providers");
         std::fs::create_dir_all(&providers).unwrap();
         std::fs::write(providers.join(".active-claude"), "readyrule\n").unwrap();
-        let stub = crate::write_exec_stub(
-            dir.path(),
-            "fno-stub.sh",
-            "#!/bin/sh\nif [ \"$3\" = usage ]; then printf '%s\\n' '{\"readyrule\":{\"probed_at\":1000,\"partial\":false,\"windows\":[{\"label\":\"session\",\"used_pct\":95.0,\"resets_at\":null}]},\"makers\":{\"probed_at\":1000,\"partial\":false,\"windows\":[{\"label\":\"session\",\"used_pct\":10.0,\"resets_at\":null}]}}'; exit 0; fi\nexit 1\n",
-        );
+        let _refresh = crate::route_capacity::RefreshStub::install(|| {
+            serde_json::json!({
+                "readyrule": {"probed_at": 1000, "partial": false, "windows": [
+                    {"label": "session", "used_pct": 95.0, "resets_at": null}]},
+                "makers": {"probed_at": 1000, "partial": false, "windows": [
+                    {"label": "session", "used_pct": 10.0, "resets_at": null}]},
+            })
+            .as_object()
+            .cloned()
+        });
+        // The switch fails, and so does every fno command the tick runs.
+        let stub = crate::write_exec_stub(dir.path(), "fno-stub.sh", "#!/bin/sh\nexit 1\n");
         let _env = SavedEnv::set(&config, &usage, &stub, &global_dir.join("settings.json"));
         let home = crate::paths::AgentsHome::at(dir.path().join("agents"));
-        super::tick_once(&home, dir.path(), 1000, |_, _| {});
+        let tried = std::cell::RefCell::new(Vec::new());
+        super::tick_once(
+            &home,
+            dir.path(),
+            1000,
+            |to| {
+                tried.borrow_mut().push(to.to_string());
+                false
+            },
+            |_, _| {},
+        );
+        assert_eq!(*tried.borrow(), ["makers"]);
         let text = crate::events::committed_journal_text(&home.events_jsonl());
         let event: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
         assert_eq!(event["data"]["arm"], "slot_cutover");

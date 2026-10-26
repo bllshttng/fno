@@ -1,0 +1,15 @@
+{
+ "global": "[accounts]\n\n[[accounts.records]]\nid = \"herm\"\nname = \"herm\"\nharness = \"hermes\"\nauth = \"oauth_dir\"\ncredentials_source = \"{TMP}/creds\"\n",
+ "bin": {
+  "claude": "#!/bin/sh\nexit 0\n"
+ },
+ "args": [
+  "herm"
+ ],
+ "expect": {
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: CLI binary 'hermes' is not on PATH\n",
+  "seen": null
+ }
+}

@@ -130,7 +130,12 @@ impl PaneSendAudit {
             "source": "daemon",
             "data": data,
         });
-        let _ = append_agents_event(path, &event);
+        if let Err(e) = append_agents_event(path, &event) {
+            eprintln!(
+                "fno mux: agent_raw_inject emit failed at {}: {e}",
+                path.display()
+            );
+        }
     }
 }
 
@@ -397,6 +402,8 @@ mod tests {
                 style_exception: None,
                 provenance: Some("mail".into()),
                 hold_pass: false,
+                harness: None,
+                clear_composer: false,
             }
         );
         // A valueless flag and a non-send command are usage errors, mirroring
@@ -500,6 +507,8 @@ mod tests {
                 style_exception: None,
                 provenance: Some("mail:msg-abc123".into()),
                 hold_pass: false,
+                harness: None,
+                clear_composer: false,
             },
         );
         server.join().unwrap();
@@ -588,6 +597,8 @@ mod tests {
                 style_exception: None,
                 provenance: None,
                 hold_pass: false,
+                harness: None,
+                clear_composer: false,
             },
         );
         server.join().unwrap();
@@ -621,6 +632,8 @@ mod tests {
                 style_exception: None,
                 provenance: Some("mail".into()),
                 hold_pass: false,
+                harness: None,
+                clear_composer: false,
             },
         );
         std::env::remove_var("FNO_BIN");

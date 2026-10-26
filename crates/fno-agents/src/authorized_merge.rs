@@ -399,7 +399,10 @@ pub trait Probes {
     fn auto_merge_enabled(&self, cwd: &Path) -> bool;
     fn posture_floor_block(&self, cwd: &Path) -> Option<String>;
     fn strategy(&self, cwd: &Path) -> String;
-    /// Run `gh` with these arguments. `Ok((success, combined_output))`.
+    /// Run `gh` with these arguments. `Ok((success, output))` where output
+    /// is stdout alone on success and stdout followed by stderr on failure:
+    /// the JSON-parsing consumers read the success string, and the proxy's
+    /// stderr banner must never ride a 200 read.
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String>;
     /// Shell the `fno` CLI for a gate probe: `Ok((exit_code, stdout, stderr))`,
     /// None code = signal death. The fidelity gate rides this, so Fake-based
@@ -688,6 +691,9 @@ fn decide_observed<P: Probes>(
                     reason: blocker.detail,
                 });
             }
+        }
+        if checks.optional_unresolved == Some(None) {
+            eprintln!("warn: optional review findings unreadable; the merge does not wait on them");
         }
         if let Some(blocker) = optional_reviews_blocker(checks.optional_unresolved) {
             return Err(Outcome::Held {
@@ -1006,8 +1012,8 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     }
 
     // (4b) the user's look: a PR touching the configured paint surface holds
-    // until an answered question page names it or a role decision row
-    // attests the user's chat approval of this head. Held, not refused: the
+    // until an answered question page names it at this head, or a role
+    // decision row attests the user's chat approval of this head. Held, not refused: the
     // user answering the page clears it on the next read.
     if let Some(blocker) =
         crate::merge_gates::visual_approval_blocker(probes, cwd, facts.number, &facts.head_sha)
@@ -1257,15 +1263,18 @@ fn flake_blocker(request: &Request, checks: &ChecksRead) -> Option<Blocker> {
     ))
 }
 
-/// The optional-reviews gate, shared by the effect and preview walks: an
-/// unknown read never passes for "none unresolved".
+/// The optional-reviews gate, shared by the effect and preview walks. A
+/// counted unresolved finding holds. A status read with no count at all is
+/// unknown and holds. A null count (the review read alone failed) passes:
+/// these reviews are optional, and failing closed on that read once held
+/// every merge on the machine. Required reviewers gate through coverage.
 fn optional_reviews_blocker(value: Option<Option<i64>>) -> Option<Blocker> {
     match value {
-        None | Some(None) => Some(Blocker::unknown(
+        None => Some(Blocker::unknown(
             "optional_reviews_unknown",
-            "optional review findings unreadable; refusing to assume none unresolved",
+            "the status read carried no optional review count; refusing to assume none unresolved",
         )),
-        Some(Some(0)) => None,
+        Some(None) | Some(Some(0)) => None,
         Some(Some(_)) => Some(Blocker::held(
             "optional_reviews_unresolved",
             "optional review findings unresolved",
@@ -1686,6 +1695,7 @@ impl RealProbes {
 
 impl Probes for RealProbes {
     fn pr_facts(&self, cwd: &Path, pr: Option<u64>) -> Result<PrFacts, String> {
+        let _step = step_timer::step("pr_facts");
         head_probe::read(cwd, pr)
     }
 
@@ -1694,34 +1704,42 @@ impl Probes for RealProbes {
         cwd: &Path,
         pr: u64,
     ) -> crate::loopcheck::coverage_gate::GateVerdict {
+        let _step = step_timer::step("coverage_verdict");
         crate::loopcheck::coverage_gate::verdict(self, cwd, pr, true)
     }
 
     fn node_binding(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("node_binding");
         node_binding_probe(cwd, facts)
     }
 
     fn main_ci_token(&self, cwd: &Path) -> Result<Value, String> {
+        let _step = step_timer::step("main_ci_token");
         crate::main_ci::main_ci_reading_cached(cwd)
     }
 
     fn main_repair_hold(&self, cwd: &Path, facts: &PrFacts) -> Option<String> {
+        let _step = step_timer::step("main_repair_hold");
         main_repair_hold_probe(cwd, facts)
     }
 
     fn outside_pr(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("outside_pr");
         crate::pr_admission::outside_pr(cwd, facts)
     }
 
     fn pr_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("pr_hold");
         crate::pr_admission::pr_hold(cwd, facts)
     }
 
     fn merge_freeze(&self, _cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("merge_freeze");
         crate::merge_freeze::probe(facts)
     }
 
     fn review_posted(&self, cwd: &Path, facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
+        let _step = step_timer::step("review_posted");
         let marker = crate::publish_review::round_marker(&facts.head_ref, reviewed_head);
         let args = vec![
             "api".to_string(),
@@ -1758,10 +1776,12 @@ impl Probes for RealProbes {
     }
 
     fn dispatch_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("dispatch_hold");
         crate::gate_probes::dispatch_hold(cwd, facts)
     }
 
     fn review_hold(&self, cwd: &Path, pr: u64) -> ProbeOutcome {
+        let _step = step_timer::step("review_hold");
         // `review-hold check` is the one owner of "a review is RUNNING":
         // clear, held, or unreadable. The probe reads the PR's head ref
         // through the trait's gh read and answers IN PROCESS (d-e11b2b3e:
@@ -1796,6 +1816,7 @@ refusing to assume no review is running"
     }
 
     fn base_lineage(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("base_lineage");
         let run = |args: &[&str], dir: &Path| {
             let mut cmd = Command::new(args[0]);
             cmd.args(&args[1..]).current_dir(dir);
@@ -1805,6 +1826,7 @@ refusing to assume no review is running"
     }
 
     fn merge_result(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("merge_result");
         let run = |args: &[&str], dir: &Path| {
             let mut cmd = Command::new(args[0]);
             cmd.args(&args[1..]).current_dir(dir);
@@ -1814,6 +1836,7 @@ refusing to assume no review is running"
     }
 
     fn ci_base(&self, cwd: &Path, facts: &PrFacts, merge_clean: bool) -> ProbeOutcome {
+        let _step = step_timer::step("ci_base");
         let endpoint = |path: String, jq: &str| {
             self.run_gh(
                 cwd,
@@ -1827,7 +1850,9 @@ refusing to assume no review is running"
             ),
             ".behind_by",
         ) {
-            // run_gh appends stderr, so a gh proxy notice can follow the value.
+            // The line scan predates the clean-stdout contract and survives
+            // it: gh --jq prints the bare value, and a stray non-numeric
+            // line is skipped either way.
             Ok((true, output)) => match output.lines().find_map(|l| l.trim().parse::<u64>().ok()) {
                 Some(value) => value,
                 None => {
@@ -1868,14 +1893,17 @@ refusing to assume no review is running"
     }
 
     fn require_fresh_ci(&self, cwd: &Path) -> bool {
+        let _step = step_timer::step("require_fresh_ci");
         crate::agents_config::auto_merge_require_fresh_ci(cwd)
     }
 
     fn slot_holder(&self, cwd: &Path, base_ref: &str) -> Result<Option<u64>, String> {
+        let _step = step_timer::step("slot_holder");
         slot_holder_read(cwd, base_ref)
     }
 
     fn take_slot(&self, cwd: &Path, base_ref: &str, pr: u64) -> Result<(), String> {
+        let _step = step_timer::step("take_slot");
         // `merge-slot:` is repo-local, so rootless claim operations share the
         // current repo space with every worktree.
         let key = slot_key(base_ref);
@@ -1930,6 +1958,7 @@ refusing to assume no review is running"
     }
 
     fn release_slot(&self, cwd: &Path, base_ref: &str, pr: u64) {
+        let _step = step_timer::step("release_slot");
         let key = slot_key(base_ref);
         let holder = slot_holder_key(pr);
         let _ = crate::claims::release(&key, &holder, None, None);
@@ -1939,6 +1968,7 @@ refusing to assume no review is running"
     }
 
     fn slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64) -> bool {
+        let _step = step_timer::step("slot_retested");
         // The migration window can hold the live slot in the legacy
         // repo-root store while the primary reads empty, so both stores
         // answer; take_slot accepts a self-held legacy row without creating
@@ -1964,6 +1994,7 @@ refusing to assume no review is running"
     }
 
     fn mark_slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64) {
+        let _step = step_timer::step("mark_slot_retested");
         let key = slot_key(base_ref);
         let holder = slot_holder_key(pr);
         let mut metadata = serde_json::Map::new();
@@ -1977,6 +2008,7 @@ refusing to assume no review is running"
     }
 
     fn checks_read(&self, cwd: &Path, pr: u64) -> ChecksRead {
+        let _step = step_timer::step("checks_read");
         // One owner: the CI verdict answers in process through the status
         // door. A preview ask never re-enters here (supplied facts win), so
         // the decision reads the same payload it would have spawned for.
@@ -1993,10 +2025,15 @@ refusing to assume no review is running"
         cwd: &Path,
         args: &[String],
     ) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String> {
+        let _step = step_timer::step(format!(
+            "fno {}",
+            args.iter().take(3).cloned().collect::<Vec<_>>().join(" ")
+        ));
         Self::fno_strings(cwd, args)
     }
 
     fn live_lanes(&self, cwd: &Path) -> usize {
+        let _step = step_timer::step("live_lanes");
         // The parallel-lane count the Python hold derived (`claims.lanes.
         // active_lane_count`): live `lane-slot:` claims at the canonical
         // repo's own claims root. The global root is other repos' lanes and
@@ -2012,30 +2049,45 @@ refusing to assume no review is running"
     }
 
     fn covered_head(&self, cwd: &Path) -> Option<String> {
+        let _step = step_timer::step("covered_head");
         covered_head_from_event(cwd)
     }
 
     fn auto_merge_enabled(&self, cwd: &Path) -> bool {
+        let _step = step_timer::step("auto_merge_enabled");
         crate::agents_config::auto_merge_enabled(cwd)
     }
 
     fn posture_floor_block(&self, cwd: &Path) -> Option<String> {
+        let _step = step_timer::step("posture_floor_block");
         crate::agents_config::automerge_posture_floor_block_reason(cwd)
     }
 
     fn strategy(&self, cwd: &Path) -> String {
+        let _step = step_timer::step("strategy");
         crate::agents_config::auto_merge_strategy(cwd)
     }
 
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String> {
+        let _step = step_timer::step(format!(
+            "gh {}",
+            args.iter().take(3).cloned().collect::<Vec<_>>().join(" ")
+        ));
         // The decide path is polled, so it admits: a hold refuses in process
         // and reads as the failed read it is, never a verdict about the PR.
         let mut cmd = Command::new("gh");
         cmd.args(args).current_dir(cwd);
         let out = crate::gh_budget::output(cmd).map_err(|error| error.to_string())?;
-        let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
-        combined.push_str(&String::from_utf8_lossy(&out.stderr));
-        Ok((out.status.success(), combined))
+        // stdout rides alone on success: every success-path consumer parses
+        // it as JSON, and the fno gh proxy's stderr banner appended to a
+        // 200 read is how "page was not JSON" fired on a healthy PR (and how
+        // an override-label read silently answered false). stderr appends
+        // only to a FAILED read, where every consumer reads a message tail.
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        if !out.status.success() {
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+        }
+        Ok((out.status.success(), text))
     }
 }
 
@@ -2799,6 +2851,7 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
 
 mod head_probe;
 mod preview_receipt;
+pub mod step_timer;
 
 pub(crate) use preview_receipt::{
     parse_request, preview_receipt, preview_receipt_payload, read_payload,

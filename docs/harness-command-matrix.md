@@ -232,6 +232,10 @@ When delivery is intended, add `--submit`. The command settles, sends a separate
 
 The internal delivery path uses this primitive. Agy seeds are submitted after trust and composer readiness. A carriage return inside pasted text is not Enter.
 
+## Sending a raw command to a worker
+
+`fno agents mail send <full-session-id> --raw <payload>` types any single-line payload verbatim. `/fno:<command>` and `$fno:<command>` both name an fno command, and the lane rewrites the command to the form the receiving harness reads. The codex app-server lane sends a non-review payload over `turn/start`. The code is in `mail_inject.rs` and `mux_cli.rs`. Today the send returns no receipt that names the command codex accepted, so confirm the turn in the worker's transcript.
+
 ## Pointing the operator at a pane
 
 Every other `mux pane` command lets an agent act ON a pane.

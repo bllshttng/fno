@@ -68,7 +68,22 @@ pub struct GuardRequest<'a> {
 /// 3 for a fail-closed guard error.
 pub fn decide(req: &GuardRequest) -> (Value, i32) {
     let node_key = format!("node:{}", req.node_id);
-    let state = crate::claims::status(&node_key, None).0;
+    // One read feeds the whole verdict. With `store.remote_url` set every
+    // read is a round trip to the primary, and a slow primary times the
+    // caller out long before a handful of repeat reads finish.
+    let (state, record) = match crate::claims::status_checked(&node_key, None) {
+        Ok(read) => read,
+        // A row that will not decode is a corrupted claim. A primary that
+        // did not answer is an outage, and repair advice would mislead.
+        Err(error) if !error.starts_with("remote store ") => (ClaimState::Corrupted, None),
+        Err(error) => {
+            let detail = format!("{node_key} claim is unreadable: {error}; not dispatching");
+            return (
+                json!({"verdict": "error", "reason": "claims-unavailable", "detail": detail}),
+                3,
+            );
+        }
+    };
     if state == ClaimState::Corrupted {
         let detail = format!(
             "node:{} claim is corrupted; force-release or repair before dispatching",
@@ -76,7 +91,7 @@ pub fn decide(req: &GuardRequest) -> (Value, i32) {
         );
         return (json!({"verdict": "corrupted", "detail": detail}), 0);
     }
-    let mut seen = observe(req, !req.no_reserve);
+    let mut seen = observe(req, !req.no_reserve, Some((state, record)));
     let mut common = common_fields(req, &seen);
     if is_deferral(&seen.action) {
         return (refused(&seen.action, common), 0);
@@ -85,10 +100,11 @@ pub fn decide(req: &GuardRequest) -> (Value, i32) {
         // A LIVE claim is benign dedup. A SUSPECT one is a wedge, and only
         // the wedge is worth recovering. A --no-reserve call is a probe and
         // takes no recovery: the real spawn that follows recovers or refuses.
-        if state == ClaimState::Suspect && !req.no_reserve {
+        let recover = state == ClaimState::Suspect && !req.no_reserve;
+        if recover {
             if let (Some(prior), _) = reclaim_if_provably_dead(&node_key, None) {
                 emit_reaped_abandoned(req.node_id, &prior, &seen.truth_status);
-                seen = observe(req, false);
+                seen = observe(req, false, None);
                 common = common_fields(req, &seen);
                 if is_deferral(&seen.action) {
                     return (refused(&seen.action, common), 0);
@@ -96,7 +112,15 @@ pub fn decide(req: &GuardRequest) -> (Value, i32) {
             }
         }
         if seen.blocks_dispatch() {
-            return (blocked(req, &seen, common, &node_key), 0);
+            // Re-read only after recovery ran: a node re-claimed by a live
+            // worker meanwhile must not render as a wedge with force-release
+            // advice. With no recovery, the first read is still the truth.
+            let now = if recover {
+                crate::claims::status(&node_key, None).0
+            } else {
+                state
+            };
+            return (blocked(req, &seen, common, &node_key, now), 0);
         }
     }
     if req.no_reserve {
@@ -105,13 +129,17 @@ pub fn decide(req: &GuardRequest) -> (Value, i32) {
     reserve_and_hand_over(req)
 }
 
-fn observe(req: &GuardRequest, emit_events: bool) -> DispatchClaimObservation {
+fn observe(
+    req: &GuardRequest,
+    emit_events: bool,
+    claim_read: Option<(ClaimState, Option<crate::claims::ClaimRecord>)>,
+) -> DispatchClaimObservation {
     observe_node_claim(
         req.node_id,
         req.cwd,
         !req.no_reserve,
         emit_events,
-        None,
+        claim_read,
         None,
         None,
         None,
@@ -151,14 +179,12 @@ fn blocked(
     seen: &DispatchClaimObservation,
     common: Map<String, Value>,
     node_key: &str,
+    state: ClaimState,
 ) -> Value {
     // A launch-window holder reads SUSPECT for its whole TTL by construction
     // (its pid is the spawner that already exited), so it is never a wedge.
     let in_launch_window = seen.holder.starts_with(HANDOVER_HOLDER_PREFIX);
-    // Re-read: a node re-claimed by a live worker while recovery ran must
-    // not render as a wedge with force-release advice.
-    let wedged =
-        crate::claims::status(node_key, None).0 == ClaimState::Suspect && !in_launch_window;
+    let wedged = state == ClaimState::Suspect && !in_launch_window;
     let block = seen.block_reason.clone().unwrap_or_default();
     let block_wins = !block.is_empty() && !block.starts_with("held:");
     let mut out = Map::new();
@@ -168,10 +194,14 @@ fn blocked(
         && seen.verdict != "foreign_live"
     {
         // The worker ROW is the occupant whenever the claim is not, so the
-        // receipt names the row and the remedy peeks it.
+        // receipt names the row and the remedy peeks it. The evidence the
+        // overlay read first is the node's open graph execute row, so the
+        // refusal names that row too: a bare `claim release` leaves it open,
+        // and the roster row it crosschecks can outlive the work by hours.
         let token = worker_token(&seen.worker);
         let first = token.split(',').next().unwrap_or_default();
         let unmeasured = seen.worker.contains(UNMEASURABLE_LABEL_MARK);
+        let rows = crate::backlog::worked::open_execute_row_ids(req.node_id);
         let mut remedy =
             format!("fno agents peek {first}; if its run is finished, fno agents stop {first}");
         if unmeasured {
@@ -181,12 +211,33 @@ fn blocked(
                 req.node_id
             ));
         }
+        if !rows.is_empty() {
+            let list: Vec<String> = rows.iter().map(|(h, sid)| format!("{h}:{sid}")).collect();
+            let reaps: Vec<String> = rows
+                .iter()
+                .map(|(h, sid)| {
+                    format!(
+                        "fno backlog session reap-open {} --phase execute --harness {} --session-id {}",
+                        req.node_id, h, sid
+                    )
+                })
+                .collect();
+            remedy.push_str(&format!(
+                "; the occupied row is the node's open graph execute row {}. \
+                 Once the peek proves the run is over, close it with `{}`",
+                list.join(", "),
+                reaps.join("`, then `")
+            ));
+        }
         out.insert("verdict".into(), json!("already-running"));
         out.insert("reason".into(), json!("worker-row"));
         out.insert("worker".into(), json!(seen.worker));
         out.insert("truth_status".into(), json!(seen.truth_status));
         if unmeasured {
             out.insert("worker_unmeasured".into(), json!(true));
+        }
+        if !rows.is_empty() {
+            out.insert("graph_execute_rows".into(), json!(rows));
         }
         out.insert("remedy".into(), json!(remedy));
         return Value::Object(out);
@@ -1120,5 +1171,23 @@ mod tests {
         );
         let error = json!({"verdict": "error", "detail": "probe failed"});
         assert!(refusal_line("x-1", &error).contains(" reason=error; "));
+    }
+
+    #[test]
+    fn an_unreachable_primary_refuses_as_an_outage_not_a_corrupted_claim() {
+        let dead = crate::store_remote::test_primary::dead();
+        let shared = crate::claim_store::directory(None).unwrap();
+        crate::claim_store::route_to_primary(Some((dead.clone(), shared)));
+        let tmp = tempfile::tempdir().unwrap();
+        let (out, exit) = decide(&request(tmp.path(), "spawn-cli:1", None));
+        crate::claim_store::route_to_primary(None);
+        assert_eq!(exit, 3, "{out}");
+        assert_eq!(out["reason"], "claims-unavailable");
+        let detail = out["detail"].as_str().unwrap_or_default();
+        assert!(
+            detail.contains(dead.url()) && detail.contains("store.remote_url"),
+            "{detail}"
+        );
+        assert!(refusal_line("x-1", &out).contains(" reason=claims-unavailable; "));
     }
 }

@@ -617,6 +617,14 @@ def bg_create(
         from fno.agents.model_routing import materialize_model_scrub_settings
 
         settings_path = materialize_model_scrub_settings(_floor_keys)
+    # The mux pins the Claude theme for its panes (FNO_CLAUDE_THEME); the
+    # settings door writes it into every settings file, so a plain spawn with
+    # no file yet takes an env-less one. `claude attach` ignores --settings,
+    # so the attached view only wears the theme this launch carries.
+    if settings_path is None and os.environ.get("FNO_CLAUDE_THEME"):
+        from fno.agents.model_routing import _write_settings_env_file
+
+        settings_path = _write_settings_env_file({})
     argv = _build_argv(
         name=name,
         message=message,

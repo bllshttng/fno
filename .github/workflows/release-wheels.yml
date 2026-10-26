@@ -43,7 +43,7 @@ jobs:
           # identical packaging. The x86_64 wheel is smoke-tested on real Intel
           # hardware post-publish.
           - { name: macos-x64, runs-on: macos-14, rust-target: x86_64-apple-darwin, wheel-platform: macosx_10_12_x86_64 }
-          - { name: linux-x64, runs-on: ubuntu-latest, rust-target: x86_64-unknown-linux-musl, wheel-platform: manylinux_2_17_x86_64 }
+          - { name: linux-x64, runs-on: ubuntu-24.04, rust-target: x86_64-unknown-linux-musl, wheel-platform: manylinux_2_17_x86_64 }
           - { name: linux-arm64, runs-on: ubuntu-24.04-arm, rust-target: aarch64-unknown-linux-musl, wheel-platform: manylinux_2_17_aarch64 }
     steps:
       - name: Checkout
@@ -104,8 +104,7 @@ jobs:
           # hard-fails if any is missing (a partial set never ships).
           cp "crates/fno/target/${{ matrix.target.rust-target }}/release/fno" \
              "cli/src/fno/_bin/fno"
-          for b in fno-agents fno-agents-daemon fno-agents-worker \
-                   fno-gh-proxy fno-gh-loopcheck fno-gh-coverage; do
+          for b in fno-agents fno-agents-daemon fno-agents-worker; do
             cp "crates/fno-agents/target/${{ matrix.target.rust-target }}/release/${b}" \
                "cli/src/fno/_bin/${b}"
           done

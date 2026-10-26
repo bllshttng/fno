@@ -1,0 +1,4 @@
+Usage: fno agents roles resolve [OPTIONS] ROLE
+Try 'fno agents roles resolve --help' for help.
+
+Error: Invalid value for <FIXTURE>/bad-caps.json: cannot validate <FIXTURE>/bad-caps.json: <ERROR>

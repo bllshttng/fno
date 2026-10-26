@@ -355,6 +355,41 @@ else
   fail "review_attestation lost invocation id: $(cat "$LINKED_ATTEST" 2>/dev/null)"
 fi
 
+# 12b. A bare run (the hold carries no level, no --verify-fixes) still records
+# the level the lane sized and the round the counter assigns, so the posted
+# summary never reads level=unset round=unscoped.
+BARE_ATTEST="$TMP/bare-attest.json"
+cat > "$TMP/fno-bare-stub" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "round" && "\${5:-}" == "--fresh" ]]; then
+  echo 2; exit 0
+fi
+if [[ "\${1:-}" == "do" && "\${2:-}" == "review" && "\${3:-}" == "resolve-level" ]]; then
+  echo '{"level": "medium", "level_source": "diff-sized"}'; exit 0
+fi
+if [[ "\${1:-}" == "doctor" && "\${2:-}" == "event" && "\${3:-}" == "emit" ]]; then
+  type=""; data=""
+  while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+      -t) type="\$2"; shift 2 ;;
+      -d) data="\$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [[ "\$type" == "review_attestation" ]] && printf '%s\n' "\$data" > "$BARE_ATTEST"
+fi
+exit 0
+STUB
+chmod +x "$TMP/fno-bare-stub"
+rm -f "$BARE_ATTEST"
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-bare-stub" bash "$EMITTER" code-review pass) >/dev/null 2>&1
+if jq -e '.level == "medium" and .review_round == 2' "$BARE_ATTEST" >/dev/null 2>&1; then
+  pass "a bare run records the sized level and the assigned round"
+else
+  fail "bare run attestation lacks level or round: $(cat "$BARE_ATTEST" 2>/dev/null)"
+fi
+
 # 11. The payload records the diff under review: base (merge-base), head, and
 #     a line count greater than 0. This is the positive control for the
 #     refusal below - a refusal alone cannot separate "zero lines measured"

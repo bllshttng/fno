@@ -1,4 +1,4 @@
-"""The one lock-decision site (x-bbc0 change 1).
+"""The one lock-decision site.
 
 ``record_quota_lock`` attributes the cooldown to the account the caller
 names and refuses to guess: None and "default" write nothing, and the
@@ -36,6 +36,8 @@ def _quota_body_with_reset(hours_ahead: int = 3) -> str:
 
 
 class TestRecordQuotaLock:
+    # The write goes through the Rust state writer, so it needs the build.
+    @pytest.mark.dev_build
     def test_a_quota_body_locks_the_named_account_until_the_reset(
         self, state_path
     ) -> None:

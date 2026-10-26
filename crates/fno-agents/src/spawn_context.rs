@@ -696,15 +696,15 @@ fn harness_static(stamp: &str) -> Option<&'static str> {
     }
 }
 
-/// The value of `marker` in `pid`'s environment, or `None` when the env is
-/// unreadable or the marker absent. macOS reads the process args buffer
+/// The value of `marker` in `pid`'s environment: `Err` when the env cannot
+/// be read, `Ok(None)` when the marker is absent. macOS reads the process args buffer
 /// natively (`KERN_PROCARGS2`, the same source `census::argv_of` uses, whose
 /// tail after argv is the environment); Linux reads `/proc/<pid>/environ`.
 /// Readability is PARTIAL by measurement (Python's `ps eww` carrier had the
-/// same property); `None` covers both "not carried" and "unreadable" because
-/// neither changes a caller decision.
+/// same property). The managed-store pin scan needs the two apart: an
+/// unreadable env pins the slot, an absent marker means the default dir.
 #[cfg(target_os = "macos")]
-pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
+pub(crate) fn process_env_value(pid: u32, marker: &str) -> Result<Option<String>, ()> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
     let mut size: libc::size_t = 0;
     if unsafe {
@@ -719,7 +719,7 @@ pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
     } != 0
         || size < 4
     {
-        return None;
+        return Err(());
     }
     let mut buf = vec![0u8; size];
     if unsafe {
@@ -733,12 +733,12 @@ pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
         )
     } != 0
     {
-        return None;
+        return Err(());
     }
     let buf = &buf[..size];
-    let argc = i32::from_ne_bytes(buf[0..4].try_into().ok()?) as usize;
+    let argc = i32::from_ne_bytes(buf[0..4].try_into().map_err(|_| ())?) as usize;
     if argc == 0 {
-        return None;
+        return Err(());
     }
     let mut i = 4;
     while i < buf.len() && buf[i] != 0 {
@@ -761,26 +761,32 @@ pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
         }
         if let Ok(text) = std::str::from_utf8(&buf[start..i]) {
             if let Some(v) = text.strip_prefix(prefix.as_str()) {
-                return Some(v.to_string());
+                return Ok(Some(v.to_string()));
             }
         }
         i += 1;
     }
-    None
+    Ok(None)
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
-    let raw = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+pub(crate) fn process_env_value(pid: u32, marker: &str) -> Result<Option<String>, ()> {
+    let raw = std::fs::read(format!("/proc/{pid}/environ")).map_err(|_| ())?;
     let prefix = format!("{marker}=");
     for entry in raw.split(|b| *b == 0) {
         if let Ok(text) = std::str::from_utf8(entry) {
             if let Some(v) = text.strip_prefix(prefix.as_str()) {
-                return Some(v.to_string());
+                return Ok(Some(v.to_string()));
             }
         }
     }
-    None
+    Ok(None)
+}
+
+/// The value of `marker` in `pid`'s environment, or `None` when the env is
+/// unreadable or the marker absent; neither changes an attester decision.
+pub(crate) fn ancestor_env_marker(pid: u32, marker: &str) -> Option<String> {
+    process_env_value(pid, marker).ok().flatten()
 }
 
 /// One ancestor in the attester walk: its argv0 basename (lowercased, the

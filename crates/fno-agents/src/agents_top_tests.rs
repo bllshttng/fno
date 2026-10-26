@@ -138,3 +138,89 @@ fn pane_counters_difference_the_latest_session_and_report_resets() {
     assert_eq!(out["window_s"], 30.0);
     assert_eq!(out["rows"][0]["bytes_in"], 60);
 }
+
+/// A joined worker carries its seat facts from the registry row and the
+/// truth reading; a worker with neither carries the same keys as null, and
+/// the row still serializes.
+#[test]
+fn worker_rows_carry_seat_facts_and_null_when_unread() {
+    let checkout = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(checkout.path().join(".fno")).unwrap();
+    std::fs::write(
+        checkout.path().join(".fno/config.toml"),
+        "[project]\nid = \"fno\"\n",
+    )
+    .unwrap();
+    let sid = "aaaa1111-2222-3333-4444-555566667777";
+    let mut entry = row("sorrel", AgentStatus::Live);
+    entry.model = Some("opus".into());
+    entry.cwd = checkout.path().display().to_string();
+    entry.harness_session_id = Some(sid.into());
+    let worker = |name: &str, entry: Option<usize>, session_id: Option<&str>| Worker {
+        source: "fno",
+        name: name.into(),
+        harness: "claude".into(),
+        substrate: "pane".into(),
+        pid: None,
+        session_pid: None,
+        stored_status: "live".into(),
+        status_basis: None,
+        session_id: session_id.map(str::to_string),
+        spawned_by: None,
+        entry,
+    };
+    let c = Census {
+        workers: vec![
+            worker("sorrel", Some(0), Some(sid)),
+            worker("stray", None, None),
+        ],
+        ..Default::default()
+    };
+    let rows = vec![entry];
+    let mut truth = HashMap::new();
+    truth.insert(
+        truth_handle(&c.workers[0], Some(&rows[0])),
+        crate::truth_probe::TruthProbe {
+            state: "working".into(),
+            reachability: Some("reachable".into()),
+            basis: Some("transcript".into()),
+            last_activity_age_s: Some(53.0),
+            last_activity_basis: None,
+            last_event_at: Some("2026-10-23T10:00:00Z".into()),
+            last_message: Some("x".repeat(300)),
+            observed_model: json!({"kind": "observed", "model": "sonnet"}),
+            provider_refusal: None,
+            harness_title: None,
+        },
+    );
+    let out = worker_rows(
+        &c,
+        &rows,
+        &truth,
+        crate::truth_probe::BatchOutcome::Measured,
+        &Map::new(),
+        &BTreeMap::new(),
+    );
+    let seat = out.iter().find(|r| r["name"] == "sorrel").unwrap();
+    assert_eq!(seat["model"], "sonnet");
+    assert_eq!(seat["model_basis"], "observed");
+    assert_eq!(seat["project"], "fno");
+    assert_eq!(seat["session_id"], sid);
+    assert_eq!(seat["started_at"], "2026-01-01T00:00:00Z");
+    assert_eq!(seat["last_message_at"], "2026-10-23T10:00:00Z");
+    assert_eq!(seat["last_message"].as_str().unwrap().chars().count(), 240);
+
+    let stray = out.iter().find(|r| r["name"] == "stray").unwrap();
+    for key in [
+        "session_id",
+        "model",
+        "started_at",
+        "last_message",
+        "cwd",
+        "project",
+        "context_pct",
+    ] {
+        assert!(stray[key].is_null(), "{key}: {}", stray[key]);
+    }
+    assert!(serde_json::to_string(stray).is_ok());
+}

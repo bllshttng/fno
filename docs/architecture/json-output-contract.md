@@ -70,14 +70,10 @@ no-flag: cli/src/fno/pr/cli.py list_cmd
 no-flag: cli/src/fno/pr/cli.py review_hold
 no-flag: cli/src/fno/pr/cli.py evidence_required
 no-flag: cli/src/fno/pr/cli.py bind_created
-no-flag: cli/src/fno/resume/cli.py write_cmd
-no-flag: cli/src/fno/resume/cli.py validate_cmd
-no-flag: cli/src/fno/resume/cli.py show_cmd
 no-flag: cli/src/fno/review/cli.py classify
 no-flag: cli/src/fno/review/cli.py resolve_level
 no-flag: cli/src/fno/route_cli.py set_cmd
 no-flag: cli/src/fno/route_cli.py unset_cmd
-no-flag: cli/src/fno/setup_cli.py plan_cmd
 no-flag: cli/src/fno/state/cli.py show
 no-flag: cli/src/fno/state/cli.py set_field
 no-flag: cli/src/fno/state/cli.py init

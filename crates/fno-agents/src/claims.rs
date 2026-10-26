@@ -804,7 +804,7 @@ pub(crate) fn emit_audit_event(
 /// its `.lock.d` mutex as a wire contract, so a pin only one side honors puts
 /// the two writers on different files and their mutex stops serialising them
 /// against each other.
-fn claim_events_path(events_dir: Option<&Path>, cwd: &Path) -> PathBuf {
+pub(crate) fn claim_events_path(events_dir: Option<&Path>, cwd: &Path) -> PathBuf {
     let pin = std::env::var("FNO_EVENTS_PATH").ok();
     claim_events_path_with(events_dir, cwd, pin.as_deref())
 }
@@ -1682,17 +1682,25 @@ pub(crate) fn release_with_receipt(
 
 /// Inspect one row. Store failures retain the Corrupted refusal state.
 pub fn status(key: &str, root: Option<&Path>) -> (ClaimState, Option<ClaimRecord>) {
-    match crate::claim_store::read(key, root) {
-        Ok(Some(record)) => (
+    status_checked(key, root).unwrap_or_else(|error| {
+        eprintln!("claim status {key}: {error}");
+        (ClaimState::Corrupted, None)
+    })
+}
+
+/// `status`, with the store failure kept, so a caller can tell an
+/// unreachable primary from a row that will not decode.
+pub fn status_checked(
+    key: &str,
+    root: Option<&Path>,
+) -> Result<(ClaimState, Option<ClaimRecord>), String> {
+    Ok(match crate::claim_store::read(key, root)? {
+        Some(record) => (
             crate::claim_commands::status_verdict(&record).0,
             Some(record),
         ),
-        Ok(None) => (ClaimState::Free, None),
-        Err(error) => {
-            eprintln!("claim status {key}: {error}");
-            (ClaimState::Corrupted, None)
-        }
-    }
+        None => (ClaimState::Free, None),
+    })
 }
 
 /// Parse a human TTL string ("1h" / "30m" / "3600s" / bare digits) to

@@ -1,0 +1,1 @@
+{"args": ["--json"], "files": [{"rel": ".fno/config.toml", "text": "[accounts]\nrecords = []\n"}], "warned": {}, "stderr_prefix": false, "expect": {"exit": 0, "stdout": "{}\n", "stderr": "", "warn_calls": [], "events": []}}

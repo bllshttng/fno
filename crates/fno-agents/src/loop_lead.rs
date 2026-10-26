@@ -61,7 +61,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -500,7 +499,10 @@ pub(crate) const WALK_SESSION_KEY_ENV: &str = "FNO_LEAD_WALK_SESSION_KEY";
 /// same {alias: canonical} project map the Python guard canonicalizes with -
 /// a row stored as `alpha` and a walk for the short name `a` are one
 /// territory, not two.
-fn canonical_members(scope: &str, projects: &HashMap<String, String>) -> HashSet<String> {
+pub(crate) fn canonical_members(
+    scope: &str,
+    projects: &HashMap<String, String>,
+) -> HashSet<String> {
     scope
         .split(',')
         .map(str::trim)
@@ -726,30 +728,33 @@ pub(crate) fn escalate_stalled(
     reason: &str,
     scope: &str,
 ) -> String {
-    // Like every shellout here: retry_etxtbsy, because a binary rewritten
-    // under us (a test stub on a parallel runner, or an fno upgrade racing a
-    // spawn) briefly refuses exec with ETXTBSY.
-    let output = retry_etxtbsy(|| {
-        Command::new(fno_bin)
-            .args([
-                "agents",
-                "org",
-                "escalate",
-                "--stalled",
-                &ids.join(","),
-                "--reason",
-                reason,
-            ])
-            .args(if scope.is_empty() {
-                Vec::<&str>::new()
-            } else {
-                vec![scope]
-            })
-            .current_dir(cwd)
-            .stdin(Stdio::null())
-            .output()
-    });
-    match output {
+    // The bounded transport, not a bare Command: a wedged escalation child
+    // must die at its bound like every other fire read. The margin-funded
+    // floor (the merged-read formula) keeps the child runnable on a hot
+    // fire; the transport's own spawn path owns the ETXTBSY retry the old
+    // `retry_etxtbsy` wrapper provided. The terminal contract is unchanged:
+    // a failed escalation is named and moves on, never blocks.
+    let bound = crate::loopcheck::stopgate_pr_meta_timeout();
+    let stalled = ids.join(",");
+    let mut args: Vec<&str> = vec![
+        "agents",
+        "org",
+        "escalate",
+        "--stalled",
+        &stalled,
+        "--reason",
+        reason,
+    ];
+    if !scope.is_empty() {
+        args.push(scope);
+    }
+    match crate::loopcheck::bounded_read(
+        std::ffi::OsStr::new(fno_bin),
+        &args,
+        cwd,
+        "lead escalation",
+        bound,
+    ) {
         Ok(out) if out.status.success() => {
             let target = String::from_utf8_lossy(&out.stdout).trim().to_string();
             match target.strip_prefix("lead:") {
@@ -761,14 +766,15 @@ pub(crate) fn escalate_stalled(
             }
         }
         Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
+            let stderr = String::from_utf8_lossy(&out.stderr_tail);
             let detail = stderr.trim().chars().take(300).collect::<String>();
             eprintln!("lead: escalation failed: {detail}");
             format!("escalation FAILED: {detail}")
         }
-        Err(e) => {
-            eprintln!("lead: cannot run {fno_bin} agents lead escalate: {e}");
-            format!("escalation FAILED: cannot run {fno_bin} agents lead escalate: {e}")
+        Err(error) => {
+            let detail = error.render();
+            eprintln!("lead: escalation failed: {detail}");
+            format!("escalation FAILED: {fno_bin} agents org escalate: {detail}")
         }
     }
 }
@@ -919,6 +925,33 @@ mod tests {
             "x-bbbb",
         );
         assert_eq!(out, "escalated to the presiding lead l1-lead");
+    }
+
+    #[test]
+    fn a_wedged_escalation_is_killed_at_its_bound() {
+        // The escalation child must die at its bound like every other fire
+        // read: a wedged `fno agents org escalate` used to hold the terminal
+        // open with no ceiling at all. The injected bound is an instruction
+        // the margin-funded floor never overrides.
+        let dir = tempfile::tempdir().unwrap();
+        let fno = crate::write_exec_stub(
+            dir.path(),
+            "fno",
+            "#!/bin/sh\nif [ \"$3\" = escalate ]; then sleep 30; fi\n",
+        );
+        crate::loopcheck::stopgate_stamp_fire(
+            250,
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+            0,
+        );
+        let out = escalate_stalled(
+            fno.to_str().unwrap(),
+            dir.path(),
+            &["undispatched:x-aaaa".to_string()],
+            "NoProgress",
+            "x-bbbb",
+        );
+        assert!(out.contains("escalation FAILED"), "{out}");
     }
 
     #[test]

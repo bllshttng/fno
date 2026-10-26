@@ -1,0 +1,11 @@
+{
+  "detail": null,
+  "reason": "mixed_revision",
+  "reference": "snapshot-2",
+  "role": {
+    "function_id": "marketing",
+    "id": "drift"
+  },
+  "source_id": "company/drift.json",
+  "source_layer": "company"
+}

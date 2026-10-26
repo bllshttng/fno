@@ -75,20 +75,14 @@ event
 event emit
 fno-agents
 help
-inbox approvals decide !--db
-inbox approvals ls !--db
-inbox approvals show !--db
+inbox approvals decide
+inbox approvals ls
+inbox approvals show
 inbox board
-inbox day end
-inbox day start
 inbox notify
 inbox operator ack
 inbox operator list
 inbox operator status
-inbox outstanding ask
-inbox outstanding clear !--origin
-inbox outstanding mine do
-inbox outstanding reindex
 inbox user ack
 inbox user list
 inbox user status
@@ -98,8 +92,6 @@ lead done
 lead drain
 lead escalate
 lead init
-lead manifest-path
-lead shape
 lead term
 lint
 loops
@@ -110,25 +102,16 @@ mcp send
 mux
 notify
 observer
-outstanding ask
-outstanding clear !--origin
-outstanding mine do
-outstanding reindex
 paths
 phase kill-check
 plan
-plugins
 pr-watch
-project init
 research
-restart
 resume
-retro
 roles
 route
 scoreboard
 setup
-skill-diff
 state
 status
 status-fanout tick

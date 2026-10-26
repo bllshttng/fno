@@ -1,0 +1,16 @@
+{
+  "args": [
+    "alpha",
+    "-H",
+    "claude",
+    "-a",
+    "oauth_dir"
+  ],
+  "expect": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "error: 1 validation error for ProviderRecord\n  Value error, auth_strategy_mismatch: alpha: auth=oauth_dir requires credentials_source\n",
+    "global": null,
+    "project": null
+  }
+}

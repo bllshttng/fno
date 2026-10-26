@@ -12,6 +12,7 @@ Run: cd cli && uv run pytest tests/unit/test_launch_pick.py -v
 """
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -54,6 +55,16 @@ def _write_config(tmp_path: Path, *, pick_on_launch: bool) -> None:
     )
 
 
+def _seed_usage(path: Path, **used_pct: float) -> None:
+    """A fresh 5h usage row per account, as the runtime-state writer leaves it."""
+    now = time.time()
+    path.write_text(json.dumps({"usage": {
+        rid: {"windows": [{"label": "5h", "used_pct": pct, "resets_at": now + 3600}],
+              "probed_at": now, "source": "t"}
+        for rid, pct in used_pct.items()
+    }}))
+
+
 def _pin_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("PWD", str(tmp_path))
@@ -69,23 +80,13 @@ def armed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(tmp_path / "runtime-state.json"))
 
-    from fno.adapters.providers.runtime_state import write_usage_snapshot
-    from fno.adapters.providers.usage import UsageSnapshot, UsageWindow
-
-    now = time.time()
-    write_usage_snapshot(
-        UsageSnapshot("readyrule", (UsageWindow("5h", 100.0, now + 3600),), now, "t"),
-        now=now,
-    )
-    write_usage_snapshot(
-        UsageSnapshot("makers", (UsageWindow("5h", 32.0, now + 3600),), now, "t"),
-        now=now,
-    )
+    _seed_usage(tmp_path / "runtime-state.json", readyrule=100.0, makers=32.0)
     return tmp_path
 
 
 class TestPickAtLaunch:
 
+    @pytest.mark.dev_build  # the pick is the fno-agents command
     def test_receipt_names_the_picked_account_and_its_headroom(
         self, armed: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -124,6 +125,7 @@ class TestSpawnSeam:
         monkeypatch.setattr(dispatch_mod, "_emit_ev", lambda *a, **k: None)
         return seen
 
+    @pytest.mark.dev_build  # the pick is the fno-agents command
     def test_direct_call_applies_the_picked_overlay(
         self, armed: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -213,6 +215,7 @@ class TestPaneSeam:
     at the latter would leave every default interactive spawn on the exhausted
     account while the option read enabled."""
 
+    @pytest.mark.dev_build  # the pick is the fno-agents command
     def test_the_pane_path_picks_too(
         self, armed: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -246,20 +249,11 @@ class TestDeferDoesNotStallWhenPickingCanReroute:
     def test_no_healthy_alternate_leaves_the_defer_standing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import time as _time
-
         _write_config(tmp_path, pick_on_launch=True)
         _pin_config(tmp_path, monkeypatch)
         monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(tmp_path / "rs.json"))
-        from fno.adapters.providers.runtime_state import write_usage_snapshot
-        from fno.adapters.providers.usage import UsageSnapshot, UsageWindow
         from fno.agents.autonomous_route import _healthy_alternate_exists
 
-        now = _time.time()
-        for rid in ("readyrule", "makers"):
-            write_usage_snapshot(
-                UsageSnapshot(rid, (UsageWindow("5h", 100.0, now + 3600),), now, "t"),
-                now=now,
-            )
+        _seed_usage(tmp_path / "rs.json", readyrule=100.0, makers=100.0)
         assert _healthy_alternate_exists() is False
 

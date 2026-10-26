@@ -313,7 +313,7 @@ pub fn resolve_kind(kind: &str, payload: &Value) -> Result<Value, String> {
             json!({ "account": account_for_env(pinned, &cwd, &src) })
         }
         _ => {
-            json!({ "login_present": env::login_present(Path::new(text("dir").unwrap_or("")), &src) })
+            json!({ "login_present": env::login_present(Path::new(text("dir").unwrap_or("")), src.slot) })
         }
     })
 }

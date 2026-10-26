@@ -312,6 +312,19 @@ pub struct HarnessCapabilities {
     /// list still works as a verbatim pill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_flags: Option<Vec<String>>,
+    /// The composer read-back (pane send --harness <name>): the marker that
+    /// names the composer as still holding the payload, the markers that
+    /// report it queued, the keys that clear a resident payload, and the
+    /// marker an emptied composer shows. Measured per harness; a row without
+    /// them keeps the plain screen-changed confirm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_affordance_marker: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued_markers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub composer_clear_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer_empty_marker: Option<String>,
     pub resume: String,
     pub autonomous_pane: bool,
     pub route_on_pane: bool,
@@ -832,6 +845,12 @@ pub struct ModelSwitchStrategy {
     pub effort_labels: BTreeMap<String, String>,
     pub status_command: String,
     pub status_pattern: String,
+    /// A narrow pane truncates the `/status` line the main pattern reads
+    /// (measured on codex: `Model: gpt-5.6` and nothing more). The status
+    /// bar carries the same (model, effort) pair and survives the
+    /// truncation; when set, the verify falls back to it.
+    #[serde(default)]
+    pub status_bar_pattern: Option<String>,
 }
 
 impl HarnessCapabilities {
@@ -1948,6 +1967,7 @@ mod tests {
                 "footnote",
                 "gemini",
                 "grok",
+                "muse",
                 "opencode",
                 "pi",
                 "zcode"

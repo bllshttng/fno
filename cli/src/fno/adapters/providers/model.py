@@ -254,10 +254,9 @@ class ProviderRecord(BaseModel):
 class FailoverConfig(BaseModel):
     """config.providers.failover block.
 
-    Phase 03 of provider rotation failover. Holds the
-    storm-cap and any future failover-tunable knobs. The actual default
-    handling lives in failover.py (DEFAULT_MAX_SWAPS_PER_PHASE) so a
-    record without a failover block still works.
+    Phase 03 of provider rotation failover. Holds the storm-cap and any
+    future failover-tunable knobs; a record without a failover block still
+    works.
     """
 
     model_config = ConfigDict(extra="forbid")

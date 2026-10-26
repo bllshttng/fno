@@ -43,7 +43,7 @@ mod row_menu;
 mod sweep_scope;
 mod wire_version;
 mod workspace_folder;
-use wire_version::{server_has_splitdir, split_skew_notice};
+use wire_version::{server_has_pane_scroll, server_has_splitdir, split_skew_notice};
 
 use sweep_scope::{build_sweep_modal, parse_sweep_receipt, sweep_apply_args, SweepCounts};
 
@@ -86,7 +86,7 @@ use crate::vt::ShellActivity;
 use crate::wordmark;
 use overlay_paint::{
     draw_lines_overlay, draw_overlay_layout, draw_popup_overlay, layout_lines_overlay,
-    OverlayAnchor, OverlayLayout,
+    overlay_text_cols, OverlayAnchor, OverlayLayout,
 };
 use theme_ground::LaunchTheme;
 // Re-exported for the test module's glob; the layout fns are the only callers.
@@ -998,6 +998,11 @@ pub(crate) struct View {
     /// input line / counter. Client-local: opening never sends a message and
     /// never reserves a row (no Resize -> no reflow -> no dropped highlight).
     search: Option<SearchView>,
+    /// (v118) Keyboard scroll mode (prefix+PgUp): stdin diverts to
+    /// `scroll_mode_keys`; the moves ride the shared server-side offset.
+    scroll_mode: bool,
+    /// Pending escape bytes in scroll mode, the `search_esc` contract.
+    scroll_esc: Vec<u8>,
     /// Pending escape bytes in search mode, carried ACROSS reads so a split
     /// arrow sequence can never half-close the search or leak its tail into the
     /// pane (same split-arrow safety as [`View::sel_esc`]).
@@ -1775,6 +1780,10 @@ pub(crate) enum AuxAction {
     /// The whole-machine resource meter: flip the status-row meter, persist
     /// `resource_meter.enabled`, start or stop the sampler.
     ToggleResourceMeter,
+    /// Flip `agents.reserve_auto` (the daemon's OBS / editor reserve).
+    ToggleReserveAuto,
+    /// Clear the machine-wide fleet hold the status row names (prefix+U).
+    LiftHold,
     ToggleConfirmLifecycle,
     /// Apply the named mux theme now: swap the in-memory theme, then
     /// persist via `fno config set mux.theme`. The picker lists the shipped
@@ -1808,20 +1817,20 @@ mod experimental;
 mod lane_entry;
 mod node_detail;
 mod share_flow;
-pub(crate) use node_detail::wrap_line;
+pub(crate) use node_detail::{wrap_line, wrap_line_joined};
 mod editor;
 mod keys_settings;
 mod messages_detail;
 mod messages_reply;
 mod overlay_lines;
-pub(crate) use overlay_lines::{
-    humanize_age, nav_agent_tokens, nav_overlay_lines, peek_overlay_lines,
-};
+#[cfg(test)]
+pub(crate) use overlay_lines::nav_overlay_lines;
+pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, peek_overlay_lines};
 mod messages_view;
 mod org_board;
-mod org_detail;
-mod org_graph;
-mod org_table;
+mod org_pages;
+mod org_seats;
+mod org_tabs;
 mod overlay_paint;
 mod release_check;
 mod settings_modal;
@@ -1850,6 +1859,8 @@ mod terminal_cursor;
 use overlay_keys::{answer_keys, move_to_keys, nav_goto, nav_keys, recruit_keys, rename_keys};
 
 mod bottom_row;
+
+mod scroll_mode;
 
 use input_folds::{
     fold_modal_keys, fold_nav_input, fold_search_input, fold_selector_keys,
@@ -2044,6 +2055,8 @@ impl View {
             row_slot: None,
             search: None,
             search_esc: Vec::new(),
+            scroll_mode: false,
+            scroll_esc: Vec::new(),
             hover_focus: true,
             card_graph: crate::client::card_line::CardGraph::Activity,
             theme: Theme::default_theme(),
@@ -3976,26 +3989,32 @@ impl View {
         for s in &self.layout.squads {
             // Always SelectSquad (unlike the sideline's active-squad
             // CycleSection): the navigator is a jump, never a view-state cycle.
-            out.push(NavRow::new(
-                s.name.clone(),
-                PaneState::Idle,
-                None,
-                None,
-                ChromeHit::Cmds(vec![Command::SelectSquad(s.id)]),
-                &[],
-            ));
+            out.push(
+                NavRow::new(
+                    s.name.clone(),
+                    PaneState::Idle,
+                    None,
+                    None,
+                    ChromeHit::Cmds(vec![Command::SelectSquad(s.id)]),
+                    &[],
+                )
+                .with_menu(row_menu::NavMenu::Squad(s.id)),
+            );
             for (t, tab) in s.tabs.iter().enumerate() {
                 let tab_text = tab_label_text(&tab.name, t, tab.named);
-                out.push(NavRow::new(
-                    format!("{} › {}", s.name, tab_text),
-                    PaneState::Idle,
-                    // SelectTab resolves the squad server-side, so one command
-                    // switches squad+tab (row_action's tab arm, gemini review).
-                    None,
-                    None,
-                    ChromeHit::Cmds(vec![Command::SelectTab(tab.id)]),
-                    std::slice::from_ref(&s.name),
-                ));
+                out.push(
+                    NavRow::new(
+                        format!("{} › {}", s.name, tab_text),
+                        PaneState::Idle,
+                        // SelectTab resolves the squad server-side, so one command
+                        // switches squad+tab (row_action's tab arm, gemini review).
+                        None,
+                        None,
+                        ChromeHit::Cmds(vec![Command::SelectTab(tab.id)]),
+                        std::slice::from_ref(&s.name),
+                    )
+                    .with_menu(row_menu::NavMenu::Tab(tab.id)),
+                );
                 // Plain panes of the tab (v22): a pane already shown as an agent
                 // row is skipped (the agent row is the richer view of the same
                 // pane); the rest become goto-able so a bare shell pane in any
@@ -4025,31 +4044,37 @@ impl View {
                     Some(TabContext::Ordinal(n)) => format!("{} › {} ·{n}", s.name, a.name),
                     None => format!("{} › {}", s.name, a.name),
                 };
-                out.push(NavRow::new(
-                    label,
-                    nav_agent_state(a),
-                    // Switch to the agent's squad first when it is not active, so
-                    // the following FocusPane lands there (the server resolves the
-                    // pane's tab on focus; the ordinal is display-only).
-                    cross(s.id),
-                    None,
-                    agent_hit(a, self.layout.active_squad),
-                    &nav_agent_tokens(a, Some(&s.name)),
-                ));
+                out.push(
+                    NavRow::new(
+                        label,
+                        nav_agent_state(a),
+                        // Switch to the agent's squad first when it is not active, so
+                        // the following FocusPane lands there (the server resolves the
+                        // pane's tab on focus; the ordinal is display-only).
+                        cross(s.id),
+                        None,
+                        agent_hit(a, self.layout.active_squad),
+                        &nav_agent_tokens(a, Some(&s.name)),
+                    )
+                    .with_menu(row_menu::NavMenu::Agent(AgentIdent::of(a))),
+                );
             }
         }
         // Orphan agents (no live squad), mirroring display_rows' orphan section.
         for a in self.layout.agents.iter().filter(
             |a| !matches!(a.squad, Some(id) if self.layout.squads.iter().any(|s| s.id == id)),
         ) {
-            out.push(NavRow::new(
-                a.name.clone(),
-                nav_agent_state(a),
-                None,
-                None,
-                agent_hit(a, self.layout.active_squad),
-                &nav_agent_tokens(a, None),
-            ));
+            out.push(
+                NavRow::new(
+                    a.name.clone(),
+                    nav_agent_state(a),
+                    None,
+                    None,
+                    agent_hit(a, self.layout.active_squad),
+                    &nav_agent_tokens(a, None),
+                )
+                .with_menu(row_menu::NavMenu::Agent(AgentIdent::of(a))),
+            );
         }
         out
     }
@@ -4869,6 +4894,8 @@ impl View {
             // key-table poster (opaque, sectioned, scrollable).
             draw_popup_overlay(&mut cells, rows, cols, &m.popup, self.term, &self.theme);
         } else if let Some(m) = &self.row_menu {
+            // A menu opened from the navigator paints over it, not instead.
+            self.draw_nav(&mut cells, rows, cols, overlay_origin, overlay_dims);
             // US2: the anchored row context menu, drawn at the pointer.
             draw_popup_overlay(&mut cells, rows, cols, &m.popup, self.term, &self.theme);
         } else if let Some(m) = &self.aux {
@@ -5005,7 +5032,7 @@ impl View {
                 overlay_origin,
                 overlay_dims,
                 &chrome,
-                &conn.render(),
+                &conn.render_with(&self.layout.agents, overlay_text_cols(overlay_dims.1)),
                 &self.theme,
                 None,
             );
@@ -5042,29 +5069,8 @@ impl View {
             // pickers, centered or full-screen overlay - paints from its
             // own module (the file-budget gate keeps client.rs shrinking).
             self.draw_board(&mut cells, rows, cols);
-        } else if let Some(nav) = &self.nav {
-            // navigator: the filtered flat catalog + query/chip line. Rows
-            // recompute per frame from the live layout (no cache), so a push
-            // repopulates it.
-            let filtered = self.nav_filtered(nav);
-            let lines = nav_overlay_lines(&filtered, nav);
-            let chrome = chrome::Chrome::new("navigator", Anchor::Center)
-                .footer("type to filter · esc close");
-            draw_lines_overlay(
-                &mut cells,
-                rows,
-                cols,
-                overlay_origin,
-                overlay_dims,
-                &chrome,
-                &lines,
-                &self.theme,
-                // The navigator is the uncapped selector this whole change
-                // points operators at, so its cursor must stay on screen too:
-                // a session with more rows than the viewport would otherwise
-                // drive the selection below the fold. +1 for the query line.
-                Some(nav.cursor + 1),
-            );
+        } else if self.nav.is_some() {
+            self.draw_nav(&mut cells, rows, cols, overlay_origin, overlay_dims);
         } else if self.org_board.is_some() && self.board_full {
             org_board::paint(self, &mut cells, rows, cols, cols, rows);
         } else if self.messages_board.is_some() {
@@ -5088,6 +5094,7 @@ impl View {
             // per-pane indicator is drawn INTO the cells above from each pane
             // frame's own scroll_offset.
             scroll_offset: 0,
+            history_lines: 0,
         }
     }
 
@@ -5239,7 +5246,7 @@ impl View {
             origin,
             dims,
             &chrome,
-            &conn.render(),
+            &conn.render_with(&self.layout.agents, overlay_text_cols(dims.1)),
             None,
             OverlayAnchor::Center,
         )
@@ -5321,31 +5328,6 @@ impl View {
         lines.push(pad_to(" hjkl/arrows move · enter move here", W));
         lines.push(pad_to(" 1-9 move to first nine · esc/q cancel", W));
         lines
-    }
-
-    /// Paint the in-scrollback search line over the bottom row (v12).
-    /// Blank first so the divider-fill pass cannot bleed through (gotcha).
-    /// Typing shows `/query_`; browsing shows `[i/n] /query` or `/query - no
-    /// matches` (total 0).
-    fn draw_search_line(&self, cells: &mut [Cell], rows: usize, cols: usize, sv: &SearchView) {
-        let r = rows - 1;
-        for c in 0..cols {
-            cells[r * cols + c] = Cell::default();
-        }
-        let text = match sv.result {
-            Some((0, _)) => format!(" /{} - no matches", sv.query),
-            Some((total, current)) => format!(" [{current}/{total}] /{}", sv.query),
-            // Typing, or submitted but awaiting the first reply: show the input.
-            None => format!(" /{}_", sv.query),
-        };
-        for (i, ch) in text.chars().take(cols).enumerate() {
-            cells[r * cols + i] = Cell {
-                c: ch,
-                fg: Color::Default,
-                bg: Color::Default,
-                flags: cell_flags::BOLD,
-            };
-        }
     }
 
     /// The tab-bar spans in paint order: the active squad's name (inert), its
@@ -6378,9 +6360,8 @@ fn agent_hit(a: &AgentRow, _active_squad: u64) -> ChromeHit {
             // The default gesture names portal 0, which is exactly
             // where the single thread pane always landed. `P` opens the next
             // free portal beside it; nothing about this path changed.
-            let id = a.attach_id.clone().unwrap_or_else(|| a.name.clone());
             ChromeHit::Cmds(vec![Command::AttachAgent {
-                id,
+                id: a.reach_key(),
                 placement: PanePlacement {
                     portal: Some(0),
                     ..PanePlacement::default()
@@ -6753,6 +6734,8 @@ pub(crate) struct NavRow {
     /// FocusPane/AttachAgent for an agent, the dispatch confirm / focus for a
     /// card, or a [`ChromeHit::Notice`] that keeps the navigator open.
     hit: ChromeHit,
+    /// What the row menu (Ctrl-o) acts on; set by [`NavRow::with_menu`].
+    menu: row_menu::NavMenu,
 }
 
 impl NavRow {
@@ -6778,6 +6761,7 @@ impl NavRow {
             goto_squad,
             goto_tab,
             hit,
+            menu: row_menu::NavMenu::None,
         }
     }
 }
@@ -7074,21 +7058,6 @@ fn nav_glyph(s: PaneState) -> char {
 /// transcript still follows within ~3s; a silent row stops refetching entirely.
 const PEEK_REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 
-/// Humanize an age in seconds to `Ns`/`Nm`/`Nh`/`Nd` for the peek
-/// header's `changed Ns ago` line (Discretion 3). A future stamp (clock skew)
-/// is clamped by the caller to 0 before this, so `0s` is the floor.
-pub(crate) fn humanize_ago(secs: u64) -> String {
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h", secs / 3600)
-    } else {
-        format!("{}d", secs / 86_400)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Attach + main loop
 // ---------------------------------------------------------------------------
@@ -7276,7 +7245,7 @@ async fn attach_and_run(
         tokio::sync::mpsc::unbounded_channel::<theme_import_ui::ImportMsg>();
     let (board_tx, mut board_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, backlog_board::BoardMsg)>();
-    let (org_tx, mut org_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, org_detail::OrgMsg)>();
+    let (org_tx, mut org_rx) = tokio::sync::mpsc::unbounded_channel::<(u64, org_board::OrgMsg)>();
     let (share_tx, mut share_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, share_flow::ShareMsg)>();
     view.share_tx = Some(share_tx);
@@ -7470,6 +7439,9 @@ async fn attach_and_run(
         }
         // kick a wanted Connections read off the UI loop, at most one in
         // flight, tagged with the current gen so a stale result is dropped.
+        if view.connections.as_mut().is_some_and(|cv| cv.usage_due()) {
+            view.rearm_connections_read();
+        }
         if view.conn_want && !view.conn_inflight {
             view.conn_want = false;
             view.conn_inflight = true;
@@ -8022,7 +7994,7 @@ async fn attach_and_run(
                 }
             }
             Some((gen, msg)) = org_rx.recv() => {
-                org_detail::apply(&mut view, gen, msg);
+                org_board::apply(&mut view, gen, msg);
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }
@@ -8857,13 +8829,7 @@ async fn dispatch_event(
             // Pure local state, like the sort cycle: no geometry, no wire.
             view.agent_group = view.agent_group.next();
             view_store::save_agent_group(view.agent_group);
-            let word = match view.agent_group {
-                AgentGroup::Workspace => "workspace",
-                AgentGroup::Team => "lead",
-                AgentGroup::Cwd => "cwd",
-                AgentGroup::Status => "status",
-            };
-            view.set_notice(format!("grouping by {word}"));
+            view.set_notice(format!("grouping by {}", view.agent_group.word()));
         }
         Event::ToggleCardHead => {
             // Pure local state: the head row is one display row, and the
@@ -8915,6 +8881,7 @@ async fn dispatch_event(
         Event::OpenSweepThreads => {
             execute_aux_action(view, AuxAction::OpenSweep, sock_w).await?;
         }
+        Event::LiftHold => hold::lift(view).await,
         Event::OpenSidelineMenu => {
             // The footer `menu` button's popup, on the keyboard.
             view.open_sideline_menu(Anchor::Center);
@@ -8978,6 +8945,19 @@ async fn dispatch_event(
                 result: None,
             });
             view.search_esc.clear();
+            return Ok(DispatchFlow::Break);
+        }
+        Event::ScrollModeOpen => {
+            // Enter keyboard scroll mode on the focused pane. Keystrokes
+            // divert to scroll_mode_keys on the next read; the moves ride the
+            // shared server-side scroll offset the wheel drives. A server that
+            // predates the v118 commands gets a bell, never a dead mode.
+            if !server_has_pane_scroll(view.server_proto) {
+                let _ = raw_out(b"\x07");
+                return Ok(DispatchFlow::Continue);
+            }
+            view.scroll_mode = true;
+            view.scroll_esc.clear();
             return Ok(DispatchFlow::Break);
         }
         Event::OpenNav => {
@@ -9302,6 +9282,7 @@ async fn execute_aux_action(
             view.aux = None;
             return Ok(DispatchFlow::Detach);
         }
+        AuxAction::LiftHold => hold::lift(view).await,
         AuxAction::ToggleExperimental(flag) => experimental::toggle(view, flag),
         AuxAction::Share(act) => share_flow::act(view, act).await,
         AuxAction::OpenBacklogView => {
@@ -9312,6 +9293,7 @@ async fn execute_aux_action(
         | AuxAction::ToggleStatus
         | AuxAction::ToggleConfirmLifecycle
         | AuxAction::ToggleResourceMeter
+        | AuxAction::ToggleReserveAuto
         | AuxAction::ToggleSidelineLayout
         | AuxAction::ApplyTheme(_)
         | AuxAction::ThemeImportOpen
@@ -10340,6 +10322,7 @@ mod agent_sort;
 
 #[path = "client/agent_group.rs"]
 mod agent_group;
+mod hold;
 
 #[path = "client/header_band.rs"]
 mod header_band;

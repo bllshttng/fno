@@ -202,14 +202,9 @@ fn policy(cwd: &Path) -> Value {
 }
 
 /// `{account_id: vendor}` from the account records' `route` first segments.
-/// The legacy `providers.records` alias answers the same question.
 fn account_record_vendors(cwd: &Path) -> Value {
-    let records = crate::agents_config::config_value_deep(cwd, &["accounts", "records"])
-        .or_else(|| crate::agents_config::config_value_deep(cwd, &["providers", "records"]))
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
     let mut out = Map::new();
-    for record in &records {
+    for record in &crate::accounts::records::raw_records(None, cwd) {
         let id = toml_str(record.get("id"));
         let route = toml_str(record.get("route"));
         if id.is_empty() || route.trim().is_empty() {
@@ -228,10 +223,10 @@ fn account_record_vendors(cwd: &Path) -> Value {
 }
 
 /// The snapshot at `<state_dir>/cache/benchmarks.json` (the root spelling
-/// still reads while it exists: the Python writer renames it into `cache/`
-/// on its first resolve), or None when absent, unreadable, or missing
+/// still reads while it exists; `accounts::benchmarks` writes only `cache/`),
+/// or None when absent, unreadable, or missing
 /// `fetched_at`/`source` (invalid is ignored, never a dead gather).
-fn load_snapshot(cwd: &Path) -> Option<Value> {
+pub(crate) fn load_snapshot(cwd: &Path) -> Option<Value> {
     let root = crate::agents_config::state_dir(cwd)?;
     let new = root.join("cache").join("benchmarks.json");
     let legacy = root.join("benchmarks.json");
@@ -350,7 +345,7 @@ fn snapshot_percentiles(snapshot: Option<Value>) -> Map<String, Value> {
 /// one name overriding per field. A snapshot percentile derives a band only
 /// when the row carries none of its own; the objective is validated against
 /// the three-word vocabulary. Never fails: an unreadable piece answers empty.
-fn inventory(cwd: &Path) -> Value {
+pub(crate) fn inventory(cwd: &Path) -> Value {
     let (tiers, reach) = load_model_tiers();
     let cfg_rows: Vec<toml::Value> =
         crate::agents_config::config_value_deep(cwd, &["routing", "models"])

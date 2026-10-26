@@ -1,0 +1,1 @@
+{"op": "detail", "record": {"id": "g1", "name": "g", "harness": "gemini", "auth": "oauth_dir", "credentials_source": "{dir}/g"}, "expect": {"snapshot": null, "reason": "harness-unsupported"}}

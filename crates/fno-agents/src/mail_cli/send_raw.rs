@@ -17,7 +17,7 @@ const REVIEW_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 /// Python `repr(str)` for refusal text: single quotes, backslash and quote
 /// escaped. The refusal strings interpolate `{name!r}`, and Rust's `{:?}`
 /// renders double quotes, so every interpolation goes through this.
-fn py_repr(value: &str) -> String {
+pub(crate) fn py_repr(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
     for ch in value.chars() {
@@ -291,9 +291,7 @@ fn raw_send(
     }
 
     let transport_sender = crate::identity::ambient_agent_handle();
-    let sender = transport_sender
-        .clone()
-        .unwrap_or_else(|| "fno".to_string());
+    let sender = crate::system_sender::stamp_or_unknown(None, || transport_sender.clone());
     let raw_recipient = crate::identity::canonical_handle(&session_id);
     let authored_words = crate::backlog::style_check::word_count(stripped);
     let mut failure_reasons: Vec<String> = Vec::new();

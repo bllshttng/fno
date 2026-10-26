@@ -23,11 +23,11 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("attestation retract <args>...", "Revoke a passing review_attestation by naming the pair that passed (--reviewer, --attester, --head, --reason/-R); refused when no matching pass exists."),
     ("merge <pr_number> [flags]", "Merge a PR with the fno-canonical guards. Emits a JSON line {pr, outcome, reason, strategy[, cleanup]}; exit 0 merged, 1 failed, 2 skipped|held, 3 merge-landed-cleanup-failed, 127 gh-missing."),
     ("verify --kind merged|reviews --pr-number <n> --state-file <f>", "Verify an external PR gate: merged audits GitHub merge state (one bounded remediation); reviews flips the external-review gate when a reviewer has no qualifying reply. Exit 0 clean/degrade, 1 blocked/flipped, 2 substrate failure."),
-    ("status <pr> [--refresh]", "One authoritative CI verdict from statusCheckRollup; prints a JSON line {pr, verdict, settled, green, checks}. exit 0 green, 1 red, 2 pending, 3 unknown, 4 read failed, 127 gh-missing. --refresh bypasses the coalescing cache for one live read (manual use only)."),
-    ("wait <pr> [--until settled|red|green|review] [--timeout 15m] [--interval 60]", "The sanctioned watcher through the coalescing cache; exits the status command's own code. Red cancels the head's runs; a red made only of cancelled runs waits for the rerun; CONFLICTING exits 5 with a rebase receipt."),
+    ("status <pr>|main [--refresh]", "One authoritative CI verdict from statusCheckRollup; prints a JSON line {pr, verdict, settled, green, checks}. exit 0 green, 1 red, 2 pending, 3 unknown, 4 read failed, 127 gh-missing. `main` reads every workflow run at main's head sha instead: red if any one failed, pending while any one runs. --refresh bypasses the coalescing cache for one live read (manual use only)."),
+    ("wait <pr> [--until settled|red|green|review] [--timeout 15m] [--interval 60]", "The sanctioned watcher through the coalescing cache; exits the status command's own code. Red cancels the head's runs; a red made only of cancelled runs, or left by the attempt before a rerun, waits for the rerun; CONFLICTING exits 5 with a rebase receipt."),
     ("coverage-publish <pr> [--head H] [--repo R]", "Publish the review-coverage verdict for a PR head as the commit status fno/review-coverage. Never recomputes. exit 0 posted, 1 not posted."),
     ("info [<pr>] [--repo R]", "Read PR state, URL, head SHA, refs, and mergeability; the read runs in the Rust op door. Prints JSON; exit 4 when the read cannot answer."),
-    ("list [--state open] [--repo R]", "List PR number, state, title, head ref, and URL through REST."),
+    ("list [--state open] [--repo R] [--since YYYY-MM-DD]", "List PR number, state, title, head ref, URL, and created, closed and merged stamps through REST. --since keeps PRs created on or after that UTC day."),
     ("graphql-exec --purpose discretionary -- <gh argv>", "Run one gh GraphQL read under the reserve accounting. Everything after -- is gh's full argv, command words first; a flag-first argv is refused, because gh answers flags with no command word by printing its root command list."),
     ("logs [<pr>] [--job J] [--lines 40] [--full]", "Why did CI fail: spool the failing job's log to .fno/last-ci.log and print its last 40 lines. exit 0 green, 1 red, 2 pending, 3 no checks, 4 fetch error, 127 gh-missing."),
     ("heal [<pr>] [--apply] [--all] [--playbook]", "Classify a red check by signature, apply the mechanical fix, push once. exit 0 nothing red, 1 escalations remain, 2 a run in flight, 3 wrong branch or dirty tree, 4 read error, 127 binary missing."),
@@ -45,7 +45,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("sync-canonical --pr-number <n>", "Post-merge canonical-checkout sync; exactly-once per merge SHA via a marker + single-flight lock; fail-open. exit 0 no-op/skipped/synced, non-zero on a failed sync_command or a dirty canonical checkout on touched paths."),
     ("publish-review <args>...", "Post a review verdict to GitHub as config.review.bot_identity (--pr-number N; --verdict defaults to the newest head-pinned attestation; --dry-run/-N). exit 0 posted, 1 skipped|refused|failed, 2 no attestation to default from."),
     ("rebase [--base B] [--continue]", "Rebase the current branch via the conflict-delegation protocol. Two-phase: exit 42 means the caller must invoke the conflict-resolver agent, then call back --continue."),
-    ("push [flags]", "The one guarded push: fetch, rebase onto origin/main, optionally preflight, push exactly once, print one receipt. Exit 0 pushed (ci=settled|bypassed|red-cancel), 1 preflight red, 2 a live run in flight, 3 a refusal, 4 a read error, 127 binary missing."),
+    ("push [flags]", "The one guarded push: fetch, rebase onto origin/main, optionally preflight, push exactly once to the PR head the upstream names, print one receipt with the remote ref. Exit 0 pushed (ci=settled|bypassed|red-cancel), 1 preflight red, 2 a live run in flight, 3 a refusal, 4 a read error, 127 binary missing."),
     ("create [flags]", "Duplicate-guarded create; exit 3 refuses a twin (--not-duplicate <pr>)."),
     ("ritual [<pr>] [--autonomous]", "Mechanical core of the post-merge ritual as one idempotent sequence with a per-leg receipt line. Hidden: the `fno do pr merged` skill is the attended front door."),
     ("closure-trailer [<node>] [--extra ID]...", "Print the exact `Fixes` closure line for NODE plus its contained_in descendants. Prints nothing (exit 0) when NODE is unresolvable or nothing well-formed remains. Exit 4 means the graph read itself failed."),
@@ -221,6 +221,10 @@ fn dispatch(sub: &str, tail: &[String]) -> i32 {
             crate::authorized_merge::run_authorized_merge(&bound_tail(sub, tail))
         }
         "verify" => crate::pr_verify::run(tail),
+        "status" if tail.iter().any(|a| a == "main") => crate::main_ci::run_status_main(
+            &PathBuf::from(current_cwd_string()),
+            tail.iter().any(|a| a == "--refresh" || a == "--no-cache"),
+        ),
         "status" => {
             let payload = json!({
                 "op": "status-read",

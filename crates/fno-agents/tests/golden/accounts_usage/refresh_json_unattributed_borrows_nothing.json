@@ -1,0 +1,39 @@
+{
+  "args": [
+    "--refresh",
+    "--json"
+  ],
+  "files": [
+    {
+      "rel": ".fno/config.toml",
+      "text": "[[accounts.records]]\nid = \"readyrule\"\nname = \"readyrule\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-alt\"\n\n[[accounts.records]]\nid = \"makers\"\nname = \"makers\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{dir}/claude-main\"\n"
+    },
+    {
+      "rel": "claude-alt/.credentials.json",
+      "text": "{}"
+    },
+    {
+      "rel": "claude-main/.credentials.json",
+      "text": "{}"
+    }
+  ],
+  "probe": {
+    "readyrule": {
+      "windows": [
+        [
+          "5h",
+          9.0,
+          1800000000.0
+        ]
+      ],
+      "probed_at": 1789399970.0,
+      "source": "oauth-endpoint"
+    },
+    "makers": "unattributed"
+  },
+  "slot": null,
+  "persist": true,
+  "ttl": 300,
+  "threshold": 90.0,
+  "expect": "{\"readyrule\": {\"source\": \"oauth-endpoint\", \"probed_at\": 1789399970.0, \"partial\": false, \"confidence\": \"exact\", \"windows\": [{\"label\": \"5h\", \"used_pct\": 9.0, \"resets_at\": 1800000000.0}], \"identity\": {\"status\": \"unknown\", \"account\": null, \"reason\": \"unbound-principal\", \"observed_at\": 1789400000.0}}, \"makers\": {\"state\": \"unknown\", \"reason\": \"unattributed\"}}\n"
+}

@@ -113,7 +113,7 @@ These five move or remove state around sessions. None stops or removes a session
 14. the dry-run unverified gate: `held {id} (dry-run did not evaluate: {gate}; apply may still refuse)`
 15. the tree verdict, then the commit: `kept tree {id} (...)` lines, then the retire lines
 
-The origin rule cuts across steps 6 to 10. It covers a spawn row, and an adopted row whose Claude state reads done, stopped or failed. Operator rows never retire. Take such a row idle past the hour with no live work-claim. It skips the open-do-row gate at step 6. It retires at step 7, ahead of every keep below it (`gc.rs` `past_idle_hour`). At stage and commit, an open do row on a done node no longer holds it. An open do row on a node still open is fresh work, and it still holds (`gc_sweep.rs` `obligation`). Inside the hour every step reads as listed.
+The origin rule cuts across steps 6 to 10. It covers a spawn row. It covers an adopted row whose Claude state reads done, stopped or failed. It covers a no-origin claude bg row whose transcript carries a real fno skill invocation (the bg-adoption ruling of 2026-10-24). Operator rows never retire. Take such a row idle past the hour with no live work-claim. It skips the open-do-row gate at step 6. It retires at step 7, ahead of every keep below it (`gc.rs` `past_idle_hour`). At stage and commit, an open do row on a done node no longer holds it. An open do row on a node still open is fresh work, and it still holds (`gc_sweep.rs` `obligation`). Inside the hour every step reads as listed.
 
 ## A dry run and a real run answer different questions
 
@@ -138,6 +138,8 @@ Four reasons are permanent by construction. Each is decided before the graph is 
 - `kept {id} (operator row)`: a human started this session (`gc.rs` `gc_decide`). No sweep touches it.
 - `kept {id} (promoted)`: the row belongs to a titled orchestrator (`gc.rs` `gc_decide`).
 - `kept {id} (not a spawn row: {why})`: fno did not spawn the session. The row is someone else's fact about it. Done plus quiet does not make it fno's to remove (`gc.rs` `gc_decide`). One exit exists. A recorded pid that answers ESRCH proves a corpse. So does a claude row absent from a known `claude agents` roster read. Such a row falls through and is judged like any other row. An unknown or partial roster read keeps the row.
+
+A second exit is the bg-adoption ruling of 2026-10-24. A no-origin claude row whose transcript carries a real fno skill invocation is fno's own work: the invocation is the join fno can prove, so the row reaps like a spawn row - node done, PR merged, then the one idle hour. `using-fno` never counts. The preamble is injected as context only after the session already joined, and a join needs a real fno skill or command, so the preamble is evidence of a join, never the invocation itself. `fno-me` counts like any other command. A bg row with neither an invocation nor an origin stays a discussion (`gc.rs` `gc_decide`, `session_backfill.rs` `bg_fno_invocation`).
 - `kept {id} (keep mark: ...)`: the user set a keep mark with `fno agents registry reap --keep <row>`. One command lifts it: `fno agents registry reap --unkeep <row>`. `fno agents registry reap --kept` lists every mark and flags one with no registry row. The mark is keyed by harness session id. It outlives the row it was set on and follows a resumed fork through its recorded lineage. It holds the registry sweep, the roster sweep and the merge reaper. It prints ahead of `user typed` on a row that carries both. `fno agents session rm` still removes a kept row. The mark is the one permanent keep a command can lift.
 
 When the registry holds no origin at all, the third reason prints `no origin recorded` (`reap_render.rs` `render_reap`).
@@ -410,7 +412,7 @@ Every keep and hold reason from the sections above, one row each.
 | `kept {id} (dead open work: {node})` | Resume: `fno agents session resume <id>`. The ladder's Resume rung does this automatically. | `fno agents session list` shows the row's process gone while the node reads `in_progress`. |
 | `kept {id} (operator row)` | Wait. This one is permanent. | The line itself names the reason. |
 | `kept {id} (promoted)` | Wait. This one is permanent. | The line itself names the reason. |
-| `kept {id} (not a spawn row: {why})` | Wait. This one is permanent. | The line prints `origin adopted` or `no origin recorded`. |
+| `kept {id} (not a spawn row: {why})` | Wait. This one is permanent - unless the row is claude and its transcript shows a real fno skill invocation (the bg-adoption ruling; see [Rows no sweep can take](#rows-no-sweep-can-take)). | The line prints `origin adopted` or `no origin recorded`. |
 | `kept {id} (keep mark: set {time} by {who})` | When the session is no longer wanted: `fno agents registry reap --unkeep <row>`. `--kept` lists every mark. | The dry run line itself. |
 | `kept {id} (open work: {node} {status}; read via {reader})` | Wait for the node to ship. Never close the node by hand. | Run `fno backlog get <node>` and read `status`. |
 | `kept {id} (open work inside the retire window: {node} {status}; read via {reader}; quiet past the window retires)` | Wait past the window, or act on the named node. | Run `fno backlog get <node>` and read `status`. |

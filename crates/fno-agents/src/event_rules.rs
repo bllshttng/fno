@@ -21,7 +21,9 @@ const TABLE: &str = include_str!("event_rules.toml");
 /// and the fire's span carries `cap_reached`.
 pub(crate) const BLOCK_CAP: usize = 3;
 
-const ACTIONS: &[&str] = &["block", "nudge", "notify", "emit"];
+/// The reply tail a Stop block keeps on its span, so `intel --lens rules`
+/// can show a judge what the rule fired on. The tail is where asks sit.
+const EXCERPT_CHARS: usize = 600;
 
 /// The four classes only the user decides; `class_user_only` reads them off
 /// a question's escalate route span.
@@ -68,53 +70,42 @@ pub struct Fire {
     pub notify: Option<(String, String, Option<String>)>,
 }
 
+/// The table parses through the shared rule schema (`crate::rules`); this
+/// maps each rule onto the Stop runtime's action names. The runtime's
+/// `nudge` is a `warn`, and `notify` and `emit` are `inform` rows with a
+/// delivery channel.
 fn parse_table() -> Result<Vec<Row>, String> {
-    let raw: toml::Value = toml::from_str(TABLE).map_err(|e| format!("event_rules.toml: {e}"))?;
-    let items = raw
-        .get("rule")
-        .and_then(toml::Value::as_array)
-        .ok_or("event_rules.toml: the [[rule]] array is missing")?;
+    let rules = crate::rules::parse_table(TABLE).map_err(|e| format!("event_rules.toml: {e}"))?;
     let mut rows = Vec::new();
-    for item in items {
-        let get = |k: &str| {
-            item.get(k)
-                .and_then(toml::Value::as_str)
-                .unwrap_or_default()
-                .to_string()
+    for rule in rules {
+        let action = match (rule.action.as_str(), rule.deliver()) {
+            ("block", _) => "block",
+            ("warn", _) => "nudge",
+            ("inform", "notify") => "notify",
+            ("inform", "emit") => "emit",
+            (action, deliver) => {
+                return Err(format!(
+                "event_rules.toml: {}: action {action} with deliver {deliver} has no Stop runtime",
+                rule.id
+            ))
+            }
+        };
+        let [event] = rule.when.events.as_slice() else {
+            return Err(format!(
+                "event_rules.toml: {} must name exactly one event",
+                rule.id
+            ));
         };
         let row = Row {
-            id: get("id"),
-            event: get("event"),
-            when: item
-                .get("when")
-                .and_then(toml::Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            action: get("action"),
-            what: get("what"),
-            why: get("why"),
-            instead: get("instead"),
-            default: item
-                .get("default")
-                .and_then(toml::Value::as_bool)
-                .unwrap_or(true),
+            event: event.strip_prefix("journal:").unwrap_or(event).to_string(),
+            when: rule.when.predicates.clone(),
+            action: action.to_string(),
+            default: rule.default,
+            id: rule.id,
+            what: rule.what,
+            why: rule.why,
+            instead: rule.instead,
         };
-        if row.id.is_empty() {
-            return Err("event_rules.toml: a row has no id".into());
-        }
-        if !ACTIONS.contains(&row.action.as_str()) {
-            return Err(format!(
-                "event_rules.toml: {} names unknown action {:?}",
-                row.id, row.action
-            ));
-        }
-        if row.event.is_empty() {
-            return Err(format!("event_rules.toml: {} names no event", row.id));
-        }
         if row.what.is_empty() || row.why.is_empty() || row.instead.is_empty() {
             return Err(format!(
                 "event_rules.toml: {} must carry non-empty what, why and instead",
@@ -131,9 +122,6 @@ fn parse_table() -> Result<Vec<Row>, String> {
             }
         }
         rows.push(row);
-    }
-    if rows.is_empty() {
-        return Err("event_rules.toml: no rows".into());
     }
     Ok(rows)
 }
@@ -339,6 +327,13 @@ fn stop_block(
     if prior + 1 >= BLOCK_CAP {
         attrs.insert("cap_reached".to_string(), json!(true));
     }
+    let skip = ctx
+        .last_message
+        .chars()
+        .count()
+        .saturating_sub(EXCERPT_CHARS);
+    let excerpt: String = ctx.last_message.chars().skip(skip).collect();
+    attrs.insert("excerpt".to_string(), json!(excerpt));
     write_fire_span(
         journal,
         ctx,
@@ -481,9 +476,10 @@ fn predicate(ctx: &Ctx, name: &str, ev: Option<&Value>) -> bool {
     negated != value
 }
 
-/// A worker ask addressed to its lead (the `Approval:` template), or any ask
-/// sentence plus a numbered list of two or more options - the chat shape the
-/// R1 rows police.
+/// A worker ask addressed to its lead (the `Approval:` template), or an ask
+/// sentence with its options: the numbered list right under the ask line, or
+/// the options inline on the ask's own line. An ask word in one paragraph and
+/// a status list in another is a report, not an ask.
 fn decision_ask(text: &str) -> bool {
     if text
         .lines()
@@ -491,10 +487,42 @@ fn decision_ask(text: &str) -> bool {
     {
         return true;
     }
-    if crate::repeated_asks::asks_in(text).is_empty() {
-        return false;
-    }
-    numbered_options(text) >= 2
+    let lines: Vec<&str> = text.lines().collect();
+    lines.iter().enumerate().any(|(i, line)| {
+        if crate::repeated_asks::asks_in(line).is_empty() {
+            return false;
+        }
+        if numbered_options(line) >= 2 {
+            return true;
+        }
+        let blank = |l: &&&str| l.trim().is_empty();
+        let item = |l: &&&str| is_numbered_item(l);
+        !is_numbered_item(line)
+            && (lines[i + 1..]
+                .iter()
+                .skip_while(blank)
+                .take_while(item)
+                .count()
+                >= 2
+                // "Options: 1. x 2. y" then "Which do you want?" is an ask too.
+                || (line.trim_end().ends_with('?')
+                    && lines[..i]
+                        .iter()
+                        .rev()
+                        .skip_while(blank)
+                        .take_while(item)
+                        .count()
+                        >= 2))
+    })
+}
+
+fn is_numbered_item(line: &str) -> bool {
+    let line = line.trim_start();
+    let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+    digits > 0
+        && line[digits..]
+            .strip_prefix(['.', ')'])
+            .is_some_and(|rest| rest.starts_with(char::is_whitespace))
 }
 
 fn numbered_options(text: &str) -> usize {
@@ -1024,6 +1052,7 @@ mod tests {
         let spans = rig.spans();
         assert_eq!(spans.len(), 1, "one block span for one fire");
         assert_eq!(spans[0]["data"]["span_kind"], "block");
+        assert_eq!(spans[0]["data"]["excerpt"], ask);
         assert_eq!(spans[0]["data"]["rule"], "chat_ask_unfiled");
 
         // AC4: the same ask with a question filed this turn allows.
@@ -1104,6 +1133,25 @@ mod tests {
         assert!(!decision_ask(next));
         let receipt = "You ruled hold, which was your call.\n1. held\n2. noted";
         assert!(!decision_ask(receipt));
+        // A numbered status list plus an unrelated "want" sentence in another
+        // paragraph is a report: the options must sit under the ask line.
+        let split =
+            "Prep list:\n1. read the node\n2. cut the worktree\n\nLet me know if the fix grows.";
+        assert!(!decision_ask(split));
+        let spaced = "Should I merge?\n\n1. merge now\n2. hold";
+        assert!(decision_ask(spaced));
+        assert!(decision_ask(
+            "Options:\n1. merge now\n2. hold\nWhich do you want?"
+        ));
+        assert!(!decision_ask(
+            "Done:\n1. merged\n2. reconciled\nLet me know if it grows."
+        ));
+        // A lead fire judged false on 2026-10-23 (intel --lens rules): an ask
+        // marker inside a numbered step is a step, not an ask over options.
+        let approve = "After you approve stable:\n1. Lift the freeze\n\
+                       2. I mail the workers. One PR still needs your visual approval.\n\
+                       3. I hand off to a fresh lead.";
+        assert!(!decision_ask(approve));
     }
 
     fn r1_unpromoted_and_cap_legs() {

@@ -1,0 +1,1 @@
+{"op": "snapshot_age_label", "args": {"id": "ghost"}, "now": 1800000000.0, "expect": {"result": "none", "error": null, "store": {}, "modes": {}, "files": {}, "keychain_writes": []}}

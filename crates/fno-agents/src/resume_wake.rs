@@ -547,11 +547,7 @@ where
     let Some(message) = message else {
         return respawn(plan, name);
     };
-    // Resolve and refuse BEFORE the respawn: a senderless message must not
-    // relaunch a session it can never wrap for.
-    let Some(sender) = resume_sender_name(home, from_name) else {
-        return refuse_senderless_message();
-    };
+    let sender = resume_sender_name(home, from_name);
     let code = respawn(plan, name);
     if code != 0 {
         return code;
@@ -931,26 +927,16 @@ fn parked_roster_state(short_id: &str) -> Option<String> {
 
 /// The sender name a resume delivery carries: a caller-passed `--from-name`
 /// wins; otherwise the caller's own session id's first 8 characters;
-/// otherwise `None` - a daemon-spawned resume with no session identity and
-/// no `--from-name` has nothing to wrap a message under.
-fn resume_sender_name(home: &AgentsHome, from_name: Option<&str>) -> Option<String> {
-    if let Some(name) = from_name.filter(|n| !n.is_empty()) {
-        return Some(name.to_string());
-    }
-    let get = |k: &str| std::env::var(k).ok();
-    crate::spawn_context::resolve_self_identity(&get, None, None, home)
-        .session_id
-        .map(|id| id.chars().take(8).collect())
-}
-
-/// Refuse a message with no resolvable sender before any respawn, claim or
-/// injection (R13's remedy, carried to every container route).
-fn refuse_senderless_message() -> i32 {
-    eprintln!(
-        "fno agents resume: a message needs a sender: pass --from-name fno/<arm>, \
-         or resume from a session"
-    );
-    2
+/// otherwise `unknown`, with the remedy on stderr. A daemon-spawned resume
+/// with no session identity still delivers, under a name that claims no
+/// authority.
+fn resume_sender_name(home: &AgentsHome, from_name: Option<&str>) -> String {
+    crate::system_sender::stamp_or_unknown(from_name, || {
+        let get = |k: &str| std::env::var(k).ok();
+        crate::spawn_context::resolve_self_identity(&get, None, None, home)
+            .session_id
+            .map(|id| id.chars().take(8).collect())
+    })
 }
 
 /// Bring a parked session whose daemon worker is gone back up, then wait for
@@ -1052,7 +1038,7 @@ pub(crate) fn parked_claude_route(
     // Mirror `_with`'s own applicability gate (harness, a real message, a
     // claude short id and a UUID-shaped session) before resolving a sender:
     // a row this route would not take anyway must read None ("not this
-    // arm"), never a senderless-message refusal.
+    // arm").
     if harness != "claude" || message.is_none() {
         return None;
     }
@@ -1078,10 +1064,7 @@ pub(crate) fn parked_claude_route(
     if !matches!(state.as_str(), "blocked" | "done" | "stopped" | "failed") {
         return None;
     }
-    let from = match resume_sender_name(home, from_name) {
-        Some(sender) => sender,
-        None => return Some(refuse_senderless_message()),
-    };
+    let from = resume_sender_name(home, from_name);
     parked_claude_route_with(
         harness,
         entry,
@@ -1359,19 +1342,7 @@ where
     }
 
     let text = message.unwrap_or(RESUME_WAKE_MESSAGE);
-    // Only a REAL message needs a resolvable sender: a bare resume with no
-    // --message still carries the generic wake text, and refusing that one
-    // for want of a sender would break a plain `resume NAME` from a caller
-    // with no session identity, which worked before this fix and reports
-    // nothing to a mail envelope that could ever refuse it.
-    let sender = if message.is_some() {
-        match resume_sender_name(home, from_name) {
-            Some(sender) => sender,
-            None => return refuse_senderless_message(),
-        }
-    } else {
-        resume_sender_name(home, from_name).unwrap_or_else(|| "fno".to_string())
-    };
+    let sender = resume_sender_name(home, from_name);
     let wrapped = match crate::claude_ask::build_cross_session_container(text, &sender) {
         Ok(wrapped) => wrapped,
         Err(reason) => {
@@ -1572,6 +1543,14 @@ pub(crate) fn relaunch_exited_claude_with(
             );
         }
     };
+    // A stale pid proves nothing: `--bg --resume` on a held session copies it.
+    if claude_home.session_held(&uuid) {
+        eprintln!(
+            "fno agents resume: a live claude process still holds {uuid}, so a relaunch \
+             would start a copy of it; attach it with `claude attach {short_id}` or stop it first"
+        );
+        return crate::reentry::REENTRY_REFUSED_EXIT;
+    }
     let spawn_name = relaunch_name(claude_home, row_name, short_id, &uuid);
     // A down-route launch refuses when another holder took the node or PR:
     // the same gate the dead arm runs before its relaunch.
@@ -2454,7 +2433,7 @@ mod tests {
         // resolves a sender. A row the real ambient `claude agents --json
         // --all` does not list (the case in this sandboxed test run, same
         // as `_with`'s own `roster_state(short_id)?`) is not this route's
-        // to refuse: it must read None, never a senderless-message exit 2.
+        // to take: it must read None.
         let _guard = crate::path_test_guard();
         let home = AgentsHome::at(std::env::temp_dir().join("fno-parked-senderless"));
         let code = parked_claude_route(
@@ -2685,7 +2664,7 @@ mod tests {
     }
 
     #[test]
-    fn ac4_edge_live_claude_idle_row_with_no_sender_refuses_before_delivery() {
+    fn a_live_claude_idle_row_with_no_sender_delivers_never_as_fno() {
         let _guard = crate::path_test_guard();
         let (_temp, home) = parked_home("live-claude-senderless");
         let claims = tempfile::tempdir().unwrap();
@@ -2710,8 +2689,13 @@ mod tests {
             None => std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV),
         }
 
-        assert_eq!(code, 2);
-        assert!(deliveries.borrow().is_empty());
+        // No --from-name and, in a sandboxed run, no session identity: the
+        // message still lands, under `unknown` rather than a bare `fno`.
+        assert_eq!(code, 0);
+        assert_eq!(deliveries.borrow().len(), 1);
+        let (_, wrapped, _, _) = &deliveries.borrow()[0];
+        assert!(wrapped.contains("hello"), "{wrapped}");
+        assert!(!wrapped.contains("from-name=\"fno\""), "{wrapped}");
     }
 
     #[test]

@@ -50,7 +50,8 @@ def test_config_chain_is_bounded_by_a_ceiling(tmp_path):
 
     Dropping the developer's FNO_CONFIG is not enough on its own: the candidate
     chain climbs to the canonical checkout through ``git worktree list``, and
-    git ignores HOME. The ceiling is what closes that climb.
+    git ignores HOME. FNO_NO_CANONICAL_CONFIG=1 closes that climb for both
+    loaders, and the ceiling still bounds the Rust readers.
 
     FNO_CONFIG is deliberately NOT re-pinned. Pinning it to one path overrides
     project-local discovery for the whole suite, which breaks the config-writing
@@ -59,6 +60,7 @@ def test_config_chain_is_bounded_by_a_ceiling(tmp_path):
     """
     out = neutralise({"FNO_CONFIG": "/home/dev/.fno/config.toml"}, tmp_path)
     assert "FNO_CONFIG" not in out
+    assert out["FNO_NO_CANONICAL_CONFIG"] == "1"
     assert str(tmp_path) in out["FNO_CONFIG_SEARCH_ROOT"]
 
 

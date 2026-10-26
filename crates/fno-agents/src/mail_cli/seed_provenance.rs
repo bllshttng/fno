@@ -55,7 +55,7 @@ pub fn run(_args: &[String]) -> i32 {
     let mut payload = json!({
         "mode": "wrap",
         "body": format!("{BODY_PREFIX}{seed}{BODY_SUFFIX}"),
-        "from": env_stripped(ENV_FROM).unwrap_or_else(|| "fno".into()),
+        "from": crate::system_sender::stamp_or_unknown(env_stripped(ENV_FROM).as_deref(), || None),
         "from_session": from_session,
     });
     for (key, env) in [

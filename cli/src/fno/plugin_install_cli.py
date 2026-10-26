@@ -1,4 +1,7 @@
-"""``fno config plugin install <claude|codex|opencode|agy> [--force]``.
+"""``fno config plugin install <claude|codex|opencode|agy> [--force] [--dev]``.
+
+The dev channel: it installs your local checkout for development. Over a
+release-channel plugin (stable, rc or nightly) it refuses unless ``--dev``.
 
 Thin Typer front door over ``fno-agents plugin-install``: the Rust command owns
 the stage build, the claude/opencode/agy arms, the env cleanup and the
@@ -12,7 +15,7 @@ from pathlib import Path
 
 import typer
 
-plugin_app = typer.Typer(help="Install the footnote plugin into a harness (from the filtered stage)")
+plugin_app = typer.Typer(help="Install your local checkout of footnote into a harness, for development")
 
 
 # --- stage -------------------------------------------------------------------
@@ -44,7 +47,15 @@ def install(
     ctx: typer.Context,
     harness: str = typer.Argument("", help="claude | codex | opencode | agy"),
 ) -> None:
-    """Install the footnote plugin from the filtered stage (no build output)."""
+    """Install your local checkout for development. --dev replaces a release-channel plugin.
+
+    Side effects. It builds a stage under ~/.fno/plugin-stage/fno and points
+    the harness at it. It removes stale plugin copies. It strips the machine-wide
+    CARGO_BUILD_BUILD_DIR and SCCACHE_DIR lines an older install wrote, from
+    ~/.zshrc, ~/.bashrc, the Claude settings.json and the Codex config.toml.
+    It then runs a reclaim pass over fno's own caches, without the uv cache
+    prune. The receipt names every file it rewrote.
+    """
     binary = _binary()
     # With allow_extra_args the command-name token arrives bound to the
     # first positional and ctx.args carries everything after it, so the
@@ -64,7 +75,7 @@ def install(
     if harness == "codex":
         # The codex arm stays on the Python converge engine (ship-phase ruling).
         stage_out = subprocess.run(
-            [str(binary), "plugin-install", "--stage-only"],
+            [str(binary), "plugin-install", "--stage-only", "codex", *extra],
             capture_output=True,
             text=True,
             check=False,

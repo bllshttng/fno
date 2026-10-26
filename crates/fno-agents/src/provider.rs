@@ -683,21 +683,58 @@ pub(crate) fn codex_cache_writable_args() -> Vec<String> {
     args
 }
 
-/// Mirror of `codex.py::git_writable_args`: grant the git COMMON dir so a
+/// Mirror of `codex.py::git_writable_args`: grant the git write roots so a
 /// bounded codex worker can commit. workspace-write marks
 /// `<project_root>/.git` read-only, so without this every `git add` fails on
-/// index.lock - and in a linked worktree the gitdir is outside the workspace
-/// entirely. The common dir is `<repo>/.git` in both shapes and holds the
-/// per-worktree gitdir plus the shared objects/ and refs/ a commit writes.
+/// index.lock. See [`git_write_roots`] for why a linked worktree needs two.
 ///
 /// Shared by every Rust codex argv builder (headless create here, the `ask`
 /// lane in codex_ask.rs) so the grant cannot land on one path and miss another.
 /// Empty on any failure: a grant we cannot resolve must never break the spawn.
 pub(crate) fn codex_git_writable_args(cwd: &std::path::Path) -> Vec<String> {
-    match git_common_dir(cwd) {
-        Some(common) => vec!["--add-dir".into(), common],
-        None => vec![],
+    git_write_roots(cwd)
+        .into_iter()
+        .flat_map(|root| ["--add-dir".to_string(), root])
+        .collect()
+}
+
+/// The git dirs a commit from `cwd` writes: the COMMON dir (shared objects/
+/// and refs/), then, in a linked worktree, its own gitdir
+/// `<repo>/.git/worktrees/<name>` (index, HEAD).
+///
+/// The common dir contains that gitdir, yet granting it alone is not enough.
+/// codex resolves the cwd's `.git` pointer file and marks the gitdir it names
+/// read-only, inside every writable root. Only a root naming the gitdir itself
+/// lifts that. Measured on codex-cli 0.164.0 under `codex sandbox`: with the
+/// common dir granted, a linked worktree still failed `git add` on index.lock;
+/// with both granted it committed. A main checkout needs only the common dir.
+pub(crate) fn git_write_roots(cwd: &std::path::Path) -> Vec<String> {
+    let Some(common) = git_common_dir(cwd) else {
+        return vec![];
+    };
+    let mut roots = vec![common];
+    if let Some(own) = linked_git_dir(cwd) {
+        let same = std::fs::canonicalize(&own).ok() == std::fs::canonicalize(&roots[0]).ok();
+        if !same {
+            roots.push(own);
+        }
     }
+    roots
+}
+
+/// `git rev-parse --absolute-git-dir` for `cwd`; `None` on any failure.
+fn linked_git_dir(cwd: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["rev-parse", "--absolute-git-dir"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!line.is_empty() && !line.contains('\n')).then_some(line)
 }
 
 /// Resolve the configured plan directory through the same public CLI path used
@@ -730,13 +767,11 @@ pub(crate) fn codex_sandbox_config_args_resume(cwd: &std::path::Path) -> Vec<Str
 }
 
 /// The root list the interactive resume and turn/start lanes grant: the repo's
-/// git common dir, the plan content dir, and the seam-published state dirs.
+/// git write roots, the plan content dir, and the seam-published state dirs.
 /// Empty when none resolve.
 pub(crate) fn codex_writable_roots(cwd: &std::path::Path) -> Vec<String> {
-    let mut roots: Vec<String> = [git_common_dir(cwd), plan_content_dir(cwd)]
-        .into_iter()
-        .flatten()
-        .collect();
+    let mut roots: Vec<String> = git_write_roots(cwd);
+    roots.extend(plan_content_dir(cwd));
     // The state root rides here too, and it MUST: `writable_roots` is a
     // whole-value override, so a list that omits ~/.fno leaves a resumed bounded
     // worker unable to create its claim lockfile. It then holds no claim and the
@@ -1922,7 +1957,25 @@ pub const KNOWN_HARNESSES: &[&str] = &[
     "grok",
     "zcode",
     "footnote",
+    "muse",
 ];
+
+/// Infer the dispatch provider when `--provider` is absent, mirroring Python
+/// `infer_invoking_harness`: resolve when the present markers name exactly one
+/// *distinct* harness. Multiple markers for the same harness (Codex's thread id
+/// plus its legacy session id) agree; markers naming different harnesses, or
+/// none, fall through to the builtin `claude`. Never guesses. `lookup` is
+/// injectable so tests don't touch process-global env.
+pub fn infer_dispatch_provider(lookup: impl Fn(&str) -> Option<String>) -> &'static str {
+    match crate::claims::resolve_harness_from(lookup).as_deref() {
+        Some("claude") => "claude",
+        Some("codex") => "codex",
+        Some("gemini") => "gemini",
+        Some("opencode") => "opencode",
+        Some("agy") => "agy",
+        _ => "claude",
+    }
+}
 
 /// NAMING SKEW (Discretion 4 — commented, not lockstep-renamed, to keep
 /// the diff small): this 5-name list mirrors Python's `READABLE_PROVIDERS` (the
@@ -1943,6 +1996,7 @@ pub const KNOWN_PROVIDERS: &[&str] = &[
     "grok",
     "zcode",
     "footnote",
+    "muse",
 ];
 
 /// The roster joined for error messages ("claude, codex, gemini, agy, opencode, pi").
@@ -1967,6 +2021,7 @@ pub fn for_name(name: &str) -> Option<Box<dyn Provider>> {
         "grok" => Some(Box::new(GrokProvider)),
         "zcode" => Some(Box::new(crate::zcode::ZcodeProvider)),
         "footnote" => Some(Box::new(crate::footnote_harness::FootnoteProvider)),
+        "muse" => Some(Box::new(crate::muse::MuseProvider)),
         _ => None,
     }
 }

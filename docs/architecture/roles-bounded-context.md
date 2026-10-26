@@ -51,7 +51,7 @@ Resolution is deterministic over explicit definitions, capability facts, context
 | `ContextBundle` | Captures the smallest selected reference set within explicit count, byte, sensitivity, and candidate-combination bounds. |
 | `ResolvedRole` | Captures the complete source chain, effective manifest, bounded bundle, requirements, policies, routing projection, and stable digests. |
 | `RoleResolutionBlocked` | Returns one typed refusal with the responsible layer, source, reference, and detail. |
-| `ManifestRoutingResolution` | Carries only validated role identity, source digest, and provider/model projection into model routing. |
+| `ManifestRoutingResolution` | Carries only validated role identity, source digest, and provider/model projection into model routing. It lives in Rust as `roles::routing::Routing`, and the `spawn-overlay` kind `business-role` returns it. |
 
 All contracts are frozen and reject unknown fields.
 Role manifests reuse `FunctionRef`, `RoleRef`, and `WorkOrderRef` from the company-work contracts rather than creating parallel identity types.

@@ -93,7 +93,7 @@ pub(crate) fn parse(body: &str) -> Vec<String> {
 
 /// One approved hand-off of a PR from the branch's node to the right one:
 /// `Retarget <from> <to> <approval>` on its own line, where approval is a
-/// mail id (`msg-...`) or a ruling id (`d-...`).
+/// mail id (`fmail-...`, or the older `msg-...`) or a ruling id (`d-...`).
 pub(crate) struct Retarget {
     pub from: String,
     pub to: String,
@@ -125,7 +125,7 @@ fn retarget_line_rest(line: &str) -> Option<&str> {
 pub(crate) fn retarget(body: &str) -> Option<Retarget> {
     let id_re = regex::Regex::new(&format!("^{NODE_ID_BODY}$")).expect("static regex");
     let approval_re =
-        regex::Regex::new(r"^(msg-[0-9a-f]{6,}|d-[0-9a-f]{8})$").expect("static regex");
+        regex::Regex::new(r"^((fmail|msg)-[0-9a-f]{6,}|d-[0-9a-f]{8})$").expect("static regex");
     let mut last: Option<Retarget> = None;
     for line in body.lines() {
         let Some(rest) = retarget_line_rest(line) else {

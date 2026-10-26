@@ -61,6 +61,7 @@ pub const AGENTS_RESERVED_KEYS: &[&str] = &[
     "pane_group_max",
     "min_free_gb",
     "max_swap_pct",
+    "naming",
     "orphan_reap_after_seconds",
     "profiles",
     "provider_limits",
@@ -301,7 +302,7 @@ fn py_repr(v: &toml::Value) -> String {
     }
 }
 
-fn py_float(f: f64) -> String {
+pub(crate) fn py_float(f: f64) -> String {
     if f.fract() == 0.0 && f.is_finite() && f.abs() < 1e16 {
         format!("{f:.1}")
     } else {
@@ -309,7 +310,7 @@ fn py_float(f: f64) -> String {
     }
 }
 
-fn py_list_repr<S: AsRef<str>>(items: &[S]) -> String {
+pub(crate) fn py_list_repr<S: AsRef<str>>(items: &[S]) -> String {
     let inner: Vec<String> = items.iter().map(|s| py_repr_str(s.as_ref())).collect();
     format!("[{}]", inner.join(", "))
 }
@@ -498,7 +499,14 @@ fn parse_record(t: &toml::Table) -> Result<Record, RecordError> {
     let harness = match t.get(harness_key) {
         None => return Err(field_err("harness", "Field required")),
         Some(toml::Value::String(s)) if HARNESS_LITERAL.contains(&s.as_str()) => s.clone(),
-        Some(_) => return Err(field_err("harness", "Input should be a known harness")),
+        Some(_) => {
+            let (head, last) = HARNESS_LITERAL.split_at(HARNESS_LITERAL.len() - 1);
+            let quoted: Vec<String> = head.iter().map(|h| format!("'{h}'")).collect();
+            return Err(field_err(
+                "harness",
+                &format!("Input should be {} or '{}'", quoted.join(", "), last[0]),
+            ));
+        }
     };
     let auth = match t.get("auth") {
         None => return Err(field_err("auth", "Field required")),
@@ -658,6 +666,19 @@ fn parse_record(t: &toml::Table) -> Result<Record, RecordError> {
     Ok(record)
 }
 
+/// `ProviderRecord(**fields)` as the add command builds it. The refusal is
+/// `str(ValidationError)` without pydantic's ` [type=...]` suffix and its
+/// docs-URL line, which carry the pydantic version.
+pub(crate) fn build_record(t: &toml::Table) -> Result<Record, String> {
+    parse_record(t).map_err(|e| {
+        let body = match e.detail.split_once(": ") {
+            Some((loc, msg)) if !e.auth_mismatch => format!("{loc}\n  {msg}"),
+            _ => format!("  Value error, {}", e.detail),
+        };
+        format!("1 validation error for ProviderRecord\n{body}")
+    })
+}
+
 /// The relative path as pathlib renders it, without the home expansion
 /// (only an expanded `~` path can be absolute, so a refused one never
 /// started with `~/`).
@@ -782,7 +803,7 @@ fn pwd(cwd: &Path) -> PathBuf {
 }
 
 /// `loader._read_candidates`: config.toml then its settings.yaml sibling.
-fn read_candidates(path: &Path) -> Vec<PathBuf> {
+pub(crate) fn read_candidates(path: &Path) -> Vec<PathBuf> {
     match path.file_name().and_then(|n| n.to_str()) {
         Some("config.toml") => vec![path.to_path_buf(), path.with_file_name("settings.yaml")],
         Some("settings.yaml") => vec![path.with_file_name("config.toml"), path.to_path_buf()],
@@ -817,7 +838,7 @@ pub(crate) fn read_layer(path: &Path) -> toml::Table {
 /// A YAML value as `yaml.safe_load` hands it to the loader. A null maps to
 /// `None`, so a null key reads as absent, which is what every reader here
 /// does with Python's `None`.
-fn yaml_value_to_toml(value: &serde_yaml_ng::Value) -> Option<toml::Value> {
+pub(crate) fn yaml_value_to_toml(value: &serde_yaml_ng::Value) -> Option<toml::Value> {
     use serde_yaml_ng::Value as Y;
     Some(match value {
         Y::Null => return None,
@@ -843,6 +864,19 @@ fn yaml_value_to_toml(value: &serde_yaml_ng::Value) -> Option<toml::Value> {
         }
         Y::Tagged(tagged) => return yaml_value_to_toml(&tagged.value),
     })
+}
+
+/// True when [extract_accounts_block] answers from the pre-rename
+/// `providers` key, which is when the Python loader logs its rename notice.
+pub(crate) fn reads_legacy_block(data: &toml::Table) -> bool {
+    let wrapper = data.get("config").and_then(toml::Value::as_table);
+    let is_block = |key: &str| {
+        data.get(key).is_some_and(toml::Value::is_table)
+            || wrapper
+                .and_then(|w| w.get(key))
+                .is_some_and(toml::Value::is_table)
+    };
+    !is_block("accounts") && is_block("providers")
 }
 
 /// `loader._extract_accounts_block`: `accounts` then the pre-rename
@@ -1069,18 +1103,35 @@ pub fn load(repo_root: Option<&Path>, cwd: &Path) -> Result<Accounts, LoadError>
 
 /// `loader.known_account_ids`: every record id declared in any layer.
 pub fn known_account_ids(repo_root: Option<&Path>, cwd: &Path) -> BTreeSet<String> {
-    let mut ids = BTreeSet::new();
-    for path in candidates(repo_root, cwd) {
-        let data = read_layer(&path);
-        let Some(records) = extract_accounts_block(&data)
-            .and_then(|b| b.get("records"))
-            .and_then(toml::Value::as_array)
-        else {
-            continue;
-        };
-        ids.extend(records.iter().filter_map(record_id).map(str::to_string));
+    candidates(repo_root, cwd)
+        .iter()
+        .flat_map(|path| layer_records(path))
+        .filter_map(|r| record_id(&r).map(str::to_string))
+        .collect()
+}
+
+/// The `records` array of one parsed layer's accounts block.
+pub(crate) fn block_records(data: &toml::Table) -> &[toml::Value] {
+    extract_accounts_block(data)
+        .and_then(|b| b.get("records"))
+        .and_then(toml::Value::as_array)
+        .map_or(&[], Vec::as_slice)
+}
+
+/// One config file's records, unvalidated.
+pub fn layer_records(path: &Path) -> Vec<toml::Value> {
+    block_records(&read_layer(path)).to_vec()
+}
+
+/// Every layer's records merged the way [load] merges them, a local record
+/// replacing a global one by id, but never validated: the reader for callers
+/// that skip a malformed record rather than lose the whole config.
+pub fn raw_records(repo_root: Option<&Path>, cwd: &Path) -> Vec<toml::Value> {
+    let mut acc = Vec::new();
+    for path in candidates(repo_root, cwd).iter().rev() {
+        overlay_records(&mut acc, block_records(&read_layer(path)));
     }
-    ids
+    acc
 }
 
 /// `loader.record_harness`: the harness `record_id` runs on, `None` when
@@ -1200,14 +1251,11 @@ pub fn load_combos(repo_root: Option<&Path>, cwd: &Path) -> Result<Vec<Combo>, L
                 LoadError::bare(format!("combo {quoted} sticky_limit must be an integer"))
             })?,
         };
-        if providers.is_empty() {
-            return Err(LoadError::bare(format!(
-                "Combo {quoted} has empty providers list (combos must name at least one provider)"
-            )));
-        }
         let strategy = match spec.get("strategy") {
             None => "fallback".to_string(),
-            Some(toml::Value::String(s)) if VALID_STRATEGIES.contains(&s.as_str()) => s.clone(),
+            Some(toml::Value::String(s)) => s.clone(),
+            // The empty-list refusal comes first, as `Combo.__post_init__` orders them.
+            Some(_) if providers.is_empty() => String::new(),
             Some(other) => {
                 return Err(LoadError::bare(format!(
                     "Combo {quoted} has invalid strategy {}; valid: ('fallback', 'round_robin')",
@@ -1215,14 +1263,37 @@ pub fn load_combos(repo_root: Option<&Path>, cwd: &Path) -> Result<Vec<Combo>, L
                 )))
             }
         };
-        out.push(Combo {
-            name: name.clone(),
-            strategy,
-            sticky_limit: sticky_limit.max(1),
-            providers,
-        });
+        out.push(combo(name, &strategy, sticky_limit, providers).map_err(LoadError::bare)?);
     }
     Ok(out)
+}
+
+/// `rotation.Combo`: refuse an empty member list or an unknown strategy, and
+/// clamp `sticky_limit` to 1.
+pub fn combo(
+    name: &str,
+    strategy: &str,
+    sticky_limit: i64,
+    providers: Vec<String>,
+) -> Result<Combo, String> {
+    let quoted = py_repr_str(name);
+    if providers.is_empty() {
+        return Err(format!(
+            "Combo {quoted} has empty providers list (combos must name at least one provider)"
+        ));
+    }
+    if !VALID_STRATEGIES.contains(&strategy) {
+        return Err(format!(
+            "Combo {quoted} has invalid strategy {}; valid: ('fallback', 'round_robin')",
+            py_repr_str(strategy)
+        ));
+    }
+    Ok(Combo {
+        name: name.to_string(),
+        strategy: strategy.to_string(),
+        sticky_limit: sticky_limit.max(1),
+        providers,
+    })
 }
 
 /// `loader.load_active_combo`: the first layer naming one wins.
@@ -1263,19 +1334,29 @@ pub enum Scope {
     Global,
 }
 
+/// The one file a scope reads and writes: `$PWD/.fno/config.toml` for the
+/// project, the global config.toml otherwise. `None` when no home resolves.
+pub fn scope_path(scope: Scope, cwd: &Path) -> Option<PathBuf> {
+    match scope {
+        Scope::Project => Some(pwd(cwd).join(".fno/config.toml")),
+        Scope::Global => crate::agents_config::global_config_path(),
+    }
+}
+
 /// `loader.load_scope_config`: the accounts block as stored in ONE scope's
 /// own file. A string `active` is kept unvalidated, because a project may
 /// point at a global record.
 pub fn load_scope(scope: Scope, cwd: &Path) -> Result<Accounts, LoadError> {
-    let target = match scope {
-        Scope::Project => pwd(cwd).join(".fno/config.toml"),
-        Scope::Global => match crate::agents_config::global_config_path() {
-            Some(p) => p,
-            None => return Ok(Accounts::default()),
-        },
+    let Some(target) = scope_path(scope, cwd) else {
+        return Ok(Accounts::default());
     };
-    let data = read_layer(&target);
-    let Some(block) = extract_accounts_block(&data).filter(|b| !b.is_empty()) else {
+    scope_accounts(&read_layer(&target))
+}
+
+/// The scope read over one parsed file: [load_scope] without the read, so
+/// a writer can run it on the document it holds under the lock.
+pub fn scope_accounts(data: &toml::Table) -> Result<Accounts, LoadError> {
+    let Some(block) = extract_accounts_block(data).filter(|b| !b.is_empty()) else {
         return Ok(Accounts::default());
     };
     if let Some(toml::Value::String(active)) = block.get("active") {

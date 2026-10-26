@@ -1,0 +1,10 @@
+{
+ "args": [
+  "refresh"
+ ],
+ "expect": {
+  "exit": 1,
+  "stdout": "",
+  "stderr": "benchmarks refresh: no OpenRouter API key: set OPENROUTER_API_KEY to refresh benchmarks\n"
+ }
+}

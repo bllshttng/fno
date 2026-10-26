@@ -19,9 +19,17 @@ use common::Scratch;
 
 /// A socket file nobody answers: bind, then drop the listener without
 /// unlinking. `ls` probes it as REFUSED and reports the session as `stale`.
+/// A session socket `ls` lists. The pid sidecar names this live test
+/// process, so the reader's dead-session heal cannot prove it a corpse and
+/// leaves the marker in place for the enumeration under test.
 fn plant_socket(path: &Path) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     drop(UnixListener::bind(path).unwrap());
+    std::fs::write(
+        fno::proto::pid_sidecar_path(path),
+        std::process::id().to_string(),
+    )
+    .unwrap();
 }
 
 /// The fake "real fleet" session socket, under the scratch HOME exactly where

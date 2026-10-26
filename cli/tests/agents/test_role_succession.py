@@ -50,17 +50,31 @@ def team(tmp_path, monkeypatch, native_backlog_door):
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", CALLER_SESSION)
     # The store gate checks that a level-0 stamp names members that RESOLVE as
     # projects, so the fixture declares the two the refusal tests spawn over.
-    from fno.projects import resolve as proj_resolve
+    # The resolver is native (the project-family port): the registry rides a stub
+    # binary pinned over FNO_AGENTS_BIN. Non-project spawn-overlay shapes
+    # exec the real binary (the ladder door rides the same env pin).
+    from fno.rust_binary import find_dev_binary, resolve_binary
 
-    cfg = tmp_path / "config.toml"
-    cfg.write_text(
-        '[work.workspaces.ws1]\nprojects = [{ name = "alpha" }, { name = "beta" }]\n',
+    real = find_dev_binary() or resolve_binary()
+    fallback = f'exec "{real}" "$@"\n' if real else "exit 1\n"
+    stub = tmp_path / "agents-stub"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = "project" ]; then\n'
+        '  if [ "$3" = "map" ]; then\n'
+        "    echo '{\"alpha\":\"alpha\",\"beta\":\"beta\"}'; exit 0\n"
+        "  fi\n"
+        '  case "$4" in\n'
+        "    alpha) echo alpha; exit 0;;\n"
+        "    beta) echo beta; exit 0;;\n"
+        "    *) exit 1;;\n"
+        "  esac\n"
+        "fi\n" + fallback,
         encoding="utf-8",
     )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", cfg)
-    proj_resolve._clear_cache()
+    stub.chmod(0o755)
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(stub))
     yield tmp_path
-    proj_resolve._clear_cache()
 
 
 def _seat(

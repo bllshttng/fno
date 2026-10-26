@@ -1,33 +1,63 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from fno.company.contracts import WorkOrderRef
-from fno.plugins.activate import activate, deactivate
-from fno.plugins.registry import PackRegistryStore
-from fno.roles.context import build_artifact_catalog
 from fno.roles.models import (
     ApprovalFloor,
     CapabilityFact,
     ContextBundleBounds,
     ContextKind,
+    ContextReference,
     RoleLayer,
     RoleResolutionBlocked,
     RoleResolutionReason,
 )
 from fno.roles.registry import discover_role_definitions
 from fno.roles.resolver import resolve_role
+from fno.rust_binary import find_dev_binary
 
-# Role discovery runs in fno-agents (spawn-overlay kind roles-discover).
+# Activation and role discovery run in fno-agents.
 pytestmark = pytest.mark.dev_build
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACK = REPO_ROOT / "plugins" / "growth-studio" / "plugin.yaml"
 PACK_ASSETS = REPO_ROOT / "plugins" / "growth-studio" / "assets"
 ROLE_IDS = ("marketing", "communications", "design", "social")
+
+
+def _plugins(root: Path, *args: str) -> dict:
+    """One native `fno config plugins` command against this role root."""
+    proc = subprocess.run(
+        [str(find_dev_binary()), "spawn-overlay", "plugins", "--root", str(root), *args, "--json"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads(proc.stdout)
+
+
+def _pack_asset(identifier: str, sensitivity, revision: str) -> ContextReference:
+    asset = PACK_ASSETS / f"{identifier}.md"
+    data = asset.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    return ContextReference(
+        kind=ContextKind.ARTIFACT,
+        identifier=identifier,
+        provenance=str(asset),
+        content_digest=digest,
+        content_revision=digest,
+        snapshot_revision=revision,
+        sensitivity=sensitivity,
+        byte_size=len(data),
+        readable=True,
+    )
 
 
 def _resolve_role(root: Path, role_id: str, function_id: str, *, extra_definitions=()):
@@ -54,18 +84,11 @@ def _resolve_role(root: Path, role_id: str, function_id: str, *, extra_definitio
     # Supply a context catalog satisfying every declared artifact selector. The
     # content here is fixture-only (the pack's own asset files); AC16's
     # project-supplied product-truth provenance is exercised separately in
-    # test_context_catalog.py and test_growth_studio_faucet.py.
-    catalog = build_artifact_catalog(
-        {
-            selector.identifier: {
-                "path": str(PACK_ASSETS / f"{selector.identifier}.md"),
-                "sensitivity": selector.max_sensitivity.value,
-            }
-            for selector in manifest.context_selectors
-            if selector.kind is ContextKind.ARTIFACT and selector.identifier
-        },
-        snapshot_revision=revision,
-        clock=datetime.now(UTC),
+    # the roles_context goldens and test_growth_studio_faucet.py.
+    catalog = tuple(
+        _pack_asset(selector.identifier, selector.max_sensitivity, revision)
+        for selector in manifest.context_selectors
+        if selector.kind is ContextKind.ARTIFACT and selector.identifier
     )
     return resolve_role(
         role=role_ref,
@@ -83,11 +106,9 @@ def _resolve_role(root: Path, role_id: str, function_id: str, *, extra_definitio
 def test_pack_activates_resolves_and_deactivates_end_to_end(tmp_path):
     root = tmp_path / "roles"
     root.mkdir()
-    store = PackRegistryStore(tmp_path / "registry.json")
-
-    outcome = activate(PACK, registry_store=store, role_root=root)
-    assert outcome.already_active is False
-    assert {path.split("/")[-1] for path in outcome.receipt.written_paths} == {
+    outcome = _plugins(root, "activate", str(PACK))
+    assert outcome["already_active"] is False
+    assert {path.split("/")[-1] for path in outcome["written_paths"]} == {
         f"{role}.json" for role in ROLE_IDS
     }
 
@@ -102,8 +123,8 @@ def test_pack_activates_resolves_and_deactivates_end_to_end(tmp_path):
         plugin_sources = [s for s in result.source_chain if s.layer is RoleLayer.PLUGIN]
         assert plugin_sources and plugin_sources[-1].disposition == "contributing"
 
-    outcome = deactivate("growth-studio", registry_store=store, role_root=root)
-    assert {path.split("/")[-1] for path in outcome.removed} == {f"{role}.json" for role in ROLE_IDS}
+    outcome = _plugins(root, "deactivate", "growth-studio")
+    assert {path.split("/")[-1] for path in outcome["removed"]} == {f"{role}.json" for role in ROLE_IDS}
     after = discover_role_definitions(root=root)
     assert not any(r.role is not None and r.role.id in ROLE_IDS for r in after)
 
@@ -115,8 +136,7 @@ def test_pack_activates_resolves_and_deactivates_end_to_end(tmp_path):
 def test_overlay_lowering_approval_floor_is_refused_as_authority_expansion(tmp_path):
     root = tmp_path / "roles"
     root.mkdir()
-    store = PackRegistryStore(tmp_path / "registry.json")
-    activate(PACK, registry_store=store, role_root=root)
+    _plugins(root, "activate", str(PACK))
 
     records = discover_role_definitions(root=root)
     plugin_def = next(

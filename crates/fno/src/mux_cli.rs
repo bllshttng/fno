@@ -39,7 +39,7 @@ mod workspace_origin;
 
 pub use self::harness_command::command;
 use self::pane_prepare::prepare_pane_bytes;
-use self::pane_submit::{pane_text, send_pane_bytes, submit_pane};
+use self::pane_submit::{pane_text, run_submit, send_pane_bytes};
 pub use self::workspace_origin::workspace;
 
 use std::ffi::OsString;
@@ -284,7 +284,7 @@ impl SessionRow {
 /// Enumerate `*.sock` stems in the mux dir, sorted. `Err` is an unreadable dir
 /// the caller must distinguish from "no sessions" (a permissions/IO error must
 /// never read as empty); `NotFound` returns an empty list (no session ever
-/// started here, AC6-FR). A graph keeper's `<graph>.store.sock` sibling is never a session: probing it with a mux frame reads as unreachable and poisons the fold (the e2e sandboxes put the graph inside the mux dir). Shared by `ls`/picker and `doctor` so both see the same session set.
+/// started here, AC6-FR). A graph keeper's `<graph>.store.sock` sibling is never a session: probing it with a mux frame reads as unreachable and poisons the fold (the e2e sandboxes put the graph inside the mux dir). Shared by `ls`/picker, `doctor` and the sweep so all see the same session set, and each heals a dead server's leftover files ([`dead_session::heal_if_dead`]).
 fn session_names() -> Result<Vec<String>, String> {
     let dir = proto::mux_dir();
     let entries = match std::fs::read_dir(&dir) {
@@ -298,9 +298,8 @@ fn session_names() -> Result<Vec<String>, String> {
             let p = e.path();
             let is_session = p.extension().and_then(|x| x.to_str()) == Some("sock")
                 && !p.to_string_lossy().ends_with(".store.sock");
-            is_session
-                .then(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-                .flatten()
+            let name = p.file_stem()?.to_string_lossy().into_owned();
+            (is_session && !dead_session::heal_if_dead(&name, &p)).then_some(name)
         })
         .collect();
     names.sort();
@@ -368,8 +367,8 @@ fn session_row_json(row: &SessionRow) -> serde_json::Value {
     }
 }
 
-/// `fno mux ls`: one row per `*.sock` in the mux dir. Read-only - a stale
-/// socket is REPORTED, never unlinked (kill-server owns removal). Exits 0
+/// `fno mux ls`: one row per `*.sock` in the mux dir. A proven-dead session
+/// is healed away first; a stale row left is one that proof refused. Exits 0
 /// even when every row is stale or unqueryable; only "no sessions" is
 /// distinguishable by text, not exit code, so scripts can `grep`.
 pub fn ls(json: bool) -> i32 {
@@ -2018,13 +2017,6 @@ pub const EXIT_SUBMIT_UNCONFIRMED: i32 = 22; // text landed, but no post-submit 
 pub const EXIT_TARGET_IDENTITY_MISMATCH: i32 = 23; // send: pane occupant differs from addressee
 pub const EXIT_TARGET_DND: i32 = 25; // pane send: target declared DND; bytes did not land
 
-// Keep these aligned with fno-agents mail_inject: the same PTY paste needs the
-// same settle and retry cadence whether it arrived through mail or pane send.
-const CR_SETTLE_MS: u64 = 800;
-const CR_RESUBMIT_EVERY: u32 = 8;
-const SUBMIT_CONFIRM_ATTEMPTS: u32 = 40;
-const SUBMIT_CONFIRM_INTERVAL_MS: u64 = 250;
-
 /// `pane send --raw` byte cap. Raw is the keystroke lane, exempt from the
 /// prose gates by design, but exempt is not unbounded: `--raw --stdin` had no
 /// limit at all, an ungated prose channel past every gate. The cap sits above
@@ -2236,6 +2228,14 @@ pub enum PaneCmd {
         /// stands down for this write. Hidden: it exists for the two
         /// transport arms above it, never for interactive typing.
         hold_pass: bool,
+        /// `--harness <name>`: opt into the composer read-back for a harness
+        /// whose capabilities row declares the keys (the queue affordance,
+        /// Tab recovery, the deciding key). Absent: the plain confirm.
+        harness: Option<String>,
+        /// `--clear-composer`: send the harness's composer-clear keys and
+        /// verify the empty marker before the payload, for the
+        /// rejected-command-rides-along case.
+        clear_composer: bool,
     },
     Wait {
         pane: u64,
@@ -3726,6 +3726,7 @@ pub mod web_ctl;
 // (v71) The prune aftermath (reload live servers + the receipt), same rule.
 mod prune_sync;
 // (v71) The live-tab fold, same rule; its tests moved with it.
+mod dead_session;
 mod tab_prune;
 use tab_prune::{live_tabs, prune_live_tabs_measuring_named, TabPruneOutcome};
 // (v72) The `fno mux thread reseat` command, same child-module pattern.
@@ -3946,6 +3947,8 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
             style_exception,
             provenance,
             hold_pass,
+            harness,
+            clear_composer,
         } => {
             let bytes = match source {
                 SendSource::Text(t) => t.into_bytes(),
@@ -4019,7 +4022,7 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
                 None
             };
             if submit {
-                let code = submit_pane(
+                let code = run_submit(
                     sock,
                     session,
                     pane,
@@ -4027,24 +4030,11 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
                     guarded,
                     expected_identity.as_deref(),
                     json,
+                    harness.as_deref(),
+                    clear_composer,
+                    pane_send_audit.take(),
+                    review_command.take(),
                 );
-                if let Some(audit) = pane_send_audit.take() {
-                    audit.emit(session, code);
-                }
-                if review_command.is_some() {
-                    let receipt = match code {
-                        EXIT_OK => "submitted",
-                        EXIT_SUBMIT_UNCONFIRMED => "text delivered, submission unconfirmed",
-                        _ => "text delivery failed",
-                    };
-                    append_review_invocation(
-                        session,
-                        review_command.take(),
-                        true,
-                        code == EXIT_OK,
-                        receipt,
-                    );
-                }
                 return code;
             }
             (
@@ -4240,7 +4230,7 @@ pub(crate) fn send_control(
                 return Err(ControlError::Fatal(format!(
                     "no response from the server; it may predate v4 control commands \
                      (this client speaks proto {PROTO_VERSION}). Restart the server \
-                     (fno mux kill-server) and retry."
+                     (fno mux kill-server {session}) and retry."
                 )))
             }
             Err(crate::proto::ProtoError::Io(e)) if crate::proto::is_retryable(&e) => {
@@ -5377,6 +5367,8 @@ mod tests {
                 expected_identity: None,
                 style_exception: None,
                 provenance: None,
+                harness: None,
+                clear_composer: false,
             }
         );
     }
@@ -6182,6 +6174,8 @@ mod tests {
                 style_exception: Some("quoted".into()),
                 provenance: None,
                 hold_pass: false,
+                harness: None,
+                clear_composer: false,
             }
         );
         // A valueless flag and a non-send command are usage errors, mirroring
@@ -6256,6 +6250,8 @@ mod tests {
             style_exception: None,
             provenance: None,
             hold_pass: false,
+            harness: None,
+            clear_composer: false,
         };
 
         std::env::set_var("FNO_BIN", &script);
@@ -6345,6 +6341,8 @@ mod tests {
             style_exception: None,
             provenance: None,
             hold_pass: false,
+            harness: None,
+            clear_composer: false,
         };
 
         let over = dispatch("t", &sock, false, send_cmd(big));

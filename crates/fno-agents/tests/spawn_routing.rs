@@ -950,6 +950,7 @@ fn run_headless_spawn(
     harness: &str,
     path_dir: &Path,
     extra: &[&str],
+    env: &[(&str, &str)],
 ) -> Option<(Option<i32>, String, String)> {
     let bin = find_client_bin();
     if !bin.exists() {
@@ -969,6 +970,7 @@ fn run_headless_spawn(
         .env("HOME", tmpdir("headless-user-home"))
         .env_remove("ANTHROPIC_BASE_URL")
         .env("PATH", format!("{}:/usr/bin:/bin", path_dir.display()))
+        .envs(env.iter().copied())
         .output()
         .expect("failed to run fno-agents");
     Some((
@@ -995,7 +997,7 @@ fn client_spawn_substrate_headless_pi_returns_the_assistant_reply() {
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let Some((code, stdout, stderr)) = run_headless_spawn("pi", &fake_path, &[]) else {
+    let Some((code, stdout, stderr)) = run_headless_spawn("pi", &fake_path, &[], &[]) else {
         return;
     };
     assert_eq!(code, Some(0), "stderr: {stderr}");
@@ -1005,6 +1007,33 @@ fn client_spawn_substrate_headless_pi_returns_the_assistant_reply() {
         argv.starts_with("--print\n--mode\njson\n--no-session\n--provider\n"),
         "argv: {argv}"
     );
+}
+
+/// A `claude -p` one-shot mints no registry row: its child carries the
+/// no-row marker under its own name, unless `--mux` (the show-row env) opted
+/// in. The opt-in never rides on to the child.
+#[test]
+fn client_spawn_headless_claude_child_is_rowless_unless_shown() {
+    use std::os::unix::fs::PermissionsExt;
+    let fake_path = tmpdir("headless-claude-rowless");
+    let fake = fake_path.join("claude");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\nprintf 'no_row=%s show=%s\\n' \"$FNO_AGENT_NO_ROW\" \"$FNO_SPAWN_SHOW_ROW\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let Some((code, stdout, stderr)) = run_headless_spawn("claude", &fake_path, &[], &[]) else {
+        return;
+    };
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "no_row=reach show=");
+    let shown = [(fno_agents::claude_ask::SHOW_ROW_ENV, "1")];
+    let Some((code, stdout, stderr)) = run_headless_spawn("claude", &fake_path, &[], &shown) else {
+        return;
+    };
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "no_row= show=");
 }
 
 /// `--once --harness footnote -- -m <model>` reaches footnote's own turn loop.
@@ -1017,6 +1046,7 @@ fn client_spawn_substrate_headless_footnote_reaches_its_turn_loop() {
         "footnote",
         &tmpdir("headless-footnote-fakepath"),
         &["--", "-m", "glm-5.3-flash"],
+        &[],
     ) else {
         return;
     };

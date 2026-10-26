@@ -64,6 +64,7 @@ pub mod agy_transcript;
 #[path = "agy_transcript_tests.rs"]
 mod agy_transcript_tests;
 pub mod announce;
+pub mod approvals;
 pub mod arm_repair;
 pub mod arm_watch;
 pub mod ask_project;
@@ -161,6 +162,7 @@ pub mod decide_door;
 pub mod decision_index;
 pub mod decision_trace;
 pub mod delivery_completion;
+pub mod delivery_eval;
 pub mod digest;
 pub mod dispatch_credit;
 pub mod disposition_gate;
@@ -248,6 +250,7 @@ pub mod intel_html;
 pub mod intel_insights;
 pub mod intel_lens;
 pub mod intel_rollup;
+pub mod intel_rules_lens;
 pub mod intel_scorecard;
 pub mod interrupt_classify;
 pub mod join_marker;
@@ -276,6 +279,7 @@ pub mod lead_history;
 pub mod lead_hygiene;
 pub mod lead_mail;
 pub mod lead_pushback;
+pub mod lead_reads;
 pub mod lead_settle;
 pub mod lead_state;
 pub mod lead_term;
@@ -339,7 +343,9 @@ mod mint_guard_tests;
 pub mod model_env_scrub;
 pub mod model_family;
 pub mod model_price;
+pub mod muse;
 pub mod name_draw;
+pub mod name_ledger;
 pub mod naming;
 pub mod native_adopt;
 pub mod native_bg_mint;
@@ -370,6 +376,8 @@ pub mod osc;
 pub mod otel_ingest;
 pub mod otel_read;
 pub mod otlp_export;
+pub mod outstanding;
+pub mod outstanding_cmds;
 pub(crate) mod owner_ladder;
 pub mod pane_claim;
 pub mod pane_keeper;
@@ -394,6 +402,7 @@ pub mod planning_lane;
 pub mod plans_dirs;
 pub mod plans_path;
 pub mod plugin_install;
+pub mod plugins;
 pub mod post_merge;
 pub mod pr_admission;
 pub mod pr_base_check;
@@ -417,6 +426,7 @@ pub mod pr_watch;
 pub mod pr_worktree;
 pub mod process_owner;
 pub mod process_probe;
+pub mod project;
 pub(crate) mod prompt_wait;
 pub mod protocol;
 pub mod prove_it_verdicts;
@@ -452,6 +462,7 @@ pub mod release_notes;
 pub mod removals;
 pub mod rename;
 pub mod repeated_asks;
+pub mod reserve;
 pub(crate) mod resolve_tier;
 pub mod restart_run;
 pub mod resume_args;
@@ -461,6 +472,7 @@ pub mod resume_receipt;
 pub(crate) mod resume_route;
 pub mod resume_wake;
 pub mod retask;
+pub mod retro;
 pub mod review_capability;
 pub mod review_doors;
 pub mod review_findings;
@@ -487,6 +499,7 @@ pub mod route_settings;
 pub mod route_slot;
 pub mod row_truth;
 pub mod row_verdict;
+pub mod rules;
 pub mod run_outcome;
 pub mod run_state;
 pub mod rundown;
@@ -509,6 +522,7 @@ pub mod session_report;
 pub mod session_start_bytes;
 pub mod session_truth;
 pub mod single_flight;
+pub mod skill_diff;
 pub mod skill_drift;
 pub mod slot_cutover;
 pub mod source_pin;
@@ -533,6 +547,8 @@ pub mod spawn_lineage;
 pub mod spawn_overlay;
 pub mod spawn_payload;
 pub mod spawn_phase;
+pub mod spawn_promote;
+pub mod spawn_remote;
 pub mod spawn_route;
 pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
@@ -556,6 +572,7 @@ pub mod subscribe;
 pub mod succession_txn;
 pub mod supervisor;
 pub mod surface_check;
+pub mod symptom_recheck;
 pub mod sync_canonical;
 pub mod system_sender;
 pub mod target_blast;
@@ -581,6 +598,9 @@ pub mod territory;
 pub mod test_delta;
 pub mod test_hold;
 pub mod test_run;
+mod test_run_journal;
+pub mod think_daily;
+pub mod thread_host;
 pub mod tick_ledger;
 pub mod tool_activity;
 pub mod tracker;
@@ -1498,12 +1518,19 @@ mod tests {
 /// output; only include kinds that appear as the first string argument to an
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
+    // The daemon trust-answer sweep: one row per attempt to answer a parked
+    // codex folder-trust modal itself (daemon/sweeps.rs).
+    "trust_prompt_answered",
+    // The legacy shell-writer rendezvous sweep (daemon/shell_writers_sweep.rs):
+    // the per-pass summary row and its pause-skip row.
+    "shell_writers_sweep",
     // The native-bg roster adopt (native_bg_mint.rs): a failed registry
-    // birth write, a node or parent filled on a later beat, and the
-    // per-beat budget deferral.
+    // birth write, a node or parent filled on a later beat, a short-id row
+    // renamed, and the per-beat budget deferral.
     "native_bg_mint_failed",
     "native_bg_node_backfilled",
     "native_bg_parent_backfilled",
+    "native_bg_renamed",
     "native_bg_mint_deferred",
     // The sandbox-denial ingester: codex transcript refusals -> one row per
     // (session, class, path) with a hit count, plus the pass summary row.
@@ -1617,6 +1644,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // the footprint command killed on the daemon's behalf.
     "orphan_test_binary_reaped",
     "orphan_owner_server_reaped",
+    // One local test run through `fno doctor test`: a started and a finished
+    // row joined by run_id, plus a refused row when the door refuses before
+    // spawning (test_run_journal.rs).
+    "test_run",
     // Late bind (daemon-emitted, task 2): a pane-hosted codex row whose
     // spawn-time bind window expired got its `harness_session_id` resolved on
     // a later reconcile tick, from the pane-tree rollout probe. Makes "the row
@@ -1957,6 +1988,13 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "attention_delivery",
     "day_boundary",
     "legacy_journal_retired",
+    // The managed slot switch (accounts/use_switch.rs): `use`, `switch` and
+    // the daemon's slot cutover.
+    "account_switched",
+    // The once-per-window close warning (accounts/window.rs).
+    "provider_window_closing",
+    // The pre-promise review-bot quota warning (accounts/required_bot.rs).
+    "quota_required_bot_exhausted",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

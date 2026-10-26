@@ -152,9 +152,12 @@ def test_unreadable_source_is_reported_not_dropped(tmp_path: Path) -> None:
 
 
 def test_required_pitfalls_reachable_for_every_harness() -> None:
-    """Pass^3 eval target: every active capped-corpus entry reaches each kernel."""
+    """Pass^3 eval target: every active capped-corpus entry reaches each kernel.
+
+    An empty corpus is a valid state (entries age out at 60 days), so the
+    kernels must then carry an empty list, not a stale one.
+    """
     expected = active_pitfall_headings(ROOT)
-    assert expected, "the capped AGENTS.md pitfalls corpus must not be empty"
 
     report = build_context_report(
         ROOT,

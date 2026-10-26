@@ -189,7 +189,7 @@ const LEVEL_TIERS: &[(&str, u64, u64)] = &[
     ("xhigh", 60, 8000),
 ];
 
-fn level_for_diff(changed_files: u64, diff_lines: u64) -> &'static str {
+pub(crate) fn level_for_diff(changed_files: u64, diff_lines: u64) -> &'static str {
     for (level, files_cap, lines_cap) in LEVEL_TIERS {
         if changed_files <= *files_cap && diff_lines <= *lines_cap {
             return level;

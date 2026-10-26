@@ -38,11 +38,6 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
     # Hidden: the menu cap is 12 and config already curates nine visible
     # commands; `fno help config --all` lists these.
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
-    "plugins": (
-        "fno.plugins.cli:plugins_app",
-        "Install, verify, activate, and inspect function packs.",
-        {"hidden": True},
-    ),
     "route": (
         "fno.route_cli:route_app",
         "Provider route lanes: ls / set / unset / env (GLM build lane).",
@@ -56,22 +51,14 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
         "Declared model-routing inventory: init (sample) / inventory (reach).",
         {"hidden": True},
     ),
-    # (d-344fe242): `project init` gives a checkout its own fno state
-    # root, which is state-root configuration - config's territory. Same
-    # lazy+hidden treatment as its siblings above.
-    "project": (
-        "fno.project:project_app",
-        "Isolated per-project fno environments.",
-        {"hidden": True},
-    ),
     "setup": ("fno.setup_cli:app", "Interactive settings.yaml wizard", {"hidden": True}),
     # One local-dev install door for every plugin harness. VISIBLE on
-    # purpose and distinct from the hidden `plugins` function-pack group: this
+    # purpose and distinct from the native `plugins` function-pack group: this
     # installs the footnote plugin itself, from the filtered stage, in one
     # action per harness (claude|codex|opencode|agy).
     "plugin": (
         "fno.plugin_install_cli:plugin_app",
-        "Install the footnote plugin into a harness from the filtered stage.",
+        "Install your local checkout of footnote into a harness, for development.",
     ),
 }
 
@@ -423,13 +410,9 @@ def _report_review_capability(json_out: bool = False) -> int:
     # no reachability row maps, are both routing holes an operator must see
     # here rather than at dispatch. This table drifted a full model release
     # with nothing detecting it; this line is the tripwire.
-    from fno.adapters.providers.benchmarks import (
-        empty_bands_for_harness,
-        unreachable_tier_ids,
-    )
-
-    dead_ids = unreachable_tier_ids()
-    empty_bands = empty_bands_for_harness()
+    tiers = command_call(["spawn-overlay", "accounts", "benchmarks", "tiers"], {})
+    dead_ids = tiers["unreachable_tier_ids"]
+    empty_bands = tiers["empty_bands"]
 
     if json_out:
         typer.echo(
@@ -623,7 +606,6 @@ def doctor_cmd(
         except Exception:  # noqa: BLE001 - a report, not the diagnostic itself
             pass
     raise typer.Exit(rc)
-
 
 
 def _state_root_selector(row: "StateFile") -> str:
@@ -1615,110 +1597,3 @@ def history(
         )
 
 
-@app.command("schema")
-def schema(
-    json_schema: bool = typer.Option(
-        False, "--json-schema", help="Emit the model's JSON Schema."
-    ),
-    markdown: bool = typer.Option(
-        False, "--markdown", help="Emit the COMPLETE settings reference as Markdown."
-    ),
-    wizard_plan: bool = typer.Option(
-        False, "--wizard-plan", help="Emit the wizard-asked fields as JSON."
-    ),
-    toml: bool = typer.Option(
-        False, "--toml", help="Emit a commented example config.toml (every key at its default)."
-    ),
-    write: bool = typer.Option(
-        False, "--write", help="With --markdown/--toml: regenerate the committed reference file."
-    ),
-    check: bool = typer.Option(
-        False, "--check", help="With --markdown/--toml: exit non-zero if the committed file differs."
-    ),
-) -> None:
-    """Generate config artifacts from the model + registry.
-
-    Exactly one of --json-schema / --markdown / --wizard-plan selects the
-    output; --markdown is the default. --write regenerates the docs file
-    atomically (temp + replace, never truncating on error); --check compares
-    the freshly generated docs against the committed file and exits 2 on drift.
-    """
-    import os
-    import sys
-    import tempfile
-
-    from fno.config import schema_gen
-
-    selected = sum([json_schema, markdown, wizard_plan, toml])
-    if selected > 1:
-        typer.echo(
-            "error: pick at most one of --json-schema / --markdown / --wizard-plan / --toml",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
-
-    if json_schema:
-        typer.echo(schema_gen.json_schema())
-        return
-    if wizard_plan:
-        typer.echo(schema_gen.wizard_plan())
-        return
-
-    # --toml selects the example file; --markdown (default) selects the guide.
-    # Both share the write/check/echo plumbing below.
-    if toml:
-        rendered = schema_gen.render_example_toml()
-        target = _repo_root() / "docs" / "config.example.toml"
-        # The Rust defaults inventory embeds its own copy of the same render:
-        # cargo publish packs only the crate, so an include_str! escape into
-        # docs/ fails the tarball compile. One renderer, two committed
-        # copies, both checked.
-        extra_target = _repo_root() / "crates" / "fno" / "config.example.toml"
-        regen = "fno config schema --toml --write"
-    else:
-        rendered = schema_gen.render_markdown()
-        target = _repo_root() / "docs" / "configuration-guide.md"
-        extra_target = None
-        regen = "fno config schema --markdown --write"
-
-    if check:
-        targets = [target] + ([extra_target] if extra_target else [])
-        for t in targets:
-            try:
-                current = t.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                # Unreadable or non-UTF-8 committed file -> treat as stale
-                # (differs from the freshly rendered text), prompting a
-                # regenerate.
-                current = None
-            if current != rendered:
-                typer.echo(
-                    f"error: {t} is stale; run `{regen}`",
-                    file=sys.stderr,
-                )
-                raise typer.Exit(code=2)
-        typer.echo(f"{target} is up to date")
-        return
-
-    if write:
-        targets = [target] + ([extra_target] if extra_target else [])
-        for t in targets:
-            t.parent.mkdir(parents=True, exist_ok=True)
-            # Atomic temp + replace so a write error never truncates the
-            # committed file (AC5-FR). Write to a temp in the same dir, then
-            # os.replace.
-            fd, tmp = tempfile.mkstemp(dir=str(t.parent), suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    fh.write(rendered)
-                os.replace(tmp, t)
-            except Exception:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
-                raise
-            typer.echo(f"wrote {t}")
-        return
-
-    typer.echo(rendered)

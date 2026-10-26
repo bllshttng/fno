@@ -1143,6 +1143,33 @@ fn an_arm_receipt_names_the_head_and_is_never_merged() {
 }
 
 #[test]
+fn an_unreadable_optional_review_count_never_holds_a_merge() {
+    // Specimen 2026-10-22: the gh helpers went missing, the optional count
+    // read unknown, and the old fail-closed gate held every merge.
+    let fake = Fake {
+        optional_unresolved: Some(None),
+        ..clean()
+    };
+    assert!(preview_blockers(&fake, &preview_request(7)).is_empty());
+    assert!(matches!(
+        run(&fake, &request(Effect::Merge)),
+        Outcome::Merged { .. }
+    ));
+    // No count at all means the status read itself failed: that still holds.
+    let unread = Fake {
+        optional_unresolved: None,
+        ..clean()
+    };
+    let blockers = preview_blockers(&unread, &preview_request(7));
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.code == "optional_reviews_unknown"),
+        "{blockers:?}"
+    );
+}
+
+#[test]
 fn an_immediate_merge_never_passes_auto() {
     let journal = crate::merge_provenance::TestJournal::opt_in();
     let fake = clean();
@@ -1897,14 +1924,22 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
             "answer {answer:?} must not clear"
         );
     }
-    // The page answers with the approve option, the hold clears.
-    std::fs::write(
-        &page,
-        "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n\
-         answer: 1. Merge as painted\n---\nbody\n",
-    )
-    .unwrap();
+    // An approve answer on a page that names no head keeps the hold: the
+    // user's look binds to the head they saw.
+    let approved = |body: &str| {
+        format!(
+            "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n\
+             answer: 1. Merge as painted\n---\n{body}\n"
+        )
+    };
+    std::fs::write(&page, approved("body")).unwrap();
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    // The page answers with the approve option at this head, the hold clears.
+    std::fs::write(&page, approved(&format!("PR 7 at head {head}"))).unwrap();
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
+    // A push after the user looked holds again.
+    let pushed: String = "b".repeat(40);
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some());
     // The page archives into done/; the approval must not lapse.
     let donedir = qdir.join("done");
     std::fs::create_dir_all(&donedir).unwrap();
@@ -1979,14 +2014,24 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
     .unwrap();
     let head: String = "a".repeat(40);
     let pushed: String = "b".repeat(40);
-    let row = |decision: &str, rationale: &str, authority: &str, lifecycle: &str| {
+    let row_at = |subject: &str,
+                  decision: &str,
+                  rationale: &str,
+                  authority: &str,
+                  lifecycle: &str| {
         format!(
-            r#"{{"decisions":[{{"decision_id":"d-xc39f","authority_source":"{authority}","lifecycle":"{lifecycle}","decision":"{decision}","rationale":"{rationale}"}}]}}"#
+            r#"{{"decisions":[{{"decision_id":"d-xc39f","subject":"{subject}","authority_source":"{authority}","lifecycle":"{lifecycle}","decision":"{decision}","rationale":"{rationale}"}}]}}"#
         )
+    };
+    let row = |decision: &str, rationale: &str, authority: &str, lifecycle: &str| {
+        row_at("x-paint", decision, rationale, authority, lifecycle)
     };
     let mut fake = clean();
     fake.gh_output = "crates/fno/src/client/theme.rs\n".to_string();
-    // The lead's transcription, head-scoped: clears.
+    let clears = |fake: &Fake, head: &str| {
+        crate::merge_gates::role_chat_clears_pr(fake, &tmp, 7, head, "x-paint")
+    };
+    // The lead's transcription at the PR's node, head-scoped: clears.
     fake.decisions_stdout = Some(
         row(
             "Approved: PR 7 at <head> as built",
@@ -1997,12 +2042,30 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
-    // A head push invalidates the approval: held again.
+    assert!(clears(&fake, &head));
+    // A head push invalidates the approval.
     assert!(
-        crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_some(),
+        !clears(&fake, &pushed),
         "an approval recorded for head a..a must not clear head b..b"
     );
+    // With no node bound to the PR, even that row holds: the subject rule
+    // has no node to match.
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    // A role row on another subject never clears: the door scopes the role
+    // to the lead whose territory covers the subject, so only the PR's own
+    // node carries that scope.
+    fake.decisions_stdout = Some(
+        row_at(
+            "release-cadence",
+            "Approved: PR 7 at <head> as built",
+            "user in chat: approved",
+            "role",
+            "unscoped",
+        )
+        .replace("<head>", &head)
+        .into_bytes(),
+    );
+    assert!(!clears(&fake, &head));
     // No chat attestation in the rationale: held.
     fake.decisions_stdout = Some(
         row(
@@ -2014,7 +2077,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    assert!(!clears(&fake, &head));
     // The row's authority is not role: held.
     fake.decisions_stdout = Some(
         row(
@@ -2026,7 +2089,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    assert!(!clears(&fake, &head));
     // A retracted approval never clears: held.
     fake.decisions_stdout = Some(
         row(
@@ -2038,7 +2101,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .replace("<head>", &head)
         .into_bytes(),
     );
-    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_some());
+    assert!(!clears(&fake, &head));
     // The gate is closed again with the empty index the Fake serves by
     // default; the head-scoped grant text stays out of a held detail.
     fake.decisions_stdout = None;

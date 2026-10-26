@@ -629,7 +629,7 @@ fn leg_context(payload: &serde_json::Value) -> (i32, String, String) {
         cmd.push(r.to_string());
     }
     cmd.push("--json".to_string());
-    cmd.push("number,body,url,state,mergedAt,files".to_string());
+    cmd.push("number,body,url,state,mergedAt,files,headRefName".to_string());
     let out = match run_with_timeout_full(&cmd, Path::new("."), Duration::from_secs_f64(30.0)) {
         Ok(o) => o,
         Err(RunFailure::KilledAtSlice(_)) => {
@@ -724,14 +724,20 @@ fn leg_context(payload: &serde_json::Value) -> (i32, String, String) {
             }
         }
     }
+    // The head ref is the branch binding key the plan-hold door reads.
+    let head_ref_json = match row.get("headRefName") {
+        Some(serde_json::Value::String(s)) => escape_json_string(s),
+        _ => "\"\"".to_string(),
+    };
     let out = format!(
-        "{{\"number\":{},\"body\":{},\"url\":{},\"state\":{},\"merged_at\":{},\"changed_files\":{}}}\n",
+        "{{\"number\":{},\"body\":{},\"url\":{},\"state\":{},\"merged_at\":{},\"changed_files\":{},\"head_ref\":{}}}\n",
         number_json,
         body_json,
         url_json,
         state_json,
         merged_json,
-        str_array_json(&files)
+        str_array_json(&files),
+        head_ref_json
     );
     (0, out, String::new())
 }

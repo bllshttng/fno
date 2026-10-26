@@ -489,6 +489,7 @@ pub enum RootCmd {
         json: bool,
     },
     /// Remove the fno plugins, binaries, launchd agents and harness hooks
+    #[command(disable_help_flag = true)]
     Uninstall(crate::uninstall::Opts),
     /// Unclaimed argv: the forwarded Python surface, byte-verbatim.
     #[command(external_subcommand)]
@@ -505,7 +506,7 @@ pub struct MuxRoot {
 /// `mux web`'s operation set.
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum WebOp {
-    /// `mux web reap [--json]`: remove every bridge marker whose port refuses
+    /// `mux web reap [--json]`: remove every bridge marker whose recorded pid is gone or whose port refuses
     #[command(disable_help_flag = true)]
     Reap(MuxTail),
 }
@@ -854,7 +855,7 @@ fn tail_req_from(args: &[OsString], start: usize) -> MuxTailReq {
 fn native_first(args: &[OsString]) -> bool {
     matches!(
         args.first().and_then(|a| a.to_str()),
-        Some("mux" | "version" | "--server" | "--session")
+        Some("mux" | "version" | "uninstall" | "--server" | "--session")
     )
 }
 

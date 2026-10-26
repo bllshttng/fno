@@ -787,6 +787,35 @@ fn group_by_axes_build_labelled_bands_with_rollups() {
         vec!["(no cwd)", "footnote", "other"],
         "cwd bands, unspecified cwd last-shown by layout order"
     );
+
+    // group_by_harness: one band per harness, a bare pane in its own band,
+    // and the band's summed spend is the header hint.
+    v.layout.agents[0].harness = Some("claude".into());
+    v.layout.agents[0].session_cost_cents = Some(150);
+    v.layout.agents[0].session_tokens = Some(2_000_000);
+    v.layout.agents[2].harness = Some("claude".into());
+    v.layout.agents[2].session_cost_cents = Some(100);
+    v.layout.agents[2].session_tokens = Some(1_000_000);
+    v.agent_group = AgentGroup::Harness;
+    let rows = v.display_rows();
+    let labels: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| match r {
+            DisplayRow::Header { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, vec!["claude", "(no harness)"], "harness bands");
+    assert_eq!(
+        crate::client::agent_group::band_spend(&v, "claude").as_deref(),
+        Some("~$2.50 · 3M tok"),
+        "the band sums its rows' spend"
+    );
+    assert_eq!(
+        crate::client::agent_group::band_spend(&v, "(no harness)"),
+        None
+    );
+    assert_eq!(AgentGroup::Harness.next(), AgentGroup::Workspace);
 }
 
 #[test]

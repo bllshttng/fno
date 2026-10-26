@@ -20,6 +20,9 @@
 //!   files went unaudited
 //! * `6` the unknowns gate refused: the session's bound plan still lists an
 //!   unchecked `- [ ]` line under `## Unknowns`
+//! * `7` the sibling gate refused: another node of the same epic is on an
+//!   open PR, or on one merged in the last two hours; a body line
+//!   `Separate PR: <reason>` passes it
 //! * otherwise gh's own create exit code
 
 use crate::pr_push::{gh_api, run_labeled, READ_TIMEOUT};
@@ -146,6 +149,7 @@ struct OpenPr {
     title: String,
     branch: String,
     author: String,
+    body: String,
 }
 
 /// One GitHub REST read: a repo-relative path with its query. Prod wires
@@ -176,12 +180,14 @@ fn open_prs(slug: &str, gh: Gh) -> Result<Vec<OpenPr>, String> {
                 .get("user")
                 .and_then(|u| u.get("login"))
                 .and_then(Value::as_str);
+            let body = item.get("body").and_then(Value::as_str).unwrap_or("");
             match (number, title, branch, author) {
                 (Some(n), Some(t), Some(b), Some(a)) => rows.push(OpenPr {
                     number: n,
                     title: t.to_string(),
                     branch: b.to_string(),
                     author: a.to_string(),
+                    body: body.to_string(),
                 }),
                 _ => {
                     return Err(format!(
@@ -265,9 +271,10 @@ pub fn run_pr_create_command(argv: &[String]) -> i32 {
 }
 
 /// One JSON request on stdin (the argv form starts with `{`): the shape
-/// `command_call("pr-create", {...})` sends. The twin scan only - the argv
-/// form's owners and unknowns gates are create-leg gates, and the worker
-/// duplicate check never ran them (it read only the exit-3 stderr).
+/// `command_call("pr-create", {...})` sends. The twin scan, then the sibling
+/// gate over the payload's `body`, so the worker ship path meets the same
+/// one-PR-per-epic rule as the argv create leg. The owners and unknowns gates
+/// stay create-leg gates.
 fn run_stdin_check_only(payload: &str) -> i32 {
     let parsed: Value = match serde_json::from_str(payload) {
         Ok(v) => v,
@@ -323,6 +330,14 @@ fn run_stdin_check_only(payload: &str) -> i32 {
             )
         }
         _ => String::new(),
+    };
+    let body = parsed.get("body").and_then(Value::as_str).unwrap_or("");
+    let refusal = match (refusal.is_empty(), branch.as_deref()) {
+        (true, Some(b)) => {
+            sibling_gate(&cwd, body, b, &slug, &|path| gh_api("gh", &cwd, path, &[]))
+                .unwrap_or_default()
+        }
+        _ => refusal,
     };
     println!("{}", json!({"refusal": refusal, "title": title}));
     0
@@ -411,6 +426,189 @@ fn unknowns_gate_refusal(a: &Args) -> Option<i32> {
     Some(6)
 }
 
+/// How long a merged sibling PR still refuses a new one for its epic.
+const SIBLING_WINDOW: chrono::Duration = chrono::Duration::minutes(120);
+
+/// A PR the sibling gate weighs: open, or merged at `merged_at`.
+struct SiblingPr {
+    number: i64,
+    title: String,
+    branch: String,
+    body: String,
+    merged_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// The ids that ship elsewhere in `node`'s epic: every other child of its
+/// parent and the nodes contained in each. Nodes contained in `node` itself
+/// ship with it and are left out. A decompose group child is a declared PR
+/// unit, so a group child never counts another group child (or its leaves)
+/// as a sibling. Empty when the node has no parent.
+fn epic_sibling_ids(entries: &[Value], node: &str) -> (String, Vec<String>) {
+    let text = |e: &Value, k: &str| e.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let Some(row) = entries.iter().find(|e| text(e, "id") == node) else {
+        return (String::new(), Vec::new());
+    };
+    let parent = text(row, "parent");
+    if parent.is_empty() {
+        return (parent, Vec::new());
+    }
+    let is_group = !text(row, "group_slug").is_empty();
+    let children: Vec<String> = entries
+        .iter()
+        .filter(|e| text(e, "parent") == parent && text(e, "contained_in") != node)
+        .filter(|e| !(is_group && !text(e, "group_slug").is_empty()))
+        .map(|e| text(e, "id"))
+        .filter(|id| !id.is_empty() && id != node)
+        .collect();
+    let mut ids = children.clone();
+    for e in entries {
+        let owner = text(e, "contained_in");
+        let id = text(e, "id");
+        if children.contains(&owner) && !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    (parent, ids)
+}
+
+/// True when the body carries `Separate PR: <reason>` with a reason.
+fn says_separate_pr(body: &str) -> bool {
+    body.lines().any(|line| {
+        line.trim()
+            .strip_prefix("Separate PR:")
+            .is_some_and(|reason| !reason.trim().is_empty())
+    })
+}
+
+/// The refusal text when another PR already ships part of this node's epic:
+/// an open PR on another branch, or one merged inside `SIBLING_WINDOW`,
+/// whose closure lines name a sibling. None lets the create go on.
+fn sibling_refusal(
+    node: &str,
+    entries: &[Value],
+    body: &str,
+    branch: &str,
+    prs: &[SiblingPr],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
+    if says_separate_pr(body) {
+        return None;
+    }
+    let (epic, siblings) = epic_sibling_ids(entries, node);
+    if siblings.is_empty() {
+        return None;
+    }
+    for pr in prs {
+        if pr.branch == branch || pr.merged_at.is_some_and(|at| now - at > SIBLING_WINDOW) {
+            continue;
+        }
+        let claimed = pr
+            .body
+            .lines()
+            .flat_map(crate::org_board::pr_closure::line_ids)
+            .find(|id| siblings.contains(id));
+        if let Some(sibling) = claimed {
+            let state = if pr.merged_at.is_some() {
+                "merged in the last two hours"
+            } else {
+                "open"
+            };
+            return Some(format!(
+                "pr-create: REFUSED: PR #{} ({state}) already ships {sibling}, a sibling of {node} in epic {epic}\n  PR:     #{} {}\n  branch: {}\n  add this work to that PR, or write a `Separate PR: <reason>` line in the body",
+                pr.number, pr.number, pr.title, pr.branch
+            ));
+        }
+    }
+    None
+}
+
+/// The recently merged PRs: one page of closed PRs, newest update first,
+/// keeping the merged ones.
+fn merged_prs(slug: &str, gh: Gh) -> Result<Vec<SiblingPr>, String> {
+    let raw = gh(&format!(
+        "repos/{slug}/pulls?state=closed&sort=updated&direction=desc&per_page=50"
+    ))?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|_| "gh api closed pulls returned non-JSON".to_string())?;
+    let items = parsed
+        .as_array()
+        .ok_or_else(|| "gh api closed pulls returned a non-array".to_string())?;
+    Ok(items
+        .iter()
+        .filter_map(|item| {
+            let merged_at = item
+                .get("merged_at")
+                .and_then(Value::as_str)
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())?
+                .with_timezone(&chrono::Utc);
+            Some(SiblingPr {
+                number: item.get("number").and_then(Value::as_i64)?,
+                title: item
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                branch: item
+                    .get("head")
+                    .and_then(|h| h.get("ref"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                body: item
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                merged_at: Some(merged_at),
+            })
+        })
+        .collect())
+}
+
+/// The sibling gate: one PR per epic at a time. Returns the refusal text;
+/// the argv door prints it and exits 7, the stdin door returns it as its
+/// `refusal`. No manifest, no bound node, or any graph or GitHub read that
+/// fails passes with a warning: the gate refuses on evidence only.
+fn sibling_gate(cwd: &Path, body: &str, branch: &str, slug: &str, gh: Gh) -> Option<String> {
+    let manifest = crate::target_orient::read_manifest(cwd)?;
+    let node = manifest.get("graph_node_id").filter(|n| !n.is_empty())?;
+    if says_separate_pr(body) {
+        return None;
+    }
+    let entries = match crate::graph_store::read_rows_strict(&crate::backlog::settings::graph_path())
+    {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("pr-create: warning: sibling gate skipped, the graph read failed: {e}");
+            return None;
+        }
+    };
+    if epic_sibling_ids(&entries, node).1.is_empty() {
+        return None;
+    }
+    let mut prs = match open_prs(slug, gh) {
+        Ok(open) => open
+            .into_iter()
+            .map(|p| SiblingPr {
+                number: p.number,
+                title: p.title,
+                branch: p.branch,
+                body: p.body,
+                merged_at: None,
+            })
+            .collect::<Vec<_>>(),
+        Err(e) => {
+            eprintln!("pr-create: warning: sibling gate skipped, the open-PR read failed: {e}");
+            return None;
+        }
+    };
+    match merged_prs(slug, gh) {
+        Ok(merged) => prs.extend(merged),
+        Err(e) => eprintln!("pr-create: warning: sibling gate read no merged PRs: {e}"),
+    }
+    sibling_refusal(node, &entries, body, branch, &prs, chrono::Utc::now())
+}
+
 fn run(a: &Args, gh: Gh) -> i32 {
     let branch = match git(&a.cwd, &["rev-parse", "--abbrev-ref", "HEAD"]) {
         Ok(b) if !b.is_empty() && b != "HEAD" => b,
@@ -482,6 +680,11 @@ fn run(a: &Args, gh: Gh) -> i32 {
             }
             if let Some(code) = unknowns_gate_refusal(&a) {
                 return code;
+            }
+            let body = std::fs::read_to_string(&a.body_file).unwrap_or_default();
+            if let Some(refusal) = sibling_gate(&a.cwd, &body, &branch, &slug, gh) {
+                eprintln!("{refusal}");
+                return 7;
             }
             if a.check_only {
                 return 0;
@@ -727,6 +930,93 @@ mod tests {
         .unwrap();
         a.check_only = true;
         assert_eq!(run(&a, &gh), 0);
+    }
+
+    fn epic_rows() -> Vec<Value> {
+        vec![
+            serde_json::json!({"id": "x-eeee", "parent": ""}),
+            serde_json::json!({"id": "x-aaaa", "parent": "x-eeee"}),
+            serde_json::json!({"id": "x-bbbb", "parent": "x-eeee"}),
+            serde_json::json!({"id": "x-cccc", "parent": "x-bbbb", "contained_in": "x-bbbb"}),
+            serde_json::json!({"id": "x-dddd", "parent": "x-eeee", "contained_in": "x-aaaa"}),
+        ]
+    }
+
+    fn sibling_pr(number: i64, body: &str, merged_at: Option<&str>) -> SiblingPr {
+        SiblingPr {
+            number,
+            title: "feat: the sibling".into(),
+            branch: format!("feature/{number}"),
+            body: body.into(),
+            merged_at: merged_at.map(|t| {
+                chrono::DateTime::parse_from_rfc3339(t)
+                    .unwrap()
+                    .with_timezone(&chrono::Utc)
+            }),
+        }
+    }
+
+    fn at(t: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(t)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn an_open_sibling_pr_of_the_epic_refuses() {
+        let now = at("2026-10-24T12:00:00Z");
+        let rows = epic_rows();
+        // A contained descendant of the sibling counts as the sibling's.
+        let open = [sibling_pr(40, "Fixes x-bbbb x-cccc", None)];
+        let refusal = sibling_refusal("x-aaaa", &rows, "## Summary\n", "feature/me", &open, now)
+            .expect("an open sibling PR refuses");
+        assert!(
+            refusal.contains("PR #40 (open) already ships x-bbbb"),
+            "{refusal}"
+        );
+        assert!(refusal.contains("epic x-eeee"), "{refusal}");
+        assert!(refusal.contains("Separate PR: <reason>"), "{refusal}");
+        let contained = [sibling_pr(41, "Fixes x-cccc", None)];
+        assert!(sibling_refusal("x-aaaa", &rows, "", "feature/me", &contained, now).is_some());
+        // This node's own PR, and a node it contains, never refuse it.
+        let mine = [sibling_pr(42, "Fixes x-bbbb", None)];
+        assert!(sibling_refusal("x-aaaa", &rows, "", "feature/42", &mine, now).is_none());
+        let own_leaf = [sibling_pr(43, "Fixes x-dddd", None)];
+        assert!(sibling_refusal("x-aaaa", &rows, "", "feature/me", &own_leaf, now).is_none());
+        // No parent, or no sibling on any PR: silent pass.
+        assert!(sibling_refusal("x-eeee", &rows, "", "feature/me", &open, now).is_none());
+        let unrelated = [sibling_pr(44, "Fixes x-1111", None)];
+        assert!(sibling_refusal("x-aaaa", &rows, "", "feature/me", &unrelated, now).is_none());
+        // Two decompose group children are each a declared PR: neither
+        // refuses the other, but a plain sibling still refuses a group.
+        let mut grouped = rows.clone();
+        grouped[1]["group_slug"] = serde_json::json!("1");
+        grouped[2]["group_slug"] = serde_json::json!("2");
+        assert!(sibling_refusal("x-aaaa", &grouped, "", "feature/me", &open, now).is_none());
+        grouped.push(serde_json::json!({"id": "x-2222", "parent": "x-eeee"}));
+        let leaf = [sibling_pr(47, "Fixes x-2222", None)];
+        assert!(sibling_refusal("x-aaaa", &grouped, "", "feature/me", &leaf, now).is_some());
+    }
+
+    #[test]
+    fn a_separate_pr_line_or_an_old_merge_lets_the_sibling_gate_pass() {
+        let now = at("2026-10-24T12:00:00Z");
+        let rows = epic_rows();
+        let open = [sibling_pr(40, "Fixes x-bbbb", None)];
+        let body = "## Summary\n\nSeparate PR: the schema change must land first\n";
+        assert!(sibling_refusal("x-aaaa", &rows, body, "feature/me", &open, now).is_none());
+        // A bare label with no reason is not an escape.
+        assert!(
+            sibling_refusal("x-aaaa", &rows, "Separate PR:", "feature/me", &open, now).is_some()
+        );
+        let recent = [sibling_pr(45, "Fixes x-bbbb", Some("2026-10-24T11:00:00Z"))];
+        let refusal = sibling_refusal("x-aaaa", &rows, "", "feature/me", &recent, now).unwrap();
+        assert!(
+            refusal.contains("merged in the last two hours"),
+            "{refusal}"
+        );
+        let old = [sibling_pr(46, "Fixes x-bbbb", Some("2026-10-24T09:30:00Z"))];
+        assert!(sibling_refusal("x-aaaa", &rows, "", "feature/me", &old, now).is_none());
     }
 
     // ── fixtures ────────────────────────────────────────────────────────────

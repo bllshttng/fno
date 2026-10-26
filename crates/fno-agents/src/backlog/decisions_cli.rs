@@ -38,12 +38,17 @@ const READ_AUTHORITY_SOURCES: &[&str] = &[
 /// kilobytes.
 const INVALID_AUTHORITY_SHOWN: usize = 5;
 
-/// Checked-in graduation retirements (`fno/decide/graduation.py`): a
-/// decision whose enforced artifact exists retires at read time. The
-/// artifact string is the evidence the reader reports.
-const REGISTERED_GRADUATION_PROBES: &[(&str, &str)] = &[(
-    "d-1ca0e711",
+/// The gates whose readers are wired into a decision walk. A registered
+/// gate answers, so its `gate:` graduation proves; the registration is the
+/// existence fact, checked in code rather than re-run per listing call.
+const REGISTERED_GATES: &[&str] = &["gate:merge-freeze", "gate:merge-hold", "gate:naming"];
+
+/// Checked-in graduation retirements (`fno/decide/graduation.py`): a test id
+/// needs a runner, so only a registered artifact retires. Keyed by artifact,
+/// the write side's own string, not by decision id.
+const REGISTERED_TEST_PROBES: &[(&str, &str)] = &[(
     "test:cli/tests/integration/test_graph_cli.py::test_new_p0_requires_breaking_acknowledgment",
+    "test_passed:cli/tests/integration/test_graph_cli.py::test_new_p0_requires_breaking_acknowledgment",
 )];
 
 /// `^d-[0-9a-f]{4,32}$`, the Python `looks_like_decision_id` shape. The
@@ -365,17 +370,73 @@ fn graph_node_for_pr<'a>(expiry: &Value, entries: &'a [Value]) -> Option<&'a Val
     }
 }
 
-/// The checked-in retirement for a decision id, if any.
-fn registered_retirement(id_casefold: &str) -> Option<Value> {
-    REGISTERED_GRADUATION_PROBES
-        .iter()
-        .find(|(id, _)| id.to_lowercase() == id_casefold)
-        .map(|(_, artifact)| {
-            json!({
-                "artifact": artifact,
-                "marker": format!("test_passed:{}", artifact.strip_prefix("test:").unwrap_or(artifact)),
-            })
-        })
+/// What an enforced artifact's probe answered. `Retired` carries the
+/// evidence a retired row reports; `Live` carries why the row stays live.
+enum ArtifactVerdict {
+    Retired(Value),
+    Live(String),
+}
+
+/// The read side of `law_match::validate_graduation`, which owns the prefix
+/// set. A `file:`/`doc:` artifact proves by existing under the caller's cwd;
+/// a `test:` artifact by its registered runner; a `gate:` artifact by
+/// registration; a `default:` is recorded, never probed.
+fn probe_artifact(artifact: &str) -> ArtifactVerdict {
+    let (class, rest) = match artifact.split_once(':') {
+        Some(pair) => pair,
+        None => return ArtifactVerdict::Live(format!("unparseable artifact {artifact:?}")),
+    };
+    // The write side records `file:<path>=>why` - the pointer names the
+    // evidence, never part of the path. Split it before every class check.
+    let rest = match rest.split_once("=>") {
+        Some((head, _)) => head,
+        None => rest,
+    };
+    match class {
+        "file" | "doc" => {
+            if Path::new(rest).exists() {
+                ArtifactVerdict::Retired(json!({ "artifact": artifact, "exists": true }))
+            } else {
+                ArtifactVerdict::Live(format!("the path does not exist here: {rest}"))
+            }
+        }
+        "test" => match REGISTERED_TEST_PROBES.iter().find(|(a, _)| *a == artifact) {
+            Some((_, marker)) => {
+                ArtifactVerdict::Retired(json!({ "artifact": artifact, "marker": marker }))
+            }
+            None => ArtifactVerdict::Live(format!("no registered runner for {artifact}")),
+        },
+        "gate" => {
+            if REGISTERED_GATES.contains(&artifact) {
+                ArtifactVerdict::Retired(json!({ "artifact": artifact, "gate": "answers" }))
+            } else {
+                ArtifactVerdict::Live(format!("gate {rest:?} is not registered"))
+            }
+        }
+        "default" => ArtifactVerdict::Live(format!("recorded default, not probed: {rest}")),
+        other => ArtifactVerdict::Live(format!("unknown artifact class {other:?}")),
+    }
+}
+
+/// The row's enforced graduation, probed. The tuple is
+/// (retire evidence, live reason): exactly one side fills, and only an
+/// `enforced` graduation fills either.
+fn graduation_probe(row: &Value) -> (Option<Value>, Option<String>) {
+    let g = match row.get("graduation") {
+        Some(g) => g,
+        None => return (None, None),
+    };
+    if g.get("kind").and_then(Value::as_str) != Some("enforced") {
+        return (None, None);
+    }
+    let artifact = match g.get("artifact").and_then(Value::as_str) {
+        Some(a) => a,
+        None => return (None, None),
+    };
+    match probe_artifact(artifact) {
+        ArtifactVerdict::Retired(evidence) => (Some(evidence), None),
+        ArtifactVerdict::Live(reason) => (None, Some(reason)),
+    }
 }
 
 /// The subject matcher, `_subject_matcher` over the graph: a resolved node
@@ -570,12 +631,13 @@ fn list_core_over(
         };
         let lane_derived = decision_lane(&row);
         row["lane"] = json!(lane_derived);
+        let (retire_evidence, unproved_reason) = graduation_probe(&row);
         let lifecycle: String = if let Some((_, reason)) = latest_retractions.get(&key) {
             row["lifecycle_reason"] = json!(reason);
             "retracted".to_string()
         } else if winner.is_some() {
             "superseded".to_string()
-        } else if let Some(retirement) = registered_retirement(&key) {
+        } else if let Some(retirement) = retire_evidence {
             row["lifecycle_reason"] = json!("graduated to enforced artifact");
             row["lifecycle_evidence"] = retirement;
             "retired".to_string()
@@ -597,6 +659,9 @@ fn list_core_over(
         } else if lane_derived == "unattributed" {
             "unscoped".to_string()
         } else {
+            if let Some(reason) = unproved_reason {
+                row["lifecycle_evidence"] = json!(reason);
+            }
             "live".to_string()
         };
         row["lifecycle"] = json!(lifecycle);
@@ -826,6 +891,9 @@ fn near_miss_subjects(
 /// on every stream: the deleted Python command printed it from the inbox mount
 /// too, and scripts read the prefix.
 pub fn run(argv: &[String]) -> i32 {
+    if argv.first().map(String::as_str) == Some("share") {
+        return run_share(argv.get(1..).unwrap_or(&[]));
+    }
     let opts = match parse_options(argv) {
         Ok(o) => o,
         Err(m) if m == "__help__" => {
@@ -1054,6 +1122,84 @@ pub fn run(argv: &[String]) -> i32 {
     );
     0
 }
+/// `fno backlog decisions share`: the bind share over the whole store, the
+/// strategy draft's "rulings that bind" input metric. The listing's own
+/// derivation, no page limit: every live law-lane row, counted by
+/// graduation kind, with the probe verdict per enforced row.
+fn run_share(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json" || a == "-J");
+    let mut entries: Option<Vec<Value>> = None;
+    let out = match list_core(None, Some("law"), Some("all"), &mut entries, false) {
+        Ok(out) => out,
+        Err(CoreError::Read(reason)) | Err(CoreError::ValueError(reason)) => {
+            eprintln!("{LABEL}: cannot read the decision index: {reason}");
+            return 1;
+        }
+    };
+    let mut ungraduated = 0usize;
+    let mut guidance = 0usize;
+    let mut should_be_enforced = 0usize;
+    let mut bound = 0usize;
+    let mut unproved: Vec<(String, String)> = Vec::new();
+    let mut enforced: Vec<(String, String)> = Vec::new();
+    for row in &out.rows {
+        if matches!(
+            rows_str(row, "lifecycle"),
+            "retracted" | "superseded" | "unscoped"
+        ) {
+            continue;
+        }
+        let g = row.get("graduation");
+        match g.and_then(|g| g.get("kind")).and_then(Value::as_str) {
+            Some("enforced") => {
+                let artifact = g
+                    .and_then(|g| g.get("artifact"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let id = rows_str(row, "decision_id").to_string();
+                match probe_artifact(&artifact) {
+                    ArtifactVerdict::Retired(_) => bound += 1,
+                    ArtifactVerdict::Live(reason) => {
+                        unproved.push((id.clone(), reason));
+                    }
+                }
+                enforced.push((id, artifact));
+            }
+            Some("guidance") => guidance += 1,
+            Some("should-be-enforced-but-i-did-not") => should_be_enforced += 1,
+            _ => ungraduated += 1,
+        }
+    }
+    let total = ungraduated + guidance + should_be_enforced + enforced.len();
+    if json {
+        println!(
+            "{}",
+            json!({
+                "law_rows": total,
+                "bound": bound,
+                "enforced": enforced.len(),
+                "guidance": guidance,
+                "should_be_enforced": should_be_enforced,
+                "ungraduated": ungraduated,
+                "unproved": unproved,
+            })
+        );
+        return 0;
+    }
+    println!(
+        "law rows {total}: bound {bound}, guidance {guidance}, \
+should-be-enforced {should_be_enforced}, ungraduated {ungraduated}"
+    );
+    for (id, artifact) in &enforced {
+        println!("  {id} {artifact}");
+    }
+    for (id, reason) in &unproved {
+        println!("  {id} unproved: {reason}");
+    }
+    0
+}
+
 fn run_review_list(opts: &Options) -> i32 {
     let report = match review_list_core() {
         Ok(r) => r,
@@ -1397,7 +1543,7 @@ fn write_report(report: &Value, output: &str, format: Option<&str>) -> Result<()
 }
 
 /// `json.dumps(..., sort_keys=True)` parity: recursively sorted object keys.
-fn sort_keys(value: &Value) -> Value {
+pub(crate) fn sort_keys(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();
@@ -1920,7 +2066,7 @@ mod tests {
                 "2026-09-01T00:00:00Z",
                 "operator",
                 "topic-g",
-                "",
+                ",\"graduation\":{\"kind\":\"enforced\",\"artifact\":\"test:cli/tests/integration/test_graph_cli.py::test_new_p0_requires_breaking_acknowledgment\"}",
             ),
             // duplicate id appended twice: one row wins
             envelope(
@@ -2145,6 +2291,99 @@ mod tests {
         assert_eq!(
             resolve_output_format("r.md", Some("yaml")).unwrap_err(),
             "--format must be markdown or json"
+        );
+    }
+
+    // One table-style declaration: the CI delta caps new test declarations.
+    #[test]
+    fn graduation_probes_and_share_guard_their_contracts() {
+        // file: proves by existing under the caller's cwd; a missing path
+        // stays live naming it.
+        assert!(matches!(
+            probe_artifact("file:Cargo.toml"),
+            ArtifactVerdict::Retired(_)
+        ));
+        let live = probe_artifact("file:does-not-exist-probe-target");
+        assert!(matches!(live, ArtifactVerdict::Live(_)));
+        // gate: proves by registration; an unregistered gate names itself.
+        assert!(matches!(
+            probe_artifact("gate:merge-freeze"),
+            ArtifactVerdict::Retired(_)
+        ));
+        let unregistered = probe_artifact("gate:no-such-gate");
+        match &unregistered {
+            ArtifactVerdict::Live(reason) => assert!(reason.contains("no-such-gate")),
+            ArtifactVerdict::Retired(_) => panic!("an unregistered gate proved"),
+        }
+        // test: proves through its registered runner only.
+        assert!(matches!(
+            probe_artifact(
+                "test:cli/tests/integration/test_graph_cli.py::test_new_p0_requires_breaking_acknowledgment"
+            ),
+            ArtifactVerdict::Retired(_)
+        ));
+        assert!(matches!(
+            probe_artifact("test:nowhere::test_x"),
+            ArtifactVerdict::Live(_)
+        ));
+        // default: is recorded, never probed; a prefix-less artifact refuses.
+        assert!(matches!(
+            probe_artifact("default:some-value"),
+            ArtifactVerdict::Live(_)
+        ));
+        assert!(matches!(
+            probe_artifact("no-prefix"),
+            ArtifactVerdict::Live(_)
+        ));
+        // graduation_probe reads only an enforced graduation; the retired
+        // side carries evidence, the live side names the verdict.
+        let enforced_row = serde_json::json!({
+            "graduation": {"kind": "enforced", "artifact": "gate:no-such-gate"}
+        });
+        let (retire, live_reason) = graduation_probe(&enforced_row);
+        assert!(retire.is_none());
+        assert!(live_reason.unwrap().contains("no-such-gate"));
+        let passing_row = serde_json::json!({
+            "graduation": {"kind": "enforced", "artifact": "file:Cargo.toml"}
+        });
+        let (retire, live_reason) = graduation_probe(&passing_row);
+        assert!(live_reason.is_none());
+        assert!(retire.unwrap().get("exists") == Some(&serde_json::json!(true)));
+        let guidance_row = serde_json::json!({"graduation": {"kind": "guidance"}});
+        assert_eq!(graduation_probe(&guidance_row), (None, None));
+        // The walk: the fixture's enforced test: row retires (its own test
+        // above), and an unproved enforced gate row stays live with the
+        // probe verdict as its evidence.
+        // The gate row goes through the same store reader as the fixture, so
+        // it carries the store-row shape the listing expects.
+        let (gate_rows, _) = rows_from_jsonl(&envelope(
+            "d-gate0007",
+            "2026-09-02T00:00:00Z",
+            "operator",
+            "topic-h",
+            ",\"graduation\":{\"kind\":\"enforced\",\"artifact\":\"gate:no-such-gate\"}",
+        ));
+        let mut rows2 = seed_fixture();
+        rows2.extend(gate_rows);
+        let mut entries2: Option<Vec<Value>> = Some(Vec::new());
+        let out2 = list_core_over(
+            rows2,
+            0,
+            &mut entries2,
+            None,
+            Some("law"),
+            Some("all"),
+            true,
+        );
+        let gate_row_out = out2
+            .rows
+            .iter()
+            .find(|r| id_of(r) == "d-gate0007")
+            .expect("the gate row is listed");
+        assert_eq!(lifecycle_of(&out2, "d-gate0007"), "live");
+        assert!(
+            rows_str(gate_row_out, "lifecycle_evidence").contains("no-such-gate"),
+            "the live evidence names the unregistered gate"
         );
     }
 }
