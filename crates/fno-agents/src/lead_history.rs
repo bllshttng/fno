@@ -1686,24 +1686,12 @@ mod verdict_tests {
     }
 
     #[test]
-    fn ac5_an_own_session_filed_close_never_reaches_a_close_count() {
-        // The guard side (lead ruling 2026-10-26): a close on a node the
-        // lead's own session filed reaches neither close counter - scope_split
-        // skips it before the window read (its counting half lives in
-        // lead_verdict_inputs tests). At the verdict level the guard means a
-        // board whose only activity is the lead closing its own filings
-        // still reads stalled.
-        let mut r = readings();
-        r.last_actionable = Some(0);
-        r.inherited_undelivered = 5;
-        r.inherited_closed_in_window = 0;
-        r.filed_closed_in_window = 0;
-        let (v, _) = verdict(&r);
-        assert_eq!(v, Verdict::Stalled);
-    }
-
-    #[test]
-    fn ac6_an_other_session_filed_close_reads_converging() {
+    fn an_other_session_filed_close_reads_converging() {
+        // The delivery side (lead ruling, 2026-10-26): one in-window close on
+        // a row another session filed is progress, so the quiet-board stalled
+        // test cannot fire. The guard side - the lead's own filings never
+        // reaching a counter - lives in scope_split's tests; at this layer it
+        // is ac3's both-counters-zero reading.
         let mut r = readings();
         r.last_actionable = Some(0);
         r.inherited_undelivered = 5;

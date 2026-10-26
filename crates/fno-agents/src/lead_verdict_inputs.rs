@@ -941,7 +941,7 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    // --- the close-count guard (lead ruling 2026-10-26, node x-c2c1) ---
+    // --- the close-count guard (lead ruling, 2026-10-26) ---
 
     fn scope_ids() -> std::collections::HashSet<String> {
         ["x-root".to_string(), "x-kid".to_string()]
