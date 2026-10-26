@@ -1,0 +1,1 @@
+{"env": {"HOME": "{HOME}"}, "expect": {"env": {"HOME": "<TMP>/home"}}, "op": "seal"}

@@ -71,39 +71,39 @@ on:
 # stress build failed there and passed on 24.04 at the same code.
 jobs:
   real-codex-0145:
+    needs: [pr-affected]
+    if: ${{ !cancelled() && needs.pr-affected.outputs.cargo == 'true' }}
     runs-on: ubuntu-24.04
-    # Widest of 40 passing runs sampled 2026-09-24: 0.5m.
-    timeout-minutes: 5
+    # The codex converge engine is Rust now: this builds the fno-agents
+    # library and one integration test, a cold compile the old 0.5m Python
+    # job never paid. Sized like hook-latency's cold build.
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
         with:
-          python-version: "3.12"
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        with:
-          version: "latest"
-
       - name: Install Codex 0.145
         run: npm install -g @openai/codex@0.145.0
-
-      - name: Sync CLI
-        working-directory: cli
-        run: uv sync
 
       - name: Real Codex 0.145 plugin boundary
         env:
           FNO_REAL_CODEX_PLUGIN_TEST: "1"
-        run: cli/.venv/bin/fno-py doctor test -q cli/tests/integration/test_codex_plugin_real_boundary.py
+        run: cargo test --locked --manifest-path crates/fno-agents/Cargo.toml --test codex_converge_real -- --nocapture
 
   # Sizes the changed-smoke ceiling from the packet the selector maps. The
   # packet scales with the diff, so a fixed cap either starves a large rebase

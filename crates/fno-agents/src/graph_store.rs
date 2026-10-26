@@ -1765,6 +1765,68 @@ pub fn reopen_outranks_stamps(reopened: Option<&str>, kid_completed: &[Option<&s
     true
 }
 
+/// The epic form of the reopen guard. `kids` pairs each child's join stamp
+/// ([`joined_parent_at`]) with its completion stamp. Only a child that joined
+/// at or before the reopen can expire it: its close is evidence the reopened
+/// work finished. A child that joined after the reopen proves nothing about
+/// the unfiled work the reopen named, so its close never re-arms the
+/// auto-close. An unreadable join stamp counts as after: ambiguity favours
+/// the human.
+pub fn reopen_holds_epic(reopened: Option<&str>, kids: &[(Option<&str>, Option<&str>)]) -> bool {
+    let cutoff = reopened.and_then(parse_rfc3339_stamp);
+    let prior: Vec<Option<&str>> = kids
+        .iter()
+        .filter(|(filed, _)| match cutoff {
+            Some(reopen) => filed
+                .and_then(parse_rfc3339_stamp)
+                .is_some_and(|f| f <= reopen),
+            None => true,
+        })
+        .map(|(_, done)| *done)
+        .collect();
+    reopen_outranks_stamps(reopened, &prior)
+}
+
+/// When a row joined its current parent: the `parented_at` stamp both write
+/// seams set under the store lock, else `created_at` for a row written
+/// before that stamp existed.
+pub fn joined_parent_at(row: &Value) -> Option<&str> {
+    row.get("parented_at")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| row.get("created_at").and_then(Value::as_str))
+}
+
+/// Stamp `parented_at` on every row this write gives a parent or moves to a
+/// new one. Both write seams call it under the store lock, so the stamp
+/// orders a child's arrival against a reopen the same lock serialized.
+/// `created_at` cannot do that: a creator stamps it before taking the lock,
+/// and a reparent never touches it.
+pub fn stamp_parent_edges(before: &[Value], after: &mut [Value], now: &str) {
+    let prior: std::collections::HashMap<&str, Option<&str>> = before
+        .iter()
+        .filter_map(|e| entry_id(e).map(|id| (id, e.get("parent").and_then(Value::as_str))))
+        .collect();
+    for row in after.iter_mut() {
+        let Some(parent) = row
+            .get("parent")
+            .and_then(Value::as_str)
+            .filter(|p| !p.trim().is_empty())
+        else {
+            continue;
+        };
+        let moved = match entry_id(row).and_then(|id| prior.get(id)) {
+            Some(old) => *old != Some(parent),
+            None => true,
+        };
+        if moved {
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert("parented_at".to_string(), Value::String(now.to_string()));
+            }
+        }
+    }
+}
+
 /// Stamp parser for the guard comparisons: None on blank or unreadable.
 /// Mirrors the Python twin's _parse_iso: an RFC3339 stamp parses as itself,
 /// a naive stamp reads UTC (the graph carries both spellings).
@@ -2067,20 +2129,25 @@ pub fn recompute_statuses_with_plan_rungs(
         // its children are: a lock or an open PR reads live from the
         // derivation above; a bound plan's own deliverables are unverified
         // until its own door closes the row; and a deliberate reopen holds
-        // until a NEW child close postdates it.
+        // until a child filed before it closes after it.
         let own_work_live = matches!(
             parent_status.as_deref(),
             Some("in_review") | Some("in_progress")
         );
         let holds = {
-            let kid_stamps: Vec<Option<&str>> = children_by_parent[&pid]
+            let kid_stamps: Vec<(Option<&str>, Option<&str>)> = children_by_parent[&pid]
                 .iter()
                 .filter_map(|ci| entries.get(*ci))
-                .map(|k| k.get("completed_at").and_then(Value::as_str))
+                .map(|k| {
+                    (
+                        joined_parent_at(k),
+                        k.get("completed_at").and_then(Value::as_str),
+                    )
+                })
                 .collect();
             own_work_live
                 || has_own_plan_work(&entries[pidx])
-                || reopen_outranks_stamps(
+                || reopen_holds_epic(
                     entries[pidx].get("reopened_at").and_then(Value::as_str),
                     &kid_stamps,
                 )
@@ -2774,6 +2841,11 @@ pub fn locked_mutate_with_hook(
 
     // Slug assignment on EVERY persisted mutation.
     ensure_slugs(&mut entries);
+    // The join stamp lands before the status recompute: a write that moves a
+    // done child under a reopened epic must derive the epic's status from the
+    // late join, not the child's older created_at.
+    let now_iso = now_isoformat();
+    stamp_parent_edges(&raw, &mut entries, &now_iso);
     recompute_statuses_with_plan_rungs(&mut entries, input.plan_rungs.as_ref());
 
     // touched_at stamp: a curation-field change vs the pre-image. The
@@ -2782,7 +2854,6 @@ pub fn locked_mutate_with_hook(
     // export) would otherwise re-stamp every row missing a defaulted field.
     // Status stays the row's own: the pre-image carries the recomputed
     // status, not the readiness overlay the defaults pass applies.
-    let now_iso = now_isoformat();
     let mut defaulted = entries.clone();
     apply_defaults(&mut defaulted, true);
     for (e, view) in entries.iter_mut().zip(defaulted.iter_mut()) {
@@ -3302,6 +3373,43 @@ mod tests {
             .expect("an unrelated update on a stored leaky title must pass");
     }
 
+    #[test]
+    fn a_whole_graph_reparent_under_a_reopened_epic_leaves_it_open() {
+        // The same publish moves an old done child under a reopened epic and
+        // derives the epic's status. The join stamp must land first, or the
+        // child's older created_at closes the epic inside the very write.
+        let root = tempfile::tempdir().unwrap();
+        let graph = root.path().join("graph.json");
+        let epic = json!({
+            "id": "ab-epic0001", "slug": "epic", "title": "Epic", "type": "feature",
+            "status": "idea", "priority": "p2", "created_at": "2025-01-01T00:00:00+00:00",
+            "reopened_at": "2026-01-01T00:00:00+00:00",
+        });
+        let mut kid = json!({
+            "id": "ab-kid00001", "slug": "kid", "title": "Kid", "type": "feature",
+            "status": "done", "priority": "p2", "created_at": "2025-06-01T00:00:00+00:00",
+            "completed_at": "2026-06-01T00:00:00+00:00", "completion_note": "shipped",
+        });
+        seed_rows(&graph, &[epic.clone(), kid.clone()]).unwrap();
+        kid["parent"] = json!("ab-epic0001");
+        let input = MutateInput {
+            entries: vec![epic, kid],
+            canonical_path: None,
+            base_version: crate::backlog::version(&graph).unwrap(),
+            plan_rungs: None,
+        };
+        let outcome = locked_mutate(&graph, input, std::time::Duration::from_secs(5)).unwrap();
+        let row = |id: &str| {
+            outcome
+                .entries
+                .iter()
+                .find(|e| entry_id(e) == Some(id))
+                .unwrap()
+        };
+        assert!(row("ab-kid00001")["parented_at"].is_string());
+        assert_eq!(row("ab-epic0001")["status"], "idea");
+    }
+
     fn count_prefixed(dir: &Path, prefix: &str) -> usize {
         std::fs::read_dir(dir)
             .unwrap()
@@ -3596,12 +3704,21 @@ mod tests {
                    "reopened_at": "2026-02-01T00:00:00+00:00"}),
             json!({"id": "reopened-kid", "parent": "reopened-parent",
                    "completed_at": "2026-01-01T00:00:00+00:00"}),
-            // A reopen that a NEW child close postdates expires: re-close.
-            // The child stamp is the naive spelling the graph also carries.
+            // A reopen that a child filed before it closes after expires:
+            // re-close. The child stamp is the naive spelling the graph also
+            // carries.
             json!({"id": "stale-parent", "parent": null, "status": "idea",
                    "reopened_at": "2026-01-01T00:00:00+00:00"}),
             json!({"id": "stale-kid", "parent": "stale-parent",
+                   "created_at": "2025-12-01T00:00:00+00:00",
                    "completed_at": "2026-03-01T00:00:00"}),
+            // A child filed after the reopen proves nothing about the work
+            // the reopen named: its close leaves the epic open.
+            json!({"id": "epic-parent", "parent": null, "status": "idea",
+                   "reopened_at": "2026-01-01T00:00:00+00:00"}),
+            json!({"id": "late-kid", "parent": "epic-parent",
+                   "created_at": "2026-02-01T00:00:00+00:00",
+                   "completed_at": "2026-03-01T00:00:00+00:00"}),
         ];
         recompute_statuses(&mut entries);
         // Parent with all-done children and no live work of its own -> done.
@@ -3625,6 +3742,11 @@ mod tests {
             s_str(&entries[8], "status"),
             Some("done"),
             "a naive child close postdating the reopen re-closes"
+        );
+        assert_eq!(
+            s_str(&entries[10], "status"),
+            Some("idea"),
+            "a child filed after the reopen never re-arms the close"
         );
     }
 

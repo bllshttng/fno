@@ -520,7 +520,6 @@ K4	cli/src/fno/adapters/providers/test_runtime_state.py	py	91
 K4	cli/src/fno/adapters/providers/test_staging.py	py	11
 K4	cli/src/fno/adapters/providers/test_usage.py	py	80
 K4	cli/src/fno/adapters/providers/test_usage_false_green.py	py	16
-K4	cli/src/fno/agents/test_account_env.py	py	23
 K4	cli/src/fno/agents/test_harness_map.py	py	80
 K4	cli/tests/agents/test_claude_parse_short_id.py	py	3
 K4	cli/tests/agents/test_claude_session_registry.py	py	30
@@ -540,7 +539,6 @@ K4	cli/tests/agents/test_harnesses_codex_argv.py	py	30
 K4	cli/tests/agents/test_harnesses_codex_create.py	py	29
 K4	cli/tests/agents/test_harnesses_env_inject.py	py	7
 K4	cli/tests/agents/test_role_grantor_identity.py	py	15
-K4	cli/tests/integration/test_canonical_account_binding.py	py	9
 K4	cli/tests/integration/test_codex_plugin_cli_boundary.py	py	8
 K4	cli/tests/integration/test_codex_plugin_real_boundary.py	py	2
 K4	cli/tests/integration/test_provider_usage_live.py	py	1

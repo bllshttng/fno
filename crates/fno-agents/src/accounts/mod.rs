@@ -4,8 +4,9 @@
 //! ([staging]), the launch env ([env]), the managed store with its shared
 //! credential slot ([store]), the provider error taxonomy ([error_class]),
 //! the runtime-state file ([state]), the usage probes ([usage_probe]), the
-//! usage report ([usage]), the launch pick ([pick]) and the config write
-//! ([writer]).
+//! usage report ([usage]), the launch pick ([pick]), the config write
+//! ([writer]), the spawn's account answers ([launch]) and the one
+//! credential composition ([credentials]).
 //! Ported from `fno.adapters.providers` (model.py, loader.py, binding.py,
 //! staging.py, dispatch.py, error_taxonomy.py, runtime_state.py, usage.py
 //! and managed.py's store layer and switch) and
@@ -21,9 +22,11 @@ pub mod add;
 pub mod benchmarks;
 pub mod binding;
 pub mod combos;
+pub mod credentials;
 pub mod doctor;
 pub mod env;
 pub mod error_class;
+pub mod launch;
 pub mod launch_check;
 pub mod list;
 pub mod pick;

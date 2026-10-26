@@ -132,6 +132,7 @@ pub mod client_commands;
 pub mod client_render;
 pub mod client_transport;
 pub mod codex_ask;
+pub mod codex_converge;
 pub mod codex_daemon_readiness;
 pub mod codex_daemon_upgrade;
 /// Test support: a fake shared codex app-server daemon. Public because the

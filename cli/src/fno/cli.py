@@ -147,11 +147,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Phase utilities (kill-check via the fno-agents binary)",
         {"hidden": True},
     ),
-    "roles": (
-        "fno.roles.cli:roles_app",
-        "Inspect bounded business-role definitions and resolutions.",
-        {"hidden": True},
-    ),
     "config": ("fno.config_cli:app", "Configuration management"),
     "notify": (
         "fno.notify:notify_app",
@@ -266,7 +261,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "plan": set(),
     "pr-watch": set(),
     "resume": set(),
-    "roles": set(),
     "route": set(),
     "state": set(),
     "stub-manifest": set(),

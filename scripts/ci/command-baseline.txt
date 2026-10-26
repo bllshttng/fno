@@ -104,7 +104,6 @@ plan
 pr-watch
 research
 resume
-roles
 route
 scoreboard
 state
