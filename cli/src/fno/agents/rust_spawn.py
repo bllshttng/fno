@@ -153,7 +153,7 @@ def _codex_thread_spawn(
     ``accounts::credentials::seal``; the ``FNO_HOME`` sidecars still follow it.
     """
     from fno.agents.dispatch import DispatchAskError
-    from fno.agents.spawn_overlay_client import spawn_overlay_call
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
     from fno import rust_binary
 
@@ -196,7 +196,18 @@ def _codex_thread_spawn(
     # account's home and go unfindable. Env is the only channel to the
     # app-server child, so the override stays.
     if env.get("HOME") != os.environ.get("HOME"):
-        env = spawn_overlay_call({"kind": "state-root-seal", "env": env})["env"]
+        try:
+            env = spawn_overlay_call({"kind": "state-root-seal", "env": env})["env"]
+        except SpawnOverlayUnavailable as exc:
+            # The seal rides the same binary the spawn will launch: one that
+            # cannot answer the door cannot hold the seal either, so refuse
+            # with the staleness receipt instead of the raw transport error.
+            raise DispatchAskError(
+                f"sealed spawn refused: {binary} cannot answer the state-root "
+                f"seal ({exc}); the seal cannot hold - run `fno doctor update` "
+                "to refresh the binary",
+                exit_code=13,
+            ) from exc
     if env.get("HOME") != os.environ.get("HOME") and env.get("FNO_STATE_DIR"):
         _confirm_seal_honored(binary, env)
     try:
