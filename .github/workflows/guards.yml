@@ -214,6 +214,18 @@ jobs:
           bash tests/ci/test_seam_crossings.sh
           (cd cli && uv run fno-py doctor lint seam-crossings)
 
+      # The JSON-stdout house contract: a -J verb prints exactly one JSON
+      # document on stdout ([] on empty, {ok:false} on a refused read), so an
+      # agent parses output without a wrapper. Selftest first, so the checker
+      # is positive-controlled before it is trusted on the real table.
+      - name: JSON-stdout contract (selftest, then check)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          bash scripts/ci/check-json-stdout.sh --selftest
+          bash scripts/ci/check-json-stdout.sh
+
       # Flag + env-var registries (x-72fc): the flag check measures the
       # change against its own base (merge base on a PR, the previous tip on
       # push), so two PRs from one base cannot race on a stored count; every
