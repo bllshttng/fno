@@ -23,9 +23,7 @@
 //!
 //! rc 0 a completed beat, 3 when an asked-for row was not journalled or
 //! stdout could not be written, 2 usage failure.
-use crate::lead_checkin_beat_budget::{
-    run_bounded, take_reading, take_reading_within, BEAT_BUDGET, READER_CALL_BUDGET,
-};
+use crate::lead_checkin_beat_budget::{run_bounded, take_reading, BEAT_BUDGET, READER_CALL_BUDGET};
 use crate::lead_history::LEAD_CHECKIN;
 use crate::org_board::{read_board, BoardOpts};
 use crate::org_fold::org_fold;

@@ -3,7 +3,7 @@
 //! past the ceiling and partial coverage always journals.
 
 use crate::lead_checkin::Reading;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 /// Wall-clock ceiling for one child a reader spawns. The worst clean call
 /// measured 8s (`fno agents list --json`); the ceiling holds at fourteen
@@ -93,6 +93,7 @@ pub(crate) fn take_reading_within(
 #[cfg(test)]
 mod reader_deadline_tests {
     use super::*;
+    use serde_json::json;
 
     /// A reader past the beat budget is skipped with the named reason, and
     /// every skipped reader lands in the readings the payload reports.
