@@ -8,7 +8,7 @@
 //! parity-stage: characterization
 //! parity-oracle: cli/src/fno/status_fanout.py
 //!
-//! Capture deviation: the mission freeze barred local cargo verbs, so the
+//! Capture deviation: the mission freeze barred local cargo runs, so the
 //! goldens were captured by driving the Python leg directly (a sandboxed
 //! driver pinning HOME/FNO_STATE_DIR/FNO_TEST_HERMETIC/FNO_NO_CANONICAL_CONFIG,
 //! scripting dispatch and the stream read exactly as this test scripts its
@@ -280,7 +280,7 @@ fn run_tick_case(sb: &Sandbox, label: &str, rows: &[Value], sinks: &[SinkConfig]
     std::fs::write(&journal, text).unwrap();
 
     let mut post = RecordingPost::always_ok();
-    let mut script = opts.script;
+    let script = opts.script;
     let stream_rows = opts.stream;
     let mut dispatch_seam: Box<DispatchFn> = Box::new(move |sink, _event| {
         script

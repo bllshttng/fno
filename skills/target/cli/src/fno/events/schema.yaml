@@ -4884,7 +4884,7 @@ event_types:
     consumers: [notifications, evals]
 
   - name: operator_notice
-    description: "One operator-attention notice left the notify dispatch (the native `fno inbox notify` command). The local OS toast is one leg; this row is the other: a status sink with events=[operator_notice] carries it off the host, so a remote operator sees it. A notice is a POINTER to the durable queue, never a copy: pointer names the verb that shows the content, and body carries counts, never rows."
+    description: "One operator-attention notice left the notify dispatch (the native `fno inbox notify` command). The local OS toast is one leg; this row is the other: a status sink with events=[operator_notice] carries it off the host, so a remote operator sees it. A notice is a POINTER to the durable queue, never a copy: pointer names the command that shows the content, and body carries counts, never rows."
     sources: [python, daemon, rust, test]
     data:
       required: [title, body]
