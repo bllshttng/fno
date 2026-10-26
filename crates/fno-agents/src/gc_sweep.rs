@@ -4877,6 +4877,19 @@ mod tests {
         );
     }
 
+    /// A recorded merge outcome that is not `merged` holds even beside a
+    /// missing `pr_number`: an unexplained recorded outcome is a state the
+    /// writers do not produce, so the hold is the right answer.
+    #[test]
+    fn done_node_with_recorded_unmerged_merge_holds_without_pr() {
+        let mut entry = one_done_no_pr_entry("x-stray");
+        entry["merge_status"] = serde_json::json!("closed");
+        assert!(
+            stale_open_do_rows(&[entry]).is_empty(),
+            "a recorded non-merged outcome keeps the hold with no PR present"
+        );
+    }
+
     /// The store-level plan door sees the no-PR done node too: the plan is
     /// what the dry run reports and what the release's narrowed settle
     /// consults.
