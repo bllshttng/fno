@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Capture the `fno agents register` goldens from the Python leg.
 
-The freeze bars cargo builds, so the capture drives the Python verb directly
+The freeze bars cargo builds, so the capture drives the Python command directly
 with the venv interpreter - neither a build nor the test suite (the same
 reading the logs PR recorded under this freeze). Run from the repo root:
 
@@ -71,7 +71,7 @@ def _base_env(root: Path, home: Path, extra: dict[str, str]) -> dict[str, str]:
     # prints the one-time bootstrap line (the Rust leg has no bootstrap).
     (root / "state" / ".path-migration-done").write_text("\n")
     # The REAL installed binary answers the doors the Python leg shells
-    # (harness-roster, registry-commit, mail-hold); the verb logic itself runs
+    # (harness-roster, registry-commit, mail-hold); the command logic itself runs
     # from this tree's source. FNO_HOME pins the hold sidecars beside the
     # fixture so a bus-only stamp never touches the machine's journal.
     env.update({
@@ -124,7 +124,7 @@ def main() -> int:
         ["--json"],
     ))
 
-    # The plain (non --json) branch: stdout is a pipe, so the verb still
+    # The plain (non --json) branch: stdout is a pipe, so the command still
     # emits the JSON line - the tty branch is not capturable here.
     cases.append((
         "mint-plain",
