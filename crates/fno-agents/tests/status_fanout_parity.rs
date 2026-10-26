@@ -235,7 +235,7 @@ impl Default for CaseOpts {
 }
 
 /// One scripted tick case: seed state, write the journal, run the tick with
-/// the scripted dispatch and stream seams, assert the frozen record.
+/// the scripted dispatch and stream seams, then assert the frozen record.
 #[allow(clippy::too_many_arguments)]
 fn run_tick_case(sb: &Sandbox, label: &str, rows: &[Value], sinks: &[SinkConfig], opts: CaseOpts) {
     let _ = std::fs::remove_dir_all(&sb.state);

@@ -37,10 +37,7 @@ pub fn read_signals_dir(dir: &std::path::Path, kind: Option<&str>) -> Vec<Value>
                 && p.is_file()
         })
         .filter_map(|p| {
-            let name = p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(str::to_string)?;
+            let name = p.file_name().and_then(|n| n.to_str()).map(str::to_string)?;
             Some((name, p))
         })
         .collect();
@@ -52,7 +49,7 @@ pub fn read_signals_dir(dir: &std::path::Path, kind: Option<&str>) -> Vec<Value>
         };
         let Ok(mut payload) = serde_json::from_str::<Value>(&text) else {
             continue;
-        }
+        };
         // The kind filter is a skip, not an error: a signal of another kind
         // stays on disk for its own reader.
         if let Some(kind) = kind {

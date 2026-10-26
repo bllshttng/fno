@@ -287,7 +287,7 @@ fn now_rfc3339_micros() -> String {
     let rem = secs % 86_400;
     let (hour, min, sec) = (
         (rem / 3600) as u32,
-        (rem % 3600) / 60 as u32,
+        ((rem % 3600) / 60) as u32,
         (rem % 60) as u32,
     );
     let (year, month, day) = civil_from_days(days);
@@ -327,7 +327,7 @@ fn mux_clients(title: &str, message: &str) -> Option<u64> {
             body: message.to_string(),
         },
     ) {
-        Ok(crate::proto::ServerMsg::NoticeSent { clients }) => Some(clients),
+        Ok(crate::proto::ServerMsg::NoticeSent { clients }) => Some(clients as u64),
         _ => None,
     }
 }
