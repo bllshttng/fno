@@ -32,9 +32,10 @@ def _run(runner: CliRunner, *args: str) -> tuple[int, str]:
     return result.exit_code, _strip_ansi(result.stdout)
 
 
-def test_heal_token_accepts_hidden_cross_project_recovery_flag(
+def test_heal_token_accepts_the_retired_cross_project_flag_as_noop(
     runner: CliRunner, monkeypatch
 ) -> None:
+    """Retired (d-460ea8c7): the flag still parses, does nothing, exit 13 on a miss."""
     monkeypatch.setattr(
         "fno.agents.registry.resolve_from_harness_store", lambda *args, **kwargs: None
     )

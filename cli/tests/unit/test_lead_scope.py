@@ -24,12 +24,26 @@ def test_project_scope_compiles_to_the_project_union():
 
 @pytest.fixture
 def _no_projects(tmp_path, monkeypatch):
-    import fno.projects.resolve as proj_resolve
+    """No projects configured: the native resolve door refuses every name.
+    Non-project spawn-overlay shapes exec the real binary (the ladder door
+    rides the same env pin)."""
+    from fno.rust_binary import find_dev_binary, resolve_binary
 
-    cfg = tmp_path / "config.toml"
-    cfg.write_text("[work.workspaces.ws1]\nprojects = []\n", encoding="utf-8")
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", cfg)
-    proj_resolve._clear_cache()
+    real = find_dev_binary() or resolve_binary()
+    fallback = f'exec "{real}" "$@"\n' if real else "exit 1\n"
+    stub = tmp_path / "agents-stub"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = "project" ]; then\n'
+        '  if [ "$3" = "map" ]; then\n'
+        "    echo '{}'; exit 0\n"
+        "  fi\n"
+        "  exit 1\n"
+        "fi\n" + fallback,
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(stub))
 
 
 def test_an_epic_set_compiles_without_a_second_graph_read(_no_projects, monkeypatch):

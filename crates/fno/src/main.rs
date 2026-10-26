@@ -334,15 +334,18 @@ enum Role {
     /// paths commands still forward to Python (one command per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
-    /// `fno agents org` history, verdict, faq, `chart shape`, `chart
-    /// manifest-path`, and `fno inbox board`: the lead read commands, exec'd as
+    /// The `fno agents org` lead commands and `fno inbox board`, exec'd as
     /// arguments of existing fno-agents actions. Their Python legs are gone.
-    LeadRead(fno::lead_reads_route::Claim),
+    Lead(fno::lead_route::Claim),
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
     /// The bool is the moved spelling, which prints its one stderr note.
     PluginsCli(Vec<OsString>, bool),
+    /// `fno config project ...` and the moved `fno project ...` spelling: the
+    /// whole project group execs `fno-agents spawn-overlay project`. The bool
+    /// is the moved spelling, which prints its one stderr note.
+    ProjectCli(Vec<OsString>, bool),
     /// `fno backlog ...`: the whole backlog namespace execs the sibling Rust
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
@@ -615,6 +618,16 @@ fn classify_plugins(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
     classify_group_command(args, "config", "plugins").map(|rest| (rest, false))
 }
 
+/// `fno config project ...` or `fno project ...` (moved): the args after the
+/// group. The project family answers natively whole, so both spellings claim
+/// here and never reach the Python forward.
+fn classify_project(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
+    if args.first()?.to_str()? == "project" {
+        return Some((args[1..].to_vec(), true));
+    }
+    classify_group_command(args, "config", "project").map(|rest| (rest, false))
+}
+
 /// `fno agents claim backlog|export ...`: the shared-store commands live only
 /// in `fno-agents claim`, and the Python claim group names its actions one
 /// by one, so the front claims these two and execs the native binary.
@@ -862,14 +875,17 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::paths_route::classify(args) {
         return Role::PathsCli(rest);
     }
-    if let Some(claim) = fno::lead_reads_route::classify(args) {
-        return Role::LeadRead(claim);
+    if let Some(claim) = fno::lead_route::classify(args) {
+        return Role::Lead(claim);
     }
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
     }
     if let Some((rest, moved)) = classify_plugins(args) {
         return Role::PluginsCli(rest, moved);
+    }
+    if let Some((rest, moved)) = classify_project(args) {
+        return Role::ProjectCli(rest, moved);
     }
     if let Some(rest) = fno::doctor_update::classify(args) {
         return Role::DoctorUpdate(rest);
@@ -1011,6 +1027,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(argv) = fno::inbox_user::classify_inbox_user(args)
         .or_else(|| fno::inbox_user::classify_inbox_peers(args))
+        .or_else(|| fno::inbox_user::classify_inbox_approvals(args))
     {
         return Role::InboxUser(argv);
     }
@@ -1323,7 +1340,7 @@ fn main() {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
-        Role::LeadRead(claim) => std::process::exit(fno::lead_reads_route::run(&claim)),
+        Role::Lead(claim) => std::process::exit(fno::lead_route::run(&claim)),
         Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],
@@ -1336,6 +1353,16 @@ fn main() {
             std::process::exit(fno_agents_exec(
                 "fno config plugins",
                 &["spawn-overlay", "plugins"],
+                &rest,
+            ))
+        }
+        Role::ProjectCli(rest, moved) => {
+            if moved {
+                eprintln!("fno project is now fno config project");
+            }
+            std::process::exit(fno_agents_exec(
+                "fno config project",
+                &["spawn-overlay", "project"],
                 &rest,
             ))
         }
@@ -1720,7 +1747,7 @@ mod tests {
             Role::AgentsLeadRefreshCanon(os(&["--extra"]))
         );
         assert_eq!(
-            decide_role(&os(&["agents", "lead", "checkin"]), false),
+            decide_role(&os(&["agents", "lead", "done"]), false),
             Role::Forward
         );
         // The mail reader claims its command and refuses the renamed one by
@@ -2046,6 +2073,19 @@ mod tests {
         assert_ne!(
             decide_role(&os(&["config", "plugin", "claude"]), false),
             Role::PluginsCli(os(&["claude"]), false)
+        );
+        // The project group is native whole, under both spellings.
+        assert_eq!(
+            decide_role(&os(&["config", "project", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), false)
+        );
+        assert_eq!(
+            decide_role(&os(&["project", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), true)
+        );
+        assert_ne!(
+            decide_role(&os(&["config", "projects", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), false)
         );
     }
 

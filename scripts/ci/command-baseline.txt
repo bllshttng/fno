@@ -42,7 +42,7 @@ agents logs
 agents loop
 agents loop-check
 agents needs
-agents resume
+agents resume !--cross-project
 agents rm !--audit-actor !--audit-reason !--audit-reclaimed-bytes !--audit-request-id !--audit-worktree-touched
 agents spawn !--bounded-placement !--deny-tools !--mux-session !--output-format !--provider !--recorded-provider !--resume !--yolo
 annotate
@@ -75,9 +75,9 @@ event
 event emit
 fno-agents
 help
-inbox approvals decide !--db
-inbox approvals ls !--db
-inbox approvals show !--db
+inbox approvals decide
+inbox approvals ls
+inbox approvals show
 inbox board
 inbox notify
 inbox operator ack
@@ -87,12 +87,9 @@ inbox user ack
 inbox user list
 inbox user status
 lead board
-lead cancel
 lead done
 lead drain
 lead escalate
-lead init
-lead term
 lint
 loops
 loops resume-all
@@ -106,13 +103,11 @@ paths
 phase kill-check
 plan
 pr-watch
-project init
 research
 resume
 roles
 route
 scoreboard
-setup
 state
 status
 status-fanout tick

@@ -19,7 +19,6 @@ pub struct ResumeArgs {
     /// Internal fallback marker: the caller already accepted this message in
     /// the durable mail queue, so a Working route must not enqueue it again.
     pub message_already_queued: bool,
-    pub cross_project: bool,
     pub cwd: Option<String>,
     pub account: Option<String>,
     /// `--substrate thread`: convert this live pane into a persistent
@@ -71,7 +70,8 @@ pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
     while let Some(a) = iter.next() {
         match a.as_str() {
             "--print-command" => parsed.print_command = true,
-            "--cross-project" => parsed.cross_project = true,
+            // Retired (d-460ea8c7): healing is machine-wide; silent no-op.
+            "--cross-project" => {}
             "--dry-run" => parsed.dry_run = true,
             "--allow-new-id" => parsed.allow_new_id = true,
             "--message-already-queued" => parsed.message_already_queued = true,
@@ -234,7 +234,6 @@ pub fn reentry_argv_for_unpaned_conversion(
         &entries,
         &parsed.name,
         &registry,
-        parsed.cross_project,
         None,
     )
     .ok()?;
@@ -354,13 +353,11 @@ mod tests {
         assert_eq!(parsed.name, "alpha");
         assert!(!parsed.print_command);
         assert_eq!(parsed.message.as_deref(), Some("continue please"));
-        assert!(!parsed.cross_project);
         assert_eq!(parsed.cwd, None);
 
         let parsed = parse_resume_args(&args(&["-m", "hi", "beta"])).unwrap();
         assert_eq!(parsed.name, "beta");
         assert_eq!(parsed.message.as_deref(), Some("hi"));
-        assert!(!parsed.cross_project);
         assert_eq!(parsed.cwd, None);
 
         // No --message given: still parses, message is None (unchanged
@@ -369,7 +366,6 @@ mod tests {
         assert_eq!(parsed.name, "gamma");
         assert!(parsed.print_command);
         assert_eq!(parsed.message, None);
-        assert!(!parsed.cross_project);
         assert_eq!(parsed.cwd, None);
     }
 

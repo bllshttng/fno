@@ -1,7 +1,7 @@
 """CLI surface for config commands (`fno config ...`).
 
-Lives next to paths_cli.py and setup_cli.py for consistency; implementation
-lives in setup/doctor.py.
+Lives next to paths_cli.py for consistency; implementation lives in
+setup/doctor.py.
 """
 from __future__ import annotations
 
@@ -51,15 +51,6 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
         "Declared model-routing inventory: init (sample) / inventory (reach).",
         {"hidden": True},
     ),
-    # (d-344fe242): `project init` gives a checkout its own fno state
-    # root, which is state-root configuration - config's territory. Same
-    # lazy+hidden treatment as its siblings above.
-    "project": (
-        "fno.project:project_app",
-        "Isolated per-project fno environments.",
-        {"hidden": True},
-    ),
-    "setup": ("fno.setup_cli:app", "Interactive settings.yaml wizard", {"hidden": True}),
     # One local-dev install door for every plugin harness. VISIBLE on
     # purpose and distinct from the native `plugins` function-pack group: this
     # installs the footnote plugin itself, from the filtered stage, in one

@@ -168,6 +168,12 @@ ensure_uv() {
 	if ! find_uv; then
 		die "uv was installed but is not resolvable; add \$HOME/.local/bin to PATH and re-run, or install uv from https://docs.astral.sh/uv/."
 	fi
+	# The marker lets `fno uninstall` offer `uv self uninstall`; a uv found on
+	# PATH above is the user's own and gets no marker.
+	_uv_marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/fno-bootstrap"
+	if ! { mkdir -p "$_uv_marker_dir" && : >"$_uv_marker_dir/uv-installed-by-fno"; }; then
+		say "warning: could not record that fno installed uv; 'fno uninstall' will not offer to remove it."
+	fi
 	say "installed uv ($FNO_UV)"
 }
 
@@ -469,14 +475,14 @@ frontdoor_receipt() {
 }
 
 # The post-install shim sweep: repair any fno* shim in the tool bin
-# that dangles or resolves into a temp dir; fail loud when unrepairable.
+# that is missing, dangles, or resolves into a temp dir; fail loud when unrepairable.
 shim_sweep() {
 	[ -n "$FNO_TOOL_BIN" ] || FNO_TOOL_BIN="${HOME:-}/.local/bin"
 	# An installed fno predating the sweep module has nothing to sweep; the
 	# wheel that ships the module always sweeps.
 	"$FNO_VENV_PY" -c "import fno.setup.shim_check" 2>/dev/null || return 0
 	"$FNO_VENV_PY" -m fno.setup.shim_check --repair --bin-dir "$FNO_TOOL_BIN" && return 0
-	say "INCOMPLETE install: fno shims in $FNO_TOOL_BIN dangle or point into a temp dir and could not be relinked to the durable copy. Inspect: $FNO_VENV_PY -m fno.setup.shim_check --bin-dir $FNO_TOOL_BIN"
+	say "INCOMPLETE install: fno shims in $FNO_TOOL_BIN are missing, dangle, or point into a temp dir and could not be relinked to the durable copy. Inspect: $FNO_VENV_PY -m fno.setup.shim_check --bin-dir $FNO_TOOL_BIN"
 	return 1
 }
 

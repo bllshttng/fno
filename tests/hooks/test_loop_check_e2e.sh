@@ -185,75 +185,100 @@ setup_delivery_project() {
     PROJECT_DIR="$dir" SESSION_ID="$session_id" HARNESS_ID="$harness_id" \
         TRANSCRIPT_KIND="$transcript_kind" uv run --project "${REPO_ROOT}/cli" python - <<'PY'
 import datetime as dt
+import hashlib
+import json
 import os
+import sqlite3
 from pathlib import Path
 
 import yaml
 
-from fno.approvals import (
-    AdapterCapability,
-    ApprovalRequest,
-    DecisionKind,
-    EffectState,
-    EffectStore,
-    action_digest,
-)
+from fno import events as events_mod
 from fno.paths import project_log
-
-
-class AllowAuthority:
-    source = "e2e-policy"
-
-    def may_approve(self, *, principal_id: str, effect_class: str, destination: str) -> bool:
-        return principal_id == "principal:e2e"
-
 
 root = Path(os.environ["PROJECT_DIR"])
 session_id = os.environ["SESSION_ID"]
 harness_id = os.environ["HARNESS_ID"]
 now = dt.datetime.now(dt.timezone.utc)
-request = ApprovalRequest(
-    request_id="request-e2e",
-    principal_id="principal:e2e",
-    work_order_id="x-delivery-e2e",
-    attempt_id="attempt-e2e",
-    effect_id="effect-e2e",
-    effect_class="communication.external",
-    destination="email:customer@example.com",
-    action_digest=action_digest({"subject": "hello", "body": "e2e"}),
-    created_at=now,
-    expires_at=now + dt.timedelta(hours=1),
+
+# Seed the approved-and-acknowledged effect the way the Rust effect gate
+# leaves it: the same tables, and the same four events in the project journal.
+bound = {
+    "principal_id": "principal:e2e",
+    "work_order_id": "x-delivery-e2e",
+    "attempt_id": "attempt-e2e",
+    "effect_id": "effect-e2e",
+    "effect_class": "communication.external",
+    "destination": "email:customer@example.com",
+    "action_digest": hashlib.sha256(b'{"body":"e2e","subject":"hello"}').hexdigest(),
+    "expires_at": (now + dt.timedelta(hours=1)).isoformat(),
+}
+request_digest = hashlib.sha256(
+    json.dumps(bound, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+).hexdigest()
+db = root / ".fno/approvals.db"
+conn = sqlite3.connect(db)
+conn.executescript(
+    """
+    CREATE TABLE requests (request_digest TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE,
+        principal_id TEXT NOT NULL, work_order_id TEXT NOT NULL, attempt_id TEXT NOT NULL,
+        effect_id TEXT NOT NULL, effect_class TEXT NOT NULL, destination TEXT NOT NULL,
+        action_digest TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+    CREATE TABLE decisions (request_digest TEXT PRIMARY KEY, deciding_principal_id TEXT NOT NULL,
+        decision TEXT NOT NULL, decided_at TEXT NOT NULL, transport TEXT);
+    CREATE TABLE attempts (idempotency_key TEXT PRIMARY KEY, effect_id TEXT NOT NULL,
+        work_order_id TEXT NOT NULL, attempt_id TEXT NOT NULL, request_digest TEXT NOT NULL,
+        action_digest TEXT NOT NULL, destination TEXT NOT NULL, effect_class TEXT NOT NULL,
+        adapter_id TEXT NOT NULL, adapter_version TEXT NOT NULL, state TEXT NOT NULL,
+        external_ref TEXT, reconciliation_ref TEXT, dispatch_claimed INTEGER NOT NULL DEFAULT 0,
+        dispatch_token TEXT, remote_idempotency INTEGER NOT NULL DEFAULT 0);
+    """
 )
-adapter = AdapterCapability(adapter_id="smtp-e2e", adapter_version="1")
-with EffectStore(
-    root / ".fno/approvals.db",
-    authority=AllowAuthority(),
-    events_path=project_log("events.jsonl", project_root=root),
-    now=lambda: now,
-) as store:
-    store.submit(request)
-    store.decide(
-        request_digest=request.request_digest,
-        deciding_principal_id="principal:e2e",
-        decision=DecisionKind.APPROVED,
+conn.execute(
+    "INSERT INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    (request_digest, "request-e2e", bound["principal_id"], bound["work_order_id"],
+     bound["attempt_id"], bound["effect_id"], bound["effect_class"], bound["destination"],
+     bound["action_digest"], now.isoformat(), bound["expires_at"]),
+)
+conn.execute(
+    "INSERT INTO decisions VALUES (?,?,?,?,?)",
+    (request_digest, "principal:e2e", "approved", now.isoformat(), None),
+)
+conn.execute(
+    "INSERT INTO attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    ("effect-key-e2e", bound["effect_id"], bound["work_order_id"], bound["attempt_id"],
+     request_digest, bound["action_digest"], bound["destination"], bound["effect_class"],
+     "smtp-e2e", "1", "acknowledged", "message-e2e", None, 1, "e2e-token", 0),
+)
+conn.commit()
+conn.close()
+
+ids = {"work_order_id": bound["work_order_id"], "attempt_id": bound["attempt_id"],
+       "effect_id": bound["effect_id"]}
+stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+journal = project_log("events.jsonl", project_root=root)
+for n, (kind, data) in enumerate((
+    ("approval_requested", {"request_digest": request_digest, "request_id": "request-e2e",
+        "principal_id": bound["principal_id"], "effect_class": bound["effect_class"],
+        "destination": bound["destination"], "action_digest": bound["action_digest"],
+        "expires_at": bound["expires_at"], **ids}),
+    ("approval_decided", {"request_digest": request_digest, "decision": "approved",
+        "deciding_principal_id": "principal:e2e", "authority_source": "e2e-policy",
+        "transport": None, **ids}),
+    ("effect_state_changed", {"idempotency_key": "effect-key-e2e", "state": "prepared",
+        "request_digest": request_digest, **ids}),
+    ("effect_state_changed", {"idempotency_key": "effect-key-e2e", "state": "executing",
+        "previous_state": "prepared", "request_digest": request_digest, **ids}),
+    ("effect_state_changed", {"idempotency_key": "effect-key-e2e", "state": "acknowledged",
+        "previous_state": "executing", "request_digest": request_digest,
+        "external_ref": "message-e2e", "reconciliation_ref": None, **ids}),
+)):
+    events_mod.append_event(
+        {"ts": stamp, "type": kind, "source": "approvals",
+         "data": {**data, "event_id": f"e2e-event-{n}"}},
+        journal,
     )
-    token = store.prepare(
-        request_digest=request.request_digest,
-        idempotency_key="effect-key-e2e",
-        adapter=adapter,
-    ).dispatch_token
-    assert token is not None
-    store.settle(
-        dispatch_token=token,
-        idempotency_key="effect-key-e2e",
-        state=EffectState.EXECUTING,
-    )
-    store.settle(
-        dispatch_token=token,
-        idempotency_key="effect-key-e2e",
-        state=EffectState.ACKNOWLEDGED,
-        external_ref="message-e2e",
-    )
+request = type("Request", (), {"request_digest": request_digest})
 
 frontmatter = {
     "node": "x-delivery-e2e",

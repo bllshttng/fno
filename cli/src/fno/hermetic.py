@@ -150,6 +150,9 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     # fno-py console script. Scrubbed, the resolver reads the default
     # ~/.local/share/uv layout instead of a developer's XDG customization.
     "XDG_DATA_HOME",
+    # Where uninstall looks for a fno-installed uv; a developer's value would
+    # point the residue check at their real bin dir.
+    "XDG_BIN_HOME",
     # Where cargo writes build intermediates. A developer shell that exports it
     # would point test-built artifacts at an arbitrary tree; neutralise re-pins
     # it into the sandbox after this scrub.

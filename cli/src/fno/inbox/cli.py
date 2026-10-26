@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import typer
 
-from fno.approvals.cli import approvals_app
+from fno.approvals_cli import approvals_app
 from fno.inbox.operator_turns import operator_app
 from fno.lead.cli import board_cmd
 from fno.notify.cli import notify_app

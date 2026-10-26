@@ -63,7 +63,20 @@ platform_wheel_notice() {
 }
 # Printed after a successful install so a new user knows the one configuration
 # step exists (install never prompts). Optional: defaults work without it.
-next_steps() { log "Next: run 'fno do wizard' to configure (optional; defaults work)."; }
+next_steps() { log "Next: run 'fno config setup run --check' to see what this machine still needs."; }
+
+# The two steps fno.sh runs after a verified install (fno.sh wire_harnesses,
+# run_setup_once), so the plugin route leaves the same machine. Best effort:
+# the CLI is installed already. FNO_NO_WIRE skips both, as it does there.
+wire_and_setup() { # wire_and_setup <front-door path>
+  if [[ -n "${FNO_NO_WIRE:-}" ]]; then
+    log "FNO_NO_WIRE is set: skipping plugin wiring and the run-once setup."
+    return 0
+  fi
+  log "wiring the fno plugin into detected agent CLIs (set FNO_NO_WIRE to skip this)..."
+  "$1" config setup auto-wire >&2 || log "plugin wiring did not finish; run 'fno config setup auto-wire' to retry."
+  "$1" config setup run --once ${FNO_YES:+--yes} --json >&2 || log "the run-once setup did not finish; run 'fno config setup run' to retry."
+}
 
 if [[ ! -f "$CLI_DIR/pyproject.toml" ]]; then
   err "expected cli/ at $CLI_DIR but pyproject.toml is missing."
@@ -99,7 +112,7 @@ for a in data.get("assets", []):
     if a.get("name", "").endswith(".whl") and re.search(plat, a["name"]):
         print(a["browser_download_url"]); sys.exit(0)
 sys.exit(1)
-' 2>/dev/null)" || return 1
+' 2>/dev/null <<<"$json")" || return 1
   printf '%s' "$url"
 }
 
@@ -132,7 +145,7 @@ shim_sweep() {
   # An installed fno predating the sweep module has nothing to sweep.
   "$py" -c "import fno.setup.shim_check" 2>/dev/null || return 0
   "$py" -m fno.setup.shim_check --repair --bin-dir "$td" && return 0
-  err "fno shims in $td dangle or point into a temp dir and could not be relinked to the durable copy. Inspect: $py -m fno.setup.shim_check --bin-dir $td"
+  err "fno shims in $td are missing, dangle, or point into a temp dir and could not be relinked to the durable copy. Inspect: $py -m fno.setup.shim_check --bin-dir $td"
   return 1
 }
 
@@ -429,6 +442,7 @@ if command -v uv >/dev/null 2>&1; then
           exit 3
         fi
         shim_sweep || exit 1
+        wire_and_setup "$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir)/fno/bin/fno"
         log "restart your shell (or source your env) to pick up PATH."
         finish_success
         next_steps

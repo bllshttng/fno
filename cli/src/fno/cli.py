@@ -91,7 +91,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     # moved-spellings block no longer renders, so the row teaches
     # nothing and exists only for the release clock.
     "approvals": (
-        "fno.approvals.cli:approvals_app",
+        "fno.approvals_cli:approvals_app",
         "Inspect and decide pending approvals for consequential effects.",
         {"hidden": True},
     ),
@@ -128,11 +128,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "bundle": ("fno.bundle:bundle_app", "Skill bundle build + lint.", {"hidden": True}),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
     "claim": ("fno.claims.cli:cli", "Work-claim coordination primitive", {"hidden": True}),
-    "project": (
-        "fno.project:project_app",
-        "Isolated per-project fno environments (now `fno config project`).",
-        {"hidden": True},
-    ),
     "resume": (
         "fno.resume_receipt_cli:cli",
         "Durable typed resume receipts (evidence, never write authority)",
@@ -170,11 +165,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
-    "setup": (
-        "fno.setup_cli:app",
-        "Interactive settings.yaml wizard",
-        {"hidden": True},
-    ),
     "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
     "worktree": ("fno.worktree_cli:app", "Worktree management", {"hidden": True}),
     "workspace": (
@@ -284,7 +274,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "resume": set(),
     "roles": set(),
     "route": set(),
-    "setup": set(),
     "state": set(),
     "stub-manifest": set(),
     "target": set(),

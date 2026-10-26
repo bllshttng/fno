@@ -143,8 +143,8 @@ impl RollupStore {
             .map(|home| home.root().join("intel").join("rollups.json"))
     }
 
-    pub(crate) fn acquire_lock(path: &Path) -> FileLock {
-        FileLock::acquire(&lock_path(path))
+    pub(crate) fn acquire_lock(path: &Path) -> Result<FileLock, String> {
+        FileLock::try_acquire(&lock_path(path))
     }
 
     pub(crate) fn open(path: PathBuf) -> Self {

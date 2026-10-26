@@ -18,13 +18,13 @@ Start with the CLI:
 curl -fsSL fno.sh | sh
 ```
 
-When `uv` is missing the script installs it first. The install lands the `fno` CLI with its bundled binaries and adds the tool bin to your PATH. It then wires the plugin into every agent CLI it detects: `claude`, `codex`, `opencode`, `pi`, `agy`, `gemini`. Each harness prints one summary line. Set `FNO_NO_WIRE=1` to skip this step. `fno do wizard` wires a harness by hand. The per-harness commands below do it manually. The plugin-only install routes pick up their CLI on the next session.
+When `uv` is missing the script installs it first. The install lands the `fno` CLI with its bundled binaries and adds the tool bin to your PATH. It then wires the plugin into every agent CLI it detects: `claude`, `codex`, `opencode`, `pi`, `agy`, `gemini`. Each harness prints one summary line. Then it runs the one-time setup with its defaults. Set `FNO_NO_WIRE=1` to skip both steps. The plugin install routes do the same work. `fno config setup run --check` names anything the machine still lacks, each with its fix. The per-harness commands below wire a harness by hand.
 
 Claude Code:
 
 ```
 /plugin marketplace add bllshttng/fno#stable
-/plugin install fno@footnote
+/plugin install fno@fno
 ```
 
 `#stable` pins the add to the `stable` branch (781 files). Without it, the add clones `main` (7,949 files, 80s+), which can time out: Claude Desktop's "Add marketplace" dialog gives up after 120s and reports "Failed to add marketplace."
@@ -33,7 +33,7 @@ Codex CLI:
 
 ```
 codex plugin marketplace add bllshttng/fno@stable
-codex plugin add fno@footnote
+codex plugin add fno@fno
 ```
 
 The plugin-only route gets its CLI on the next session: the first session you start after installing runs the installer. Until then `fno` is not on PATH and the `/fno:` skills cannot run.
@@ -51,7 +51,7 @@ From a clone, `bash scripts/setup.sh` installs the CLI and scaffolds the project
 npx skills add bllshttng/fno --skill tdd
 ```
 
-Other harnesses (opencode, agy, gemini, pi): see [docs/HARNESSES.md](docs/HARNESSES.md). Then run `/fno:setup` (or `fno do wizard` in a terminal), and point `/fno:target` at a feature.
+Other harnesses (opencode, agy, gemini, pi): see [docs/HARNESSES.md](docs/HARNESSES.md). Then run `/fno:setup` in a session or `fno config setup run` in a terminal. `fno do wizard` asks each question instead. Then point `/fno:target` at a feature.
 
 ## Uninstall
 

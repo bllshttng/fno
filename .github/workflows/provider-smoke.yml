@@ -8,7 +8,7 @@ on:
 
 jobs:
   codex:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,7 +66,7 @@ jobs:
         run: uv run pytest --tb=short -q tests/agents/test_codex_integration_smoke.py
 
   gemini:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -1,0 +1,10 @@
+{
+  "result": "refused",
+  "reason": "unauthorized_principal",
+  "detail": "principal stranger may not decide communication.external to mail:list-a",
+  "fields": [
+    "deciding_principal_id"
+  ],
+  "authority_source": "config.approvals.authorized_principals",
+  "recovery": "Have an authorized principal decide this request."
+}
