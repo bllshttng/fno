@@ -4,6 +4,11 @@ use crate::{
 };
 use serde_json::Value;
 
+/// The public `fno` verbs the Explorer tabs read. The `fno` front owns their
+/// routing, so moving an internal fno-agents verb cannot break a tab.
+pub const ORG_FOLD_ARGV: &[&str] = &["agents", "org", "chart", "fold"];
+pub const FLEET_TOP_ARGV: &[&str] = &["agents", "fleet", "top", "--machines", "--json"];
+
 #[derive(Debug, Clone)]
 pub struct OrgInputs {
     pub backlog: Inputs,
@@ -47,9 +52,10 @@ pub async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> OrgInputs
     let teams: Vec<Value> = agents.iter().filter(|a| !a.exited).filter_map(|a| {
         Some(serde_json::json!({"scope": a.role_scope.as_ref()?, "level": a.role_level?, "holder": a.name}))
     }).collect();
-    let mut command = tokio::process::Command::new("fno-agents");
+    let mut command = tokio::process::Command::new(crate::server::fno_bin());
     command
-        .args(["org-fold", "--graph"])
+        .args(ORG_FOLD_ARGV)
+        .arg("--graph")
         .arg(graph)
         .args([
             "--teams-json",

@@ -124,12 +124,12 @@ impl Fleet {
     }
 }
 
-/// `fno-agents top --machines --json` beside the backlog read, each with
-/// its own failure, on the same 30 s bound the org fold had.
+/// `fno agents fleet top --machines --json` beside the backlog read, each
+/// with its own failure, on the same 30 s bound the org fold had.
 pub(crate) async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> FleetInputs {
-    let mut command = tokio::process::Command::new("fno-agents");
+    let mut command = tokio::process::Command::new(crate::server::fno_bin());
     command
-        .args(["top", "--machines", "--json"])
+        .args(crate::org_model::FLEET_TOP_ARGV)
         .kill_on_drop(true);
     let (backlog, output) = tokio::join!(
         crate::backlog_model::gather(graph, agents),
