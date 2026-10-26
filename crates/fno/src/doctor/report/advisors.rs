@@ -285,3 +285,11 @@ fn breakdown_line(armed: &BTreeMap<String, i64>) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+
+/// The durable-grant observer coupling (doctor.py:2570-2577): a standing
+/// dispatch grant implies a live watcher; an unreadable config reads no
+/// grant.
+pub(crate) fn standing_dispatch_grant() -> bool {
+    let cfg = load_doctor_config();
+    cfg.auto_merge == Some(true) && cfg.grant.as_deref() == Some("dispatch")
+}

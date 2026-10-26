@@ -15,6 +15,8 @@ fn emit(err: bool, line: &str) {
     }
 }
 
+pub(crate) use super::report::emit_blockers;
+
 fn s<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or_default()
 }
@@ -709,6 +711,532 @@ fn emit_managed_block(rep: &Value, err: bool) {
                 mb.get("stamped").and_then(Value::as_i64).unwrap_or(0),
                 mb.get("current").and_then(Value::as_i64).unwrap_or(1)
             ),
+        );
+    }
+}
+
+fn emit_surface_lines(rep: &Value, err: bool) {
+    let surf = rep.get("harness_surface").cloned().unwrap_or(json!({}));
+    for line in surf
+        .get("opencode_doctor_lines")
+        .and_then(Value::as_array)
+        .map(|a| a.to_vec())
+        .unwrap_or_default()
+    {
+        if let Some(text) = line.get("text").and_then(Value::as_str) {
+            emit(err, &format!("fno doctor: {text}"));
+        }
+    }
+    emit_codex_context_window(rep, err);
+    let plugin = surf.get("codex_plugin").cloned().unwrap_or(json!({}));
+    let status = plugin
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if status == "fresh" {
+        emit(
+            err,
+            &format!(
+                "fno doctor: codex plugin: fresh (channel={} version={} digest={}).",
+                plugin.get("channel").and_then(Value::as_str).unwrap_or("?"),
+                plugin
+                    .get("cache_version")
+                    .and_then(Value::as_str)
+                    .unwrap_or("?"),
+                short12(
+                    plugin
+                        .get("cache_digest")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                )
+            ),
+        );
+    } else if !status.is_empty() {
+        let detail = plugin
+            .get("issue")
+            .and_then(Value::as_str)
+            .filter(|i| !i.is_empty())
+            .unwrap_or(status);
+        let enabled: Vec<String> = plugin
+            .get("enabled_plugin_ids")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        emit(
+            err,
+            &format!(
+                "fno doctor: codex plugin: {} ({}; enabled={}); run `{}`.",
+                status.to_uppercase(),
+                detail,
+                if enabled.is_empty() {
+                    "none".to_string()
+                } else {
+                    enabled.join(", ")
+                }
+            ),
+        );
+    }
+}
+
+fn emit_codex_context_window(rep: &Value, err: bool) {
+    let report = rep
+        .get("harness_surface")
+        .and_then(|h| h.get("codex_context_window"))
+        .cloned()
+        .unwrap_or(json!({}));
+    let overstated = report.get("overstated") == Some(&Value::Bool(true));
+    let leans = report.get("leans_on_cached_cap") == Some(&Value::Bool(true));
+    if !overstated && !leans {
+        return;
+    }
+    let kept = report
+        .get("percent")
+        .and_then(Value::as_f64)
+        .map(|p| format!(" (codex keeps {p})"))
+        .unwrap_or_default();
+    let mut line = format!(
+        "fno doctor: codex {}={} with {}={} runs at an effective {}{kept}.",
+        s(&report, "model_source"),
+        s(&report, "model"),
+        s(&report, "window_source"),
+        report
+            .get("configured")
+            .map(|v| v.to_string())
+            .unwrap_or_default(),
+        report
+            .get("effective")
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+    );
+    if overstated {
+        line.push_str(" The TUI footer shows the configured value, not this one.");
+    }
+    if leans {
+        let cap = report
+            .get("max_context_window")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let base = report
+            .get("context_window")
+            .and_then(Value::as_i64)
+            .unwrap_or(cap);
+        let stamp = opt_s(&report, "cache_fetched_at").unwrap_or_default();
+        let client = opt_s(&report, "cache_client_version").unwrap_or_default();
+        let fetched = match (stamp.is_empty(), client.is_empty()) {
+            (false, false) => format!("(fetched {stamp} by codex {client})"),
+            (false, true) => format!("(fetched {stamp})"),
+            (true, false) => format!("(written by codex {client})"),
+            (true, true) => "(the cache records no fetch time)".to_string(),
+        };
+        let model = s(&report, "model");
+        let pct = report.get("percent").and_then(Value::as_f64);
+        let base_tier = pct
+            .map(|p| (base as f64 * p / 100.0).floor() as i64)
+            .unwrap_or(base);
+        let provenance = format!(
+            "{fetched}. That cap is served per fetching client, surface and originator both, and the cache records neither"
+        );
+        let synthesized = report.get("base_synthesized") == Some(&Value::Bool(true));
+        if cap > base {
+            line.push_str(&format!(
+                " models_cache.json holds {model} at {cap}, above its {base} base {provenance}. A base-tier fetch drops this to {base_tier}."
+            ));
+        } else if cap == base && !synthesized {
+            line.push_str(&format!(
+                " models_cache.json caps {model} at {cap}, its base {provenance}, so whichever launcher fetched last set it for every thread started since."
+            ));
+        } else {
+            line.push_str(&format!(
+                " models_cache.json puts {model} at {cap} {provenance}, so whichever launcher fetched last set it for every thread started since."
+            ));
+        }
+        let daemon_live = report.get("app_server_running") == Some(&Value::Bool(true));
+        if daemon_live {
+            line.push_str(" A codex app-server daemon is live here and every app-server fetch lands the base cap, so it will keep pulling this back down.");
+        }
+    }
+    emit(err, &line);
+}
+
+fn emit_groom(rep: &Value, err: bool) {
+    let gr = rep.get("groom").cloned().unwrap_or(json!({}));
+    let state = gr.get("state").and_then(Value::as_str).unwrap_or_default();
+    let agent_installed = gr.get("agent_installed") == Some(&Value::Bool(true));
+    if state == "never" {
+        let remedy = if agent_installed {
+            " despite an installed agent; check ~/.fno/logs/groom.err.log."
+        } else {
+            "; run `fno backlog groom --install-agent` to schedule it daily."
+        };
+        emit(
+            err,
+            &format!("fno doctor: backlog grooming has NEVER run{remedy}"),
+        );
+    } else if gr.get("stale") == Some(&Value::Bool(true)) {
+        emit(err, &format!(
+            "fno doctor: backlog grooming last ran {}h ago (the daily pass is not running); check `launchctl list | grep sh.fno.groom` and ~/.fno/logs/groom.err.log.",
+            gr.get("hours").and_then(Value::as_f64).unwrap_or(0.0) as i64
+        ));
+    }
+}
+
+fn emit_post_merge_sync(rep: &Value, err: bool) {
+    let pms = rep.get("post_merge_sync").cloned().unwrap_or(json!({}));
+    if pms.get("stale") == Some(&Value::Bool(true)) {
+        emit(err, &format!(
+            "fno doctor: post-merge sync STALE - the canonical checkout is not synced with recent merges ({}); run `fno do pr sync-canonical --pr-number <n>` and check ~/.fno/logs/pr-watcher.err.log.",
+            pms.get("detail").and_then(Value::as_str).unwrap_or_default()
+        ));
+    } else if pms.get("state").and_then(Value::as_str) == Some("unknown") {
+        emit(err, &format!(
+            "fno doctor: post-merge sync UNKNOWN - could not read merge state ({}); run `gh auth status`.",
+            pms.get("detail").and_then(Value::as_str).filter(|d| !d.is_empty()).unwrap_or("gh unavailable or unauthenticated")
+        ));
+    }
+}
+
+fn emit_evals(rep: &Value, err: bool) {
+    let ev = rep.get("evals").cloned().unwrap_or(Value::Null);
+    if ev.is_null() || ev.get("never_ran") == Some(&Value::Bool(true)) {
+        let detail = if ev.is_null() {
+            "no eval history"
+        } else {
+            "no regression-tier run on record"
+        };
+        emit(
+            err,
+            &format!(
+            "fno doctor: evals UNKNOWN ({detail}); run `fno doctor evals run --tier regression -y`."
+        ),
+        );
+    } else if ev.get("stale") == Some(&Value::Bool(true)) {
+        emit(err, &format!(
+            "fno doctor: evals STALE - the newest regression-tier run is {}d old; run `fno doctor evals run --tier regression -y`.",
+            ev.get("age_days").and_then(Value::as_i64).unwrap_or(0)
+        ));
+    } else if ev
+        .get("regressed")
+        .and_then(Value::as_array)
+        .is_some_and(|a| !a.is_empty())
+    {
+        let names: Vec<String> = ev
+            .get("regressed")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let window = ev.get("window_days").and_then(Value::as_i64).unwrap_or(7);
+        emit(err, &format!(
+            "fno doctor: evals REGRESSING - {} dropped against the prior {window}d window; run `fno doctor evals trend`.",
+            names.join(", ")
+        ));
+    }
+}
+
+fn emit_launch_agents(rep: &Value, err: bool) {
+    let agents = rep.get("launch_agents").cloned().unwrap_or(json!({}));
+    if agents.get("applicable") == Some(&Value::Bool(false)) {
+        emit(
+            err,
+            "fno doctor: LaunchAgent health: not applicable (no launchctl on this host).",
+        );
+    }
+    for entry in agents
+        .get("dead")
+        .and_then(Value::as_array)
+        .map(|a| a.to_vec())
+        .unwrap_or_default()
+    {
+        let label = entry.get("label").and_then(Value::as_str).unwrap_or("?");
+        let remedy = if label == "sh.fno.pr-watcher" {
+            "run `fno do pr watch refresh`"
+        } else {
+            "re-run `fno doctor update` if the entry point moved"
+        };
+        let exit_code = entry.get("exit");
+        let exit_text = exit_code
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "exit unknown".to_string());
+        emit(err, &format!(
+            "fno doctor: LaunchAgent {label} last exited {exit_text} (it is installed but failing); check its log under ~/.fno/ and {remedy}."
+        ));
+    }
+}
+
+fn emit_silent_switches(rep: &Value, err: bool) {
+    let ss = rep.get("silent_switches").cloned().unwrap_or(json!({}));
+    let stamp = ss.get("posture").cloned().unwrap_or(json!({}));
+    if let Some(p) = stamp.get("posture").and_then(Value::as_str) {
+        emit(
+            err,
+            &format!(
+                "fno doctor: applied posture: {p} (applied {}, scope {}).",
+                stamp
+                    .get("applied_at")
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "?".into()),
+                stamp
+                    .get("scope")
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "?".into())
+            ),
+        );
+    }
+    for f in ss
+        .get("findings")
+        .and_then(Value::as_array)
+        .map(|a| a.to_vec())
+        .unwrap_or_default()
+    {
+        emit_silent_finding(&f, err);
+    }
+}
+
+fn emit_silent_finding(f: &Value, err: bool) {
+    let sw = s(f, "switch");
+    let cmd = s(f, "command");
+    let count = f.get("count").map(|c| c.to_string()).unwrap_or_default();
+    let label = s(f, "count_label");
+    if s(f, "direction") == "inaction" {
+        let clause = if count.is_empty() {
+            " (idle)".to_string()
+        } else {
+            format!(" but {count} {label} waiting")
+        };
+        emit(
+            err,
+            &format!(
+                "fno doctor: {sw} is OFF{clause}; nothing is happening. Run `{cmd}` to enable."
+            ),
+        );
+    } else {
+        let clause = if count.is_empty() {
+            String::new()
+        } else {
+            format!(" ({count} {label})")
+        };
+        emit(err, &format!(
+            "fno doctor: {sw} is ARMED{clause}; a green PR can merge unattended. Run `{cmd}` to disarm."
+        ));
+    }
+    if let Some(cause) = opt_s(f, "cause") {
+        emit(err, &format!("  cause: {cause}"));
+    }
+}
+
+fn emit_review_gap(rep: &Value, err: bool) {
+    let gap = rep
+        .get("auto_merge_review_gap")
+        .cloned()
+        .unwrap_or(Value::Null);
+    if gap.is_null() {
+        return;
+    }
+    let manifests = gap.get("manifests").and_then(Value::as_i64).unwrap_or(0);
+    let breakdown = s(&gap, "breakdown");
+    let label = if breakdown.is_empty() {
+        format!("{manifests} armed manifest(s)")
+    } else {
+        format!("{manifests} armed manifest(s): {breakdown}")
+    };
+    let keys: Vec<String> = gap
+        .get("keys")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    emit(
+        err,
+        &format!(
+            "fno doctor: auto_merge is ARMED with zero review lanes - the merge gate requires no review for a code payload ({}; {label}). Remedy: {}",
+            keys.join("; "),
+            s(&gap, "remedy")
+        ),
+    );
+}
+
+fn emit_optout_residue(rep: &Value, err: bool) {
+    let findings = rep
+        .get("merge_gating_optouts")
+        .and_then(|m| m.get("residue"))
+        .and_then(Value::as_array)
+        .map(|a| a.to_vec())
+        .unwrap_or_default();
+    for f in findings {
+        emit(
+            err,
+            &format!(
+                "fno doctor: {} remains set to its opt-out value in {} without a live claim ({}); run `{}` or let the reaper restore it.",
+                s(&f, "key"), s(&f, "path"), s(&f, "claim_state"), s(&f, "command")
+            ),
+        );
+    }
+}
+
+fn emit_plugin_cache(rep: &Value, err: bool) {
+    let pc = rep.get("plugin_cache").cloned().unwrap_or(json!({}));
+    for root in pc
+        .get("roots")
+        .and_then(Value::as_array)
+        .map(|a| a.to_vec())
+        .unwrap_or_default()
+    {
+        let role = if root.get("live") == Some(&Value::Bool(true)) {
+            "live"
+        } else {
+            "second copy"
+        };
+        emit(
+            err,
+            &format!(
+                "fno doctor: plugin root ({}, {role}): {}: {}{}",
+                s(&root, "origin"),
+                s(&root, "path"),
+                s(&root, "status"),
+                s(&root, "note")
+            ),
+        );
+    }
+    if !pc.is_null()
+        && pc
+            .get("roots")
+            .and_then(Value::as_array)
+            .is_none_or(|a| a.is_empty())
+    {
+        emit(
+            err,
+            &format!(
+                "fno doctor: plugin stage freshness unknown ({}).",
+                s(&pc, "detail")
+            ),
+        );
+    }
+}
+
+fn emit_codex_dual(rep: &Value, err: bool) {
+    let dual = rep
+        .get("harness_surface")
+        .and_then(|h| h.get("codex_hooks_dual"))
+        .cloned()
+        .unwrap_or(Value::Bool(false));
+    if dual == Value::Bool(true) {
+        emit(
+            err,
+            "fno doctor: codex hooks load from both config.toml and hooks.json; run `fno config setup cli-hooks-codex --migrate-legacy-hooks-json` to converge (or `fno doctor --codex-hooks` for detail)."
+        );
+    }
+}
+
+fn emit_pre_push(rep: &Value, err: bool) {
+    let pp = rep.get("pre_push_hook").cloned().unwrap_or(json!({}));
+    if s(&pp, "status") == "legacy" {
+        emit(
+            err,
+            "fno doctor: the installed pre-push hook gates on the pushing checkout's branch, so it refuses every push from a canonical checkout on main. Run `bash scripts/install-pre-push-hook.sh` to replace it (the old file is backed up)."
+        );
+    }
+}
+
+fn emit_plugin_hooks(rep: &Value, err: bool) {
+    let ph = rep.get("plugin_hooks").cloned().unwrap_or(json!({}));
+    if ph.get("applicable") == Some(&Value::Bool(true)) {
+        for merr in ph
+            .get("manifest_errors")
+            .and_then(Value::as_array)
+            .map(|a| a.to_vec())
+            .unwrap_or_default()
+        {
+            emit(
+                err,
+                &format!(
+                "fno doctor: hook manifest {}: {} [{}] - that harness loads no hooks (fail-open).",
+                s(&merr, "issue"), s(&merr, "path"), s(&merr, "manifest")
+            ),
+            );
+        }
+        for miss in ph
+            .get("missing_scripts")
+            .and_then(Value::as_array)
+            .map(|a| a.to_vec())
+            .unwrap_or_default()
+        {
+            emit(
+                err,
+                &format!(
+                    "fno doctor: hook references MISSING script {} [{}/{}] - the guard fails open with no signal.",
+                    s(&miss, "script"), s(&miss, "manifest"), s(&miss, "event")
+                ),
+            );
+        }
+        for failure in ph
+            .get("failures")
+            .and_then(Value::as_array)
+            .map(|a| a.to_vec())
+            .unwrap_or_default()
+        {
+            let stderr = s(&failure, "stderr");
+            let tail = if stderr.is_empty() {
+                String::new()
+            } else {
+                let cut: String = stderr.chars().take(160).collect();
+                format!(" - {cut}")
+            };
+            emit(
+                err,
+                &format!(
+                    "fno doctor: hook LAUNCH FAILED (rc={}): {} [{}/{}]{}",
+                    failure
+                        .get("rc")
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "None".into()),
+                    s(&failure, "resolved"),
+                    s(&failure, "manifest"),
+                    s(&failure, "event"),
+                    tail
+                ),
+            );
+        }
+    } else if !s(&ph, "reason").is_empty() {
+        emit(
+            err,
+            &format!(
+                "fno doctor: plugin hook probe skipped ({}).",
+                s(&ph, "reason")
+            ),
+        );
+    }
+}
+
+fn emit_codex_foreign(rep: &Value, err: bool) {
+    let foreign = rep
+        .get("harness_surface")
+        .and_then(|h| h.get("codex_hooks_foreign_json"))
+        .and_then(Value::as_array)
+        .map(|a| a.len())
+        .unwrap_or(0);
+    if foreign > 0 {
+        emit(err, &format!(
+            "fno doctor: codex hooks: {foreign} foreign hook(s) in ~/.codex/hooks.json (informational; run `fno doctor --codex-hooks` for the per-command config.toml/hooks.json breakdown)."
+        ));
+    }
+}
+
+fn emit_codex_app_server(rep: &Value, err: bool) {
+    let cas = rep.get("codex_app_server").cloned().unwrap_or(json!({}));
+    if cas.get("present") != Some(&Value::Bool(true)) {
+        emit(
+            err,
+            "fno doctor: codex app-server daemon not running (no daemon listening on its control socket); live mail to codex sessions demotes to durable. Start it BEFORE the codex TUI: `codex app-server daemon start` (or `codex app-server daemon bootstrap` for durable SSH-driven use). A session launched before the daemon cannot receive live mail without a restart."
         );
     }
 }
