@@ -67,7 +67,6 @@ def _hermetic_post_merge(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-@pytest.fixture(autouse=True)
 def _free_gh_budget(monkeypatch):
     """The drain's fleet-budget read must never answer from the real ledger
     inside a test; the budget tests in test_pr_watch_merge_drain.py stub
