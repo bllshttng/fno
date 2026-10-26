@@ -23,7 +23,7 @@ Usage (via the factory)
     import typer
 
     LAZY = {
-        "state":   ("fno.state.cli:cli",    "manage state files"),
+        "inbox":   ("fno.inbox.cli:cli",    "operator inbox"),
         "backlog": ("fno.graph.cli:cli",     "feature graph"),
     }
 

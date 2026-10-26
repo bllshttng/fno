@@ -162,9 +162,11 @@ def _graph_callback(
         help="Output structured JSON to stdout. Diagnostics go to stderr.",
     ),
 ) -> None:
-    from fno.handoff.output import merge_json_flag
-
-    merge_json_flag(ctx, json_output)
+    # merge_json_flag's 3-line merge, inlined (x-9516): the handoff module
+    # dies with the family port and this caller survives it.
+    ctx.ensure_object(dict)
+    if json_output:
+        ctx.obj["json"] = True
 
 
 def _graph_path() -> Path:

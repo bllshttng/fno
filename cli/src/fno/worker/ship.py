@@ -20,6 +20,36 @@ from typing import Any, Optional
 import yaml
 
 
+def _atomic_write(path: Path, content: str) -> None:
+    """The lock-then-tempfile-then-os.replace write, inlined from the
+    state-io helper at the family port (x-9516): that module dies with the
+    port. The lock prevents interleaved writers; os.replace is atomic on
+    POSIX."""
+    import tempfile
+
+    import filelock
+
+    path = Path(path)
+    with filelock.FileLock(str(path) + ".lock", timeout=10):
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+                encoding="utf-8",
+            ) as tmp:
+                tmp.write(content)
+                tmp_path = Path(tmp.name)
+            os.replace(tmp_path, path)
+            tmp_path = None
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+
+
 def _read_state(state_path: Path) -> dict[str, Any]:
     """Read YAML frontmatter from a state file."""
     text = state_path.read_text(encoding="utf-8")
@@ -334,9 +364,8 @@ def ship(
     )
     # Atomic write: the ship artifact is factor-2 of the two-factor gate check.
     # A partial write from a crash or concurrent access would be indistinguishable
-    # from a forged artifact. atomic_write uses filelock + tempfile + os.replace.
-    from fno.state.io import atomic_write
-    atomic_write(artifact_path, artifact_content)
+    # from a forged artifact. _atomic_write uses filelock + tempfile + os.replace.
+    _atomic_write(artifact_path, artifact_content)
 
     # Arming auto-merge here would pre-authorize a merge before any gate ran, so
     # it moved to `fno-agents finalize` (see the module docstring). The

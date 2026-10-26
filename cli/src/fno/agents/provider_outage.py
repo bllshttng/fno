@@ -27,6 +27,32 @@ HEALTH_MARKER = "FNO_PROVIDER_" + "HEALTH_OK"
 _HEALTH_FRAGMENTS = ("FNO_", "PROVIDER_", "HEALTH_", "OK")
 
 
+def _atomic_write(path: Path, content: str) -> None:
+    """The lock-then-tempfile-then-os.replace write, inlined from the
+    state-io helper at the family port (x-9516): that module dies with the
+    port. The lock prevents interleaved writers; os.replace is atomic on
+    POSIX."""
+    path = Path(path)
+    with filelock.FileLock(str(path) + ".lock", timeout=10):
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+                encoding="utf-8",
+            ) as tmp:
+                tmp.write(content)
+                tmp_path = Path(tmp.name)
+            os.replace(tmp_path, path)
+            tmp_path = None
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+
+
 @dataclass(frozen=True)
 class OutagePolicy:
     """Validated recovery settings consumed by the pure outage fold."""
@@ -406,7 +432,6 @@ def collect_pane_evidence(
     reset_timezone_for: Callable[[str], str | None] | None = None,
 ) -> tuple[list["OutageEvidence"], list[dict[str, Any]]]:
     """Persist exact mux screens before returning any pane-backed vote."""
-    from fno.state.io import atomic_write
     from fno.adapters.providers.error_taxonomy import reset_epoch_from
 
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -480,7 +505,7 @@ def collect_pane_evidence(
         }
         target = snapshot_dir / f"{record.fingerprint}.json"
         try:
-            atomic_write(target, json.dumps(snapshot, sort_keys=True))
+            _atomic_write(target, json.dumps(snapshot, sort_keys=True))
             persisted = json.loads(target.read_text(encoding="utf-8"))
         except (OSError, ValueError, UnicodeDecodeError):
             refusals.append({

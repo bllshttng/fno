@@ -695,34 +695,17 @@ PLAN_ARTIFACTS_DIR="${PLAN_PATH}.artifacts"
 ARCHIVED_STATE="$PLAN_ARTIFACTS_DIR/target-state-${SESSION_ID}.md"
 
 _PREPARE_RC=0
-# Bootstrap the interpreter the way every other Python-delegating script does
-# (scripts/lib/fno-python.sh): a PYTHONPATH sourced from an env var that only
-# test harness files set left production running the leg with an empty path.
-_HANDOFF_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -z "$_HANDOFF_REPO_ROOT" ]; then
-  # Non-repo cwd (the handoff smoke sandbox): the script's own location still
-  # names this checkout, so the shared bootstrap stays reachable.
-  _HANDOFF_REPO_ROOT="$(cd "$_SCRIPT_DIR/../../.." 2>/dev/null && pwd || true)"
-fi
-_HANDOFF_PYTHON="python3"
-_HANDOFF_PKG_SRC=""
-if [ -n "$_HANDOFF_REPO_ROOT" ] && [ -f "$_HANDOFF_REPO_ROOT/scripts/lib/fno-python.sh" ]; then
-  # shellcheck source=scripts/lib/fno-python.sh
-  . "$_HANDOFF_REPO_ROOT/scripts/lib/fno-python.sh"
-  fno_python_init "$_HANDOFF_REPO_ROOT"
-  _HANDOFF_PYTHON="${FNO_PYTHON:-python3}"
-  _HANDOFF_PKG_SRC="${_HANDOFF_REPO_ROOT}/cli/src"
-fi
 _HANDOFF_PREPARE_LOG="$(mktemp "${TMPDIR:-/tmp}/fno-handoff-prepare.XXXXXX")"
-FNO_CLAIMS_ROOT="$HOME" PYTHONPATH="${_HANDOFF_PKG_SRC}${PYTHONPATH:+:${PYTHONPATH}}" \
-  "$_HANDOFF_PYTHON" -m fno.state.target_handoff prepare \
+# (x-9516) The prepare module is native now: the target-handoff-prepare op
+# under the fno-agents binary serves the same contract and exits (0/10/12).
+FNO_CLAIMS_ROOT="$HOME" fno-agents target-gates target-handoff-prepare \
   --state "$STATE_FILE" \
   --archive "$ARCHIVED_STATE" \
   --claim-key "node:$NODE_ID" \
   --holder "$CLAIM_HOLDER" >"$_HANDOFF_PREPARE_LOG" 2>&1 || _PREPARE_RC=$?
-# A nonzero code the module did NOT emit (10/12 are its own outcomes) means
-# the module never ran to its own error handling: the interpreter or the
-# import failed. The two classes get different reasons and details, so an
+# A nonzero code the op did NOT emit (10/12 are its own outcomes) means the
+# door never ran to its own error handling: the binary was missing or the
+# dispatch failed. The two classes get different reasons and details, so an
 # operator reading the event can tell a broken bootstrap from a real
 # handoff refusal.
 _HANDOFF_PREPARE_STDOUT="$(cat "$_HANDOFF_PREPARE_LOG" 2>/dev/null)"

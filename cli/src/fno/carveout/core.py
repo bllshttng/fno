@@ -116,6 +116,27 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _read_manifest_keys(state_path: Path) -> dict[str, str]:
+    """The ``---``-fenced ``key: value`` scan read_frontmatter served for the
+    session-id lookup, inlined (x-9516): the state module dies with the
+    family port. Plain scalars only; this reader needs no more."""
+    try:
+        text = state_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    fm: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        key, sep, value = line.partition(":")
+        if sep:
+            fm[key.strip()] = value.strip()
+    return fm
+
+
 def resolve_session_id(repo_root: Path) -> Optional[str]:
     """Resolve the active target session id, or None if unresolvable.
 
@@ -135,9 +156,7 @@ def resolve_session_id(repo_root: Path) -> Optional[str]:
     state_path = target_state_path_or_legacy(repo_root)
     if state_path.exists():
         try:
-            from fno.state.io import read_frontmatter
-
-            fm, _ = read_frontmatter(state_path)
+            fm = _read_manifest_keys(state_path)
             sid = fm.get("fno_id") or fm.get("session_id")
             if sid is not None and str(sid).strip() and str(sid).strip() != "null":
                 return str(sid).strip()

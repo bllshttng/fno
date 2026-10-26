@@ -21,6 +21,37 @@ import yaml
 DEFAULT_POLL_INTERVAL = 30  # seconds
 
 
+def _atomic_write(path: Path, content: str) -> None:
+    """The lock-then-tempfile-then-os.replace write, inlined from the
+    state-io helper at the family port (x-9516): that module dies with the
+    port. The lock prevents interleaved writers; os.replace is atomic on
+    POSIX."""
+    import os
+    import tempfile
+
+    import filelock
+
+    path = Path(path)
+    with filelock.FileLock(str(path) + ".lock", timeout=10):
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+                encoding="utf-8",
+            ) as tmp:
+                tmp.write(content)
+                tmp_path = Path(tmp.name)
+            os.replace(tmp_path, path)
+            tmp_path = None
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+
+
 def _read_state(state_path: Path) -> dict[str, Any]:
     text = state_path.read_text(encoding="utf-8") if state_path.exists() else ""
     if not text.startswith("---"):
@@ -118,8 +149,7 @@ def external_review(
         )
         # Atomic write: external artifact is factor-2 of the external-review
         # gate. See ship.py for the same rationale.
-        from fno.state.io import atomic_write
-        atomic_write(artifact_path, artifact_content)
+        _atomic_write(artifact_path, artifact_content)
         return {
             "action": "approved",
             "external_review_passed": True,
