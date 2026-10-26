@@ -5,7 +5,7 @@
 //! refuses here because the Python mounts died with the family port.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// One resolved launch: the sibling binary's argv, or the lifecycle script.
 pub enum Launch {
@@ -45,6 +45,13 @@ impl Launch {
                 let root = repo_root();
                 let mut cmd = std::process::Command::new("bash");
                 cmd.arg(script).args(&rest).current_dir(&root);
+                // The script's status leaf shells the shim, and the shim's
+                // own resolution is PATH-plus-override only: hand it the
+                // binary this door already resolved, so a wheel install
+                // whose venv bin is off PATH still answers status. A
+                // non-existent resolution fails the shim's is_file check
+                // and falls through to its own PATH read.
+                cmd.env("FNO_AGENTS_BIN", crate::digest_overlay::fno_agents_bin());
                 match cmd.status() {
                     Ok(status) => status.code().unwrap_or(1),
                     Err(e) => {
