@@ -654,6 +654,10 @@ fn resolve_reentry_inner(
                 argv.push("--bg".into());
                 argv.push("--resume".into());
                 argv.push(session_id.clone());
+                // A resume takes the title the transcript carries, which a
+                // retasked row has outgrown: the row's name is the truth.
+                argv.push("--name".into());
+                argv.push(entry.name.clone());
             }
         }
     }
@@ -1767,6 +1771,8 @@ mod tests {
                 "--bg".to_string(),
                 "--resume".to_string(),
                 "9a1b2c3d-eeee-ffff-0000-111122223333".to_string(),
+                "--name".to_string(),
+                "paned".to_string(),
             ]
         );
 
