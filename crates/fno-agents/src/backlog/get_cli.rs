@@ -170,10 +170,26 @@ pub fn run(tail: &[String]) -> i32 {
         }
     }
     let served = served_store_path(&graph_path);
-    eprintln!(
+    // The JSON-stdout contract: the default get render IS json, so a miss
+    // prints one {ok:false} document on stdout instead of silence; rc stays 1
+    // for rc readers. The --field render keeps the scalar contract (empty
+    // stdout on a miss): its consumers read "empty or null" as not-set, and a
+    // document there would read as a linked value.
+    let message = format!(
         "No node matching '{}' (id/slug/bare-hex) in {}",
         args.id,
         served.display()
+    );
+    if args.render.field.is_some() {
+        eprintln!("{message}");
+        return 1;
+    }
+    println!(
+        "{}",
+        py_json_compact(&json!({
+            "ok": false,
+            "error": message,
+        }))
     );
     1
 }
