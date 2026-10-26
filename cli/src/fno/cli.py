@@ -125,7 +125,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Sweep events.jsonl and route status events to configured sinks (tick).",
         {"hidden": True},
     ),
-    "bundle": ("fno.bundle:bundle_app", "Skill bundle build + lint.", {"hidden": True}),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
     "claim": ("fno.claims.cli:cli", "Work-claim coordination primitive", {"hidden": True}),
     "resume": (
@@ -222,10 +221,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Cost + usage metrics from session transcripts and ledger.json.",
         {"hidden": True},
     ),
-    "doctor": (
-        "fno.doctor_cli:doctor_app",
-        "Diagnose installed-vs-source fno skew (network-free).",
-    ),
     "done": (
         "fno.done.cli:done_command",
         "Deprecated done shim; use `fno backlog done` (its flag surface is now identical).",
@@ -262,12 +257,10 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "annotate": {"list"},
     "approvals": set(),
     "backlog": {"advance", "done", "get", "next", "queued"},
-    "bundle": set(),
     "carveout": set(),
     "claim": {"release"},
     "config": {"accounts", "get", "set"},
     "do": set(),
-    "doctor": set(),
     "evals": set(),
     "event": {"emit"},
     "loops": {"resume-all"},
