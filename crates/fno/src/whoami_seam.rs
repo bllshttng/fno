@@ -118,13 +118,7 @@ pub fn run(args: &[OsString]) -> i32 {
     // render is the native spawn-overlay exec; re-entering the seam here
     // would spawn itself forever.
     if std::env::var_os(CHILD_ENV).is_some() {
-        let bin = match crate::digest_overlay::fno_agents_bin() {
-            Some(bin) => bin,
-            None => {
-                eprintln!("fno whoami: the fno-agents binary is unavailable");
-                return 14;
-            }
-        };
+        let bin = crate::digest_overlay::fno_agents_bin();
         let status = Command::new(&bin)
             .arg("spawn-overlay")
             .arg("whoami")
