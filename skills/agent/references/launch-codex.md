@@ -47,7 +47,7 @@ These tables are read from the harness's own `--help`. The harness-launch-docs w
 
 ### `codex --help`
 
-Captured from `codex-cli 0.159.2`.
+Captured from `codex-cli 0.164.0`.
 
 #### Commands
 
@@ -62,7 +62,6 @@ Captured from `codex-cli 0.159.2`.
 | `plugin` | Manage Codex plugins |
 | `app-server` | [experimental] Run the app server or related tooling |
 | `remote-control` | [experimental] Manage the app-server daemon with remote control enabled |
-| `app` | Launch the Desktop app (opens the app installer if missing) |
 | `completion` | Generate shell completion scripts |
 | `update` | Update Codex to the latest version |
 | `doctor` | Diagnose local Codex installation, config, auth, and runtime health |
@@ -74,6 +73,7 @@ Captured from `codex-cli 0.159.2`.
 | `archive` | Archive a saved session by id or session name |
 | `delete` | Permanently delete a saved session by id or session name |
 | `migrate-rollouts` | Inspect or migrate legacy local sessions to paginated thread history |
+| `migrate-nfs-db` | [experimental] Migrate configured SQLite databases to DELETE mode in place |
 | `unarchive` | Unarchive a saved session by id or session name |
 | `fork` | Fork a previous interactive session (picker by default; use --last to fork the most recent) |
 | `cloud` | [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally |

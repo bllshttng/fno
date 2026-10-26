@@ -50,7 +50,7 @@ These tables are read from the harness's own `--help`. The harness-launch-docs w
 
 ### `opencode run --help`
 
-Captured from `opencode v2.0.20`.
+Captured from `opencode v2.1.4`.
 
 #### FLAGS
 
@@ -82,7 +82,7 @@ Captured from `opencode v2.0.20`.
 
 ### `opencode --help`
 
-Captured from `opencode v2.0.20`.
+Captured from `opencode v2.1.4`.
 
 #### FLAGS
 
@@ -111,7 +111,7 @@ Captured from `opencode v2.0.20`.
 | Command | What it does |
 |---|---|
 | `upgrade, update` | Upgrade OpenCode to the latest or a specific version |
-| `uninstall` | Uninstall OpenCode and remove all related files |
+| `uninstall` | Uninstall OpenCode, keeping session data, configuration, and state |
 | `acp` | Start an Agent Client Protocol server |
 | `api` | Make a request to the running server |
 | `debug` | Debugging and troubleshooting tools |

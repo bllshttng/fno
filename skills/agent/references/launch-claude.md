@@ -52,7 +52,7 @@ These tables are read from the harness's own `--help`. The harness-launch-docs w
 
 ### `claude --help`
 
-Captured from `2.1.296 (Claude Code)`.
+Captured from `2.1.310 (Claude Code)`.
 
 #### Options
 
@@ -74,10 +74,10 @@ Captured from `2.1.296 (Claude Code)`.
 | `--cloud [description\|session_id\|url]` | Create a cloud session with the given description, or attach to an existing one by session ID or claude.ai/code URL |
 | `-c, --continue` | Continue the most recent conversation in the current directory |
 | `--dangerously-skip-permissions` | Bypass all permission checks. Recommended only for sandboxes with no internet access. |
-| `-d, --debug [filter]` | Enable debug mode with optional category filtering (e.g., "api,hooks" or "!1p,!file") |
+| `-d, --debug [filter]` | Enable debug mode with optional category filtering (e.g., --debug=hooks,mcp or --debug='!hooks,!mcp') |
 | `--debug-file <path>` | Write debug logs to a specific file path (implicitly enables debug mode) |
 | `--desktop` | Open in the Claude Desktop app instead of the terminal (with --continue or --resume <id> to pick the session) |
-| `--disable-slash-commands` | Disable all skills |
+| `--disable-slash-commands` | Disable all skills and commands |
 | `--disallowedTools, --disallowed-tools <tools...>` | Comma or space-separated list of tool names to deny (e.g. "Bash(git *) Edit") |
 | `--effort <level>` | Effort level for the current session (low, medium, high, xhigh, max) |
 | `--environment <environment_id>` | Create a new cloud session that runs on the given self-hosted environment (ccpool_...). |
@@ -92,7 +92,7 @@ Captured from `2.1.296 (Claude Code)`.
 | `--include-hook-events` | Include all hook lifecycle events in the output stream (only works with --output-format=stream-json) |
 | `--include-partial-messages` | Include partial message chunks as they arrive (only works with --print and --output-format=stream-json) |
 | `--input-format <format>` | Input format (only works with --print): "text" (default), or "stream-json" (realtime streaming input) (choices: "text", "stream-json") |
-| `--json-schema <schema>` | JSON Schema for structured output validation. Example: {"type":"object","properties":{"name":{"type":"string"}},"required":["name"]} |
+| `--json-schema <schema>` | JSON Schema for structured output validation (only works with --print). Example: {"type":"object","properties":{"name":{"type":"string"}},"required":["name"]} |
 | `--max-budget-usd <amount>` | Maximum dollar amount to spend on API calls (only works with --print) |
 | `--mcp-config <configs...>` | Load MCP servers from JSON files or strings (space-separated) |
 | `--model <model>` | Model for the current session. Provide an alias for the latest model (e.g. 'fable', 'opus', or 'sonnet') or a model's full name. |
@@ -109,18 +109,18 @@ Captured from `2.1.296 (Claude Code)`.
 | `--remote-control [name]` | Start an interactive session with Remote Control enabled (optionally named) |
 | `--remote-control-session-name-prefix <prefix>` | Prefix for auto-generated Remote Control session names (default: hostname) |
 | `--replay-user-messages` | Re-emit user messages from stdin back on stdout for acknowledgment (only works with --input-format=stream-json and --output-format=stream-json) |
-| `--restricted` | Restricted mode: removes the built-in tools that run commands or code (Bash, PowerShell, REPL and the other code-running tools) and WebFetch unless --tools names them, and ignores user, project and local settings files (managed settings and --settings still apply; add --strict-mcp-config to skip MCP servers too). Also confines the file tools to the working directories (--add-dir included), refuses bypassPermissions, and lets only a person or the configured permission handler approve writes to settings, git and tool-configuration files. |
-| `-r, --resume [value]` | Resume a conversation by session ID, or open interactive picker with optional search term |
+| `--restricted` | Restricted mode: removes the built-in tools that run commands or code (Bash, PowerShell and the other code-running tools) and WebFetch unless --tools names them, and ignores user, project and local settings files (managed settings and --settings still apply; add --strict-mcp-config to skip MCP servers too). Also confines the file tools to the working directories (--add-dir included), refuses bypassPermissions, and lets only a person or the configured permission handler approve writes to settings, git and tool-configuration files. |
+| `-r, --resume [value]` | Resume a conversation by session ID or name, or open interactive picker with optional search term |
 | `--safe-mode` | Start with all customizations (CLAUDE.md, skills, installed plugins, hooks, MCP servers, custom commands and agents, output styles, workflows, custom themes, keybindings, and more) disabled - useful for troubleshooting a broken configuration. Admin-managed (policy) settings still apply. Auth, model selection, built-in tools and plugins, and permissions work normally. Sets CLAUDE_CODE_SAFE_MODE=1. |
 | `--session-id <uuid>` | Use a specific session ID for the conversation (must be a valid UUID) |
 | `--setting-sources <sources>` | Comma-separated list of setting sources to load (user, project, local). |
 | `--settings <file-or-json>` | Path to a settings JSON file or a JSON string to load additional settings from |
 | `--strict-mcp-config` | Only use MCP servers from --mcp-config, ignoring all other MCP configurations |
 | `--system-prompt <prompt>` | System prompt to use for the session |
-| `--system-prompt-snapshot <on\|off>` | Record the system prompt once per conversation and reuse it verbatim on every request and resume. on (the default): the prompt is rendered on the conversation's first request - a --system-prompt or --append-system-prompt included - sent, and recorded; every later request and resume sends the record as-is, even when a later launch passes different text, until the conversation is compacted. off: never record; the prompt is rendered fresh every request (for iterating on prompt text). No effect where system-prompt recording is not yet enabled. (choices: "on", "off") |
+| `--system-prompt-snapshot <on\|off>` | Record the system prompt once per conversation and reuse it verbatim on every request and resume. on (the default, except under --bare outside cloud and background sessions): the prompt is rendered on the conversation's first request - a --system-prompt or --append-system-prompt included - sent, and recorded; every later request and resume sends the record as-is, even when a later launch passes different text, until the conversation is compacted. off: never record; the prompt is rendered fresh every request (for iterating on prompt text). (choices: "on", "off") |
 | `--teleport [session]` | Resume a teleport session, optionally specify session ID |
 | `--tmux` | Create a tmux session for the worktree (requires --worktree). Uses iTerm2 native panes when available; use --tmux=classic for traditional tmux. |
-| `--tools <tools...>` | Specify the list of available tools from the built-in set. Use "" to disable all tools, "default" to use all tools, or specify tool names (e.g. "Bash,Edit,Read"). |
+| `--tools <tools...>` | Specify the list of available tools from the built-in set. Use "" to disable all tools, "default" to use the default set, or specify tool names (e.g. "Bash,Edit,Read"). |
 | `--verbose` | Override verbose mode setting from config |
 | `-v, --version` | Output the version number |
 | `-w, --worktree [name]` | Create a new git worktree for this session (optionally specify a name) |
@@ -146,4 +146,4 @@ Captured from `2.1.296 (Claude Code)`.
 | `setup-token` | Set up a long-lived authentication token (requires Claude subscription) |
 | `stop\|kill <id>` | Stop a background session. Its conversation is kept: `claude attach <id>` opens it again, `claude --resume` works once it is stopped |
 | `ultrareview [options] [target]` | Run a cloud-hosted multi-agent code review of the current branch (or a PR number / base branch) and print the findings |
-| `update\|upgrade` | Check for updates and install if available |
+| `update\|upgrade` | Check for updates and install if available; package-manager installs update through the package manager |
