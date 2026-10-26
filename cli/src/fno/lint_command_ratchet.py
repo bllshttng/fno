@@ -101,6 +101,9 @@ NATIVE_SERVED_LEAVES = {
     "backlog session open",
     "backlog session reap-open",
     "config schema",
+    # The ci namespace answers through the native front door (the same
+    # classifier handover as the pr spellings below); it has no click child.
+    "do ci status",
     "do review resolve-level",
     "do review post-dispositions",
     "do review classify",
