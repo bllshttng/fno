@@ -1008,7 +1008,10 @@ pub fn run_intel(args: &[String]) -> i32 {
              prose-only-enforced shares with their denominator, a fleet mail graph\n\
              (who mails whom, unanswered tails, hops that relay a ruling id), and\n\
              the compliance limit: uncontested is no recorded counter-evidence,\n\
-             never proven obedience.\n"
+             never proven obedience.\n\n\
+             --lens rules counts each event rule's fires and samples them with the reply\n\
+             tail (--sample N or all, default 5). --labels <file> of judged fires prints\n\
+             each rule's false-fire rate. See docs/architecture/event-rules.md.\n"
         );
         return 0;
     }
@@ -1027,6 +1030,7 @@ pub fn run_intel(args: &[String]) -> i32 {
     let mut fold_file: Option<String> = None;
     let mut score_prior: Option<String> = None;
     let mut lens: Option<String> = None;
+    let mut labels: Option<String> = None;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut i = 0;
     while i < args.len() {
@@ -1172,7 +1176,19 @@ pub fn run_intel(args: &[String]) -> i32 {
                 match args.get(i) {
                     Some(v) => lens = Some(v.clone()),
                     None => {
-                        eprintln!("fno-agents intel: --lens needs a name (known: decisions)");
+                        eprintln!(
+                            "fno-agents intel: --lens needs a name (known: decisions, rules)"
+                        );
+                        return 2;
+                    }
+                }
+            }
+            "--labels" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => labels = Some(v.clone()),
+                    None => {
+                        eprintln!("fno-agents intel: --labels needs <file>");
                         return 2;
                     }
                 }
@@ -1201,12 +1217,28 @@ pub fn run_intel(args: &[String]) -> i32 {
         );
         return 2;
     }
+    if labels.is_some() && lens.as_deref() != Some("rules") {
+        eprintln!("fno-agents intel: --labels needs --lens rules");
+        return 2;
+    }
+    let scoped = all_projects || !projects.is_empty() || !harness_spec.is_empty();
+    if lens.is_some() && (scoped || session.is_some() || node.is_some()) {
+        eprintln!("fno-agents intel: --lens reads this project's journal; drop the scope flags");
+        return 2;
+    }
+    if json && lens.as_deref() == Some("rules") {
+        eprintln!("fno-agents intel: --lens rules prints text only; drop --json");
+        return 2;
+    }
     if let Some(name) = lens.as_deref() {
-        if name != "decisions" {
-            eprintln!("fno-agents intel: unknown lens {name} (known: decisions)");
-            return 2;
-        }
-        return crate::intel_lens::run_lens(days, json);
+        return match name {
+            "decisions" => crate::intel_lens::run_lens(days, json),
+            "rules" => crate::intel_rules_lens::run_lens(days, &sample, labels.as_deref()),
+            _ => {
+                eprintln!("fno-agents intel: unknown lens {name} (known: decisions, rules)");
+                2
+            }
+        };
     }
 
     let home = AgentsHome::from_env();

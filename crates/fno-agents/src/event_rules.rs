@@ -21,6 +21,10 @@ const TABLE: &str = include_str!("event_rules.toml");
 /// and the fire's span carries `cap_reached`.
 pub(crate) const BLOCK_CAP: usize = 3;
 
+/// The reply tail a Stop block keeps on its span, so `intel --lens rules`
+/// can show a judge what the rule fired on. The tail is where asks sit.
+const EXCERPT_CHARS: usize = 600;
+
 /// The four classes only the user decides; `class_user_only` reads them off
 /// a question's escalate route span.
 const USER_CLASSES: &[&str] = &[
@@ -323,6 +327,13 @@ fn stop_block(
     if prior + 1 >= BLOCK_CAP {
         attrs.insert("cap_reached".to_string(), json!(true));
     }
+    let skip = ctx
+        .last_message
+        .chars()
+        .count()
+        .saturating_sub(EXCERPT_CHARS);
+    let excerpt: String = ctx.last_message.chars().skip(skip).collect();
+    attrs.insert("excerpt".to_string(), json!(excerpt));
     write_fire_span(
         journal,
         ctx,
@@ -1041,6 +1052,7 @@ mod tests {
         let spans = rig.spans();
         assert_eq!(spans.len(), 1, "one block span for one fire");
         assert_eq!(spans[0]["data"]["span_kind"], "block");
+        assert_eq!(spans[0]["data"]["excerpt"], ask);
         assert_eq!(spans[0]["data"]["rule"], "chat_ask_unfiled");
 
         // AC4: the same ask with a question filed this turn allows.
@@ -1134,6 +1146,12 @@ mod tests {
         assert!(!decision_ask(
             "Done:\n1. merged\n2. reconciled\nLet me know if it grows."
         ));
+        // A lead fire judged false on 2026-10-23 (intel --lens rules): an ask
+        // marker inside a numbered step is a step, not an ask over options.
+        let approve = "After you approve stable:\n1. Lift the freeze\n\
+                       2. I mail the workers. One PR still needs your visual approval.\n\
+                       3. I hand off to a fresh lead.";
+        assert!(!decision_ask(approve));
     }
 
     fn r1_unpromoted_and_cap_legs() {
