@@ -287,12 +287,23 @@ fn ci_verdict(worker: &RegistryEntry, pr: u64) -> String {
 /// the caller renders that as a failed reading, never a silent zero.
 pub(crate) fn failed_rows_this_boot(home: &AgentsHome) -> Option<Vec<ReceiptRow>> {
     let receipt = home.root().join(RECEIPT_FILE);
-    let raw = std::fs::read_to_string(&receipt).ok()?;
-    if !ran_this_boot(recorded_boot(&receipt), boot_time()?) {
+    let raw = match std::fs::read_to_string(&receipt) {
+        Ok(raw) => raw,
+        // No pass has run this boot: clean, not failed.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(Vec::new()),
+        Err(_) => return None,
+    };
+    let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+        // Exists but unreadable: unmeasured, never a silent zero.
+        return None;
+    };
+    let boot = boot_time()?;
+    if !ran_this_boot(v.get("boot").and_then(Value::as_u64), boot) {
         return Some(Vec::new());
     }
-    let v: Value = serde_json::from_str(&raw).ok()?;
-    let rows = v.get("rows")?.as_array()?;
+    let Some(rows) = v.get("rows").and_then(Value::as_array) else {
+        return Some(Vec::new());
+    };
     Some(
         rows.iter()
             .filter_map(|r| {
@@ -397,8 +408,8 @@ fn revive(home: &AgentsHome, name: &str) -> ReceiptRow {
 /// The nodes a revival must leave alone: done or superseded. A merged PR
 /// under a live node is a multi-ship node mid-flight; its worker comes back.
 /// The node's own status is the authority - the primary PR's merge state
-/// once read a multi-ship node closed and left its worker down (x-fcb4,
-/// 2026-10-10).
+/// once read a multi-ship node closed and left its worker down during the
+/// 2026-10-10 reboot.
 fn closed_row(row: &Value) -> bool {
     crate::graph_store::is_terminal_entry(row)
 }

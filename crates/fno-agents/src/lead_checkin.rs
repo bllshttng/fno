@@ -1157,7 +1157,7 @@ fn r_boot_revival() -> Result<Value, String> {
                 "reason": r.reason,
             })).collect::<Vec<_>>(),
         })),
-        None => Err("boot-revival.json exists but did not parse".to_string()),
+        None => Err("boot-revival.json unreadable".to_string()),
     }
 }
 
