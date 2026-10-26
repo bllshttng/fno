@@ -1866,6 +1866,7 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
         plan_path: Option<String>,
         reopened_at: Option<String>,
         completed_at: Option<String>,
+        created_at: Option<String>,
         has_any_pr: bool,
     }
     let claims = node_claims_by_id()?;
@@ -1886,7 +1887,8 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                     n.ownership_defect,
                     n.plan_path,
                     n.reopened_at,
-                    n.completed_at
+                    n.completed_at,
+                    n.created_at
              FROM nodes n",
         )
         .map_err(|error| error.to_string())?;
@@ -1912,6 +1914,7 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                 plan_path: row.get(10)?,
                 reopened_at: row.get(11)?,
                 completed_at: row.get(12)?,
+                created_at: row.get(13)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -2046,13 +2049,13 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
             .collect();
         // The same holds the whole-graph pass reads: own plan work (the
         // has_own_plan_work typed twin; any PR row is evidence, an
-        // additional-PR list included) and a deliberate reopen postdating
-        // every child close (reopen_outranks_stamps).
+        // additional-PR list included) and a deliberate reopen no child filed
+        // before it has closed after (reopen_holds_epic).
         let holds = {
-            let kid_stamps: Vec<Option<&str>> = rows
+            let kid_stamps: Vec<(Option<&str>, Option<&str>)> = rows
                 .iter()
                 .filter(|row| row.parent.as_deref() == Some(pid.as_str()))
-                .map(|row| row.completed_at.as_deref())
+                .map(|row| (row.created_at.as_deref(), row.completed_at.as_deref()))
                 .collect();
             matches!(rows[pidx].status.as_str(), "in_review" | "in_progress")
                 || (rows[pidx]
@@ -2060,7 +2063,7 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                     .as_deref()
                     .is_some_and(|p| !p.trim().is_empty())
                     && !rows[pidx].has_any_pr)
-                || crate::graph_store::reopen_outranks_stamps(
+                || crate::graph_store::reopen_holds_epic(
                     rows[pidx].reopened_at.as_deref(),
                     &kid_stamps,
                 )
