@@ -882,7 +882,9 @@ fn seed_refusals(tail: &[String], plugin_status: &dyn Fn() -> Option<String>) ->
                 Some(harness.as_str()),
                 Some(substrate.as_str()),
                 seed_of(tail).as_deref(),
-                flag_value(tail, &["--resume"]).filter(|r| !r.is_empty()).as_deref(),
+                flag_value(tail, &["--resume"])
+                    .filter(|r| !r.is_empty())
+                    .as_deref(),
                 flag_present(tail, "--promote"),
                 flag_value(tail, &["--name"]).as_deref(),
                 flag_value(tail, &["--node"]).as_deref(),
@@ -912,14 +914,21 @@ fn codex_plugin_status() -> Option<String> {
         &mut crate::codex_converge::codex_runner,
         &crate::codex_converge::codex_home(),
     );
-    verdict.get("status").and_then(Value::as_str).map(str::to_string)
+    verdict
+        .get("status")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn argv_of(answer: &Value) -> Option<Vec<String>> {
     let arr = answer.get("argv").and_then(Value::as_array)?;
     let toks: Vec<String> = arr
         .iter()
-        .map(|t| t.as_str().map(str::to_string).unwrap_or_else(|| t.to_string()))
+        .map(|t| {
+            t.as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| t.to_string())
+        })
         .collect();
     (!toks.is_empty()).then_some(toks)
 }
