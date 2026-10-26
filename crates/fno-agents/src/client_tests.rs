@@ -1796,6 +1796,8 @@ fn resume_through_run_inside_a_runtime_refuses_16_without_panicking() {
     // Serializes against the other env-mutating resume tests (shared
     // FNO_AGENTS_HOME / CODEX_HOME / PATH mutation, parallel threads).
     let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    // The PATH swap joins the shared PATH lane as well, PATH innermost.
+    let _path = crate::path_test_guard();
     let temp = tempfile::tempdir().unwrap();
     let home_dir = temp.path().join("agents-home");
     std::fs::create_dir_all(&home_dir).unwrap();
