@@ -264,9 +264,6 @@ pub fn parse_locked_model(text: &str) -> String {
     let Some(val_raw) = matches.last() else {
         return String::new();
     };
-    let Some(val_raw) = last else {
-        return String::new();
-    };
     let val = model_provenance_re()
         .replace_all(val_raw, "")
         .trim()
