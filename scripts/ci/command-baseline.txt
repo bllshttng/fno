@@ -95,22 +95,18 @@ loops
 loops resume-all
 mail
 mail send !--origin !--provider
-mcp send
 mux
 notify
 observer
 paths
 plan
 pr-watch
-research
 resume
-roles
 route
 scoreboard
 status
 status-fanout tick
 test
-think
 uninstall
 update
 version

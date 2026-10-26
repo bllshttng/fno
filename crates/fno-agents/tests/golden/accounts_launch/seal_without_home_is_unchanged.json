@@ -1,0 +1,1 @@
+{"env": {"CODEX_HOME": "/acct/codex"}, "expect": {"env": {"CODEX_HOME": "/acct/codex"}}, "op": "seal"}

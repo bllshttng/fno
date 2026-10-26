@@ -108,6 +108,16 @@ ALLOWLIST = {
     # name in the receipt. Single authority at the explicit operator
     # `unclaim` boundary.
     "crates/fno-agents/src/backlog/cutover.rs",
+    # crates/fno-agents/src/target_start.rs release_early_claim: the start
+    # orchestrator releases the EARLY claim it acquired itself, minutes
+    # earlier, before the slow allocation steps - and only when start itself
+    # fails before init runs (ensure refusal/timeout, bind refusal). The
+    # release is holder-bound (`claims::release` drops only a matching
+    # holder, silently no-ops otherwise), so it can never release the
+    # parent's or a foreign session's claim: the inverse of ab-588326a7,
+    # same shape as the init-helper acquire-then-refuse site above. Not
+    # releasing would strand a 2h claim on a node whose allocation failed.
+    "crates/fno-agents/src/target_start.rs",
 }
 
 _EXTS = {".py", ".sh", ".bash", ".rs"}

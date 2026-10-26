@@ -11,10 +11,10 @@ No model in the gate; the verify panel never changes the verdict.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fno.evals import research_grade as rg
-from fno.research.core import Source
 
 
 def _write(p: Path, text: str) -> Path:
@@ -23,10 +23,15 @@ def _write(p: Path, text: str) -> Path:
     return p
 
 
-def _sidecar(p: Path, rows: list[Source]) -> None:
+def _row(**fields) -> dict:
+    """One sources.jsonl row; the grade reads url, verified and reason."""
+    return {"reason": "", **fields}
+
+
+def _sidecar(p: Path, rows: list[dict]) -> None:
     with p.open("w", encoding="utf-8") as fh:
         for r in rows:
-            fh.write(r.to_json_line() + "\n")
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
 GOLDEN = """# Discovery: example agency
@@ -62,8 +67,8 @@ sources: example-agency.sources.jsonl
 
 def _green_sidecar(p: Path) -> None:
     _sidecar(p, [
-        Source(url="https://a.example/financials", fetched_at="t", hash="h1", extract="x", verified=True),
-        Source(url="https://b.example/cadence", fetched_at="t", hash="h2", extract="y", verified=True),
+        _row(url="https://a.example/financials", fetched_at="t", hash="h1", extract="x", verified=True),
+        _row(url="https://b.example/cadence", fetched_at="t", hash="h2", extract="y", verified=True),
     ])
 
 
@@ -73,7 +78,7 @@ def test_claim_citing_missing_row_reds_a(tmp_path: Path) -> None:
     brief = _write(tmp_path / "example-agency.md", GREEN_BRIEF)
     # sidecar has only S1's url, not S2's
     _sidecar(tmp_path / "example-agency.sources.jsonl", [
-        Source(url="https://a.example/financials", fetched_at="t", hash="h1", extract="x", verified=True),
+        _row(url="https://a.example/financials", fetched_at="t", hash="h1", extract="x", verified=True),
     ])
     golden = _write(tmp_path / "golden.md", GOLDEN)
     res = rg.grade(brief, golden)
@@ -84,8 +89,8 @@ def test_claim_citing_missing_row_reds_a(tmp_path: Path) -> None:
 def test_dead_url_reds_b(tmp_path: Path) -> None:
     brief = _write(tmp_path / "example-agency.md", GREEN_BRIEF)
     _sidecar(tmp_path / "example-agency.sources.jsonl", [
-        Source(url="https://a.example/financials", fetched_at="t", hash="h1", extract="x", verified=True),
-        Source(url="https://b.example/cadence", fetched_at="t", hash="", extract="", verified=False, reason="http 404"),
+        _row(url="https://a.example/financials", fetched_at="t", hash="h1", extract="x", verified=True),
+        _row(url="https://b.example/cadence", fetched_at="t", hash="", extract="", verified=False, reason="http 404"),
     ])
     golden = _write(tmp_path / "golden.md", GOLDEN)
     res = rg.grade(brief, golden)

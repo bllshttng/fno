@@ -18,6 +18,13 @@ use std::sync::Arc;
 /// A sent notice is "open" for the load read for this long.
 pub(crate) const NOTICE_OPEN_SECS: i64 = 86_400;
 
+/// One reconcile period: the SessionStart writer's own throttle
+/// (`RECONCILE_THROTTLE_SECONDS`, scripts/lib/reconcile-throttle.sh). A
+/// result file older than this is superseded - a still-true condition
+/// gets a fresh file within one more period - so the pass consumes it
+/// instead of holding it open forever behind one undelivered group.
+pub(crate) const RECONCILE_PERIOD_S: i64 = 900;
+
 /// `~/.fno/state/notice-route/`, folded under `state/` like `attention/`.
 pub(crate) fn notice_route_dir() -> Result<PathBuf, String> {
     state_root().map(|p| crate::state_layout::place(&p, "notice-route"))
@@ -69,12 +76,21 @@ fn write_sent(map: &BTreeMap<String, Value>) {
 /// Record one sent notice: the fingerprint and the owner scope it went to.
 /// Older-than-open entries are pruned on the same write.
 pub(crate) fn record_sent(fingerprint: &str, scope: &str, now: i64) {
+    record_sent_many(&[fingerprint.to_string()], scope, now);
+}
+
+/// Record a batch of sent notices in one read-modify-write: one entry per
+/// warning key, so a delivered group's members dedupe independently from
+/// here on no matter how a later pass re-partitions them.
+pub(crate) fn record_sent_many(fingerprints: &[String], scope: &str, now: i64) {
     let mut map = read_sent();
     map.retain(|_, v| NOTICE_OPEN_SECS > now - v.get("ts").and_then(Value::as_i64).unwrap_or(0));
-    map.insert(
-        fingerprint.to_string(),
-        serde_json::json!({"scope": scope, "ts": now}),
-    );
+    for fingerprint in fingerprints {
+        map.insert(
+            fingerprint.clone(),
+            serde_json::json!({"scope": scope, "ts": now}),
+        );
+    }
     write_sent(&map);
 }
 
@@ -362,25 +378,29 @@ struct OwnerGroup {
 
 /// Route the warnings: group by owner, one deduped mail per live lead
 /// (the cause text rides word for word), one question page when the rung
-/// is the user. Returns the acted count plus the group keys whose
-/// outcome is terminal: delivered now, or already delivered inside the
-/// dedupe window. Only terminal groups may consume their source files.
+/// is the user. Only the warnings whose per-warning key sits outside its
+/// open window mail this pass, so a re-partition of already-delivered
+/// rows under a changed owner resolution cannot re-mail them. Returns the
+/// acted count plus the group keys whose outcome is terminal: nothing
+/// unsent left, delivered now, or already delivered inside the dedupe
+/// window. Only terminal groups may consume their source files.
 fn route_groups(
     groups: BTreeMap<String, OwnerGroup>,
     now: i64,
     detail: &mut Vec<String>,
+    sent: &BTreeMap<String, Value>,
 ) -> (u64, std::collections::BTreeSet<String>) {
     let mut acted = 0u64;
     let mut terminal = std::collections::BTreeSet::new();
     for (key, group) in groups {
-        let fingerprint = fingerprint_of(&group.warnings);
-        if sent_recently(&fingerprint) {
+        let unsent = unsent_of(&group, sent, now);
+        if unsent.is_empty() {
             terminal.insert(key);
             continue;
         }
         let delivered = match group.owner.session.as_deref() {
-            Some(sid) if !sid.trim().is_empty() => mail_owner(sid, &group, &fingerprint, now),
-            _ => file_question_page(&group, &fingerprint, now),
+            Some(sid) if !sid.trim().is_empty() => mail_owner(sid, &group, &unsent, now),
+            _ => file_question_page(&group, now),
         };
         if delivered {
             acted += 1;
@@ -402,12 +422,23 @@ fn route_groups(
         } else {
             detail.push(format!(
                 "undelivered: {} warning(s) for {}",
-                group.warnings.len(),
+                unsent.len(),
                 group.owner.scope.as_deref().unwrap_or("?")
             ));
         }
     }
     (acted, terminal)
+}
+
+/// The warnings of one group whose per-warning key is not inside its open
+/// window in this pass's sent map: the slice a delivery actually carries.
+fn unsent_of(group: &OwnerGroup, sent: &BTreeMap<String, Value>, now: i64) -> Vec<Warning> {
+    group
+        .warnings
+        .iter()
+        .filter(|w| !sent_recently_in(sent, &warning_fingerprint(w), now))
+        .cloned()
+        .collect()
 }
 
 /// The dedupe key: sha256 over the sorted kind:node:cause triples. The
@@ -426,14 +457,21 @@ fn fingerprint_of(warnings: &[Warning]) -> String {
     hex
 }
 
-/// True when the fingerprint was sent inside the open window.
-fn sent_recently(fingerprint: &str) -> bool {
-    let now = now_epoch();
-    let map = read_sent();
+/// The same window check against a map the caller already read, so one
+/// pass costs one sent-store read no matter how many warnings it weighs.
+fn sent_recently_in(map: &BTreeMap<String, Value>, fingerprint: &str, now: i64) -> bool {
     match map.get(fingerprint) {
         Some(v) => NOTICE_OPEN_SECS > now - v.get("ts").and_then(Value::as_i64).unwrap_or(0),
         None => false,
     }
+}
+
+/// The per-warning dedupe key: the same sha over its one kind:node:cause
+/// triple. A changed cause mints a new key; an unchanged one stays
+/// deduped inside the open window no matter how the owner ladder
+/// re-partitions the group it rode in on.
+fn warning_fingerprint(warning: &Warning) -> String {
+    fingerprint_of(std::slice::from_ref(warning))
 }
 
 /// The question-page dedupe subject: every warning's cause flattened to
@@ -471,14 +509,15 @@ fn refusal_subject(group: &OwnerGroup) -> String {
 }
 
 /// One mail per owner through the system-sender lane with the resume
-/// fallback. Records the fingerprint only on a delivered mail.
-fn mail_owner(sid: &str, group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
+/// fallback. Lines carry only the unsent warnings; each of their keys is
+/// recorded on a delivered mail.
+fn mail_owner(sid: &str, group: &OwnerGroup, unsent: &[Warning], now: i64) -> bool {
     let mut lines: Vec<String> = Vec::new();
     lines.push(format!(
         "Automatic notice routing from the fno daemon: {} reconcile warning(s) for your territory.",
-        group.warnings.len()
+        unsent.len()
     ));
-    for w in &group.warnings {
+    for w in unsent {
         lines.push(format!("- [{}] {}", w.kind, w.cause));
     }
     let text = lines.join("\n");
@@ -491,7 +530,9 @@ fn mail_owner(sid: &str, group: &OwnerGroup, fingerprint: &str, now: i64) -> boo
         &mut runner,
     );
     if sent {
-        record_sent(fingerprint, group.owner.scope.as_deref().unwrap_or(""), now);
+        let scope = group.owner.scope.as_deref().unwrap_or("");
+        let keys: Vec<String> = unsent.iter().map(warning_fingerprint).collect();
+        record_sent_many(&keys, scope, now);
     }
     sent
 }
@@ -545,7 +586,7 @@ fn question_page_body(group: &OwnerGroup, subject: &str) -> String {
 /// waits") counts as delivered and the page file is rewritten in place,
 /// so the open page is updated rather than filed anew. The index lives
 /// where the Python intake door resolves it; the router never derives it.
-fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
+fn file_question_page(group: &OwnerGroup, now: i64) -> bool {
     let dir = match notice_route_dir() {
         Ok(d) => d,
         Err(_) => return false,
@@ -553,6 +594,10 @@ fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
     if std::fs::create_dir_all(&dir).is_err() {
         return false;
     }
+    // The page's identity stays set-level: the filename and the intake's
+    // subject+node dedupe depend on the whole warning set, and any change
+    // to the set mints a new page.
+    let fingerprint = fingerprint_of(&group.warnings);
     let page_path = dir.join(format!("q-{}.md", &fingerprint[..8]));
     let subject = refusal_subject(group);
     let body = question_page_body(group, &subject);
@@ -574,7 +619,7 @@ fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
         Err(_) => return false,
     };
     if ran.status.success() {
-        record_sent(fingerprint, group.owner.scope.as_deref().unwrap_or(""), now);
+        record_group_sent(group, now);
         return true;
     }
     // The intake's subject+node dedup refused a repeat ask: the open page
@@ -583,25 +628,39 @@ fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
     // retrying forever.
     let stderr = String::from_utf8_lossy(&ran.stderr);
     if stderr.contains("already waits") {
-        record_sent(fingerprint, group.owner.scope.as_deref().unwrap_or(""), now);
+        record_group_sent(group, now);
         return true;
     }
     false
 }
 
+/// Record every member warning's key: the page delivered (or the intake's
+/// dedupe confirmed an open page already covers the set), so the whole
+/// group dedupes independently from here on.
+fn record_group_sent(group: &OwnerGroup, now: i64) {
+    let keys: Vec<String> = group.warnings.iter().map(warning_fingerprint).collect();
+    record_sent_many(&keys, group.owner.scope.as_deref().unwrap_or(""), now);
+}
+
 /// The pass: read the world once, walk the workspace project roots'
 /// `.fno/.reconcile-result.json` and `.fno/.orphan-plans-result.json`,
 /// group, route, dedupe, and rename each consumed file to `.shown` (the
-/// rename the hook did before). A world read fault skips the pass.
+/// rename the hook did before). A file older than one reconcile period is
+/// consumed too: its undelivered warnings get this pass's delivery attempt
+/// first, and a still-true condition gets a fresh file from the next sweep
+/// within one more period. A world read fault skips the pass.
 pub(crate) fn run_pass(
     home: &crate::paths::AgentsHome,
     config_cwd: &Path,
 ) -> Result<crate::lead_wake::Outcome, String> {
     let w = crate::owner_ladder::world(home, config_cwd)?;
     let now = w.now;
+    // One sent-store read per pass: every dedupe decision below weighs
+    // this map instead of re-reading the file per group.
+    let sent = read_sent();
     let mut groups: BTreeMap<String, OwnerGroup> = BTreeMap::new();
     let mut detail: Vec<String> = Vec::new();
-    let mut consumed: Vec<(std::path::PathBuf, Vec<String>)> = Vec::new();
+    let mut consumed: Vec<(std::path::PathBuf, Vec<String>, Option<FileIdentity>)> = Vec::new();
     let paths = crate::territory::workspace_paths(config_cwd);
     // Every workspace project root, plus the config root itself: a repo
     // outside the workspace map still sweeps, and its result must reach an
@@ -614,33 +673,55 @@ pub(crate) fn run_pass(
         if !seen.insert(fno_dir.clone()) {
             continue;
         }
-        if let Some((path, fed)) = consume_file(
+        if let Some((path, fed, dropped, identity)) = consume_file(
             &fno_dir.join(".reconcile-result.json"),
             &w,
             &mut groups,
             ReconcileReader,
         ) {
-            consumed.push((path, fed));
+            if dropped > 0 {
+                detail.push(format!("suppressed {} settled-node warning(s)", dropped));
+            }
+            consumed.push((path, fed, identity));
         }
-        if let Some((path, fed)) = consume_file(
+        if let Some((path, fed, dropped, identity)) = consume_file(
             &fno_dir.join(".orphan-plans-result.json"),
             &w,
             &mut groups,
             OrphanReader,
         ) {
-            consumed.push((path, fed));
+            if dropped > 0 {
+                detail.push(format!("suppressed {} settled-node warning(s)", dropped));
+            }
+            consumed.push((path, fed, identity));
         }
     }
-    let (acted, terminal) = route_groups(groups, now, &mut detail);
-    // A result file is consumed only when every owner group it fed is
-    // terminal (delivered now, or inside the dedupe window): one
-    // undelivered group keeps the file on disk for the next tick, and the
-    // groups that did deliver dedupe through sent_recently.
-    for (path, fed) in consumed {
-        if fed.iter().all(|k| terminal.contains(k)) {
-            let shown = path.with_extension("json.shown");
-            let _ = std::fs::rename(&path, shown);
+    let (acted, terminal) = route_groups(groups, now, &mut detail, &sent);
+    // A result file is consumed when every owner group it fed is terminal
+    // (nothing unsent left, delivered now, or inside the dedupe window),
+    // or when the file is older than one reconcile period: one
+    // undelivered group must not hold a stale file open forever, and its
+    // warnings got this pass's delivery attempt just above.
+    for (path, fed, identity) in consumed {
+        let all_terminal = fed.iter().all(|k| terminal.contains(k));
+        if !consume_decision(all_terminal, file_age_secs(&path, now)) {
+            continue;
         }
+        // Rename only the instance that was read: the writer publishes by
+        // replacing the path, so a swap between the read and this rename
+        // must leave the fresh file for the next pass, never consume it
+        // uninspected.
+        if path_identity(&path) != identity {
+            continue;
+        }
+        if !all_terminal {
+            detail.push(format!(
+                "consumed a result file older than {}s with undelivered warning(s)",
+                RECONCILE_PERIOD_S
+            ));
+        }
+        let shown = path.with_extension("json.shown");
+        let _ = std::fs::rename(&path, shown);
     }
     if acted == 0 && detail.is_empty() {
         return Ok(crate::lead_wake::Outcome {
@@ -677,20 +758,44 @@ impl ResultReader for OrphanReader {
     }
 }
 
-/// Read one result file, group its warnings under their owners, and return
-/// the path plus the group keys it fed, for the caller to rename once
-/// every fed group is terminal. A file that does not exist, or that
-/// parses to nothing, contributes nothing.
+/// Read one result file, drop the warnings whose node the world read says
+/// is settled (done or superseded), group the rest under their owners one
+/// row per distinct warning, and return the path, the group keys it fed,
+/// and the dropped count. The caller renames the file once every fed
+/// group is terminal, or once the file ages past one reconcile period. A
+/// file that does not exist contributes nothing.
 fn consume_file(
     path: &Path,
     w: &crate::owner_ladder::World,
     groups: &mut BTreeMap<String, OwnerGroup>,
     reader: impl ResultReader,
-) -> Option<(std::path::PathBuf, Vec<String>)> {
-    let raw = std::fs::read_to_string(path).ok()?;
+) -> Option<(std::path::PathBuf, Vec<String>, usize, Option<FileIdentity>)> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let identity = file_identity(&file);
+    let mut raw = String::new();
+    {
+        use std::io::Read;
+        file.read_to_string(&mut raw).ok()?;
+    }
     let warnings = reader.read(&raw);
+    let mut dropped = 0usize;
+    let warnings: Vec<Warning> = warnings
+        .into_iter()
+        .filter(|warning| {
+            let settled = warning_settled(warning, w);
+            dropped += settled as usize;
+            !settled
+        })
+        .collect();
     if warnings.is_empty() {
-        return None;
+        if dropped == 0 {
+            // Nothing routable and nothing settled (malformed or empty
+            // payload): keep the file on disk, as before - a future
+            // reader may understand a shape this reader does not.
+            return None;
+        }
+        // Every row settled: report the path so the caller consumes it.
+        return Some((path.to_path_buf(), Vec::new(), dropped, identity));
     }
     let mut fed: Vec<String> = Vec::new();
     for warning in warnings {
@@ -710,16 +815,93 @@ fn consume_file(
         if !fed.contains(&key) {
             fed.push(key.clone());
         }
-        groups
-            .entry(key)
-            .or_insert(OwnerGroup {
-                owner,
-                warnings: Vec::new(),
-            })
-            .warnings
-            .push(warning);
+        let group = groups.entry(key).or_insert(OwnerGroup {
+            owner,
+            warnings: Vec::new(),
+        });
+        // One row per distinct warning in a group: the same
+        // kind:node:cause twice (two buckets, two roots) mails once.
+        let duplicate = group.warnings.iter().any(|existing| {
+            existing.kind == warning.kind
+                && existing.node == warning.node
+                && existing.cause == warning.cause
+        });
+        if !duplicate {
+            group.warnings.push(warning);
+        }
     }
-    Some((path.to_path_buf(), fed))
+    Some((path.to_path_buf(), fed, dropped, identity))
+}
+
+/// The file instance a consume decision names: the fields that change when
+/// the writer replaces the path between the read and the rename. Read off
+/// the open handle, so it describes what was parsed, never whatever sits
+/// at the path later.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct FileIdentity {
+    dev: u64,
+    ino: u64,
+    mtime: i64,
+    len: u64,
+}
+
+/// Identity of what an open handle holds: immune to a later path swap.
+fn file_identity(file: &std::fs::File) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = file.metadata().ok()?;
+    Some(FileIdentity {
+        dev: meta.dev(),
+        ino: meta.ino(),
+        mtime: meta.mtime(),
+        len: meta.len(),
+    })
+}
+
+/// Identity of whatever sits at the path right now.
+fn path_identity(path: &Path) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).ok()?;
+    Some(FileIdentity {
+        dev: meta.dev(),
+        ino: meta.ino(),
+        mtime: meta.mtime(),
+        len: meta.len(),
+    })
+}
+
+/// True when the world read says the warning's node is settled: status
+/// done or superseded. A node absent from the entries is never settled
+/// here - absence of evidence is not done.
+fn warning_settled(warning: &Warning, w: &crate::owner_ladder::World) -> bool {
+    let Some(node) = warning.node.as_deref() else {
+        return false;
+    };
+    w.entries.iter().any(|entry| {
+        entry.get("id").and_then(Value::as_str) == Some(node)
+            && matches!(
+                entry.get("status").and_then(Value::as_str),
+                Some("done") | Some("superseded")
+            )
+    })
+}
+
+/// Seconds since the file was last written, or None when unreadable (an
+/// unreadable mtime counts as fresh).
+fn file_age_secs(path: &Path, now: i64) -> Option<i64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let mtime = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    Some(now - mtime)
+}
+
+/// Consume a result file when every group it fed is terminal, or when the
+/// file is older than one reconcile period: a still-true condition gets a
+/// fresh file from the next sweep, so holding a stale file open behind an
+/// undelivered group only re-feeds old rows.
+fn consume_decision(all_terminal: bool, age_secs: Option<i64>) -> bool {
+    all_terminal || age_secs.is_some_and(|age| age >= RECONCILE_PERIOD_S)
 }
 
 // --- repeat-failure and banner fold (change 4) -----------------------------
@@ -1519,11 +1701,14 @@ mod tests {
         // AC11: the same fingerprint is not resent inside the open window.
         let _root = crate::paths::DeclaredRoot::declare("notice_sent_dedupe");
         let fp = fingerprint_of(&warnings);
-        assert!(!sent_recently(&fp));
-        record_sent(&fp, "scope-a", now_epoch());
-        assert!(sent_recently(&fp));
+        let now = now_epoch();
+        let sent = read_sent();
+        assert!(!sent_recently_in(&sent, &fp, now));
+        record_sent(&fp, "scope-a", now);
+        let sent = read_sent();
+        assert!(sent_recently_in(&sent, &fp, now));
         let other = fingerprint_of(&orphan_warnings);
-        assert!(!sent_recently(&other));
+        assert!(!sent_recently_in(&sent, &other, now));
 
         // The key: digits and hex runs collapse to one token, so a count
         // or an id inside the error never splits one failure in two.
@@ -1719,5 +1904,157 @@ mod tests {
         assert_ne!(fingerprint_a, fingerprint_b);
         let fingerprint_again = fingerprint_of(&group.warnings);
         assert_eq!(fingerprint_a, fingerprint_again);
+    }
+
+    /// The mail-discipline fixes: settled-node rows drop at consume, a
+    /// stale file's consume decision, per-warning dedupe against a
+    /// re-partition, and one row per distinct warning in a group.
+    #[test]
+    fn mail_discipline_settled_stale_and_per_warning_dedupe() {
+        let _root = crate::paths::DeclaredRoot::declare("notice_mail_discipline");
+        let now = 1_700_000_000_i64;
+
+        // A world whose entries mark n-1 done; n-2 is open; n-3 rides no
+        // entry at all.
+        let w = crate::owner_ladder::World {
+            teams: Vec::new(),
+            entries: vec![serde_json::json!({"id": "n-1", "status": "done"})],
+            projects: Ok(std::collections::HashMap::new()),
+            beats: BTreeMap::new(),
+            load: BTreeMap::new(),
+            now,
+        };
+
+        // Settled-node drop: n-1's row never survives the filter; the
+        // open and the entry-less rows do.
+        let raw = serde_json::json!({
+            "promise_unmet": [
+                {"node_id": "n-1"},
+                {"node_id": "n-2"},
+                {"node_id": "n-3"}
+            ]
+        })
+        .to_string();
+        let warnings = read_reconcile(&raw);
+        assert_eq!(warnings.len(), 3);
+        let kept: Vec<&Warning> = warnings
+            .iter()
+            .filter(|warn| !warning_settled(warn, &w))
+            .collect();
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|warn| warn.node.as_deref() != Some("n-1")));
+
+        // Per-warning keys: the same triple is one key under any
+        // partition; a changed cause mints a new one.
+        let a = Warning {
+            kind: "promise_unmet",
+            node: Some("n-2".to_string()),
+            cause: "cause one".to_string(),
+        };
+        let a_again = a.clone();
+        let a_changed = Warning {
+            kind: "promise_unmet",
+            node: Some("n-2".to_string()),
+            cause: "cause two".to_string(),
+        };
+        assert_eq!(warning_fingerprint(&a), warning_fingerprint(&a_again));
+        assert_ne!(warning_fingerprint(&a), warning_fingerprint(&a_changed));
+
+        // Re-partition immunity: a delivered key in the sent map keeps
+        // the warning out of the unsent slice even inside a group put
+        // together under a different owner resolution.
+        let b = Warning {
+            kind: "promise_unmet",
+            node: Some("n-3".to_string()),
+            cause: "cause three".to_string(),
+        };
+        let mut sent = BTreeMap::new();
+        sent.insert(
+            warning_fingerprint(&a),
+            serde_json::json!({"scope": "s", "ts": now}),
+        );
+        let repartitioned = OwnerGroup {
+            owner: crate::owner_ladder::Owner {
+                rung: crate::owner_ladder::Rung::User,
+                scope: Some("s".to_string()),
+                holder: None,
+                session: None,
+            },
+            warnings: vec![a.clone(), b.clone()],
+        };
+        let unsent = unsent_of(&repartitioned, &sent, now);
+        assert_eq!(unsent.len(), 1);
+        assert_eq!(unsent[0].node.as_deref(), Some("n-3"));
+        // The long quiet window: inside it the warning stays deduped;
+        // past it the unchanged cause re-notifies.
+        assert!(sent_recently_in(
+            &sent,
+            &warning_fingerprint(&a),
+            now + NOTICE_OPEN_SECS - 1
+        ));
+        assert!(!sent_recently_in(
+            &sent,
+            &warning_fingerprint(&a),
+            now + NOTICE_OPEN_SECS + 1
+        ));
+
+        // The stale-file consume decision: terminal consumes at any age;
+        // an unterminated group consumes only past one reconcile period;
+        // an unreadable mtime stays fresh.
+        assert!(consume_decision(true, None));
+        assert!(!consume_decision(false, None));
+        assert!(!consume_decision(false, Some(RECONCILE_PERIOD_S - 1)));
+        assert!(consume_decision(false, Some(RECONCILE_PERIOD_S)));
+
+        // One row per distinct warning in a group: the same triple twice
+        // in one file (or across roots) mails once.
+        let res = _root.path().join("dup-result.json");
+        std::fs::write(
+            &res,
+            serde_json::json!({
+                "promise_unmet": [
+                    {"node_id": "n-9"},
+                    {"node_id": "n-9"}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut groups = BTreeMap::new();
+        let (_, fed, dropped, identity) =
+            consume_file(&res, &w, &mut groups, ReconcileReader).expect("readable result file");
+        assert_eq!(dropped, 0);
+        assert_eq!(fed.len(), 1);
+        let group = groups.values().next().expect("one group");
+        assert_eq!(group.warnings.len(), 1);
+        // The identity names the instance that was read: equal to the
+        // path's identity now, unequal after the writer replaces it.
+        assert_eq!(identity, path_identity(&res));
+        std::fs::write(&res, "{\"promise_unmet\": []}").unwrap();
+        assert_ne!(identity, path_identity(&res));
+
+        // A file whose every row is settled reports an empty fed list, so
+        // the caller consumes it with nothing routed.
+        let done_res = _root.path().join("done-result.json");
+        std::fs::write(
+            &done_res,
+            serde_json::json!({"promise_unmet": [{"node_id": "n-1"}]}).to_string(),
+        )
+        .unwrap();
+        let mut done_groups = BTreeMap::new();
+        let (_, fed_done, dropped_done, _) =
+            consume_file(&done_res, &w, &mut done_groups, ReconcileReader)
+                .expect("readable result file");
+        assert_eq!(dropped_done, 1);
+        assert!(fed_done.is_empty());
+        assert!(done_groups.is_empty());
+
+        // A payload this reader cannot route and cannot settle stays on
+        // disk: a future reader may understand the shape.
+        let bad_res = _root.path().join("bad-result.json");
+        std::fs::write(&bad_res, "{not json").unwrap();
+        let mut bad_groups = BTreeMap::new();
+        let bad = consume_file(&bad_res, &w, &mut bad_groups, ReconcileReader);
+        assert!(bad.is_none());
     }
 }

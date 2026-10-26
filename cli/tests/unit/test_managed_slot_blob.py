@@ -95,7 +95,7 @@ class TestReadSlotBlobResidue:
         # An alternate config_dir's credential lives only in its scoped item; the
         # unscoped item is the DEFAULT ~/.claude account's. A scoped residue must
         # NOT fall through to the default's live token (misattribution) - refuse,
-        # matching account_env._login_present's scoped-only read of a dir.
+        # matching the overlay login check's scoped-only read of a dir.
         _darwin_slot(
             monkeypatch,
             {"scoped": _residue(), managed._CLAUDE_KEYCHAIN_SERVICE: _live("default-token")},
