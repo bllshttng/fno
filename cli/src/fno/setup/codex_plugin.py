@@ -19,8 +19,8 @@ from typing import Any, Callable, Iterator
 
 import fno.paths as paths
 
-MARKETPLACE = "footnote"
-PLUGIN_ID = "fno@footnote"
+MARKETPLACE = "fno"
+PLUGIN_ID = "fno@fno"
 RELEASE_MARKETPLACE = MARKETPLACE
 RELEASE_SOURCE = "bllshttng/fno"
 RELEASE_REF = "stable"  # the bare repo's default branch is slow and can time out
@@ -30,7 +30,11 @@ DEV_PLUGIN_ID = PLUGIN_ID
 LEGACY_DEV_MARKETPLACE = "footnote-dev"
 LEGACY_DEV_PLUGIN_ID = "fno@footnote-dev"
 LEGACY_PLUGIN_ID = "fno@footnote-local"
-OWNED_PLUGIN_IDS = frozenset({PLUGIN_ID, LEGACY_DEV_PLUGIN_ID, LEGACY_PLUGIN_ID})
+# "footnote" is the marketplace name before the rename to "fno"; install migrates it.
+LEGACY_MARKETPLACES = frozenset({LEGACY_DEV_MARKETPLACE, "footnote"})
+OWNED_MARKETPLACES = frozenset({MARKETPLACE, *LEGACY_MARKETPLACES})
+LEGACY_PLUGIN_IDS = frozenset({LEGACY_DEV_PLUGIN_ID, LEGACY_PLUGIN_ID, "fno@footnote"})
+OWNED_PLUGIN_IDS = frozenset({PLUGIN_ID, *LEGACY_PLUGIN_IDS})
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 _OUTPUT_LIMIT = 500
@@ -461,7 +465,7 @@ def _read_owned_config(home: Path) -> _OwnedConfig:
             {
                 key: value
                 for key, value in marketplaces.items()
-                if key in {MARKETPLACE, LEGACY_DEV_MARKETPLACE}
+                if key in OWNED_MARKETPLACES
             }
         ),
         plugins=copy.deepcopy(
@@ -476,7 +480,7 @@ def _without_owned_config(document: dict[str, object]) -> dict[str, object]:
     result = copy.deepcopy(document)
     marketplaces = result.get("marketplaces")
     if isinstance(marketplaces, dict):
-        for key in {MARKETPLACE, LEGACY_DEV_MARKETPLACE}:
+        for key in OWNED_MARKETPLACES:
             marketplaces.pop(key, None)
         if not marketplaces:
             result.pop("marketplaces", None)
@@ -504,7 +508,7 @@ def _restore_owned_config(home: Path, snapshot: _OwnedConfig) -> None:
         current_marketplaces = {
             key: value
             for key, value in marketplaces.items()
-            if key in {MARKETPLACE, LEGACY_DEV_MARKETPLACE}
+            if key in OWNED_MARKETPLACES
         }
         current_plugins = {key: value for key, value in plugins.items() if key in OWNED_PLUGIN_IDS}
         if current_marketplaces == snapshot.marketplaces and current_plugins == snapshot.plugins:
@@ -566,7 +570,7 @@ def _discard_cache_backup_best_effort(item: _CacheQuarantine) -> None:
 
 
 def _owned_marketplace(marketplace: Marketplace) -> bool:
-    return marketplace.name in {MARKETPLACE, LEGACY_DEV_MARKETPLACE}
+    return marketplace.name in OWNED_MARKETPLACES
 
 
 def _normalized_source(source_type: str, source: str) -> tuple[str, str]:
@@ -664,13 +668,13 @@ def _restore_snapshot(
                     env=env,
                 )
             except CodexPluginError as exc:
-                if plugin.plugin_id != LEGACY_DEV_PLUGIN_ID:
+                if plugin.plugin_id not in LEGACY_PLUGIN_IDS:
                     raise
                 config_restore_needed = True
                 legacy_restore_error = exc
     if snapshot.config.marketplaces or snapshot.config.plugins or config_restore_needed:
         _restore_owned_config(home, snapshot.config)
-    for cache_name in {MARKETPLACE, LEGACY_DEV_MARKETPLACE} - snapshot.cache_names:
+    for cache_name in OWNED_MARKETPLACES - snapshot.cache_names:
         introduced_cache = home / "plugins" / "cache" / cache_name
         if introduced_cache.is_symlink():
             raise CodexPluginError("rollback-cache", f"refusing non-directory {introduced_cache}")
@@ -839,6 +843,10 @@ def inspect_freshness(
         or len(owned_marketplaces) > 1
         or any(marketplace.name == LEGACY_DEV_MARKETPLACE for marketplace in owned_marketplaces)
     )
+    if [p.plugin_id for p in installed] == ["fno@footnote"] and len(owned_marketplaces) <= 1:
+        channel = str(marker.get("channel", "release")) if marker else "release"
+        ids = {"enabled_plugin_ids": [p.plugin_id for p in enabled], "remedy": _remedy(channel)}
+        return {**ids, "status": "stale", "issue": "legacy-marketplace"}
     if ambiguous:
         conflict_channel = str(marker.get("channel", "unknown")) if marker else "unknown"
         return {
@@ -986,7 +994,7 @@ def converge(
             config=_read_owned_config(home),
             cache_names=frozenset(
                 name
-                for name in (MARKETPLACE, LEGACY_DEV_MARKETPLACE)
+                for name in OWNED_MARKETPLACES
                 if (home / "plugins" / "cache" / name).is_dir()
             ),
         )
@@ -1016,7 +1024,7 @@ def converge(
             and ref_ok
         )
         legacy_marketplaces = [
-            item for item in state.marketplaces if item.name == LEGACY_DEV_MARKETPLACE
+            item for item in state.marketplaces if item.name in LEGACY_MARKETPLACES
         ]
         selected_ok = (
             selected is not None
@@ -1038,8 +1046,8 @@ def converge(
             and marker.get("source") == marketplace_source
             and marker.get("ref") == marketplace_ref
         )
-        legacy_cache = home / "plugins" / "cache" / LEGACY_DEV_MARKETPLACE
-        legacy_cache_present = legacy_cache.exists() or legacy_cache.is_symlink()
+        legacy_caches = [home / "plugins" / "cache" / name for name in LEGACY_MARKETPLACES]
+        legacy_cache_present = any(p.exists() or p.is_symlink() for p in legacy_caches)
         no_op = (
             channel_stable
             and marker_matches
@@ -1086,7 +1094,7 @@ def converge(
                 changed = True
                 _clear_rollback_receipt(home)
             for cache_name in (
-                LEGACY_DEV_MARKETPLACE,
+                *sorted(LEGACY_MARKETPLACES),
                 *(() if not needs_install else (MARKETPLACE,)),
             ):
                 quarantine = _quarantine_cache(home, cache_name)

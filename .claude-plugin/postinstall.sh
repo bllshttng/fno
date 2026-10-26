@@ -145,7 +145,7 @@ shim_sweep() {
   # An installed fno predating the sweep module has nothing to sweep.
   "$py" -c "import fno.setup.shim_check" 2>/dev/null || return 0
   "$py" -m fno.setup.shim_check --repair --bin-dir "$td" && return 0
-  err "fno shims in $td dangle or point into a temp dir and could not be relinked to the durable copy. Inspect: $py -m fno.setup.shim_check --bin-dir $td"
+  err "fno shims in $td are missing, dangle, or point into a temp dir and could not be relinked to the durable copy. Inspect: $py -m fno.setup.shim_check --bin-dir $td"
   return 1
 }
 

@@ -355,8 +355,10 @@ fn cached_status_via(
     }
     // Miss: the ONE live read under the per-key lock; queued pollers re-read
     // the fresh row after.
-    let lock_path = dir.join(format!("{key}.lock"));
-    let _lock = crate::gh_budget::FileLock::acquire(&lock_path);
+    let _lock = match miss_lock(&dir, &key, &slug_key, pr, None) {
+        Ok(lock) => lock,
+        Err(answer) => return into_answer(answer, probe.calls.load(Ordering::SeqCst)),
+    };
     let prior = read_row(&dir, &key)
         .and_then(|row| row.get("output").cloned())
         .filter(|v| v.is_object());
@@ -379,6 +381,54 @@ fn cached_status_via(
         Some(&pulls),
         hold_state,
     )
+}
+
+/// The per-key miss lock, or the answer to give when it stays held past its
+/// retry bound. `tries` is None for the real bound.
+fn miss_lock(
+    dir: &Path,
+    key: &str,
+    slug_key: &str,
+    pr: u64,
+    tries: Option<u32>,
+) -> Result<crate::gh_budget::FileLock, (i32, String, String)> {
+    let path = dir.join(format!("{key}.lock"));
+    let locked = match tries {
+        Some(n) => crate::gh_budget::FileLock::try_acquire_with(&path, n, 0),
+        None => crate::gh_budget::FileLock::try_acquire(&path),
+    };
+    locked.map_err(|why| contended_serve(dir, key, slug_key, pr, &why))
+}
+
+/// The miss lock stayed held past its retry bound. The answer is a wait, never
+/// a panic: the newest row degraded to unknown, or a bare unknown when no row
+/// exists. Both read `settled: false`, so a watcher polls again next tick.
+fn contended_serve(
+    dir: &Path,
+    key: &str,
+    slug_key: &str,
+    pr: u64,
+    why: &str,
+) -> (i32, String, String) {
+    let reason = format!("the status cache lock is busy ({why}); this is no verdict, read again");
+    let served = read_row(dir, key)
+        .or_else(|| newest_row(dir, slug_key, &pr.to_string()))
+        .and_then(|row| serve(&row, true));
+    let (mut out, stderr) = match served {
+        Some((_, stdout, stderr)) => (
+            serde_json::from_str::<Value>(stdout.trim()).unwrap_or_else(|_| json!({})),
+            stderr,
+        ),
+        None => (
+            json!({"pr": pr.to_string(), "verdict": "unknown", "green": false, "settled": false, "ready": false}),
+            String::new(),
+        ),
+    };
+    out["ready_blockers"] = json!(["status_lock_busy"]);
+    out["stale_reason"] = json!(reason);
+    let stdout = format!("{}\n", serde_json::to_string(&out).unwrap_or_default());
+    let stderr = format!("{stderr}\nnote: {reason}").trim_start().to_string();
+    (3, stdout, stderr)
 }
 
 /// A peer host holds the poller lease and shared a row young enough to
@@ -768,6 +818,30 @@ mod tests {
         for d in [peer_dir, dir] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    /// A miss lock held elsewhere answers a wait, never a panic: with no row
+    /// a bare unknown, with a row that row degraded. Both are unsettled.
+    #[test]
+    fn a_held_miss_lock_answers_unsettled_instead_of_panicking() {
+        let dir = temp_cache_dir("contended");
+        let key = "Owner--Repo-42-aaaaaaaa1111";
+        let _held = crate::gh_budget::FileLock::try_acquire(&dir.join(format!("{key}.lock")))
+            .expect("the test holds the lock");
+
+        let (code, stdout, _) = miss_lock(&dir, key, "Owner--Repo", 42, Some(1))
+            .expect_err("a held lock answers instead of locking");
+        assert_eq!(code, 3);
+        assert!(stdout.contains("\"settled\":false"), "{stdout}");
+        assert!(stdout.contains("status_lock_busy"), "{stdout}");
+
+        seed_row(&dir, key, "aaaaaaaa1111");
+        let (code, stdout, _) = miss_lock(&dir, key, "Owner--Repo", 42, Some(1))
+            .expect_err("a held lock answers instead of locking");
+        assert_eq!(code, 3);
+        assert!(stdout.contains("\"settled\":false"), "{stdout}");
+        assert!(stdout.contains("\"stale_verdict\":\"green\""), "{stdout}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The zero-network tick's serve: a young row minted FOR the required

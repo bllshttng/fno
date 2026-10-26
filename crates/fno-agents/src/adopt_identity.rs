@@ -142,7 +142,6 @@ fn journal_agent_revived(
 pub(crate) fn synthesize_and_adopt(
     session_id: &str,
     home: &AgentsHome,
-    cross_project: bool,
 ) -> Result<(Value, Option<String>, AdoptSource), AdoptError> {
     let registry_path = home.registry_json();
     let entries =
@@ -165,7 +164,7 @@ pub(crate) fn synthesize_and_adopt(
         return Ok((value, None, AdoptSource::Manifest));
     }
     // 3. Harness session stores (heal-token adopts best-effort and writes the row).
-    match heal_token(session_id, &registry_path, cross_project, None) {
+    match heal_token(session_id, &registry_path, None) {
         Ok(Some(row)) => Ok((row, None, AdoptSource::HarnessStore)),
         Ok(None) => Err(AdoptError::NoEvidence),
         Err(msg) => Err(AdoptError::Io(msg)),
@@ -350,7 +349,7 @@ mod tests {
         let old_path = std::env::var_os("PATH");
         std::env::set_var("PATH", crate::path_with(bin_dir.path()));
 
-        let result = crate::adopt_identity::synthesize_and_adopt(sid, &home, false);
+        let result = crate::adopt_identity::synthesize_and_adopt(sid, &home);
 
         match old_path {
             Some(value) => std::env::set_var("PATH", value),

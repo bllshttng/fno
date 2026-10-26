@@ -42,7 +42,7 @@ agents logs
 agents loop
 agents loop-check
 agents needs
-agents resume
+agents resume !--cross-project
 agents rm !--audit-actor !--audit-reason !--audit-reclaimed-bytes !--audit-request-id !--audit-worktree-touched
 agents spawn !--bounded-placement !--deny-tools !--mux-session !--output-format !--provider !--recorded-provider !--resume !--yolo
 annotate
@@ -87,12 +87,9 @@ inbox user ack
 inbox user list
 inbox user status
 lead board
-lead cancel
 lead done
 lead drain
 lead escalate
-lead init
-lead term
 lint
 loops
 loops resume-all
@@ -111,7 +108,6 @@ resume
 roles
 route
 scoreboard
-setup
 state
 status
 status-fanout tick

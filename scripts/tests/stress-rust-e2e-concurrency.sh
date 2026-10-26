@@ -55,6 +55,12 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 }
 cd "$repo_root" || exit 2
 
+# The smoke sandbox pins the cargo build-dir inside its throwaway HOME under
+# TMPDIR, and a runner's /tmp carries a size quota a full dependency-graph
+# debug build exceeds (os error 122 mid-build). The workspace target dir rides
+# the main disk; the smoke shards pin the same way for their journey builds.
+export CARGO_BUILD_BUILD_DIR="$repo_root/target"
+
 # A dirty tree cannot be pinned to a sha, so the trials would measure something
 # nobody can name. That is a reason to stand down, NOT a reason to go red: this
 # file is auto-discovered by `fno doctor test smoke` (the scripts/tests/*.sh
@@ -86,6 +92,8 @@ build_test_binary() {
     local candidate
     if ! cargo test --manifest-path "$manifest" --test "$test_name" --no-run --message-format=json >>"$build_log" 2>&1; then
         echo "stress_setup=unavailable binary=$key log=$build_log" >&2
+        # The failure reason lives only in this file, which dies with the runner: say the tail here so CI names the compile-or-link error.
+        tail -40 "$build_log" >&2 || true
         if grep -Eq 'Blocking waiting for file lock|could not acquire.*lock|resource temporarily unavailable' "$build_log"; then
             echo "stress_setup_note=cargo-artifact-lock-contention (not counted as a test failure)" >&2
         fi

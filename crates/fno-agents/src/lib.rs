@@ -102,6 +102,7 @@ pub(crate) mod cargo_orphans;
 pub mod census;
 pub mod chats;
 pub mod check_supersession;
+pub mod ci_cadence;
 pub mod claim_cli;
 pub mod claim_commands;
 pub mod claim_lanes_cli;
@@ -198,6 +199,7 @@ pub mod fleet_load;
 pub mod fleet_page;
 pub mod fleet_task;
 pub mod flight_gate;
+pub(crate) mod fnod;
 pub mod footnote_harness;
 pub mod footnote_transcript;
 pub(crate) mod footprint_cache;
@@ -250,6 +252,7 @@ pub mod intel_html;
 pub mod intel_insights;
 pub mod intel_lens;
 pub mod intel_rollup;
+pub mod intel_rules_lens;
 pub mod intel_scorecard;
 pub mod interrupt_classify;
 pub mod join_marker;
@@ -276,6 +279,7 @@ pub mod lead_eval;
 pub mod lead_goal;
 pub mod lead_history;
 pub mod lead_hygiene;
+pub mod lead_lifecycle;
 pub mod lead_mail;
 pub mod lead_pushback;
 pub mod lead_reads;
@@ -571,6 +575,7 @@ pub mod subscribe;
 pub mod succession_txn;
 pub mod supervisor;
 pub mod surface_check;
+pub mod symptom_recheck;
 pub mod sync_canonical;
 pub mod system_sender;
 pub mod target_blast;
@@ -1801,6 +1806,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // dedupe memory the arm folds before it wakes again (lead_wake.rs).
     "lead_wake",
     "worker_wake",
+    // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
+    "pr_push_landed",
+    "ci_cadence_check",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
