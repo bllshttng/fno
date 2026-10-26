@@ -282,6 +282,7 @@ pub mod lead_history;
 pub mod lead_hygiene;
 pub mod lead_lifecycle;
 pub mod lead_mail;
+pub mod lead_ops;
 pub mod lead_pushback;
 pub mod lead_reads;
 pub mod lead_settle;
