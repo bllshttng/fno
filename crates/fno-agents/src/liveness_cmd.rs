@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn verdict_ladder_and_absent() {
-        // The door owns every verdict; the verb only words it. A reaped pid
+        // The door owns every verdict; this command only words it. A reaped pid
         // finishes the row even with a fresh transcript; evidence-free reads
         // unknown, never dead; a handle nothing answers for is its own word.
         let gone = crate::row_verdict::reaped_pid();
