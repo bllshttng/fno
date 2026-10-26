@@ -201,45 +201,35 @@ pub(crate) fn read_evidence_since(
 ) -> Result<Vec<Evidence>, String> {
     let mut types = vec![WATCH_IDLE, WAKE_EVENT];
     types.extend_from_slice(ACTIVITY_AND_TERMINAL);
+    let since_ms = Some(now_ms.saturating_sub(window_ms));
     let query = crate::event_store::EventQuery {
-        since_ms: Some(now_ms.saturating_sub(window_ms)),
+        since_ms,
         limit: Some(MAX_EVENTS + 1),
         ..crate::event_store::EventQuery::of_types(&types)
     };
     let global_events = crate::daemon::global_events_path(home);
-    if !crate::event_store::store_path(&global_events).is_file()
-        && std::fs::metadata(&global_events)
-            .map(|metadata| metadata.len() > MAX_LIVE_JOURNAL_BYTES)
-            .unwrap_or(false)
-    {
-        return Err(format!(
-            "watch expiry live journal exceeds {MAX_LIVE_JOURNAL_BYTES} bytes"
-        ));
+    let mut rows = journal_rows(&global_events, &query)?;
+    // The daemon journals its own stops and exits in the agents home, not
+    // the global stream the hooks write. Without this read every
+    // `agent_stopped` row is invisible here, so a stop never exempts a row.
+    // Watch declarations stay global-only: a watch is the hook's to arm.
+    let daemon_events = home.events_jsonl();
+    if daemon_events != global_events {
+        let terminal = crate::event_store::EventQuery {
+            since_ms,
+            limit: Some(MAX_EVENTS + 1),
+            ..crate::event_store::EventQuery::of_types(DAEMON_TERMINAL)
+        };
+        rows.extend(journal_rows(&daemon_events, &terminal)?);
     }
-    let text = crate::event_store::journal_text_checked(&global_events, &query)?;
-    let lines: Vec<&str> = text
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-    if lines.len() > MAX_EVENTS as usize {
+    if rows.len() > MAX_EVENTS as usize {
         return Err(format!(
             "watch expiry event window exceeds {MAX_EVENTS} rows"
         ));
     }
-    // Recovery provenance re-serializes store rows, but a wake receipt names
-    // the hash of the stored line, so identity hashes that line instead.
-    let stored_lines: std::collections::HashMap<i64, String> = if text.contains("\"_store_seq\"") {
-        crate::event_store::query_events(&global_events, &query)?
-            .into_iter()
-            .map(|row| (row.seq, row.line))
-            .collect()
-    } else {
-        Default::default()
-    };
-    lines
-        .into_iter()
-        .enumerate()
-        .map(|(index, line)| {
+    let mut evidence = rows
+        .iter()
+        .map(|(line, stored_line)| {
             let value: Value = serde_json::from_str(line)
                 .map_err(|error| format!("watch expiry event row is invalid: {error}"))?;
             // A row known only through the recovered store replay is copied
@@ -262,14 +252,9 @@ pub(crate) fn read_evidence_since(
             if ts_ms > now_ms {
                 return Err("watch expiry event has a future timestamp".to_string());
             }
-            let stored_line = value
-                .get("_store_seq")
-                .and_then(Value::as_i64)
-                .and_then(|seq| stored_lines.get(&seq))
-                .map_or(line, String::as_str);
             Ok(Some(Evidence {
                 event_id: event_id(stored_line),
-                seq: index as i64,
+                seq: 0,
                 ts_ms,
                 kind,
                 session_id,
@@ -281,7 +266,57 @@ pub(crate) fn read_evidence_since(
             Ok(Some(_)) | Ok(None) => None,
             Err(error) => Some(Err(error)),
         })
-        .collect()
+        .collect::<Result<Vec<_>, String>>()?;
+    // Two journals interleave by time; the stable sort keeps each journal's
+    // own order on a tie, and `seq` is the merged position.
+    evidence.sort_by_key(|row| row.ts_ms);
+    for (index, row) in evidence.iter_mut().enumerate() {
+        row.seq = index as i64;
+    }
+    Ok(evidence)
+}
+
+/// The kinds the daemon journals in the agents home that end a watch or
+/// stand quiet recovery down.
+const DAEMON_TERMINAL: &[&str] = &["agent_stopped", "agent_exited", "inside_leg_completed"];
+
+/// One journal's rows in the window, each with the line its identity hashes:
+/// recovery provenance re-serializes store rows, but a wake receipt names the
+/// hash of the stored line, so identity hashes that line instead.
+fn journal_rows(
+    journal: &std::path::Path,
+    query: &crate::event_store::EventQuery,
+) -> Result<Vec<(String, String)>, String> {
+    if !crate::event_store::store_path(journal).is_file()
+        && std::fs::metadata(journal)
+            .map(|metadata| metadata.len() > MAX_LIVE_JOURNAL_BYTES)
+            .unwrap_or(false)
+    {
+        return Err(format!(
+            "watch expiry live journal exceeds {MAX_LIVE_JOURNAL_BYTES} bytes"
+        ));
+    }
+    let text = crate::event_store::journal_text_checked(journal, query)?;
+    let stored_lines: std::collections::HashMap<i64, String> = if text.contains("\"_store_seq\"") {
+        crate::event_store::query_events(journal, query)?
+            .into_iter()
+            .map(|row| (row.seq, row.line))
+            .collect()
+    } else {
+        Default::default()
+    };
+    Ok(text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let stored = serde_json::from_str::<Value>(line)
+                .ok()
+                .and_then(|value| value.get("_store_seq").and_then(Value::as_i64))
+                .and_then(|seq| stored_lines.get(&seq).cloned())
+                .unwrap_or_else(|| line.to_string());
+            (line.to_string(), stored)
+        })
+        .collect())
 }
 
 fn timestamp_ms(value: &Value) -> Option<i64> {
@@ -582,4 +617,61 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
             eprintln!("watch-expiry: {error}");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stage(path: &std::path::Path, row: Value) {
+        use std::io::Write;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        writeln!(f, "{row}").unwrap();
+    }
+
+    #[test]
+    fn a_daemon_stop_reaches_the_evidence_and_a_daemon_watch_does_not() {
+        // The daemon journals agent_stopped in the agents home; the hooks
+        // journal watches globally. A stop read only from the global stream
+        // left quiet recovery waking a worker its lead stopped.
+        let td = tempfile::TempDir::new().unwrap();
+        let home = AgentsHome::at(td.path().join("agents"));
+        let now = millis_now();
+        let ts = chrono::Utc::now().to_rfc3339();
+        stage(
+            &crate::daemon::global_events_path(&home),
+            serde_json::json!({"ts": ts, "type": WATCH_IDLE, "source": "hook",
+                "data": {"session_id": "s-global", "node": "x-1", "blocker": "ci"}}),
+        );
+        stage(
+            &home.events_jsonl(),
+            serde_json::json!({"ts": ts, "type": "agent_stopped", "source": "daemon",
+                "data": {"name": "t-x-1-glm"}}),
+        );
+        stage(
+            &home.events_jsonl(),
+            serde_json::json!({"ts": ts, "type": WATCH_IDLE, "source": "hook",
+                "data": {"session_id": "s-daemon", "node": "x-2", "blocker": "ci"}}),
+        );
+        let evidence = read_evidence(&home, now + 1000).unwrap();
+        let stopped: Vec<_> = evidence
+            .iter()
+            .filter(|e| e.kind == "agent_stopped")
+            .filter_map(|e| e.data.get("name").and_then(Value::as_str))
+            .collect();
+        assert_eq!(stopped, vec!["t-x-1-glm"]);
+        let watched: Vec<_> = evidence
+            .iter()
+            .filter(|e| e.kind == WATCH_IDLE)
+            .filter_map(|e| e.session_id.as_deref())
+            .collect();
+        assert_eq!(watched, vec!["s-global"]);
+        let seqs: Vec<i64> = evidence.iter().map(|e| e.seq).collect();
+        assert_eq!(seqs, (0..evidence.len() as i64).collect::<Vec<_>>());
+    }
 }
