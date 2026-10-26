@@ -348,6 +348,22 @@ fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
+/// Each open node's project cwd: per-node plans-root resolution for the
+/// resident tick, whose replica spans projects.
+fn node_cwds(graph: &Path) -> Result<BTreeMap<String, String>, String> {
+    let conn = crate::backlog::open(graph)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, COALESCE(cwd, '') FROM nodes WHERE archived_at IS NULL \
+             AND status NOT IN ('done', 'superseded', 'deferred')",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
 /// Open nodes in this host's replica: id -> plan_path (may be empty).
 fn open_nodes(graph: &Path) -> Result<BTreeMap<String, String>, String> {
     let conn = crate::backlog::open(graph)?;
@@ -446,6 +462,7 @@ fn push(remote: &Remote, node: &str, stored: &str, body: &str, host: &str) -> Re
 /// write the bodies it lacks or has not touched since its last sync.
 pub(crate) fn sync_with(
     nodes: &BTreeMap<String, String>,
+    cwds: &BTreeMap<String, String>,
     remote: &Remote,
     host: &str,
     home: &Path,
@@ -456,12 +473,44 @@ pub(crate) fn sync_with(
     ensure_tables(remote)?;
     let mut primary = primary_rows(remote, host)?;
     let mut out = Outcome::default();
+    let mut roots: BTreeMap<String, Option<PathBuf>> = BTreeMap::new();
     for (node, plan_path) in nodes {
         let remote_row = primary.remove(node);
-        let stored = stored_form(plan_path, plans_root, home);
-        let local = plan_file(plan_path, home, plans_root)
-            .filter(|p| p.is_file())
-            .and_then(|p| std::fs::read_to_string(p).ok());
+        // Each node resolves against its own project's plans root: the
+        // resident tick walks one replica across projects.
+        let node_root: Option<PathBuf> = match cwds.get(node) {
+            Some(cwd) if !cwd.trim().is_empty() => match roots.get(cwd) {
+                Some(root) => root.clone(),
+                None => {
+                    let root = plans_root_for(Some(Path::new(cwd.as_str())));
+                    roots.insert(cwd.clone(), root.clone());
+                    root
+                }
+            },
+            _ => plans_root.map(Path::to_path_buf),
+        };
+        let node_root = node_root.as_deref();
+        let read_local = |p: &str| {
+            plan_file(p, home, node_root)
+                .filter(|p| p.is_file())
+                .and_then(|p| std::fs::read_to_string(p).ok())
+        };
+        let mut stored = stored_form(plan_path, node_root, home);
+        let mut local = read_local(plan_path);
+        if local.is_none() {
+            if let Some((row, _)) = &remote_row {
+                // The node binding may name the writer's path while the
+                // carrier placed the file at this host's own resolution:
+                // read that copy too, so an edit to it pushes or conflicts
+                // instead of being overwritten.
+                if row.plan_path != *plan_path {
+                    if let Some(body) = read_local(&row.plan_path) {
+                        local = Some(body);
+                        stored = row.plan_path.clone();
+                    }
+                }
+            }
+        }
         match (local, remote_row) {
             (Some(body), None) => {
                 push(remote, node, &stored, &body, host)?;
@@ -483,16 +532,14 @@ pub(crate) fn sync_with(
                     push(remote, node, &stored, &body, host)?;
                     out.pushed.push(node.clone());
                 } else if seen.as_deref() == Some(mine.as_str()) {
-                    pull_row(remote, node, host, home, plans_root, peers, ssh, &mut out)?;
+                    pull_row(remote, node, host, home, node_root, peers, ssh, &mut out)?;
                 } else {
                     out.conflicts.push(node.clone());
                 }
             }
             // The file is absent here (or the binding was lost): the
             // primary's row decides where it lands.
-            (None, Some(_)) => {
-                pull_row(remote, node, host, home, plans_root, peers, ssh, &mut out)?
-            }
+            (None, Some(_)) => pull_row(remote, node, host, home, node_root, peers, ssh, &mut out)?,
             // No row and no body: only the opt-in ssh rescue can still find
             // the file, asking a peer the seen ledger names.
             (None, None) => {
@@ -634,6 +681,7 @@ pub fn sync(graph: &Path) -> Result<Outcome, String> {
     let peers = ssh_peers();
     sync_with(
         &open_nodes(graph)?,
+        &node_cwds(graph)?,
         &remote,
         &host_key(),
         &home(),
@@ -687,6 +735,11 @@ mod tests {
         BTreeMap::new()
     }
 
+    /// No node carries a cwd: every node takes the pass-level plans root.
+    fn bare_cwds() -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
     #[test]
     fn a_pushed_plan_lands_where_the_peer_lacks_it_even_with_a_lost_binding() {
         let primary = test_primary::start();
@@ -699,6 +752,7 @@ mod tests {
         let a = replica(&[("x-1", plan_s)]);
         let out = sync_with(
             &a,
+            &bare_cwds(),
             &primary.remote,
             "a",
             home.path(),
@@ -713,6 +767,7 @@ mod tests {
         let b = replica(&[("x-1", "")]);
         let out = sync_with(
             &b,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home.path(),
@@ -726,6 +781,7 @@ mod tests {
         // A second pass is quiet: nothing moved.
         let out = sync_with(
             &a,
+            &bare_cwds(),
             &primary.remote,
             "a",
             home.path(),
@@ -747,6 +803,7 @@ mod tests {
         let b = replica(&[("x-1", plan_s)]);
         sync_with(
             &b,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home.path(),
@@ -760,6 +817,7 @@ mod tests {
         write_atomic(&plan, "v2").unwrap();
         let out = sync_with(
             &b,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home.path(),
@@ -774,6 +832,7 @@ mod tests {
         write_atomic(&plan, "v1").unwrap();
         sync_with(
             &b,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home.path(),
@@ -785,6 +844,7 @@ mod tests {
         push(&primary.remote, "x-1", plan_s, "v3", "a").unwrap();
         let out = sync_with(
             &b,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home.path(),
@@ -801,6 +861,7 @@ mod tests {
         let c = replica(&[("x-1", moved.to_str().unwrap())]);
         let out = sync_with(
             &c,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home.path(),
@@ -813,6 +874,7 @@ mod tests {
         assert_eq!(
             sync_with(
                 &c,
+                &bare_cwds(),
                 &primary.remote,
                 "b",
                 home.path(),
@@ -848,6 +910,7 @@ mod tests {
         let b = replica(&[("x-1", "/elsewhere/plans/p.md")]);
         let out = sync_with(
             &b,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home.path(),
@@ -915,6 +978,7 @@ mod tests {
         let a = replica(&[("x-1", plan.to_str().unwrap())]);
         let out = sync_with(
             &a,
+            &bare_cwds(),
             &primary.remote,
             "a",
             home_a.path(),
@@ -938,6 +1002,7 @@ mod tests {
         let b = replica(&[("x-1", plan.to_str().unwrap())]);
         let out = sync_with(
             &b,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home_b.path(),
@@ -953,6 +1018,7 @@ mod tests {
         // writer's path: the placed file already holds the row's hash.
         let out = sync_with(
             &b,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home_b.path(),
@@ -997,6 +1063,7 @@ mod tests {
         };
         let out = sync_with(
             &b,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home.path(),
@@ -1013,6 +1080,7 @@ mod tests {
         // With no peers configured nothing is asked, and the pass stays quiet.
         let out = sync_with(
             &b,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home.path(),
@@ -1087,6 +1155,7 @@ mod tests {
         let a = replica(&[("x-1", tilde.as_str())]);
         let out = sync_with(
             &a,
+            &bare_cwds(),
             &primary.remote,
             "a",
             home.path(),
@@ -1109,6 +1178,7 @@ mod tests {
         let b = replica(&[("x-1", absolute.as_str())]);
         let out = sync_with(
             &b,
+            &bare_cwds(),
             &primary.remote,
             "b",
             home.path(),
@@ -1118,5 +1188,138 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, Outcome::default());
+    }
+
+    #[test]
+    fn an_edit_to_the_placed_copy_pushes_instead_of_being_overwritten() {
+        let primary = test_primary::start();
+        let home_a = tempfile::tempdir().unwrap();
+        let home_b = tempfile::tempdir().unwrap();
+        let root_a = home_a.path().join("vault/fno/plans");
+        let root_b = home_b.path().join("vault/fno/plans");
+        std::fs::create_dir_all(&root_a).unwrap();
+        std::fs::create_dir_all(&root_b).unwrap();
+        let plan_a = root_a.join("20261021-portable-plans-row.md");
+        write_atomic(&plan_a, "v1").unwrap();
+        let a = replica(&[("x-1", plan_a.to_str().unwrap())]);
+        let out = sync_with(
+            &a,
+            &bare_cwds(),
+            &primary.remote,
+            "a",
+            home_a.path(),
+            Some(&root_a),
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
+        assert_eq!(out.pushed, vec!["x-1"]);
+        // B places the body under its own root, then edits that copy.
+        let placed = root_b.join("20261021-portable-plans-row.md");
+        let b = replica(&[("x-1", plan_a.to_str().unwrap())]);
+        let out = sync_with(
+            &b,
+            &bare_cwds(),
+            &primary.remote,
+            "b",
+            home_b.path(),
+            Some(&root_b),
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
+        assert_eq!(out.pulled, vec!["x-1"]);
+        write_atomic(&placed, "v2-from-b").unwrap();
+        // The edit pushes to the primary; it is never overwritten.
+        let out = sync_with(
+            &b,
+            &bare_cwds(),
+            &primary.remote,
+            "b",
+            home_b.path(),
+            Some(&root_b),
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
+        assert_eq!(out.pushed, vec!["x-1"]);
+        assert_eq!(
+            sha(&std::fs::read_to_string(&placed).unwrap()),
+            sha("v2-from-b")
+        );
+        // A takes B's edit on its next pass.
+        let out = sync_with(
+            &a,
+            &bare_cwds(),
+            &primary.remote,
+            "a",
+            home_a.path(),
+            Some(&root_a),
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
+        assert_eq!(out.pulled, vec!["x-1"]);
+        assert_eq!(
+            sha(&std::fs::read_to_string(&plan_a).unwrap()),
+            sha("v2-from-b")
+        );
+    }
+
+    #[test]
+    fn each_node_stores_relative_to_its_own_project_root() {
+        let primary = test_primary::start();
+        let home = tempfile::tempdir().unwrap();
+        let proj_a = tempfile::tempdir().unwrap();
+        let proj_b = tempfile::tempdir().unwrap();
+        let root_a = home.path().join("vault-a/plans");
+        let root_b = home.path().join("vault-b/plans");
+        std::fs::create_dir_all(&root_a).unwrap();
+        std::fs::create_dir_all(&root_b).unwrap();
+        std::fs::create_dir_all(proj_a.path().join(".claude")).unwrap();
+        std::fs::create_dir_all(proj_b.path().join(".claude")).unwrap();
+        std::fs::write(
+            proj_a.path().join(".claude/settings.local.json"),
+            format!("{{\"plansDirectory\": \"{}\"}}", root_a.display()),
+        )
+        .unwrap();
+        std::fs::write(
+            proj_b.path().join(".claude/settings.local.json"),
+            format!("{{\"plansDirectory\": \"{}\"}}", root_b.display()),
+        )
+        .unwrap();
+        let plan_a = root_a.join("p-one.md");
+        let plan_b = root_b.join("p-two.md");
+        write_atomic(&plan_a, "one").unwrap();
+        write_atomic(&plan_b, "two").unwrap();
+        // Two projects in one replica: each node names its own cwd, and the
+        // pass-level root (project one's) must not leak onto project two.
+        let mut nodes = BTreeMap::new();
+        nodes.insert("x-1".to_string(), plan_a.to_str().unwrap().to_string());
+        nodes.insert("x-2".to_string(), plan_b.to_str().unwrap().to_string());
+        let mut cwds = BTreeMap::new();
+        cwds.insert(
+            "x-1".to_string(),
+            proj_a.path().to_str().unwrap().to_string(),
+        );
+        cwds.insert(
+            "x-2".to_string(),
+            proj_b.path().to_str().unwrap().to_string(),
+        );
+        let out = sync_with(
+            &nodes,
+            &cwds,
+            &primary.remote,
+            "a",
+            home.path(),
+            Some(&root_a),
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
+        assert_eq!(out.pushed.len(), 2);
+        let rows = primary_rows(&primary.remote, "a").unwrap();
+        assert_eq!(rows.get("x-1").unwrap().0.plan_path, "p-one.md");
+        assert_eq!(rows.get("x-2").unwrap().0.plan_path, "p-two.md");
     }
 }
