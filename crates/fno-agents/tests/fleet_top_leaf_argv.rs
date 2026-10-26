@@ -18,6 +18,7 @@ fn census_workers_machines_answers_the_fleet_map() {
         .env_clear()
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
+        .envs(fno_agents::test_run::self_owner_env())
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&home);
