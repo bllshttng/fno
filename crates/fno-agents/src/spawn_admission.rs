@@ -3,6 +3,11 @@
 //! port group 2, row 10): the seed refusals, the node seed rewrite,
 //! normalization, the compose and the headroom account pick.
 //!
+//! Four seam duties are not here yet and land with the client wiring: the
+//! codex git-grant refusal, `extract_existing_pane`, the worker-dir export and
+//! the codex sandbox probe. `Admission::events` are the compose's
+//! `model_vendor_mismatch` rows, for the caller to emit.
+//!
 //! [`admit`] is not on the client's spawn path yet. Python `cmd_spawn` still
 //! serves three shapes no Rust arm owns: a `--role` spawn, `--route` with an
 //! account flag, and a routed non-thread spawn (`spawn_route::route_seam`
@@ -368,7 +373,7 @@ pub fn scan_projection(tail: &[String]) -> Value {
     };
     let explicit_route = flag_present(tail, "--route");
     let has_permission = has_permission_mode(tail);
-    let mut permission_value = flag_value(tail, &["--permission-mode"]);
+    let mut permission_value = flag_value(tail, &["--permission-mode"]).filter(|v| !v.is_empty());
     if permission_value.is_none() && has_permission {
         permission_value = Some("yolo".to_string());
     }
