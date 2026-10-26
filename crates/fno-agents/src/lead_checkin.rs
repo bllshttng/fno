@@ -1335,11 +1335,25 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         ))
     };
     // One graph read feeds both surfaces: the blueprint's skip line and the
-    // scope_idea_children reading the coverage line sees.
-    let idea_children = scope_ids
-        .as_ref()
-        .map_err(Clone::clone)
-        .and_then(|ids| crate::lead_answers::idea_children_reading(&ctx.graph, ids));
+    // scope_idea_children reading the coverage line sees. Like the readers
+    // it runs bounded: on expiry both surfaces inherit a named failure.
+    let idea_children = match scope_ids.as_ref().map_err(Clone::clone) {
+        Ok(ids) => {
+            let graph = ctx.graph.clone();
+            let ids = ids.clone();
+            let remaining = BEAT_BUDGET.saturating_sub(beat_started.elapsed());
+            match run_bounded(remaining, "idea children", move || {
+                crate::lead_answers::idea_children_reading(&graph, &ids)
+            }) {
+                Ok(Some(value)) => value,
+                Ok(None) => Err(format!(
+                    "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+                )),
+                Err(error) => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    };
     take_reading(&mut readings, beat_started, "blueprint", {
         let board = board.clone();
         let folded = folded.clone();
