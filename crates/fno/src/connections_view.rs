@@ -862,7 +862,7 @@ impl ConnectionsView {
             return ConnIntent::Bell;
         };
         // Only claude accounts are spawn-routable: mux dispatch always launches
-        // provider="claude", and the `--account` overlay is claude-only, so a
+        // provider="claude", and `resolve_account_overlay` is claude-only, so a
         // codex/gemini selection would reject every spawn until cleared (codex
         // P2). Refuse it here with visible feedback instead.
         if acct.harness != "claude" {
