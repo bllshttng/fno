@@ -1,0 +1,4 @@
+project:  <FIXTURE>/project
+visitor: manifest names session resident-session, not this one
+mail:     visitor-  (reply handle - pass as --from-name, or omit to self-stamp)
+harness:  claude

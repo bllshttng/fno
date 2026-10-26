@@ -106,7 +106,6 @@ resume
 route
 scoreboard
 state
-status
 status-fanout tick
 stub-manifest
 target

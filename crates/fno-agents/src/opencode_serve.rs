@@ -709,6 +709,7 @@ fn dispatch_opencode_serve_inner(
         home.root(),
         crate::launch_record::Launch {
             harness: "opencode".to_string(),
+            resume: None,
             name: Some(name.to_string()),
             node: node.filter(|v| !v.is_empty()).map(str::to_string),
             slot: None,
