@@ -113,8 +113,17 @@ fn merged_config(repo_root: &Path) -> Result<Map<String, Value>, String> {
         };
         return Ok(unwrap_config(parsed));
     }
-    let mut global = load_flat(&global_config_path())
-        .map_err(|()| format!("config parse error: {}", global_config_path().display()))?;
+    // An absent global config is a fresh install, not an error: the resolver
+    // answers its built-in default. Only a PRESENT file that will not parse
+    // refuses (fail closed) - the same split the FNO_CONFIG branch above
+    // already makes.
+    let global_path = global_config_path();
+    let mut global = if global_path.exists() {
+        load_flat(&global_path)
+            .map_err(|()| format!("config parse error: {}", global_path.display()))?
+    } else {
+        Map::new()
+    };
     global = unwrap_config(global);
     let repo_cfg = match repo_config_path(repo_root) {
         Some(path) => unwrap_config(

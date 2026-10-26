@@ -21,7 +21,7 @@ def write_cache(repo: Path, rows: list) -> bool:
         {
             "branch": row.get("facts", {}).get("branch"),
             "node": row.get("node"),
-            "klass": row.get("klass"),
+            "klass": row.get("class"),
             "unpushed": row.get("unpushed"),
             "has_remote": row.get("facts", {}).get("has_remote"),
             "age": row.get("age"),
@@ -30,8 +30,9 @@ def write_cache(repo: Path, rows: list) -> bool:
         }
         for row in rows
         # The class vocabulary lives in the door; CLEAN is its informational
-        # bucket that never reaches the cache.
-        if row.get("klass") != "CLEAN"
+        # bucket that never reaches the cache. The payload key is `class`
+        # (the frozen stranded wire shape), not the Rust struct's field name.
+        if row.get("class") != "CLEAN"
     ]
     if out == read_cache(repo):
         return False

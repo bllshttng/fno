@@ -1580,7 +1580,7 @@ class TestTickRecordsAndDeadline:
         # call. Report posture travels as --no-wake in the argv, and the
         # returned rows still reach the provenance cache.
         stranded_row = {
-            "klass": "STRANDED",
+            "class": "STRANDED",
             "node": "x-beef",
             "unpushed": 4,
             "age": "2 hours ago",

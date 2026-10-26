@@ -146,7 +146,7 @@ fn worktree_leaf(tail: &[String]) -> Option<Launch> {
         Some("reapable") => agents_launch("worktree-reapable", &tail[1..]),
         Some("overlap-record") => agents_launch("worktree-overlap-record", &tail[1..]),
         Some("overlaps") => agents_launch("worktree-overlaps", &tail[1..]),
-        Some("status") => Some(Launch::Lifecycle(vec!["status".into()])),
+        Some("status") => Some(Launch::Lifecycle(tail.to_vec())),
         Some("cleanup") => Some(Launch::Lifecycle(tail.to_vec())),
         Some("archive") => Some(Launch::Lifecycle(tail.to_vec())),
         _ => Some(Launch::Refuse(

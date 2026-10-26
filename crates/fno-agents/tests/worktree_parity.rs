@@ -1107,14 +1107,18 @@ fn sweep_and_apply_cases() {
     let base = resolved(&root.join("wtbase"));
     let pins = Pins::new(&root, &home);
     let sw1 = root.join("sw1");
-    // The graph the sweep reads: the state-root graph.db, seeded.
+    // The graph the sweep reads, seeded at the layout anchor the strict
+    // read resolves (a migrated install keeps the store under db/).
     let graph_rows = vec![json!({
         "id": "x-b00",
         "slug": "sweep-node-xb00",
         "status": "in_progress",
         "title": "sweep node",
     })];
-    let _ = fno_agents::graph_store::seed_rows(&root.join("state").join("graph.db"), &graph_rows);
+    let _ = fno_agents::graph_store::seed_rows(
+        &fno_agents::state_layout::graph_anchor(&root.join("state")),
+        &graph_rows,
+    );
     // The second worktree ahead of origin: the stranded shape.
     let sweep_wt = resolved(&root.join("sweep-wt"));
     run_git(

@@ -1446,8 +1446,8 @@ def tick() -> None:
                     except Exception as exc:  # noqa: BLE001 - one bad repo never stops the rest
                         log.warning("pr-watch: stranded sweep failed for %s: %s", root, exc)
                         continue
-                    stranded_n += sum(1 for r in stranded_rows if r.get("klass") == "STRANDED")
-                    unknown_n += sum(1 for r in stranded_rows if r.get("klass") == "UNKNOWN")
+                    stranded_n += sum(1 for r in stranded_rows if r.get("class") == "STRANDED")
+                    unknown_n += sum(1 for r in stranded_rows if r.get("class") == "UNKNOWN")
                     acted_n += len(outcomes)
                     failed_n += sum(1 for o in outcomes if o["stopped_at"])
                     roots_done += 1

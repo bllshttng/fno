@@ -15,7 +15,9 @@ const FETCH_TIMEOUT_SECS: u64 = 60;
 /// flow reads the ambient graph and asks node_branch in-process, so the
 /// ensure adds no seam crossing. A miss answers feature/<name>.
 fn node_branch_for(name: &str) -> Option<String> {
-    let path = super::state_root().join("graph.db");
+    // The layout anchor, not a bare <state>/graph.db: the migrated layout
+    // keeps the store under db/, the same read the stranded sweep makes.
+    let path = crate::state_layout::graph_anchor(&super::state_root());
     let rows = crate::graph_store::read_rows(&path).unwrap_or_default();
     let (_, row) = super::stranded::resolve_node(name, &rows)?;
     crate::node_branch::resolve(&row)
@@ -98,9 +100,20 @@ fn continuation_base(repo: &Path, name: &str, base: &str, br: &str) -> Option<Co
     let remote_branch = base.split('/').nth(1).unwrap_or("main");
     let salvage = format!("refs/fno/salvage/{name}");
     let feat_ref = format!("refs/remotes/origin/{br}");
+    // Full-path dst: `{br}:{feat_ref}` materializes the tracking ref even on
+    // a --single-branch clone. A bare `feat_ref` is a LHS-only refspec: git
+    // looks for a ref named refs/remotes/origin/<br> ON the remote, finds
+    // none, and the tracking ref never materializes - so the ahead count
+    // always reads zero and every re-dispatch cuts fresh.
     let fetch = git_bounded(
         repo,
-        &["fetch", "--quiet", "origin", remote_branch, &feat_ref],
+        &[
+            "fetch",
+            "--quiet",
+            "origin",
+            remote_branch,
+            &format!("{br}:{feat_ref}"),
+        ],
         FETCH_TIMEOUT_SECS,
     );
     if let Some(count) = ahead_count(repo, base, &feat_ref) {
@@ -163,6 +176,19 @@ fn continue_salvage_arm(
                 source: salvage.to_string(),
                 count,
                 create_target: remote_salvage.to_string(),
+            });
+        }
+    }
+    // The remote arm missing is not the end: a dead worker's hook may have
+    // written only the LOCAL salvage ref (a never-pushed crash), and a ref
+    // ahead of base is exactly what a re-dispatch continues.
+    if let Some(count) = ahead_count(repo, base, salvage) {
+        if count > 0 {
+            return Some(Continuation {
+                kind: "salvaged".to_string(),
+                source: salvage.to_string(),
+                count,
+                create_target: salvage.to_string(),
             });
         }
     }
@@ -546,6 +572,9 @@ fn create_branch_arm(
 }
 
 /// The fresh-cut arm: continuation and salvage refs, else origin/main.
+/// A repo with no remote-tracking main (local-only) cuts from HEAD, the
+/// deleted leg's documented fallback - a None base here would surface as a
+/// misleading worktree-add timeout instead.
 fn create_fresh_arm(
     top: &Path,
     name: &str,
@@ -554,7 +583,7 @@ fn create_fresh_arm(
     br: &str,
     base_note: &mut String,
 ) -> Option<std::process::Output> {
-    let base = base_ref(top)?;
+    let base = base_ref(top).unwrap_or_else(|| "HEAD".to_string());
     let cont = if branch.is_none() {
         continuation_base(top, name, &base, br)
     } else {

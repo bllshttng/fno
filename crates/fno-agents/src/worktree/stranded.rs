@@ -291,14 +291,18 @@ pub fn sweep(repo: &Path) -> Vec<Row> {
         _ => String::new(),
     };
     let worktrees = super::parse_porcelain_rows(&listing);
+    // The layout table's anchor, not a bare <state>/graph.db: a migrated
+    // install keeps the store at <state>/db/graph.db, and a strict read of
+    // the legacy spelling would fail the leg on every normal installation
+    // and classify every ahead worktree UNKNOWN.
     let mut entries: Vec<Value> = Vec::new();
     let mut graph_ok = true;
-    match crate::graph_store::read_rows_strict(&super::state_root().join("graph.db")) {
+    match crate::graph_store::read_rows_strict(&crate::state_layout::graph_anchor(
+        &super::state_root(),
+    )) {
         Ok(rows) => entries = rows,
         Err(_) => graph_ok = false,
     }
-    let (join_map, registry_ok) = super::status::registry_join();
-    sweep_over(worktrees, entries, graph_ok, join_map, registry_ok)
 }
 
 fn sweep_over(
@@ -430,11 +434,17 @@ fn record_unknown(row: &Row) -> Value {
 }
 
 /// The `worktree-stranded` op: `--repo R [--json] [--apply] [--no-wake]`.
+///
+/// The deleted leg's contract: the default is classify-and-print only, so
+/// without `--apply` nothing acts and `outcomes` stays empty. `--apply`
+/// implies the wake (push + file for STRANDED, record for UNKNOWN) unless
+/// `--no-wake` names the report posture explicitly - the shape the pr-watch
+/// leg sends, and the reason the flag survives a wake-implying apply.
 pub fn run_client(args: &[String]) -> i32 {
     let mut repo = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut as_json = false;
     let mut apply = false;
-    let mut wake = true;
+    let mut no_wake = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -451,7 +461,7 @@ pub fn run_client(args: &[String]) -> i32 {
                 i += 1;
             }
             "--no-wake" => {
-                wake = false;
+                no_wake = true;
                 i += 1;
             }
             other => {
@@ -460,19 +470,25 @@ pub fn run_client(args: &[String]) -> i32 {
             }
         }
     }
+    let wake = apply && !no_wake;
     run_stranded_print(&repo, as_json, apply, wake)
 }
 
 fn run_stranded_print(repo: &Path, as_json: bool, apply: bool, wake: bool) -> i32 {
     let rows = sweep(repo);
+    // Nothing acts or records without --apply: the deleted leg's
+    // classify-and-print default, and the reason a plain `stranded --json`
+    // stays a read.
     let mut outcomes: Vec<Value> = Vec::new();
-    for row in &rows {
-        if row.klass == STRANDED {
-            if wake {
-                outcomes.push(act_on_stranded(row));
+    if apply {
+        for row in &rows {
+            if row.klass == STRANDED {
+                if wake {
+                    outcomes.push(act_on_stranded(row));
+                }
+            } else if row.klass == UNKNOWN {
+                outcomes.push(record_unknown(row));
             }
-        } else if row.klass == UNKNOWN {
-            outcomes.push(record_unknown(row));
         }
     }
     if as_json {
