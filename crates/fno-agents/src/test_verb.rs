@@ -27,12 +27,12 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use crate::test_env;
+use crate::test_smoke_registry::TAIL_LINES;
 
 pub const SCOPE_STATEMENT: &str =
     "fno doctor test runs tests only and does NOT type-check; ruff + mypy \
 run separately: bash scripts/ci/check-python-static.sh (CI job \
 main-python-static runs the same script).";
-const TAIL_LINES: usize = 40;
 
 /// Which ambient shape the child processes run under. `Clean` is today's
 /// behaviour and the merge gate; `Dirty` feeds a poisoned PARENT through

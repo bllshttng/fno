@@ -114,7 +114,10 @@ jobs:
   changed-packet-size:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # The sizer builds fno-agents from a cold cache when the fleet loads the
+    # runners; 5 minutes cut that build off mid-compile and read as a
+    # selector regression.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
