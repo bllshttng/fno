@@ -135,7 +135,7 @@ def _env_for_api_key(
 def _refuse_identity_mismatch(
     record: ProviderRecord, root: Path, by_id: dict[str, ProviderRecord]
 ) -> None:
-    """The same refusal ``resolve_account_overlay`` makes, from the same binding."""
+    """The same refusal the ``--account`` overlay makes, from the same binding."""
     from fno.adapters.providers.binding import MISMATCH, resolve_account_binding
 
     got = resolve_account_binding(record, root=root, by_id=by_id)

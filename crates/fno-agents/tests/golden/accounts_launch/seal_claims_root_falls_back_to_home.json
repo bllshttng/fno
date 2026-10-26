@@ -1,0 +1,1 @@
+{"env": {"HOME": "/acct/home"}, "expect": {"env": {"FNO_AGENTS_HOME": "<TMP>/agents", "FNO_CLAIMS_ROOT": "<TMP>/home", "FNO_STATE_DIR": "<TMP>/state", "HOME": "/acct/home"}}, "op": "seal", "unset": ["FNO_CLAIMS_ROOT"]}
