@@ -155,6 +155,14 @@ fn stored_form(plan_path: &str, plans_root: Option<&Path>, home: &Path) -> Strin
             }
         }
     }
+    if bare.starts_with("~/") && resolved.is_absolute() {
+        // A tilde binding normalizes to its absolute form, so two hosts
+        // binding one file compare equal instead of rebinding every tick.
+        return match anchor {
+            Some(a) => format!("{}#{}", resolved.display(), a),
+            None => resolved.display().to_string(),
+        };
+    }
     plan_path.trim().to_string()
 }
 
@@ -1064,5 +1072,51 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("outside this host's home"), "{err}");
         assert!(!placed.exists());
+    }
+
+    #[test]
+    fn a_tilde_binding_and_an_absolute_binding_of_one_file_stay_quiet() {
+        let primary = test_primary::start();
+        let home = tempfile::tempdir().unwrap();
+        let plan = home.path().join("vault/plans/p.md");
+        write_atomic(&plan, "v1").unwrap();
+        let absolute = plan.to_str().unwrap().to_string();
+        let tilde = format!("~/vault/plans/p.md");
+        // Host A binds the tilde form and pushes; the stored row carries the
+        // absolute normalization.
+        let a = replica(&[("x-1", tilde.as_str())]);
+        let out = sync_with(
+            &a,
+            &primary.remote,
+            "a",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
+        assert_eq!(out.pushed, vec!["x-1"]);
+        let stored = primary_rows(&primary.remote, "a")
+            .unwrap()
+            .get("x-1")
+            .unwrap()
+            .0
+            .plan_path
+            .clone();
+        assert_eq!(stored, absolute);
+        // Host B binds the absolute form of the same file: equal stored
+        // forms, so the pass takes the hash path and stays quiet.
+        let b = replica(&[("x-1", absolute.as_str())]);
+        let out = sync_with(
+            &b,
+            &primary.remote,
+            "b",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
+        assert_eq!(out, Outcome::default());
     }
 }
