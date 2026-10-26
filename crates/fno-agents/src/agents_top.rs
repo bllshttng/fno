@@ -229,6 +229,39 @@ fn census(
     out
 }
 
+/// The recorded pids of the census's live workers, for the orphan sweep's
+/// exclusion set: a `claude --bg` worker is detached to PPID 1 with a worktree
+/// cwd, so without this exclusion the first `--reap` takes down the fleet.
+/// The same union `payload` renders - the Python census union it replaced -
+/// so the sweep and the display view cannot disagree about who is supposed to
+/// exist. The sweep itself decides whether an empty or failed read is a
+/// broken instrument; this helper only reports the pids it can name.
+pub(crate) fn census_worker_pids() -> HashSet<u32> {
+    let home = crate::paths::AgentsHome::from_env();
+    let roster: Vec<crate::claude_roster::RosterWorker> =
+        match crate::claude_roster::ClaudeRoster::load(&crate::claude_roster::default_roster_path())
+        {
+            Ok(r) => r.workers.into_values().collect(),
+            Err(_) => Vec::new(),
+        };
+    let rows = match crate::state::load_registry(&home.registry_json()) {
+        Ok(r) => r.entries,
+        Err(_) => Vec::new(),
+    };
+    let claims_root = crate::claims_root::global_claims_root();
+    let claim_live = |name: &str| {
+        matches!(
+            crate::claims::status(&format!("worker:{name}"), claims_root.as_deref()).0,
+            crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
+        )
+    };
+    census(&roster, &rows, &pid_state, &claim_live, chrono::Utc::now())
+        .workers
+        .iter()
+        .filter_map(|w| w.pid)
+        .collect()
+}
+
 fn role_label(entry: &RegistryEntry) -> Option<String> {
     entry
         .role_level
