@@ -756,8 +756,8 @@ fn target_family_replays_the_goldens() {
 
 /// The state-io atomicity contract, re-hosted from the deleted test_state_io:
 /// eight parallel force-writers on one manifest leave it parseable, never
-/// torn - the lock-then-replace writer holds the file together under
-/// contention.
+/// torn - the atomic-replace writer (temp sibling + rename) holds the file
+/// together under contention.
 #[test]
 fn state_force_writes_stay_atomic_under_parallel_writers() {
     let dir = tempfile::tempdir().unwrap();

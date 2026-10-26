@@ -137,9 +137,8 @@ pub fn serialize_frontmatter(map: &BTreeMap<String, String>, body: &str) -> Stri
     out
 }
 
-/// Atomic replace: temp file in the same directory, fsync, rename. The lock
-/// the Python `atomic_write` took is the flock `state.rs` already documents;
-/// a manifest write races only with other manifest writers, which the
+/// Atomic replace: temp file in the same directory, fsync, rename. The
+/// manifest write races only with other manifest writers, which the
 /// write-once rule makes rare enough that the rename's atomicity is the
 /// guarantee that matters (a reader sees the old or the new file, never torn).
 fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
@@ -348,10 +347,16 @@ pub fn run_set(args: &[String]) -> i32 {
     if is_immutable_target {
         // First-fill of an immutable manifest rewrites only the line it owns,
         // so every byte outside `plan_path:` stays exactly as init wrote it.
-        rewrite_single_field(&state_path, &field, &coerced)?;
+        if let Err(e) = rewrite_single_field(&state_path, &field, &coerced) {
+            eprintln!("error: state write failed: {e}");
+            return 1;
+        }
     } else {
         map.insert(field.clone(), coerced.clone());
-        atomic_write(&state_path, &serialize_frontmatter(&map, &body))?;
+        if let Err(e) = atomic_write(&state_path, &serialize_frontmatter(&map, &body)) {
+            eprintln!("error: state write failed: {e}");
+            return 1;
+        }
     }
     if json {
         println!(
@@ -447,7 +452,10 @@ pub fn run_init(args: &[String]) -> i32 {
     defaults.insert("owner_cwd".to_string(), String::new());
     defaults.insert("plan_path".to_string(), String::new());
     defaults.insert("status".to_string(), String::new());
-    atomic_write(&out_path, &serialize_frontmatter(&defaults, ""))?;
+    if let Err(e) = atomic_write(&out_path, &serialize_frontmatter(&defaults, "")) {
+        eprintln!("error: state write failed: {e}");
+        return 1;
+    }
     println!("created: {}", display_relative(&out_path));
     0
 }
@@ -487,7 +495,10 @@ pub fn run_archive(args: &[String]) -> i32 {
         .and_then(|s| s.to_str())
         .unwrap_or("state");
     let archive_path = state_path.with_file_name(format!("{stem}.archived.{ts}.md"));
-    std::fs::rename(&state_path, &archive_path)?;
+    if let Err(e) = std::fs::rename(&state_path, &archive_path) {
+        eprintln!("error: archive rename failed: {e}");
+        return 1;
+    }
     if json {
         println!(
             "{{{}:{}}}",
@@ -501,16 +512,35 @@ pub fn run_archive(args: &[String]) -> i32 {
             archive_path.display()
         );
     }
-    Ok::<(), std::io::Error>(()).ok();
     0
 }
 
 /// The whole `state-verbs` door: `fno-agents state-verbs <sub> <args...>`.
 pub fn run(args: &[String]) -> i32 {
+    // The front door's group-level `--json` arrives before the subcommand
+    // (`do state --json show`); re-order it into the subcommand's own args,
+    // which accept it anywhere.
+    if matches!(
+        args.first().map(String::as_str),
+        Some("--json") | Some("-J")
+    ) && args.len() >= 2
+    {
+        let mut reordered: Vec<String> = Vec::with_capacity(args.len());
+        reordered.push(args[1].clone());
+        reordered.push("--json".to_string());
+        reordered.extend(args[2..].iter().cloned());
+        return run(&reordered);
+    }
     let (sub, rest) = match args.split_first() {
         Some(pair) => pair,
         None => usage_fail("state-verbs: a subcommand is required: show|set|init|archive"),
     };
+    // A --help that reaches the door prints the native usage line: the
+    // Python group help died with the wheel.
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        println!("usage: fno do state show|set|init|archive [--path <file>] [--field <name>] [--value <v>] [--type <t>] [--allow-stub] [--force] [--json]");
+        return 0;
+    }
     match sub.as_str() {
         "show" => run_show(rest),
         "set" => run_set(rest),

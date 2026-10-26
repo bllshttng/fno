@@ -438,6 +438,13 @@ pub fn run(args: &[String]) -> i32 {
             return 2;
         }
     };
+    // A --help that reaches the door prints the native usage line: the
+    // Python group help died with the wheel, and a usage error instead of
+    // help would strand the muscle-memory spelling.
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        println!("usage: fno do pr stub-manifest write|reconcile-validate|reconcile-finalize --node <id> [--root <dir>] [--stubs-json <json>] [--contract-version <n>] [--contract-ref <ref>] [--contract-test <cmd>] [--no-run]");
+        return 0;
+    }
     match verb {
         "write" => run_write(rest),
         "reconcile-validate" => run_reconcile_validate(rest),

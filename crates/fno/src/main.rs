@@ -745,16 +745,20 @@ fn classify_phase_family(args: &[OsString]) -> Option<(&'static [&'static str], 
     Some((&["kill-check"], args[2..].to_vec()))
 }
 
-/// `fno do pr stub-manifest <verb> ...`: the manifest verbs claim
-/// ahead of the do-pr lexical claim, whose handback narrows to watch only.
+/// `fno do pr stub-manifest <verb> ...` and the bare `fno pr stub-manifest
+/// <verb> ...` legacy spelling: the manifest verbs claim ahead of the do-pr
+/// lexical claims, whose handbacks narrow to watch only.
 fn classify_pr_stub_manifest(
     args: &[OsString],
 ) -> Option<(&'static [&'static str], Vec<OsString>)> {
-    if args.len() < 4
-        || args[0].to_str()? != "do"
-        || args[1].to_str()? != "pr"
-        || args[2].to_str()? != "stub-manifest"
-    {
+    if args.len() < 4 {
+        return None;
+    }
+    let first = args[0].to_str()?;
+    let second = args[1].to_str()?;
+    let third = args[2].to_str()?;
+    let matches_head = (first == "do" && second == "pr") || first == "pr";
+    if !matches_head || third != "stub-manifest" {
         return None;
     }
     Some((&["stub-manifest"], args[3..].to_vec()))
