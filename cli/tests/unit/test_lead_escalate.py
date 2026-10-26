@@ -97,7 +97,7 @@ def _capture_transport(monkeypatch: pytest.MonkeyPatch, *, answer: dict) -> list
     return captured
 
 
-def _run(root: Path, ids: list[str], reason: str = "NoProgress") -> tuple[str, str]:
+def _run(root: Path, ids: list[str], reason: str = "NoProgress") -> tuple:
     return escalate(ids, reason=reason, root=root, session_id="k-test", cwd=root)
 
 
@@ -109,8 +109,8 @@ def test_one_stalled_board_sends_one_task_payload(
     captured = _capture_transport(
         monkeypatch, answer={"outcome": "asked", "id": "ft-kingfeed"}
     )
-    first_outcome, first_id = _run(tmp_path, STALLED)
-    second_outcome, second_id = _run(tmp_path, list(reversed(STALLED)))
+    first_outcome, first_id, _, _ = _run(tmp_path, STALLED)
+    second_outcome, second_id, _, _ = _run(tmp_path, list(reversed(STALLED)))
 
     assert first_outcome == "recorded"
     assert first_id == "ft-kingfeed"
@@ -246,7 +246,10 @@ def _two_channels() -> None:
 
 
 def _escalate_as(root: Path, session: str, ids: "list[str]") -> "tuple[str, str]":
-    return escalate(ids, reason="NoProgress", root=root, session_id=session, cwd=root)
+    outcome, qid, _, _ = escalate(
+        ids, reason="NoProgress", root=root, session_id=session, cwd=root
+    )
+    return outcome, qid
 
 
 def test_two_serving_leads_send_distinct_scoped_lanes(
@@ -266,3 +269,58 @@ def test_two_serving_leads_send_distinct_scoped_lanes(
 
     lanes = [p["lane"] for p in captured]
     assert lanes == ["lead-escalation:fno", "lead-escalation:reaper"]
+
+
+# ---------------------------------------------------------------------------
+# The questions.route verdict rides the render answer (x-e1d2)
+# ---------------------------------------------------------------------------
+
+
+def test_direct_route_returns_the_crown_mail_verdict_and_nudge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under direct, the default, the renderer's verdict is mail_crown False
+    with a nudge naming the ask verb; the transport carries it verbatim."""
+    monkeypatch.setattr(
+        "fno.lead.escalate._render",
+        lambda *a, **k: {
+            "ok": True,
+            "question": "[lead-escalation:k] q",
+            "mail": "m",
+            "marker": "lead-escalation",
+            "mail_crown": False,
+            "nudge": "questions.route=direct (default): the question stays on the "
+            "board. File user-only decisions with fno inbox outstanding ask.",
+        },
+    )
+    _capture_transport(monkeypatch, answer={"outcome": "asked", "id": "ft-route00"})
+
+    outcome, qid, mail_crown, nudge = _run(tmp_path, STALLED)
+    assert outcome == "recorded"
+    assert qid == "ft-route00"
+    assert mail_crown is False
+    assert nudge is not None
+    assert "fno inbox outstanding ask" in nudge
+
+
+def test_via_crown_verdict_carries_no_nudge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A via_crown team keeps the crown mail and gets no teaching line."""
+    monkeypatch.setattr(
+        "fno.lead.escalate._render",
+        lambda *a, **k: {
+            "ok": True,
+            "question": "[lead-escalation:k] q",
+            "mail": "m",
+            "marker": "lead-escalation",
+            "mail_crown": True,
+            "nudge": None,
+        },
+    )
+    _capture_transport(monkeypatch, answer={"outcome": "asked", "id": "ft-route01"})
+
+    outcome, _, mail_crown, nudge = _run(tmp_path, STALLED)
+    assert outcome == "recorded"
+    assert mail_crown is True
+    assert nudge is None

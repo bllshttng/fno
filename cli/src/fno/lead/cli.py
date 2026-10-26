@@ -721,7 +721,15 @@ def escalate_cmd(
         "NoProgress", "--reason", "-R", help="The terminal reason that triggered this."
     ),
 ) -> None:
-    """Escalate to the presiding role or operator with work pending (AC4-HP)."""
+    """Escalate to the presiding role or operator with work pending (AC4-HP).
+
+    A decision only the user can make does not ride this verb: file it
+    straight on the question board with `fno inbox outstanding ask` (law
+    d-fdab1af2). Under `questions.route=direct`, the default, the question
+    this verb records stays on the board alone: no crown mail copy goes out.
+    Set `questions.route=via_crown` in .fno/config.toml to route questions
+    through a triage crown.
+    """
     from fno.carveout.core import resolve_carveout_root, resolve_session_id
     from fno.lead.escalate import escalate, mail_presiding_lead, resolve_presiding_lead
     from fno.lead.state import term_state
@@ -761,7 +769,7 @@ def escalate_cmd(
         ids = ["reading:verdict:" + (verdict_scope or scope_arg).replace(",", "+")]
     presiding = resolve_presiding_lead(session_id)
     try:
-        outcome, qid = escalate(
+        outcome, qid, mail_crown, nudge = escalate(
             ids,
             reason=reason,
             root=resolve_carveout_root(),
@@ -775,8 +783,14 @@ def escalate_cmd(
     except Exception as exc:  # noqa: BLE001 - named, never swallowed
         typer.echo(f"lead: escalation failed: {exc}", err=True)
         raise typer.Exit(1) from exc
+    if nudge:
+        typer.echo(nudge, err=True)
     holder = presiding["holder"] if presiding is not None else None
-    mailed = holder is not None and mail_presiding_lead(holder, ids, reason, verdict=summary)
+    mailed = (
+        holder is not None
+        and mail_crown
+        and mail_presiding_lead(holder, ids, reason, verdict=summary)
+    )
     target = f"lead:{holder}" if mailed else f"operator:{qid}"
     note = f", mailed presiding lead {holder}" if mailed else ""
     typer.echo(f"lead: {outcome}{note} {qid}", err=True)

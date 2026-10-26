@@ -10,11 +10,80 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::Read;
+use std::path::{Path, PathBuf};
 
 /// How many stalled rows the question names before it says "and N more".
 const MAX_LISTED_IDS: usize = 20;
 
 const MARKER: &str = "lead-escalation";
+
+/// The `questions.route` decision (x-e1d2): who else learns of an escalated
+/// question beyond the board row. `direct`, the unset default, keeps the
+/// question on the board alone - the crowned relay hop the user retired is
+/// the mail copy. `via_crown` is a team's opt-in to a triage crown. Anything
+/// else degrades to direct and says so.
+/// Returns `(mail_crown, nudge)`.
+fn crown_mail(route: Option<&str>) -> (bool, Option<String>) {
+    match route {
+        Some("via_crown") => (true, None),
+        Some(other) => (
+            false,
+            Some(format!(
+                "questions.route reads '{other}' (direct or via_crown), so direct \
+                 applies: the question stays on the board and no crown mail went \
+                 out. For a decision only the user can make, file it with \
+                 fno inbox outstanding ask. Set questions.route=via_crown in \
+                 .fno/config.toml to route questions through a triage crown."
+            )),
+        ),
+        None => (
+            false,
+            Some(
+                "questions.route=direct (default): the question stays on the board \
+                 and no crown mail went out. For a decision only the user can make, \
+                 file it with fno inbox outstanding ask. Set questions.route=via_crown \
+                 in .fno/config.toml to route questions through a triage crown."
+                    .to_string(),
+            ),
+        ),
+    }
+}
+
+/// The config candidates the route knob reads: the caller's cwd first, then
+/// home, per key (the same cwd-then-home fallback `read_project_id` uses).
+fn route_candidates(cwd: Option<&Path>, agents_home: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(c) = cwd {
+        candidates.push(c.join(".fno/config.toml"));
+    }
+    if let Some(h) = agents_home {
+        // AgentsHome roots at ~/.fno/agents; config.toml lives at ~/.fno.
+        if let Some(base) = h.parent() {
+            candidates.push(base.join("config.toml"));
+        }
+    }
+    candidates
+}
+
+/// Tolerant scan: the first candidate that sets `questions.route` wins.
+fn route_from_configs(candidates: &[PathBuf]) -> Option<String> {
+    for candidate in candidates {
+        let Ok(text) = std::fs::read_to_string(candidate) else {
+            continue;
+        };
+        let Ok(table) = text.parse::<toml::Table>() else {
+            continue;
+        };
+        if let Some(route) = table
+            .get("questions")
+            .and_then(|q| q.get("route"))
+            .and_then(|r| r.as_str())
+        {
+            return Some(route.to_string());
+        }
+    }
+    None
+}
 
 // Reading ids are minted here so no call site writes a string literal that
 // can drift from the parser below. A scope's commas become `+` so a
@@ -80,6 +149,10 @@ pub struct EscalationRequest {
     /// legacy shared channel.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// The `questions.route` knob, read by the transport from config and
+    /// passed in so `render` stays deterministic. `None` reads as direct.
+    #[serde(default)]
+    pub route: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -95,6 +168,12 @@ pub struct EscalationAnswer {
     /// every ok answer so the caller never re-derives the channel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marker: Option<String>,
+    /// False under `questions.route=direct`: the caller skips the presiding
+    /// crown's mail copy. The board row still records.
+    pub mail_crown: bool,
+    /// The teaching line the caller prints when the crown mail is skipped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nudge: Option<String>,
 }
 
 fn refused(message: &str) -> EscalationAnswer {
@@ -104,6 +183,8 @@ fn refused(message: &str) -> EscalationAnswer {
         mail: None,
         message: Some(format!("lead escalation refused: {message}")),
         marker: None,
+        mail_crown: false,
+        nudge: None,
     }
 }
 
@@ -301,12 +382,15 @@ pub fn render(req: &EscalationRequest) -> EscalationAnswer {
         subject = subject,
         reason = req.reason,
     );
+    let (mail_crown, nudge) = crown_mail(req.route.as_deref());
     EscalationAnswer {
         ok: true,
         question: Some(question),
         mail: Some(mail),
         message: None,
         marker: Some(marker),
+        mail_crown,
+        nudge,
     }
 }
 
@@ -328,13 +412,24 @@ pub fn run_lead_escalation_text(args: &[String]) -> i32 {
         eprintln!("fno-agents lead-escalation-text: could not read stdin");
         return 2;
     }
-    let req: EscalationRequest = match serde_json::from_str(&input) {
+    let mut req: EscalationRequest = match serde_json::from_str(&input) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("fno-agents lead-escalation-text: bad request: {e}");
             return 2;
         }
     };
+    // The knob read lives here, not in `render`: the renderer stays
+    // deterministic on its request, and the tests pin the route through the
+    // field the transport fills.
+    if req.route.is_none() {
+        req.route = route_from_configs(&route_candidates(
+            std::env::current_dir().ok().as_deref(),
+            crate::paths::AgentsHome::from_env_opt()
+                .map(|h| h.root().to_path_buf())
+                .as_deref(),
+        ));
+    }
     let answer = serde_json::to_string(&render(&req)).expect("serializes");
     println!("{answer}");
     0
@@ -384,7 +479,89 @@ mod tests {
             verdict: None,
             scope: None,
             session_id: None,
+            route: None,
         }
+    }
+
+    // --- the questions.route decision (x-e1d2) ---
+
+    #[test]
+    fn direct_route_skips_the_crown_mail_and_teaches_the_board() {
+        let (mail_crown, nudge) = crown_mail(None);
+        assert!(!mail_crown);
+        let nudge = nudge.expect("direct carries the teaching line");
+        assert!(nudge.contains("fno inbox outstanding ask"));
+        assert!(nudge.contains("questions.route=via_crown"));
+
+        let ans = render(&req(IDS.to_vec(), Some(true)));
+        assert!(ans.ok);
+        assert!(!ans.mail_crown);
+        assert!(ans.nudge.is_some());
+    }
+
+    #[test]
+    fn via_crown_keeps_the_mail_and_stays_quiet() {
+        let (mail_crown, nudge) = crown_mail(Some("via_crown"));
+        assert!(mail_crown);
+        assert!(nudge.is_none());
+
+        let mut r = req(IDS.to_vec(), Some(true));
+        r.route = Some("via_crown".to_owned());
+        let ans = render(&r);
+        assert!(ans.mail_crown);
+        assert!(ans.nudge.is_none());
+    }
+
+    #[test]
+    fn an_unknown_route_degrades_to_direct_and_names_the_value() {
+        let (mail_crown, nudge) = crown_mail(Some("ladder"));
+        assert!(!mail_crown);
+        let nudge = nudge.expect("unknown carries the teaching line");
+        assert!(nudge.contains("reads 'ladder'"));
+        assert!(nudge.contains("fno inbox outstanding ask"));
+    }
+
+    #[test]
+    fn the_route_candidate_list_reads_cwd_then_agents_home() {
+        let cwd = Path::new("/repo");
+        let home = Path::new("/u/.fno/agents");
+        let candidates = route_candidates(Some(cwd), Some(home));
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/repo/.fno/config.toml"),
+                PathBuf::from("/u/.fno/config.toml"),
+            ]
+        );
+        assert!(route_candidates(None, None).is_empty());
+    }
+
+    #[test]
+    fn route_scan_reads_the_first_candidate_that_sets_the_key() {
+        let dir = std::env::temp_dir().join(format!("lead-esc-route-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bare = dir.join("bare.toml");
+        std::fs::write(&bare, "[project]\nid = \"fno\"\n").unwrap();
+        let set = dir.join("set.toml");
+        std::fs::write(
+            &set,
+            "[project]\nid = \"fno\"\n[questions]\nroute = \"via_crown\"\n",
+        )
+        .unwrap();
+        // A file without the key keeps the caller looking; a bad table reads
+        // as absent.
+        assert_eq!(
+            route_from_configs(&[bare.clone(), set.clone()]).as_deref(),
+            Some("via_crown")
+        );
+        assert_eq!(route_from_configs(&[bare.clone()]), None);
+        let garbage = dir.join("garbage.toml");
+        std::fs::write(&garbage, "not toml at all [[[").unwrap();
+        assert_eq!(
+            route_from_configs(&[garbage, set]).as_deref(),
+            Some("via_crown")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn question(req: &EscalationRequest) -> String {
