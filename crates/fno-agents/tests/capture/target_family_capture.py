@@ -125,7 +125,7 @@ FAMILY_HEADS = (("do", "state"), ("do", "phase"), ("do", "target"), ("do", "pr",
 
 
 def make_shim(bindir: Path) -> None:
-    """A PATH shim named `fno`: family verbs reach the worktree's Python app
+    """A PATH shim named `fno`: family commands reach the worktree's Python app
     (the leg under capture); every other spelling execs the installed front,
     so seeding doors (`backlog idea`) and the native body behind a transport
     leaf behave as production."""
@@ -262,7 +262,7 @@ CASES: list[dict] = [
     dict(label="phase kill check default no state", argv=["do", "phase", "kill-check"]),
     dict(label="phase kill check with plan arg", argv=["do", "phase", "kill-check", "plans/no-kills.md"], plan_no_kills=True),
     # -- do target gates --
-    # No status cases: the verb is already native (PR #3887 made it a
+    # No status cases: the command is already native (PR #3887 made it a
     # transport leaf over target-status), so its remaining contract is the
     # front-door claim, not a golden; the pinned capture binary predates the
     # door and would freeze a stale-binary refusal the branch-built binary
@@ -314,7 +314,7 @@ def run_case(case: dict, bindir: Path) -> None:
     try:
         env = base_env(root, bindir)
         # Skip the installed front's one-time uv provisioning: the sentinel
-        # and settings it would write carry no verb behavior, and writing them
+        # and settings it would write carry no command behavior, and writing them
         # here keeps the goldens free of machine-speed install noise.
         (root / ".path-migration-done").write_text("captured\n")
         (root / "settings.yaml").write_text("")
