@@ -817,7 +817,8 @@ pub fn read_graph_entries(home: &AgentsHome) -> Option<GraphRead> {
 }
 
 /// One open do row the sweep may settle: its node is done, GitHub-confirmed
-/// merged, and carries no additional PR whose outcome nothing recorded.
+/// merged or shipped with no PR, and carries no additional PR whose outcome
+/// nothing recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaleDoRow {
     pub node: String,
@@ -1679,8 +1680,19 @@ pub(crate) fn run_with_release(
             .map(|c| std::path::Path::new(c.as_str()).join(crate::claims::CLAIMS_DIRNAME)),
     );
     let claim_records = crate::claims::list_in(&claims_dirs, None, false).unwrap_or_default();
+    // A claim on a done node is not live work: the node it guards is over,
+    // so it never shields the row that still holds it.
+    let claim_on_done_node = |key: &str| {
+        key.strip_prefix("node:").is_some_and(|node| {
+            graph
+                .as_ref()
+                .and_then(|g| g.statuses.get(node))
+                .is_some_and(|status| status == "done")
+        })
+    };
     let claims_by_session: std::collections::HashMap<String, String> = claim_records
         .iter()
+        .filter(|rec| !claim_on_done_node(&rec.key))
         .filter_map(|rec| {
             let sid = rec.session_id.as_deref()?.trim().to_ascii_lowercase();
             (!sid.is_empty()).then_some((sid, format!("{} (holder {})", rec.key, rec.holder)))
@@ -1855,7 +1867,22 @@ pub(crate) fn run_with_release(
                 continue;
             }
         }
-        if e.origin.as_deref() == Some("operator") {
+        // The done rule: every node the row names is done and the row sat
+        // quiet past the idle hour. No origin shields such a row; the claim,
+        // attended and tree gates below still run. A node read only from the
+        // transcript is a witness, never the row's own work.
+        let done_quiet = matches!(
+            staged_row,
+            Some((verdict, age)) if matches!(verdict.work, WorkState::AllDone { .. })
+                && !verdict
+                    .route
+                    .source
+                    .is_some_and(node_route::NodeSource::is_transcript)
+                && (*age)
+                    .or_else(|| report_age(e, now))
+                    .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS)
+        );
+        if e.origin.as_deref() == Some("operator") && !done_quiet {
             summary.kept_operator.push(id);
             continue;
         }
@@ -1904,7 +1931,7 @@ pub(crate) fn run_with_release(
                 e.harness_session_id.as_deref().unwrap_or("").trim(),
                 e.launch_account.as_deref(),
             );
-        if !is_spawn && !adopted_finished(e) && !adopted_terminal {
+        if !is_spawn && !adopted_finished(e) && !adopted_terminal && !done_quiet {
             let corpse_probe = crate::gc_adopt::origin_corpse(e, quiet, &agents_memo, agents_read);
             // An adopted bg row falls through as a live row judged like a
             // spawn one, never as a corpse: only a row the corpse probe
@@ -1967,11 +1994,13 @@ pub(crate) fn run_with_release(
         // Locked Decision 1: every named node done but one still carries an
         // OPEN do row for this session -> the row stays and the node is
         // named. The retirement never settles graph rows itself. Past the
-        // origin ruling's idle hour a spawn row no longer holds on it.
-        let idle_hour_past = (is_spawn || adopted_terminal)
-            && (*age)
-                .or_else(|| report_age(e, now))
-                .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS);
+        // origin ruling's idle hour a spawn row no longer holds on it, and
+        // under the done rule no row does.
+        let idle_hour_past = done_quiet
+            || ((is_spawn || adopted_terminal)
+                && (*age)
+                    .or_else(|| report_age(e, now))
+                    .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS));
         if matches!(work, WorkState::AllDone { .. }) && !idle_hour_past {
             if let Some(nodes) = graph.open_do.get(&sid.to_ascii_lowercase()) {
                 let node = nodes.first().cloned().unwrap_or_default();
