@@ -118,6 +118,14 @@ _handoff_agents_bin() {
       return 0
     fi
   done
+  # The CI smoke job exports the built binary by path (smoke-setup), and a
+  # sandbox cwd hides the build tree from the git walk above, so this leg is
+  # the only one that finds the binary from a handoff sandbox. The hooks read
+  # the same export (context-nudge.sh and friends).
+  if [ -n "${FNO_AGENTS_FRONT:-}" ] && [ -x "${FNO_AGENTS_FRONT}" ]; then
+    printf '%s' "$FNO_AGENTS_FRONT"
+    return 0
+  fi
   _bin="$(command -v fno-agents 2>/dev/null || true)"
   [ -n "$_bin" ] && printf '%s' "$_bin"
 }
