@@ -15,11 +15,10 @@ mod fold;
 mod isolation;
 
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::events::EventEmitter;
-use crate::observer::isolation::IsolationResult;
 
 /// The op door: `fno doctor observer <sweep|judge|replay> [flags]` execs
 /// here through `fno-agents spawn-overlay observer <op> [flags]`.
@@ -350,7 +349,13 @@ fn run_sweep(args: &[String]) -> i32 {
             "-J" | "--json" => json_out = true,
             "--judge" => {
                 i += 1;
-                judge_n = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(0);
+                match args.get(i).and_then(|v| v.parse().ok()) {
+                    Some(n) => judge_n = n,
+                    None => {
+                        eprintln!("observer sweep: --judge needs an integer");
+                        return 2;
+                    }
+                }
             }
             _ => {}
         }

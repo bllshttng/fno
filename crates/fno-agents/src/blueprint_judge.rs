@@ -1064,15 +1064,11 @@ pub(crate) fn calibration_result(
             )
         })
         .collect();
-    println!(
-        "{}",
-        json!({"dimensions": dimensions, "disagreements": disagreements, "controls_wrong": controls_wrong})
-    );
-    if controls_wrong > 0 {
-        1
-    } else {
-        0
-    }
+    Ok(json!({
+        "dimensions": dimensions,
+        "disagreements": disagreements,
+        "controls_wrong": controls_wrong
+    }))
 }
 
 pub fn run_judge(args: &[String]) -> i32 {

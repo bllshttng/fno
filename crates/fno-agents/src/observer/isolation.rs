@@ -13,7 +13,7 @@
 //! redirected (register-task.py's hardcoded ledger, the bash paths.sh
 //! STATE_DIR writers).
 
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -252,7 +252,6 @@ pub(crate) fn default_real_state_paths(repo_root: &Path) -> Map<String, Value> {
             json!(fno_home.join("events.jsonl")),
         ),
         ("memory_dir".into(), json!(fno_home.join("memory"))),
-        // corrections.log moved under logs/ in the state-root wave.
         // corrections.log moved under logs/ in the state-root wave; scan it
         // there.
         (
