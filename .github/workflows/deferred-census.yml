@@ -74,7 +74,7 @@ jobs:
         # delete its line from _DISCOVERY_DEFERRED (discovery then covers it
         # by shebang). Three entries are known macOS-green / Linux-red and are
         # expected to stay red HERE - see the comment above the set.
-        run: uv run --project cli fno-py doctor test --census-deferred
+        run: fno-agents test --census-deferred
 
       - name: Explain a red census
         if: failure()

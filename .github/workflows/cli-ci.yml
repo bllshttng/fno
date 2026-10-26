@@ -103,7 +103,7 @@ jobs:
       - name: Real Codex 0.145 plugin boundary
         env:
           FNO_REAL_CODEX_PLUGIN_TEST: "1"
-        run: cli/.venv/bin/fno-py doctor test -q cli/tests/integration/test_codex_plugin_real_boundary.py
+        run: fno-agents test -q cli/tests/integration/test_codex_plugin_real_boundary.py
 
   # Sizes the changed-smoke ceiling from the packet the selector maps. The
   # packet scales with the diff, so a fixed cap either starves a large rebase
@@ -131,13 +131,16 @@ jobs:
         with:
           version: "latest"
 
+      - name: Provision the native test verb
+        uses: ./.github/actions/smoke-setup
+
       - name: Estimate the packet
         id: estimate
         env:
           CHANGED_BASE: ${{ github.event.pull_request.base.sha }}
           CHANGED_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          est="$(uv run --project cli fno-py doctor test smoke --changed \
+          est="$(fno-agents test smoke --changed \
             --base "$CHANGED_BASE" --head "$CHANGED_HEAD" --list 2>/dev/null \
             | sed -n 's/.*changed-estimate minutes=\([0-9][0-9]*\).*/\1/p' \
             | tail -1)"
@@ -343,7 +346,7 @@ jobs:
             exit 0
           fi
           set +e
-          uv run --project cli fno-py doctor test smoke --changed \
+          fno-agents test smoke --changed \
             --base "$CHANGED_BASE" --head "$CHANGED_HEAD" \
             --shard "${{ matrix.shard }}/${{ needs.changed-packet-size.outputs.shard_count }}"
           rc=$?
@@ -509,7 +512,7 @@ jobs:
           start=$SECONDS
           trap 'bash scripts/ci/smoke-duration-report.sh smoke-pytest-${{ matrix.shard }} "$(( SECONDS - start ))" 12 || true' EXIT
           : "$start"
-          uv run --project cli fno-py doctor test smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/4
+          fno-agents test smoke --only 'Sync + build,Pytest*' --shard ${{ matrix.shard }}/4
 
   slow-e2e:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
@@ -527,7 +530,7 @@ jobs:
       - name: Run the slow pane lane
         env:
           FNO_PYTEST_SHARD: "1/1"
-        run: uv run --project cli fno-py doctor test --stream cli/tests/agents/test_pane_journeys.py -- -m slow_e2e
+        run: fno-agents test --stream cli/tests/agents/test_pane_journeys.py -- -m slow_e2e
 
   smoke-rest:
     needs: [pr-affected]
@@ -574,7 +577,7 @@ jobs:
           start=$SECONDS
           trap 'bash scripts/ci/smoke-duration-report.sh smoke-rest-${{ matrix.shard }} "$(( SECONDS - start ))" 30 || true' EXIT
           : "$start"
-          uv run --project cli fno-py doctor test smoke --skip 'Pytest*' --shard ${{ matrix.shard }}/4
+          fno-agents test smoke --skip 'Pytest*' --shard ${{ matrix.shard }}/4
 
       # Static dead-import guard: a module move down a layer can leave
       # test-only callers on the old `from fno.agents import moved` path that

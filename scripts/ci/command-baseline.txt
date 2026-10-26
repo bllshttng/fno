@@ -113,7 +113,6 @@ status
 status-fanout tick
 stub-manifest
 target
-test
 think
 uninstall
 update

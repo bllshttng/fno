@@ -445,7 +445,6 @@ target resolve-model	T1	target resolve-model	2
 target resolve-owned-identity	T1	target resolve-owned-identity	3
 target review-invocation	T1	target review-invocation	4
 target status	T1	target status	8
-test	KEEP	test	108	single-leaf group
 think dispatch	T1	think dispatch	4
 think inspect	T1	think inspect	7
 update	KEEP	update	88	single-leaf group

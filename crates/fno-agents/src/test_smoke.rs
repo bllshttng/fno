@@ -316,7 +316,11 @@ pub fn state_steps(steps: &[disc::Step], mode: &str) -> Vec<disc::Step> {
         .iter()
         .map(|(name, cwd, cmd)| {
             if name == "Pytest (unit + integration)" {
-                (name.clone(), cwd.clone(), format!("{cmd} --junitxml={report}"))
+                (
+                    name.clone(),
+                    cwd.clone(),
+                    format!("{cmd} --junitxml={report}"),
+                )
             } else {
                 (name.clone(), cwd.clone(), cmd.clone())
             }
@@ -344,7 +348,11 @@ pub(crate) fn state_canary_snapshot() -> String {
     format!(
         "{}{}fno-state-canary.{}.snapshot",
         std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into()),
-        if std::env::var("TMPDIR").is_ok() { "/" } else { "" },
+        if std::env::var("TMPDIR").is_ok() {
+            "/"
+        } else {
+            ""
+        },
         std::process::id()
     )
 }
@@ -398,10 +406,7 @@ fn write_failure_record(path: &str, failed: &[String]) {
     if let Some(parent) = Path::new(path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let body = failed
-        .iter()
-        .map(|n| format!("{n}\n"))
-        .collect::<String>();
+    let body = failed.iter().map(|n| format!("{n}\n")).collect::<String>();
     let _ = std::fs::write(path, body);
 }
 
@@ -409,8 +414,11 @@ fn write_failure_record(path: &str, failed: &[String]) {
 /// shared record would let a dirty-lane failure list be replayed into a
 /// clean-lane --retry-failed.
 fn failure_record_path(root: &Path, ambient: &str) -> String {
-    let base = std::env::var("SMOKE_FAILURE_RECORD")
-        .unwrap_or_else(|_| root.join(reg::SMOKE_FAILURE_RECORD_DEFAULT).to_string_lossy().to_string());
+    let base = std::env::var("SMOKE_FAILURE_RECORD").unwrap_or_else(|_| {
+        root.join(reg::SMOKE_FAILURE_RECORD_DEFAULT)
+            .to_string_lossy()
+            .to_string()
+    });
     if ambient == "clean" {
         return base;
     }
@@ -467,9 +475,7 @@ pub(crate) fn preserve_claim_door(root: &Path, env: &mut BTreeMap<String, String
     for rel in reg::TARGET_BIN_RELS {
         candidates.push(root.join(rel));
     }
-    let source = candidates
-        .iter()
-        .find(|c| c.is_file() && is_executable(c));
+    let source = candidates.iter().find(|c| c.is_file() && is_executable(c));
     let Some(source) = source else {
         return;
     };
@@ -555,9 +561,15 @@ pub fn run(args: &[String], _stream: bool) -> i32 {
             "dirty" => AmbientMode::Dirty,
             _ => AmbientMode::Clean,
         },
-        ambient_label: if opts.ambient == "dirty" { "dirty" } else { "clean" },
+        ambient_label: if opts.ambient == "dirty" {
+            "dirty"
+        } else {
+            "clean"
+        },
         state: opts.state.clone(),
-        state_flag: args.iter().any(|a| a == "--state" || a.starts_with("--state=")),
+        state_flag: args
+            .iter()
+            .any(|a| a == "--state" || a.starts_with("--state=")),
     };
     run_single_lane(&root, &opts, &lane)
 }
@@ -631,8 +643,7 @@ fn run_state_both(root: &Path, args: &[String]) -> i32 {
             println!("  {nodeid}");
         }
     }
-    if canary_clean.as_deref() != Some("passed") || canary_populated.as_deref() != Some("failed")
-    {
+    if canary_clean.as_deref() != Some("passed") || canary_populated.as_deref() != Some("failed") {
         eprintln!(
             "state verdict diff: positive control missing or unexpected; require canary clean=passed and populated=failed"
         );
@@ -727,13 +738,19 @@ fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
         }
         env.insert(
             "FNO_CONFIG".into(),
-            sandbox.join("populated-state/config.toml").to_string_lossy().to_string(),
+            sandbox
+                .join("populated-state/config.toml")
+                .to_string_lossy()
+                .to_string(),
         );
         env.insert(
             "STATE_PROFILE_DIR".into(),
             sandbox.join("home/.fno").to_string_lossy().to_string(),
         );
-        env.insert("CLAUDE_CODE_SESSION_ID".into(), "state-canary-session".into());
+        env.insert(
+            "CLAUDE_CODE_SESSION_ID".into(),
+            "state-canary-session".into(),
+        );
     }
     if opts.changed {
         return crate::test_changed::run_changed(root, opts, &env, sandbox);
@@ -746,8 +763,7 @@ fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
         steps = state_steps(&steps, &lane.state);
     }
     let total = steps.len();
-    let names: std::collections::BTreeSet<String> =
-        steps.iter().map(|s| s.0.clone()).collect();
+    let names: std::collections::BTreeSet<String> = steps.iter().map(|s| s.0.clone()).collect();
 
     // Selection: build the selected indices from the mode.
     let mut retry_fell_back = false;
@@ -804,7 +820,15 @@ fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
     let mut shard_index = 0;
     let mut shard_total = 0;
     if !opts.shard.is_empty() {
-        let (idx, tot) = parse_smoke_shard(&opts.shard)?;
+        // validate() already parsed this spec; a failure here is the
+        // caller bypassing the door, so refuse rather than guess.
+        let (idx, tot) = match parse_smoke_shard(&opts.shard) {
+            Ok(pair) => pair,
+            Err(msg) => {
+                eprintln!("{msg}");
+                return 2;
+            }
+        };
         shard_index = idx;
         shard_total = tot;
         if tot > 1 {
@@ -842,9 +866,7 @@ fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
     let kg = if opts.keep_going { " keep-going" } else { "" };
     let mut shard_header = String::new();
     if shard_total > 1 {
-        let pytest_in = steps
-            .iter()
-            .any(|s| selected.contains_step_marker);
+        let pytest_in = steps.iter().any(|s| selected.contains_step_marker);
         shard_header = format!(" shard={shard_index}/{shard_total}{pytest_marker}");
     }
     println!(
@@ -862,7 +884,9 @@ fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
         println!("smoke: no usable failure record - falling back to FULL run");
     }
     if selected.len() != total {
-        println!("smoke: SUBSET run - run 'fno doctor test smoke' full before the settle-green push");
+        println!(
+            "smoke: SUBSET run - run 'fno doctor test smoke' full before the settle-green push"
+        );
     }
 
     let cmds: Vec<&str> = selected.iter().map(|i| steps[*i].2.as_str()).collect();
@@ -884,7 +908,18 @@ fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
     // The canary brackets the whole run: plant before the first step, verify
     // after the last.
     let plant_rc = run_state_canary(&root, "plant");
-    let (results, first_rc) = execute_steps(&root, &env, &steps, &selected, opts.keep_going, if shard_total > 1 { opts.shard.as_str() } else { "" });
+    let (results, first_rc) = execute_steps(
+        &root,
+        &env,
+        &steps,
+        &selected,
+        opts.keep_going,
+        if shard_total > 1 {
+            opts.shard.as_str()
+        } else {
+            ""
+        },
+    );
     let canary_broken = plant_rc != 0;
     let canary_rc = run_state_canary(&root, "verify");
     if canary_rc != 0 && !canary_broken {
