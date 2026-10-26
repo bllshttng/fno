@@ -140,11 +140,7 @@ pub(crate) fn flag_value(toks: &[String], flags: &[&str]) -> Option<String> {
             if let Some(rest) = t.strip_prefix(&format!("{f}=")) {
                 return Some(rest.to_string());
             }
-            if f.len() == 2
-                && f.ends_with(|c: char| c != '-')
-                && t != *f
-                && t.starts_with(f.as_str())
-            {
+            if f.len() == 2 && f.ends_with(|c: char| c != '-') && t != *f && t.starts_with(*f) {
                 return Some(t[f.len()..].to_string());
             }
         }
@@ -1153,7 +1149,7 @@ pub fn admit(args: &[String], cwd: &Path, existing_names: &HashSet<String>) -> A
         stderr,
         exit: None,
         stdout: None,
-        take_over: answer.take_over.clone(),
+        take_over: (!answer.take_over.is_empty()).then(|| answer.take_over.clone()),
         events: answer.events.clone(),
     }
 }
