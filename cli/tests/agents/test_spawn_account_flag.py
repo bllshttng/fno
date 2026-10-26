@@ -59,7 +59,14 @@ def test_proven_credential_carrier_overrides_record_derivation(monkeypatch, runn
     asked: list = []
 
     def answer(payload, **_kw):
+        # The stub answers per kind, like the real door: config defaults
+        # compose at the seam before the command runs, and the pane mesh's
+        # compose rides this same transport with no carrier in its payload.
         asked.append(payload)
+        if payload.get("kind") == "compose":
+            return {"exit": 0}
+        if payload.get("kind") == "credentials":
+            return {"env": {}, "scrub": [], "secret": []}
         return {
             "env": json.loads(payload["carrier"]),
             "credential_source": "canary-proven carrier",
@@ -88,9 +95,11 @@ def test_proven_credential_carrier_overrides_record_derivation(monkeypatch, runn
 
     assert _os.environ.get("FNO_LAUNCH_ACCOUNT") == "makers"
     del _os.environ["FNO_LAUNCH_ACCOUNT"]
-    # The carrier travels to the Rust owner verbatim, against the spawn's harness.
-    assert asked[0]["kind"] == "dispatch-account"
-    assert (asked[0]["account"], asked[0]["harness"], asked[0]["carrier"]) == (
+    # The carrier travels to the Rust owner verbatim, against the spawn's
+    # harness; the seam's compose ask may ride the same transport before it.
+    dispatch_asks = [p for p in asked if p.get("kind") == "dispatch-account"]
+    assert len(dispatch_asks) == 1
+    assert (dispatch_asks[0]["account"], dispatch_asks[0]["harness"], dispatch_asks[0]["carrier"]) == (
         "makers", "claude", carrier,
     )
 
