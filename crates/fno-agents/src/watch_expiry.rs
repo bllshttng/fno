@@ -687,6 +687,7 @@ mod tests {
             .push(row("t-x-1-glm", "s-stopped", at(120)));
         // Born after its name's stop: a respawn the old stop must not touch.
         registry.entries.push(row("t-x-2-glm", "s-respawn", at(5)));
+        home.ensure_root().unwrap();
         crate::registry_store::seed_raw(
             &home.registry_json(),
             serde_json::to_vec(&registry).unwrap(),
