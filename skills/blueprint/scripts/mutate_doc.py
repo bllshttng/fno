@@ -1315,7 +1315,7 @@ def _sync_graph_status(frontmatter: object, plan_path: Path) -> None:
     try:
         proc = subprocess.run(
             ["fno", "backlog", "update", node_id.strip(),
-             "plan_path", str(plan_path)],
+             f"plan_path={plan_path}"],
             capture_output=True, text=True, timeout=30,
         )
         if proc.returncode != 0:

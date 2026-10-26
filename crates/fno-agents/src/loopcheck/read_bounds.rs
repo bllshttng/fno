@@ -391,4 +391,33 @@ mod tests {
             "{reserved:?}"
         );
     }
+
+    #[test]
+    fn the_drain_floor_survives_bounded_pre_drain_work() {
+        // The invariant the 260-297ms kills broke: pre-drain reads taken at
+        // stopgate_read_timeout() cannot push the fire past the reserve
+        // line, so a drain that starts after the WORST legal pre-drain spend
+        // still meets its floor. The re-stamp fast-forwards the clock to the
+        // spent state (remaining == reserve) without sleeping.
+        let deadline = std::time::Instant::now() + STOPGATE_FIRE_BUDGET;
+        STOPGATE_READS.with(|cell| {
+            *cell.borrow_mut() = (0, Some(deadline), STOPGATE_DRAIN_RESERVE.as_millis() as u64);
+        });
+        let worst_pre_drain = stopgate_read_timeout();
+        assert!(
+            worst_pre_drain
+                <= STOPGATE_FIRE_BUDGET - STOPGATE_DRAIN_RESERVE
+                    + std::time::Duration::from_secs(1),
+            "{worst_pre_drain:?}"
+        );
+        let spent = std::time::Instant::now() + STOPGATE_DRAIN_RESERVE;
+        STOPGATE_READS.with(|cell| {
+            *cell.borrow_mut() = (0, Some(spent), STOPGATE_DRAIN_RESERVE.as_millis() as u64);
+        });
+        let drain = stopgate_drain_timeout();
+        assert!(
+            drain >= STOPGATE_DRAIN_FLOOR,
+            "a fully-spent legal pre-drain phase left the drain at {drain:?}, under its floor"
+        );
+    }
 }
