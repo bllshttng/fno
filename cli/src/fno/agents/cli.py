@@ -1119,8 +1119,9 @@ def cmd_spawn(
     # id so the row mint stamps it, and an id left by a parent's spawn dies
     # here rather than labeling a row that launched on something else. The
     # pick's provenance carrier stays the pick's (launch_provenance.py).
-    if account is not None or dispatch_account is not None:
-        os.environ["FNO_LAUNCH_ACCOUNT"] = account if account is not None else dispatch_account
+    label = account if account is not None else dispatch_account
+    if label is not None:
+        os.environ["FNO_LAUNCH_ACCOUNT"] = label
     else:
         os.environ.pop("FNO_LAUNCH_ACCOUNT", None)
 
