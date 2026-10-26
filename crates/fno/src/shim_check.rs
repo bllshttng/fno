@@ -8,7 +8,6 @@
 //! install and fail loud when a defect survives.
 
 use std::ffi::OsString;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// Every gh read and every fno command dies when one of these is missing.
@@ -73,8 +72,15 @@ impl Roots {
     }
 }
 
+/// A file this user may run. access(2), not the mode bits: an owned file
+/// with only the group or other execute bit set is not runnable by its owner.
 fn executable(p: &Path) -> bool {
-    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c) = std::ffi::CString::new(p.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `c` is a valid NUL-terminated path that outlives the call.
+    p.is_file() && unsafe { libc::access(c.as_ptr(), libc::X_OK) } == 0
 }
 
 impl Roots {

@@ -82,6 +82,16 @@ fn an_absence_counts_only_with_a_linkable_durable_copy() {
     // A pure-Python install ships no fno binary: nothing to link, no defect.
     assert!(scan(r).is_empty());
 
+    // An owned copy with only the group execute bit is not runnable by its
+    // owner, so it is no durable copy. Root passes access(2) on any x bit.
+    let group_only = r.cargo_bin.join("fno-gh-proxy");
+    exe(&group_only);
+    std::fs::set_permissions(&group_only, std::fs::Permissions::from_mode(0o610)).unwrap();
+    if unsafe { libc::geteuid() } != 0 {
+        assert!(scan(r).is_empty(), "a group-only x bit is not executable");
+    }
+    std::fs::remove_file(&group_only).unwrap();
+
     // A durable copy under the temp root would relink into a temp-resolving
     // defect, so its absence is not reported either.
     let in_temp = Roots {
