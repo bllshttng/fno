@@ -429,11 +429,16 @@ fn fetch_board(ctx: &Ctx) -> Result<Value, String> {
     Ok(read_board(&opts))
 }
 
-fn fetch_fold(ctx: &Ctx) -> Result<Value, String> {
-    let teams = vec![json!({"scope": ctx.scope, "level": ctx.level})];
+fn fetch_fold(
+    graph: &PathBuf,
+    cwd: &PathBuf,
+    scope: &str,
+    level: Option<i64>,
+) -> Result<Value, String> {
+    let teams = vec![json!({"scope": scope, "level": level})];
     let payload = org_fold(
-        &ctx.graph,
-        &ctx.cwd,
+        graph,
+        cwd,
         None,
         &crate::paths::AgentsHome::from_env().registry_json(),
         &teams,
@@ -441,7 +446,7 @@ fn fetch_fold(ctx: &Ctx) -> Result<Value, String> {
     .map_err(|e| format!("scope fold unreadable: {e}"))?;
     let mine = payload
         .get("scope_nodes")
-        .and_then(|s| s.get(&ctx.scope))
+        .and_then(|s| s.get(scope))
         .cloned()
         .unwrap_or(Value::Null);
     if mine.get("status").and_then(|s| s.as_str()) != Some("ok") {
@@ -3082,7 +3087,25 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         .and_then(Value::as_str);
     let beat = Beat {
         board: fetch_board(&ctx),
-        folded: fetch_fold(&ctx),
+        // The fold prefetch rides the reader deadline like the readers:
+        // past the ceiling it lands as a named failure instead of holding
+        // the beat, so the partial-journaling guarantee covers the leg
+        // before collect_readings.
+        folded: {
+            let graph = ctx.graph.clone();
+            let cwd = ctx.cwd.clone();
+            let scope = ctx.scope.clone();
+            let level = ctx.level;
+            match run_bounded(READER_CALL_BUDGET, "fold prefetch", move || {
+                fetch_fold(&graph, &cwd, &scope, level)
+            }) {
+                Ok(Some(value)) => value,
+                Ok(None) => Err(format!(
+                    "fold prefetch timed out after {READER_CALL_BUDGET:?}"
+                )),
+                Err(error) => Err(error),
+            }
+        },
     };
     let readings = collect_readings(&ctx, &beat, since);
     let mut data = build_data(&readings, &ctx.scope);
