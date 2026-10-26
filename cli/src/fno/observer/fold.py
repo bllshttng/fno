@@ -3,7 +3,7 @@
 Read-only over already-captured signals (ledger, graph, events, postmortems) -
 corpus construction is a read-time fold, never a new write-path for historical
 facts (Locked Decision 1). Skill-invocation attribution and version resolution
-moved here verbatim when the scoreboard family went native: one implementation of each, the moved bodies; the native verb answers
+moved here verbatim when the scoreboard family went native: one implementation of each, the moved bodies; the native command answers
 ``fno whoami scoreboard``.
 
 I/O (plan-file reads, gh PR-thread fetches) stays at the CLI layer; the

@@ -389,10 +389,14 @@ crates/fno-agents/src/hook/diff_budget.rs
 crates/fno-agents/src/kill_criteria.rs
 crates/fno-agents/src/merge_hold.rs
 crates/fno-agents/src/plan_carry.rs
+crates/fno-agents/src/scoreboard/plan_join.rs
 crates/fno-agents/src/surface_check.rs
 crates/fno-agents/src/verify_advise.rs"
 # plan_carry.rs reads a plan body only to hash it and copy it across hosts;
 # it never parses frontmatter, so the shelling rule does not apply to it.
+# scoreboard/plan_join.rs reads plan frontmatter (ACs, probes, ownership) to
+# score plan fidelity for the scoreboard and the plan-fidelity gate; it never
+# extracts a plan status, so the shelling rule does not apply to it.
 # create_cli.rs reads only the plan frontmatter `status` scalar and hands it
 # to the shared rung table (graph_store::supplied_plan_rung) for the wave
 # append's plan-rung map; it classifies nothing itself, so the shelling rule
@@ -564,6 +568,19 @@ while IFS= read -r reader; do
                 | grep -vE '\.get\("status"\)' \
                 | grep -vE 'str_field\(response, "status"\)' \
                 | grep -vE '"status": status,' \
+                || true
+        )"
+    fi
+    if [ "$reader" = "crates/fno-agents/src/scoreboard/plan_join.rs" ]; then
+        # plan_join's "status" literals are LEDGER-row reads and the
+        # plan-fidelity view envelope (unjoined/joined delivery fidelity),
+        # the merge_hold row-vocabulary precedent; its plan read walks ACs,
+        # probes and ownership, never a `status:` key.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '\.get\("status"\)' \
+                | grep -vE '"status":[[:space:]]*"unjoined",' \
+                | grep -vE '"status"\.to_string\(\)' \
                 || true
         )"
     fi

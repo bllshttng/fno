@@ -30,7 +30,7 @@ pub(crate) enum ArgError {
     MissingValue(&'static str),
 }
 
-/// The usage line `--help` prints (the typer help's own verb line).
+/// The usage line `--help` prints (the typer help's own command line).
 pub(crate) const USAGE: &str = "usage: fno-agents scoreboard [--since <days>] [--json] [--project <slug>]\n       or one view: --calibration | --by-skill | --efficiency | --plan-fidelity | --by-provider | --lanes";
 
 pub(crate) fn parse(args: &[String]) -> Result<ScoreboardArgs, ArgError> {

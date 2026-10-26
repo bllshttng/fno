@@ -213,7 +213,7 @@ enum Role {
     /// `fno whoami scoreboard ...`: the telemetry views, native via the
     /// binary-direct `fno-agents scoreboard` door. The deprecated root
     /// `fno scoreboard` keeps its Python deprecation line and re-spells to
-    /// this verb, so only the whoami spelling claims here.
+    /// this command, so only the whoami spelling claims here.
     WhoamiScoreboard(Vec<OsString>),
     /// `fno agents claim backlog|export ...`: the shared-store commands, run
     /// by `fno-agents claim`.

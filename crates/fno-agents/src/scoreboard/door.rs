@@ -97,7 +97,7 @@ pub fn run_scoreboard(args: &[String]) -> i32 {
             nid.map(|n| pnodes.contains(n)).unwrap_or(false)
         }
     };
-    let mut read = |kinds: &[&str]| {
+    let read = |kinds: &[&str]| {
         let (events, coverage) =
             super::readers::read_events_with_coverage(&inputs.events_paths, kinds);
         let events: Vec<Value> = events.into_iter().filter(|e| in_scope(e)).collect();
@@ -179,7 +179,7 @@ pub fn run_scoreboard(args: &[String]) -> i32 {
         match crate::scoreboard_provider::view(&params) {
             Ok(reply) => {
                 if parsed.json_out {
-                    let view = reply.get("view").cloned().unwrap_or_default();
+                    let mut view = reply.get("view").cloned().unwrap_or_default();
                     if let Some(scope) = &scope {
                         view["project_scope"] = scope.clone();
                     }

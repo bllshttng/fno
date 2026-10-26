@@ -485,14 +485,14 @@ pub(crate) fn build_calibration(
     }
     let mut excluded = Map::new();
     for (_, v) in &final_verdict {
-        if !COUNTABLE_VERDICTS.contains(v.as_str()) {
+        if !COUNTABLE_VERDICTS.contains(&v.as_str()) {
             let counter = excluded.entry(v.to_string()).or_insert(json!(0));
             *counter = json!(counter.as_i64().unwrap_or(0) + 1);
         }
     }
     let counted: Vec<(String, String)> = final_verdict
         .iter()
-        .filter(|(_, v)| COUNTABLE_VERDICTS.contains(v.as_str()))
+        .filter(|(_, v)| COUNTABLE_VERDICTS.contains(&v.as_str()))
         .cloned()
         .collect();
     let n = counted.len() as i64;
