@@ -142,7 +142,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Phase utilities (kill-check via the fno-agents binary)",
         {"hidden": True},
     ),
-    "config": ("fno.config.write_cli:app", "Configuration management"),
+    "config": ("fno.config_writer_cli:app", "Configuration management"),
     "notify": (
         "fno.notify:notify_app",
         "OS notification helper (in-package; macOS osascript / Linux notify-send)",

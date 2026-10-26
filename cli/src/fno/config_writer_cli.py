@@ -1,13 +1,16 @@
-"""The `fno config` command shell: the typer app, its lazy mounts, the writer
+"""The `fno config` write shell: the typer app, its lazy mounts, the writer
 commands, and the doctor leaf.
 
 The family port moved the read-side commands (get, history, build-dir,
 assert-subagent-budget, status-sinks, active-backlog, the non-codex arms of
-plugin install) native to the `fno` front door; the writer stays Python until
-the config-writer port, and the doctor command answers through
-fno.setup.config_doctor, the library beside its engine. This module carries
-the moved remainder of cli/src/fno/config_cli.py; it deletes when the hub
-does.
+plugin install) native to the `fno` front door. What remains here is a
+composition root: the writer's engine lives in the config hub
+(fno.config.writer) while the doctor's lives in the setup family
+(fno.setup.config_doctor), and the merge-gating lease wrapper it composes is
+claims vocabulary the config package may not import (the boundary rule in
+check-company-boundaries). So this module stays top-level and unmapped by
+the layer scan, like its config_cli.py ancestor; the config-writer port
+deletes it with the hub.
 """
 
 from __future__ import annotations

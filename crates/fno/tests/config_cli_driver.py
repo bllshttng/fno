@@ -293,10 +293,6 @@ def load_oracle_modules() -> None:
         # module through sys.modules while the body runs.
         sys.modules[module_name] = module
         exec(compile(source, f"<git-show:{repo_path}>", "exec"), module.__dict__)
-    # The live command table points `config` at the moved shell; capture answers
-    # from the base-commit leg, so the oracle module aliases under the name
-    # the lazy import resolves.
-    sys.modules["fno.config.write_cli"] = sys.modules["fno.config_cli"]
 
 
 def run_case(case: Case, root: Path) -> tuple[str, str, int]:

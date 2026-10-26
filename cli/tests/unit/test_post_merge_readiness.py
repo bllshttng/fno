@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.config.write_cli import app
+from fno.config_writer_cli import app
 from fno.setup.config_doctor import post_merge_readiness
 
 VALID_STATUSES = {"ready", "unconfigured", "opted_out", "dormant", "error"}
