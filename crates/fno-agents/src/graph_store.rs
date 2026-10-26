@@ -1765,6 +1765,27 @@ pub fn reopen_outranks_stamps(reopened: Option<&str>, kid_completed: &[Option<&s
     true
 }
 
+/// The epic form of the reopen guard. `kids` pairs each child's filing stamp
+/// with its completion stamp. Only a child filed at or before the reopen can
+/// expire it: its close is evidence the reopened work finished. A child filed
+/// after the reopen proves nothing about the unfiled work the reopen named,
+/// so its close never re-arms the auto-close. An unreadable filing stamp
+/// counts as filed after: ambiguity favours the human.
+pub fn reopen_holds_epic(reopened: Option<&str>, kids: &[(Option<&str>, Option<&str>)]) -> bool {
+    let cutoff = reopened.and_then(parse_rfc3339_stamp);
+    let prior: Vec<Option<&str>> = kids
+        .iter()
+        .filter(|(filed, _)| match cutoff {
+            Some(reopen) => filed
+                .and_then(parse_rfc3339_stamp)
+                .is_some_and(|f| f <= reopen),
+            None => true,
+        })
+        .map(|(_, done)| *done)
+        .collect();
+    reopen_outranks_stamps(reopened, &prior)
+}
+
 /// Stamp parser for the guard comparisons: None on blank or unreadable.
 /// Mirrors the Python twin's _parse_iso: an RFC3339 stamp parses as itself,
 /// a naive stamp reads UTC (the graph carries both spellings).
@@ -2067,20 +2088,25 @@ pub fn recompute_statuses_with_plan_rungs(
         // its children are: a lock or an open PR reads live from the
         // derivation above; a bound plan's own deliverables are unverified
         // until its own door closes the row; and a deliberate reopen holds
-        // until a NEW child close postdates it.
+        // until a child filed before it closes after it.
         let own_work_live = matches!(
             parent_status.as_deref(),
             Some("in_review") | Some("in_progress")
         );
         let holds = {
-            let kid_stamps: Vec<Option<&str>> = children_by_parent[&pid]
+            let kid_stamps: Vec<(Option<&str>, Option<&str>)> = children_by_parent[&pid]
                 .iter()
                 .filter_map(|ci| entries.get(*ci))
-                .map(|k| k.get("completed_at").and_then(Value::as_str))
+                .map(|k| {
+                    (
+                        k.get("created_at").and_then(Value::as_str),
+                        k.get("completed_at").and_then(Value::as_str),
+                    )
+                })
                 .collect();
             own_work_live
                 || has_own_plan_work(&entries[pidx])
-                || reopen_outranks_stamps(
+                || reopen_holds_epic(
                     entries[pidx].get("reopened_at").and_then(Value::as_str),
                     &kid_stamps,
                 )
@@ -3596,12 +3622,21 @@ mod tests {
                    "reopened_at": "2026-02-01T00:00:00+00:00"}),
             json!({"id": "reopened-kid", "parent": "reopened-parent",
                    "completed_at": "2026-01-01T00:00:00+00:00"}),
-            // A reopen that a NEW child close postdates expires: re-close.
-            // The child stamp is the naive spelling the graph also carries.
+            // A reopen that a child filed before it closes after expires:
+            // re-close. The child stamp is the naive spelling the graph also
+            // carries.
             json!({"id": "stale-parent", "parent": null, "status": "idea",
                    "reopened_at": "2026-01-01T00:00:00+00:00"}),
             json!({"id": "stale-kid", "parent": "stale-parent",
+                   "created_at": "2025-12-01T00:00:00+00:00",
                    "completed_at": "2026-03-01T00:00:00"}),
+            // A child filed after the reopen proves nothing about the work
+            // the reopen named: its close leaves the epic open.
+            json!({"id": "epic-parent", "parent": null, "status": "idea",
+                   "reopened_at": "2026-01-01T00:00:00+00:00"}),
+            json!({"id": "late-kid", "parent": "epic-parent",
+                   "created_at": "2026-02-01T00:00:00+00:00",
+                   "completed_at": "2026-03-01T00:00:00+00:00"}),
         ];
         recompute_statuses(&mut entries);
         // Parent with all-done children and no live work of its own -> done.
@@ -3625,6 +3660,11 @@ mod tests {
             s_str(&entries[8], "status"),
             Some("done"),
             "a naive child close postdating the reopen re-closes"
+        );
+        assert_eq!(
+            s_str(&entries[10], "status"),
+            Some("idea"),
+            "a child filed after the reopen never re-arms the close"
         );
     }
 
