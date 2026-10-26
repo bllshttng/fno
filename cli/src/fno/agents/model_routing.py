@@ -111,8 +111,6 @@ class BusinessRoleResolutionBlockedError(RouteCompositionError):
 
     def __init__(self, result: dict) -> None:
         self.result = result
-        # reason arrives as the refusal vocabulary's own string (the Rust
-        # schema owns it), so the message keeps its pre-port bytes.
         detail = f": {result['detail']}" if result.get("detail") else ""
         role_id = (result.get("role") or {}).get("id")
         super().__init__(

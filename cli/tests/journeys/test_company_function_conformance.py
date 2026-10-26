@@ -58,7 +58,6 @@ def _plugins(root: Path, *args: str) -> tuple[int, dict]:
 
 
 def _spawn_overlay(payload: dict) -> dict:
-    """One native spawn-overlay round-trip: JSON payload in, answer out."""
     proc = subprocess.run(
         [str(find_dev_binary()), "spawn-overlay"],
         input=json.dumps(payload),
@@ -70,7 +69,6 @@ def _spawn_overlay(payload: dict) -> dict:
 
 
 def _discover_rows(root: Path) -> list[dict]:
-    """The full discovery rows the retired Python discovery door parsed."""
     return _spawn_overlay({"kind": "roles-discover", "root": str(root)})["rows"]
 
 
