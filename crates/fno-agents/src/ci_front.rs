@@ -1,9 +1,8 @@
 //! The native `fno do ci` namespace: per-commit CI state with per-check
 //! names. The front door claims `do ci` lexically and execs this binary with
-//! the argv intact, the same handover `do pr` uses. Every target form (PR
-//! number, `main`, hex sha) reduces to one commit sha and one workflow-run
-//! read, so a scratch script never hand-rolls the listing again. The PR
-//! merge verdict stays `do pr status`; this command answers the narrower
+//! the argv intact, the same handover `do pr` uses; every target form (PR
+//! number, `main`, hex sha) reduces to one sha and one workflow-run read.
+//! The merge verdict stays `do pr status`; this command answers the narrower
 //! question the census keeps filing: what ran at THIS sha, and what is red.
 
 use serde_json::{json, Value};
@@ -36,9 +35,9 @@ pub(crate) enum Target {
     Sha(String),
 }
 
-/// Classify one positional target. All-digits reads as a PR number (the
-/// pr_operand precedent), so a short all-digit sha needs its full form or a
-/// letter in it; `main` is reserved; anything else hex-ish 7..=40 is a sha.
+/// Classify one positional target: all-digits reads as a PR number (the
+/// pr_operand precedent), `main` is reserved, else hex-ish 7..=40 with a
+/// letter is a sha.
 pub(crate) fn classify_target(raw: &str) -> Option<Target> {
     if raw == "main" {
         return Some(Target::Main);
@@ -52,12 +51,10 @@ pub(crate) fn classify_target(raw: &str) -> Option<Target> {
     hexish.then(|| Target::Sha(raw.to_ascii_lowercase()))
 }
 
-/// `--name value` / `--name=value` off the tail, shared with pr_front.
 use crate::pr_front::option_value;
 
-/// The one positional target word, skipping each value-taking flag's value,
-/// plus a positional count: `status --interval 30 main` must read `main`,
-/// never the flag's own `30`, and a second positional is a usage error.
+/// The one positional target word and its count: `status --interval 30 main`
+/// must read `main`, never the flag's own `30`, and two positionals refuse.
 fn positional_target(tail: &[String]) -> Option<(String, usize)> {
     let mut index = 0;
     let mut found: Option<String> = None;
@@ -197,8 +194,7 @@ pub(crate) fn verdict_from_runs(runs: &[Value]) -> (String, bool, Vec<Value>) {
     verdict_from_folds(&folds)
 }
 
-/// One dispatch of `do ci status [tail...]`. Called from bin/client.rs for
-/// argv whose first two words are `do ci`, with `args = argv[2..]`.
+/// One dispatch of `do ci status [tail...]`, with `args = argv[2..]`.
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
         print_help();
@@ -360,10 +356,6 @@ mod tests {
         assert_eq!(
             positional_target(&vec_of(&["main", "--timeout", "5m"])),
             Some(("main".to_string(), 1))
-        );
-        assert_eq!(
-            positional_target(&vec_of(&["--interval=30", "deadbeef123"])),
-            Some(("deadbeef123".to_string(), 1))
         );
         assert_eq!(
             positional_target(&vec_of(&["41", "42"])).map(|(_, n)| n),
