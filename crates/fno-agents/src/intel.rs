@@ -1409,10 +1409,18 @@ fn fold_all(
     // The rollup cache: one lock holder per run; every advance reads only
     // bytes appended since the last run, and the save lands before the
     // lock drops. No agents home, no cache (the fold then reads whole).
-    let rollup_path = crate::intel_rollup::RollupStore::default_path();
-    let _rollup_guard = rollup_path
+    // A busy lock runs the fold with no cache, the same as no agents home.
+    let mut rollup_path = crate::intel_rollup::RollupStore::default_path();
+    let _rollup_guard = match rollup_path
         .as_deref()
-        .map(crate::intel_rollup::RollupStore::acquire_lock);
+        .map(crate::intel_rollup::RollupStore::acquire_lock)
+    {
+        Some(Ok(guard)) => Some(guard),
+        _ => {
+            rollup_path = None;
+            None
+        }
+    };
     let mut ctx = FoldCtx {
         bus,
         join,

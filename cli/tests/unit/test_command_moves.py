@@ -173,11 +173,14 @@ def test_every_moved_spelling_is_hidden():
         # rename notice, and execs `spawn-overlay project` itself. `skill-diff`
         # joined when its family ported: the front door claims both
         # spellings and execs the native ops, so a python registration
-        # would forward into nothing. Every OTHER moved spelling keeps a
-        # one-release registration, and any registration that exists must
-        # be hidden: an advertised moved name teaches a doomed spelling.
+        # would forward into nothing. `setup` joined when every setup
+        # command ported native: the front door claims the root spelling
+        # and answers it. Every OTHER moved spelling keeps a one-release
+        # registration, and any registration that exists must be hidden:
+        # an advertised moved name teaches a doomed spelling.
         if name in (
             "decide", "yard", "review", "pr", "retro", "restart", "project", "skill-diff",
+            "setup",
         ):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue

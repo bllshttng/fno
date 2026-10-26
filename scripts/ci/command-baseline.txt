@@ -111,7 +111,6 @@ resume
 roles
 route
 scoreboard
-setup
 state
 status
 status-fanout tick

@@ -102,6 +102,7 @@ pub(crate) mod cargo_orphans;
 pub mod census;
 pub mod chats;
 pub mod check_supersession;
+pub mod ci_cadence;
 pub mod claim_cli;
 pub mod claim_commands;
 pub mod claim_lanes_cli;
@@ -1803,6 +1804,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // dedupe memory the arm folds before it wakes again (lead_wake.rs).
     "lead_wake",
     "worker_wake",
+    // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
+    "pr_push_landed",
+    "ci_cadence_check",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
