@@ -152,7 +152,7 @@ Manual inspection remains `fno agents fleet watchdog --json`. The base command i
 
 ## The keeper lane
 
-A `--pane` or `--keeper` process of `fno-agents-worker` whose server died belongs to no shipped sweep. The orphan sweep declines it (`orphans.py` `OWN_DAEMONS`) because ppid 1 is a keeper's normal state. The registry-side sweep walks only the thread socket dir (`daemon.rs` `keeper_registry_sweep`). The pane sweep `KeeperAdopt` runs inside the mux server, which is exactly the thing that died. Measured 2026-09-01: seven live keepers at ppid 1, ages to 22.5h, every one a test fixture, zero socket directories, zero claiming rows. A socket walk reported a clean machine over seven live processes.
+A `--pane` or `--keeper` process of `fno-agents-worker` whose server died belongs to no shipped sweep. The orphan sweep declines it (`crates/fno-agents/src/orphans.rs` `OWN_DAEMONS`) because ppid 1 is a keeper's normal state. The registry-side sweep walks only the thread socket dir (`daemon.rs` `keeper_registry_sweep`). The pane sweep `KeeperAdopt` runs inside the mux server, which is exactly the thing that died. Measured 2026-09-01: seven live keepers at ppid 1, ages to 22.5h, every one a test fixture, zero socket directories, zero claiming rows. A socket walk reported a clean machine over seven live processes.
 
 The keeper lane discovers by PROCESS and joins through argv. Every keeper carries `--sock` and `--session` on its own command line. A `psutil` read yields pid, socket, session, cwd and age with no directory walk. The lane lives in `cli/src/fno/agents/keeper_lane.py`. It shares the orphan sweep's enumeration (`iter_processes` - one `psutil.process_iter` call site, or the sweeps drift) and adds a `--only keeper` filter to this command.
 

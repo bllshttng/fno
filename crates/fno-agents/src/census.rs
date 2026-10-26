@@ -509,7 +509,7 @@ fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
 }
 
 #[cfg(target_os = "macos")]
-fn comm_string(comm: &[libc::c_char]) -> String {
+pub(crate) fn comm_string(comm: &[libc::c_char]) -> String {
     let bytes: Vec<u8> = comm
         .iter()
         .take_while(|&&c| c != 0)

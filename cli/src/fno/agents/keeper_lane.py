@@ -33,7 +33,7 @@ import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Iterator, Optional
 
 #: A named orphan younger than this is left alone by the orphan sweep, and the
 #: same bound is this lane's default reap grace: a worker that just launched
@@ -49,7 +49,7 @@ def _reaper_set(reaper: int) -> set[int]:
     return {reaper, 1}
 
 
-def iter_processes(reaper: int = 1) -> "Iterator[dict]":
+def iter_processes(reaper: int = 1) -> Iterator[dict]:
     """Every process this uid can read, as plain dicts.
 
     One enumeration site for every process-table reader that still runs in

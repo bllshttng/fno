@@ -833,21 +833,13 @@ fn await_orphaned(pid: Option<u32>, timeout: std::time::Duration) -> Option<u32>
     None
 }
 
-/// The ppid of one pid, from the same per-OS read the table uses.
+/// The ppid of one pid. macOS delegates to the census table's one-pid
+/// probe; Linux reads `/proc` directly, because the poll loop below ticks
+/// every 50ms and a `ps` exec per tick would spend the whole await budget
+/// forking.
 #[cfg(target_os = "macos")]
 fn ppid_of(pid: u32) -> Option<u32> {
-    let mut bsd: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut bsd as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    (written == size).then_some(bsd.pbi_ppid)
+    crate::census::parent_pid(pid)
 }
 
 #[cfg(target_os = "linux")]
@@ -981,7 +973,7 @@ pub fn read_rows(reapers: &HashSet<u32>) -> Vec<Row> {
             uid: Some(bsd.pbi_uid),
             start_time: bsd.pbi_start_tvsec as f64,
             cpu_seconds,
-            exe_name: comm_name(&bsd.pbi_comm),
+            exe_name: crate::census::comm_string(&bsd.pbi_comm),
             argv: crate::census::argv_of(pid).unwrap_or_default(),
             cwd,
         });
@@ -1130,21 +1122,9 @@ fn read_cwd(pid: u32) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// The executable's name from the BSD info's `pbi_comm`, NUL-trimmed.
-#[cfg(target_os = "macos")]
-fn comm_name(comm: &[libc::c_char]) -> String {
-    let bytes: Vec<u8> = comm
-        .iter()
-        .take_while(|&&c| c != 0)
-        .map(|&c| c as u8)
-        .collect();
-    String::from_utf8_lossy(&bytes).into_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
 
     /// The fabricated host: the same seam set the Python suite drove through
     /// monkeypatched module functions. `probe_pids` hands out the planted
@@ -1823,18 +1803,5 @@ mod tests {
         assert_eq!(attribute(&worktree, &[]), Some("CWD"));
         let outside = proc_row(4, "grep", "grep", Some("/opt/thing"), 501, START, 0.0);
         assert_eq!(attribute(&outside, &["/repo".to_string()]), None);
-    }
-
-    #[test]
-    fn the_seenset_round_trips_sorted_lines() {
-        // The file is newline-joined and a key carries argv[0], which on
-        // macOS is routinely `Foo Helper` - split on lines, never whitespace.
-        let keys: BTreeSet<String> = ["1:Foo Helper:100".to_string(), "2:grep:200".to_string()]
-            .into_iter()
-            .collect();
-        let joined = keys.iter().cloned().collect::<Vec<_>>().join("\n");
-        let read_back: HashSet<String> = joined.lines().map(str::to_string).collect();
-        assert_eq!(read_back.len(), 2);
-        assert!(read_back.contains("1:Foo Helper:100"));
     }
 }
