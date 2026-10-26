@@ -88,12 +88,12 @@ A thread or daemon worker is reaped stop first, then rm.
 |---|---|---|
 | 1 | `fno agents session stop <name>` | Reaches a session on claude rows only. Codex and gemini answer `stop is a no-op between asks`, registry unchanged. |
 | 2 | `fno agents session rm <name>` | Tears down the harness session record FIRST, registry row after. That record is the resume handle. On teardown failure the registry row is KEPT for retry. `--force` drops it anyway and names the orphan left in the harness store. |
-| 2r | `fno agents registry adopt <full-harness-session-id> --cross-project` | Identity-only recovery from a surviving harness store. Use the full session ID. The flag authorizes machine-wide store selection after uniqueness checks. |
+| 2r | `fno agents registry adopt <full-harness-session-id>` | Identity-only recovery from a surviving harness store. Use the full session ID; store selection is machine-wide. |
 
 `rm` alone never stops a running session. Removing a row and stopping a session are separate commands by design.
 
 <!-- retired-ok: names the command in order to forbid it. -->
-Never follow `rm` with a bare `claude rm <id>`. `rm` already made that call itself, before it touched the registry. The second call buys nothing, and the first one already spent the resume handle. Step 2r with the retained full session UUID is how you get the row back. For one-step recovery into an existing checkout, use `fno agents session resume <full-harness-session-id> --cross-project --cwd <existing-checkout>` instead.
+Never follow `rm` with a bare `claude rm <id>`. `rm` already made that call itself, before it touched the registry. The second call buys nothing, and the first one already spent the resume handle. Step 2r with the retained full session UUID is how you get the row back. For one-step recovery into an existing checkout, use `fno agents session resume <full-harness-session-id> --cwd <existing-checkout>` instead.
 
 Measured on a live registry: `fno agents session rm` lands the registry removal, then hangs on harness teardown. A timeout is not a failed removal. Re-read the registry before you believe the receipt.
 
@@ -118,7 +118,7 @@ It is a dry run by default. `--apply` executes the wake lane only, the one actio
 
 ## Delivery to a parked or live session
 
-`fno-agents resume <name> -m <text>` delivers the text to a live, non-mux Claude row. It also delivers to a Claude row that `claude agents` lists as parked: Needs input, Done, stopped, or failed. A parked session whose process has exited is revived in place first. A pruned-worktree recovery uses `fno agents session resume <full-harness-session-id> --cross-project --cwd <existing-checkout>`.
+`fno-agents resume <name> -m <text>` delivers the text to a live, non-mux Claude row. It also delivers to a Claude row that `claude agents` lists as parked: Needs input, Done, stopped, or failed. A parked session whose process has exited is revived in place first. A pruned-worktree recovery uses `fno agents session resume <full-harness-session-id> --cwd <existing-checkout>`.
 
 A mux pane relaunch still drops the value, as does every non-Claude harness. The resume succeeds and the instruction never lands. A session that carries `FNO_AGENTS_RUNTIME=python` reaches the older Python leg, which refuses a Done row. Run the command with `env -u FNO_AGENTS_RUNTIME` until spawned sessions stop inheriting that pin.
 

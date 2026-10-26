@@ -1032,8 +1032,7 @@ mod tests {
         let inputs = inputs_from_rows(&selected);
         let (private, _) = render_one(&inputs, None, None, None, false, None).unwrap();
         assert!(
-            private
-                .contains("fno agents adopt 9b1c2d3e-0000-4000-8000-00000000leak --cross-project"),
+            private.contains("fno agents adopt 9b1c2d3e-0000-4000-8000-00000000leak"),
             "the private page carries the recovery command"
         );
         let (page, count) = render_one(&inputs, None, None, None, true, None).unwrap();
@@ -1044,7 +1043,6 @@ mod tests {
             "ses-leak",
             "9b1c2d3e",
             "fno agents",
-            "--cross-project",
             "secret details",
             "secret note",
             "Linked private",

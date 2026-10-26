@@ -367,3 +367,33 @@ fn smoke_setup_cleans_before_building_cached_artifacts() {
         assert!(clean < build, "smoke setup can execute a stale cached {package} binary");
     }
 }
+
+#[test]
+fn journey_cargo_builds_pin_the_classic_layout() {
+    // The smoke sandbox pins CARGO_BUILD_BUILD_DIR into its /tmp home, so a
+    // bare `cargo build` in a smoke leg is a cold rebuild into the sandbox,
+    // and the CI runner's /tmp quota cannot fit one (EDQUOT os error 122,
+    // smoke-rest (4), 2026-10-25). Every cargo build in the
+    // workspace-standalone journey must pin the classic layout the script
+    // itself reads and smoke-setup pre-builds warm. The invocation pattern
+    // consumes shell assignment prefixes, so an indented build or one
+    // carrying another env prefix (RUSTFLAGS=... cargo build) is caught too.
+    let lines =
+        std::fs::read_to_string(repo().join("tests/mux-workspace-standalone.sh")).unwrap();
+    let invocation = regex::Regex::new(
+        r#"(?:^|[;&|]\s*|\b(?:then|do|else)\s+)(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*cargo build\b"#,
+    )
+    .unwrap();
+    let bare: Vec<String> = lines
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| {
+            invocation.is_match(line.trim()) && !line.contains("CARGO_BUILD_BUILD_DIR=")
+        })
+        .map(|(i, line)| format!("line {}: {}", i + 1, line))
+        .collect();
+    assert!(
+        bare.is_empty(),
+        "unpinned cargo build in tests/mux-workspace-standalone.sh: {bare:?}"
+    );
+}

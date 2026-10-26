@@ -5,8 +5,7 @@ use serde_json::{json, Value};
 
 /// Resolve the lifecycle target the way the session-connecting commands do:
 /// registry first, then a best-effort harness-store heal for session-shaped
-/// tokens. `cross_project` lifts the store heal's project confinement, which
-/// is the grant `fno agents rm --cross-project` forwards. `for_stop` tries the
+/// tokens. `for_stop` tries the
 /// rm tombstone FIRST: a session `fno agents rm` just removed resolves from
 /// the tombstone the daemon itself stamped (short id, full session id, cwd),
 /// never through the adopting heal, whose rm grace window refuses exactly
@@ -18,7 +17,6 @@ pub(crate) async fn entry_for_lifecycle(
     registry: &crate::state::Registry,
     token: &str,
     registry_path: &std::path::Path,
-    cross_project: bool,
     for_stop: bool,
 ) -> Result<Option<crate::state::RegistryEntry>, String> {
     let Value::Array(rows) = serde_json::to_value(&registry.entries)
@@ -53,15 +51,9 @@ pub(crate) async fn entry_for_lifecycle(
                 })));
             }
         }
-        crate::client_commands::resolve_entry_with_heal_scoped(
-            &rows,
-            &worker_token,
-            &path,
-            cross_project,
-            None,
-        )
-        .map(Some)
-        .map_err(|err| err.message())
+        crate::client_commands::resolve_entry_with_heal_scoped(&rows, &worker_token, &path, None)
+            .map(Some)
+            .map_err(|err| err.message())
     })
     .await
     .map_err(|exc| format!("identity resolution task failed: {exc}"))?;
@@ -116,11 +108,10 @@ mod tests {
             ..Default::default()
         };
 
-        let entry =
-            entry_for_lifecycle(&reg, "f00dcafe", &agents.join("registry.json"), false, true)
-                .await
-                .expect("the tombstone resolves the removed session")
-                .expect("the token names a recorded removal");
+        let entry = entry_for_lifecycle(&reg, "f00dcafe", &agents.join("registry.json"), true)
+            .await
+            .expect("the tombstone resolves the removed session")
+            .expect("the token names a recorded removal");
 
         assert_eq!(entry.name, "t-removed");
         assert_eq!(entry.harness_name(), "codex");

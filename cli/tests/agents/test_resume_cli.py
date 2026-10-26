@@ -105,7 +105,7 @@ def test_missing_cwd_exits_13_with_handle_remedy() -> None:
     assert "the row is the resume handle" in res.stderr
     assert "fno agents adopt <id>" in res.stderr
 
-def test_store_resume_threads_cross_project_and_replacement_cwd(tmp_path, monkeypatch):
+def test_store_resume_threads_replacement_cwd(tmp_path, monkeypatch):
     """A pruned store session must resolve and launch in the explicit checkout."""
     from types import SimpleNamespace
 
@@ -127,7 +127,6 @@ def test_store_resume_threads_cross_project_and_replacement_cwd(tmp_path, monkey
     replacement = str(tmp_path)
     res = resume_logic(
         name=entry.harness_session_id,
-        cross_project=True,
         cwd_override=replacement,
         print_command=True,
         registry_loader=lambda: [],
@@ -140,8 +139,6 @@ def test_store_resume_threads_cross_project_and_replacement_cwd(tmp_path, monkey
     assert res.exec_cwd == replacement
     assert seen == {
         "token": entry.harness_session_id,
-        "scope_cwd": replacement,
-        "cross_project": True,
     }
 
 # ---------------------------------------------------------------------------
