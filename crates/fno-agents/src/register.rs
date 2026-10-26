@@ -102,20 +102,25 @@ session-start restamp keeps the existing row pointed at this session"
 
     // Address collisions refuse before any write (the Python closure raises,
     // which aborts the update; a pre-check reaches the same no-write outcome).
+    // The raise sits after the refresh loop in the Python updater, so a
+    // session refreshing its OWN row never collides.
     let base = canonical_handle(&session_id);
-    if let Ok(registry) = load_registry(&home.shared_registry_json()) {
-        let taken_by_same_session = registry.entries.iter().any(|row| {
-            row.harness_session_id
-                .as_deref()
-                .and_then(|sid| session_handle_tier(&base, sid))
-                == Some(0)
-        });
-        if taken_by_same_session {
-            eprintln!(
-                "register failed: canonical handle '{base}' collision while registering \
+    let current = load_registry(&home.shared_registry_json()).ok();
+    let own_row_exists = current.as_ref().is_some_and(|registry| {
+        registry.entries.iter().any(|e| {
+            e.harness.as_deref() == Some(harness.as_str())
+                && e.harness_session_id.as_deref() == Some(session_id.as_str())
+        })
+    });
+    if !own_row_exists {
+        if let Some(registry) = &current {
+            if address_taken(&registry.entries, &base, true) {
+                eprintln!(
+                    "register failed: canonical handle '{base}' collision while registering \
 session '{session_id}'; use the full session id directly"
-            );
-            return 1;
+                );
+                return 1;
+            }
         }
     }
 
@@ -149,7 +154,7 @@ session '{session_id}'; use the full session id directly"
         }
         let mut name = base.clone();
         let mut suffix = 2;
-        while registry.entries.iter().any(|e| e.name == name) {
+        while address_taken(&registry.entries, &name, false) {
             name = format!("{base}-{suffix}");
             suffix += 1;
         }
@@ -173,15 +178,11 @@ session '{session_id}'; use the full session id directly"
             // The derived 8-hex attach key, skipped (not raised) when it
             // collides with an existing address: the full id still resolves.
             let derived = canonical_handle(&session_id);
-            let derived_taken = registry
-                .entries
-                .iter()
-                .any(|e| e.name == derived || e.short_id == derived);
             let hex_guarded = derived.chars().count() == 8
                 && derived
                     .chars()
                     .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
-            if hex_guarded && !derived_taken {
+            if hex_guarded && !address_taken(&registry.entries, &derived, false) {
                 fresh.short_id = derived;
             }
         }
@@ -258,6 +259,24 @@ session '{session_id}'; use the full session id directly"
 fn run_mail_hold(argv: &[&str]) -> i32 {
     let owned: Vec<String> = argv.iter().map(|s| (*s).to_string()).collect();
     crate::mail_hold::run_mail_hold(&owned)
+}
+
+/// The Python `_address_is_taken` predicate: a token is taken when a row
+/// names it directly (name or short id) or when the row's session id
+/// addresses it at any tier. `same_session_only` narrows to the tier-0 (full
+/// id) match: a token MINTED from a session id is taken only by the SAME
+/// session, and a first-eight overlap with a different session is read-side
+/// ambiguity, not a registration wall.
+fn address_taken(entries: &[RegistryEntry], token: &str, same_session_only: bool) -> bool {
+    entries.iter().any(|row| {
+        if !same_session_only && (row.name == token || row.short_id == token) {
+            return true;
+        }
+        row.harness_session_id
+            .as_deref()
+            .and_then(|sid| session_handle_tier(token, sid))
+            .is_some_and(|tier| !same_session_only || tier == 0)
+    })
 }
 
 /// The lead manifest naming `session_id` as holder, for the role re-stamp a

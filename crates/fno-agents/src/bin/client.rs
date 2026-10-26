@@ -4623,11 +4623,6 @@ fn render_list_json(
     serde_json::to_string_pretty(&payload).unwrap_or_default()
 }
 
-/// The `; released N claim(s); kept <key> (<observed>)` suffix a stop/rm line
-/// carries when the daemon released or kept claims for the stopped worker
-/// (change 5d). Empty when the receipt names neither, so a stop that
-/// released nothing renders byte-identical to today.
-
 /// Render reconcile result as Python-matching JSON (Task 3.1).
 ///
 /// Shape: `{"scanned": N, "orphaned": [...], "recovered": [...], "skipped": [...], "errors": [...]}`
