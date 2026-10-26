@@ -170,10 +170,19 @@ pub fn run(tail: &[String]) -> i32 {
         }
     }
     let served = served_store_path(&graph_path);
-    eprintln!(
-        "No node matching '{}' (id/slug/bare-hex) in {}",
-        args.id,
-        served.display()
+    // The JSON-stdout contract: the default get render IS json, so a miss
+    // prints one {ok:false} document on stdout instead of silence; rc stays 1
+    // for rc readers.
+    println!(
+        "{}",
+        py_json_compact(&json!({
+            "ok": false,
+            "error": format!(
+                "No node matching '{}' (id/slug/bare-hex) in {}",
+                args.id,
+                served.display()
+            ),
+        }))
     );
     1
 }

@@ -53,7 +53,7 @@ fn a_present_node_resolves_and_field_prints_raw() {
 }
 
 #[test]
-fn a_clean_miss_is_exit_1_naming_the_served_store_without_read_diagnostics() {
+fn a_clean_miss_is_exit_1_with_one_error_document_naming_the_served_store() {
     let (_dir, config, graph) = sandbox();
     seed(
         &graph,
@@ -61,27 +61,46 @@ fn a_clean_miss_is_exit_1_naming_the_served_store_without_read_diagnostics() {
     );
     let (code, stdout, stderr) = get(&config, &["--strict", "x-zzzz9999"]);
     assert_eq!(code, 1, "{stdout}{stderr}");
-    let combined = format!("{stdout}{stderr}");
+    // The miss is one parseable document on stdout (the JSON-stdout
+    // contract: a pipe consumer never json.loads an empty string), rc
+    // stays 1, and stderr stays quiet.
+    let doc: serde_json::Value = serde_json::from_str(stdout.trim()).expect("stdout parses");
+    assert_eq!(
+        doc.get("ok").and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
+    let error = doc
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .expect("error field");
     assert!(
-        combined.contains("No node matching 'x-zzzz9999' (id/slug/bare-hex)"),
-        "{combined}"
+        error.contains("No node matching 'x-zzzz9999' (id/slug/bare-hex)"),
+        "{error}"
     );
     let db = fno_agents::backlog::database_path(&graph);
-    assert!(combined.contains(&db.display().to_string()), "{combined}");
-    assert!(
-        !combined.to_lowercase().contains("unreadable"),
-        "{combined}"
-    );
-    assert!(!combined.to_lowercase().contains("corrupt"), "{combined}");
+    assert!(error.contains(&db.display().to_string()), "{error}");
+    assert!(!stderr.to_lowercase().contains("unreadable"), "{stderr}");
+    assert!(!stderr.to_lowercase().contains("corrupt"), "{stderr}");
 }
 
 #[test]
 fn an_empty_store_is_a_clean_miss_not_an_unreadable_one() {
     let (_dir, config, graph) = sandbox();
     seed(&graph, &[]);
-    let (code, _stdout, stderr) = get(&config, &["x-d157"]);
-    assert_eq!(code, 1, "{stderr}");
-    assert!(stderr.contains("No node matching"), "{stderr}");
+    let (code, stdout, stderr) = get(&config, &["x-d157"]);
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    let doc: serde_json::Value = serde_json::from_str(stdout.trim()).expect("stdout parses");
+    assert_eq!(
+        doc.get("ok").and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
+    assert!(
+        doc.get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .contains("No node matching"),
+        "{doc}"
+    );
 }
 
 #[test]
