@@ -11,6 +11,21 @@ use std::path::Path;
 const SENDER: &str = "fno/quiet-recovery";
 const TAIL_BYTES: u64 = 256 * 1024;
 
+/// A parked session stays shielded past its watch's bound: the expiry wake
+/// fires at `expires_at_ms`, and the worker then needs one quiet interval to
+/// wake, act and re-arm (or proceed) before its silence reads as stuck. The
+/// daemon's wake row does not lift the shield - the wake is the daemon
+/// acting, not the worker answering - and a re-arm supersedes the row inside
+/// `settle_watches`, so expiry plus linger is the whole predicate. Without
+/// the linger, every watch bound evaluated the ladder against a pre-watch
+/// activity stamp, flagged the healthy parked worker stuck, and each failed
+/// resume salvaged a recovery branch.
+const WATCH_LINGER_MS: i64 = 900 * 1000;
+
+fn watch_shielded(watch: &crate::watch_expiry::Watch, now_ms: i64) -> bool {
+    now_ms < watch.expires_at_ms + WATCH_LINGER_MS
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Episode {
     activity: i64,
@@ -458,8 +473,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             let closed = closed(row);
             if settle_watches.iter().any(|w| {
                 (w.watch.session_id == sid || w.codex_thread_id.as_deref() == Some(sid))
-                    && now * 1000 < w.watch.expires_at_ms
-                    && crate::watch_expiry::is_current_watch(&w.watch, &watches)
+                    && watch_shielded(&w.watch, now * 1000)
             }) {
                 return Ok(());
             }
@@ -939,5 +953,76 @@ mod tests {
             err.contains("salvage skipped") && err.contains("the main worktree"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn watch_shield_covers_the_bound_and_one_quiet_interval_past_it() {
+        let watch = crate::watch_expiry::Watch {
+            event_id: "e1".into(),
+            seq: 1,
+            session_id: "sess-a".into(),
+            pr: Some(258),
+            node: "x-1".into(),
+            blocker: "ci".into(),
+            task_id: None,
+            reason: None,
+            expires_at_ms: 1_000_000,
+            ts_ms: 100_000,
+        };
+        assert!(watch_shielded(&watch, watch.expires_at_ms - 1));
+        assert!(watch_shielded(&watch, watch.expires_at_ms));
+        assert!(watch_shielded(
+            &watch,
+            watch.expires_at_ms + WATCH_LINGER_MS - 1
+        ));
+        assert!(!watch_shielded(
+            &watch,
+            watch.expires_at_ms + WATCH_LINGER_MS
+        ));
+    }
+
+    #[test]
+    fn the_expiry_wake_does_not_unshield_a_parked_session() {
+        // The incident: a session parks on ci, the bound fires, the daemon
+        // emits its wake row (which ends is_current_watch), and the worker's
+        // next transcript write is still minutes out. The shield must hold
+        // through the wake and one quiet interval past the bound.
+        let evidence = vec![
+            crate::watch_expiry::Evidence {
+                event_id: "e1".into(),
+                seq: 1,
+                ts_ms: 100_000,
+                kind: crate::watch_expiry::WATCH_IDLE.into(),
+                session_id: Some("sess-a".into()),
+                data: serde_json::json!({
+                    "harness": "claude",
+                    "expires_at_ms": 1_000_000,
+                    "blocker": "ci",
+                    "node": "x-1",
+                }),
+            },
+            crate::watch_expiry::Evidence {
+                event_id: "e2".into(),
+                seq: 2,
+                ts_ms: 1_000_050,
+                kind: crate::watch_expiry::WAKE_EVENT.into(),
+                session_id: Some("sess-a".into()),
+                data: serde_json::json!({"watch_event_id": "e1"}),
+            },
+        ];
+        let watch = &super::settle_watches(&evidence)[0].watch;
+        assert!(
+            !crate::watch_expiry::is_current_watch(watch, &evidence),
+            "the wake row alone must not be what holds the shield"
+        );
+        assert!(watch_shielded(watch, 1_000_050));
+        assert!(watch_shielded(
+            watch,
+            watch.expires_at_ms + WATCH_LINGER_MS - 1
+        ));
+        assert!(!watch_shielded(
+            watch,
+            watch.expires_at_ms + WATCH_LINGER_MS
+        ));
     }
 }
