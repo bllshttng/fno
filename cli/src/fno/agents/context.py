@@ -243,8 +243,8 @@ def build_context(
         from_provider = None
         from_session_id = None
     elif kind == "mcp_channel":
-        # The envelope-meta-driven attribution is layered on by
-        # channel_server when it invokes dispatch; here we just stamp
+        # The envelope-meta-driven attribution is layered on by the
+        # channel server when it invokes dispatch; here we just stamp
         # the placeholder so the caller can override post-construction
         # if needed. The default keeps from_name None so a downstream
         # consumer can distinguish 'mcp_channel, sender unknown' from

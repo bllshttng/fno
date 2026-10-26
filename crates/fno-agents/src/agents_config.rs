@@ -875,8 +875,9 @@ pub fn reap_receipt_retain_days(cwd: &Path) -> u64 {
 /// today's behavior: only rows whose provenance resolves and whose work is
 /// done. `All` widens to resolved rows with open work. `Off` retires nothing.
 /// The one rule no value can cross: an unowned session retires only on an
-/// fno-ownership marker (a sessions[] row fno wrote, or a reap receipt an
-/// earlier retirement staged), so a session with no marker at all is
+/// fno-ownership marker (a sessions[] row fno wrote, a reap receipt an
+/// earlier retirement staged, or a claimed launch record naming the
+/// launcher session), so a session with no marker at all is
 /// unreachable by construction, not by default value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RosterScope {

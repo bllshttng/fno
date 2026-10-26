@@ -56,6 +56,7 @@ BYTE_COPY_SOURCES = (
     "crates/fno-agents/src/registry_schema.toml",
     "crates/fno-agents/src/event_store/events_schema.json",
     "crates/fno-agents/src/model_reach.toml",
+    "crates/fno-agents/src/ambient_vocab.toml",
 )
 
 EVENTS_SCHEMA_SOURCE = "cli/src/fno/events/schema.yaml"
