@@ -972,7 +972,7 @@ mod tests {
         let rows = [close_row(
             "x-kid",
             "2026-10-25T23:00:30+00:00",
-            json!({"source_session_id": "worker-session"}),
+            serde_json::json!({"source_session_id": "worker-session"}),
         )];
         let (inherited_open, filed_open, inherited_closed, filed_closed) = scope_split(
             &scope_ids(),
@@ -992,7 +992,7 @@ mod tests {
         let rows = [close_row(
             "x-kid",
             "2026-10-25T20:13:03+00:00",
-            json!({"source_session_id": "lead-session"}),
+            serde_json::json!({"source_session_id": "lead-session"}),
         )];
         let (_, _, inherited_closed, filed_closed) = scope_split(
             &scope_ids(),
@@ -1010,10 +1010,10 @@ mod tests {
         let rows = [
             // created before generation_start, no filer recorded: inherited
             // close that still counts (old undated backlog behavior kept).
-            close_row("x-root", "2026-10-03T22:26:33+00:00", json!({})),
+            close_row("x-root", "2026-10-03T22:26:33+00:00", serde_json::json!({})),
             // filed after generation_start, no filer recorded: counts as a
             // filed close - an absence of a filer is not the lead's own hand.
-            close_row("x-kid", "2026-10-25T23:00:30+00:00", json!({})),
+            close_row("x-kid", "2026-10-25T23:00:30+00:00", serde_json::json!({})),
         ];
         let (inherited_open, filed_open, inherited_closed, filed_closed) = scope_split(
             &scope_ids(),
@@ -1034,7 +1034,7 @@ mod tests {
             "x-kid",
             "x-root",
             "2026-10-25T23:00:30+00:00",
-            json!({"status": "in_progress"}),
+            serde_json::json!({"status": "in_progress"}),
         )];
         let (inherited_open, filed_open, _, _) = scope_split(
             &scope_ids(),
