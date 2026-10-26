@@ -42,7 +42,6 @@ cli/tests/events/test_producer_equivalence.py::test_codex_stop_path_reaches_the_
 cli/tests/events/test_producer_equivalence.py::test_producer_emits_review_attestation_with_no_second_call::pytest.skip  # only the code-review param drives the hook, whose classify runs through the Rust front; peer and declare emit through fno-py and still run without it
 cli/tests/events/test_producer_equivalence.py::test_resolver_reads_the_code_review_attestation_at_head::mark.skipif  # second site, added with the front pin: the drive leg needs the front, the resolver leg the door
 cli/tests/integration/test_backlog_alias.py::_native_backlog::pytest.skip  # on main before this ratchet
-cli/tests/integration/test_codex_plugin_real_boundary.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/integration/test_first_run_documentation.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/integration/test_graph_cli.py::_native_get::pytest.skip  # on main before this ratchet
 cli/tests/integration/test_graph_cli.py::_rank::pytest.skip  # on main before this ratchet
