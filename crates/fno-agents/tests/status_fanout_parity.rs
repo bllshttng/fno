@@ -23,8 +23,8 @@ use fno_agents::status_fanout::{
     SinkConfig, StreamFn, TickResult,
 };
 use fno_agents::wake_read::python_json_default;
-use std::cell::RefCell;
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -68,8 +68,7 @@ fn sink_cfg(
             match k.as_str() {
                 "match" => {
                     for (mk, mv) in v.as_object().unwrap() {
-                        s.match_keys
-                            .insert(mk.clone(), mv.clone());
+                        s.match_keys.insert(mk.clone(), mv.clone());
                     }
                 }
                 "template" => s.template = v.as_str().map(str::to_string),
@@ -348,13 +347,7 @@ fn tick_result_value(result: &TickResult) -> Value {
 /// as the journal, one tick, then the frozen `{"calls": [...]}` record. The
 /// driver serialized with `json.dumps(..., sort_keys=True)` default
 /// separators, so keys go in sorted order through `python_json_default`.
-fn adapter_case(
-    sb: &Sandbox,
-    label: &str,
-    sink: SinkConfig,
-    post: &mut RecordingPost,
-    ev: &Value,
-) {
+fn adapter_case(sb: &Sandbox, label: &str, sink: SinkConfig, post: &mut RecordingPost, ev: &Value) {
     let _ = std::fs::remove_dir_all(&sb.state);
     std::fs::create_dir_all(&sb.state).unwrap();
     let cursor = json!({"ts": "2026-01-01T00:00:02Z", "n": 0}).to_string();
