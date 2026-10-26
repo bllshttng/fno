@@ -30,7 +30,6 @@ from typing import Callable, Optional
 
 import typer
 
-from fno.loops import loop_level
 from fno.observer import fold
 from fno.plan._doc import load_plan_text
 from fno.rust_binary import find_dev_binary, resolve_binary
@@ -439,6 +438,32 @@ def _evidence(item: dict, dimension: str, verdict: str) -> str:
     return f"session {sid} node {nid}: {dimension}={verdict}"
 
 
+def _loop_level(name: str) -> str:
+    """The configured loop level through the native door, failing safe.
+
+    An unreachable binary reads as "report" (observe only) - the same
+    default the deleted Python helper fell back to for an unconfigured or
+    unrecognized name.
+    """
+    try:
+        from fno.rust_binary import command_call
+
+        return str(command_call(["loops", "level", name], {}, timeout=5))
+    except Exception:  # noqa: BLE001 - the level gate never blocks on a lost door
+        return "report"
+
+
+def _loops_paused() -> bool:
+    """The pause verdict through the native door, failing closed: any
+    failure reads as paused, exactly like the deleted Python helper."""
+    try:
+        from fno.rust_binary import command_call
+
+        return command_call(["loops", "paused"], {}, timeout=5).get("paused") is not False
+    except Exception:  # noqa: BLE001 - a safety switch must fail closed
+        return True
+
+
 def _arg_value(args: list[str], flag: str) -> Optional[str]:
     i = args.index(flag) + 1 if flag in args else -1
     return args[i] if 0 <= i < len(args) else None
@@ -538,7 +563,7 @@ def judge_cmd(ctx: typer.Context) -> None:
     plan = _arg_value(args, "--plan")
     if plan is None:
         raise typer.BadParameter("give --plan or --labels")
-    if "--force" not in args and "-F" not in args and loop_level("blueprint_judge") == "report":
+    if "--force" not in args and "-F" not in args and _loop_level("blueprint_judge") == "report":
         typer.echo("skipped level=report")
         return
     plan_path = Path(plan)
@@ -1020,7 +1045,6 @@ def _replay(
     _spawn = spawn
     _run_worktree = run_worktree
     from fno import paths as _paths
-    from fno.loops import loops_paused
 
     if skill == "review":
         typer.echo("replay not supported for review in v1 (Review Amendment A2): a replayed "
@@ -1030,7 +1054,7 @@ def _replay(
         raise typer.BadParameter("--skill must be blueprint (v1 replay is blueprint-only)")
 
     # Pause gate at the corpus-item boundary (AC / Locked Decision 10).
-    if loops_paused():
+    if _loops_paused():
         typer.echo("paused: loop halt in effect; stopping cleanly before replay.")
         raise typer.Exit(0)
 

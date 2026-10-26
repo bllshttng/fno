@@ -989,23 +989,23 @@ def status_sinks_cmd(
     """Resolve which projects the status-fanout supervisor should tick.
 
     A project is a target when it has >=1 enabled ``status_sinks`` entry -
-    INDEPENDENT of ``config.active_backlog``. The daemon shells this to discover
-    its fanout loops. Read-only and best-effort: a malformed config yields an
-    empty list, never an error.
+    INDEPENDENT of ``config.active_backlog``. Forward leaf: the resolver is
+    native (the daemon folds it in-process); this surface execs the native
+    door with stdout, stderr and the exit code passing through.
     """
-    import json as _json
+    import subprocess as _sp
 
-    from fno.active_backlog import fanout_targets_as_dicts
+    from fno.rust_binary import resolve_binary
 
-    targets = fanout_targets_as_dicts()
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo("status-sinks: the fno-agents binary is unavailable", err=True)
+        raise typer.Exit(code=1)
+    argv = [str(binary), "active-backlog-receipt", "status-sinks"]
     if json_out:
-        typer.echo(_json.dumps(targets))
-        return
-    if not targets:
-        typer.echo("status-sinks: no projects with enabled sinks")
-        return
-    for t in targets:
-        typer.echo(f"{t['project']}\t{t['cwd']}\tinterval={t['interval_seconds']}s")
+        argv.append("--json")
+    proc = _sp.run(argv, check=False)
+    raise typer.Exit(code=proc.returncode)
 
 
 @app.command("assert-subagent-budget", hidden=True)

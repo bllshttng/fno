@@ -3945,58 +3945,6 @@ agents_app.command("history")(history_command)
 agents_app.command("transcript", hidden=True)(transcript_command)
 
 
-@agents_app.command(
-    "yard",
-    hidden=True,
-    help=(
-        "The yard identity fold: species, rarity tier, role, and first-sighting "
-        "per registry citizen.\n\n"
-        "Read-only over the agent registry and the graph archive. Consumed by "
-        "the mux yard overlay (fail-open shell-out); `--json` is the machine "
-        "surface, the text mode is a one-line-per-citizen summary. Outcome "
-        "only - never the rank, the frequency, or the boundary."
-    ),
-)
-def yard(
-    as_json: bool = typer.Option(False, "--json", "-J", help="Emit the fold as JSON."),
-) -> None:
-    """Fold the fleet into yard citizens (the f[no]nimals)."""
-    import json as _json
-
-    from fno import paths
-    from fno.agents.registry import load_registry
-    from fno.graph.store import GraphUnreadableError, read_graph_strict
-    from fno.yard import RARITY_TIERS, fold
-
-    rows = load_registry()
-    archive_path = paths.graph_archive_json()
-    # Strict on purpose: this is a truth-bound fold, not a browse command. The
-    # lenient reader turns a corrupt archive into [], which would mark every
-    # citizen a first-sighting - fabricated outcome on the machine surface the
-    # mux renders. Unreadable history fails the fold so the overlay degrades.
-    try:
-        archive = read_graph_strict(archive_path) if archive_path.exists() else []
-    except GraphUnreadableError as exc:
-        typer.secho(f"agents yard: archive unreadable, fold refused: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    citizens = fold(rows, archive)
-
-    if as_json:
-        typer.echo(_json.dumps({"citizens": citizens}, indent=2))
-        return
-    if not citizens:
-        typer.echo("the yard is empty (no registry rows)")
-        return
-    for c in citizens:
-        mark = " NEW" if c["first_sighting"] else ""
-        role = f" role {c['role_level']}" if c["role_level"] else ""
-        typer.echo(
-            f"{c['name']:<24} species {c['species']:>2}  {c['rarity']:<9}{role}{mark}"
-        )
-    n_new = sum(1 for c in citizens if c["first_sighting"])
-    typer.echo(f"{len(citizens)} citizens, {n_new} first sighting(s); tiers: {'/'.join(RARITY_TIERS)}")
-
-
 #: instruments over the capability table. `probe` measures the live
 # harness against the (config-merged) row. Four verdicts and UNKNOWN never
 # acts: a missing binary or a timeout is UNKNOWN with its reason, never a

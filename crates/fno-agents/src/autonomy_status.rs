@@ -331,3 +331,162 @@ pub fn run(args: &[String]) -> i32 {
     println!("{}", format_table(&rows));
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A process-env pin with restore-on-drop: the table's env ranks read
+    /// real env vars, and a parallel test's unpinned read must not race it.
+    struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl EnvGuard {
+        fn set(name: &'static str, value: &str) -> Self {
+            let prior = std::env::var_os(name);
+            std::env::set_var(name, value);
+            EnvGuard(vec![(name, prior)])
+        }
+
+        fn clear(name: &'static str) -> Self {
+            let prior = std::env::var_os(name);
+            std::env::remove_var(name);
+            EnvGuard(vec![(name, prior)])
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, prior) in self.0.drain(..) {
+                match prior {
+                    Some(v) => std::env::set_var(name, v),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    fn row_by_name<'a>(rows: &'a [SpawnerStatus], name: &str) -> &'a SpawnerStatus {
+        rows.iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("spawner row {name:?} missing"))
+    }
+
+    #[test]
+    fn format_table_matches_the_captured_python_bytes() {
+        // Golden captured from cli/src/fno/autonomy_cli.py format_table
+        // before deletion (port protocol). Trailing spaces included: every
+        // cell ljust-pads, the last column too.
+        let rows = vec![
+            row(
+                "autonomy (master switch)",
+                "every row below",
+                "config.autonomy.enabled",
+                Some(true),
+                "config",
+            ),
+            row(
+                "advance (node-walk)",
+                "PR merge (reconcile / /fno:ship pr merged)",
+                "config.auto_continue.enabled",
+                Some(false),
+                "default",
+            ),
+            row(
+                "groom (_spawn_groom_worker)",
+                "fno backlog groom",
+                "config.groom.enabled",
+                None,
+                "ungated",
+            ),
+            row(
+                "evals runner",
+                "fno doctor evals run",
+                "config.evals.enabled",
+                Some(false),
+                "config",
+            ),
+        ];
+        rows[1].source = Some("AG".into());
+        rows[1].command = Some("TG".into());
+        let rendered = format_table(&rows);
+        let expected = [
+            "SPAWNER                      TRIGGER                                     GATE KEY                      ARMED    RANK     SOURCE  COMMAND",
+            "---------------------------  ------------------------------------------  ----------------------------  -------  -------  ------  -------",
+            "autonomy (master switch)     every row below                             config.autonomy.enabled       true     config   -       -      ",
+        ];
+        for (i, line) in rendered.lines().enumerate() {
+            if i < expected.len() {
+                assert_eq!(line, expected[i], "line {i}");
+            }
+        }
+        assert!(rendered.contains("AG"), "provenance stamps render");
+        assert!(rendered.contains("TG"));
+    }
+
+    #[test]
+    fn every_known_spawner_appears_in_table_order() {
+        let rows = collect_status(None);
+        let names: Vec<&str> = rows.iter().map(|r| r.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "autonomy (master switch)",
+                "advance (node-walk)",
+                "dispatch_lanes (parallel fill)",
+                "epic converge (mission drain)",
+                "reconcile_dispatch (G4 de-stub)",
+                "spawn_think (context /think)",
+                "post-merge ritual",
+                "pr_watch (headless PR poll)",
+                "recovery sweep (crash respawn)",
+                "keep_going (autonomous follow-up)",
+                "groom (_spawn_groom_worker)",
+                "evals runner",
+                "lead loop",
+            ]
+        );
+    }
+
+    #[test]
+    fn env_override_rank_is_visible() {
+        let _guard = EnvGuard::set("FNO_KEEP_GOING", "1");
+        let rows = collect_status(None);
+        let keep = row_by_name(&rows, "keep_going (autonomous follow-up)");
+        assert_eq!(keep.armed, Some(true));
+        assert_eq!(keep.rank, "env");
+    }
+
+    #[test]
+    fn master_switch_off_vetoes_every_other_row() {
+        // The master switch reads through the settings stack; a root whose
+        // .fno config.toml carries autonomy.enabled=false vetoes every gated
+        // row to rank "autonomy".
+        let dir = std::env::temp_dir().join(format!("fno-aut-veto-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".fno")).unwrap();
+        std::fs::write(
+            dir.join(".fno").join("config.toml"),
+            "[autonomy]\nenabled = false\n",
+        )
+        .unwrap();
+        let rows = collect_status(Some(&dir));
+        for name in [
+            "post-merge ritual",
+            "pr_watch (headless PR poll)",
+            "groom (_spawn_groom_worker)",
+            "evals runner",
+            "lead loop",
+        ] {
+            let r = row_by_name(&rows, name);
+            assert_eq!(r.armed, Some(false), "{name}");
+            assert_eq!(r.rank, "autonomy", "{name}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ungated_cells_render_ungated() {
+        let rows = vec![row("x", "t", "k", None, "ungated")];
+        let rendered = format_table(&rows);
+        assert!(rendered.contains("ungated"));
+    }
+}

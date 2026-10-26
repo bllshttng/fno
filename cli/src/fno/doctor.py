@@ -67,7 +67,7 @@ _PROBE_COMMAND_LABEL = "backlog capture"
 
 # Three-valued probe outcome made explicit (not Optional[bool]) so call sites
 # must distinguish "proven missing" from "could not probe" - an `if not x:`
-# would silently conflate them. Mirrors the Literal style in health_monitor.py.
+# would silently conflate them.
 ProbeResult = Literal["present", "missing", "unknown"]
 # The verdict's discriminator. Only these three values are ever reachable.
 DoctorStatus = Literal["fresh", "stale", "unknown"]

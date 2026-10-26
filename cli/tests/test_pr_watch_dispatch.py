@@ -67,13 +67,6 @@ def _hermetic_post_merge(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _unpaused_loop_gate(monkeypatch):
-    """Keep dispatch-composition tests on the normal, unpaused path."""
-    from fno import loops
-
-    monkeypatch.setattr(loops, "loops_paused", lambda: False)
-
-
 @pytest.fixture(autouse=True)
 def _free_gh_budget(monkeypatch):
     """The drain's fleet-budget read must never answer from the real ledger
@@ -1782,16 +1775,19 @@ class TestFleetLegRunsAfterACutPRLeg:
         from typer.testing import CliRunner
         from unittest.mock import MagicMock
 
-        from fno import fleet_state as fs
         from fno.agents import sweep as agents_sweep
         from fno.pr_watch import cli as prcli
         import fno.recovery as rec
 
+        door_calls: list[list[str]] = []
+
         monkeypatch.setattr("fno.pr_watch._dispatch.tick", dispatch_tick, raising=True)
-        monkeypatch.setattr(
-            "fno.rust_binary.command_call",
-            lambda command_name, payload, **kw: {"candidates": 0, "verdicts": {}, "queue": []},
-        )
+
+        def _fake_command_call(command_name, payload, **kw):
+            door_calls.append(list(command_name))
+            return {"candidates": 0, "verdicts": {}, "queue": []}
+
+        monkeypatch.setattr("fno.rust_binary.command_call", _fake_command_call)
         monkeypatch.setattr(rec, "run_recovery_sweep", sweep_fn, raising=True)
         # The silence backstop reads the real registry and resolves every
         # worker's transcript; that is seconds of work these tests do not want.
@@ -1815,9 +1811,6 @@ class TestFleetLegRunsAfterACutPRLeg:
         if not os.environ.get("FNO_PR_WATCH_TICK_TIMEOUT"):
             monkeypatch.setenv("FNO_PR_WATCH_TICK_TIMEOUT", "60")
 
-        hb = tmp_path / "fleet-sweep-state.json"
-        monkeypatch.setattr(fs, "fleet_state_path", lambda: hb, raising=True)
-
         settings = MagicMock()
         settings.pr_watch.max_age_days = 30
         settings.pr_watch.retries = 3
@@ -1839,7 +1832,7 @@ class TestFleetLegRunsAfterACutPRLeg:
         app = typer.Typer()
         app.command()(prcli.tick)
         res = CliRunner().invoke(app, [])
-        return res, events, hb
+        return res, events, door_calls
 
     def test_ac7_edge_a_raising_fleet_leg_still_lets_the_pr_legs_run(
         self, monkeypatch, tmp_path
@@ -1855,15 +1848,16 @@ class TestFleetLegRunsAfterACutPRLeg:
         def _sweep(_cfg, **_kw):
             raise RuntimeError("registry unreadable")
 
-        res, events, hb = self._invoke(monkeypatch, tmp_path, _pr, _sweep)
+        res, events, door_calls = self._invoke(monkeypatch, tmp_path, _pr, _sweep)
 
         assert pr_ran == ["pr"]
         assert res.exit_code == 0, res.output
         ends = [d for t, d in events if t == "pr_watch_tick_end"]
         assert ends[0]["outcome"] == "ok"
-        # The leg raised BEFORE its watermark, so the watermark honestly reads
-        # stale rather than claiming a sweep that never finished.
-        assert not hb.exists()
+        # The leg raised BEFORE its watermark, so no heartbeat door call fires:
+        # the watermark honestly reads stale rather than claiming a sweep that
+        # never finished.
+        assert not any("fleet-state" in call for call in door_calls)
 
 
 # ---------------------------------------------------------------------------

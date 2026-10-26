@@ -46,7 +46,6 @@ def test_agents_lead_excludes_board_while_inbox_keeps_it() -> None:
 
 def test_importing_agents_cli_does_not_import_folded_subgroups() -> None:
     modules = {
-        "fno.autonomy_cli",
         "fno.claims.cli",
         "fno.dispatch",
         "fno.lead.cli",

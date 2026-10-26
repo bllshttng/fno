@@ -13,7 +13,6 @@ from pathlib import Path
 
 import typer
 
-from fno.loops import loops_app
 from fno.phase import phase_app
 from fno.plan import plan_app
 from fno.pr_watch.cli import cli as pr_watch_app
@@ -105,7 +104,6 @@ def _forward_delivery(argv: list[str]) -> None:
 
 
 do_app.add_typer(delivery_app, name="delivery")
-do_app.add_typer(loops_app, name="loops")
 do_app.add_typer(phase_app, name="phase")
 do_app.add_typer(plan_app, name="plan")
 do_app.add_typer(do_pr_app, name="pr")

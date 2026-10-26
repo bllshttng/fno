@@ -23,9 +23,9 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def _unpaused_loop_gate(monkeypatch):
-    from fno import loops
+    import fno.observer.cli as observer_cli
 
-    monkeypatch.setattr(loops, "loops_paused", lambda: False)
+    monkeypatch.setattr(observer_cli, "_loops_paused", lambda: False)
 
 
 def _item(session_id, node_id, plan_path):
@@ -370,8 +370,7 @@ def test_replay_isolation_violation_hard_fails(monkeypatch, tmp_path):
     item = _item("s-rep", "x-rep", None)
     events_path = _wire_replay(monkeypatch, tmp_path, item)
     monkeypatch.setattr(cli, "_write_workdir_settings", lambda wd: None)
-    from fno import loops
-    monkeypatch.setattr(loops, "loops_paused", lambda: False)
+    monkeypatch.setattr(cli, "_loops_paused", lambda: False)
 
     class _P:
         returncode, stdout, stderr = 0, "", ""

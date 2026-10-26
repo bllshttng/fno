@@ -173,11 +173,14 @@ fn read_archive_strict() -> Result<Vec<Value>, String> {
     let Some(parent) = graph_path().parent().map(Path::to_path_buf) else {
         return Ok(Vec::new());
     };
-    let archive_path = parent.join("graph-archive.json");
-    if !archive_path.exists() {
+    read_archive_strict_at(&parent.join("graph-archive.json"))
+}
+
+fn read_archive_strict_at(path: &Path) -> Result<Vec<Value>, String> {
+    if !path.exists() {
         return Ok(Vec::new());
     }
-    let text = std::fs::read_to_string(&archive_path)
+    let text = std::fs::read_to_string(path)
         .map_err(|e| format!("archive unreadable, fold refused: {e}"))?;
     let value: Value = serde_json::from_str(&text)
         .map_err(|e| format!("archive unreadable, fold refused: {e}"))?;
@@ -347,5 +350,49 @@ mod tests {
         ];
         let seen = seen_species(&archive);
         assert_eq!(seen.len(), 2);
+    }
+
+    #[test]
+    fn a_corrupt_archive_fails_the_fold_not_fabricates() {
+        // The Python suite's contract: the lenient reader would turn a
+        // corrupt archive into [] and mark every citizen a first-sighting;
+        // the strict reader refuses instead (test_yard_cli_corrupt_archive_
+        // fails_the_fold_not_fabricates, pre-deletion).
+        let dir = std::env::temp_dir().join(format!("fno-yard-corrupt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let corrupt = dir.join("graph-archive.json");
+        std::fs::write(&corrupt, "{not json").unwrap();
+
+        // A raw parse of the corrupt bytes is the refusal the fold surfaces.
+        let text = std::fs::read_to_string(&corrupt).unwrap();
+        let parsed: Result<Value, _> = serde_json::from_str(&text);
+        assert!(parsed.is_err(), "corrupt archive parses nowhere");
+
+        // The strict reader surfaces that refusal as the fold's error, and
+        // the door exits 1 rather than emitting fabricated first-sightings.
+        assert!(read_archive_strict_at(&corrupt).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_citizen_json_shape_carries_the_seven_fields() {
+        // The mux overlay reads these keys off `fno agents yard --json`
+        // (test_yard_cli_json_emits_citizens, pre-deletion).
+        let rows = vec![row("alpha", "claude", "sess-alpha", 2)];
+        let citizens = fold(&rows, &[]);
+        let c = &citizens[0];
+        for key in [
+            "id",
+            "name",
+            "harness",
+            "species",
+            "rarity",
+            "role_level",
+            "first_sighting",
+        ] {
+            assert!(c.get(key).is_some(), "citizen key {key} missing");
+        }
+        assert_eq!(c["id"], json!("sess-alpha"));
+        assert_eq!(c["role_level"], json!(2));
     }
 }
