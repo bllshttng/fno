@@ -5,6 +5,10 @@
 # impeccable executor on the INLINE path (resolve-plan-executor.sh), and a
 # backend-only plan resolves `tdd`. Mirrors /operator's resolution at the
 # flat-plan granularity /execute works at.
+#
+# The Python parity legs died with the worker-family port that deleted the
+# leg. The canonical stdout bytes stay: the bash resolver answers them alone,
+# and the deleted leg's answers are frozen in the executor_route goldens.
 
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -18,10 +22,9 @@ ck() { local l="$1" exp="$2" act="$3"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# The plan-frontmatter enum is `tdd`. `do` remains accepted for one release,
-# but both inputs must resolve through both implementations to the same
-# canonical stdout bytes. Compare files rather than command substitutions so
-# the trailing newline stays part of the contract.
+# The plan-frontmatter enum is `tdd`; `do` remains accepted for one release.
+# Compare files rather than command substitutions so the trailing newline
+# stays part of the contract.
 printf 'tdd\n' > "$TMP/expected-tdd.out"
 for spelling in tdd do; do
     cat > "$TMP/alias-$spelling.md" <<EOF
@@ -31,17 +34,13 @@ executor: $spelling
 # Backend task
 **Files:** cli/src/fno/loop.py
 EOF
-    PYTHONPATH="$REPO_ROOT/cli/src${PYTHONPATH:+:$PYTHONPATH}" \
-        python3 -m fno.executor.cli resolve \
-        --plan-path "$TMP/alias-$spelling.md" > "$TMP/python-$spelling.out"
     bash "$R" "$TMP/alias-$spelling.md" > "$TMP/bash-$spelling.out"
-    if cmp -s "$TMP/python-$spelling.out" "$TMP/bash-$spelling.out" \
-        && cmp -s "$TMP/python-$spelling.out" "$TMP/expected-tdd.out"; then
-        echo "  PASS: positive marker: executor=$spelling Python/Bash bytes are identical tdd"
+    if cmp -s "$TMP/bash-$spelling.out" "$TMP/expected-tdd.out"; then
+        echo "  PASS: positive marker: executor=$spelling resolves canonical tdd bytes"
         PASS=$((PASS+1))
     else
-        echo "  FAIL: executor=$spelling Python/Bash bytes differ from canonical tdd"
-        od -An -tx1 "$TMP/python-$spelling.out" "$TMP/bash-$spelling.out" "$TMP/expected-tdd.out"
+        echo "  FAIL: executor=$spelling does not resolve canonical tdd bytes"
+        od -An -tx1 "$TMP/bash-$spelling.out" "$TMP/expected-tdd.out"
         FAIL=$((FAIL+1))
     fi
 done
@@ -53,18 +52,14 @@ cat > "$TMP/frontend.md" <<'EOF'
 **Files:** src/components/SettingsPanel.tsx, src/styles/settings.css
 EOF
 ck "frontend plan -> impeccable (inline)" impeccable "$(bash "$R" "$TMP/frontend.md")"
-PYTHONPATH="$REPO_ROOT/cli/src${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -m fno.executor.cli resolve \
-    --plan-path "$TMP/frontend.md" > "$TMP/python-frontend.out"
-bash "$R" "$TMP/frontend.md" > "$TMP/bash-frontend.out"
 printf 'impeccable\n' > "$TMP/expected-impeccable.out"
-if cmp -s "$TMP/python-frontend.out" "$TMP/bash-frontend.out" \
-    && cmp -s "$TMP/python-frontend.out" "$TMP/expected-impeccable.out"; then
-    echo "  PASS: positive marker: frontend Python/Bash bytes are identical impeccable"
+bash "$R" "$TMP/frontend.md" > "$TMP/bash-frontend.out"
+if cmp -s "$TMP/bash-frontend.out" "$TMP/expected-impeccable.out"; then
+    echo "  PASS: positive marker: frontend resolves canonical impeccable bytes"
     PASS=$((PASS+1))
 else
-    echo "  FAIL: frontend Python/Bash bytes differ from canonical impeccable"
-    od -An -tx1 "$TMP/python-frontend.out" "$TMP/bash-frontend.out" "$TMP/expected-impeccable.out"
+    echo "  FAIL: frontend does not resolve canonical impeccable bytes"
+    od -An -tx1 "$TMP/bash-frontend.out" "$TMP/expected-impeccable.out"
     FAIL=$((FAIL+1))
 fi
 
@@ -75,17 +70,13 @@ executor: mixed
 # Mixed plan
 **Files:** src/components/Mixed.tsx
 EOF
-PYTHONPATH="$REPO_ROOT/cli/src${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -m fno.executor.cli resolve \
-    --plan-path "$TMP/mixed-frontend.md" > "$TMP/python-mixed-frontend.out"
 bash "$R" "$TMP/mixed-frontend.md" > "$TMP/bash-mixed-frontend.out"
-if cmp -s "$TMP/python-mixed-frontend.out" "$TMP/bash-mixed-frontend.out" \
-    && cmp -s "$TMP/python-mixed-frontend.out" "$TMP/expected-tdd.out"; then
-    echo "  PASS: positive marker: mixed frontend Python/Bash bytes are identical tdd"
+if cmp -s "$TMP/bash-mixed-frontend.out" "$TMP/expected-tdd.out"; then
+    echo "  PASS: positive marker: mixed frontend resolves canonical tdd bytes"
     PASS=$((PASS+1))
 else
-    echo "  FAIL: mixed frontend Python/Bash bytes differ from canonical tdd"
-    od -An -tx1 "$TMP/python-mixed-frontend.out" "$TMP/bash-mixed-frontend.out" "$TMP/expected-tdd.out"
+    echo "  FAIL: mixed frontend does not resolve canonical tdd bytes"
+    od -An -tx1 "$TMP/bash-mixed-frontend.out" "$TMP/expected-tdd.out"
     FAIL=$((FAIL+1))
 fi
 
@@ -93,33 +84,25 @@ cat > "$TMP/uppercase-files.md" <<'EOF'
 # Uppercase heading
 **FILES:** components/Uppercase.ts
 EOF
-PYTHONPATH="$REPO_ROOT/cli/src${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -m fno.executor.cli resolve \
-    --plan-path "$TMP/uppercase-files.md" > "$TMP/python-uppercase-files.out"
 bash "$R" "$TMP/uppercase-files.md" > "$TMP/bash-uppercase-files.out"
-if cmp -s "$TMP/python-uppercase-files.out" "$TMP/bash-uppercase-files.out" \
-    && cmp -s "$TMP/python-uppercase-files.out" "$TMP/expected-impeccable.out"; then
-    echo "  PASS: positive marker: uppercase FILES Python/Bash bytes are identical impeccable"
+if cmp -s "$TMP/bash-uppercase-files.out" "$TMP/expected-impeccable.out"; then
+    echo "  PASS: positive marker: uppercase FILES resolves canonical impeccable bytes"
     PASS=$((PASS+1))
 else
-    echo "  FAIL: uppercase FILES Python/Bash bytes differ from canonical impeccable"
-    od -An -tx1 "$TMP/python-uppercase-files.out" "$TMP/bash-uppercase-files.out" "$TMP/expected-impeccable.out"
+    echo "  FAIL: uppercase FILES does not resolve canonical impeccable bytes"
+    od -An -tx1 "$TMP/bash-uppercase-files.out" "$TMP/expected-impeccable.out"
     FAIL=$((FAIL+1))
 fi
 
 printf '%s\r\n' '---' 'executor: impeccable' '---' '# CRLF plan' \
     '**Files:** src/components/CrLf.tsx' > "$TMP/crlf.md"
-PYTHONPATH="$REPO_ROOT/cli/src${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -m fno.executor.cli resolve \
-    --plan-path "$TMP/crlf.md" > "$TMP/python-crlf.out"
 bash "$R" "$TMP/crlf.md" > "$TMP/bash-crlf.out"
-if cmp -s "$TMP/python-crlf.out" "$TMP/bash-crlf.out" \
-    && cmp -s "$TMP/python-crlf.out" "$TMP/expected-impeccable.out"; then
-    echo "  PASS: positive marker: CRLF plan Python/Bash bytes are identical impeccable"
+if cmp -s "$TMP/bash-crlf.out" "$TMP/expected-impeccable.out"; then
+    echo "  PASS: positive marker: CRLF plan resolves canonical impeccable bytes"
     PASS=$((PASS+1))
 else
-    echo "  FAIL: CRLF plan Python/Bash bytes differ from canonical impeccable"
-    od -An -tx1 "$TMP/python-crlf.out" "$TMP/bash-crlf.out" "$TMP/expected-impeccable.out"
+    echo "  FAIL: CRLF plan does not resolve canonical impeccable bytes"
+    od -An -tx1 "$TMP/bash-crlf.out" "$TMP/expected-impeccable.out"
     FAIL=$((FAIL+1))
 fi
 
