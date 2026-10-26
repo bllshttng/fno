@@ -70,7 +70,7 @@ struct Census {
     live_registry_names: HashSet<String>,
 }
 
-fn status_word(entry: &RegistryEntry) -> String {
+pub(crate) fn status_word(entry: &RegistryEntry) -> String {
     serde_json::to_value(entry.status)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
