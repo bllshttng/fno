@@ -161,14 +161,14 @@ pub(crate) fn wake_text(pr: u64, sha: &str, offset_s: i64, failing: &[&str]) -> 
     )
 }
 
-fn millis_now() -> i64 {
+pub(crate) fn millis_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
 }
 
-fn ts_ms(row: &Value) -> Option<i64> {
+pub(crate) fn ts_ms(row: &Value) -> Option<i64> {
     row.get("ts")
         .and_then(Value::as_str)
         .and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
