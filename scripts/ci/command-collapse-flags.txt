@@ -19,9 +19,6 @@ agents spawn !--bounded-placement
 agents spawn !--recorded-provider
 agents spawn !--mux-session
 agents worker external !--pr
-approvals decide !--db
-approvals ls !--db
-approvals show !--db
 worktree cleanup !--kill-orphans
 do resume receipt validate !--session
 do resume receipt write !--session

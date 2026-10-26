@@ -1532,7 +1532,7 @@ PYEOF
           continue
         fi
         FNO_CLAIMS_ROOT="$HOME" fno agents claim release "node:${_mnode}" \
-          --holder "$_MULTI_HOLDER" >/dev/null 2>&1 || true
+          --holder "$_MULTI_HOLDER" --rollback-do >/dev/null 2>&1 || true
       done
       _EXTRA_CLAIMED="$_MULTI_KEPT"
     fi

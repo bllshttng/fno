@@ -346,8 +346,6 @@ doctor plugin-file	T1	doctor plugin-file	2
 doctor route	T1	doctor route	6
 doctor scratch report	T1	doctor scratch report	0
 doctor scratch sweep	T1	doctor scratch sweep	1
-doctor skill-diff reconcile	T1	doctor skill-diff reconcile	1
-doctor skill-diff tick	T1	doctor skill-diff tick	4
 doctor stalls	T1	doctor stalls	0
 doctor test	T1	doctor test	107
 doctor update	T1	doctor update	109
@@ -431,8 +429,6 @@ setup cli-hooks	T1	setup cli-hooks	8
 setup cli-hooks-codex	T1	setup cli-hooks-codex	4
 config plugin	T1	config plugin	0
 doctor reclaim	T1	doctor reclaim	0
-skill-diff reconcile	T1	skill-diff reconcile	1
-skill-diff tick	T1	skill-diff tick	4
 state archive	T1	state archive	1
 state init	T1	state init	3
 state set	T1	state set	20
