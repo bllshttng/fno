@@ -1193,7 +1193,7 @@ fn apply_case() {
             apply_wt.to_str().unwrap(),
         ],
     );
-    let mut row = fno_agents::worktree::stranded::classify(
+    let row = fno_agents::worktree::stranded::classify(
         apply_wt.to_str().unwrap(),
         Some("feature/apply-node-xc00"),
         1,
@@ -1416,6 +1416,7 @@ fn overlap_dispatch_register_cases() {
         ],
         Some(valid_stdin),
     );
+    let _ = err;
     check(
         "valid payload records and folds",
         code,
@@ -1486,6 +1487,7 @@ fn overlap_dispatch_register_cases() {
         ],
         None,
     );
+    let _ = err;
     check(
         "text render names the counts",
         code,
@@ -1528,7 +1530,9 @@ fn dispatch_and_register_cases() {
             argv.push("--harness".to_string());
             argv.push(h.to_string());
         }
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         let (code, out, err) = pins.drive(&argv, &[], None);
+        let _ = err;
         check(label, code, out, &root, &home, &base);
     };
     pin_case("same repo identity pins nothing", "p1", "p1", None, None);
