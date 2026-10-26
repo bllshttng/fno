@@ -12,11 +12,6 @@
 //! call sites. [`drift`] names the disagreement a caller turns into a drift
 //! event.
 
-// This first wave lands the door alone; its call sites land in the waves
-// that follow, so nothing outside the tests reads it yet. Delete this allow
-// when they wire in.
-#![allow(dead_code)]
-
 use crate::daemon::pid_is_gone;
 use crate::state::{InsideLegState, RegistryEntry};
 use serde_json::Value;
