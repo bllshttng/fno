@@ -7,7 +7,7 @@
 //! the pre-338c list-shape fallback.
 
 use super::{
-    aliased_layers_at, chain_at, home_dir, parse_config_file, repo_root, resolve_path,
+    aliased_layers_at, chain_at, deep_merge, home_dir, parse_config_file, repo_root, resolve_path,
     unwrap_config_dict, worktree_local_override,
 };
 use serde_json::{Map, Value};

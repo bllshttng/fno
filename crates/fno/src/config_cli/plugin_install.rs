@@ -6,7 +6,6 @@
 //! codex arm to Python, where the converge engine (the setup family's) still
 //! owns it.
 
-use super::leaves::usage_error;
 use std::ffi::OsString;
 use std::process::Command;
 

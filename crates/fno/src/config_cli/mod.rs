@@ -87,7 +87,7 @@ pub fn classify(args: &[OsString]) -> Option<Door> {
 /// flag-mode flag, not `--force`/`-F`, and not the value of a `--source`.
 /// `None` means no harness word (or only flags) - forward, so Python prints
 /// its usage line byte-identically.
-fn harness_word(tail: &[&str]) -> Option<&str> {
+fn harness_word<'a>(tail: &[&'a str]) -> Option<&'a str> {
     let mut expect_source_value = false;
     for token in tail {
         if expect_source_value {
@@ -188,7 +188,7 @@ pub fn resolve_path(path: &Path) -> PathBuf {
                 let Some(name) = cursor.file_name() else {
                     return path.to_path_buf();
                 };
-                parts.push(name.to_owned());
+                parts.push(PathBuf::from(name));
                 if !cursor.pop() {
                     return path.to_path_buf();
                 }
@@ -628,7 +628,7 @@ pub fn resolve_source(key: &str, repo_root: &Path) -> Option<(PathBuf, Vec<PathB
         vec![key.to_string(), format!("config.{key}")]
     };
 
-    fn get_dotted(dotted: &str, data: &Value) -> Option<&Value> {
+    fn get_dotted<'a>(dotted: &str, data: &'a Value) -> Option<&'a Value> {
         let mut node = data;
         for part in dotted.split('.') {
             node = node.as_object()?.get(part)?;
@@ -688,7 +688,7 @@ pub fn resolve_source(key: &str, repo_root: &Path) -> Option<(PathBuf, Vec<PathB
 }
 
 /// Dotted lookup into the merged raw tree; `None` when any hop is missing.
-pub fn raw_get(raw: &Value, dotted: &str) -> Option<&Value> {
+pub fn raw_get<'a>(raw: &'a Value, dotted: &str) -> Option<&'a Value> {
     let mut node = raw;
     for part in dotted.split('.') {
         node = node.as_object()?.get(part)?;

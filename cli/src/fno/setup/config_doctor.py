@@ -8,7 +8,6 @@ fno.config_cli.post_merge_readiness import from here now.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-import json
 import os
 from pathlib import Path
 from importlib import import_module

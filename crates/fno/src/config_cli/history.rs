@@ -5,7 +5,6 @@
 //! row first per journal, and renders the receipt table or JSONL exactly as
 //! the deleted Python leg printed it.
 
-use super::leaves::usage_error;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -286,7 +285,8 @@ fn numeric_rotations(parent: &Path, prefix: &str) -> Vec<(i64, PathBuf)> {
         Err(_) => return rotated,
     };
     for entry in entries.flatten() {
-        let Some(name) = entry.file_name().to_str() else {
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else {
             continue;
         };
         let Some(suffix) = name.strip_prefix(prefix) else {
@@ -335,7 +335,7 @@ fn global_journal() -> PathBuf {
         Some(raw) if Path::new(&raw).is_absolute() => {
             super::leaves::state_dir_value().join("events.jsonl")
         }
-        _ => super::leaves::home_dir().join(".fno").join("events.jsonl"),
+        _ => super::home_dir().join(".fno").join("events.jsonl"),
     }
 }
 
@@ -344,9 +344,9 @@ fn global_journal() -> PathBuf {
 fn agents_home_dir() -> PathBuf {
     match std::env::var_os("FNO_AGENTS_HOME") {
         Some(override_dir) if !override_dir.is_empty() => {
-            super::leaves::resolve_path(&PathBuf::from(override_dir))
+            super::resolve_path(&PathBuf::from(override_dir))
         }
-        _ => super::leaves::home_dir().join(".fno").join("agents"),
+        _ => super::home_dir().join(".fno").join("agents"),
     }
 }
 
@@ -356,13 +356,13 @@ fn agents_home_dir() -> PathBuf {
 fn project_journal() -> PathBuf {
     match std::env::var_os("FNO_EVENTS_PATH") {
         Some(pin) if !pin.is_empty() => PathBuf::from(pin),
-        None => spaces_root().join(space_slug()).join("events.jsonl"),
+        _ => spaces_root().join(space_slug()).join("events.jsonl"),
     }
 }
 
 fn spaces_root() -> PathBuf {
     match std::env::var_os("FNO_SPACES_DIR") {
-        Some(pin) if !pin.is_empty() => super::leaves::resolve_path(&PathBuf::from(pin)),
+        Some(pin) if !pin.is_empty() => super::resolve_path(&PathBuf::from(pin)),
         _ => super::leaves::state_dir_value().join("spaces"),
     }
 }
