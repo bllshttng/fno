@@ -1,4 +1,4 @@
-//! The `fno do state` verb bodies, ported from `cli/src/fno/state/cli.py`
+//! The `fno do state` command bodies, ported from `cli/src/fno/state/cli.py`
 //!. One op per subcommand: `show`, `set`, `init`, `archive`, served
 //! through the front door's lexical claim with the same argv shape.
 //!
@@ -138,7 +138,7 @@ pub fn serialize_frontmatter(map: &BTreeMap<String, String>, body: &str) -> Stri
 }
 
 /// Atomic replace: temp file in the same directory, fsync, rename. The
-/// calling verb holds the `<manifest>.lock` flock across the whole
+/// calling command holds the `<manifest>.lock` flock across the whole
 /// read-check-write transaction (the Python `atomic_write` flocked the same
 /// path), so a reader sees the old or the new file, never torn, and two
 /// writers never interleave.
@@ -245,7 +245,7 @@ fn usage_fail(message: &str) -> ! {
     exit(USAGE_ERROR);
 }
 
-/// `fno-agents state-verbs show [--path P] [--type T] [--field F] [--json]`
+/// `fno-agents state-cli show [--path P] [--type T] [--field F] [--json]`
 pub fn run_show(args: &[String]) -> i32 {
     let mut path = None;
     let mut type_ = None;
@@ -295,7 +295,7 @@ pub fn run_show(args: &[String]) -> i32 {
     0
 }
 
-/// `fno-agents state-verbs set --field F --value V [--path P] [--type T]`
+/// `fno-agents state-cli set --field F --value V [--path P] [--type T]`
 pub fn run_set(args: &[String]) -> i32 {
     let mut path = None;
     let mut type_ = None;
@@ -387,7 +387,7 @@ pub fn run_set(args: &[String]) -> i32 {
 
 fn coerce_value(value: &str, existing: Option<&str>) -> String {
     // The Python layer coerced to the existing field's int/float/bool type;
-    // the manifest fields this verb legally writes are strings, and the
+    // the manifest fields this command legally writes are strings, and the
     // immutable path is the only one the control plane exercises. Keep the
     // string form; a typed coercion of legacy files goes with the legacy
     // file format itself.
@@ -422,7 +422,7 @@ fn rewrite_single_field(path: &Path, field: &str, value: &str) -> std::io::Resul
     atomic_write(path, &out)
 }
 
-/// `fno-agents state-verbs init [--type T] [--output P] [--force] [--allow-stub]`
+/// `fno-agents state-cli init [--type T] [--output P] [--force] [--allow-stub]`
 pub fn run_init(args: &[String]) -> i32 {
     let mut type_ = "target".to_string();
     let mut output: Option<PathBuf> = None;
@@ -487,7 +487,7 @@ fn display_relative(path: &Path) -> String {
         .unwrap_or_else(|_| path.to_string_lossy().to_string())
 }
 
-/// `fno-agents state-verbs archive [--path P] [--type T]`
+/// `fno-agents state-cli archive [--path P] [--type T]`
 pub fn run_archive(args: &[String]) -> i32 {
     let mut path = None;
     let mut type_ = None;
@@ -542,7 +542,7 @@ pub fn run_archive(args: &[String]) -> i32 {
     0
 }
 
-/// The whole `state-verbs` door: `fno-agents state-verbs <sub> <args...>`.
+/// The whole `state-cli` door: `fno-agents state-cli <sub> <args...>`.
 pub fn run(args: &[String]) -> i32 {
     // The front door's group-level `--json` arrives before the subcommand
     // (`do state --json show`); re-order it into the subcommand's own args,
@@ -560,7 +560,7 @@ pub fn run(args: &[String]) -> i32 {
     }
     let (sub, rest) = match args.split_first() {
         Some(pair) => pair,
-        None => usage_fail("state-verbs: a subcommand is required: show|set|init|archive"),
+        None => usage_fail("state-cli: a subcommand is required: show|set|init|archive"),
     };
     // A --help that reaches the door prints the native usage line: the
     // Python group help died with the wheel.
@@ -574,7 +574,7 @@ pub fn run(args: &[String]) -> i32 {
         "init" => run_init(rest),
         "archive" => run_archive(rest),
         other => usage_fail(&format!(
-            "state-verbs: unknown subcommand {other:?} (show|set|init|archive)"
+            "state-cli: unknown subcommand {other:?} (show|set|init|archive)"
         )),
     }
 }

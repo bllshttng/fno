@@ -1136,7 +1136,7 @@ pub fn run_kill_check(args: &[String]) -> i32 {
         let plan_path = std::fs::read_to_string(&state_file)
             .ok()
             .and_then(|text| {
-                crate::state::verbs::parse_frontmatter_text(&text)
+                crate::state::cli::parse_frontmatter_text(&text)
                     .0
                     .remove("plan_path")
             })

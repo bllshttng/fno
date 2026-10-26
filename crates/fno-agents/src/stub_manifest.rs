@@ -3,7 +3,7 @@
 //!
 //! The manifest is the durable artifact a `contract`-tier dependent's first
 //! pass emits so a later merge-triggered reconciliation can de-stub from it.
-//! One op per CLI verb; the write side door (fire the pending reconcile
+//! One op per CLI command; the write side door (fire the pending reconcile
 //! sentinel) composes the same best-effort call the Python made.
 //!
 //! Exit contracts, pinned by `tests/golden/target_family/`:
@@ -449,7 +449,7 @@ fn run_reconcile_finalize(args: &[String]) -> i32 {
     }
 }
 
-/// Shared `--node/--root/--no-run` flag parsing for the reconcile verbs.
+/// Shared `--node/--root/--no-run` flag parsing for the reconcile ops.
 /// None names a missing required --node.
 fn parse_node_root(args: &[String]) -> Option<(String, String, bool)> {
     let mut node = String::new();
@@ -470,13 +470,13 @@ fn parse_node_root(args: &[String]) -> Option<(String, String, bool)> {
     Some((node, root, no_run))
 }
 
-/// The op router: `fno-agents stub-manifest <verb> [flags]`. Registered in
+/// The op router: `fno-agents stub-manifest <op> [flags]`. Registered in
 /// client.rs.
 pub fn run(args: &[String]) -> i32 {
-    let (verb, rest) = match args.split_first() {
-        Some((verb, rest)) => (verb.as_str(), rest),
+    let (op, rest) = match args.split_first() {
+        Some((op, rest)) => (op.as_str(), rest),
         None => {
-            eprintln!("fno-agents stub-manifest: name a verb");
+            eprintln!("fno-agents stub-manifest: name an op");
             return 2;
         }
     };
@@ -487,12 +487,12 @@ pub fn run(args: &[String]) -> i32 {
         println!("usage: fno do pr stub-manifest write|reconcile-validate|reconcile-finalize --node <id> [--root <dir>] [--stubs-json <json>] [--contract-version <n>] [--contract-ref <ref>] [--contract-test <cmd>] [--no-run]");
         return 0;
     }
-    match verb {
+    match op {
         "write" => run_write(rest),
         "reconcile-validate" => run_reconcile_validate(rest),
         "reconcile-finalize" => run_reconcile_finalize(rest),
         other => {
-            eprintln!("fno-agents stub-manifest: unknown verb {other}");
+            eprintln!("fno-agents stub-manifest: unknown op {other}");
             2
         }
     }

@@ -3510,7 +3510,7 @@ pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<
 #[cfg(test)]
 mod tests;
 
-pub mod verbs;
+pub mod cli;
 
 // ---------------------------------------------------------------------------
 // v23: the substitution verdict. The Rust twin of

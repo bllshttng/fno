@@ -42,7 +42,7 @@ pub(crate) struct ManifestLock {
 /// rewrites the manifest (the Python `atomic_write` flocked this path with a
 /// 10s filelock timeout; the native verbs mirror the ~5s budget). Best-effort:
 /// `None` after ~5s of contention means the caller skips rather than racing
-/// the other writer. `pub(crate)`: the `state-verbs` door shares the lock.
+/// the other writer. `pub(crate)`: the `state-cli` door shares the lock.
 pub(crate) fn lock_manifest(manifest: &Path) -> Option<ManifestLock> {
     use std::os::fd::AsRawFd;
     let name = manifest

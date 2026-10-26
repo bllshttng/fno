@@ -650,7 +650,7 @@ fn play_case(case: &Case) -> Result<(), String> {
         if head.first() == Some(&"do") {
             match head.get(1).copied() {
                 Some("state") => {
-                    a.push("state-verbs");
+                    a.push("state-cli");
                     a.extend(head.iter().skip(2));
                 }
                 Some("phase") => {
@@ -769,7 +769,7 @@ fn state_force_writes_stay_atomic_under_parallel_writers() {
             let root = root;
             scope.spawn(move || {
                 let args = vec![
-                    "state-verbs".to_string(),
+                    "state-cli".to_string(),
                     "init".to_string(),
                     "--allow-stub".to_string(),
                     "--force".to_string(),
