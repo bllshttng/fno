@@ -358,7 +358,7 @@ fn emit_sweep_event(row: &Row, sha: Option<&str>, acts: Vec<String>) -> bool {
     crate::event_store::append_envelope(&journal, &envelope.to_string(), None).is_ok()
 }
 
-fn act_on_stranded(row: &Row) -> Value {
+pub fn act_on_stranded(row: &Row) -> Value {
     let path = row.facts.get("path").and_then(Value::as_str).unwrap_or("");
     let branch = row.facts.get("branch").and_then(Value::as_str);
     let node = row.node.clone().unwrap_or_default();
