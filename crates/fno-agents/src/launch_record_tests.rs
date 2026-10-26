@@ -151,16 +151,22 @@ fn an_unnamed_or_forking_claude_bg_line_is_refused() {
     let line = "cd /w/fb-9b9b && claude --bg --resume 58b9fbe4-b512 --model opus \"Lead Hope: go\"";
     let launches = parse_command(line, "/repo");
     assert_eq!(launches[0].resume.as_deref(), Some("58b9fbe4-b512"));
-    let forks = claude_bg_refusal(&launches, |id| id == "58b9fbe4-b512").unwrap();
+    // The daemon-hosted session is in claude's listing only, and the line
+    // names a prefix of its id longer than the short id.
+    let mut row = crate::claude_roster::ClaudeAgentRow::new("58b9fbe4", Some("working"));
+    row.session_id = Some("58b9fbe4-b512-4d4c-87ef-2015ac6e5b13".into());
+    let roster = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![row]);
+    let forks = claude_bg_refusal(&launches, |id| roster.holds_session(id)).unwrap();
     assert!(forks.contains("still running"), "{forks}");
     let unnamed = claude_bg_refusal(&launches, |_| false).unwrap();
     assert!(unnamed.contains("--name"), "{unnamed}");
-    // A named line passes, and so does a bare `-r` picker, which names no id.
+    // A named resume of a stopped session passes, and so does a bare `-r`
+    // picker, which names no id.
     for ok in [
         "claude --bg --name t-fb-9b9b --resume 58b9fbe4-b512 go",
         "claude --bg -r -n w",
     ] {
         let launches = parse_command(ok, "/repo");
-        assert!(claude_bg_refusal(&launches, |_| true).is_none(), "{ok}");
+        assert!(claude_bg_refusal(&launches, |_| false).is_none(), "{ok}");
     }
 }

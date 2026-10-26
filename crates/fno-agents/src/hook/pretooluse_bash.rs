@@ -216,19 +216,8 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
 /// shows a hosted process for it. A daemon-hosted `--bg` session carries no
 /// id in its argv, so the listing is the half that sees it.
 fn claude_session_runs(id: &str) -> bool {
-    if crate::census::live_claude_holds_session(id) {
-        return true;
-    }
-    let snapshot = crate::claude_roster::read_all_agents_union();
-    let carries_pids = snapshot.carries_pids();
-    let rows = match &snapshot {
-        crate::claude_roster::ClaudeAgentsSnapshot::Known { rows, .. }
-        | crate::claude_roster::ClaudeAgentsSnapshot::Unknown { rows, .. } => rows,
-    };
-    rows.iter().any(|row| {
-        (row.session_id.as_deref() == Some(id) || row.short_id == id)
-            && row.has_live_process(carries_pids)
-    })
+    crate::census::live_claude_holds_session(id)
+        || crate::claude_roster::read_all_agents_union().holds_session(id)
 }
 
 /// Not a guard. An allowed command that starts a harness session leaves a
