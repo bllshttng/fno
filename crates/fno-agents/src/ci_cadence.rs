@@ -218,7 +218,7 @@ fn read_rows(path: &Path, now_ms: i64) -> Result<(Vec<Push>, Vec<Check>), String
 }
 
 /// Check names heal's flake ledger saw fail and then pass on a rerun.
-fn flake_checks(path: &Path) -> HashSet<String> {
+pub(crate) fn flake_checks(path: &Path) -> HashSet<String> {
     crate::event_store::journal_text(path, &["pr_heal_flake"])
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())

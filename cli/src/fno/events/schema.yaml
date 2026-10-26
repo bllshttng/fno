@@ -8582,6 +8582,10 @@ event_types:
     description: "The ci_cadence arm read a pushed head's CI at one offset. outcome names what it did: pending, green, superseded, flake_wait, flake_rerun, stale_red, woke, red_no_session or unreadable."
     sources: [daemon]
     data: {required: [branch, sha, offset_s, outcome]}
+  - name: main_revert_check
+    description: "The main_revert arm read a red main head. outcome names what it did: seen, ambiguous, flaky, already_opened, opened, failed or unreadable."
+    sources: [daemon]
+    data: {required: [slug, head, outcome]}
   - name: mcp_channel_demoted_to_socket
     description: "Legacy agents-family telemetry kind, envelope-mapped by the shared emitter."
     sources: [daemon, agents]
