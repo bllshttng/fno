@@ -21,3 +21,7 @@ class StoreBlock(BaseModel):
     # Strict: Rust's as_bool() reads a "true" string as off, so lax coercion
     # would report sharing on while the backlog stays local.
     share_backlog: StrictBool = False
+    # Opt-in plan rescue: host key -> ssh destination. The plan carrier asks
+    # that peer for a plan file it cannot place from the store. Read in Rust
+    # only (plan_carry.rs ssh_peers).
+    ssh_peers: Optional[dict[str, str]] = None

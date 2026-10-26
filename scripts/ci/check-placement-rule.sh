@@ -371,6 +371,9 @@ crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/claude_drive.rs
 crates/fno-agents/src/claude_roster.rs
 crates/fno-agents/src/plans_path.rs
+# plan_carry.rs tests build a per-project Claude settings fixture (the same
+# Claude's-own-config class as plans_path.rs); footnote state never lands there.
+crates/fno-agents/src/plan_carry.rs
 crates/fno-agents/src/law_match.rs
 crates/fno-agents/src/mail_cli/send/resolve.rs
 crates/fno-agents/src/client_commands.rs
