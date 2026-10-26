@@ -1144,6 +1144,23 @@ fn r_state_root_drift() -> Result<Value, String> {
     }))
 }
 
+/// The boot-revival failed rows of this boot. A receipt from an older boot
+/// reads clean: a stale failure is not this boot's news. A corrupted
+/// receipt is a failed reading, never a silent zero.
+fn r_boot_revival() -> Result<Value, String> {
+    let home = crate::paths::AgentsHome::from_env();
+    match crate::boot_revival::failed_rows_this_boot(&home) {
+        Some(rows) => Ok(json!({
+            "failed": rows.len(),
+            "rows": rows.iter().map(|r| json!({
+                "name": r.name,
+                "reason": r.reason,
+            })).collect::<Vec<_>>(),
+        })),
+        None => Err("boot-revival.json exists but did not parse".to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // gather
 
@@ -1218,6 +1235,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take("territory", r_territory(ctx));
     take("peer_blocked", peer_blocked::reading());
     take("state_root_drift", r_state_root_drift());
+    take("boot_revival", r_boot_revival());
     take("capacity", r_capacity());
     take("layout", r_layout());
     take(
@@ -2347,6 +2365,23 @@ fn render_lines_with(
                 "state_root_drift: {count} undocumented top-level entries: {}{more}",
                 entries.join(", ")
             ));
+        }
+    }
+    if ok("boot_revival", &mut lines) {
+        let failed = by_name("boot_revival")
+            .and_then(|r| r.value.get("rows"))
+            .and_then(|o| o.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if failed.is_empty() {
+            lines.push("boot_revival: none".into());
+        } else {
+            lines.push("boot_revival:".into());
+            for row in failed.iter().take(MAX_ORG_ROWS) {
+                let name = row.get("name").and_then(Value::as_str).unwrap_or("?");
+                let reason = row.get("reason").and_then(Value::as_str).unwrap_or("?");
+                lines.push(format!("  {name}: {reason}"));
+            }
         }
     }
     if ok("parked", &mut lines) {
@@ -3621,6 +3656,7 @@ mod tests {
                 json!({"clock_live": false, "clock_until": null, "delivery_policy": null}),
             ),
             Reading::took("parked", json!({"open": 0, "rows": []})),
+            Reading::took("boot_revival", json!({"failed": 0, "rows": []})),
         ]
     }
 
@@ -3635,6 +3671,42 @@ mod tests {
     }
 
     // ---- check_account_login_with: one test per rule ----
+
+    #[test]
+    fn the_checkin_names_failed_revival_rows() {
+        let mut readings = sample_readings(board0(), org0(), cap_ok(), workers_none());
+        set_reading(
+            &mut readings,
+            Reading::took(
+                "boot_revival",
+                json!({
+                    "failed": 1,
+                    "rows": [{"name": "kestrel", "reason": "zai lane cannot ride a re-entry plan"}],
+                }),
+            ),
+        );
+        let data = build_data(&readings, "x-bbbb");
+        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
+        let header = lines
+            .iter()
+            .find(|l| l.starts_with("boot_revival:"))
+            .unwrap();
+        assert_eq!(header, "boot_revival:", "lines: {lines:?}");
+        let detail = lines
+            .iter()
+            .find(|l| l.contains("kestrel") && l.contains("zai lane"))
+            .unwrap();
+        assert!(detail.starts_with("  "), "row line: {detail}");
+
+        // Clean receipt: none.
+        let readings = sample_readings(board0(), org0(), cap_ok(), workers_none());
+        let data = build_data(&readings, "x-bbbb");
+        let line = render_lines("x-bbbb", &readings, &data, &None, "", "no change")
+            .into_iter()
+            .find(|l| l.starts_with("boot_revival:"))
+            .unwrap();
+        assert_eq!(line, "boot_revival: none");
+    }
 
     #[test]
     fn capacity_rows() {
