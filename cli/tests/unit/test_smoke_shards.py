@@ -214,3 +214,34 @@ def test_smoke_setup_cleans_fno_agents_and_fno_before_building_cached_artifacts(
             and f"--manifest-path crates/{package}/Cargo.toml" in line
         )
         assert clean < build, f"smoke setup can execute a stale cached {package} binary"
+
+
+def test_journey_cargo_builds_pin_the_classic_layout() -> None:
+    """The smoke sandbox pins CARGO_BUILD_BUILD_DIR into its /tmp home.
+
+    hermetic.neutralise redirects HOME and the cargo build dir into a /tmp
+    sandbox for every child of `fno doctor test`, so a bare `cargo build` in
+    a smoke leg is a full cold rebuild of the crate into that sandbox. The
+    CI runner's /tmp quota cannot fit a cold fno-agents build (EDQUOT
+    os error 122, smoke-rest (4), 2026-10-25). Every cargo build invocation
+    in the workspace-standalone journey must pin the classic layout the
+    script itself reads and smoke-setup pre-builds warm.
+
+    The invocation test normalizes leading whitespace and consumes shell
+    assignment prefixes, so an indented build or one carrying another env
+    prefix (`RUSTFLAGS=... cargo build`) is still caught; the pin test reads
+    the whole line, so `CARGO_BUILD_BUILD_DIR=... cargo build` passes.
+    """
+    lines = (_REPO_ROOT / "tests" / "mux-workspace-standalone.sh").read_text().splitlines()
+    invocation = re.compile(
+        r"(?:^|[;&|]\s*|\b(?:then|do|else)\s+)"
+        r"(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*"
+        r"cargo build\b"
+    )
+    bare = [
+        f"line {i}: {line}"
+        for i, line in enumerate(lines, 1)
+        if invocation.search(line.strip())
+        and "CARGO_BUILD_BUILD_DIR=" not in line
+    ]
+    assert not bare, f"unpinned cargo build in tests/mux-workspace-standalone.sh: {bare}"
