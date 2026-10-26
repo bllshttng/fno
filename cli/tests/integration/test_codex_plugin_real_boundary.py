@@ -112,7 +112,7 @@ def test_codex_0145_failed_legacy_migration_restores_config_cache_and_marker(
         is_live = env is None or Path(str(env["CODEX_HOME"])) == home
         if (
             is_live
-            and argv == ["codex", "plugin", "add", "fno@footnote", "--json"]
+            and argv == ["codex", "plugin", "add", "fno@fno", "--json"]
             and result.returncode == 0
             and not failed_once
         ):
@@ -138,7 +138,7 @@ def test_codex_0145_failed_legacy_migration_restores_config_cache_and_marker(
     assert tomllib.loads(config.read_text(encoding="utf-8")) == expected_config
     assert (legacy_cache / "payload").read_bytes() == cache_bytes
     assert marker.read_bytes() == marker_bytes
-    assert not (home / "plugins/cache/footnote").exists()
+    assert not (home / "plugins/cache/fno").exists()
     marketplaces = _run(home, "plugin", "marketplace", "list", "--json")
     assert marketplaces.returncode == 0, marketplaces.stderr
     assert [
