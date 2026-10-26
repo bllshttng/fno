@@ -565,7 +565,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
 #: commands a human never types - but stays invocable, listed by ``fno help --all``
 #: and each command's own ``--help``. Membership is display-only; it never changes
 #: dispatch or the RUST_CLIENT_COMMANDS routing set.
-RUST_ONLY_ADVERTISED: frozenset[str] = frozenset({"status", "liveness"})
+RUST_ONLY_ADVERTISED: frozenset[str] = frozenset({"status"})
 
 #: Commands retired at G4: the grid, the WebSocket ``drive`` surface, and
 #: the interactive daemon PTY hosting behind ``host``/``promote`` moved to the
