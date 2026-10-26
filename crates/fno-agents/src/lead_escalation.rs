@@ -147,7 +147,7 @@ pub struct EscalationRequest {
     #[serde(default)]
     pub route: Option<String>,
     /// The directory whose `.fno/config.toml` the route read starts from:
-    /// the caller's repository root, so a verb run from a subdirectory
+    /// the caller's repository root, so a run from a subdirectory
     /// still reads the project config. Absent falls back to the process
     /// cwd.
     #[serde(default)]
@@ -421,7 +421,7 @@ pub fn run_lead_escalation_text(args: &[String]) -> i32 {
     // The knob read lives here, not in `render`: the renderer stays
     // deterministic on its request, and the tests pin the route through the
     // field the transport fills. The caller names its repository root, so a
-    // verb run from a subdirectory still reads the project config.
+    // run from a subdirectory still reads the project config.
     if req.route.is_none() {
         let cwd = req
             .route_cwd

@@ -280,7 +280,7 @@ def test_direct_route_returns_the_relay_mail_verdict_and_nudge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Under direct, the default, the renderer's verdict is mail_relay False
-    with a nudge naming the ask verb; the transport carries it verbatim."""
+    with a nudge naming the ask action; the transport carries it through."""
     monkeypatch.setattr(
         "fno.lead.escalate._render",
         lambda *a, **k: {
