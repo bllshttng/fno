@@ -1,4 +1,4 @@
-//! The op-door verbs (hidden `fno doctor` arms the Python importers now call)
+//! The op-door commands (hidden `fno doctor` arms the Python importers now call)
 //! plus the cost-check helpers (doctor.py:878-1016).
 
 use std::path::PathBuf;
