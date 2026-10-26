@@ -376,7 +376,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "default answers harness-native for claude",
+        "policy_default answers harness-native for claude",
         "r1",
         Some("claude"),
         &[],
@@ -385,7 +385,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "default degrades to external for codex",
+        "policy_default degrades to external for codex",
         "r1",
         Some("codex"),
         &[],
@@ -396,7 +396,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "global never wins over the default",
+        "policy_global never wins over the default",
         "r1",
         Some("claude"),
         &[(
@@ -414,7 +414,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "per-project path match answers external",
+        "policy_per-project path match answers external",
         "r1",
         Some("claude"),
         &[],
@@ -424,7 +424,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "per-project name match answers never",
+        "policy_per-project name match answers never",
         "r2",
         Some("claude"),
         &[],
@@ -438,7 +438,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "invalid global policy refuses",
+        "policy_invalid global policy refuses",
         "r1",
         Some("claude"),
         &[(
@@ -452,7 +452,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "unparseable repo config refuses",
+        "policy_unparseable repo config refuses",
         "r1",
         Some("claude"),
         &[],
@@ -462,7 +462,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "work wrong type refuses",
+        "policy_work wrong type refuses",
         "r1",
         Some("claude"),
         &[],
@@ -472,7 +472,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "env override wins and is validated",
+        "policy_env override wins and is validated",
         "r1",
         Some("claude"),
         &[("FNO_WORKTREE_POLICY", Some("external".to_string()))],
@@ -482,7 +482,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "invalid env override refuses",
+        "policy_invalid env override refuses",
         "r1",
         Some("claude"),
         &[("FNO_WORKTREE_POLICY", Some("wat".to_string()))],
@@ -501,7 +501,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "explicit worktrees base degrades harness-native",
+        "policy_explicit worktrees base degrades harness-native",
         "r1",
         Some("claude"),
         &[(
@@ -517,7 +517,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "conductor canonical degrades with a note",
+        "policy_conductor canonical degrades with a note",
         "r1",
         Some("claude"),
         &[(
@@ -531,7 +531,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "bare string project id resolves",
+        "policy_bare string project id resolves",
         "r2",
         Some("claude"),
         &[],
@@ -541,7 +541,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "project table id resolves",
+        "policy_project table id resolves",
         "r2",
         Some("claude"),
         &[],
@@ -551,7 +551,7 @@ fn policy_cases() {
     policy_case(
         &pins,
         &base,
-        "state dir fallback anchors the base",
+        "policy_state dir fallback anchors the base",
         "r1",
         Some("codex"),
         &[],
@@ -585,7 +585,7 @@ fn ensure_cases() {
         None,
     );
     check2(
-        "fresh cut from origin main",
+        "ensure_fresh cut from origin main",
         code,
         out,
         err,
@@ -608,7 +608,7 @@ fn ensure_cases() {
         None,
     );
     check2(
-        "reuse of an existing tree",
+        "ensure_reuse of an existing tree",
         code,
         out,
         err,
@@ -634,7 +634,7 @@ fn ensure_cases() {
         None,
     );
     check2(
-        "branch switch on a reused tree",
+        "ensure_branch switch on a reused tree",
         code,
         out,
         err,
@@ -657,7 +657,7 @@ fn ensure_cases() {
         None,
     );
     check2(
-        "never policy launches in place",
+        "ensure_never policy launches in place",
         code,
         out,
         err,
@@ -682,7 +682,7 @@ fn ensure_cases() {
         None,
     );
     check2(
-        "never policy conflicts with an explicit branch",
+        "ensure_never policy conflicts with an explicit branch",
         code,
         out,
         err,
@@ -705,7 +705,7 @@ fn ensure_cases() {
         None,
     );
     check2(
-        "invalid policy refuses with empty stdout",
+        "ensure_invalid policy refuses with empty stdout",
         code,
         out,
         err,
@@ -729,7 +729,7 @@ fn ensure_cases() {
         None,
     );
     check2(
-        "linked worktree refuses to nest",
+        "ensure_linked worktree refuses to nest",
         code,
         out,
         err,
@@ -752,7 +752,15 @@ fn ensure_cases() {
         &[],
         None,
     );
-    check2("non-git repo refuses", code, out, err, &root, &home, &base);
+    check2(
+        "ensure_non-git repo refuses",
+        code,
+        out,
+        err,
+        &root,
+        &home,
+        &base,
+    );
 }
 
 #[test]
@@ -777,7 +785,7 @@ fn status_and_list_cases() {
     );
     let _ = err;
     check(
-        "text form joins the registry",
+        "status_text form joins the registry",
         code,
         out,
         &root,
@@ -794,7 +802,7 @@ fn status_and_list_cases() {
         None,
     );
     check(
-        "json form carries the summary",
+        "status_json form carries the summary",
         code,
         out,
         &root,
@@ -808,7 +816,7 @@ fn status_and_list_cases() {
         None,
     );
     check(
-        "missing registry degrades with a warning",
+        "status_missing registry degrades with a warning",
         code,
         out,
         &root,
@@ -823,7 +831,7 @@ fn status_and_list_cases() {
     );
     let _ = err;
     check(
-        "fno base and legacy base rows only",
+        "list_fno base and legacy base rows only",
         code,
         out,
         &root,
@@ -929,7 +937,7 @@ fn stranded_and_resolve_cases() {
         &root,
         &home,
         &base,
-        "zero unpushed reads clean",
+        "stranded_classify_zero unpushed reads clean",
         0,
         true,
         Some("x-a000"),
@@ -942,7 +950,7 @@ fn stranded_and_resolve_cases() {
         &root,
         &home,
         &base,
-        "a failed read answers unknown first",
+        "stranded_classify_a failed read answers unknown first",
         1,
         false,
         Some("x-a000"),
@@ -955,7 +963,7 @@ fn stranded_and_resolve_cases() {
         &root,
         &home,
         &base,
-        "unresolved node answers unknown",
+        "stranded_classify_unresolved node answers unknown",
         1,
         true,
         None,
@@ -968,7 +976,7 @@ fn stranded_and_resolve_cases() {
         &root,
         &home,
         &base,
-        "a live worker outranks node status",
+        "stranded_classify_a live worker outranks node status",
         1,
         true,
         Some("x-a000"),
@@ -981,7 +989,7 @@ fn stranded_and_resolve_cases() {
         &root,
         &home,
         &base,
-        "done node reads shipped",
+        "stranded_classify_done node reads shipped",
         1,
         true,
         Some("x-a000"),
@@ -994,7 +1002,7 @@ fn stranded_and_resolve_cases() {
         &root,
         &home,
         &base,
-        "quiet terminal reads abandoned",
+        "stranded_classify_quiet terminal reads abandoned",
         1,
         true,
         Some("x-a000"),
@@ -1007,7 +1015,7 @@ fn stranded_and_resolve_cases() {
         &root,
         &home,
         &base,
-        "open pr keeps work visible",
+        "stranded_classify_open pr keeps work visible",
         1,
         true,
         Some("x-a000"),
@@ -1020,7 +1028,7 @@ fn stranded_and_resolve_cases() {
         &root,
         &home,
         &base,
-        "in-progress with no pr reads stranded",
+        "stranded_classify_in-progress with no pr reads stranded",
         1,
         true,
         Some("x-a000"),
@@ -1033,7 +1041,7 @@ fn stranded_and_resolve_cases() {
         &root,
         &home,
         &base,
-        "facts carry pr number and live flag",
+        "stranded_classify_facts carry pr number and live flag",
         2,
         true,
         Some("x-a000"),
@@ -1067,31 +1075,31 @@ fn stranded_and_resolve_cases() {
         );
     };
     resolve_case(
-        "exact id resolves from the basename",
+        "resolve_node_exact id resolves from the basename",
         "x-d000",
         None,
         &entries("x-d000", "d-slug"),
     );
     resolve_case(
-        "slug resolves case-insensitively",
+        "resolve_node_slug resolves case-insensitively",
         "plain-dir",
         Some("feature/d-slug"),
         &entries("x-d001", "d-slug"),
     );
     resolve_case(
-        "bare hex re-prefixes",
+        "resolve_node_bare hex re-prefixes",
         "plain-dir",
         Some("feature/d002"),
         &entries("x-d002", "d-two"),
     );
     resolve_case(
-        "manifest line wins over nothing",
+        "resolve_node_manifest line wins over nothing",
         "plain-dir2",
         None,
         &entries("x-d003", "d-three"),
     );
     resolve_case(
-        "no hit answers none",
+        "resolve_node_no hit answers none",
         "plain-dir3",
         Some("feature/nothing"),
         &entries("x-d004", "d-four"),
@@ -1162,7 +1170,7 @@ fn sweep_and_apply_cases() {
         })
         .collect();
     check(
-        "sweep classifies ahead and merged rows",
+        "sweep_sweep classifies ahead and merged rows",
         0,
         format!("{}\n", sorted(&Value::Array(payload))),
         &root,
@@ -1231,7 +1239,7 @@ fn apply_case() {
         "pushed_sha": pushed.trim().chars().take(7).collect::<String>(),
     });
     check(
-        "stranded act pushes and stops clean",
+        "apply_stranded act pushes and stops clean",
         0,
         format!("{}\n", sorted(&payload)),
         &root,
@@ -1383,7 +1391,7 @@ fn overlap_dispatch_register_cases() {
     let folded = fno_agents::worktree::overlaps::fold_overlap_events(&events, 28, pinned_now)
         .expect("dedup fold succeeds");
     check(
-        "dedup folds one observation to one row",
+        "fold_dedup folds one observation to one row",
         0,
         format!("{}\n", sorted(&folded)),
         &root,
@@ -1394,7 +1402,7 @@ fn overlap_dispatch_register_cases() {
     let folded = fno_agents::worktree::overlaps::fold_overlap_events(&single, 1, pinned_now)
         .expect("window fold succeeds");
     check(
-        "out-of-window drops",
+        "fold_out-of-window observations drop",
         0,
         format!("{}\n", sorted(&folded)),
         &root,
@@ -1418,7 +1426,7 @@ fn overlap_dispatch_register_cases() {
     );
     let _ = err;
     check(
-        "valid payload records and folds",
+        "overlap_record_valid payload records and folds",
         code,
         out,
         &root,
@@ -1427,13 +1435,16 @@ fn overlap_dispatch_register_cases() {
     );
     // invalid json / empty peers / empty observer
     for (label, stdin_text) in [
-        ("invalid json answers invalid-input", "not json"),
         (
-            "empty peers answer invalid-input",
+            "overlap_record_invalid json answers invalid-input",
+            "not json",
+        ),
+        (
+            "overlap_record_empty peers answer invalid-input",
             r#"{"observer_session_id": "sess-a", "peer_session_ids": []}"#,
         ),
         (
-            "empty observer answers schema-rejected",
+            "overlap_record_empty observer answers schema-rejected",
             r#"{"observer_session_id": "", "peer_session_ids": ["sess-b"], "repository_common_dir": "/fix/repo", "worktree_git_dir": "/fix/repo/wt"}"#,
         ),
     ] {
@@ -1452,9 +1463,9 @@ fn overlap_dispatch_register_cases() {
     // The report op: missing / complete / malformed, JSON form; the text
     // render case runs last on a complete journal.
     let report_cases: [(&str, usize); 3] = [
-        ("missing journal is a valid empty source", 0),
-        ("complete journal exits zero", 1),
-        ("malformed line makes partial exit one", 2),
+        ("overlap_report_missing journal is a valid empty source", 0),
+        ("overlap_report_complete journal exits zero", 1),
+        ("overlap_report_malformed line makes partial exit one", 2),
     ];
     for (label, lines) in report_cases {
         let _ = std::fs::remove_dir_all(root.join("events"));
@@ -1489,7 +1500,7 @@ fn overlap_dispatch_register_cases() {
     );
     let _ = err;
     check(
-        "text render names the counts",
+        "overlap_report_text render names the counts",
         code,
         out,
         &root,
@@ -1535,16 +1546,22 @@ fn dispatch_and_register_cases() {
         let _ = err;
         check(label, code, out, &root, &home, &base);
     };
-    pin_case("same repo identity pins nothing", "p1", "p1", None, None);
     pin_case(
-        "foreign undeclared repo pins never",
+        "dispatch_pin_same repo identity pins nothing",
+        "p1",
+        "p1",
+        None,
+        None,
+    );
+    pin_case(
+        "dispatch_pin_foreign undeclared repo pins never",
         "p2",
         "p1",
         Some("claude"),
         None,
     );
     pin_case(
-        "foreign declared repo pins nothing",
+        "dispatch_pin_foreign declared repo pins nothing",
         "p3",
         "p1",
         Some("claude"),
@@ -1572,7 +1589,7 @@ fn dispatch_and_register_cases() {
     );
     let _ = err;
     check(
-        "entry lands in the jsonl registry",
+        "register_worker_entry lands in the jsonl registry",
         code,
         out,
         &root,
