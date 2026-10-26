@@ -186,7 +186,7 @@ fn main() {
     }
     // gh-cache, target-status: the early transport arms; client_transport.rs
     // holds their bodies and comments. worktree-reapable and launch-workdir
-    // stay here: the x-9ee6 port owns their moves into their own modules.
+    // stay here: their own ports own the moves into their modules.
     if let Some(code) = fno_agents::client_transport::transport_early_arms(&args) {
         std::process::exit(code);
     }

@@ -118,7 +118,9 @@ fn run_door_raw(args: &[&str]) -> (i32, String, String) {
 }
 
 fn assert_cases_against_goldens(cases: &[Case], subject: &str) {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(subject);
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden")
+        .join(subject);
     for case in cases {
         let expected_exit = std::fs::read_to_string(dir.join(format!("{}.exit", case.label)))
             .unwrap_or_else(|e| panic!("{subject}/{}: golden exit missing: {e}", case.label))

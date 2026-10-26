@@ -5,8 +5,8 @@
 //! `harness_reader::transport_doors` gives the harness probes; client.rs sits
 //! against its line budget, so each family's body lives in its own module and
 //! the arm comments moved with the code. `worktree-reapable` and
-//! `launch-workdir` stay their own arms in client.rs: the x-9ee6 port owns
-//! those moves into the worktree and launch_workdir modules.
+//! `launch-workdir` stay their own arms in client.rs: their own ports own
+//! the moves into the worktree and launch_workdir modules.
 
 /// The group's dispatch: `Some(exit code)` when `args` names one of these
 /// arms, `None` so the caller falls through to the next arm.

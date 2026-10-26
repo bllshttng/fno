@@ -22,25 +22,88 @@ struct Case {
 #[test]
 fn the_surface_door_matches_the_captured_leg_on_every_golden() {
     let cases = [
-        Case { label: "tsx-path", flag: "", input: "src/components/Foo.tsx\n" },
-        Case { label: "jsx-path", flag: "", input: "app/panel.jsx\n" },
-        Case { label: "components-prefix", flag: "", input: "components/Sidebar.tsx\n" },
-        Case { label: "components-mid", flag: "", input: "src/features/dashboard/components/Chart.tsx\n" },
-        Case { label: "routes-mid", flag: "", input: "web/routes/api.ts\n" },
-        Case { label: "src-styles-mid", flag: "", input: "ui/src/styles/theme.css\n" },
-        Case { label: "plain-py", flag: "", input: "cli/src/fno/loop.py\n" },
-        Case { label: "empty-stdin", flag: "", input: "" },
-        Case { label: "blank-lines", flag: "", input: "\n\n" },
-        Case { label: "multi-file-mix", flag: "", input: "cli/src/fno/loop.py\nsrc/components/Foo.tsx\n" },
-        Case { label: "multi-file-backend-only", flag: "", input: "cli/src/fno/loop.py\ncrates/fno-agents/src/lib.rs\n" },
-        Case { label: "has-ui-true", flag: "--has-ui", input: "src/routes/settings.tsx\n" },
-        Case { label: "has-ui-false", flag: "--has-ui", input: "README.md\n" },
-        Case { label: "has-ui-empty", flag: "--has-ui", input: "" },
-        Case { label: "trailing-no-newline", flag: "", input: "src/components/Foo.tsx" },
-        Case { label: "bare-tsx-suffix", flag: "", input: "panel.tsx\n" },
+        Case {
+            label: "tsx-path",
+            flag: "",
+            input: "src/components/Foo.tsx\n",
+        },
+        Case {
+            label: "jsx-path",
+            flag: "",
+            input: "app/panel.jsx\n",
+        },
+        Case {
+            label: "components-prefix",
+            flag: "",
+            input: "components/Sidebar.tsx\n",
+        },
+        Case {
+            label: "components-mid",
+            flag: "",
+            input: "src/features/dashboard/components/Chart.tsx\n",
+        },
+        Case {
+            label: "routes-mid",
+            flag: "",
+            input: "web/routes/api.ts\n",
+        },
+        Case {
+            label: "src-styles-mid",
+            flag: "",
+            input: "ui/src/styles/theme.css\n",
+        },
+        Case {
+            label: "plain-py",
+            flag: "",
+            input: "cli/src/fno/loop.py\n",
+        },
+        Case {
+            label: "empty-stdin",
+            flag: "",
+            input: "",
+        },
+        Case {
+            label: "blank-lines",
+            flag: "",
+            input: "\n\n",
+        },
+        Case {
+            label: "multi-file-mix",
+            flag: "",
+            input: "cli/src/fno/loop.py\nsrc/components/Foo.tsx\n",
+        },
+        Case {
+            label: "multi-file-backend-only",
+            flag: "",
+            input: "cli/src/fno/loop.py\ncrates/fno-agents/src/lib.rs\n",
+        },
+        Case {
+            label: "has-ui-true",
+            flag: "--has-ui",
+            input: "src/routes/settings.tsx\n",
+        },
+        Case {
+            label: "has-ui-false",
+            flag: "--has-ui",
+            input: "README.md\n",
+        },
+        Case {
+            label: "has-ui-empty",
+            flag: "--has-ui",
+            input: "",
+        },
+        Case {
+            label: "trailing-no-newline",
+            flag: "",
+            input: "src/components/Foo.tsx",
+        },
+        Case {
+            label: "bare-tsx-suffix",
+            flag: "",
+            input: "panel.tsx\n",
+        },
     ];
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden/executor_surface");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/executor_surface");
     for case in &cases {
         let expected_exit = std::fs::read_to_string(dir.join(format!("{}.exit", case.label)))
             .unwrap_or_else(|e| panic!("executor_surface/{}: golden exit missing: {e}", case.label))
@@ -53,8 +116,16 @@ fn the_surface_door_matches_the_captured_leg_on_every_golden() {
             .unwrap_or_else(|e| panic!("executor_surface/{}: golden err missing: {e}", case.label));
         let (code, stdout, stderr) = run_door(case.flag, case.input);
         assert_eq!(code, expected_exit, "executor_surface/{}: exit", case.label);
-        assert_eq!(stdout, expected_out, "executor_surface/{}: stdout", case.label);
-        assert_eq!(stderr, expected_err, "executor_surface/{}: stderr", case.label);
+        assert_eq!(
+            stdout, expected_out,
+            "executor_surface/{}: stdout",
+            case.label
+        );
+        assert_eq!(
+            stderr, expected_err,
+            "executor_surface/{}: stderr",
+            case.label
+        );
     }
 }
 
