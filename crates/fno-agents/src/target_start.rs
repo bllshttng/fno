@@ -861,11 +861,12 @@ fn read_node_claim(
     (state, rec)
 }
 
-/// True iff `holder` is THIS session's identity (any claim state). Four arms,
+/// True iff `holder` is THIS session's identity (any claim state). Five arms,
 /// mirroring init-target-state.sh's `claim_owner_id`: the driver-assigned run
-/// id, the codex thread id, the resolved self identity, then durable session
-/// pid + machine. An uncapturable own pid reads as not-ours (park /
-/// re-acquire, never assume ownership).
+/// id, the codex thread id, the resolved self identity, the launch-window
+/// handover this session was minted for, then durable session pid + machine.
+/// An uncapturable own pid reads as not-ours (park / re-acquire, never
+/// assume ownership).
 fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     for env_var in ["TARGET_SESSION_ID", "CODEX_THREAD_ID"] {
         if let Ok(own) = std::env::var(env_var) {
@@ -877,10 +878,25 @@ fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     let home = AgentsHome::from_env();
     let owned =
         crate::spawn_context::resolve_self_identity(&|k| std::env::var(k).ok(), None, None, &home);
-    if let Some(sid) = owned.session_id.map(|s| s.trim().to_string()) {
-        if !sid.is_empty() && holder == format!("target-session:{sid}") {
+    let own_sid = owned
+        .session_id
+        .clone()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(sid) = &own_sid {
+        if holder == format!("target-session:{sid}") {
             return true;
         }
+    }
+    // A launch-window claim names its worker, not its session: the spawn
+    // wrote `spawn-handover:<worker>` before this session existed. The
+    // registry row the worker name joins to answers with a session id, and
+    // only an exact match with this session's own adopts the claim - the
+    // same proof init's bash fallback trusts. Without this arm the start
+    // pre-check classifies its own beneficiary as foreign and refuses
+    // before init's adopt fallback can run (measured live 2026-10-26).
+    if let Some(worker) = holder.strip_prefix(crate::claim_commands::HANDOVER_HOLDER_PREFIX) {
+        return handover_row_is_ours(&home, worker, own_sid.as_deref());
     }
     if rec.pid_unavailable {
         return false;
@@ -890,6 +906,21 @@ fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     matches!(own_pid, Some(p) if rec.pid == Some(p as i32)) && same_machine
 }
 
+/// True when the registry row the handover's worker name resolves to carries
+/// this session's own id. One join: name -> row -> session id, the same join
+/// the liveness reader does for the same holder shape.
+fn handover_row_is_ours(home: &AgentsHome, worker: &str, own_sid: Option<&str>) -> bool {
+    let Some(own) = own_sid.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
+        return false;
+    };
+    registry
+        .entries
+        .iter()
+        .any(|e| e.name == worker && e.harness_session_id.as_deref().map(str::trim) == Some(own))
+}
 /// `(verdict, state word, record)` for `node:<id>` from THIS session's view:
 /// verdict in {ours, foreign_live, dead_predecessor, free}. Liveness is
 /// pid-based, so a busy owner whose TTL lapsed still reads live. Read-only;
@@ -2420,5 +2451,24 @@ mod start_progress_tests {
         assert!(got.starts_with("begin: step-name"));
         assert!(got.ends_with("..."));
         assert_eq!(got.chars().count(), 123);
+    }
+
+    #[test]
+    fn a_handover_row_joins_by_name_and_own_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(dir.path());
+        std::fs::create_dir_all(home.root()).unwrap();
+        std::fs::write(
+            home.registry_json(),
+            r#"{"agents": [
+                {"name": "t-w", "harness_session_id": "sid-1"},
+                {"name": "lead-x", "harness_session_id": "sid-2"}
+            ]}"#,
+        )
+        .unwrap();
+        assert!(handover_row_is_ours(&home, "t-w", Some("sid-1")));
+        assert!(!handover_row_is_ours(&home, "t-w", Some("sid-2")));
+        assert!(!handover_row_is_ours(&home, "t-w", None));
+        assert!(!handover_row_is_ours(&home, "absent", Some("sid-1")));
     }
 }
