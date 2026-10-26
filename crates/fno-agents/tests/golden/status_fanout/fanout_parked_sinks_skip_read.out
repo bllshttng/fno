@@ -1,0 +1,1 @@
+{"cursors": {}, "errors": {}, "label": "parked sinks skip read", "park_keys": ["s1"], "result": {"lease_lost": false, "locked_out": false, "parked_sinks": ["s1"], "rows_read": 0, "sinks": [], "skipped_lines": 0, "undeliverable_sinks": []}}

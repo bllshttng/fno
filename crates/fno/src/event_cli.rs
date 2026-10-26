@@ -30,6 +30,7 @@ pub const NATIVE_EVENT_SUBCOMMANDS: &[&str] = &[
     "prune",
     "recover",
     "signals",
+    "fanout",
 ];
 
 /// Classify `fno doctor event <sub> ...` for the front door: `Some(rest)`
@@ -71,11 +72,31 @@ pub fn run(args: &[OsString]) -> i32 {
         }
         "recover" => recovery::run(rest),
         "signals" => crate::event_signals::run(rest),
+        "fanout" => run_fanout(rest),
         _ => {
             eprintln!(
                 "error: expected a subcommand (emit-envelope | export | import | rows | prune | find | signals)"
             );
             2
+        }
+    }
+}
+
+/// `fno doctor event fanout tick [--dry-run|-N]`: the status-sink fanout
+/// tick. The whole fanout body lives in the fno-agents binary (the mutex, the
+/// config reader and the plan-doc writer are that crate's); this door execs
+/// it with the carried tail and propagates the exit code. Not a porcelain
+/// crossing: the runtime binary, not the Python CLI.
+fn run_fanout(rest: &[OsString]) -> i32 {
+    let bin = crate::digest_overlay::fno_agents_bin();
+    let mut cmd = std::process::Command::new(bin);
+    cmd.arg("status-fanout");
+    cmd.args(rest);
+    match cmd.status() {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("fno doctor event fanout: the fno-agents binary is missing: {e}");
+            1
         }
     }
 }
