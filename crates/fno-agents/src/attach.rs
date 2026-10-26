@@ -482,23 +482,22 @@ then attach again."
 /// `fno-agents attach <name>` -- interactive attach to a running claude agent,
 /// a codex thread, or a pi session (every other harness is refused). Mirrors
 /// Python `dispatch.attach_agent` + the `cmd_attach` Typer wrapper.
-/// Parsed `attach` argv: one NAME plus the store-heal flag. Extracted so the
+/// Parsed `attach` argv: one NAME (plus the retired store-heal no-op flag,
+/// accepted and ignored). Extracted so the
 /// flag grammar is unit-testable without a registry fixture, the way
 /// resume_args did for resume.
 #[derive(Debug)]
 pub(crate) struct AttachArgs {
     pub name: String,
-    pub cross_project: bool,
 }
 
 pub(crate) fn parse_attach_args(rest: &[String]) -> Result<AttachArgs, (i32, String)> {
     let mut name: Option<String> = None;
-    // The store heal's project-confinement refusal prescribes --cross-project;
-    // accept it so the taught remedy is a form this command takes.
-    let mut cross_project = false;
+    // Retired (d-460ea8c7): the store heal is machine-wide; the flag rides
+    // along as a silent no-op so the old taught remedy still parses.
     for a in rest {
         match a.as_str() {
-            "--cross-project" => cross_project = true,
+            "--cross-project" => {}
             other if other.starts_with("--") => {
                 return Err((2, format!("fno-agents: unknown attach flag: {other}")));
             }
@@ -517,10 +516,7 @@ pub(crate) fn parse_attach_args(rest: &[String]) -> Result<AttachArgs, (i32, Str
         }
     }
     let name = name.ok_or((2, "fno-agents: attach needs a <name>".to_string()))?;
-    Ok(AttachArgs {
-        name,
-        cross_project,
-    })
+    Ok(AttachArgs { name })
 }
 
 pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
@@ -545,13 +541,7 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
             return 12;
         }
     };
-    let entry = match resolve_entry_with_heal_scoped(
-        &entries,
-        &name,
-        &home.registry_json(),
-        parsed.cross_project,
-        None,
-    ) {
+    let entry = match resolve_entry_with_heal_scoped(&entries, &name, &home.registry_json(), None) {
         Ok(e) => e,
         Err(err) => {
             eprintln!("{}", err.message());
@@ -916,15 +906,11 @@ mod tests {
     }
 
     #[test]
-    fn attach_parses_the_refusal_prescribed_cross_project_flag() {
-        // The store heal's project-confinement refusal prescribes
-        // --cross-project; the old surface died with "unknown attach flag"
-        // before any resolution ran.
+    fn attach_still_accepts_the_retired_cross_project_flag() {
+        // Retired (d-460ea8c7): the flag is a silent no-op now; the old
+        // surface died with "unknown attach flag" before any resolution ran.
         let a = parse_attach_args(&["cx".to_string(), "--cross-project".to_string()]).unwrap();
         assert_eq!(a.name, "cx");
-        assert!(a.cross_project);
-        let plain = parse_attach_args(&["cx".to_string()]).unwrap();
-        assert!(!plain.cross_project);
         let err = parse_attach_args(&["cx".to_string(), "--nope".to_string()]).unwrap_err();
         assert_eq!(
             err,

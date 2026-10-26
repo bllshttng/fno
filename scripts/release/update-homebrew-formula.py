@@ -16,16 +16,21 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 import urllib.request
 
 PYPI = "https://pypi.org/pypi/fno/{}/json"
+# The PyPI file index can lag the upload by minutes; poll this long before
+# giving up instead of failing a release leg on the race.
+TRIES = 10
+DELAY_SECONDS = 30
 # Arch substrings as they appear in the wheel filenames + the formula url lines.
 X64 = "macosx_10_12_x86_64"
 ARM = "macosx_14_0_arm64"
 _URL_RE = re.compile(r'url "([^"]*?(' + re.escape(X64) + "|" + re.escape(ARM) + r')[^"]*\.whl)"')
 
 
-def fetch_wheels(version: str) -> dict[str, tuple[str, str]]:
+def _fetch_wheels_once(version: str) -> dict[str, tuple[str, str]]:
     """{arch_substr: (url, sha256)} for the two macOS wheels of <version>."""
     with urllib.request.urlopen(PYPI.format(version), timeout=30) as r:
         data = json.load(r)
@@ -37,6 +42,45 @@ def fetch_wheels(version: str) -> dict[str, tuple[str, str]]:
                 if arch in fn:
                     out[arch] = (u["url"], u["digests"]["sha256"])
     return out
+
+
+def fetch_wheels(
+    version: str,
+    tries: int = TRIES,
+    delay: int = DELAY_SECONDS,
+    fetch=None,
+    sleep=time.sleep,
+) -> dict[str, tuple[str, str]] | None:
+    """Poll PyPI until both macOS wheels are listed, then return them.
+
+    The upload can land minutes before the PyPI file index serves the wheels
+    (a 200 can still carry an incomplete file list), so read up to `tries`
+    times, `delay` seconds apart. Returns None once the budget is spent, with
+    the reason on stderr. `fetch` and `sleep` are injectable for --self-check.
+    """
+    fetch = fetch or _fetch_wheels_once
+    missing: list[str] = []
+    last_err: Exception | None = None
+    for attempt in range(1, tries + 1):
+        try:
+            wheels = fetch(version)
+        except (OSError, ValueError) as e:  # network error, bad status, or non-JSON body
+            last_err = e
+        else:
+            missing = [a for a in (X64, ARM) if a not in wheels]
+            if not missing:
+                return wheels
+        if attempt < tries:
+            sys.stderr.write(
+                f"fno {version}: macOS wheels not on PyPI yet"
+                f" (attempt {attempt}/{tries}), retrying in {delay}s\n"
+            )
+            sleep(delay)
+    if last_err is not None:
+        sys.stderr.write(f"fno {version}: could not fetch wheels from PyPI: {last_err}\n")
+    else:
+        sys.stderr.write(f"fno {version}: macOS wheels not on PyPI after {tries} tries: {missing}\n")
+    return None
 
 
 def rewrite(text: str, version: str, wheels: dict[str, tuple[str, str]]) -> str:
@@ -81,6 +125,26 @@ def self_check() -> None:
     assert 'url "https://new/x64.whl"' in got and f'sha256 "{"1" * 64}"' in got, got
     assert 'url "https://new/arm.whl"' in got and f'sha256 "{"2" * 64}"' in got, got
     assert "0.1.0" not in got and "deadbeef" not in got and "cafebabe" not in got, got
+
+    # Retry contract: keep polling until the wheel set is complete; a spent
+    # budget returns None and names the cause on stderr.
+    calls: list[str] = []
+
+    def flaky(v: str) -> dict[str, tuple[str, str]]:
+        calls.append(v)
+        if len(calls) < 3:
+            return {X64: ("https://new/x64.whl", "1" * 64)}
+        return {X64: ("https://new/x64.whl", "1" * 64), ARM: ("https://new/arm.whl", "2" * 64)}
+
+    got = fetch_wheels("0.2.1", tries=5, delay=0, fetch=flaky, sleep=lambda _s: None)
+    assert got is not None and ARM in got, got
+    assert len(calls) == 3, calls
+    assert fetch_wheels("0.2.1", tries=3, delay=0, fetch=lambda v: {}, sleep=lambda _s: None) is None
+
+    def refused(v: str) -> dict[str, tuple[str, str]]:
+        raise OSError("connection refused")
+
+    assert fetch_wheels("0.2.1", tries=3, delay=0, fetch=refused, sleep=lambda _s: None) is None
     print("self-check OK")
 
 
@@ -92,14 +156,8 @@ def main() -> int:
         sys.stderr.write(__doc__)
         return 2
     version, path = sys.argv[1], sys.argv[2]
-    try:
-        wheels = fetch_wheels(version)
-    except (OSError, ValueError) as e:  # network error, bad status, or non-JSON body
-        sys.stderr.write(f"fno {version}: could not fetch wheels from PyPI: {e}\n")
-        return 1
-    missing = [a for a in (X64, ARM) if a not in wheels]
-    if missing:
-        sys.stderr.write(f"fno {version}: macOS wheels not on PyPI yet: {missing}\n")
+    wheels = fetch_wheels(version)
+    if wheels is None:
         return 1
     with open(path, encoding="utf-8") as f:
         text = f.read()
