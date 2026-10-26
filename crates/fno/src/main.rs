@@ -200,9 +200,6 @@ enum Role {
     DoctorUpdate(Vec<OsString>),
     /// `fno agents history ... --graph ...`: the native session-card reader.
     AgentsHistory(Vec<OsString>),
-    /// `fno whoami` and `fno whoami status`: Python's output plus the
-    /// session receipt (`fno-agents intel --receipt`).
-    Whoami(Vec<OsString>),
     /// `fno agents lead refresh-canon` (the front's rewrite of
     /// `fno agents org refresh-canon`): the beat's canon-doc refresh. The
     /// carried tail is empty by contract; the door resolves the plugin root
@@ -279,9 +276,10 @@ enum Role {
     /// `fno agents roles <op>` for an op the Rust door owns: exec'd as
     /// `fno-agents spawn-overlay roles`, the group options carried along.
     AgentsRoles(Vec<OsString>),
-    /// `fno whoami ...`: the summary render and the status read, exec'd as
-    /// `fno-agents spawn-overlay whoami`. The four leaves other families own
-    /// forward to the Python leg; see `classify_whoami`.
+    /// `fno whoami` and `fno whoami status`: the render with the session
+    /// receipt (`fno-agents intel --receipt`) appended. The seam runs the
+    /// front door as a marker child; the four leaves other families own
+    /// still forward to the Python leg; see `classify_whoami`.
     Whoami(Vec<OsString>),
     /// The retired root `fno status ...`: the move notice the Python
     /// forwarder printed lands on stderr (byte-identical), then the same
@@ -1566,11 +1564,6 @@ fn main() {
         Role::AgentsRoles(rest) => std::process::exit(fno_agents_exec(
             "fno agents roles",
             &["spawn-overlay", "roles"],
-            &rest,
-        )),
-        Role::Whoami(rest) => std::process::exit(fno_agents_exec(
-            "fno whoami",
-            &["spawn-overlay", "whoami"],
             &rest,
         )),
         Role::WhoamiStatusAlias(rest) => {
