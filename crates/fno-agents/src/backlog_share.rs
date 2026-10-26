@@ -1345,17 +1345,16 @@ fn catch_up(
         if page.rows.is_empty() {
             return Ok(receipt);
         }
-        // Seqs come from one AUTOINCREMENT on a single writer, so they run
-        // without holes until a prune cuts the oldest ones.
-        if page.rows[0][0]
-            .integer()
-            .is_some_and(|seq| seq > cursor + 1)
-        {
-            return Err(PRUNED_PAST.to_string());
-        }
         let mut batches = Vec::new();
         for row in &page.rows {
             let seq = row[0].integer().ok_or("change row without a seq")?;
+            // Seqs come from one AUTOINCREMENT on a single writer, so they
+            // run without holes until a prune cuts some. A prune keys on
+            // each writer's own clock, so a skewed row can survive with
+            // younger pruned rows behind it: check every row, not the first.
+            if seq != batches.last().map_or(cursor, |(last, _)| *last) + 1 {
+                return Err(PRUNED_PAST.to_string());
+            }
             batches.push((seq, parse_ops(row[1].text().unwrap_or("[]"))?));
         }
         let transaction = connection
@@ -2422,6 +2421,25 @@ mod tests {
             !sync(&b.graph).unwrap().snapshot,
             "level again, the log serves it"
         );
+
+        // A skewed clock can leave a hole behind a surviving row: the
+        // replica must not read past it.
+        on(&primary, &a);
+        retitle(&a, "x-1", "fourth");
+        flush(&a.graph).unwrap();
+        retitle(&a, "x-1", "fifth");
+        flush(&a.graph).unwrap();
+        retitle(&a, "x-1", "sixth");
+        flush(&a.graph).unwrap();
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM backlog_changes WHERE seq = 5", [])
+            .unwrap();
+        on(&primary, &b);
+        assert!(sync(&b.graph).unwrap().snapshot);
+        assert_eq!(title(&b, "x-1").as_deref(), Some("sixth"));
         route_to_primary(None);
 
         let probed = probe(&primary.remote).unwrap();
