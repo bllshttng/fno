@@ -32,9 +32,15 @@ def bin_dir(tmp_path: Path) -> Path:
     return d
 
 
+@pytest.fixture(autouse=True)
+def no_cargo_bin(tmp_path, monkeypatch):
+    """The real ~/.cargo/bin would answer as the durable copy of fno."""
+    monkeypatch.setattr(shim_check, "CARGO_BIN", tmp_path / "absent-cargo" / "bin")
+
+
 @pytest.fixture()
 def no_durable_anywhere(tmp_path, monkeypatch):
-    """Point both durable candidates at absent dirs: pytest's own venv or the
+    """Point every durable candidate at absent dirs: pytest's own venv or the
     real uv tools dir would otherwise answer as the durable copy."""
     empty = tmp_path / "empty"
     empty.mkdir()
@@ -87,6 +93,30 @@ def test_temp_resolving_live_link_detected(bin_dir, tmp_path):
     defect = report["defects"][0]
     assert defect["name"] == "fno-gh-proxy"
     assert defect["problem"] == "temp-resolving"
+
+
+def test_absent_required_shim_restored_from_cargo_bin(bin_dir, tmp_path, monkeypatch, no_durable_anywhere):
+    # The 2026-10-22 shape: fno and fno-gh-proxy gone from the tool bin, the
+    # uv venv shipping neither, the durable copies only in the cargo bin.
+    cargo = tmp_path / "cargo-bin"
+    cargo.mkdir()
+    (cargo / "fno-gh-proxy").write_text("#!/bin/sh\ntrue\n")
+    (cargo / "fno-gh-proxy").chmod(0o755)
+    monkeypatch.setattr(shim_check, "CARGO_BIN", cargo)
+    monkeypatch.setattr(shim_check, "_temp_root", lambda: "/fno-no-temp-root")
+
+    report = scan(bin_dir)
+
+    # fno has no durable copy anywhere, so its absence is not a link defect.
+    assert [(d["name"], d["problem"]) for d in report["defects"]] == [("fno-gh-proxy", "absent")]
+    assert main(["--bin-dir", str(bin_dir), "--repair"]) == 0
+    assert os.path.realpath(bin_dir / "fno-gh-proxy") == str((cargo / "fno-gh-proxy").resolve())
+
+    # A durable copy under the temp root is no repair: the re-scan would
+    # condemn the new link and fail an install that passed before.
+    (bin_dir / "fno-gh-proxy").unlink()
+    monkeypatch.setattr(shim_check, "_temp_root", lambda: str(tmp_path))
+    assert scan(bin_dir)["healthy"] is True
 
 
 def test_main_exit_codes(bin_dir, tmp_path, monkeypatch):
