@@ -3,7 +3,7 @@
 //! of bin/client.rs for the file budget (the same shape as client_render.rs,
 //! which banked the first slice of that shrink). No behavior change.
 
-use fno_agents::client_render::{render_checked, truncate_cell, LAST_MESSAGE_WIDTH};
+use crate::client_render::{render_checked, truncate_cell, LAST_MESSAGE_WIDTH};
 use serde_json::Value;
 
 /// Per-column widths in chars, not bytes: the `{:<width$}` pad counts chars,
@@ -61,16 +61,16 @@ pub fn fetch_discovered_sessions(
     // at once each paid their own Python cold start for one answer. The latch
     // is keyed on the argv above, so a run with a different `--cwd` or
     // `--harness` is a different flight and keeps its own answer.
-    let key = fno_agents::single_flight::flight_key(&argv);
+    let key = crate::single_flight::flight_key(&argv);
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let flight = fno_agents::single_flight::run_or_join(
+    let flight = crate::single_flight::run_or_join(
         &key,
-        fno_agents::agents_config::single_flight_ttl(&cwd),
-        fno_agents::agents_config::single_flight_join_budget(&cwd),
+        crate::agents_config::single_flight_ttl(&cwd),
+        crate::agents_config::single_flight_join_budget(&cwd),
         // No outer deadline to subtract from: this path has no caller-supplied
         // budget, so the wait it may have spent changes nothing about the run.
         |_spent| {
-            let mut cmd = Command::new(fno_agents::scrape::fno_bin());
+            let mut cmd = Command::new(crate::scrape::fno_bin());
             cmd.args(&argv);
             cmd.env("FNO_AGENTS_RUNTIME", "python");
             // Fail-open by contract, and the same rule the latch needs: only a
@@ -193,9 +193,9 @@ pub fn render_list_table(
                 text(r, "name"),
                 session,
                 text(r, "harness"),
-                fno_agents::list_row::model_cell(r),
+                crate::list_row::model_cell(r),
                 text(r, "effort"),
-                fno_agents::list_row::pr_cell(r),
+                crate::list_row::pr_cell(r),
                 age,
                 last_msg,
                 text(r, "status"),
@@ -238,7 +238,7 @@ pub fn render_list_table(
     if !discovered.is_empty() {
         out.push_str(&render_discovered_section(discovered));
     }
-    out.push_str(&fno_agents::reap_render::retired_section(retired));
+    out.push_str(&crate::reap_render::retired_section(retired));
     out
 }
 

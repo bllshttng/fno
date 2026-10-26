@@ -81,7 +81,7 @@ pub fn run_register(args: &[String], home: &AgentsHome) -> i32 {
     let self_name = std::env::var("FNO_AGENT_SELF").unwrap_or_default();
     if !self_name.is_empty() {
         let pending = std::env::var("FNO_AGENT_ROW_PENDING").as_deref() == Ok(self_name.as_str());
-        let row_holds = load_registry(&home.shared_registry_json())
+        let row_holds = load_registry(&crate::paths::AgentsHome::shared_registry_json())
             .map(|registry| registry.entries.iter().any(|e| e.name == self_name))
             .unwrap_or(false);
         if pending || row_holds {
@@ -105,7 +105,7 @@ session-start restamp keeps the existing row pointed at this session"
     // The raise sits after the refresh loop in the Python updater, so a
     // session refreshing its OWN row never collides.
     let base = canonical_handle(&session_id);
-    let current = load_registry(&home.shared_registry_json()).ok();
+    let current = load_registry(&crate::paths::AgentsHome::shared_registry_json()).ok();
     let own_row_exists = current.as_ref().is_some_and(|registry| {
         registry.entries.iter().any(|e| {
             e.harness.as_deref() == Some(harness.as_str())
@@ -124,7 +124,7 @@ session '{session_id}'; use the full session id directly"
         }
     }
 
-    let outcome = update_registry(&home.shared_registry_json(), |registry| {
+    let outcome = update_registry(&crate::paths::AgentsHome::shared_registry_json(), |registry| {
         let existing = registry.entries.iter_mut().find(|e| {
             e.harness.as_deref() == Some(harness.as_str())
                 && e.harness_session_id.as_deref() == Some(session_id.as_str())
