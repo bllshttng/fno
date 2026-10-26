@@ -398,9 +398,29 @@ pub fn run_rebase(argv: &[String]) -> i32 {
 mod tests {
     use super::*;
 
+    /// The git binary as an absolute path, resolved once. Other tests in
+    /// this process mutate PATH concurrently, so a by-name spawn can lose
+    /// the race and die with ENOENT; two CI runs each lost one random
+    /// pr_rebase test that way before this resolved up front.
+    fn git_exe() -> String {
+        use std::sync::OnceLock;
+        static GIT: OnceLock<String> = OnceLock::new();
+        GIT.get_or_init(|| {
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            for dir in std::env::split_paths(&path) {
+                let candidate = dir.join("git");
+                if candidate.is_file() {
+                    return candidate.to_string_lossy().into_owned();
+                }
+            }
+            "git".to_string()
+        })
+        .clone()
+    }
+
     /// Run git in `cwd`, asserting success, returning stdout.
     fn git(cwd: &Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git")
+        let out = std::process::Command::new(git_exe())
             .args(args)
             .current_dir(cwd)
             .env("GIT_EDITOR", "true")
@@ -468,7 +488,7 @@ mod tests {
         let _path = crate::path_test_guard();
         let tmp = tempfile::tempdir().unwrap();
         let work = init_repo_with_origin(tmp.path()); // on main
-        let (rc, v) = phase_a_full("origin/main", &work, "git");
+        let (rc, v) = phase_a_full("origin/main", &work, &git_exe());
         assert_eq!(rc, 3);
         assert_eq!(str_field(&v, "status"), "refused");
     }
@@ -480,7 +500,7 @@ mod tests {
         let work = init_repo_with_origin(tmp.path());
         git(&work, &["checkout", "-b", "feature/dirty"]);
         std::fs::write(work.join("base.txt"), "uncommitted change\n").unwrap();
-        let (rc, v) = phase_a_full("origin/main", &work, "git");
+        let (rc, v) = phase_a_full("origin/main", &work, &git_exe());
         assert_eq!(rc, 2);
         assert_eq!(str_field(&v, "status"), "dirty");
     }
@@ -490,7 +510,7 @@ mod tests {
         let _path = crate::path_test_guard();
         let tmp = tempfile::tempdir().unwrap();
         let work = make_conflict(tmp.path(), "base.txt");
-        let (rc, v) = phase_a_full("origin/main", &work, "git");
+        let (rc, v) = phase_a_full("origin/main", &work, &git_exe());
         assert_eq!(rc, 42);
         assert_eq!(str_field(&v, "status"), "needs_resolver");
         let files = v
