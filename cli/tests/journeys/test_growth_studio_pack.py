@@ -11,7 +11,8 @@ import pytest
 from fno.rust_binary import find_dev_binary
 
 # Activation, role discovery and role resolution run in fno-agents; this
-# journey speaks to the spawn-overlay kinds the verbs answer through.
+# journey speaks to the spawn-overlay kinds the `fno agents roles` commands
+# answer through.
 pytestmark = pytest.mark.dev_build
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
