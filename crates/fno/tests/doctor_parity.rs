@@ -79,7 +79,7 @@ fn cases() -> Vec<Case> {
 /// token pairs are substituted in order: canonicalized paths first (a
 /// canonical macOS temp path contains the raw form as a substring), then
 /// the raw forms.
-fn mask(text: &str, paths: &[(&str, &str)]) -> String {
+fn mask(text: &str, paths: &[(String, &str)]) -> String {
     let patterns: [(&str, &str); 6] = [
         (r#""free_gb": [0-9.]+"#, "\"free_gb\": <FREE>"),
         (r#""soft": [0-9]+"#, "\"soft\": <FD>"),
@@ -103,7 +103,7 @@ fn mask(text: &str, paths: &[(&str, &str)]) -> String {
         out = re.replace_all(&out, replacement).into_owned();
     }
     for (needle, token) in paths {
-        out = out.replace(needle, token);
+        out = out.replace(needle.as_str(), token);
     }
     out
 }
