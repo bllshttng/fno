@@ -828,7 +828,7 @@ def cmd_spawn(
     # refuses and names the flag instead of opening a pane by surprise.
     if substrate == "thread":
         try:
-            seatable = thread_seatable(harness)
+            seatable = thread_seatable(harness or "")
         except DispatchResolveError:  # an undeclared harness seats no thread
             seatable = False
         why = f"has no carrier for {uncarried}" if uncarried else ""
