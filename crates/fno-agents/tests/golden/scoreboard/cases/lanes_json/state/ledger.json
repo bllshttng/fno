@@ -1,0 +1,88 @@
+{
+ "entries": [
+  {
+   "session_id": "s-ship",
+   "type": "target",
+   "completed": "2026-06-15T10:00:00",
+   "termination_reason": "DonePRGreen",
+   "graph_node_id": "x-1",
+   "cost_usd": 5.0,
+   "tokens_total": 1000,
+   "duration_minutes": 30,
+   "pr_number": 11,
+   "pr_url": "https://github.com/ex/repo/pull/11",
+   "summary_path": "/Users/bb16/.fno/worktrees/footnote/x-08d8/crates/fno-agents/tests/golden/scoreboard/cases/lanes_json/repo/plans/SUMMARY-p1.md",
+   "plan_path": "/Users/bb16/.fno/worktrees/footnote/x-08d8/crates/fno-agents/tests/golden/scoreboard/cases/lanes_json/repo/plans/p1.md",
+   "project": "ex/repo",
+   "sessions": [
+    "11111111-1111-1111-1111-111111111111"
+   ]
+  },
+  {
+   "session_id": "s-doc",
+   "type": "target",
+   "completed": "2026-06-14T10:00:00",
+   "termination_reason": "DoneAdvisory",
+   "graph_node_id": "x-2",
+   "cost_usd": 1.5
+  },
+  {
+   "session_id": "s-wedge",
+   "type": "target",
+   "completed": "2026-06-13T10:00:00",
+   "termination_reason": "NoProgress",
+   "graph_node_id": "x-3",
+   "cost_usd": 2.0
+  },
+  {
+   "session_id": "s-bare",
+   "type": "target",
+   "completed": "2026-06-12T10:00:00",
+   "cost_usd": 1.0
+  },
+  {
+   "session_id": "s-old",
+   "type": "target",
+   "completed": "1970-01-01T00:00:00",
+   "termination_reason": "DonePRGreen",
+   "cost_usd": 99.0
+  },
+  {
+   "session_id": "s-plan",
+   "type": "plan",
+   "completed": "2026-06-11T10:00:00",
+   "termination_reason": "DonePlanned",
+   "graph_node_id": "x-4",
+   "cost_usd": 0.5,
+   "plan_path": "/Users/bb16/.fno/worktrees/footnote/x-08d8/crates/fno-agents/tests/golden/scoreboard/cases/lanes_json/repo/plans/p1.md",
+   "project": "ex/repo",
+   "summary_path": "/Users/bb16/.fno/worktrees/footnote/x-08d8/crates/fno-agents/tests/golden/scoreboard/cases/lanes_json/repo/plans/SUMMARY-p1.md",
+   "pr_number": 12,
+   "pr_url": "https://github.com/ex/repo/pull/12",
+   "phases_completed": [
+    "think",
+    "plan"
+   ]
+  },
+  {
+   "session_id": "s-exec",
+   "type": "execution",
+   "completed": "2026-06-10T10:00:00",
+   "termination_reason": "DonePRGreen",
+   "graph_node_id": "x-1",
+   "cost_usd": 3.0,
+   "provider": "zai",
+   "model": "glm-5",
+   "effort": "high",
+   "carveouts_filed": 1,
+   "duration_minutes": 42
+  },
+  {
+   "session_id": "s-delegated",
+   "type": "target",
+   "completed": "2026-06-09T10:00:00",
+   "termination_reason": "delegated",
+   "cost_usd": 0.25
+  }
+ ]
+}

@@ -1,0 +1,4 @@
+Usage: python -m fno.cli whoami scoreboard [OPTIONS]
+Try 'python -m fno.cli whoami scoreboard --help' for help.
+
+Error: Invalid value: --since must be at least 1 (days).

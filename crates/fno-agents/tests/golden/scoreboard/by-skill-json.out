@@ -1,0 +1,67 @@
+{
+  "state": "ok",
+  "since_days": 20000,
+  "coverage": {
+    "rows": 7,
+    "attributed_pct": 29
+  },
+  "rows": [
+    {
+      "skill": "unattributed",
+      "version": "-",
+      "runs": 5,
+      "ship_rate_pct": 0,
+      "revert_rate_pct": null,
+      "touches_per_run": 0.4,
+      "cost_per_run": 1.55,
+      "method": "unattributed"
+    },
+    {
+      "skill": "fno:blueprint",
+      "version": "unknown",
+      "runs": 1,
+      "ship_rate_pct": 0,
+      "revert_rate_pct": null,
+      "touches_per_run": 0.0,
+      "cost_per_run": 0.5,
+      "method": "phase-proxy"
+    },
+    {
+      "skill": "fno:review",
+      "version": "1d8c120",
+      "runs": 1,
+      "ship_rate_pct": 100,
+      "revert_rate_pct": 100,
+      "touches_per_run": 2.0,
+      "cost_per_run": 5.0,
+      "method": "transcript"
+    },
+    {
+      "skill": "fno:think",
+      "version": "unknown",
+      "runs": 1,
+      "ship_rate_pct": 0,
+      "revert_rate_pct": null,
+      "touches_per_run": 0.0,
+      "cost_per_run": 0.5,
+      "method": "phase-proxy"
+    }
+  ],
+  "event_coverage": {
+    "complete": true,
+    "malformed_lines": 0,
+    "unreadable_paths": 0,
+    "paths": [
+      {
+        "path": "<CASE>/state/events.jsonl",
+        "status": "ok",
+        "malformed_lines": 0
+      },
+      {
+        "path": "<CASE>/state/events.jsonl.ephemeral",
+        "status": "missing",
+        "malformed_lines": 0
+      }
+    ]
+  }
+}

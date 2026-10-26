@@ -1,0 +1,24 @@
+{
+  "state": "insufficient",
+  "need": 10,
+  "n": 1,
+  "excluded": {},
+  "unattributed": 0,
+  "event_coverage": {
+    "complete": false,
+    "malformed_lines": 1,
+    "unreadable_paths": 0,
+    "paths": [
+      {
+        "path": "<CASE>/state/events.jsonl",
+        "status": "malformed",
+        "malformed_lines": 1
+      },
+      {
+        "path": "<CASE>/state/events.jsonl.ephemeral",
+        "status": "missing",
+        "malformed_lines": 0
+      }
+    ]
+  }
+}

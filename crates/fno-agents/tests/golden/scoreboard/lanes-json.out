@@ -1,0 +1,60 @@
+{
+  "state": "ok",
+  "since_days": 20000,
+  "coverage": {
+    "provider": 1,
+    "model": 1,
+    "effort": 1,
+    "rows": 1
+  },
+  "retrospective": [
+    {
+      "provider": "zai",
+      "model": "glm-5",
+      "effort": "high",
+      "size": "M",
+      "runs": 1,
+      "ok_pct": 100,
+      "wall_minutes": 42.0,
+      "carveouts_filed": 1,
+      "sample_state": "insufficient_sample"
+    }
+  ],
+  "live": [
+    {
+      "provider": "unattributed",
+      "model": "glm-5",
+      "effort": "high",
+      "occupancy": 3,
+      "cap": null,
+      "headroom": null
+    },
+    {
+      "provider": "unattributed",
+      "model": "sonnet",
+      "effort": "medium",
+      "occupancy": 1,
+      "cap": null,
+      "headroom": null
+    }
+  ],
+  "rate_limited": 1,
+  "coverage_floor": 5,
+  "event_coverage": {
+    "complete": true,
+    "malformed_lines": 0,
+    "unreadable_paths": 0,
+    "paths": [
+      {
+        "path": "<CASE>/state/events.jsonl",
+        "status": "ok",
+        "malformed_lines": 0
+      },
+      {
+        "path": "<CASE>/state/events.jsonl.ephemeral",
+        "status": "missing",
+        "malformed_lines": 0
+      }
+    ]
+  }
+}
