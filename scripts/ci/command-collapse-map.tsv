@@ -112,11 +112,6 @@ agents wait	T1	agents wait	10
 agents watch	T1	agents watch	5
 agents watchdog	T1	agents watchdog	4
 agents whoami	T1	agents whoami	9
-agents worker blueprint	T1	agents worker blueprint	0
-agents worker external	T1	agents worker external	0
-agents worker reconcile	T1	agents worker reconcile	0
-agents worker review	T1	agents worker review	0
-agents worker ship	T1	agents worker ship	2
 agents yard	T1	agents yard	4
 annotate add	T1	annotate add	8
 annotate list	KEEP	annotate list	0	ruled KEEP: read-back half of the live annotate write path
@@ -414,7 +409,6 @@ state archive	T1	state archive	1
 state init	T1	state init	3
 state set	T1	state set	20
 state show	T1	state show	7
-status	KEEP	status	22	single-leaf group
 status-fanout tick	KEEP	status-fanout tick	4	single-leaf group
 stub-manifest reconcile-finalize	T1	stub-manifest reconcile-finalize	1
 stub-manifest reconcile-validate	T1	stub-manifest reconcile-validate	2

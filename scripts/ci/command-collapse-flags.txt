@@ -18,7 +18,6 @@ agents spawn !--output-format
 agents spawn !--bounded-placement
 agents spawn !--recorded-provider
 agents spawn !--mux-session
-agents worker external !--pr
 do resume receipt validate !--session
 do resume receipt write !--session
 do state init !--allow-stub

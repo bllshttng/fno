@@ -140,6 +140,11 @@
 #      crates/fno/src/transcript_tail.rs reads Claude Code's own
 #      ~/.claude/projects transcript tree (the sideline's last-msg column) -
 #      read-only, same category as agents_view.rs above.
+#      crates/fno-agents/src/whoami.rs reads the same transcript stores its
+#      deleted singular-whoami Python twin read: the own-transcript globs
+#      under ~/.claude/projects (FNO_CLAUDE_PROJECTS_DIR overrides) and the
+#      ambiguity refusal whose remedy names those roots as the resolve hint.
+#      Read-only; footnote stores nothing there.
 #      gc_inventory.rs and receipt.rs are the retirement census and the reap
 #      receipt: they resolve Claude Code's own ~/.claude/projects transcript
 #      tree to join a session's store existence and locator - read-only, the
@@ -363,6 +368,7 @@ crates/fno-agents/src/claude_config_tmp.rs
 crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/claude_drive.rs
 crates/fno-agents/src/claude_roster.rs
+crates/fno-agents/src/whoami.rs
 crates/fno-agents/src/plans_path.rs
 # plan_carry.rs tests build a per-project Claude settings fixture (the same
 # Claude's-own-config class as plans_path.rs); footnote state never lands there.
