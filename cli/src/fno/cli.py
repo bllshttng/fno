@@ -72,7 +72,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "The lead's board and its session manifest.",
         {"hidden": True},
     ),
-    "worker": ("fno.worker.cli:cli", "manage delivery worker phases", {"hidden": True}),
     "event": ("fno.events.cli:cli", "emit and audit events", {"hidden": True}),
     "inbox": (
         "fno.inbox.cli:inbox_app",
@@ -147,7 +146,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "evals": (
-        "fno.evals.cli:evals_app",
+        "fno.evals_cli:evals_app",
         "Golden-task efficacy evals (run / report / diff)",
         {"hidden": True},
     ),
@@ -237,7 +236,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "pr-watch": set(),
     "resume": set(),
     "route": set(),
-    "worker": set(),
     "worktree": set(),
 }
 

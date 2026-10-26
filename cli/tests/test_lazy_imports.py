@@ -38,7 +38,6 @@ def _run_py(code: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
 # These are the heaviest transitive imports that the lazy refactor defers.
 _FORBIDDEN_AFTER_HELP = [
     "fno.adapters.providers.cli",
-    "fno.worker.cli",
     "fno.graph.cli",
     "fno.events.cli",
     "fno.mail.cli",

@@ -759,6 +759,34 @@ fn print_summary(history: &str, stale_days: i64, now: DateTime<Utc>) -> i32 {
     0
 }
 
+/// The health projection (the deleted Python leg's evals_health_summary
+/// shape): the summary's fields under the health keys, or the literal null
+/// when no history or no baseline rows exist. One denominator authority:
+/// the callers never re-fold.
+fn print_health(history: &str, stale_days: i64, now: DateTime<Utc>) -> i32 {
+    let payload = summary_payload(history, stale_days, now);
+    let row_count = payload
+        .get("row_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if row_count == 0 {
+        println!("null");
+        return 0;
+    }
+    let health = json!({
+        "regression_pass_rate": payload.get("regression_pass_rate").cloned().unwrap_or(Value::Null),
+        "flake_count": payload.get("flake_count").and_then(Value::as_i64).unwrap_or(0),
+        "regression_alarm": payload.get("regression_alarm").cloned().unwrap_or(json!([])),
+        "regressed": payload.get("regressed").cloned().unwrap_or(json!([])),
+        "window_days": stale_days,
+        "age_days": payload.get("age_days").cloned().unwrap_or(Value::Null),
+        "stale": payload.get("stale").and_then(Value::as_bool).unwrap_or(false),
+        "never_ran": payload.get("never_ran").and_then(Value::as_bool).unwrap_or(false),
+    });
+    println!("{}", serde_json::to_string(&health).unwrap_or_default());
+    0
+}
+
 /// The qualification projection surface, shared by the `--qualification`
 /// flag and the stdin `{"op": "qualification"}` payload. A missing history
 /// file folds over zero rows: every scenario reports missing, which is the
@@ -847,6 +875,20 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                         .to_string();
                     let stale_days = v.get("stale_days").and_then(Value::as_i64).unwrap_or(7);
                     return print_summary(&history, stale_days, Utc::now());
+                }
+                // The health projection: the deleted Python leg's
+                // evals_health_summary (report.py) shape, now the door's own
+                // answer. None rules (no history, no rows) read as the
+                // literal null so the callers keep their None-on-error
+                // posture.
+                if v.get("op").and_then(Value::as_str) == Some("health") {
+                    let history = v
+                        .get("history")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let stale_days = v.get("stale_days").and_then(Value::as_i64).unwrap_or(7);
+                    return print_health(&history, stale_days, Utc::now());
                 }
                 if v.get("op").and_then(Value::as_str) == Some("qualification") {
                     let history = v
@@ -1066,14 +1108,14 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
             );
             if let Some(tasks) = view["tasks"].as_object() {
                 for (tid, t) in tasks {
+                    let prior = t["prior"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0;
+                    let prior_runs = t["prior"]["runs"].to_string();
+                    let recent = t["recent"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0;
+                    let recent_runs = t["recent"]["runs"].to_string();
+                    let delta = t["delta"].as_f64().unwrap_or(0.0);
+                    let verdict = t["verdict"].as_str().unwrap_or_default();
                     println!(
-                        "  {tid}  prior {:.0}% ({})  recent {:.0}% ({})  delta={:+.2}  {}",
-                        t["prior"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0,
-                        t["prior"]["runs"],
-                        t["recent"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0,
-                        t["recent"]["runs"],
-                        t["delta"].as_f64().unwrap_or(0.0),
-                        t["verdict"].as_str().unwrap_or_default(),
+                        "  {tid}  prior {prior:.0}% ({prior_runs})  recent {recent:.0}% ({recent_runs})  delta={delta:+.2}  {verdict}"
                     );
                 }
             }
@@ -1086,7 +1128,8 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                     .map(|a| a.iter().filter_map(Value::as_str).collect())
                     .unwrap_or_default();
                 if !ids.is_empty() {
-                    println!("  missing in {label}: {}", ids.join(", "));
+                    let id_list = ids.join(", ");
+                    println!("  missing in {label}: {id_list}");
                 }
             }
             let regressed_ids: Vec<&str> = view["regressed"]
@@ -1160,19 +1203,19 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                     } else {
                         "cost unmeasured".to_string()
                     };
+                    let attempts = c["attempts"].to_string();
+                    let graded = c["graded"].to_string();
+                    let accepted = c["accepted"].to_string();
+                    let rate_pct = rate * 100.0;
+                    let lo_pct = lo * 100.0;
+                    let hi_pct = hi * 100.0;
+                    let median = c["median_wall_s"].to_string();
+                    let tok_in = c["tokens"]["input"].to_string();
+                    let tok_out = c["tokens"]["output"].to_string();
+                    let cache_r = c["tokens"]["cache_read"].to_string();
+                    let cache_w = c["tokens"]["cache_write"].to_string();
                     println!(
-                        "  {id}: attempts={} graded={} accepted={} rate={:.1}% [{:.1},{:.1}] median={}s in={} out={} cache_r={} cache_w={} {cost}",
-                        c["attempts"],
-                        c["graded"],
-                        c["accepted"],
-                        rate * 100.0,
-                        lo * 100.0,
-                        hi * 100.0,
-                        c["median_wall_s"],
-                        c["tokens"]["input"],
-                        c["tokens"]["output"],
-                        c["tokens"]["cache_read"],
-                        c["tokens"]["cache_write"],
+                        "  {id}: attempts={attempts} graded={graded} accepted={accepted} rate={rate_pct:.1}% [{lo_pct:.1},{hi_pct:.1}] median={median}s in={tok_in} out={tok_out} cache_r={cache_r} cache_w={cache_w} {cost}"
                     );
                 }
             }
@@ -1193,15 +1236,15 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
         } else {
             if let Some(tasks) = cmp["tasks"].as_object() {
                 for (tid, t) in tasks {
+                    let base_pct = t["baseline"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0;
+                    let base_runs = t["baseline"]["runs"].to_string();
+                    let variant_name = cmp["variant"].as_str().unwrap_or_default();
+                    let var_pct = t["variant"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0;
+                    let var_runs = t["variant"]["runs"].to_string();
+                    let delta = t["delta"].as_f64().unwrap_or(0.0);
+                    let verdict = t["verdict"].as_str().unwrap_or_default();
                     println!(
-                        "  {tid}  baseline {:.0}% ({})  {} {:.0}% ({})  delta={:+.2}  {}",
-                        t["baseline"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0,
-                        t["baseline"]["runs"],
-                        cmp["variant"].as_str().unwrap_or_default(),
-                        t["variant"]["pass_at_1"].as_f64().unwrap_or(0.0) * 100.0,
-                        t["variant"]["runs"],
-                        t["delta"].as_f64().unwrap_or(0.0),
-                        t["verdict"].as_str().unwrap_or_default(),
+                        "  {tid}  baseline {base_pct:.0}% ({base_runs})  {variant_name} {var_pct:.0}% ({var_runs})  delta={delta:+.2}  {verdict}"
                     );
                 }
             }
@@ -1215,7 +1258,8 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
                     .map(|a| a.iter().filter_map(Value::as_str).collect())
                     .unwrap_or_default();
                 if !ids.is_empty() {
-                    println!("  missing in {label}: {}", ids.join(", "));
+                    let id_list = ids.join(", ");
+                    println!("  missing in {label}: {id_list}");
                 }
             }
             println!(
@@ -1260,12 +1304,10 @@ pub fn run_evals_trend(args: &[String]) -> i32 {
     println!("Evals report:");
     if let Some(tiers) = report["tiers"].as_object() {
         for (tier, agg) in tiers {
-            println!(
-                "  {tier}: {}/{} pass ({:.0}%)",
-                agg["passes"],
-                agg["runs"],
-                agg["pass_rate"].as_f64().unwrap_or(0.0) * 100.0
-            );
+            let passes = agg["passes"].to_string();
+            let runs = agg["runs"].to_string();
+            let pct = agg["pass_rate"].as_f64().unwrap_or(0.0) * 100.0;
+            println!("  {tier}: {passes}/{runs} pass ({pct:.0}%)");
         }
     }
     if let Some(tasks) = report["tasks"].as_array() {

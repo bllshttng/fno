@@ -671,10 +671,10 @@ def report_roots() -> "list[Path]":
     except Exception:  # noqa: BLE001 - an unknown scope must not scan `/`
         pass
     try:
-        from fno.tracker import sidecar as sidecar_store
+        from fno import rust_binary
 
-        for sc in sidecar_store.load_all().values():
-            cwd = getattr(sc, "cwd", None)
+        for sc in rust_binary.sidecar_all().values():
+            cwd = sc.get("cwd")
             if cwd and Path(cwd) not in roots:
                 roots.append(Path(cwd))
     except Exception:  # noqa: BLE001 - no sidecar store means the repo root only

@@ -227,7 +227,8 @@ def _rollup_from_ledger(node: Optional[dict]) -> dict:
 
     # One cost_sessions row per ledger row, carrying that row's whole cost.
     # A row's `sessions` is an ALIAS SET for ONE run, not a list of sessions:
-    # cost/_register.py records up to five identifier forms of the same
+    # the register leg (now crates/fno-agents/src/ledger_register.rs, formerly
+    # cost/_register.py) records up to five identifier forms of the same
     # session (the minted run id, the harness id, a claude transcript uuid, a
     # codex thread id), and its only other writer emits a single-element list.
     # So len(sessions) counts NAMES and dividing by it splits one run's cost
@@ -446,7 +447,7 @@ def done_command(
         # roster lives in the tracker and the rollup lives in the footnote
         # sidecar, so both halves target the wrong store; the per-node door
         # above already fills sidecar rollups at completion time.
-        from fno.tracker import active_backend_name
+        from fno.graph.api import active_backend_name
 
         if active_backend_name() != "graph":
             typer.echo(
@@ -530,7 +531,7 @@ def done_command(
     # before the close, exactly one tracker.close - instead of the local
     # graph resolution below. Requires an explicit node id: the branch-based
     # auto-detect resolves through footnote-minted slug metadata.
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     if active_backend_name() != "graph":
         from fno.graph.cli import _done_via_seam

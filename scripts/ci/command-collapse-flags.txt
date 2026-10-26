@@ -19,7 +19,6 @@ agents spawn !--output-format
 agents spawn !--bounded-placement
 agents spawn !--recorded-provider
 agents spawn !--mux-session
-agents worker external !--pr
 worktree cleanup !--kill-orphans
 do resume receipt validate !--session
 do resume receipt write !--session
@@ -34,7 +33,6 @@ resume receipt validate !--session
 resume receipt write !--session
 agents pane-identity !--session
 agents pane-identity !--session-id
-worker external !--pr
 # the spawn axis stubs: hidden options whose only job is the refusal
 agents spawn !--deny-tools
 agents spawn !--provider
