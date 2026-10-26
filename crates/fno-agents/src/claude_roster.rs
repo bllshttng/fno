@@ -963,13 +963,13 @@ mod tests {
 
     #[test]
     fn pinned_agents_reader_uses_the_plan_config_dir() {
-        let _guard = crate::path_test_guard();
-        // Both lanes: the PATH swap rides PATH_TEST_MUTEX, and test_env_lock
-        // serializes against the reclaim and occupancy tests that mutate PATH
-        // on the wider env lane.
+        // Both lanes, env first: the order codex_inject's tests already hold,
+        // so a thread can never hold PATH_TEST_MUTEX while it waits on the
+        // env lane or the reverse.
         let _env = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let bin = temp.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
