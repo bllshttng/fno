@@ -77,7 +77,7 @@ fn lifecycle_script() -> Option<PathBuf> {
     for name in ["CLAUDE_PLUGIN_ROOT", "CODEX_PLUGIN_ROOT", "FNO_REPO_ROOT"] {
         if let Ok(root) = std::env::var(name) {
             if !root.is_empty() {
-                return probe_root(PathBuf::from(root));
+                return probe_root(&PathBuf::from(root));
             }
         }
     }
