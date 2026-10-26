@@ -708,17 +708,17 @@ async fn run(args: Vec<String>) -> i32 {
     // agents` command; callers are `cli/src/fno/test_runner.py` and the wrapper.
     // `test-run`: the bounded suite runner, plus the test family's raw
     // doors as its arguments (the shrink law allows no new action, so
-    // `env`, `sweep` and `verb` are arguments, not actions): `test-run env`
+    // `env`, `sweep` and `command` are arguments, not actions): `test-run env`
     // is the hermetic child env door, `test-run sweep` the orphaned-keeper
-    // sweep for the pytest conftest, and `test-run verb <argv>` the whole
-    // native test verb (pytest/rust/smoke/census; the advertised surface is
+    // sweep for the pytest conftest, and `test-run doctor <argv>` the whole
+    // native test command (pytest/rust/smoke/census; the advertised surface is
     // the `fno doctor test` front).
     if command == "test-run" {
         let rest = &args[1..];
         match rest.first().map(String::as_str) {
             Some("env") => return fno_agents::test_env::run_test_env(&rest[1..]),
             Some("sweep") => return fno_agents::graph_keeper::run_keeper_sweep(&rest[1..]),
-            Some("verb") => return fno_agents::test_verb::run_test(&rest[1..]),
+            Some("doctor") => return fno_agents::test_command::run_test_command(&rest[1..]),
             _ => {}
         }
         return fno_agents::test_run::run_test_run(rest);

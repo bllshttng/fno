@@ -1,5 +1,5 @@
 //! The smoke registry: the structural steps plus the deferred quarantine.
-//! GENERATED from crates/fno-agents/tests/golden/test_verb/smoke_structural.tsv
+//! GENERATED from crates/fno-agents/tests/golden/test_command/smoke_structural.tsv
 //! (captured from the Python leg before deletion); regenerate with the capture
 //! script, never hand-edit the tables. The full behavioral
 //! documentation lives in test_smoke.rs beside the runner.

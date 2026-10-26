@@ -1,4 +1,4 @@
-//! Golden parity: the Rust test-verb family against the goldens captured
+//! Golden parity: the Rust test-command family against the goldens captured
 //! from the Python leg before its deletion. Each test rebuilds the
 //! capture's specimen (universe + probes), runs the Rust implementation,
 //! normalizes with the capture's placeholder map ({SB}/{TMPR}/{TMP}/{FX}/
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 fn golden(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden/test_verb")
+        .join("tests/golden/test_command")
         .join(name);
     std::fs::read_to_string(path).unwrap_or_default()
 }
@@ -183,7 +183,7 @@ fn poison_matches_the_python_golden() {
 #[test]
 fn structural_steps_match_the_captured_registry() {
     let want = golden("smoke_structural.tsv");
-    let mut rows: Vec<String> = reg::STRUCTURAL_STEPS
+    let rows: Vec<String> = reg::STRUCTURAL_STEPS
         .iter()
         .map(|(n, c, m)| format!("{n}\t{c}\t{}", m.replace('\n', "\u{1f}")))
         .collect();

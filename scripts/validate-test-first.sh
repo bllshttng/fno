@@ -24,7 +24,7 @@ COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 # Rust validation also checks the crate-wide mux process-admission inventory.
 # Keeping this on the normal test surface means a new raw launch cannot hide
 # behind a green unit suite.
-if echo "$COMMAND" | grep -qE '(^|[[:space:]])(cargo test|fno-agents test-run verb rust)'; then
+if echo "$COMMAND" | grep -qE '(^|[[:space:]])(cargo test|fno-agents test-run doctor rust)'; then
     bash scripts/ci/check-mux-process-admission.sh >/dev/null
 fi
 

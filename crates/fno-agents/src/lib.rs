@@ -608,6 +608,10 @@ pub mod terminal_vocab;
 pub mod territory;
 pub mod test_census;
 pub mod test_changed;
+pub mod test_command;
+#[cfg(test)]
+#[path = "test_command_goldens_tests.rs"]
+mod test_command_goldens_tests;
 pub mod test_delta;
 pub mod test_env;
 pub mod test_hold;
@@ -619,10 +623,6 @@ pub mod test_smoke_registry;
 #[cfg(test)]
 #[path = "test_smoke_tests.rs"]
 mod test_smoke_tests;
-pub mod test_verb;
-#[cfg(test)]
-#[path = "test_verb_goldens_tests.rs"]
-mod test_verb_goldens_tests;
 pub mod think_daily;
 pub mod think_dispatch;
 pub mod think_inspect;

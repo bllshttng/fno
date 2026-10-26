@@ -764,7 +764,7 @@ struct ParsedFlags {
 /// Extract `--stream` and `--log[=]PATH` (the token is ours: pytest's
 /// passthrough has no bare `--log`) ahead of the first bare `--`; everything
 /// else keeps its order.
-fn parse_verb_flags(args: &[String]) -> ParsedFlags {
+fn parse_command_flags(args: &[String]) -> ParsedFlags {
     let mut stream = false;
     let mut log: Option<String> = None;
     let mut rest: Vec<String> = Vec::new();
@@ -790,9 +790,9 @@ fn parse_verb_flags(args: &[String]) -> ParsedFlags {
     ParsedFlags { stream, log, rest }
 }
 
-/// The verb entry: `fno-agents test <argv>`.
-pub fn run_test(args: &[String]) -> i32 {
-    let flags = parse_verb_flags(args);
+/// The command entry: `fno-agents test <argv>`.
+pub fn run_test_command(args: &[String]) -> i32 {
+    let flags = parse_command_flags(args);
     let rest = flags.rest;
     // Scope statement, every RUN, pass or fail: a green run here is pytest's
     // verdict alone, and the reader must learn the typing gate lives elsewhere
@@ -872,12 +872,12 @@ mod tests {
     }
 
     #[test]
-    fn verb_flags_parse_anywhere_but_stop_at_the_separator() {
+    fn command_flags_parse_anywhere_but_stop_at_the_separator() {
         let args: Vec<String> = ["-k", "expr", "--stream", "--log=/tmp/x.log", "--", "--log"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let f = parse_verb_flags(&args);
+        let f = parse_command_flags(&args);
         assert!(f.stream);
         assert_eq!(f.log.as_deref(), Some("/tmp/x.log"));
         assert_eq!(f.rest, vec!["-k", "expr", "--", "--log"]);

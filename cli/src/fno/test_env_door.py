@@ -1,8 +1,8 @@
 """The native test-env door: neutralise/poison for Python test runners.
 
-The env assembly is native since the Rust test verb landed
+The env assembly is native since the Rust test command landed
 (crates/fno-agents/src/test_env.rs); the two pytest roots apply the SAME
-env the native verb runs in-process, through this door rather than a
+env the native command runs in-process, through this door rather than a
 second Python implementation. A missing or broken door refuses loudly:
 running this tree unisolated is the failure mode the hermetic fence
 exists to prevent.

@@ -68,8 +68,8 @@ jobs:
           }
           yq --version
 
-      - name: Provision the native test verb
-        # The census calls the native verb directly; without this step the job
+      - name: Provision the native test command
+        # The census calls the native command directly; without this step the job
         # reds with "fno-agents: command not found" before it measures
         # anything.
         uses: ./.github/actions/smoke-setup
@@ -80,7 +80,7 @@ jobs:
         # delete its line from _DISCOVERY_DEFERRED (discovery then covers it
         # by shebang). Three entries are known macOS-green / Linux-red and are
         # expected to stay red HERE - see the comment above the set.
-        run: $FNO_AGENTS_FRONT test-run verb --census-deferred
+        run: $FNO_AGENTS_FRONT test-run doctor --census-deferred
 
       - name: Explain a red census
         if: failure()

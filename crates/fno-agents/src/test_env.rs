@@ -12,8 +12,8 @@
 //! Python `classify` service. The state-root fence (`declared_root`) stays
 //! Python beside the events gate that shares it.
 //!
-//! Characterization: `crates/fno-agents/tests/test_verb_parity.rs` asserts the
-//! captured goldens under `tests/golden/test_verb/`, taken from the Python leg
+//! Characterization: `crates/fno-agents/tests/test_command_parity.rs` asserts the
+//! captured goldens under `tests/golden/test_command/`, taken from the Python leg
 //! before its deletion.
 
 use std::collections::BTreeMap;
@@ -349,7 +349,7 @@ fn env_to_json(env: &BTreeMap<String, String>) -> Value {
 /// One JSON payload: `{"mode": "neutralise"|"poison", "env": {...},
 /// "sandbox": path, "fixtures": path?}`. Prints the resulting env as a JSON
 /// object with sorted keys. Python's conftest and the hermetic-lane harness
-/// read the boundary the native verb itself uses, so a harness never
+/// read the boundary the native command itself uses, so a harness never
 /// re-implements the env assembly.
 pub fn run_test_env(args: &[String]) -> i32 {
     let payload: Value = match serde_json::from_str(args.first().map(String::as_str).unwrap_or(""))

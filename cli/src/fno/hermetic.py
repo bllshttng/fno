@@ -1,7 +1,7 @@
 """The hermetic child env: ambient classification, and the state-root fence.
 
 The env builder (neutralise, poison, and the vocabulary they read) lives
-native in crates/fno-agents/src/test_env.rs with the native test verb. This
+native in crates/fno-agents/src/test_env.rs with the native test command. This
 module keeps two duties that stayed Python:
 
 - the state-root fence (declared_root / UndeclaredStateRootError), still
@@ -10,7 +10,7 @@ module keeps two duties that stayed Python:
   byte-copies freshness-tripwired from the canonical copy beside the Rust
   module.
 
-Characterization lives beside the Rust module (tests/golden/test_verb/),
+Characterization lives beside the Rust module (tests/golden/test_command/),
 asserted by the Rust parity tests.
 """
 

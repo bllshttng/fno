@@ -71,7 +71,7 @@ The same rule covers the operator's screen. `fno/notify/_impl.py` suppresses the
 
 ## Move 2: one boundary, four trees
 
-`crates/fno-agents/src/test_env.rs::neutralise` (via the native verb, or the `test-env` door for the pytest roots) builds the environment for all four test trees:
+`crates/fno-agents/src/test_env.rs::neutralise` (via the native command, or the `test-env` door for the pytest roots) builds the environment for all four test trees:
 
 - pytest over `cli/tests/**`
 - pytest over `cli/src/fno/**/test_*.py` (a separate pytest root with its own conftest)

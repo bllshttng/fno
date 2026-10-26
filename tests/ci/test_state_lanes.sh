@@ -41,7 +41,7 @@ cat > "$SEAM/registry.json" <<'JSON'
 JSON
 
 run_lane() {
-  SMOKE_REGISTRY_FILE="$SEAM/registry.json" "$BIN" test-run verb smoke --state "$1" \
+  SMOKE_REGISTRY_FILE="$SEAM/registry.json" "$BIN" test-run doctor smoke --state "$1" \
     --only 'state canary pytest control' >/dev/null 2>&1
   return $?
 }

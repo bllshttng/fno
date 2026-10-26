@@ -287,9 +287,9 @@ enum Role {
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
     /// `fno doctor test ...` and the deprecated hidden root `fno test`: the
-    /// whole test verb (pytest/rust/smoke/changed/census), exec'd as
+    /// whole test command (pytest/rust/smoke/changed/census), exec'd as
     /// `fno-agents test`. The tail rides byte-verbatim; --help answers native
-    /// help inside the verb.
+    /// help inside the command.
     DoctorTest(Vec<OsString>),
     /// `fno agents mail show ...`: the native one-message reader, lexically
     /// classified beside agents_history. The Python CLI keeps the rest of
@@ -624,10 +624,10 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
 }
 
 /// `fno doctor test ...` and the deprecated hidden root `fno test`: the whole
-/// verb claims itself lexically, the tail byte-verbatim. A bare command and
-/// --help claim too (the Python leg dies in this port); the native verb owns
+/// command claims itself lexically, the tail byte-verbatim. A bare command and
+/// --help claim too (the Python leg dies in this port); the native command owns
 /// its help and its refusals.
-fn classify_test_verb(args: &[OsString]) -> Option<Vec<OsString>> {
+fn classify_test_command(args: &[OsString]) -> Option<Vec<OsString>> {
     let rest: &[OsString] = match args.first()?.to_str()? {
         "doctor" if args.get(1)?.to_str()? == "test" => &args[2..],
         "test" => &args[1..],
@@ -956,7 +956,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_group_command(args, "doctor", "builds") {
         return Role::DoctorBuilds(rest);
     }
-    if let Some(rest) = classify_test_verb(args) {
+    if let Some(rest) = classify_test_command(args) {
         return Role::DoctorTest(rest);
     }
     if let Some(rest) = fno::agents_history::classify(args) {

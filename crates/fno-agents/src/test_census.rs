@@ -149,7 +149,7 @@ fn census_kill_bound(tranche: usize) -> usize {
 pub fn run(args: &[String]) -> i32 {
     let _ = args;
     let cwd = std::env::current_dir().unwrap_or_default();
-    let root = crate::test_verb::repo_root(&cwd).unwrap_or_else(|| cwd.clone());
+    let root = crate::test_command::repo_root(&cwd).unwrap_or_else(|| cwd.clone());
     let tranche = reg::CENSUS_TRANCHE_BOUND_S;
     let kill_bound = census_kill_bound(tranche);
     let entries = census_entries();
@@ -157,7 +157,7 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("census: deferred set is empty or unparseable");
         return 2;
     }
-    let sandbox = match crate::test_verb::SandboxGuard::shared() {
+    let sandbox = match crate::test_command::SandboxGuard::shared() {
         Ok(s) => s,
         Err(msg) => {
             eprintln!("{msg}");
@@ -165,7 +165,8 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
     let env =
-        match crate::test_smoke::smoke_env(&root, crate::test_verb::AmbientMode::Clean, sandbox) {
+        match crate::test_smoke::smoke_env(&root, crate::test_command::AmbientMode::Clean, sandbox)
+        {
             Ok(e) => e,
             Err(msg) => {
                 eprintln!("{msg}");

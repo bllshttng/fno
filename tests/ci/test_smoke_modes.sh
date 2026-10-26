@@ -9,7 +9,7 @@
 # Covers AC1-EDGE (keep-going harvests all failures), AC1-UI (summary + header),
 # AC2-FR (subset labelled), AC3-ERR (corrupt/missing record -> full run).
 #
-# The runner is the native test verb (`fno-agents test-run verb smoke`,
+# The runner is the native test command (`fno-agents test-run doctor smoke`,
 # `fno doctor test smoke` through the front door).
 
 set -uo pipefail
@@ -32,9 +32,9 @@ cat > "$REG" <<'EOF'
 EOF
 
 # The runner is native: the fno front door lexically claims `doctor test` and
-# hands the whole verb to the fno-agents binary. CI's smoke-setup puts that
+# hands the whole command to the fno-agents binary. CI's smoke-setup puts that
 # binary on PATH; locally, FNO_AGENTS_BIN overrides it.
-RUNNER=("${FNO_AGENTS_BIN:-fno-agents}" test-run verb smoke)
+RUNNER=("${FNO_AGENTS_BIN:-fno-agents}" test-run doctor smoke)
 
 FAILS=0
 ok()   { echo "  ok: $1"; }

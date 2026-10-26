@@ -3,10 +3,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::test_command::{AmbientMode, SandboxGuard};
 use crate::test_smoke_discovery as disc;
 use crate::test_smoke_registry as reg;
 use crate::test_smoke_registry::{AMBIENT_MODES, STATE_MODES};
-use crate::test_verb::{AmbientMode, SandboxGuard};
 
 #[derive(Debug, Default)]
 pub struct SmokeOpts {
@@ -54,6 +54,10 @@ pub fn parse_smoke_args(args: &[String]) -> Result<SmokeOpts, String> {
                 pending = None;
                 continue;
             }
+        }
+        if let Some(key) = valued_flag(a) {
+            pending = Some(key);
+            continue;
         }
         if let Some(on) = boolean_flag(a) {
             match a.as_str() {
@@ -534,7 +538,7 @@ pub struct LaneShape {
 
 /// The smoke entry: `fno-agents test smoke <args>`.
 pub fn run(args: &[String], _stream: bool) -> i32 {
-    let root = crate::test_verb::repo_root(&std::env::current_dir().unwrap_or_default())
+    let root = crate::test_command::repo_root(&std::env::current_dir().unwrap_or_default())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     if args.iter().any(|a| a == "-h" || a == "--help") {
         print_help();
@@ -685,7 +689,7 @@ The populated lane's exit code is discarded by design, so this has no other way 
 
 /// Read one boolean canary marker from the session sandbox.
 fn sandbox_marker(kind: &str) -> Result<bool, String> {
-    Ok(crate::test_verb::SandboxGuard::shared()?
+    Ok(crate::test_command::SandboxGuard::shared()?
         .join(format!("state-canary-{kind}"))
         .is_file())
 }
@@ -696,10 +700,10 @@ fn sandbox_marker(kind: &str) -> Result<bool, String> {
 /// shares this env assembly with the full lanes.
 pub(crate) fn smoke_env(
     root: &Path,
-    ambient: crate::test_verb::AmbientMode,
+    ambient: crate::test_command::AmbientMode,
     sandbox: &Path,
 ) -> Result<std::collections::BTreeMap<String, String>, String> {
-    let child = crate::test_verb::build_child_env(root, ambient, sandbox)?;
+    let child = crate::test_command::build_child_env(root, ambient, sandbox)?;
     let mut env = child.env;
     env.insert("NO_COLOR".into(), "1".into());
     env.remove("FORCE_COLOR");
@@ -713,8 +717,8 @@ pub(crate) fn smoke_env(
 /// execution, and the failure record.
 fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_default();
-    let root = crate::test_verb::repo_root(&cwd).unwrap_or_else(|| root.to_path_buf());
-    let sandbox = match crate::test_verb::SandboxGuard::shared() {
+    let root = crate::test_command::repo_root(&cwd).unwrap_or_else(|| root.to_path_buf());
+    let sandbox = match crate::test_command::SandboxGuard::shared() {
         Ok(s) => s,
         Err(msg) => {
             eprintln!("{msg}");
@@ -940,7 +944,7 @@ fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
     let canary_rc = run_state_canary(&root, "verify");
     if canary_rc != 0 && !canary_broken {
         let _ = std::fs::write(
-            crate::test_verb::SandboxGuard::shared()
+            crate::test_command::SandboxGuard::shared()
                 .map(|s| s.join("state-canary-leaked"))
                 .unwrap_or_default(),
             "1",
@@ -948,7 +952,7 @@ fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
     }
     if canary_broken {
         let _ = std::fs::write(
-            crate::test_verb::SandboxGuard::shared()
+            crate::test_command::SandboxGuard::shared()
                 .map(|s| s.join("state-canary-broken"))
                 .unwrap_or_default(),
             "1",
@@ -1116,7 +1120,7 @@ fn json_quote(s: &str) -> String {
 /// The repo's cli/tests/fixtures dir, resolved from the current checkout.
 fn repo_fixture_dir() -> Option<std::path::PathBuf> {
     let cwd = std::env::current_dir().ok()?;
-    crate::test_verb::repo_root(&cwd).map(|r| r.join("cli/tests/fixtures/populated-state"))
+    crate::test_command::repo_root(&cwd).map(|r| r.join("cli/tests/fixtures/populated-state"))
 }
 
 /// The test seam: `SMOKE_REGISTRY_FILE` names a JSON file

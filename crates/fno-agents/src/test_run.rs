@@ -578,9 +578,9 @@ fn emit(run_id: &str, kind: &str, fields: &[(&str, String)]) {
 struct Options {
     timeout: Duration,
     claims_root: Option<PathBuf>,
-    /// Per-child env pins and removals for the test verb: `--env K=V` and
+    /// Per-child env pins and removals for the test command: `--env K=V` and
     /// `--unset NAME`, repeatable, applied by `spawn_group` on top of the
-    /// inherited process env. The verb builds the full hermetic env and hands
+    /// inherited process env. The command builds the full hermetic env and hands
     /// it over per command, so no process-global mutation is needed.
     envs: Vec<(String, String)>,
     unsets: Vec<String>,
@@ -2419,7 +2419,7 @@ fn spawn_group(
     if whole_lane {
         cmd.env("FNO_TEST_FULL", "1");
     }
-    // The verb's per-child hermetic env: the neutralised surface plus its
+    // The command's per-child hermetic env: the neutralised surface plus its
     // pins, handed over per command so no process-global env mutation is
     // needed anywhere.
     for (k, v) in &opts.envs {
