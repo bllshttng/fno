@@ -617,6 +617,7 @@ pub mod watch_expiry;
 pub mod wave;
 pub mod worked_nodes;
 pub mod worker_wake;
+pub mod worktree;
 pub mod worktree_reapable;
 pub mod write_queue;
 pub mod zcode;

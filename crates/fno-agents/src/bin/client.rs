@@ -197,9 +197,44 @@ fn main() {
     if args.first().map(String::as_str) == Some("launch-workdir") {
         std::process::exit(fno_agents::launch_workdir::run_launch_workdir(&args[1..]));
     }
-    // `worktree-reapable`: the worktree-removal gate; callers: worktree_gate.py, worktree-reapable.sh.
+    // `worktree-reapable`: the worktree-removal gate; caller: worktree-reapable.sh
+    // (worktree_gate.py died with the Python family port).
     if args.first().map(String::as_str) == Some("worktree-reapable") {
         std::process::exit(fno_agents::worktree_reapable::run_client(&args[1..]));
+    }
+    // The worktree family's raw client intercepts: the `fno` front door
+    // claims the worktree / workspace / agents-workspace argv shapes and
+    // execs here, so the curated menu sees none of these leaves.
+    if args.first().map(String::as_str) == Some("worktree-policy") {
+        std::process::exit(fno_agents::worktree::policy::run_client(&args[1..]));
+    }
+    if args.first().map(String::as_str) == Some("worktree-ensure") {
+        std::process::exit(fno_agents::worktree::ensure::run_client(&args[1..]));
+    }
+    if args.first().map(String::as_str) == Some("worktree-status") {
+        std::process::exit(fno_agents::worktree::status::run_client(&args[1..]));
+    }
+    if args.first().map(String::as_str) == Some("worktree-list") {
+        std::process::exit(fno_agents::worktree::status::run_list_client(&args[1..]));
+    }
+    if args.first().map(String::as_str) == Some("worktree-stranded") {
+        std::process::exit(fno_agents::worktree::stranded::run_client(&args[1..]));
+    }
+    if args.first().map(String::as_str) == Some("worktree-resolve-node") {
+        std::process::exit(fno_agents::worktree::stranded::resolve_node_client(
+            &args[1..],
+        ));
+    }
+    if args.first().map(String::as_str) == Some("worktree-overlap-record") {
+        std::process::exit(fno_agents::worktree::overlaps::record_client(&args[1..]));
+    }
+    if args.first().map(String::as_str) == Some("worktree-overlaps") {
+        std::process::exit(fno_agents::worktree::overlaps::report_client(&args[1..]));
+    }
+    if args.first().map(String::as_str) == Some("workspace-register-worker") {
+        std::process::exit(fno_agents::worktree::registry_worker::run_client(
+            &args[1..],
+        ));
     }
     // `harness-probe` / `harness-matrix` / `harness-beat`: capability reads, transport-only.
     if matches!(
