@@ -79,3 +79,18 @@ sibling-of-binary lookup finds no `fno-agents`, matching the capture machine.
 - Parity provenance: the header declares `parity-stage: characterization`
   with oracle `fno.doctor`, a module the deletion removed, per the
   provenance rule; the gate itself runs in CI.
+
+## Late folds and rounds
+
+- **The evals health door (fold 2026-10-26).** Main's evals port (#3905)
+  moved the deleted leg's evals section onto the native `evals-trend op
+  health` door; the fold brings the same convergence into the port: the
+  collector calls the health op with `evals.stale_days` from the config
+  ladder and passes the door's payload through, no doctor-side re-fold. The
+  empty-machine golden pins null either way.
+- **Round 10 (CI batch).** The three ported reports (plugin_cache_report,
+  auto_merge_review_gap, merge_gating_optout_report) land; the bind canary's
+  write-only condition sink drops and the never-assigned last_alive write
+  lands (expired binds now report the last observed pane aliveness, a port
+  bug the deny-warnings gate surfaced); the pytest skip-site ratchet drops
+  the row the test_hooks_json_validity path fix un-skipped.
