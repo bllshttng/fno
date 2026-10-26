@@ -149,7 +149,7 @@ fn usage_error(message: &str) -> i32 {
 /// siblings ride when they exist, resolved and de-duplicated like Python's.
 fn stall_event_journals() -> Vec<std::path::PathBuf> {
     let mut live: Vec<std::path::PathBuf> = vec![
-        report::state_dir().join("events.jsonl"),
+        report::global_events_path(),
         match std::env::var_os("FNO_AGENTS_HOME") {
             Some(home) => std::path::PathBuf::from(home).join("events.jsonl"),
             None => report::home_dir().join(".fno/agents/events.jsonl"),

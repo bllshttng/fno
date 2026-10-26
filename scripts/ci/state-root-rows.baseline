@@ -89,3 +89,8 @@ mail-hold
 route-settings
 bin
 .lock.d
+# The doctor family port reads these two retired root residents (read-only):
+# events.jsonl is the retired journal family's anchor (global_events_json);
+# posture.json is the removed posture command's advisory stamp.
+events.jsonl
+posture.json

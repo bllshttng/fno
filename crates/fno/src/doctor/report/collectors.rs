@@ -836,6 +836,15 @@ pub(crate) fn project_events_path() -> PathBuf {
     space_dir().join("events.jsonl")
 }
 
+/// `fno.paths.global_events_json()`: the retired root journal family's
+/// anchor and stray-hunt root, a read-only resident the writers abandoned
+/// for the routed store. It resolves without the root fence the same way
+/// Python's accessor does: the fence refuses new writers, and this retired
+/// name is not one.
+pub(crate) fn global_events_path() -> PathBuf {
+    state_dir().join("events.jsonl")
+}
+
 fn space_dir() -> PathBuf {
     spaces_root().join(space_slug(&canonical_repo_root()))
 }
@@ -881,7 +890,9 @@ fn expand_tilde(path: &Path) -> PathBuf {
 }
 
 fn archive_id_collisions() -> Value {
-    let archive_path = state_dir().join("graph-archive.json");
+    // The canonical resolver reads db/graph-archive.json (graph_json's
+    // parent), the layout table's row, never the bare root spelling.
+    let archive_path = graph_store_path().parent().join("graph-archive.json");
     if !archive_path.exists() {
         return json!({"count": 0, "ids": []});
     }
