@@ -4,16 +4,19 @@
 //! `gc::tree_action`; this module owns their I/O.
 //!
 //! The settle (`settle_stale_do_rows`) writes the graph before the row pass:
-//! an open do row on a done, merged node with no open additional PR has
-//! nothing left to re-open, so the sweep fills `ended_at` and KEEPS the row -
-//! the session provenance (phase, harness, session id, started_at) survives,
-//! stamped `ended_by: "reap-sweep"` because the sweep infers the end instant
-//! rather than observing it. A row the settle cannot fill on a node still in
+//! an open do row on a done node with no open additional PR has nothing left
+//! to re-open - the node read merged, or it never recorded a PR at all (a
+//! measurement or report node ships no PR, so there is no merge to wait
+//! for) - so the sweep fills `ended_at` and KEEPS the row - the session
+//! provenance (phase, harness, session id, started_at) survives, stamped
+//! `ended_by: "reap-sweep"` because the sweep infers the end instant rather
+//! than observing it. A row the settle cannot fill on a node still in
 //! flight keeps under `open do row`. That stranded population
 //! (an open do row is what holds its node out of this settle's own gate) has
 //! its own lane: `fno backlog maintain` detects it in Python, where the
 //! transcript resolver lives, and reaps a row only after the prover proves
-//! the session gone. Widen THIS gate never; extend that lane instead.
+//! the session gone. Widen THIS gate past a done node never; extend that
+//! lane instead.
 //!
 //! Retirement removes the session from its harness's ACTIVE surface only
 //! (the agent list, the session index); the native history is never deleted,
@@ -833,13 +836,16 @@ pub(crate) fn gh_pr_is_open(pr: u64, cwd: &str) -> Option<bool> {
 }
 
 /// Every open do row sitting on a settled node. Every clause is a positive
-/// marker: `status == "done"`; `merge_status == "merged"`, a field written
-/// only when a caller resolved MERGED from `gh`, so its absence has two
-/// explanations and neither is asserted here; and no `additional_prs` entry
-/// still open under the three settle rules ([`crate::additional_prs`]) -
-/// presence alone never holds the row, and an entry no rule settles does.
-/// A done node that shipped with no PR at all (no `pr_number`, no
-/// `additional_prs`) has no merge to record, so it settles on done alone.
+/// marker: `status == "done"`; the merge question settled one of two ways -
+/// `merge_status == "merged"`, a field written only when a caller resolved
+/// MERGED from `gh`, or no PR ever recorded (`pr_number` null and `pr_url`
+/// blank beside a null `merge_status`: a measurement or report node ships
+/// no PR, so there is no merge to wait for); a recorded PR - by number or
+/// by a parseable url alone, the shape [`crate::additional_prs`] reads -
+/// with an unrecorded outcome still holds, and the stamp pass resolves it
+/// or the hold stands. And no `additional_prs` entry still open under the
+/// three settle rules ([`crate::additional_prs`]) - presence alone never
+/// holds the row, and an entry no rule settles does.
 pub(crate) fn stale_open_do_rows(entries: &[Value]) -> Vec<StaleDoRow> {
     let mut stale = Vec::new();
     let primaries = crate::additional_prs::primary_index(entries);
@@ -850,12 +856,13 @@ pub(crate) fn stale_open_do_rows(entries: &[Value]) -> Vec<StaleDoRow> {
         if entry.get("status").and_then(Value::as_str) != Some("done") {
             continue;
         }
-        let no_pr = entry.get("pr_number").is_none_or(Value::is_null)
-            && entry
-                .get("additional_prs")
-                .and_then(Value::as_array)
-                .is_none_or(Vec::is_empty);
-        if !no_pr && entry.get("merge_status").and_then(Value::as_str) != Some("merged") {
+        let merge = entry.get("merge_status").and_then(Value::as_str);
+        let pr_url_present = entry
+            .get("pr_url")
+            .and_then(Value::as_str)
+            .is_some_and(|u| !u.trim().is_empty());
+        let pr_recorded = entry.get("pr_number").is_some_and(|v| !v.is_null()) || pr_url_present;
+        if merge != Some("merged") && (merge.is_some() || pr_recorded) {
             continue;
         }
         let holds_pr = entry
@@ -4865,21 +4872,79 @@ mod tests {
         std::fs::remove_dir_all(&base).ok();
     }
 
-    /// A done node that shipped with no PR has no merge to record, so its
-    /// open do row settles on done alone. A done node with a PR and no
-    /// recorded merge still waits for the merge.
+    /// The production row shape for a node that finished without a PR: the
+    /// graph writes the fields as explicit nulls, never as absent keys.
+    fn one_done_no_pr_entry(id: &str) -> Value {
+        serde_json::json!({
+            "id": id, "title": "No PR by design", "slug": id, "type": "feature",
+            "status": "done", "priority": "p2", "pr_number": null, "merge_status": null,
+            "created_at": "2026-10-13T00:00:00+00:00",
+            "completed_at": "2026-10-13T02:00:00+00:00",
+            "sessions": [{"phase": "execute", "harness": "claude", "session_id": "s-nopr",
+                          "started_at": "2026-10-13T01:00:00+00:00"}]
+        })
+    }
+
+    /// A done node that never recorded a PR settles its do row: there is no
+    /// merge to wait for, so the worker seat cannot hold forever.
     #[test]
-    fn a_done_node_with_no_pr_settles_and_one_with_an_unrecorded_pr_waits() {
-        let open = serde_json::json!({"phase": "execute", "harness": "claude",
-            "session_id": "s-open", "started_at": "2026-10-21T00:00:00Z"});
-        let entries = vec![
-            serde_json::json!({"id": "fb-nopr", "status": "done", "pr_number": null,
-                "sessions": [open.clone()]}),
-            serde_json::json!({"id": "fb-pr", "status": "done", "pr_number": 7,
-                "sessions": [open]}),
-        ];
-        let stale = stale_open_do_rows(&entries);
-        assert_eq!(stale.len(), 1, "{stale:?}");
-        assert_eq!(stale[0].node, "fb-nopr");
+    fn done_node_without_pr_settles_its_do_row() {
+        let stale = stale_open_do_rows(&[one_done_no_pr_entry("x-nopr")]);
+        assert_eq!(
+            stale.len(),
+            1,
+            "a done node with no recorded PR has no merge to wait for"
+        );
+        assert_eq!(stale[0].session_id, "s-nopr");
+    }
+
+    /// A recorded PR URL with a null `pr_number` is still a recorded PR: the
+    /// stamp pass reads that url, and an open or unreadable answer leaves
+    /// the merge unrecorded, so the row holds.
+    #[test]
+    fn done_node_with_pr_url_only_holds() {
+        let mut entry = one_done_no_pr_entry("x-url");
+        entry["pr_url"] = serde_json::json!("https://github.com/owner/repo/pull/4242");
+        assert!(
+            stale_open_do_rows(&[entry]).is_empty(),
+            "a recorded url keeps the merge question open"
+        );
+    }
+
+    /// A recorded PR with an unrecorded outcome still holds: the stamp pass
+    /// resolves live PRs, and until it answers, the hold is the right
+    /// failure.
+    #[test]
+    fn done_node_with_recorded_pr_and_unrecorded_merge_holds() {
+        let mut entry = one_done_no_pr_entry("x-pr");
+        entry["pr_number"] = serde_json::json!(4242);
+        assert!(
+            stale_open_do_rows(&[entry]).is_empty(),
+            "a recorded PR keeps the merge question open"
+        );
+    }
+
+    /// A recorded merge outcome that is not `merged` holds even beside a
+    /// missing `pr_number`: an unexplained recorded outcome is a state the
+    /// writers do not produce, so the hold is the right answer.
+    #[test]
+    fn done_node_with_recorded_unmerged_merge_holds_without_pr() {
+        let mut entry = one_done_no_pr_entry("x-stray");
+        entry["merge_status"] = serde_json::json!("closed");
+        assert!(
+            stale_open_do_rows(&[entry]).is_empty(),
+            "a recorded non-merged outcome keeps the hold with no PR present"
+        );
+    }
+
+    /// The store-level plan door sees the no-PR done node too: the plan is
+    /// what the dry run reports and what the release's narrowed settle
+    /// consults.
+    #[test]
+    fn store_plan_includes_done_node_without_pr() {
+        let (base, home) = stale_state_home("settle-nopr");
+        seed_store(&home, vec![one_done_no_pr_entry("x-nopr-store")]);
+        assert_eq!(plan_stale_do_rows(&home).len(), 1);
+        std::fs::remove_dir_all(&base).ok();
     }
 }
