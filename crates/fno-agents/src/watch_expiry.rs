@@ -220,7 +220,18 @@ pub(crate) fn read_evidence_since(
             limit: Some(MAX_EVENTS + 1),
             ..crate::event_store::EventQuery::of_types(DAEMON_TERMINAL)
         };
-        rows.extend(journal_rows(&daemon_events, &terminal)?);
+        // A raw journal comes back whole, so the type filter is applied here.
+        rows.extend(
+            journal_rows(&daemon_events, &terminal)?
+                .into_iter()
+                .filter(|(line, _)| {
+                    serde_json::from_str::<Value>(line).is_ok_and(|value| {
+                        value["type"]
+                            .as_str()
+                            .is_some_and(|kind| DAEMON_TERMINAL.contains(&kind))
+                    })
+                }),
+        );
     }
     if rows.len() > MAX_EVENTS as usize {
         return Err(format!(
