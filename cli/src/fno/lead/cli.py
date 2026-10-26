@@ -315,11 +315,10 @@ def escalate_cmd(
 ) -> None:
     """Escalate to the presiding role or operator with work pending (AC4-HP).
 
-    A decision only the user can make does not ride this verb: file it
-    straight on the question board with `fno inbox outstanding ask` (law
-    d-fdab1af2). Under `questions.route=direct`, the default, the question
-    this verb records stays on the board alone: no relay mail copy goes out.
-    Set `questions.route=triage` in .fno/config.toml for a triage lead.
+    A user-only decision files straight on the question board with
+    `fno inbox outstanding ask` (law d-fdab1af2). Under the default
+    `questions.route=direct` no relay mail copy goes out; set
+    `questions.route=triage` in .fno/config.toml for a triage lead.
     """
     from fno.carveout.core import resolve_carveout_root, resolve_session_id
     from fno.lead.escalate import escalate, mail_presiding_lead, resolve_presiding_lead
@@ -378,10 +377,8 @@ def escalate_cmd(
     if nudge:
         typer.echo(nudge, err=True)
     holder = presiding["holder"] if presiding is not None else None
-    mailed = (
-        holder is not None
-        and mail_relay
-        and mail_presiding_lead(holder, ids, reason, verdict=summary)
+    mailed = holder is not None and mail_relay and mail_presiding_lead(
+        holder, ids, reason, verdict=summary
     )
     target = f"lead:{holder}" if mailed else f"operator:{qid}"
     note = f", mailed presiding lead {holder}" if mailed else ""

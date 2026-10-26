@@ -34,7 +34,7 @@ def _render(
     ``crates/``). ``ok: false`` is a REFUSAL, not a failure: the caller must
     raise, never fall back to Python text - the fallback is the defect.
     ``verdict`` (first word = verdict name), ``scope``, and ``route_cwd``
-    (the repository root the route knob reads from) ride along.
+    (the repo root the route knob reads) ride along.
     Naming ``session_id`` scopes the answer's ``marker`` to that lead.
     """
     from fno.rust_binary import command_call
@@ -63,8 +63,7 @@ def escalate(stalled_ids: "list[str]", reason: str, root: Path, session_id: "str
     """Record one operator question for this stalled set.
 
     Returns ``(outcome, question_id, mail_relay, nudge)``; raises rather than
-    failing quiet. ``mail_relay`` reads False under direct, the default, so
-    the caller skips the presiding lead's mail copy.
+    failing quiet. ``mail_relay`` is False under the direct default.
     """
     from fno.agents.stale_escalate import dedupe_key, reconcile_channel
     from fno.harness_identity import canonical_handle
