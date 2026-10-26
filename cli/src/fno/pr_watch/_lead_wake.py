@@ -600,8 +600,14 @@ def run_lead_wake(
         live = str(paths.bus_dir() / "messages.jsonl")
 
         def _unread(address: str) -> list:
+            # Bounded like every truth read here, and an unreadable bus is no
+            # mail for this address, never an aborted pass for every role.
             args = ["chats", "bus-read", "unread", "--name", address, "--bus", live]
-            return rust_binary.command_call(args, {}).get(address) or []
+            try:
+                answer = rust_binary.command_call(args, {}, timeout=_LEAD_TRUTH_WAIT_S)
+            except Exception:  # noqa: BLE001
+                return []
+            return answer.get(address) or []
 
         unread_fn = _unread
 

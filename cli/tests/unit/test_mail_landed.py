@@ -198,6 +198,9 @@ def test_ac3_edge_durable_row_with_unread_cursor_still_nags(tmp_path, monkeypatc
         True,
         "bus claim (recipient read past it)",
     )
+    # A same-pair landed control row is the stronger proof and answers first.
+    append_row({"from": "alice", "to": "lead", "kind": "landed", "body": "", "meta": {"landed": send_id}})
+    assert post_send_landed(send_id, to="lead") == (True, "bus landed record")
 
 
 def test_ac9_self_send_refuses_the_resolution(tmp_path, monkeypatch):

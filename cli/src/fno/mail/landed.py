@@ -204,7 +204,7 @@ def post_send_landed(
     from fno import paths
 
     live = paths.bus_dir() / "messages.jsonl"
-    landed, _withdrawn = _bus_sets(live)
+    _withdrawn, landed = _bus_sets(live)
     if msg_id in landed:
         return True, "bus landed record"
     mine = next((m for m in msgs if m.get("id") == msg_id), None)
