@@ -846,7 +846,7 @@ def _read_time_status_external(
     return _external_open_status(pr_number=pr_number, plan_path=plan_path)
 
 
-def _render_external_get(id: str, field: Optional[str]) -> None:
+def _render_external_get(id: str, field: Optional[str], ctx: typer.Context) -> None:
     """`backlog get` under an external backend: exact-id tracker read plus the
     sidecar, joined FOR DISPLAY ONLY (a render, not a stored convenience
     record). Byte-compatibility binds the graph mode above, not this branch."""
@@ -862,7 +862,7 @@ def _render_external_get(id: str, field: Optional[str]) -> None:
             "(an external backend resolves exact ids; slug/bare-hex are "
             "footnote-minted)"
         )
-        if json_mode(typer.get_current_context()):
+        if json_mode(ctx):
             typer.echo(json.dumps({"ok": False, "error": message}))
         else:
             typer.echo(message, err=True)
@@ -901,6 +901,7 @@ def _echo_node_entry(e: dict, field: Optional[str], grouped: bool) -> None:
 
 @cli.command("get")
 def cmd_get(
+    ctx: typer.Context,
     ids: List[str] = typer.Argument(
         ..., help="One or more node ab-id, slug, or bare 8-hex (e.g.  | dashless-spawn | ff6f96e0)"
     ),
@@ -928,7 +929,7 @@ def cmd_get(
     # tracker fields plus the sidecar. Slug/bare-hex tiers are footnote-minted
     # metadata and refuse with the backend named rather than reporting absent.
     if active_backend_name() != "graph":
-        _render_external_get(id, field)
+        _render_external_get(id, field, ctx)
         return
 
 
