@@ -167,13 +167,16 @@ fn known_fno_marketplace(known: &Value) -> Option<&Value> {
         .or_else(|| known.get(LEGACY_MARKETPLACE_NAME))
 }
 
-/// The fno entries in an installed_plugins.json, under either plugin id.
-fn registry_fno_entries(registry: &Value) -> Option<&Vec<Value>> {
+/// The fno entries in an installed_plugins.json, under both plugin ids: a
+/// failed migration leaves both registered, and the sweep's guard must see
+/// each. None when neither id is registered.
+fn registry_fno_entries(registry: &Value) -> Option<Vec<&Value>> {
     let plugins = registry.get("plugins")?;
-    plugins
-        .get(PLUGIN_ID)
-        .or_else(|| plugins.get(LEGACY_PLUGIN_ID))
-        .and_then(Value::as_array)
+    let lists: Vec<&Vec<Value>> = [PLUGIN_ID, LEGACY_PLUGIN_ID]
+        .iter()
+        .filter_map(|id| plugins.get(*id).and_then(Value::as_array))
+        .collect();
+    (!lists.is_empty()).then(|| lists.into_iter().flatten().collect())
 }
 
 /// The commands that retire an old-name Claude registration, so the
@@ -3240,6 +3243,22 @@ mod tests {
         assert_eq!(
             release_channel("claude", &claude, &home.join(".codex")).as_deref(),
             Some("stable (github:bllshttng/fno#stable)")
+        );
+        // A failed migration leaves both ids registered; the guard sees both.
+        let both = json!({"version": 2, "plugins": {
+            "fno@fno": [{"scope": "user", "installPath": "/c/cache/fno/fno/0.5.0"}],
+            "fno@footnote": [{"scope": "project", "installPath": "/c/cache/footnote/fno/0.4.3"}]}});
+        fs::write(
+            claude.join("plugins/installed_plugins.json"),
+            both.to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            registry_install_paths(&home),
+            vec![
+                PathBuf::from("/c/cache/fno/fno/0.5.0"),
+                PathBuf::from("/c/cache/footnote/fno/0.4.3")
+            ]
         );
         assert_eq!(
             legacy_claude_migration(&claude),
