@@ -146,6 +146,12 @@ pub struct EscalationRequest {
     /// passed in so `render` stays deterministic. `None` reads as direct.
     #[serde(default)]
     pub route: Option<String>,
+    /// The directory whose `.fno/config.toml` the route read starts from:
+    /// the caller's repository root, so a verb run from a subdirectory
+    /// still reads the project config. Absent falls back to the process
+    /// cwd.
+    #[serde(default)]
+    pub route_cwd: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -414,10 +420,16 @@ pub fn run_lead_escalation_text(args: &[String]) -> i32 {
     };
     // The knob read lives here, not in `render`: the renderer stays
     // deterministic on its request, and the tests pin the route through the
-    // field the transport fills.
+    // field the transport fills. The caller names its repository root, so a
+    // verb run from a subdirectory still reads the project config.
     if req.route.is_none() {
+        let cwd = req
+            .route_cwd
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok());
         req.route = route_from_configs(&route_candidates(
-            std::env::current_dir().ok().as_deref(),
+            cwd.as_deref(),
             crate::paths::AgentsHome::from_env_opt()
                 .map(|h| h.root().to_path_buf())
                 .as_deref(),
@@ -473,6 +485,7 @@ mod tests {
             scope: None,
             session_id: None,
             route: None,
+            route_cwd: None,
         }
     }
 

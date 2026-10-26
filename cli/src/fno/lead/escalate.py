@@ -28,12 +28,14 @@ def _render(
     verdict: "str | None" = None,
     scope: "str | None" = None,
     session_id: "str | None" = None,
+    route_cwd: "str | None" = None,
 ) -> dict:
     """One round-trip with the crate renderer (d-b6cc1a2a: new code in
     ``crates/``). ``ok: false`` is a REFUSAL, not a failure: the caller must
     raise, never fall back to Python text - the fallback is the defect.
     ``verdict`` (first word = verdict name) and ``scope`` ride along.
     Naming ``session_id`` scopes the answer's ``marker`` to that lead.
+    ``route_cwd`` is the repository root the route knob reads from.
     """
     from fno.rust_binary import command_call
 
@@ -48,6 +50,7 @@ def _render(
             "verdict": verdict,
             "scope": scope,
             "session_id": session_id,
+            "route_cwd": route_cwd,
         },
     )
 
@@ -73,9 +76,18 @@ def escalate(stalled_ids: "list[str]", reason: str, root: Path, session_id: "str
     # untouched. The channel's empty branch closes open asks, so reaching it
     # with a refused set would read as a clean board. Naming the session
     # scopes the answer's marker to this lead.
+    # The route knob reads the repository root's config, so a verb run from
+    # a subdirectory still finds the project-level setting.
+    try:
+        from fno.paths import resolve_repo_root
+
+        route_root = str(resolve_repo_root())
+    except Exception:  # noqa: BLE001 - an unresolved root degrades to cwd
+        route_root = str(cwd)
     answer = _render(
         ids, key, reason, live=live, unknown_reason=unknown_reason,
         verdict=verdict, scope=scope, session_id=session_id,
+        route_cwd=route_root,
     )
     if not answer.get("ok"):
         raise ValueError(answer.get("message", "lead escalation refused"))

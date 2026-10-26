@@ -34,7 +34,7 @@ SCOPES: "dict[str, str]" = {}
 
 def _fake_render(
     ids, key, reason, *, live=None, unknown_reason=None, verdict=None, scope=None,
-    session_id=None,
+    session_id=None, route_cwd=None,
 ) -> dict:
     """The renderer runs in the fno-agents crate; the fake keeps its
     contract where the fold tests depend on it: the marker+key leads, and a
