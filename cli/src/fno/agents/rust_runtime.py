@@ -133,7 +133,7 @@ RUST_CLIENT_COMMANDS = frozenset(
         "attach",
         "logs",
         # register: the /fno-me self-service join, ported to a daemon-free
-        # client verb (the owned-identity ladder plus the row mint under the
+        # client command (the owned-identity ladder plus the row mint under the
         # shared registry lock). Starts nothing.
         "register",
         # The daemon-free revival decision the spawn path calls. Client-side

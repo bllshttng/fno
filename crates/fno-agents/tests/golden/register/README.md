@@ -1,12 +1,12 @@
 # register goldens
 
 Captured exit code, stdout and stderr of the Python `fno agents register`
-verb before its front was flipped to the refuse shape, one case per triple
+command before its front was flipped to the refuse shape, one case per triple
 (`<case>.exit`, `<case>.out`, `<case>.err`). `register_parity.rs` runs the
-Rust verb under the same fixture env and asserts these bytes.
+Rust command under the same fixture env and asserts these bytes.
 
 Regenerate with `capture.py` — but only from a checkout whose Python leg
-still carries the verb (a tree where `cmd_register` is already the refuse
+still carries the command (a tree where `cmd_register` is already the refuse
 shape produces 127-refusal bytes, not the oracle). The pending-window case
 was captured that way from the canonical tree after the flip; its script
 lives nowhere on purpose: copy `capture.py`, point `REPO` at the canonical

@@ -135,7 +135,7 @@ def test_register_rejects_unknown_provider(tmp_path: Path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# `fno agents register` (the /fno-me seam) answers from the Rust client verb
+# `fno agents register` (the /fno-me seam) answers from the Rust client command
 # (crates/fno-agents/src/register.rs); without the binary the Python front
 # refuses. Its contracts are pinned by crates/fno-agents/tests/golden/register/
 # and tests/register_parity.rs, so no CliRunner cases live here anymore.

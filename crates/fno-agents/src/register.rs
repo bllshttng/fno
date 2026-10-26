@@ -1,16 +1,16 @@
-//! The `fno agents register` client verb: the /fno-me self-service join.
+//! The `fno agents register` client command: the /fno-me self-service join.
 //!
 //! Port of the Python `cmd_register` front (cli.py) over
-//! `registry.register_existing_session`'s verb path: resolve the ambient
+//! `registry.register_existing_session`'s command path: resolve the ambient
 //! harness identity with the owned-identity ladder, then mint or refresh the
 //! caller's own idle roster row under the shared registry lock, so peers can
 //! `fno agents mail send` the canonical handle. Client-side and daemon-free:
-//! the verb starts nothing, matching the registry-json posture.
+//! the command starts nothing, matching the registry-json posture.
 //!
 //! Contract pinned by `tests/golden/register/` (captured from the Python leg)
 //! and `tests/register_parity.rs`. Not in scope here: the hook's pane-worker
 //! restamp (`register_session.py main`), which is the SessionStart transport,
-//! not this verb.
+//! not this command.
 
 use crate::identity::{canonical_handle, session_handle_tier};
 use crate::paths::AgentsHome;
@@ -132,7 +132,7 @@ session '{session_id}'; use the full session id directly"
                     && e.harness_session_id.as_deref() == Some(session_id.as_str())
             });
             if let Some(row) = existing {
-                // The verb passes no explicit status, so the refresh is
+                // The command passes no explicit status, so the refresh is
                 // unconditional: a hand-started session is never live-transport.
                 row.status = crate::AgentStatus::Idle;
                 row.cwd = cwd.clone();

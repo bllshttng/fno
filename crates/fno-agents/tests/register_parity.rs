@@ -1,11 +1,11 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.agents.registry.register_existing_session
 //!
-//! The `fno agents register` verb, characterized against goldens captured
+//! The `fno agents register` command, characterized against goldens captured
 //! from the Python leg (tests/golden/register/capture.py). The Python front
-//! keeps the verb signature for --help and refuses without a binary; the
+//! keeps the command signature for --help and refuses without a binary; the
 //! oracle module survives (registry.py keeps importers), so the provenance
-//! gate will not refuse while the verb answers from this crate.
+//! gate will not refuse while the command answers from this crate.
 
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -18,7 +18,7 @@ fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/register")
 }
 
-/// Run the register verb with the fixture env. The identity markers are
+/// Run the register command with the fixture env. The identity markers are
 /// stripped first so each case names exactly the identity it wants seen.
 fn run_register(
     home: &PathBuf,

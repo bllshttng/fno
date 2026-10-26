@@ -2693,7 +2693,7 @@ def cmd_register(
 ) -> None:
     """Join THIS session to the mesh roster so peers can `fno agents mail send` to it.
 
-    The Rust client verb owns register (the owned-identity ladder plus the row
+    The Rust client command owns register (the owned-identity ladder plus the row
     mint under the shared registry lock); with an installed binary the runtime
     router execs it before this function runs. There is no Python register
     left: a missing binary is refused here.
