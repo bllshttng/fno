@@ -475,15 +475,15 @@ pub(crate) fn sync_with(
                     push(remote, node, &stored, &body, host)?;
                     out.pushed.push(node.clone());
                 } else if seen.as_deref() == Some(mine.as_str()) {
-                    pull_row(remote, node, &row, host, home, plans_root, peers, ssh, &mut out)?;
+                    pull_row(remote, node, host, home, plans_root, peers, ssh, &mut out)?;
                 } else {
                     out.conflicts.push(node.clone());
                 }
             }
             // The file is absent here (or the binding was lost): the
             // primary's row decides where it lands.
-            (None, Some((row, _))) => {
-                pull_row(remote, node, &row, host, home, plans_root, peers, ssh, &mut out)?
+            (None, Some(_)) => {
+                pull_row(remote, node, host, home, plans_root, peers, ssh, &mut out)?
             }
             // No row and no body: only the opt-in ssh rescue can still find
             // the file, asking a peer the seen ledger names.
@@ -504,7 +504,6 @@ pub(crate) fn sync_with(
 fn pull_row(
     remote: &Remote,
     node: &str,
-    row: &Row,
     host: &str,
     home: &Path,
     plans_root: Option<&Path>,
@@ -531,9 +530,16 @@ fn pull_row(
     }
     // This host cannot place the store's copy (a legacy absolute row naming
     // another home): the opt-in ssh rescue asks the machine that pushed.
-    if let Some((path, _)) =
-        ssh_rescue(remote, node, &row.plan_path, &row.from_host, host, home, peers, ssh)
-    {
+    if let Some((path, _)) = ssh_rescue(
+        remote,
+        node,
+        &row.plan_path,
+        &row.from_host,
+        host,
+        home,
+        peers,
+        ssh,
+    ) {
         write_atomic(&path, &body)?;
         mark_seen(remote, node, host, &row.sha)?;
         out.fetched.push(node.to_string());
@@ -573,9 +579,16 @@ pub(crate) fn fetch_with(
             mark_seen(remote, node, host, &row.sha)?;
             return Ok(with_anchor(&path, &row.plan_path));
         }
-        if let Some((path, _)) =
-            ssh_rescue(remote, node, &row.plan_path, &row.from_host, host, home, peers, ssh)
-        {
+        if let Some((path, _)) = ssh_rescue(
+            remote,
+            node,
+            &row.plan_path,
+            &row.from_host,
+            host,
+            home,
+            peers,
+            ssh,
+        ) {
             write_atomic(&path, &body)?;
             mark_seen(remote, node, host, &row.sha)?;
             return Ok(with_anchor(&path, &row.plan_path));
@@ -676,19 +689,43 @@ mod tests {
         let body = format!("---\nstatus: ready\n---\n{}", "x".repeat(64 * 1024));
         write_atomic(&plan, &body).unwrap();
         let a = replica(&[("x-1", plan_s)]);
-        let out = sync_with(&a, &primary.remote, "a", home.path(), None, &bare_peers(), &no_ssh)
-            .unwrap();
+        let out = sync_with(
+            &a,
+            &primary.remote,
+            "a",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         assert_eq!(out.pushed, vec!["x-1"]);
         // B has no file, and its replica lost the binding.
         std::fs::remove_file(&plan).unwrap();
         let b = replica(&[("x-1", "")]);
-        let out = sync_with(&b, &primary.remote, "b", home.path(), None, &bare_peers(), &no_ssh)
-            .unwrap();
+        let out = sync_with(
+            &b,
+            &primary.remote,
+            "b",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         assert_eq!(out.pulled, vec!["x-1"]);
         assert_eq!(sha(&std::fs::read_to_string(&plan).unwrap()), sha(&body));
         // A second pass is quiet: nothing moved.
-        let out = sync_with(&a, &primary.remote, "a", home.path(), None, &bare_peers(), &no_ssh)
-            .unwrap();
+        let out = sync_with(
+            &a,
+            &primary.remote,
+            "a",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         assert_eq!(out, Outcome::default());
     }
 
@@ -700,32 +737,82 @@ mod tests {
         let plan_s = plan.to_str().unwrap();
         write_atomic(&plan, "v0").unwrap();
         let b = replica(&[("x-1", plan_s)]);
-        sync_with(&b, &primary.remote, "b", home.path(), None, &bare_peers(), &no_ssh).unwrap();
+        sync_with(
+            &b,
+            &primary.remote,
+            "b",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         // The peer pushes v1; B edits its own copy to v2 before it syncs.
         push(&primary.remote, "x-1", plan_s, "v1", "a").unwrap();
         write_atomic(&plan, "v2").unwrap();
-        let out =
-            sync_with(&b, &primary.remote, "b", home.path(), None, &bare_peers(), &no_ssh).unwrap();
+        let out = sync_with(
+            &b,
+            &primary.remote,
+            "b",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         assert_eq!(out.conflicts, vec!["x-1"]);
         assert_eq!(std::fs::read_to_string(&plan).unwrap(), "v2");
         // Untouched since its sync, B takes the peer's edit.
         write_atomic(&plan, "v1").unwrap();
-        sync_with(&b, &primary.remote, "b", home.path(), None, &bare_peers(), &no_ssh).unwrap();
+        sync_with(
+            &b,
+            &primary.remote,
+            "b",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         push(&primary.remote, "x-1", plan_s, "v3", "a").unwrap();
-        let out =
-            sync_with(&b, &primary.remote, "b", home.path(), None, &bare_peers(), &no_ssh).unwrap();
+        let out = sync_with(
+            &b,
+            &primary.remote,
+            "b",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         assert_eq!(out.pulled, vec!["x-1"]);
         assert_eq!(std::fs::read_to_string(&plan).unwrap(), "v3");
         // A rebind to a new path moves the carried body, never a standing conflict.
         let moved = home.path().join("plans/q.md");
         write_atomic(&moved, "v4").unwrap();
         let c = replica(&[("x-1", moved.to_str().unwrap())]);
-        let out =
-            sync_with(&c, &primary.remote, "b", home.path(), None, &bare_peers(), &no_ssh).unwrap();
+        let out = sync_with(
+            &c,
+            &primary.remote,
+            "b",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         assert_eq!(out.pushed, vec!["x-1"]);
         assert_eq!(
-            sync_with(&c, &primary.remote, "b", home.path(), None, &bare_peers(), &no_ssh)
-                .unwrap(),
+            sync_with(
+                &c,
+                &primary.remote,
+                "b",
+                home.path(),
+                None,
+                &bare_peers(),
+                &no_ssh
+            )
+            .unwrap(),
             Outcome::default()
         );
     }
@@ -735,15 +822,32 @@ mod tests {
         let primary = test_primary::start();
         let home = tempfile::tempdir().unwrap();
         assert_eq!(
-            fetch_with("x-1", "", &primary.remote, "b", home.path(), None, &bare_peers(), &no_ssh)
-                .unwrap_err(),
+            fetch_with(
+                "x-1",
+                "",
+                &primary.remote,
+                "b",
+                home.path(),
+                None,
+                &bare_peers(),
+                &no_ssh
+            )
+            .unwrap_err(),
             "no host pushed a plan for it"
         );
         ensure_tables(&primary.remote).unwrap();
         push(&primary.remote, "x-1", "/elsewhere/plans/p.md", "v0", "a").unwrap();
         let b = replica(&[("x-1", "/elsewhere/plans/p.md")]);
-        let out =
-            sync_with(&b, &primary.remote, "b", home.path(), None, &bare_peers(), &no_ssh).unwrap();
+        let out = sync_with(
+            &b,
+            &primary.remote,
+            "b",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         assert_eq!(out.unplaced, vec!["x-1"]);
         let err = fetch_with(
             "x-1",
@@ -775,8 +879,16 @@ mod tests {
             assert!(!path.exists());
         }
         // An unreachable primary is an error the tick logs, never a panic.
-        assert!(sync_with(&b, &test_primary::dead(), "b", home.path(), None, &bare_peers(), &no_ssh)
-            .is_err());
+        assert!(sync_with(
+            &b,
+            &test_primary::dead(),
+            "b",
+            home.path(),
+            None,
+            &bare_peers(),
+            &no_ssh
+        )
+        .is_err());
     }
 
     #[test]
@@ -793,8 +905,16 @@ mod tests {
         // The writer's node row carries its absolute path; the carrier stores
         // the plans-root-relative form.
         let a = replica(&[("x-1", plan.to_str().unwrap())]);
-        let out = sync_with(&a, &primary.remote, "a", home_a.path(), Some(&root_a), &bare_peers(), &no_ssh)
-            .unwrap();
+        let out = sync_with(
+            &a,
+            &primary.remote,
+            "a",
+            home_a.path(),
+            Some(&root_a),
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         assert_eq!(out.pushed, vec!["x-1"]);
         let stored = primary_rows(&primary.remote, "a")
             .unwrap()
@@ -808,17 +928,31 @@ mod tests {
         // A reader whose home differs places the body under its own root,
         // even though its node row still names the writer's absolute path.
         let b = replica(&[("x-1", plan.to_str().unwrap())]);
-        let out =
-            sync_with(&b, &primary.remote, "b", home_b.path(), Some(&root_b), &bare_peers(), &no_ssh)
-                .unwrap();
+        let out = sync_with(
+            &b,
+            &primary.remote,
+            "b",
+            home_b.path(),
+            Some(&root_b),
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         assert_eq!(out.pulled, vec!["x-1"]);
         let placed = root_b.join("20261021-x-9e22-plans-sync.md");
         assert_eq!(sha(&std::fs::read_to_string(&placed).unwrap()), sha("v1"));
         // The second pass is quiet even though B's node row still names the
         // writer's path: the placed file already holds the row's hash.
-        let out =
-            sync_with(&b, &primary.remote, "b", home_b.path(), Some(&root_b), &bare_peers(), &no_ssh)
-                .unwrap();
+        let out = sync_with(
+            &b,
+            &primary.remote,
+            "b",
+            home_b.path(),
+            Some(&root_b),
+            &bare_peers(),
+            &no_ssh,
+        )
+        .unwrap();
         assert_eq!(out, Outcome::default());
         // Target init's miss fetch resolves and returns B's own path.
         let got = fetch_with(
@@ -853,13 +987,32 @@ mod tests {
             assert_eq!(path, "/Users/alice/vault/plans/p.md");
             Ok::<String, String>("rescued".to_string())
         };
-        let out =
-            sync_with(&b, &primary.remote, "b", home.path(), Some(&root), &peers, &fetched).unwrap();
+        let out = sync_with(
+            &b,
+            &primary.remote,
+            "b",
+            home.path(),
+            Some(&root),
+            &peers,
+            &fetched,
+        )
+        .unwrap();
         assert_eq!(out.fetched, vec!["x-1"]);
-        assert_eq!(std::fs::read_to_string(root.join("p.md")).unwrap(), "rescued");
+        assert_eq!(
+            std::fs::read_to_string(root.join("p.md")).unwrap(),
+            "rescued"
+        );
         // With no peers configured nothing is asked, and the pass stays quiet.
-        let out = sync_with(&b, &primary.remote, "b", home.path(), Some(&root), &bare_peers(), &fetched)
-            .unwrap();
+        let out = sync_with(
+            &b,
+            &primary.remote,
+            "b",
+            home.path(),
+            Some(&root),
+            &bare_peers(),
+            &fetched,
+        )
+        .unwrap();
         assert_eq!(out, Outcome::default());
     }
 
@@ -868,7 +1021,14 @@ mod tests {
         let primary = test_primary::start();
         let home = tempfile::tempdir().unwrap();
         ensure_tables(&primary.remote).unwrap();
-        push(&primary.remote, "x-1", "/Users/alice/vault/plans/p.md", "v1", "a").unwrap();
+        push(
+            &primary.remote,
+            "x-1",
+            "/Users/alice/vault/plans/p.md",
+            "v1",
+            "a",
+        )
+        .unwrap();
         let mut peers = BTreeMap::new();
         peers.insert(host_name(), "alice.lan".to_string());
         let fetched = |alias: &str, path: &str| {
