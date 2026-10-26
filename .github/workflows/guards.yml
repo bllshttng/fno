@@ -214,7 +214,7 @@ jobs:
           bash tests/ci/test_seam_crossings.sh
           (cd cli && uv run fno-py doctor lint seam-crossings)
 
-      # The JSON-stdout house contract: a -J verb prints exactly one JSON
+      # The JSON-stdout house contract: a -J command prints exactly one JSON
       # document on stdout ([] on empty, {ok:false} on a refused read), so an
       # agent parses output without a wrapper. Selftest first, so the checker
       # is positive-controlled before it is trusted on the real table.

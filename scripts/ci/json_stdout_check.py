@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The per-row checker for check-json-stdout.sh.
 
-Reads the expected contract word and the verb's stdout, prints PASS or a
+Reads the expected contract word and the command's stdout, prints PASS or a
 FAIL reason. The gate feeds it the captured stdout; contract words:
 
 - ``doc``        stdout parses as exactly one JSON document, rc 0

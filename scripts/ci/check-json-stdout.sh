@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# check-json-stdout.sh - the JSON-stdout house contract over fno verbs.
+# check-json-stdout.sh - the JSON-stdout house contract over fno commands.
 #
 # The scratch census (internal/fno/briefs/20260908-scratch-script-shapes-findings.md,
-# section 4 rank 1) measured "wrap an fno verb to parse its output" as the biggest
+# section 4 rank 1) measured "wrap an fno command to parse its output" as the biggest
 # recurring scratch shape: 238 files across 13 jobs. A wrapper exists because a
-# -J verb sometimes prints silence on a miss, shares stdout with prose, or makes
+# -J command sometimes prints silence on a miss, shares stdout with prose, or makes
 # the agent guess the envelope key. This gate runs a curated table of read-only
-# verbs and asserts the house contract: stdout is exactly one JSON document; the
+# commands and asserts the house contract: stdout is exactly one JSON document; the
 # pinned rows also check the shape (error doc, empty list).
 #
-# Verbs run through the repo CLI (uv run --project cli fno-py) with the FNO home
+# Commands run through the repo CLI (uv run --project cli fno-py) with the FNO home
 # pinned to a temp dir, so no machine state feeds the verdict. The native get
 # execs fno-agents; the binary resolves FNO_AGENTS_BIN, then the checkout build,
 # then the deployed binary, so the get row tests this tree's fix.
@@ -65,10 +65,10 @@ export FNO_CONFIG="$TMP/config.toml"
 export FNO_GLOBAL_SETTINGS_PATH=/dev/null
 : > "$FNO_CONFIG"
 
-# run_row <expect> <row-id> <cmd...>: run one verb row and print PASS, WAIVED
+# run_row <expect> <row-id> <cmd...>: run one command row and print PASS, WAIVED
 # (a baseline row matched), or FAIL with the checker's reason. The row id is
-# the verb argv without the CLI launcher, so a baseline author writes the verb
-# they are waiving, not the resolved launcher.
+# the command argv without the CLI launcher, so a baseline author writes the
+# command they are waiving, not the resolved launcher.
 run_row() {
     local expect="$1"
     shift
@@ -97,7 +97,7 @@ run_row() {
 }
 
 if [[ "$SELFTEST" == 1 ]]; then
-    # The gate must fail a noisy verb and a silent rc-1 verb, and pass a clean
+    # The gate must fail a noisy command and a silent rc-1 command, and pass a clean
     # one, or nothing it says on the real table can be trusted. Exit 2 on any
     # miss.
     status=0
@@ -113,7 +113,7 @@ if [[ "$SELFTEST" == 1 ]]; then
     }
     v="$(run_row doc 'stub: silent rc-1' bash -c 'exit 1')"
     [[ "$v" == FAIL* ]] || {
-        echo "selftest refused: a silent rc-1 verb was not failed" >&2
+        echo "selftest refused: a silent rc-1 command was not failed" >&2
         status=1
     }
     v="$(run_row error-doc 'stub: error document rc-1' bash -c 'printf "{\"ok\": false, \"error\": \"x\"}\n"; exit 1')"
