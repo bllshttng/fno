@@ -34,93 +34,105 @@ def _days_ago(n: int) -> str:
 
 
 class FakeTracker:
-    """A NodeTracker fake over seam-only facts, with call accounting."""
+    """A tracker-door fake over seam-only facts, with call accounting.
+
+    The seam is the native door now, so the fake answers the door's payload
+    shapes (read / list-open / snapshot) from one ``door()`` entry that the
+    ``command_call`` stub routes every tracker op through.
+    """
 
     name = "fake-external"
 
     def __init__(self, rows, *, fail_list_open=False, fail_read_ids=()):
-        from fno.tracker.types import TrackerCandidate, TrackerState
-
-        self._T, self._S = TrackerCandidate, TrackerState
         self._rows = rows
         self._fail_list_open = fail_list_open
         self._fail_read_ids = set(fail_read_ids)
         self.list_open_calls = 0
         self.read_calls: list[str] = []
 
-    def read(self, id):
-        from fno.tracker.types import NodeNotFound
+    def _node(self, r):
+        return {
+            "id": r["id"], "title": r.get("title"),
+            "state": r.get("state", "open"),
+            "parent": r.get("parent"), "blocked_by": r.get("blocked_by", []),
+        }
 
+    def _sc(self, sid):
+        path = self._sidecar_dir / f"{sid}.json"
+        try:
+            body = json.loads(path.read_text())
+        except Exception as exc:
+            raise RuntimeError(f"sidecar read failed for {sid}: {exc}")
+        return body
+
+    def read(self, id):
         self.read_calls.append(id)
         if id in self._fail_read_ids:
             raise RuntimeError(f"backend read blew up for {id}")
         for r in self._rows:
             if r["id"] == id:
-                return self._T(
-                    id=r["id"], title=r.get("title"),
-                    state=self._S(r.get("state", "open")),
-                    parent=r.get("parent"),
-                    blocked_by=r.get("blocked_by", []),
-                )
-        raise NodeNotFound(id)
+                return {"node": self._node(r)}
+        return {"not_found": True}
 
     def list_open(self):
         self.list_open_calls += 1
         if self._fail_list_open:
             raise RuntimeError("network partition")
-        out = []
-        for r in self._rows:
-            if r.get("state", "open") == "open":
-                out.append(self._T(
-                    id=r["id"], title=r.get("title"), state=self._S.open,
-                    parent=r.get("parent"), blocked_by=r.get("blocked_by", []),
-                    priority=r.get("priority", "p2"),
-                    rank=r.get("rank"), created_at=r.get("created_at"),
-                ))
-        return out
+        return [
+            self._node(r)
+            | {
+                "priority": r.get("priority", "p2"),
+                "rank": r.get("rank"),
+                "created_at": r.get("created_at"),
+            }
+            for r in self._rows
+            if r.get("state", "open") == "open"
+        ]
 
     def close(self, id):
         raise AssertionError("close is not part of selection")
 
-    def _call(self, op, id=None):
-        """The door-shaped document: open entries joined with sidecar fields,
-        closed rows as tombstones."""
-        assert op == "snapshot"
-        import fno.tracker.sidecar as sidecar_store
+    def door(self, op, payload):
+        if op == "read":
+            return self.read(payload["id"])
+        if op == "list-open":
+            return {"candidates": self.list_open()}
+        if op == "snapshot":
+            # The door-shaped document: open entries joined with sidecar
+            # fields, closed rows as tombstones.
+            entries = []
+            for c in self.list_open():
+                sc = self._sc(c["id"])
+                entries.append({
+                    "id": c["id"],
+                    "title": c["title"],
+                    "state": "open",
+                    "status": _open_status(pr_number=sc.get("pr_number"), plan_path=sc.get("plan_path")),
+                    "parent": c["parent"],
+                    "blocked_by": list(c["blocked_by"]),
+                    "priority": c["priority"],
+                    "rank": c["rank"],
+                    "created_at": c["created_at"],
+                    "cwd": sc.get("cwd"),
+                    "plan_path": sc.get("plan_path"),
+                    "pr_number": sc.get("pr_number"),
+                    "pr_url": sc.get("pr_url"),
+                    "additional_prs": sc.get("additional_prs") or [],
+                    "batch": sc.get("batch"),
+                    "contained_in": sc.get("contained_in"),
+                    "sessions": sc.get("sessions") or [],
+                    "claimed_at": sc.get("claimed_at"),
+                    "cost_usd": sc.get("cost_usd"),
+                })
+            for r in self._rows:
+                if r.get("state", "open") != "open":
+                    entries.append(
+                        {"id": r["id"], "state": "closed", "status": "done", "completed_at": "closed"}
+                    )
+            return {"backend": self.name, "entries": entries}
+        raise AssertionError(f"selection never calls {op}")
 
-        entries = []
-        for c in self.list_open():
-            try:
-                sc = sidecar_store.load(c.id)
-            except Exception as exc:
-                raise RuntimeError(f"sidecar read failed for {c.id}: {exc}")
-            entries.append({
-                "id": c.id,
-                "title": c.title,
-                "state": "open",
-                "status": _open_status(pr_number=sc.pr_number, plan_path=sc.plan_path),
-                "parent": c.parent,
-                "blocked_by": list(c.blocked_by),
-                "priority": c.priority,
-                "rank": c.rank,
-                "created_at": c.created_at,
-                "cwd": sc.cwd,
-                "plan_path": sc.plan_path,
-                "pr_number": sc.pr_number,
-                "pr_url": sc.pr_url,
-                "additional_prs": sc.additional_prs,
-                "batch": sc.batch,
-                "contained_in": sc.contained_in,
-                "sessions": sc.sessions,
-                "claimed_at": sc.claimed_at,
-                "cost_usd": sc.cost_usd,
-            })
-        for r in self._rows:
-            if r.get("state", "open") != "open":
-                entries.append(
-                    {"id": r["id"], "state": "closed", "status": "done", "completed_at": "closed"}
-                )
-        return {"backend": self.name, "entries": entries}
+    _sidecar_dir: Path = Path("/nonexistent")
 
 
 def _open_status(*, pr_number, plan_path):
@@ -130,19 +142,26 @@ def _open_status(*, pr_number, plan_path):
 
 
 def _wire(monkeypatch, tmp_path, rows, sidecars, **tracker_kwargs):
-    """Point tracker, sidecar store, claims, and the local graph at fakes."""
+    """Point the tracker door, claims, and the local graph at fakes."""
     tracker = FakeTracker(rows, **tracker_kwargs)
-    monkeypatch.setattr("fno.tracker.get_tracker", lambda *a, **k: tracker)
+    import fno.rust_binary as rb
+
+    real_call = rb.command_call
+
+    def _door_call(command, payload, *args, **kwargs):
+        op = payload.get("tracker") if isinstance(payload, dict) else None
+        if op:
+            return tracker.door(op, payload)
+        return real_call(command, payload, *args, **kwargs)
+
+    monkeypatch.setattr(rb, "command_call", _door_call)
     sidecar_dir = tmp_path / "sidecars"
     sidecar_dir.mkdir(exist_ok=True)
+    tracker._sidecar_dir = sidecar_dir
     for sid, fields in sidecars.items():
         payload = {"id": sid}
         payload.update(fields)
         (sidecar_dir / f"{sid}.json").write_text(json.dumps(payload))
-    import fno.tracker.sidecar as sidecar_store
-
-    monkeypatch.setattr(sidecar_store, "sidecar_path",
-                        lambda i: sidecar_dir / f"{i}.json")
     # The contradictory local graph: every value here must never surface.
     g = tmp_path / "graph.json"
     seed_graph(g, json.dumps({"entries": [
@@ -188,7 +207,7 @@ def test_next_fail_closed_names_the_backend(tmp_path, monkeypatch):
           fail_list_open=True)
     r = runner.invoke(app, ["backlog", "next"], catch_exceptions=False)
     assert r.exit_code == 1
-    assert "fake-external" in r.output
+    assert "github" in r.output  # the env-selected backend, the name the seam can report
     assert r.output.strip() != "null"
 
 
@@ -198,14 +217,13 @@ def test_next_fail_closed_names_the_id_on_sidecar_fault(tmp_path, monkeypatch):
     rows = _rows_basic()
     tracker, _g = _wire(monkeypatch, tmp_path, rows, {
         "EXT-hi": {"plan_path": "/plans/hi.md"},
+        "EXT-lo": {"plan_path": "/plans/lo.md"},
     })
-    # Make the second candidate's sidecar unreadable at the store level by
-    # failing its file read: a directory in place of the file raises on read.
-    import fno.tracker.sidecar as sidecar_store
-
-    real_load = sidecar_store.load
-    monkeypatch.setattr(sidecar_store, "load", lambda i: real_load(i))
-    (Path(sidecar_store.sidecar_path("EXT-lo").parent) / "EXT-lo.json").mkdir()
+    # Make the second candidate's sidecar unreadable at the store level:
+    # a directory in place of the file raises on read, the fake names the id,
+    # and the door transport carries the refusal to the fail-closed join.
+    (tracker._sidecar_dir / "EXT-lo.json").unlink()
+    (tracker._sidecar_dir / "EXT-lo.json").mkdir()
 
     r = runner.invoke(app, ["backlog", "next"], catch_exceptions=False)
     assert r.exit_code == 1
