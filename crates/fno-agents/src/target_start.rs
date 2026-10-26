@@ -2206,11 +2206,19 @@ fn run_bounded_init(
             "fno do target start: could not resolve the init door (own binary)",
         ));
     };
+    // The progress file names the init step in flight for the timeout
+    // receipt: the door and the bash helper append markers when the variable
+    // is set, and this parent reads the last line after the kill. Temp +
+    // pid keeps concurrent starts apart; this process removes it.
+    let progress =
+        std::env::temp_dir().join(format!("fno-init-progress-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&progress);
     let mut cmd = Command::new(self_exe);
     use std::os::unix::process::CommandExt;
     cmd.arg("target-init")
         .args(init_args)
         .current_dir(wt_path)
+        .env("FNO_INIT_PROGRESS_FILE", &progress)
         .process_group(0)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -2249,19 +2257,41 @@ fn run_bounded_init(
         }
     };
     if timed_out {
-        stage_timeout_exit(
-            "init",
-            &format!(
-                "Claim state is unknown: check fno agents claim status node:{node}. \
-                 A rerun of fno do target start {node} resumes idempotently."
+        let note = match last_progress_line(&progress) {
+            Some(line) => format!(
+                "Last init step: {line}. Claim state is unknown: check fno agents \
+                 claim status node:{node}. A rerun of fno do target start {node} \
+                 resumes idempotently (the half-made worktree is reused, not \
+                 recreated)."
             ),
-        );
+            None => format!(
+                "No init step marker was recorded. Claim state is unknown: check \
+                 fno agents claim status node:{node}. A rerun of fno do target \
+                 start {node} resumes idempotently."
+            ),
+        };
+        let _ = std::fs::remove_file(&progress);
+        stage_timeout_exit("init", &note);
     }
+    let _ = std::fs::remove_file(&progress);
     let code = match status.code() {
         Some(c) => c,
         None => status.signal().map(|s| 128 + s).unwrap_or(1),
     };
     Ok(code)
+}
+
+/// The last non-empty marker line in the init progress file, bounded, so the
+/// receipt names the step instead of dumping the log. None when the file is
+/// absent, unreadable, or empty.
+fn last_progress_line(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let line = text.lines().rev().map(str::trim).find(|l| !l.is_empty())?;
+    let mut bounded: String = line.chars().take(120).collect();
+    if bounded.len() < line.len() {
+        bounded.push_str("...");
+    }
+    Some(bounded)
 }
 
 /// Init the session FROM an existing worktree: binds owner_cwd and claims the
@@ -2354,4 +2384,38 @@ fn init_from_worktree(
     );
     eprintln!("cd {} to continue the pipeline.", wt_path.display());
     Ok(0)
+}
+
+#[cfg(test)]
+mod start_progress_tests {
+    use super::*;
+
+    #[test]
+    fn last_progress_line_reads_last_marker_missing_file_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("progress.txt");
+        std::fs::write(&path, "begin: a\n\nbegin: b\n").unwrap();
+        assert_eq!(last_progress_line(&path), Some("begin: b".to_string()));
+        let missing = dir.path().join("absent.txt");
+        assert_eq!(last_progress_line(&missing), None);
+    }
+
+    #[test]
+    fn empty_file_reads_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.txt");
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(last_progress_line(&path), None);
+    }
+
+    #[test]
+    fn long_marker_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.txt");
+        let long = "begin: step-name-that-keeps-going".repeat(6);
+        std::fs::write(&path, "done: a\n".to_string() + &long).unwrap();
+        let got = last_progress_line(&path).unwrap();
+        assert!(got.starts_with("done: a"));
+        assert_eq!(got.chars().count(), 123);
+    }
 }
