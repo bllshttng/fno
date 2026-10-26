@@ -1,5 +1,5 @@
 //! The orphan sweep: processes that outlived whatever started them, said out
-//! loud. Ported from the Python `fno.agents.orphans` the day its verb moved
+//! loud. Ported from the Python `fno.agents.orphans` the day its command moved
 //! onto the native census door (`fno-agents census --orphans`); the two rules
 //! below are the module's thesis, inherited verbatim.
 //!
@@ -684,7 +684,7 @@ fn round_to(value: f64, places: u32) -> f64 {
     (value * factor).round() / factor
 }
 
-/// The `fno-agents census --orphans` door. Hidden, like the verb it serves:
+/// The `fno-agents census --orphans` door. Hidden, like the command it serves:
 /// `fno agents orphans [--reap] [--quiet-unless-new] [--json]` routes here.
 /// Exit 2 on a broken scan, WITHOUT an orphan count: a clean machine and a
 /// half-blind instrument must never print the same line.
