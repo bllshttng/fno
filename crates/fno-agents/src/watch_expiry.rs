@@ -273,7 +273,37 @@ pub(crate) fn read_evidence_since(
     for (index, row) in evidence.iter_mut().enumerate() {
         row.seq = index as i64;
     }
+    stamp_daemon_sessions(home, &mut evidence);
     Ok(evidence)
+}
+
+/// A daemon stop or exit names its row, never its session, so it cannot
+/// end a watch or exempt a session. Stamp each one with the session of the
+/// row that held that name when it fired: a row born after the event is a
+/// respawn under the same name, and the old stop is not its stop.
+fn stamp_daemon_sessions(home: &AgentsHome, evidence: &mut [Evidence]) {
+    let unstamped =
+        |row: &Evidence| DAEMON_TERMINAL.contains(&row.kind.as_str()) && row.session_id.is_none();
+    if !evidence.iter().any(unstamped) {
+        return;
+    }
+    let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
+        return;
+    };
+    for row in evidence.iter_mut().filter(|row| unstamped(row)) {
+        let Some(name) = row.data.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        row.session_id = registry
+            .entries
+            .iter()
+            .filter(|entry| entry.name == name || entry.short_id == name)
+            .find(|entry| {
+                chrono::DateTime::parse_from_rfc3339(&entry.created_at)
+                    .map_or(true, |born| born.timestamp_millis() <= row.ts_ms)
+            })
+            .and_then(|entry| entry.harness_session_id.clone());
+    }
 }
 
 /// The kinds the daemon journals in the agents home that end a watch or
@@ -635,42 +665,74 @@ mod tests {
     }
 
     #[test]
-    fn a_daemon_stop_reaches_the_evidence_and_a_daemon_watch_does_not() {
-        // The daemon journals agent_stopped in the agents home; the hooks
-        // journal watches globally. A stop read only from the global stream
-        // left quiet recovery waking a worker its lead stopped.
+    fn a_daemon_stop_ends_its_session_watch_and_spares_a_same_name_respawn() {
+        // The daemon journals agent_stopped in the agents home, by row name;
+        // the hooks journal watches globally, by session. A stop read only
+        // from the global stream, or never tied to a session, let quiet
+        // recovery and the expiry arm wake a worker its lead stopped.
         let td = tempfile::TempDir::new().unwrap();
         let home = AgentsHome::at(td.path().join("agents"));
-        let now = millis_now();
-        let ts = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
+        let at = |minutes: i64| (now - chrono::Duration::minutes(minutes)).to_rfc3339();
+        let row = |name: &str, session: &str, born: String| {
+            let mut entry = crate::state::RegistryEntry::default();
+            entry.name = name.into();
+            entry.harness_session_id = Some(session.into());
+            entry.created_at = born;
+            entry
+        };
+        let mut registry = crate::state::Registry::default();
+        registry
+            .entries
+            .push(row("t-x-1-glm", "s-stopped", at(120)));
+        // Born after its name's stop: a respawn the old stop must not touch.
+        registry.entries.push(row("t-x-2-glm", "s-respawn", at(5)));
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::to_vec(&registry).unwrap(),
+        );
+        let watch = |session: &str| {
+            serde_json::json!({"ts": at(30), "type": WATCH_IDLE, "source": "hook",
+                "data": {"session_id": session, "node": "x-1", "blocker": "ci",
+                    "expires_at_ms": now.timestamp_millis() + 60_000}})
+        };
         stage(
             &crate::daemon::global_events_path(&home),
-            serde_json::json!({"ts": ts, "type": WATCH_IDLE, "source": "hook",
-                "data": {"session_id": "s-global", "node": "x-1", "blocker": "ci"}}),
+            watch("s-stopped"),
         );
-        stage(
-            &home.events_jsonl(),
-            serde_json::json!({"ts": ts, "type": "agent_stopped", "source": "daemon",
-                "data": {"name": "t-x-1-glm"}}),
-        );
-        stage(
-            &home.events_jsonl(),
-            serde_json::json!({"ts": ts, "type": WATCH_IDLE, "source": "hook",
-                "data": {"session_id": "s-daemon", "node": "x-2", "blocker": "ci"}}),
-        );
-        let evidence = read_evidence(&home, now + 1000).unwrap();
+        stage(&home.events_jsonl(), watch("s-daemon"));
+        let stop = |name: &str, minutes: i64| {
+            serde_json::json!({"ts": at(minutes), "type": "agent_stopped",
+                "source": "daemon", "data": {"name": name}})
+        };
+        stage(&home.events_jsonl(), stop("t-x-1-glm", 10));
+        stage(&home.events_jsonl(), stop("t-x-2-glm", 10));
+
+        let evidence = read_evidence(&home, now.timestamp_millis() + 1000).unwrap();
         let stopped: Vec<_> = evidence
             .iter()
             .filter(|e| e.kind == "agent_stopped")
-            .filter_map(|e| e.data.get("name").and_then(Value::as_str))
+            .map(|e| {
+                (
+                    e.data.get("name").and_then(Value::as_str).unwrap(),
+                    e.session_id.as_deref(),
+                )
+            })
             .collect();
-        assert_eq!(stopped, vec!["t-x-1-glm"]);
-        let watched: Vec<_> = evidence
-            .iter()
-            .filter(|e| e.kind == WATCH_IDLE)
-            .filter_map(|e| e.session_id.as_deref())
-            .collect();
-        assert_eq!(watched, vec!["s-global"]);
+        assert_eq!(
+            stopped,
+            vec![("t-x-1-glm", Some("s-stopped")), ("t-x-2-glm", None)]
+        );
+        let found = watches(&evidence);
+        assert_eq!(
+            found
+                .iter()
+                .map(|w| w.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["s-stopped"],
+            "a watch is the hook's to arm, never the daemon journal's"
+        );
+        assert!(!is_current_watch(&found[0], &evidence));
         let seqs: Vec<i64> = evidence.iter().map(|e| e.seq).collect();
         assert_eq!(seqs, (0..evidence.len() as i64).collect::<Vec<_>>());
     }
