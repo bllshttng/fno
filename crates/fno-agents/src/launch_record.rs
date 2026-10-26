@@ -523,7 +523,7 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
                 .unwrap_or_else(|| here.clone());
             Some(Launch {
                 harness: flag_value(rest, &["-H", "--harness"]).unwrap_or_else(|| "claude".into()),
-                resume: resume_target(args),
+                resume: None,
                 name: flag_value(rest, &["--name"]),
                 node: flag_value(rest, &["--node"]).or_else(|| seed_node(pos.first())),
                 slot: None,
