@@ -18,7 +18,7 @@ mod surface;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 
 use super::{bounded_command, echo_stderr};
 
