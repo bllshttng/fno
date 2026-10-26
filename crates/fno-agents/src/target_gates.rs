@@ -53,13 +53,6 @@ const REVIEW_GATE_REFUSED: i32 = 9;
 /// The exit the Python refusals used internally before the command restamped.
 const REFUSED: i32 = 2;
 
-fn env_input(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
 pub(crate) fn resolve_repo_root() -> PathBuf {
     if let Ok(root) = std::env::var("FNO_REPO_ROOT") {
         if !root.trim().is_empty() {
@@ -470,8 +463,14 @@ fn resolve_dispatch_node(
 
 fn check_contained_run(args: &[String]) -> i32 {
     let _ = args;
-    let input = env_input("TARGET_INPUT");
-    let plan = env_input("TARGET_PLAN_PATH");
+    let input = std::env::var("TARGET_INPUT")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let plan = std::env::var("TARGET_PLAN_PATH")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
     let entries = match graph_entries() {
         Ok(rows) => rows,
         Err(error) => {
@@ -563,8 +562,14 @@ fn redirect_if_contained(node: &serde_json::Value) -> i32 {
 
 fn check_dispatch_hold_run(args: &[String]) -> i32 {
     let _ = args;
-    let input = env_input("TARGET_INPUT");
-    let plan = env_input("TARGET_PLAN_PATH");
+    let input = std::env::var("TARGET_INPUT")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    let plan = std::env::var("TARGET_PLAN_PATH")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
     let entries = match graph_entries() {
         Ok(rows) => rows,
         Err(_) => {
