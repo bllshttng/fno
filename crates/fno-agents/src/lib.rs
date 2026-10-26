@@ -525,6 +525,7 @@ pub mod session_cost;
 pub mod session_join;
 pub mod session_names_fold;
 pub(crate) mod session_origin;
+pub(crate) mod session_receipt;
 pub mod session_report;
 pub mod session_start_bytes;
 pub mod session_truth;

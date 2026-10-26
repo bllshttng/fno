@@ -283,6 +283,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_UX_SHOTS` | rs | unclear: crates/fno/src/frame_html.rs:356 |
 | `FNO_VERBOSE` | rs | Set to 1 to print non-fatal notes that are quiet by default: the registry provenance heal and the loop-runtime global mirror failure. |
 | `FNO_VERIFY_GIT_BIN` | rs | unclear: crates/fno-agents/src/verify_evidence.rs:906 |
+| `FNO_WHOAMI_SEAM_CHILD` | rs | Set by the front door on the child it runs for `fno whoami`, so the child takes the plain Python forward instead of the receipt seam (crates/fno/src/whoami_seam.rs). |
 | `FNO_WORKER_ADD_DIRS` | rs | unclear: crates/fno-agents/src/claude_ask.rs:687 |
 | `FNO_WORKER_NAME` | py+rs | The spawned worker's name: the dispatcher pins it (py), the task-grain claim metadata reads it back (crates/fno-agents/src/backlog/task.rs). |
 | `FNO_WORKTREE_POLICY` | py+rs | Overrides the resolved worktree policy from env, above every config layer; the dispatcher sets it to never for a spawn into an undeclared repo. |
