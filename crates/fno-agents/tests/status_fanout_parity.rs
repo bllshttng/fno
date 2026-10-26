@@ -19,8 +19,8 @@ mod common;
 
 use common::{assert_golden, env_mutex, Golden};
 use fno_agents::status_fanout::{
-    python_json_compact_ascii, run_tick, DispatchFn, FanoutTuning, HttpPost, HttpResult, SinkConfig,
-    StreamFn, TickResult,
+    python_json_compact_ascii, run_tick, DispatchFn, FanoutTuning, HttpPost, HttpResult,
+    SinkConfig, StreamFn, TickResult,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -316,10 +316,7 @@ fn run_tick_case(sb: &Sandbox, label: &str, rows: &[Value], sinks: &[SinkConfig]
 
 /// A dispatch script entry for one sink.
 fn script_of(name: &str, status: &str, detail: &str) -> BTreeMap<String, (String, String)> {
-    BTreeMap::from([(
-        name.to_string(),
-        (status.to_string(), detail.to_string()),
-    )])
+    BTreeMap::from([(name.to_string(), (status.to_string(), detail.to_string()))])
 }
 
 #[test]
@@ -351,7 +348,13 @@ fn fanout_cases_match_the_captured_goldens() {
         sink_cfg(name, etypes, "json-webhook", Some(url), None, json!({}))
     };
 
-    run_tick_case(&sb, "fresh sink starts at eof", &e, &[hook("s1", &["task_done"])], CaseOpts::default());
+    run_tick_case(
+        &sb,
+        "fresh sink starts at eof",
+        &e,
+        &[hook("s1", &["task_done"])],
+        CaseOpts::default(),
+    );
     run_tick_case(
         &sb,
         "resumed cursor delivers newer",
@@ -426,7 +429,14 @@ fn fanout_cases_match_the_captured_goldens() {
         &sb,
         "undeliverable sink skips read",
         &e,
-        &[sink_cfg("s1", &["task_done"], "json-webhook", None, Some("NOPE_ENV"), json!({}))],
+        &[sink_cfg(
+            "s1",
+            &["task_done"],
+            "json-webhook",
+            None,
+            Some("NOPE_ENV"),
+            json!({}),
+        )],
         CaseOpts::default(),
     );
     run_tick_case(
@@ -454,7 +464,11 @@ fn fanout_cases_match_the_captured_goldens() {
         "disabled sink is a noop",
         &e,
         &[sink_cfg(
-            "s1", &["task_done"], "json-webhook", Some(url), None,
+            "s1",
+            &["task_done"],
+            "json-webhook",
+            Some(url),
+            None,
             json!({"enabled": false}),
         )],
         CaseOpts::default(),
@@ -476,11 +490,7 @@ fn fanout_cases_match_the_captured_goldens() {
         &e,
         &[hook("s1", &["task_done"])],
         CaseOpts {
-            stream: Some((
-                e.iter().take(3).cloned().collect(),
-                1,
-                Some(41),
-            )),
+            stream: Some((e.iter().take(3).cloned().collect(), 1, Some(41))),
             ..Default::default()
         },
     );
@@ -489,7 +499,11 @@ fn fanout_cases_match_the_captured_goldens() {
         "match key filters events",
         &e,
         &[sink_cfg(
-            "s1", &["task_done"], "json-webhook", Some(url), None,
+            "s1",
+            &["task_done"],
+            "json-webhook",
+            Some(url),
+            None,
             json!({"match": {"outcome": "ok"}}),
         )],
         CaseOpts::default(),
@@ -507,7 +521,10 @@ fn fanout_cases_match_the_captured_goldens() {
             script: script_of("s2", "short_circuit", ""),
             ..Default::default()
         },
-    );#[test]
+    );
+}
+
+#[test]
 fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
     let sb = Sandbox::new("adapters");
     let ev = jline(

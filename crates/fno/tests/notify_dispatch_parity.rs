@@ -7,7 +7,7 @@
 //! parity-stage: characterization
 //! parity-oracle: cli/src/fno/notify/_impl.py
 //!
-//! Capture deviation: the mission freeze barred local cargo verbs, so the
+//! Capture deviation: the mission freeze barred local cargo runs, so the
 //! goldens were captured by driving the Python leg directly (its module
 //! functions monkeypatched per case, exactly the seams
 //! `send_notification_seams` restores) instead of FNO_CAPTURE_GOLDEN=1.

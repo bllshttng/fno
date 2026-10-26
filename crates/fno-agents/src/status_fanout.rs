@@ -166,8 +166,11 @@ fn tuning_value(cwd: &Path, key: &str, default: f64, min: f64) -> Result<f64, St
     let Some(v) = config_value_deep(cwd, &["status_fanout", key]) else {
         return Ok(default);
     };
+    // toml 0.8 spells its numeric accessors as_integer/as_float; accept both
+    // TOML number spellings (an int in config stays a number).
     let raw = v
-        .as_f64()
+        .as_float()
+        .or_else(|| v.as_integer().map(|i| i as f64))
         .ok_or_else(|| format!("config.status_fanout.{key}: expected a number, got {v}"))?;
     if raw < min {
         return Err(format!("config.status_fanout.{key}: must be >= {min}"));
@@ -439,7 +442,7 @@ fn stream_pass(
         let values: Vec<Value> = rows
             .iter()
             .filter(|r| !r.history_only)
-            .filter_map(|r| serde_json::from_str(&r.line).ok())
+            .filter_map(|r| serde_json::from_str::<Value>(&r.line).ok())
             .filter(|v| {
                 v.get("ts")
                     .and_then(Value::as_str)
@@ -902,7 +905,7 @@ fn run_locked(
         if advance {
             if let Some(h) = high {
                 if lock.verify() {
-                    let _ = write_cursor(state, SCAN, &("", h));
+                    let _ = write_cursor(state, SCAN, &(String::new(), h));
                 }
             }
         }
@@ -1064,6 +1067,17 @@ fn touch_now(path: &Path) -> std::io::Result<()> {
 // HTTP delivery (shared by the two webhook adapters)
 // ---------------------------------------------------------------------------
 
+/// Scan dumped response headers for `Retry-After` (case-insensitive name,
+/// numeric seconds - the Python leg read `e.headers.get("Retry-After")`).
+fn retry_after_from_headers(text: &str) -> Option<f64> {
+    text.lines().find_map(|l| {
+        let (name, value) = l.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("retry-after")
+            .then(|| value.trim().parse::<f64>().ok())?
+    })
+}
+
 /// The real post: one `curl` child, config on stdin, body from a temp file -
 /// the same secret shape `attention_http` ships.
 pub struct CurlPost;
@@ -1080,6 +1094,7 @@ impl HttpPost for CurlPost {
         ));
         let _ = std::fs::write(&body_path, body);
         let resp_path = body_path.with_extension("resp");
+        let hdr_path = body_path.with_extension("hdr");
         let quoted = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
         let mut config = format!(
             "url = \"{}\"\nmax-time = \"{}\"\nsilent\nshow-error\n",
@@ -1091,9 +1106,10 @@ impl HttpPost for CurlPost {
             quoted(content_type)
         ));
         config.push_str(&format!(
-            "data-binary = \"@{}\"\noutput = \"{}\"\nwrite-out = \"%{{http_code}}\"\n",
+            "data-binary = \"@{}\"\noutput = \"{}\"\nwrite-out = \"%{{http_code}}\"\ndump-header = \"{}\"\n",
             quoted(&body_path.display().to_string()),
-            quoted(&resp_path.display().to_string())
+            quoted(&resp_path.display().to_string()),
+            quoted(&hdr_path.display().to_string())
         ));
         let output = std::process::Command::new("curl")
             .arg("--config")
@@ -1112,13 +1128,16 @@ impl HttpPost for CurlPost {
         let _ = std::fs::remove_file(&body_path);
         let result = output.ok().and_then(|out| {
             let code: Option<u16> = String::from_utf8_lossy(&out.stdout).trim().parse().ok();
-            let resp = std::fs::read_to_string(&resp_path).unwrap_or_default();
+            let retry_after = std::fs::read_to_string(&hdr_path)
+                .ok()
+                .and_then(|hdr| retry_after_from_headers(&hdr));
             let _ = std::fs::remove_file(&resp_path);
+            let _ = std::fs::remove_file(&hdr_path);
             if out.status.success() {
                 Some(HttpResult {
                     ok: (200..300).contains(&code.unwrap_or(0)),
                     status: code,
-                    retry_after: None,
+                    retry_after,
                 })
             } else {
                 None
