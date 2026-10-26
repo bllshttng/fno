@@ -151,7 +151,7 @@ pub(crate) fn verdict_from_folds(
                 .and_then(Value::as_str)
                 .unwrap_or("");
             match crate::pr_push::rest_bucket(newest) {
-                "pass" => {}
+                "pass" | "skipping" => {}
                 "fail" | "cancel" => red = true,
                 _ => pending = true,
             }
@@ -400,5 +400,16 @@ mod tests {
         let (verdict, green, _) = verdict_from_runs(&runs);
         assert_eq!(verdict, "pending");
         assert!(!green);
+    }
+
+    #[test]
+    fn a_skipped_workflow_reads_neutral_not_pending() {
+        let runs = vec![
+            run_row("ci", "completed", "success", "2026-10-25T00:00:00Z"),
+            run_row("release", "completed", "skipped", "2026-10-25T00:00:00Z"),
+        ];
+        let (verdict, green, _) = verdict_from_runs(&runs);
+        assert_eq!(verdict, "green");
+        assert!(green);
     }
 }
