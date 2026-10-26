@@ -1056,6 +1056,15 @@ struct Tail {
 fn tail_events(path: &Path, max_bytes: u64, max_lines: usize) -> Tail {
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
+        // The old leg stayed silent about an absent journal; only an
+        // unreadable present file warns.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Tail {
+                events: Vec::new(),
+                failed: false,
+                error: String::new(),
+            }
+        }
         Err(e) => {
             return Tail {
                 events: Vec::new(),
