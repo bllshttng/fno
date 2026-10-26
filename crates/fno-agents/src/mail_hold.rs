@@ -38,8 +38,12 @@ pub(crate) const GRACE_S: i64 = 120;
 /// whichever comes first with the Stop grace (C3). Overridable through
 /// `mail.hold.answer_minutes` in the global config, or
 /// `$FNO_AGENTS_ANSWER_MINUTES`. A value below 1 minute coerces to this
-/// default.
+/// default; one above a day clamps to a day, so a typo can never arm a
+/// hold the reader cannot outlive.
 pub(crate) const DEFAULT_ANSWER_MINUTES: i64 = 10;
+
+/// The clamp ceiling for the answer minutes: one day.
+const MAX_ANSWER_MINUTES: i64 = 24 * 60;
 
 /// The answering-phase backstop (C2), in seconds: the answering clock is
 /// written this far out, so a crash or an interrupt (Esc fires no Stop)
@@ -51,7 +55,7 @@ pub(crate) fn answer_backstop_s() -> i64 {
 /// The minutes behind [`answer_backstop_s`]: `$FNO_AGENTS_ANSWER_MINUTES`
 /// wins, then the global config's `mail.hold.answer_minutes`, then the
 /// default. An unparseable or non-positive value falls through like an
-/// absence.
+/// absence, and the result clamps to [`MAX_ANSWER_MINUTES`].
 fn answer_minutes() -> i64 {
     let env = std::env::var("FNO_AGENTS_ANSWER_MINUTES")
         .ok()
@@ -63,6 +67,7 @@ fn answer_minutes() -> i64 {
     configured
         .filter(|minutes| *minutes > 0)
         .unwrap_or(DEFAULT_ANSWER_MINUTES)
+        .min(MAX_ANSWER_MINUTES)
 }
 
 /// The `source` mark on a clock the conversation rules wrote. A manual hold

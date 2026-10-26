@@ -40,7 +40,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `EDITOR` | rs | The editor the board's full description edit runs in; `vi` when unset. |
 | `EVENTS_FILE` | rs | unclear: crates/fno-agents/src/verify_evidence.rs:932 |
 | `FNO_A2A_NO_CONFIRM` | py | unclear: cli/src/fno/agents/dispatch.py:5376 |
-| `FNO_AGENTS_ANSWER_MINUTES` | rs | The conversation mail-hold backstop in minutes: a hold armed on the user's last real message ends this long after it, whichever comes first with the Stop grace. Unset, the global config's `mail.hold.answer_minutes` reads; unset too, the default is 10. A value below 1 coerces to the default (mail_hold.rs answer_minutes). |
+| `FNO_AGENTS_ANSWER_MINUTES` | rs | The conversation mail-hold backstop in minutes: a hold armed on the user's last real message ends this long after it, whichever comes first with the Stop grace. Unset, the global config's `mail.hold.answer_minutes` reads; unset too, the default is 10. A value below 1 coerces to the default, one above 1440 clamps to 1440 (mail_hold.rs answer_minutes). |
 | `FNO_AGENTS_BIN` | py+rs | Explicit override path to the fno-agents binary; unset, empty, or non-executable falls through to the search rather than failing. |
 | `FNO_AGENTS_DAEMON_BIN` | rs | unclear: crates/fno-agents/src/client.rs:125 |
 | `FNO_AGENTS_FAIL_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/daemon.rs:2093 |
