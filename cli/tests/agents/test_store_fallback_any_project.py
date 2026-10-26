@@ -1,15 +1,14 @@
-"""Project confinement for harness-store adoption .
+"""Harness-store healing resolves from any project.
 
-A bare handle from a foreign repo used to heal into the caller's scope and get
-woken as a side effect. Adoption is now confined to the caller's project; an
-out-of-project hit is refused. Membership is the shared ``git-common-dir`` (NOT
-``--show-toplevel``): footnote is worktree-first, so toplevel differs per
-worktree and would refuse canonical->worktree traffic, while the common-dir is
-identical across a project's whole worktree family.
+The project confinement retired 2026-10-25 (ruling d-460ea8c7) refused a hit
+whose cwd sat outside the caller's project and taught callers to retry with
+the retired --cross-project flag. The heal is machine-wide now: a full session
+id, a short id, or a name resolves from any project, and the one guard left is
+uniqueness (more than one store hit refuses with the candidate list).
 
-The bidirectional guarantee is the load-bearing test: same-project (canonical vs
-one of its worktrees) RESOLVES, and a genuinely foreign repo REFUSES. A test that
-only proved the foreign-refuse case would have shipped the worktree bug.
+These tests pin the machine-wide behavior on the in-process healer AND on the
+exec'd ``fno agents heal-token`` binary, so a future confinement cannot return
+without a test failing on both.
 """
 from __future__ import annotations
 
@@ -20,11 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.agents.store_fallback import (
-    StoreHit,
-    _same_project,
-    heal_from_harness_store,
-)
+from fno.agents.store_fallback import StoreHit, heal_from_harness_store
 
 
 def _git_repo(path: Path) -> Path:
@@ -56,21 +51,7 @@ def two_repos(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Membership: same project across a worktree; foreign differs
-# ---------------------------------------------------------------------------
-
-
-def test_bidirectional_membership_in_one_assertion(two_repos):
-    """Both directions, one test."""
-    main, worktree, foreign = two_repos
-    # Same project (canonical <-> worktree): resolves.
-    assert _same_project(str(main), str(worktree)) is True
-    # Foreign project: refuses.
-    assert _same_project(str(main), str(foreign)) is False
-
-
-# ---------------------------------------------------------------------------
-# heal_from_harness_store: confine adoption to the caller's project
+# heal_from_harness_store: a foreign-repo hit heals with no flag
 # ---------------------------------------------------------------------------
 
 
@@ -81,48 +62,21 @@ def _stub_hits(monkeypatch, hits):
     )
 
 
-def test_heal_cross_project_flag_adopts_foreign(two_repos, monkeypatch, tmp_path):
+def test_heal_adopts_a_foreign_hit_without_a_flag(two_repos, monkeypatch, tmp_path):
+    """The retired confinement refused exactly this shape behind --cross-project."""
     main, _, foreign = two_repos
     sid = "ab12cdef-0000-0000-0000-000000000001"
     _stub_hits(monkeypatch, [StoreHit("claude", sid, str(foreign))])
     entry = heal_from_harness_store(
-        "ab12cdef", scope_cwd=str(main), cross_project=True,
+        "ab12cdef",
         registry_path=tmp_path / "registry.json",
     )
     assert entry is not None
     assert entry.harness_session_id == sid
 
 
-def test_heal_unresolvable_hit_named_honestly_not_cross_project(
-    two_repos, monkeypatch, tmp_path
-):
-    """A hit whose cwd never resolved (empty) is refused, but the message must
-    NOT call it cross-project: membership was undeterminable, not foreign.
-    Calling an unresolvable hit cross-project sends the operator looking in the
-    wrong place."""
-    from fno.agents.registry import AgentResolutionError
-
-    main, _, _ = two_repos
-    sid = "ab12cdef-0000-0000-0000-000000000002"
-    # Empty cwd: a transcript that never recorded one, or a reaped worktree.
-    _stub_hits(monkeypatch, [StoreHit("claude", sid, "")])
-    with pytest.raises(AgentResolutionError) as exc:
-        heal_from_harness_store(
-            "ab12cdef", scope_cwd=str(main),
-            registry_path=tmp_path / "registry.json",
-        )
-    msg = str(exc.value).lower()
-    assert "could not be determined" in msg
-    assert "pass --cross-project" in msg
-    # The REASON must not mislabel an undeterminable hit as cross-project. (The
-    # trailing "pass cross-project" hint legitimately contains the substring, so
-    # assert against the reason phrase, not the whole message.)
-    assert "cross-project candidate" not in msg
-
-
 # ---------------------------------------------------------------------------
-# Binary: the exec'd `fno agents heal-token` refuses cross-project (prove the
-# guard on the exec'd path, not only in-process)
+# Binary: the exec'd `fno agents heal-token` resolves a foreign session
 # ---------------------------------------------------------------------------
 
 
@@ -135,8 +89,11 @@ def _seed_claude_transcript(projects_dir: Path, session_id: str, cwd: Path) -> N
     )
 
 
-def test_binary_heal_token_refuses_cross_project(two_repos, tmp_path, monkeypatch):
-    main, worktree, foreign = two_repos
+def test_binary_heal_token_resolves_a_foreign_session(two_repos, tmp_path):
+    """From the footnote scope AND the foreign repo, the same foreign-repo
+    session resolves (exit 0). The retired binary refused the first shape with
+    exit 3 and a --cross-project remedy."""
+    main, _worktree, foreign = two_repos
     sid = "ab12cdef-0000-0000-0000-000000000009"
     projects = tmp_path / "projects"
     _seed_claude_transcript(projects, sid, foreign)
@@ -168,12 +125,12 @@ def test_binary_heal_token_refuses_cross_project(two_repos, tmp_path, monkeypatc
             cwd=str(cwd), env=env, capture_output=True, text=True,
         )
 
-    # From the footnote scope: a foreign-repo session is REFUSED (exit 3).
+    # From the footnote scope: the foreign-repo session resolves (exit 0).
     out_main = _run(main)
-    assert out_main.returncode == 3, out_main.stderr + out_main.stdout
-    assert "cross-project" in (out_main.stderr + out_main.stdout).lower()
+    assert out_main.returncode == 0, out_main.stderr + out_main.stdout
+    row = json.loads(out_main.stdout.strip().splitlines()[-1])
+    assert row["harness_session_id"] == sid
 
-    # From the foreign repo itself: the same session is in-project -> resolves
-    # (exit 0), proving the guard discriminates rather than refusing everything.
+    # From the foreign repo itself: the same session resolves too.
     out_foreign = _run(foreign)
     assert out_foreign.returncode == 0, out_foreign.stderr + out_foreign.stdout
