@@ -106,13 +106,8 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     # the entries between this comment and `agents` below whose names
-    # sit in COMMAND_MOVES are one-release shims kept reachable for muscle
-    # memory; their canonical homes are the move destinations.
-    "mcp": (
-        "fno.mcp.cli:mcp_app",
-        "MCP sidecar client commands (send an envelope to a channel).",
-        {"hidden": True},
-    ),
+    # sit in COMMAND_MOVES are one-release shims in their canonical homes;
+    # their move rows stay in command_moves.py.
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
     "stub-manifest": (
@@ -143,19 +138,9 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
         {"hidden": True},
     ),
-    "think": (
-        "fno.provenance.cli:think_app",
-        "Think inspection and explicit conversational dispatch.",
-        {"hidden": True},
-    ),
     "phase": (
         "fno.phase:phase_app",
         "Phase utilities (kill-check via the fno-agents binary)",
-        {"hidden": True},
-    ),
-    "roles": (
-        "fno.roles.cli:roles_app",
-        "Inspect bounded business-role definitions and resolutions.",
         {"hidden": True},
     ),
     "config": ("fno.config_cli:app", "Configuration management"),
@@ -226,11 +211,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Deprecated done shim; use `fno backlog done` (its flag surface is now identical).",
         {"hidden": True},
     ),
-    "research": (
-        "fno.research:research_command",
-        "Retrieve + store: ddgs backbone -> self-fetch -> sources.jsonl.",
-        {"hidden": True},
-    ),
     "scoreboard": (
         "fno.scoreboard.cli:scoreboard_command",
         "Read-only telemetry: stop-cause, spend, autonomy, survival, coverage.",
@@ -272,12 +252,10 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "plan": set(),
     "pr-watch": set(),
     "resume": set(),
-    "roles": set(),
     "route": set(),
     "state": set(),
     "stub-manifest": set(),
     "target": set(),
-    "think": set(),
     "worker": set(),
     "worktree": set(),
 }

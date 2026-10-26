@@ -1260,6 +1260,7 @@ def _wrapped_happy_argv(route: dict) -> list[str]:
     return mux_spawn._mesh_env_wrapper("wk", "claude", None, inner, None, None, route)
 
 
+@pytest.mark.dev_build
 def test_happy_pane_wrapped_argv_holds_the_union_invariant(monkeypatch) -> None:
     """Every route key reaches the child, and no credential reaches ``ps``.
 
@@ -1271,15 +1272,15 @@ def test_happy_pane_wrapped_argv_holds_the_union_invariant(monkeypatch) -> None:
     secret moved to the wrapper" (correct) from "the secret was dropped"
     (a 401 in production, and silent here).
     """
-    from fno.agents.account_env import SECRET_ROUTE_VARS
     import fno.agents.mux_spawn as mux_spawn
+    from fno.agents.spawn_overlay_client import compose_credentials
 
     _happy_on_path(monkeypatch, "/opt/homebrew/bin/happy")
     wrapped = _wrapped_happy_argv(_ROUTE)
 
     env1 = _env1_assignments(wrapped)
     claude_env = _claude_env_pairs(wrapped)
-    secrets = [k for k in _ROUTE if k in SECRET_ROUTE_VARS]
+    secrets = [k for k in _ROUTE if k in compose_credentials(None, None, {})["secret"]]
     assert secrets, "fixture must carry a credential or this proves nothing"
 
     for key, value in _ROUTE.items():

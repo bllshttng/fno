@@ -31,7 +31,6 @@ lead	18	18	14	6	keep-and-fold	agents lead	The lead root folds into agents; the l
 lint	1511	1506	34	7	keep-and-fold	doctor lint	
 loops	0	0	5	2	keep-and-fold	do loops	ZERO calls, and the lowest-traffic survivor. It stays only because it is the sole WRITER of the pause-all sentinel that cli/src/fno/observer/cli.py reads through fno.paths. Re-audit it after one release.
 mail	4999	4998	347	104	keep-and-fold	agents mail	
-mcp	4	4	10	6	keep-and-fold	agents mcp	only 4 calls but the Rust daemon shells `fno mcp send` on the sidecar path.
 mux	865	865	389	218	keep-as-root	mux	
 notify	107	94	17	3	keep-and-fold	inbox notify	
 observer	6	6	8	2	keep-and-fold	doctor observer	only 6 calls but scripts/lib/eval-sweep-throttle.sh shells `fno observer sweep`.

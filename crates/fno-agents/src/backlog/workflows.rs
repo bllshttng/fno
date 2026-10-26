@@ -20,7 +20,7 @@ use super::settings;
 use super::supersession::{coverage_clause, normalize_surface};
 use crate::backlog::mutate_single_row;
 use crate::graph_store;
-use crate::graph_store::{has_own_plan_work, reopen_outranks_stamps};
+use crate::graph_store::{has_own_plan_work, reopen_holds_epic, reopen_outranks_stamps};
 
 // ---------------------------------------------------------------------------
 // argv parsing
@@ -300,6 +300,18 @@ pub(crate) fn reopen_outranks_child_closes(parent: &Value, kids: &[&Value]) -> b
     )
 }
 
+/// The epic close paths' reopen guard: only a child that joined at or before
+/// the reopen can expire it (graph_store::reopen_holds_epic).
+pub(crate) fn reopen_holds_epic_children(parent: &Value, kids: &[&Value]) -> bool {
+    reopen_holds_epic(
+        text_at(parent, "reopened_at"),
+        &kids
+            .iter()
+            .map(|k| (graph_store::joined_parent_at(k), text_at(k, "completed_at")))
+            .collect::<Vec<_>>(),
+    )
+}
+
 /// True when a deliberate reopen postdates the merge being closed on (the
 /// _reopen_outranks_merge twin). Ambiguity favours the human, both ways: an
 /// unreadable reopen protects, and so does an unreadable merge stamp.
@@ -477,7 +489,7 @@ pub(crate) fn cascade_close_parents(
             .collect();
         let kid_refs: Vec<&Value> = kids.iter().collect();
         let parent_is_done = truthy_field(&entries[idx], "completed_at");
-        let outranks = reopen_outranks_child_closes(&entries[idx], &kid_refs);
+        let outranks = reopen_holds_epic_children(&entries[idx], &kid_refs);
         let all_closed = children_all_closed(&entries[idx], &kid_refs);
         // Own plan work holds the close: the parent's own deliverables are
         // unverified, and the UNVERIFIED note that used to flag this close

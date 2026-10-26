@@ -148,11 +148,12 @@ def _codex_thread_spawn(
     ``account_env``/``route_env`` overlay the client subprocess environment.
     They reach the app-server child only when this client also lazy-starts the
     daemon (the child inherits the daemon's env); a warm daemon keeps its own.
-    The state roots that have an env carrier are pinned around the overlay
-    by ``seal_state_root``; that docstring names what still follows HOME.
+    The state roots that have an env carrier (``FNO_AGENTS_HOME``,
+    ``FNO_CLAIMS_ROOT``, ``FNO_STATE_DIR``) are pinned around a moved HOME by
+    ``accounts::credentials::seal``; the ``FNO_HOME`` sidecars still follow it.
     """
-    from fno.agents.account_env import seal_state_root
     from fno.agents.dispatch import DispatchAskError
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
     from fno import rust_binary
 
@@ -193,9 +194,20 @@ def _codex_thread_spawn(
     # This client IS a footnote process and a non-claude oauth_dir overlay is a
     # HOME override, so seal it or the client's own reads resolve under the
     # account's home and go unfindable. Env is the only channel to the
-    # app-server child, so the override stays; seal_state_root's docstring says
-    # what that leaves open.
-    env = seal_state_root(env)
+    # app-server child, so the override stays.
+    if env.get("HOME") != os.environ.get("HOME"):
+        try:
+            env = spawn_overlay_call({"kind": "state-root-seal", "env": env})["env"]
+        except SpawnOverlayUnavailable as exc:
+            # The seal rides the same binary the spawn will launch: one that
+            # cannot answer the door cannot hold the seal either, so refuse
+            # with the staleness receipt instead of the raw transport error.
+            raise DispatchAskError(
+                f"sealed spawn refused: {binary} cannot answer the state-root "
+                f"seal ({exc}); the seal cannot hold - run `fno doctor update` "
+                "to refresh the binary",
+                exit_code=13,
+            ) from exc
     if env.get("HOME") != os.environ.get("HOME") and env.get("FNO_STATE_DIR"):
         _confirm_seal_honored(binary, env)
     try:

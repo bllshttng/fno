@@ -1,9 +1,9 @@
-//! The born-with-why birth hook, ported from
-//! `cli/src/fno/provenance/spawn_think.py` for the birth branch: gate-first,
+//! The born-with-why birth hook: gate-first,
 //! strictly non-fatal, and an unforced birth NEVER auto-spawns - the worst
 //! outcome is one durable `think_offered` event plus its stderr offer line.
 //! The auto-spawn tail (day cap, dedup token, bg dispatch) is unreachable for
-//! an unforced birth and stays unported.
+//! an unforced birth; the explicit `fno do think dispatch` command owns it in
+//! `crate::think_dispatch`, over the gate, presence and transcript reads here.
 
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
@@ -72,7 +72,7 @@ fn config_flag(keys: &[&str]) -> Option<Value> {
 /// The gate: autonomy master switch, then the FNO_THINK_SPAWN env override,
 /// then config.think_spawn.enabled, then default off. Any settings-read
 /// failure degrades to disabled. Returns (armed, granting rank).
-fn think_spawn_resolve(get: &impl Fn(&str) -> Option<String>) -> (bool, &'static str) {
+pub(crate) fn think_spawn_resolve(get: &impl Fn(&str) -> Option<String>) -> (bool, &'static str) {
     think_spawn_resolve_with(get, &config_flag)
 }
 
@@ -95,7 +95,7 @@ fn think_spawn_resolve_with(
 }
 
 /// The blast-radius cap from config, fail-safe to 5.
-fn max_per_run() -> usize {
+pub(crate) fn max_per_run() -> usize {
     match config_flag(&["think_spawn", "max_per_run"]) {
         Some(Value::Number(n)) => n.as_u64().map(|v| v as usize).unwrap_or(5),
         _ => 5,
@@ -172,7 +172,7 @@ pub(crate) fn env_marks_unattended(get: &impl Fn(&str) -> Option<String>) -> boo
 /// Classify the originating session as attended or away. The override wins,
 /// then the ambient unattended marks, then the owned manifest, then an
 /// interactive claude/codex session identity, then away.
-fn classify_presence(root: &Path, get: &impl Fn(&str) -> Option<String>) -> String {
+pub(crate) fn classify_presence(root: &Path, get: &impl Fn(&str) -> Option<String>) -> String {
     if let Some(override_value) = get(ENV_PRESENCE) {
         let v = override_value.trim().to_lowercase();
         if v == "attended" || v == "away" {
@@ -205,7 +205,8 @@ fn classify_presence(root: &Path, get: &impl Fn(&str) -> Option<String>) -> Stri
 /// The claude transcript for a session id, searched across every project dir
 /// (EnterWorktree re-keys transcripts between cwd slugs; a stub in the other
 /// dir is common). A dotted stem is a sibling artifact, never a transcript.
-fn resolve_claude_transcript(session_id: &str) -> Option<PathBuf> {
+/// The flag is true when a short prefix matched two distinct sessions.
+fn resolve_claude_transcript(session_id: &str) -> Option<(PathBuf, bool)> {
     let root = std::env::var_os("HOME")
         .map(PathBuf::from)
         .map(|h| h.join(".claude").join("projects"))?;
@@ -230,7 +231,7 @@ fn resolve_claude_transcript(session_id: &str) -> Option<PathBuf> {
     matches.sort();
     match matches.len() {
         0 => None,
-        1 => Some(matches.remove(0)),
+        1 => Some((matches.remove(0), false)),
         _ => {
             let stems: std::collections::BTreeSet<String> = matches
                 .iter()
@@ -242,7 +243,7 @@ fn resolve_claude_transcript(session_id: &str) -> Option<PathBuf> {
                 })
                 .collect();
             if stems.len() > 1 {
-                return Some(matches.remove(0)); // ambiguous: first-sorted, contract kept
+                return Some((matches.remove(0), true)); // ambiguous: first-sorted, contract kept
             }
             // Same session copied across dirs: prefer copies that actually
             // carry conversation, newest write among those.
@@ -256,6 +257,7 @@ fn resolve_claude_transcript(session_id: &str) -> Option<PathBuf> {
             } else {
                 &with_convo
             })
+            .map(|p| (p, false))
         }
     }
 }
@@ -291,23 +293,51 @@ fn newest_mtime(paths: &[PathBuf]) -> Option<PathBuf> {
     best.map(|(_, p)| p)
 }
 
+/// One transcript resolution: the path when found, else the reason word the
+/// seed prints (`missing-input`, `not-found`, `harness-not-supported`).
+pub(crate) struct Transcript {
+    pub path: Option<PathBuf>,
+    pub reason: Option<&'static str>,
+    pub ambiguous: bool,
+}
+
 /// Resolve a provenance pointer to its on-disk transcript path. Never fails;
 /// an unresolved pointer degrades the seed to the stored triple.
+pub(crate) fn resolve_transcript_detail(harness: &str, session_id: &str, cwd: &str) -> Transcript {
+    let miss = |reason: &'static str| Transcript {
+        path: None,
+        reason: Some(reason),
+        ambiguous: false,
+    };
+    if session_id.is_empty() {
+        return miss("missing-input");
+    }
+    let found = match harness {
+        "claude" if cwd.is_empty() => return miss("missing-input"),
+        "claude" => resolve_claude_transcript(session_id),
+        "codex" => crate::codex_store::codex_rollout_path(None, session_id).map(|p| (p, false)),
+        // opencode keys its SQLite store on the session id; the probe stays
+        // out of scope here and degrades unresolved.
+        "opencode" => None,
+        _ => return miss("harness-not-supported"),
+    };
+    match found {
+        Some((path, ambiguous)) => Transcript {
+            path: Some(path),
+            reason: None,
+            ambiguous,
+        },
+        None => miss("not-found"),
+    }
+}
+
+/// [`resolve_transcript_detail`] narrowed to `(path, resolved)`.
 pub(crate) fn resolve_transcript(
     harness: &str,
     session_id: &str,
     cwd: &str,
 ) -> (Option<PathBuf>, bool) {
-    if session_id.is_empty() {
-        return (None, false);
-    }
-    let path = match harness {
-        "claude" if !cwd.is_empty() => resolve_claude_transcript(session_id),
-        "codex" => crate::codex_store::codex_rollout_path(None, session_id),
-        // opencode keys its SQLite store on the session id; the probe stays
-        // out of the birth path's scope here and degrades unresolved.
-        _ => None,
-    };
+    let path = resolve_transcript_detail(harness, session_id, cwd).path;
     let resolved = path.is_some();
     (path, resolved)
 }
@@ -334,7 +364,7 @@ fn events_path(project_root: Option<&Path>) -> PathBuf {
 }
 
 /// Best-effort event emit through the native store. Never raises.
-fn emit(kind: &str, data: Map<String, Value>, events_path: &Path) {
+pub(crate) fn emit(kind: &str, data: Map<String, Value>, events_path: &Path) {
     let emitter = crate::events::EventEmitter::new(events_path, EVENT_SOURCE);
     if let Err(e) = emitter.emit_fields(kind, data) {
         eprintln!("spawn_think: WARNING: event emit failed ({kind}): {e}");
@@ -344,7 +374,7 @@ fn emit(kind: &str, data: Map<String, Value>, events_path: &Path) {
 /// The birth-hook decision ladder for an unforced birth: gate, id, bulk
 /// intake, origin, design-warranting, blast cap, presence + seed, then the
 /// OFFER. Steps past the offer (day cap, dedup token, bg dispatch) are
-/// unreachable for an unforced birth and stay unported.
+/// unreachable for an unforced birth; `crate::think_dispatch` owns them.
 pub fn maybe_spawn_think(
     node: &Value,
     project_root: Option<&Path>,
