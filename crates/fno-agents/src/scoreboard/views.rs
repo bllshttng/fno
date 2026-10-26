@@ -90,13 +90,6 @@ fn in_window(
     matches!(parse_ts(ts_raw), Some(dt) if cutoff <= dt && dt <= now)
 }
 
-/// The delivery classification a fold needs: `by_node` plus the survival
-/// payload, classified once per command run.
-pub(crate) struct Classified {
-    pub by_node: Value,
-    pub survival: Value,
-}
-
 pub(crate) fn classify_deliveries(
     graph_nodes: &[Value],
     rows: &[Value],
