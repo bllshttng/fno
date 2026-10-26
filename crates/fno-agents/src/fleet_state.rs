@@ -465,6 +465,14 @@ fn parse_args(args: &[String]) -> Result<(String, Params), String> {
                 i += 2;
             }
             other => {
+                // An unknown --flag is a usage refusal, never a positional:
+                // a typoed flag silently read as a node id would answer an
+                // empty walk instead of naming the mistake.
+                if other.starts_with("--") {
+                    return Err(format!(
+                        "unknown fleet-state flag {other:?}; flags: --path, --candidates, --refused, --silent, --now, --node, --link, --handles"
+                    ));
+                }
                 positional.push(other.to_string());
                 i += 1;
             }
@@ -733,5 +741,24 @@ mod tests {
             text,
             "{\n  \"candidates\": 3,\n  \"chains\": {},\n  \"refused\": 1,\n  \"silent\": 2,\n  \"ts\": 1700000000.0\n}\n"
         );
+    }
+
+    #[test]
+    fn an_unknown_flag_refuses_instead_of_becoming_a_node_id() {
+        let err = parse_args(&["links".to_string(), "--json".to_string()])
+            .err()
+            .expect("unknown flag refuses");
+        assert!(err.contains("--json"), "{err}");
+        // A known flag still parses.
+        let (op, params) = parse_args(&[
+            "links".to_string(),
+            "n-1".to_string(),
+            "--now".to_string(),
+            "5".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(op, "links");
+        assert_eq!(params.get("node").and_then(Value::as_str), Some("n-1"));
+        assert_eq!(params.get("now").and_then(Value::as_f64), Some(5.0));
     }
 }
