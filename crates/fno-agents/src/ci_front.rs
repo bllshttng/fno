@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 /// One spelling's row: (spelling, usage tail), the pr_front help shape.
 const HELP_ROWS: &[(&str, &str)] = &[(
     "status <sha|main|pr> [--watch] [--interval 60] [--timeout 15m]",
-    "One CI verdict at one commit: a hex sha, `main` (its head sha), or a PR number (its head sha; all-digits reads as a PR number). Prints a JSON line {target, kind, sha, verdict, settled, green, checks} with one checks row per workflow {name, status, conclusion, created_at}. Per workflow the newest run decides while it is in flight (pending); the newest completed run decides once it lands: fail or cancel reads red, success reads green; no rows at that sha reads pending, never green. exit 0 green, 1 red, 2 pending (with --watch: still unsettled at --timeout), 3 unresolvable target, 4 read failed. --watch re-reads every --interval seconds until settled or the bound, one stderr line per poll; it never cancels runs (do pr wait owns that).",
+    "One CI verdict at one commit: a hex sha, `main` (its head sha), or a PR number (its head sha; all-digits reads as a PR number). Prints a JSON line {target, kind, sha, verdict, settled, green, checks} with one checks row per workflow {name, status, conclusion, created_at}, newest 100 runs at that sha. Per workflow the newest run decides while it is in flight (pending); the newest completed run decides once it lands: fail or cancel reads red, success reads green; no rows at that sha reads pending, never green. exit 0 green, 1 red, 2 pending (with --watch: still unsettled at --timeout), 3 unresolvable target, 4 read failed. --watch re-reads every --interval seconds until settled or the bound, one stderr line per poll; it never cancels runs (do pr wait owns that).",
 )];
 
 fn print_help() {
@@ -52,17 +52,33 @@ pub(crate) fn classify_target(raw: &str) -> Option<Target> {
     hexish.then(|| Target::Sha(raw.to_ascii_lowercase()))
 }
 
-/// `--name value` / `--name=value` off the tail, the pr_front helper shape.
-fn option_value(tail: &[String], name: &str) -> Option<String> {
-    for (index, arg) in tail.iter().enumerate() {
-        if arg == name {
-            return tail.get(index + 1).cloned();
+/// `--name value` / `--name=value` off the tail, shared with pr_front.
+use crate::pr_front::option_value;
+
+/// The one positional target word, skipping each value-taking flag's value,
+/// plus a positional count: `status --interval 30 main` must read `main`,
+/// never the flag's own `30`, and a second positional is a usage error.
+fn positional_target(tail: &[String]) -> Option<(String, usize)> {
+    let mut index = 0;
+    let mut found: Option<String> = None;
+    let mut count = 0usize;
+    while index < tail.len() {
+        let arg = &tail[index];
+        if arg == "--interval" || arg == "--timeout" {
+            index += 2;
+            continue;
         }
-        if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
-            return Some(value.to_string());
+        if arg.starts_with("--") {
+            index += 1;
+            continue;
         }
+        count += 1;
+        if found.is_none() {
+            found = Some(arg.clone());
+        }
+        index += 1;
     }
-    None
+    found.map(|word| (word, count))
 }
 
 /// Resolve the target to its commit sha and the target kind the payload
@@ -205,11 +221,15 @@ pub fn run(args: &[String]) -> i32 {
             return 0;
         }
     }
-    let Some(target_word) = tail.iter().find(|arg| !arg.starts_with("--")) else {
+    let Some((target_word, positional_count)) = positional_target(tail) else {
         eprintln!("fno do ci status: a target is required: <sha|main|pr>");
         return 3;
     };
-    let Some(target) = classify_target(target_word) else {
+    if positional_count > 1 {
+        eprintln!("fno do ci status: one target only, got {positional_count} positionals");
+        return 3;
+    }
+    let Some(target) = classify_target(&target_word) else {
         eprintln!(
             "fno do ci status: cannot read {target_word:?} as a target: \
              all-digits is a PR number, `main` is the branch, else 7..=40 hex \
@@ -239,7 +259,6 @@ pub fn run(args: &[String]) -> i32 {
             return 4;
         }
     };
-    let target_word = target_word.to_string();
 
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let mut poll = 0u64;
@@ -305,6 +324,10 @@ mod tests {
         })
     }
 
+    fn vec_of(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
     #[test]
     fn target_words_classify_by_the_documented_rule() {
         assert_eq!(classify_target("main"), Some(Target::Main));
@@ -324,6 +347,29 @@ mod tests {
         assert_eq!(classify_target(""), None);
         assert_eq!(classify_target("mainx"), None);
         assert_eq!(classify_target("dead beef"), None);
+    }
+
+    #[test]
+    fn a_flag_value_never_reads_as_the_target() {
+        // `status --interval 30 main`: the 30 belongs to the flag; the
+        // positional walk must land on `main` and count one positional.
+        assert_eq!(
+            positional_target(&vec_of(&["--interval", "30", "main"])),
+            Some(("main".to_string(), 1))
+        );
+        assert_eq!(
+            positional_target(&vec_of(&["main", "--timeout", "5m"])),
+            Some(("main".to_string(), 1))
+        );
+        assert_eq!(
+            positional_target(&vec_of(&["--interval=30", "deadbeef123"])),
+            Some(("deadbeef123".to_string(), 1))
+        );
+        assert_eq!(
+            positional_target(&vec_of(&["41", "42"])).map(|(_, n)| n),
+            Some(2)
+        );
+        assert_eq!(positional_target(&vec_of(&["--watch"])), None);
     }
 
     #[test]
