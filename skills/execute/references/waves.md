@@ -274,7 +274,7 @@ Use Task tool to spawn fresh executors for each task. The executor loads `fno:te
 #   1. Explicit `executor:` on the task block (highest)
 #   2. Explicit `executor:` on the plan frontmatter
 #   3. Surface inference from the task's file list
-#      (fno.executor._surface)
+#      (fno-agents executor-route surface)
 #   4. 'do' (default)
 TASK_EXECUTOR=$(TASK_EXEC="$task_executor_field" \
                 PLAN_EXEC="$plan_executor_field" \

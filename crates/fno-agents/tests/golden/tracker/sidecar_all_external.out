@@ -1,0 +1,18 @@
+{
+  "sidecars": {
+    "EXT-1": {
+      "additional_prs": [],
+      "cost_sessions": [],
+      "cwd": "/one",
+      "id": "EXT-1",
+      "sessions": []
+    },
+    "EXT-2": {
+      "additional_prs": [],
+      "cost_sessions": [],
+      "id": "EXT-2",
+      "pr_number": 7,
+      "sessions": []
+    }
+  }
+}
