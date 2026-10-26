@@ -16,6 +16,29 @@ pub mod registry_worker;
 pub mod status;
 pub mod stranded;
 
+/// The bin client's one dispatch site for the family: every op name answers
+/// here so client.rs carries a single arm, not one per op (the 5,000-line
+/// file budget). Covers the ported ops plus the pre-existing reapable gate,
+/// whose arm moved out of client.rs with this dispatcher.
+pub fn client_dispatch(args: &[String]) -> Option<i32> {
+    let op = args.first().map(String::as_str)?;
+    let rest = &args[1..];
+    let code = match op {
+        "worktree-policy" => policy::run_client(rest),
+        "worktree-ensure" => ensure::run_client(rest),
+        "worktree-status" => status::run_client(rest),
+        "worktree-list" => status::run_list_client(rest),
+        "worktree-stranded" => stranded::run_client(rest),
+        "worktree-resolve-node" => stranded::resolve_node_client(rest),
+        "worktree-overlap-record" => overlaps::record_client(rest),
+        "worktree-overlaps" => overlaps::report_client(rest),
+        "workspace-register-worker" => registry_worker::run_client(rest),
+        "worktree-reapable" => crate::worktree_reapable::run_client(rest),
+        _ => return None,
+    };
+    Some(code)
+}
+
 use std::path::{Path, PathBuf};
 
 /// The live-status vocabulary a registry row must carry for a session to own

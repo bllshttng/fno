@@ -5,7 +5,7 @@
 //! refuses here because the Python mounts died with the family port.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// One resolved launch: the sibling binary's argv, or the lifecycle script.
 pub enum Launch {
