@@ -574,6 +574,9 @@ fn render_receipt(reading: Value) -> i32 {
         let reason = reading
             .get("skip_reason")
             .and_then(|reason| reason.as_str())
+            // The Python leg's `or` folded an empty string to the default
+            // alongside null/absent; the fold is part of the contract.
+            .filter(|reason| !reason.is_empty())
             .unwrap_or("no_missions");
         if reason == "no_missions" {
             println!("active-backlog: no territories to drain");

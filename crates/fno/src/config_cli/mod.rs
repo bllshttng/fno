@@ -57,14 +57,16 @@ pub fn classify(args: &[OsString]) -> Option<Door> {
             let _ = rest;
             Some(Door::Get(args[2..].to_vec()))
         }
-        ["config", "history", rest @ ..] => Some(Door::History(rest.iter().map(|w| OsString::from(*w)).collect())),
+        ["config", "history", rest @ ..] => Some(Door::History(
+            rest.iter().map(|w| OsString::from(*w)).collect(),
+        )),
         ["config", "build-dir"] => Some(Door::BuildDir),
-        ["config", "assert-subagent-budget", rest @ ..] => {
-            Some(Door::Budget(rest.iter().map(|w| OsString::from(*w)).collect()))
-        }
-        ["config", "status-sinks", rest @ ..] => {
-            Some(Door::StatusSinks(rest.iter().map(|w| OsString::from(*w)).collect()))
-        }
+        ["config", "assert-subagent-budget", rest @ ..] => Some(Door::Budget(
+            rest.iter().map(|w| OsString::from(*w)).collect(),
+        )),
+        ["config", "status-sinks", rest @ ..] => Some(Door::StatusSinks(
+            rest.iter().map(|w| OsString::from(*w)).collect(),
+        )),
         ["config", "active-backlog"] => Some(Door::ActiveBacklog),
         ["config", "plugin", "install", tail @ ..] => {
             // The codex arm stays on the Python converge engine (ship-phase
@@ -183,8 +185,10 @@ pub fn resolve_path(path: &Path) -> PathBuf {
                 return out;
             }
             Err(_) => {
-                let name = cursor.file_name()?.to_owned();
-                parts.push(PathBuf::from(name));
+                let Some(name) = cursor.file_name() else {
+                    return path.to_path_buf();
+                };
+                parts.push(name.to_owned());
                 if !cursor.pop() {
                     return path.to_path_buf();
                 }
@@ -222,7 +226,9 @@ pub fn settings_yaml_locations(repo_root: &Path) -> Vec<PathBuf> {
 }
 
 fn pinned() -> bool {
-    std::env::var("FNO_CONFIG").map(|p| !p.is_empty()).unwrap_or(false)
+    std::env::var("FNO_CONFIG")
+        .map(|p| !p.is_empty())
+        .unwrap_or(false)
 }
 
 fn pinned_path() -> PathBuf {
@@ -234,7 +240,9 @@ fn pinned_path() -> PathBuf {
 pub fn chain_at(repo_root: &Path) -> Vec<PathBuf> {
     let mut candidates = vec![repo_root.join(".fno").join("settings.yaml")];
     if std::env::var("FNO_NO_CANONICAL_CONFIG") != Ok("1".to_string()) {
-        let canonical = canonical_repo_root(repo_root).join(".fno").join("settings.yaml");
+        let canonical = canonical_repo_root(repo_root)
+            .join(".fno")
+            .join("settings.yaml");
         if !candidates.contains(&canonical) {
             candidates.push(canonical);
         }
@@ -414,7 +422,11 @@ fn alias_am_grant(scope: &mut Value) -> bool {
     if am.contains_key("grant") {
         return false;
     }
-    let grant = if legacy == Value::Bool(true) { "dispatch" } else { "none" };
+    let grant = if legacy == Value::Bool(true) {
+        "dispatch"
+    } else {
+        "none"
+    };
     am.insert("grant".to_string(), Value::String(grant.to_string()));
     map.insert("auto_merge".to_string(), Value::Object(am));
     true
@@ -468,7 +480,7 @@ pub fn alias_legacy_keys(raw: &mut Value) {
                 .cloned()
                 .unwrap_or_default();
             let mut lifted = false;
-            for field in ("id", "vision") {
+            for field in ["id", "vision"] {
                 let top_value = top_project.get(field).filter(|v| !v.is_null());
                 let cfg_absent = cfg_project.get(field).map(|v| v.is_null()).unwrap_or(true);
                 if let (Some(value), true) = (top_value, cfg_absent) {
@@ -686,11 +698,11 @@ pub fn raw_get(raw: &Value, dotted: &str) -> Option<&Value> {
 
 /// Dotted lookup with the loader's prefix tolerance: `config.` is optional.
 pub fn raw_get_variant(raw: &Value, key: &str) -> Option<Value> {
-    let variants: Vec<&str> = match key.strip_prefix("config.") {
-        Some(stripped) => vec![key, stripped],
-        None => vec![key, &format!("config.{key}")],
+    let variants: Vec<String> = match key.strip_prefix("config.") {
+        Some(stripped) => vec![key.to_string(), stripped.to_string()],
+        None => vec![key.to_string(), format!("config.{key}")],
     };
-    for variant in variants {
+    for variant in &variants {
         if let Some(got) = raw_get(raw, variant) {
             return Some(got.clone());
         }
@@ -716,11 +728,26 @@ mod tests {
     #[test]
     fn classify_claims_read_doors_and_forwards_writer_and_codex() {
         let os = |words: &[&str]| -> Vec<OsString> { words.iter().map(OsString::from).collect() };
-        assert!(matches!(classify(&os(&["config", "get", "review.max_rounds"])), Some(Door::Get(_))));
-        assert!(matches!(classify(&os(&["config", "history"])), Some(Door::History(_))));
-        assert!(matches!(classify(&os(&["config", "build-dir"])), Some(Door::BuildDir)));
-        assert!(matches!(classify(&os(&["config", "status-sinks", "--json"])), Some(Door::StatusSinks(_))));
-        assert!(matches!(classify(&os(&["config", "active-backlog"])), Some(Door::ActiveBacklog)));
+        assert!(matches!(
+            classify(&os(&["config", "get", "review.max_rounds"])),
+            Some(Door::Get(_))
+        ));
+        assert!(matches!(
+            classify(&os(&["config", "history"])),
+            Some(Door::History(_))
+        ));
+        assert!(matches!(
+            classify(&os(&["config", "build-dir"])),
+            Some(Door::BuildDir)
+        ));
+        assert!(matches!(
+            classify(&os(&["config", "status-sinks", "--json"])),
+            Some(Door::StatusSinks(_))
+        ));
+        assert!(matches!(
+            classify(&os(&["config", "active-backlog"])),
+            Some(Door::ActiveBacklog)
+        ));
         assert!(matches!(
             classify(&os(&["config", "plugin", "install", "claude", "--dev"])),
             Some(Door::PluginInstall(_))
@@ -730,7 +757,10 @@ mod tests {
         assert_eq!(classify(&os(&["config", "unset", "a.b"])), None);
         assert_eq!(classify(&os(&["config", "doctor", "--post-merge"])), None);
         // The codex arm stays on the Python converge engine.
-        assert_eq!(classify(&os(&["config", "plugin", "install", "codex"])), None);
+        assert_eq!(
+            classify(&os(&["config", "plugin", "install", "codex"])),
+            None
+        );
         // The bare group and unknown leaves forward.
         assert_eq!(classify(&os(&["config"])), None);
         assert_eq!(classify(&os(&["config", "no-such-leaf"])), None);
@@ -738,8 +768,11 @@ mod tests {
 
     #[test]
     fn deep_merge_matches_the_python_semantics() {
-        let mut base: Value = serde_json::from_str(r#"{"a": {"x": 1, "y": 2}, "list": [1]}"#).unwrap();
-        let over: Value = serde_json::from_str(r#"{"a": {"y": 3, "z": null}, "list": [2], "null_block": null}"#).unwrap();
+        let mut base: Value =
+            serde_json::from_str(r#"{"a": {"x": 1, "y": 2}, "list": [1]}"#).unwrap();
+        let over: Value =
+            serde_json::from_str(r#"{"a": {"y": 3, "z": null}, "list": [2], "null_block": null}"#)
+                .unwrap();
         deep_merge(&mut base, &over);
         assert_eq!(base["a"]["x"], serde_json::json!(1));
         assert_eq!(base["a"]["y"], serde_json::json!(3));
