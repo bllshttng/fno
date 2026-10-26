@@ -1,7 +1,7 @@
 //! Parity for the deleted Python leg `cli/src/fno/wake/signal.py`'s one
 //! surviving read (`read_signals`), ported to
 //! `fno_agents::wake_read::read_signals`. The goldens carry the Python
-//! `json.dumps` output verbatim, `_path` scrubbed to `<ROOT>`/`<SLUG>`.
+//! `json.dumps` output byte for byte, `_path` scrubbed to `<ROOT>`/`<SLUG>`.
 //!
 //! parity-stage: characterization
 //! parity-oracle: cli/src/fno/wake/signal.py

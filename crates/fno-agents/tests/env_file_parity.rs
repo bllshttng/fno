@@ -6,7 +6,7 @@
 //! parity-stage: characterization
 //! parity-oracle: cli/src/fno/env_file.py
 //!
-//! Capture deviation: the mission freeze barred local cargo verbs, so the
+//! Capture deviation: the mission freeze barred local cargo runs, so the
 //! goldens were captured by driving the Python leg directly with a script
 //! instead of the harness's FNO_CAPTURE_GOLDEN=1 path. The oracle file is
 //! gone, so capture mode now refuses, by design - these bytes are final.

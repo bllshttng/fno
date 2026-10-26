@@ -3,7 +3,7 @@
 //! events once to the project journal and never know sinks exist; one tick
 //! sweeps the committed rows and routes each to its configured sinks.
 //!
-//! The correctness spine survives the port verbatim (see the parity test
+//! The correctness spine survives the port byte for byte (see the parity test
 //! header for the goldens): a per-sink RFC3339 cursor beside the journal (a
 //! byte offset dies at rotation), one shared pass from `min(cursors)`,
 //! at-least-once delivery (a cursor advances only past a completed dispatch),

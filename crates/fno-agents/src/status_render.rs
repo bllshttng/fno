@@ -1,4 +1,4 @@
-//! The `fno-agents status` render cluster, moved verbatim out of `bin/
+//! The `fno-agents status` render cluster, moved byte for byte out of `bin/
 //! client.rs` (the file sat at 4,995 of the 5,000-line budget; the family
 //! doors were about to land there). The arms readout, the attention set, the
 //! degraded payload, and the human render; `run_status` in client.rs calls
