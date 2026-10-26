@@ -11,7 +11,7 @@ The plugin installs from the filtered stage of your checkout: git-tracked files 
 fno config plugin install codex
 ```
 
-The release channel installs `fno@fno` from the `stable` branch of `bllshttng/fno`. `fno.sh` wires it after a verified install, through `fno config setup auto-wire`. That step runs `fno-agents plugin-install codex --release`, which leaves a fresh install on either channel alone and converges anything else onto release. When the channel marker reads `release`, the dev install refuses with exit 3 and names the channel. Pass `--dev` to switch to your local checkout. To repair a release install, run `fno config setup run --only harness-wiring`.
+The release channel installs `fno@fno` from the `stable` branch of `bllshttng/fno`. `fno.sh` wires it after a verified install, through `fno config setup auto-wire`. That step runs `fno-agents plugin-install codex --release`, which leaves a fresh install and any dev-channel install alone and converges anything else onto release. When the channel marker reads `release`, the dev install refuses with exit 3 and names the channel. Pass `--dev` to switch to your local checkout. To repair a release install, run `fno config setup run --only harness-wiring`.
 
 Codex caches plugins by version, so local edits at the same manifest version require an explicit refresh.
 `--force` removes and re-adds the copy through Codex, which deterministically rebuilds its cache.

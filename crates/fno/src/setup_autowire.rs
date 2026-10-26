@@ -221,8 +221,8 @@ pub fn parse_codex_receipt(out: &str) -> Outcome {
     }
 }
 
-/// A fresh install on either channel stays; anything else converges onto
-/// release, through a candidate proven in a throwaway CODEX_HOME.
+/// A fresh install and any dev-channel install stay; anything else converges
+/// onto release, through a candidate proven in a throwaway CODEX_HOME.
 fn codex_wire(agents: &Path, run: Run) -> Outcome {
     match run(&[
         agents_str(agents),

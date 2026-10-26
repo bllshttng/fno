@@ -1543,8 +1543,8 @@ pub fn run_status() -> i32 {
     0
 }
 
-/// `plugin-install codex --release`: setup's wiring. A fresh install, on
-/// either channel, is left alone; anything else converges onto release.
+/// `plugin-install codex --release`: setup's wiring. A fresh install and any
+/// dev-channel install are left alone; anything else converges onto release.
 /// `--json` prints `{status, note}` for the auto-wire receipt.
 pub fn run_release(json: bool) -> i32 {
     let home = codex_home();
@@ -1563,8 +1563,18 @@ pub fn run_release(json: bool) -> i32 {
             );
         }
     };
-    if inspect(runner, &home)["status"] == "fresh" {
+    let verdict = inspect(runner, &home);
+    if verdict["status"] == "fresh" {
         report("already-installed", String::new());
+        return 0;
+    }
+    // A developer's checkout install is theirs to refresh; wiring never
+    // moves it off the dev channel.
+    if verdict["channel"] == "dev" {
+        report(
+            "already-installed",
+            format!("dev channel kept; refresh with `{DEV_REMEDY}`"),
+        );
         return 0;
     }
     let req = Request {
