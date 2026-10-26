@@ -3,7 +3,7 @@
 #
 #   source "${REPO_ROOT}/scripts/lib/fno-python.sh"
 #   fno_python_init "$REPO_ROOT"      # sets FNO_PYTHON
-#   "$FNO_PYTHON" -m fno.cost._register ...
+#   "$FNO_PYTHON" -m fno.<module> ...
 #
 # Callers keep their own PYTHONPATH export: it must still happen when a partial
 # deploy dropped this file, so it cannot live here.
@@ -13,11 +13,11 @@
 # so the row is dropped silently. `--help` never reaches that import, so a smoke
 # check that only runs --help reports healthy.
 #
-# The CALLER resolves the interpreter, never the callee: `python3 -m
-# fno.cost._register` imports fno.cost (-> fno.events -> yaml) before the
-# module's __main__ runs, so a module that re-execs itself is dead code on the
-# interpreters that need it most. fno-agents finalize resolves the same venv the
-# same way; this keeps bash and Rust on one rule.
+# The CALLER resolves the interpreter, never the callee: a `python3 -m fno.<mod>`
+# run imports the package (-> fno.events -> yaml) before the module's __main__
+# runs, so a module that re-execs itself is dead code on the interpreters that
+# need it most. fno-agents finalize resolves the same venv the same way; this
+# keeps bash and Rust on one rule.
 
 # Always succeeds: falls back to `python3` so a missing venv degrades rather
 # than breaking the caller.

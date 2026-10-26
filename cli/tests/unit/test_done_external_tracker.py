@@ -21,12 +21,12 @@ runner = CliRunner()
 
 
 class DoneFakeTracker:
+    """A tracker-door fake: the door's payload shapes, close accounting, and
+    real per-id sidecar files the sidecar-set arm writes through."""
+
     name = "fake-external"
 
     def __init__(self, rows, *, fail_close_ids=()):
-        from fno.tracker.types import TrackerCandidate, TrackerState
-
-        self._T, self._S = TrackerCandidate, TrackerState
         self._rows = {r["id"]: r for r in rows}
         self._fail_close = set(fail_close_ids)
         self.close_calls: list[str] = []
@@ -34,43 +34,81 @@ class DoneFakeTracker:
         # BEFORE the irreversible close.
         self.sidecar_at_close: dict[str, dict] = {}
 
-    def read(self, id):
-        from fno.tracker.types import NodeNotFound
+    def _node(self, r):
+        return {
+            "id": r["id"], "title": r.get("title"),
+            "state": r.get("state", "open"),
+            "parent": r.get("parent"), "blocked_by": r.get("blocked_by", []),
+        }
 
+    def _sc_path(self, sid):
+        return self._sidecar_dir / f"{sid}.json"
+
+    def read(self, id):
         r = self._rows.get(id)
         if r is None:
-            raise NodeNotFound(id)
-        return self._T(
-            id=r["id"], title=r.get("title"),
-            state=self._S(r.get("state", "open")),
-            parent=r.get("parent"), blocked_by=r.get("blocked_by", []),
-        )
+            return {"not_found": True}
+        return {"node": self._node(r)}
 
     def list_open(self):
-        out = []
-        for r in self._rows.values():
-            if r.get("state", "open") == "open":
-                out.append(self._T(
-                    id=r["id"], title=r.get("title"), state=self._S.open,
-                    parent=r.get("parent"), blocked_by=r.get("blocked_by", []),
-                ))
-        return out
+        return [self._node(r) for r in self._rows.values() if r.get("state", "open") == "open"]
 
     def close(self, id):
         self.close_calls.append(id)
         if id in self._fail_close:
             raise RuntimeError("backend 503")
         self._rows[id]["state"] = "closed"
-        sc_path = self._sidecar_dir / f"{id}.json"
+        sc_path = self._sc_path(id)
         if sc_path.exists():
             self.sidecar_at_close[id] = json.loads(sc_path.read_text())
+
+    def door(self, op, payload):
+        if op == "read":
+            return self.read(payload["id"])
+        if op == "list-open":
+            return {"candidates": self.list_open()}
+        if op == "close":
+            self.close(payload["id"])
+            return {"closed": payload["id"]}
+        if op == "sidecar-get":
+            sid = payload["id"]
+            path = self._sc_path(sid)
+            body = {"id": sid}
+            if path.exists():
+                body.update(json.loads(path.read_text()))
+            return {"sidecar": body}
+        if op == "sidecar-set":
+            sid = payload["id"]
+            path = self._sc_path(sid)
+            body = {"id": sid}
+            if path.exists():
+                body.update(json.loads(path.read_text()))
+            body.update(payload["fields"])
+            path.write_text(json.dumps(body))
+            return {"saved": str(path)}
+        if op == "sidecar-all":
+            out = {}
+            for path in sorted(self._sidecar_dir.glob("*.json")):
+                out[path.stem] = json.loads(path.read_text())
+            return {"sidecars": out}
+        raise AssertionError(f"the close path never calls {op}")
 
     _sidecar_dir: Path = Path("/nonexistent")
 
 
 def _wire(monkeypatch, tmp_path, rows, sidecars, **tracker_kwargs):
     tracker = DoneFakeTracker(rows, **tracker_kwargs)
-    monkeypatch.setattr("fno.tracker.get_tracker", lambda *a, **k: tracker)
+    import fno.rust_binary as rb
+
+    real_call = rb.command_call
+
+    def _door_call(command, payload, *args, **kwargs):
+        op = payload.get("tracker") if isinstance(payload, dict) else None
+        if op:
+            return tracker.door(op, payload)
+        return real_call(command, payload, *args, **kwargs)
+
+    monkeypatch.setattr(rb, "command_call", _door_call)
     sidecar_dir = tmp_path / "sidecars"
     sidecar_dir.mkdir(exist_ok=True)
     tracker._sidecar_dir = sidecar_dir
@@ -78,10 +116,6 @@ def _wire(monkeypatch, tmp_path, rows, sidecars, **tracker_kwargs):
         payload = {"id": sid}
         payload.update(fields)
         (sidecar_dir / f"{sid}.json").write_text(json.dumps(payload))
-    import fno.tracker.sidecar as sidecar_store
-
-    monkeypatch.setattr(sidecar_store, "sidecar_path",
-                        lambda i: sidecar_dir / f"{i}.json")
     g = tmp_path / "graph.json"
     seed_graph(g, json.dumps({"entries": [
         {"id": r["id"], "title": "GRAPH-SENTINEL", "completed_at": None}
@@ -169,7 +203,7 @@ def test_failed_external_close_is_loud_and_retryable(tmp_path, monkeypatch):
     r = runner.invoke(app, ["backlog", "done", "EXT-1"],
                       catch_exceptions=False)
     assert r.exit_code == 1
-    assert "fake-external" in r.output
+    assert "github" in r.output
     assert tracker._rows["EXT-1"].get("state", "open") == "open"
 
     tracker._fail_close.clear()
