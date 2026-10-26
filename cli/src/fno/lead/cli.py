@@ -319,8 +319,7 @@ def escalate_cmd(
     straight on the question board with `fno inbox outstanding ask` (law
     d-fdab1af2). Under `questions.route=direct`, the default, the question
     this verb records stays on the board alone: no relay mail copy goes out.
-    Set `questions.route=triage` in .fno/config.toml to route questions
-    through a triage lead.
+    Set `questions.route=triage` in .fno/config.toml for a triage lead.
     """
     from fno.carveout.core import resolve_carveout_root, resolve_session_id
     from fno.lead.escalate import escalate, mail_presiding_lead, resolve_presiding_lead
@@ -328,8 +327,9 @@ def escalate_cmd(
     from fno.paths import resolve_repo_root
 
     ids = [part.strip() for part in stalled.split(",") if part.strip()]
+    repo_root = resolve_repo_root()
     try:
-        session_id = resolve_session_id(resolve_repo_root())
+        session_id = resolve_session_id(repo_root)
     except Exception:  # noqa: BLE001 - an unresolvable session never blocks the ask
         session_id = None
     # The caller's own liveness, read not asserted: unknown reads as dead
@@ -366,7 +366,7 @@ def escalate_cmd(
             reason=reason,
             root=resolve_carveout_root(),
             session_id=session_id,
-            cwd=Path.cwd(),
+            cwd=repo_root,
             live=live,
             unknown_reason=unknown_reason,
             verdict=summary,

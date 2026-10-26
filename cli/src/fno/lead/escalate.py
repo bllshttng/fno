@@ -33,9 +33,9 @@ def _render(
     """One round-trip with the crate renderer (d-b6cc1a2a: new code in
     ``crates/``). ``ok: false`` is a REFUSAL, not a failure: the caller must
     raise, never fall back to Python text - the fallback is the defect.
-    ``verdict`` (first word = verdict name) and ``scope`` ride along.
+    ``verdict`` (first word = verdict name), ``scope``, and ``route_cwd``
+    (the repository root the route knob reads from) ride along.
     Naming ``session_id`` scopes the answer's ``marker`` to that lead.
-    ``route_cwd`` is the repository root the route knob reads from.
     """
     from fno.rust_binary import command_call
 
@@ -63,9 +63,8 @@ def escalate(stalled_ids: "list[str]", reason: str, root: Path, session_id: "str
     """Record one operator question for this stalled set.
 
     Returns ``(outcome, question_id, mail_relay, nudge)``; raises rather than
-    failing quiet. ``mail_relay`` is the renderer's ``questions.route``
-    verdict: False under direct, the default, so the caller skips the
-    presiding lead's mail copy. The board row still records.
+    failing quiet. ``mail_relay`` reads False under direct, the default, so
+    the caller skips the presiding lead's mail copy.
     """
     from fno.agents.stale_escalate import dedupe_key, reconcile_channel
     from fno.harness_identity import canonical_handle
@@ -76,18 +75,10 @@ def escalate(stalled_ids: "list[str]", reason: str, root: Path, session_id: "str
     # untouched. The channel's empty branch closes open asks, so reaching it
     # with a refused set would read as a clean board. Naming the session
     # scopes the answer's marker to this lead.
-    # The route knob reads the repository root's config, so a verb run from
-    # a subdirectory still finds the project-level setting.
-    try:
-        from fno.paths import resolve_repo_root
-
-        route_root = str(resolve_repo_root())
-    except Exception:  # noqa: BLE001 - an unresolved root degrades to cwd
-        route_root = str(cwd)
     answer = _render(
         ids, key, reason, live=live, unknown_reason=unknown_reason,
         verdict=verdict, scope=scope, session_id=session_id,
-        route_cwd=route_root,
+        route_cwd=str(cwd),
     )
     if not answer.get("ok"):
         raise ValueError(answer.get("message", "lead escalation refused"))
