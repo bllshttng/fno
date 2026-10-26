@@ -481,6 +481,7 @@ shim_sweep() {
 	# The venv copy of the front door, never the tool-bin shim under check.
 	# A Python-only install has no front door, and one predating the sweep
 	# refuses the command: either way there is nothing to sweep with.
+	[ -n "$FNO_REAL" ] || return 0
 	_mux="$(dirname "$FNO_REAL")/fno"
 	[ -x "$_mux" ] || return 0
 	"$_mux" config setup shim-check --help >/dev/null 2>&1 || return 0
