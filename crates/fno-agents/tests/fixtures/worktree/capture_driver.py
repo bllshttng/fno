@@ -29,6 +29,7 @@ deleted, capture mode refuses and the frozen files are the contract.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -379,14 +380,55 @@ def run_apply(case, root, home, env):
     return 0, json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n", ""
 
 
+def _pin_raw_overlap_contract(ov):
+    """Pin the overlap legs to the raw-journal contract.
+
+    The Rust ops (crates/fno-agents/src/worktree/overlaps.rs) read and append
+    the raw journal only. The live Python leg reads back through the native
+    event store and commits through it, so an unpinned capture characterizes
+    whatever store state earlier cases leaked into the shared fixture root
+    (the first freeze caught exactly that: four report goldens read the same
+    leftover rows). Pin both edges: the store read answers unavailable (the
+    leg's documented raw fallback branch) and the append writes the envelope
+    line straight into the journal file.
+    """
+    from fno.events import store_client as _store
+
+    _store.native_rows = lambda *a, **k: None
+    # The recorded envelope's ts is the real clock; against the pinned fold
+    # now (2026-10-26T00:00:00+00:00) an afternoon capture lands outside the
+    # window and the deduped observation drops, so the fold flips with the
+    # wall clock. Pin the stamp like the Rust side pins FNO_TEST_NOW.
+    import fno.events as _events
+
+    _events._ts_now = lambda: "2026-10-26T00:00:00.000000Z"
+
+    def _raw_append(event, journal, lock_timeout_seconds=10.0):
+        journal = Path(journal)
+        journal.parent.mkdir(parents=True, exist_ok=True)
+        with journal.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, separators=(",", ":"), sort_keys=True) + "\n")
+        return None
+
+    ov.append_event = _raw_append
+
+
+def _isolated_journal(root, case):
+    journal = root / "events" / "global-events.jsonl"
+    if journal.parent.exists():
+        shutil.rmtree(journal.parent)
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    if case.get("journal_lines"):
+        journal.write_text("".join(case["journal_lines"]))
+    return journal
+
+
 def run_overlap_record(case, root, home, env):
     from fno.worktree_cli import overlaps as ov
 
     os.environ.update(env)
-    journal = root / "events" / "global-events.jsonl"
-    if case.get("journal_lines"):
-        journal.parent.mkdir(parents=True, exist_ok=True)
-        journal.write_text("".join(case["journal_lines"]))
+    _pin_raw_overlap_contract(ov)
+    journal = _isolated_journal(root, case)
     result, code = ov.overlap_record(
         since_days=case.get("since", 28),
         journal=journal,
@@ -404,10 +446,8 @@ def run_overlap_report(case, root, home, env):
     from fno.worktree_cli import overlaps as ov
 
     os.environ.update(env)
-    journal = root / "events" / "global-events.jsonl"
-    if case.get("journal_lines"):
-        journal.parent.mkdir(parents=True, exist_ok=True)
-        journal.write_text("".join(case["journal_lines"]))
+    _pin_raw_overlap_contract(ov)
+    journal = _isolated_journal(root, case)
     report, code = ov.overlaps_report(
         since_days=case.get("since", 28),
         json_out=case.get("json", True),
@@ -504,6 +544,34 @@ def overlap_line(**over):
 
     line = copy.deepcopy(OVERLAP_LINE)
     line["data"].update(over)
+    return json.dumps(line, separators=(",", ":"), sort_keys=True) + "\n"
+
+
+def _true_observation_id(data):
+    """The digest the validator recomputes; "a"*64 never passes it."""
+    blob = json.dumps(
+        [
+            data["repository_key"],
+            data["worktree_key"],
+            data["observer_session_id"],
+            sorted(set(data["peer_session_ids"])),
+        ],
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def valid_overlap_line(**over):
+    """overlap_line the schema actually admits: source hook and the
+    observation_id the validator recomputes, so a pre-seeded row counts as an
+    observation instead of a malformed line."""
+    import copy
+
+    line = copy.deepcopy(OVERLAP_LINE)
+    line["source"] = "hook"
+    line["data"].update(over)
+    line["data"]["observation_id"] = _true_observation_id(line["data"])
     return json.dumps(line, separators=(",", ":"), sort_keys=True) + "\n"
 
 
@@ -648,26 +716,25 @@ def cases():
                               "peer_session_ids": ["sess-b"],
                               "repository_common_dir": "/fix/repo",
                               "worktree_git_dir": "/fix/repo/wt"}),
-         "journal_lines": [overlap_line()]},
+         "journal_lines": [valid_overlap_line()]},
         {"subject": "overlap_record", "label": "invalid json answers invalid-input",
          "stdin": "not json"},
         {"subject": "overlap_record", "label": "empty peers answer invalid-input",
          "stdin": json.dumps({"observer_session_id": "sess-a",
                               "peer_session_ids": []})},
-        {"subject": "overlap_record", "label": "schema-rejected digest answers schema-rejected",
-         "stdin": json.dumps({"observer_session_id": "sess-a",
+        {"subject": "overlap_record", "label": "empty observer answers schema-rejected",
+         "stdin": json.dumps({"observer_session_id": "",
                               "peer_session_ids": ["sess-b"],
                               "repository_common_dir": "/fix/repo",
-                              "worktree_git_dir": "/fix/repo/wt",
-                              "observation_id": "zz" * 32})},
+                              "worktree_git_dir": "/fix/repo/wt"})},
         {"subject": "overlap_report", "label": "missing journal is a valid empty source",
          "json": True},
         {"subject": "overlap_report", "label": "complete journal exits zero",
-         "json": True, "journal_lines": [overlap_line()]},
+         "json": True, "journal_lines": [valid_overlap_line()]},
         {"subject": "overlap_report", "label": "malformed line makes partial exit one",
-         "json": True, "journal_lines": [overlap_line(), "{broken\n"]},
+         "json": True, "journal_lines": [valid_overlap_line(), "{broken\n"]},
         {"subject": "overlap_report", "label": "text render names the counts",
-         "render": True, "journal_lines": [overlap_line()]},
+         "render": True, "journal_lines": [valid_overlap_line()]},
         # --- dispatch pin ----------------------------------------------------------
         {"subject": "dispatch_pin", "label": "same repo identity pins nothing",
          "target": "p1", "caller": "p1"},
