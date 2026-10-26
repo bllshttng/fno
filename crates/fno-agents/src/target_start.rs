@@ -2355,9 +2355,9 @@ fn init_from_worktree(
             // keeps archive as the explicit discard.
             eprintln!(
                 "fno do target start: target init failed (step: init, exit {code}); \
-                 worktree at {} is created. A rerun of fno do target start resumes \
-                 in this tree (idempotent, nothing is recreated); to discard it \
-                 instead: fno agents workspace worktree archive {}",
+                 worktree at {} is created. A rerun of fno do target start {node} \
+                 resumes in this tree (idempotent, nothing is recreated); to \
+                 discard it instead: fno agents workspace worktree archive {}",
                 wt_path.display(),
                 wt_path.display()
             );
