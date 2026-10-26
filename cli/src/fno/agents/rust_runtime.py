@@ -1057,6 +1057,20 @@ def _is_promotion_bearing_spawn(command: str, args: Sequence[str]) -> bool:
     return command == "spawn" and _has_flag(args, longs=("--promote",))
 
 
+def _is_account_bearing_pane(command: str, args: Sequence[str]) -> bool:
+    """True for an explicit ``--as pane`` spawn carrying an account flag.
+
+    The binary's pane spine runs before the account seam and assumes no
+    account axis on its requests, so an account-bearing pane spawn keeps the
+    Python mux arm, whose pane transports compose the overlay.
+    """
+    if command != "spawn":
+        return False
+    if _spawn_flag_value(args, "--account", "--dispatch-account") is None:
+        return False
+    return _spawn_flag_value(args, "--as") == "pane"
+
+
 def _is_resume_bearing_spawn(command: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--resume`` / ``-r``.
 
@@ -1504,6 +1518,7 @@ def make_agents_group_cls() -> type:
                     _is_role_bearing_spawn(command, args)
                     or _is_promotion_bearing_spawn(command, args)
                     or (_is_route_bearing_spawn(command, args) and _spawn_flag_value(args, "--account", "--dispatch-account") is not None)
+                    or _is_account_bearing_pane(command, args)
                     or _is_default_substrate_spawn(command, args)
                     or _is_retired_axis_spawn(command, args)
                 )

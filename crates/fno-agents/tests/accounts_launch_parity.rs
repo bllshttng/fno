@@ -274,10 +274,22 @@ fn the_spawn_seam_applies_refuses_and_clears() {
     let routed_code = launch::seam_exit(&routed, "claude");
     let route_key = std::env::var("ANTHROPIC_AUTH_TOKEN").ok();
     let routed_stamp = std::env::var("FNO_LAUNCH_ACCOUNT").ok();
+
+    // A routed spawn carrying the proven carrier but no --dispatch-account
+    // refuses, and the carrier is claimed so no child inherits its values.
+    std::env::set_var(launch::DISPATCH_ACCOUNT_ENV, "{\"A\": \"1\"}");
+    let routed_carrier_code =
+        launch::seam_exit(&json!({ "route": "zai,glm-5.2", "cwd": cwd }), "claude");
+    let routed_carrier_left = std::env::var(launch::DISPATCH_ACCOUNT_ENV).ok();
+
     restore(saved);
     assert_eq!(
         (routed_code, route_key.as_deref(), routed_stamp.as_deref()),
         (None, Some("route-key"), None)
+    );
+    assert_eq!(
+        (routed_carrier_code, routed_carrier_left.as_deref()),
+        (Some(2), None)
     );
 
     assert_eq!(code, None);

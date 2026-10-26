@@ -229,14 +229,24 @@ pub fn seam_exit(params: &Value, provider: &str) -> Option<i32> {
     // PARENT's account, and every path below either re-stamps it (Apply) or
     // hands the spawn to Python, whose cmd_spawn re-stamps after it resolves.
     std::env::remove_var(crate::state::LAUNCH_ACCOUNT_ENV_KEY);
+    // The carrier is claimed before any early return, so its proven values
+    // never ride into a child that did not ask for them: a routed spawn
+    // without --dispatch-account refuses exactly as cmd_spawn would.
+    let carrier = std::env::var(DISPATCH_ACCOUNT_ENV).ok();
+    std::env::remove_var(DISPATCH_ACCOUNT_ENV);
     // A route with either account flag composes in the Python CLI, which the
     // route arm re-execs. Scrubbing here first would strip a vendor key the
     // route reads from a scrubbed var (ANTHROPIC_AUTH_TOKEN as api_key_env).
     if params.get("route").is_some() {
+        if carrier.is_some() {
+            eprintln!(
+                "refusing: the proven-credential carrier is set but no \
+                 --dispatch-account was given; no worker launched"
+            );
+            return Some(2);
+        }
         return None;
     }
-    let carrier = std::env::var(DISPATCH_ACCOUNT_ENV).ok();
-    std::env::remove_var(DISPATCH_ACCOUNT_ENV);
     let text = |key: &str| params.get(key).and_then(Value::as_str);
     let cwd = text("cwd")
         .map(std::path::PathBuf::from)

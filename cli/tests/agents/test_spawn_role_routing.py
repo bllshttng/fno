@@ -39,3 +39,25 @@ def test_long_only_detectors_detect_and_respect_argv_boundary() -> None:
     assert _is_role_bearing_spawn("spawn", ["spawn", "w", "--role=build"])
     assert not _is_role_bearing_spawn("spawn", ["spawn", "w", "--argv", "--role", "x"])
 
+
+def test_account_bearing_pane_stays_on_python() -> None:
+    """An explicit ``--as pane`` spawn carrying an account flag keeps the
+    Python mux arm: the binary's pane spine runs before the account seam and
+    assumes no account axis on its requests. Both flag spellings and both
+    account flags divert; the same spawn on a thread substrate does not."""
+    from fno.agents.rust_runtime import _is_account_bearing_pane
+
+    assert _is_account_bearing_pane(
+        "spawn", ["spawn", "w", "hi", "--as", "pane", "--account", "makers"]
+    )
+    assert _is_account_bearing_pane(
+        "spawn", ["spawn", "w", "hi", "--as=pane", "--dispatch-account", "m"]
+    )
+    assert not _is_account_bearing_pane(
+        "spawn", ["spawn", "w", "hi", "--as", "thread", "--account", "makers"]
+    )
+    assert not _is_account_bearing_pane(
+        "spawn", ["spawn", "w", "hi", "--as", "pane"]
+    )
+    assert not _is_account_bearing_pane("ask", ["ask", "w", "hi", "--as", "pane"])
+
