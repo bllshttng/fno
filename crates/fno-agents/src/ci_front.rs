@@ -203,10 +203,11 @@ pub(crate) fn verdict_from_runs(runs: &[Value]) -> (String, bool, Vec<Value>) {
                 .get("conclusion")
                 .and_then(Value::as_str)
                 .unwrap_or("");
+            // rest_bucket folds an unknown conclusion to fail on purpose
+            // (fail-closed), so the wildcard reads red with it, never green.
             match crate::pr_push::rest_bucket(newest) {
                 "pass" | "skipping" => {}
-                "fail" | "cancel" => red = true,
-                _ => pending = true,
+                _ => red = true,
             }
             json!({
                 "name": name,
@@ -492,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_conclusion_never_reads_green() {
+    fn an_unknown_conclusion_reads_red_fail_closed() {
         let runs = vec![run_row(
             "ci",
             "completed",
@@ -500,7 +501,7 @@ mod tests {
             "2026-10-25T00:00:00Z",
         )];
         let (verdict, green, _) = verdict_from_runs(&runs);
-        assert_eq!(verdict, "pending");
+        assert_eq!(verdict, "red");
         assert!(!green);
     }
 
