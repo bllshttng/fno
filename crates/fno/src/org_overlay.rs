@@ -945,11 +945,13 @@ impl Panel {
         // tree and the rows already in hand. No I/O; the halves landed.
         lines.extend(self.team_section(agents, text_w, team_budget.saturating_sub(lines.len())));
         // The reap hint survives the all-rows line that used to carry it:
-        // dead rows are a backlog, whatever line answered the census.
+        // dead rows are a backlog, whatever line answered the census. The
+        // count is age alone and the daemon's sweep reaps on its own tick, so
+        // the hint names the read that answers why each one still stands.
         let all_split = census_split(&ages);
         if all_split.dead > 0 {
             lines.push(format!(
-                "            {} dead: run `fno agents reap --apply`",
+                "            {} dead: `fno agents registry reap --dry-run` names each keep",
                 all_split.dead
             ));
         }
@@ -1649,7 +1651,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("1 dead: run `fno agents reap --apply`"),
+            text.contains("1 dead: `fno agents registry reap --dry-run` names each keep"),
             "{text}"
         );
         // The lanes workers count is never rendered: the split replaced it.

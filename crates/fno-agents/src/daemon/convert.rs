@@ -456,7 +456,7 @@ fn run_client_resume(ctx: &Ctx, req: &Request, plan: &ConvertPlan, allow_new_id:
         &json!({"name": plan.name, "strategy": plan.strategy, "phase": "pane-stopped"}),
     );
 
-    let argv = crate::convert::client_resume::resume_argv(&session_id, &carried);
+    let argv = crate::convert::client_resume::resume_argv(&session_id, &plan.name, &carried);
     // A misconfigured account root is NOT "the ambient root". Relaunching
     // there runs the session on the wrong account, bills the wrong lane,
     // and then reports "never appeared on the roster" - which names the
