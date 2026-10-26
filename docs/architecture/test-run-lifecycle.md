@@ -12,7 +12,7 @@ Every `fno doctor test` suite now runs through one native owner: `fno-agents tes
 
 ## The owner's contract
 
-`fno-agents test-run --timeout SECS [--claims-root PATH] -- ARGV...` is internal dispatch only. `bin/client.rs` matches it the same way it matches `probe-run`. It is never a public `fno` command. `cli/src/fno/test_runner.py`'s `run_suite_bounded` is the sole caller. When the `fno-agents` binary is not installed, it falls back to the pre-native Python group-kill (timeout only), so a bare checkout degrades rather than fails.
+`fno-agents test-run --timeout SECS [--claims-root PATH] -- ARGV...` is internal dispatch only. `bin/client.rs` matches it the same way it matches `probe-run`. It is never a public `fno` command. Since the native test verb landed, the verb itself (`crates/fno-agents/src/test_verb.rs::run_bounded`) is the sole caller, and the pre-native Python degrade path is gone with the leg that needed it.
 
 Each run does the same five things in order. First, a whole-suite run acquires the suite claim, and a nested run never does (see below). Second, spawn the argv as the leader of a fresh session via `setsid()`. It and everything it forks then share a pgid the owner never touches. Third, wait for the argv, bounded by the timeout. The timeout counts from admission, so a run that queued keeps its whole budget. Fourth, unconditionally `killpg` the group: SIGTERM, then SIGKILL after a grace window, confirmed empty by `killpg(pgid, 0)` rather than inferred from the leader's own exit. Fifth, release the claim.
 

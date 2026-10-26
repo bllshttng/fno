@@ -1,6 +1,6 @@
 name: deferred-census
 
-# Puts a clock on _DISCOVERY_DEFERRED (cli/src/fno/test_cmd.py).
+# Puts a clock on DISCOVERY_DEFERRED (crates/fno-agents/src/test_smoke_registry.rs).
 #
 # The quarantine list has no expiry of its own: a line goes in during a hurry
 # and nothing makes it come out. `fno doctor test --census-deferred` is the mechanism
@@ -30,7 +30,8 @@ on:
     # this is the one case where per-PR cost is justified, because the list is
     # exactly what changed.
     paths:
-      - cli/src/fno/test_cmd.py
+      - crates/fno-agents/src/test_census.rs
+      - crates/fno-agents/src/test_smoke_registry.rs
       - .github/workflows/deferred-census.yml
 
 jobs:

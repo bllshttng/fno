@@ -36,9 +36,9 @@
 # smoke runner writes them while the canary brackets it. They are the
 # instrument's own exhaust, not a test reaching operator state:
 #
-#   last-test.log               cli/src/fno/test_cmd.py:255
-#   preflight-last-failures.txt cli/src/fno/test_cmd.py SMOKE_FAILURE_RECORD_DEFAULT
-#   changed-last-receipt.json   cli/src/fno/test_cmd.py CHANGED_RECEIPT_DEFAULT
+#   last-test.log               the native test verb (log_path)
+#   preflight-last-failures.txt the native test verb SMOKE_FAILURE_RECORD_DEFAULT
+#   changed-last-receipt.json   the native test verb CHANGED_RECEIPT_DEFAULT
 #
 # The list is by exact basename, at the checkout root only, and verify prints
 # how many it excluded. A green that rests on a growing ignore list is the

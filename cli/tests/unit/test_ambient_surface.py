@@ -101,11 +101,11 @@ def test_classify_agrees_with_the_scrub():
     """
     import tempfile
 
-    from fno.hermetic import neutralise
+    from fno.test_env_door import apply_env
 
     sandbox = Path(tempfile.mkdtemp())
     probes = {name: "ambient-value" for name in _env_reads()}
-    out = neutralise(probes, sandbox)
+    out = apply_env("neutralise", probes, sandbox=sandbox)
     for name in probes:
         if classify(name) == "ambient":
             assert out.get(name) != "ambient-value", (

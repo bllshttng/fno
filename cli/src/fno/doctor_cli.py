@@ -23,21 +23,11 @@ from fno.observer.cli import observer_app
 from fno.route_cli import inventory_cmd
 from fno.scratch_cli import scratch_app
 from fno.status_fanout import status_fanout_app
-from fno.test_cmd import test_command
-
-
-class DoctorGroup(typer.core.TyperGroup):
-    """Typer group that preserves the existing Click-based test command."""
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.add_command(test_command, name="test")
 
 
 doctor_app = typer.Typer(
     name="doctor",
     help="Diagnose and verify the installed fno environment.",
-    cls=DoctorGroup,
     invoke_without_command=True,
     no_args_is_help=False,
 )

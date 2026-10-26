@@ -9,9 +9,8 @@
 # Covers AC1-EDGE (keep-going harvests all failures), AC1-UI (summary + header),
 # AC2-FR (subset labelled), AC3-ERR (corrupt/missing record -> full run).
 #
-# The runner is `fno-py doctor test smoke` (the deployed console script, on PATH inside
-# a smoke run via cli/.venv/bin; falls back to `uv run --project cli fno-py` for
-# a standalone local run).
+# The runner is the native test verb (`fno-agents test smoke`, reachable as
+# `fno doctor test smoke` through the front door).
 
 set -uo pipefail
 # Under pipefail, `echo | grep -q` SIGPIPEs the echo when grep exits on its
@@ -26,23 +25,16 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 REC="$TMP/failures.txt"
-REG="$TMP/registry.py"
+REG="$TMP/registry.json"
 cat > "$REG" <<'EOF'
-STEPS = [("alpha pass", ".", "true"), ("bravo fail", ".", "exit 1"),
-         ("charlie pass", ".", "true"), ("delta fail", ".", "false")]
+{"steps": [["alpha pass", ".", "true"], ["bravo fail", ".", "exit 1"],
+ ["charlie pass", ".", "true"], ["delta fail", ".", "false"]]}
 EOF
 
-# Prefer the worktree's venv'd fno-py (current source); fall back to uv run so
-# a fresh checkout with no synced venv still resolves. Never trust a global
-# `fno-py` on PATH: a deployed build is stale and lacks the smoke subcommand.
-VENVED="$REPO_ROOT/cli/.venv/bin/fno-py"
-if [[ -x "$VENVED" ]]; then
-    RUNNER=("$VENVED" test smoke)
-else
-    # Absolute --project: the changed-mode cases below run from a throwaway repo,
-    # where a relative `cli` would not resolve.
-    RUNNER=(uv run --project "$REPO_ROOT/cli" fno-py doctor test smoke)
-fi
+# The runner is native: the fno front door lexically claims `doctor test` and
+# hands the whole verb to the fno-agents binary. CI's smoke-setup puts that
+# binary on PATH; locally, FNO_AGENTS_BIN overrides it.
+RUNNER=("${FNO_AGENTS_BIN:-fno-agents}" test smoke)
 
 FAILS=0
 ok()   { echo "  ok: $1"; }
@@ -88,15 +80,15 @@ echo "$out" | grep "ONLY SUBSET steps=2/4" >/dev/null && ok "only subset 2/4" ||
 run --only 'zzz-none' >/dev/null 2>&1 && fail "no-match should exit non-zero" || ok "no-match exits non-zero"
 
 echo "== zero steps is never green =="
-EMPTY="$TMP/empty.py"; echo 'STEPS = []' > "$EMPTY"
+EMPTY="$TMP/empty.json"; echo '{"steps": []}' > "$EMPTY"
 SMOKE_REGISTRY_FILE="$EMPTY" SMOKE_FAILURE_RECORD="$REC" "${RUNNER[@]}" --keep-going >/dev/null 2>&1 \
     && fail "empty registry should not be green" || ok "empty registry exits non-zero"
 
 echo "== --list is verbatim-stable (all-pass registry) =="
-PASS_REG="$TMP/pass.py"
+PASS_REG="$TMP/pass.json"
 cat > "$PASS_REG" <<'EOF'
-STEPS = [("alpha pass", ".", "true"), ("bravo pass", ".", "true"),
-         ("charlie pass", ".", "true"), ("delta pass", ".", "true")]
+{"steps": [["alpha pass", ".", "true"], ["bravo pass", ".", "true"],
+ ["charlie pass", ".", "true"], ["delta pass", ".", "true"]]}
 EOF
 out="$(SMOKE_REGISTRY_FILE="$PASS_REG" "${RUNNER[@]}" --list)"
 [[ "$(echo "$out" | wc -l | tr -d ' ')" == "4" ]] && ok "--list prints 4 names" || fail "--list count wrong"

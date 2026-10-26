@@ -1,5 +1,21 @@
 #!/usr/bin/env bash
-# The state lane's positive control must pass clean and fail populated.
+# test_state_lanes.sh - the populated lane must be able to go red.
+#
+# The populated lane claims a green means the populated state shape is
+# faithfully replayed, not silently skipped. That claim rests on the lane
+# being ABLE to fail: the pytest-side positive control (the state canary)
+# must fail when the profile is populated and pass when it is not.
+#
+# This drives the NATIVE smoke runner over a one-step registry (the
+# SMOKE_REGISTRY_FILE seam), so the lane env, the populated profile, the
+# canary bracket, and the junit verdict all come from the shipped path -
+# never a re-implementation beside it.
+#
+#   clean lane     -> control passes
+#   populated lane -> control fails (the positive control firing)
+#
+# A populated lane that cannot fail means the control has been disarmed and
+# every green from that lane is decorative.
 
 set -uo pipefail
 
@@ -12,30 +28,21 @@ FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-CANARY_TEST="cli/tests/unit/test_state_canary.py"
-PY="$REPO_ROOT/cli/.venv/bin/python"
-[ -x "$PY" ] || PY="python3"
+BIN="${FNO_AGENTS_BIN:-fno-agents}"
+if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
+  echo "state lanes: fno-agents is not on PATH; install the crate first"
+  exit 2
+fi
+
+SEAM="$(mktemp -d)"
+trap 'rm -rf "$SEAM"' EXIT
+cat > "$SEAM/registry.json" <<'JSON'
+{"steps": [["state canary pytest control", ".", "uv run --project cli pytest -q -p no:cacheprovider cli/tests/unit/test_state_canary.py"]]}
+JSON
 
 run_lane() {
-  local mode="$1"
-  PYTHONPATH="$REPO_ROOT/cli/src" "$PY" - "$mode" "$CANARY_TEST" <<'PYEOF' >/dev/null 2>&1
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-import fno.test_cmd as tc
-
-mode, test_path = sys.argv[1], sys.argv[2]
-tc._STATE_MODE = mode
-env = tc._smoke_env(Path.cwd())
-env["STATE_LANE"] = mode
-sys.exit(subprocess.run(
-    [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", test_path],
-    env=env,
-    cwd=Path.cwd(),
-).returncode)
-PYEOF
+  SMOKE_REGISTRY_FILE="$SEAM/registry.json" "$BIN" test smoke --state "$1" \
+    --only 'state canary pytest control' >/dev/null 2>&1
   return $?
 }
 

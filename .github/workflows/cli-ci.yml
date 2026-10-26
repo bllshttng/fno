@@ -484,7 +484,7 @@ jobs:
         # pass it here.
         #
         # The test/lint steps live in the code-owned `fno doctor test smoke`
-        # runner (cli/src/fno/test_cmd.py) so "run what CI runs" is one command
+        # runner (crates/fno-agents/src/test_smoke_registry.rs) so "run what CI runs" is one command
         # and local/CI parity is structural. A bare `fno doctor test smoke` with
         # no selector still runs every step; the shards are a CI concern only.
         #

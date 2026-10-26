@@ -153,7 +153,7 @@ pub(crate) fn parse_config(content: &str) -> Option<toml::Table> {
 }
 
 /// First candidate config.toml that yields `Some(T)` via `extract`.
-fn resolve<T>(cwd: &Path, extract: impl Fn(&toml::Table) -> Option<T>) -> Option<T> {
+pub(crate) fn resolve<T>(cwd: &Path, extract: impl Fn(&toml::Table) -> Option<T>) -> Option<T> {
     for path in config_candidates(cwd) {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Some(table) = parse_config(&content) {
