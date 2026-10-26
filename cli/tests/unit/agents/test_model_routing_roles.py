@@ -103,13 +103,10 @@ def _write_business_role(root: Path, *, provider: str | None, model: str | None)
             "authority_ceiling": "internal",
             "context_selectors": [],
             "review_policy": {
-                "required": True,
-                "minimum_reviewers": 1,
-                "required_review_kinds": [],
+                "required": True, "minimum_reviewers": 1, "required_review_kinds": [],
             },
             "delivery_policy": {
-                "required_evidence": ["artifact"],
-                "require_all_deliverables": True,
+                "required_evidence": ["artifact"], "require_all_deliverables": True,
             },
             "default_topology": "direct",
             "approval_floor": "none",
