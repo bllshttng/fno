@@ -195,9 +195,23 @@ fn run_case(key: &str, case: &Value) -> Value {
             // Diagnostics for the divergence the first CI run of this test
             // found: what the store itself answers beside what the door did.
             if let Ok(state) = std::env::var("FNO_STATE_DIR") {
-                let graph = std::path::PathBuf::from(&state)
-                    .join("db")
-                    .join("graph.json");
+                let root = std::path::Path::new(&state);
+                let graph = root.join("db").join("graph.json");
+                // The door's own resolution chain, spelled out: where the
+                // layout lands the anchor, which db twin it opens, and
+                // whether a fallback store was created at the legacy spot.
+                eprintln!(
+                    "parity-probe: anchor={:?} dbpath={:?}",
+                    fno_agents::backlog::anchor_path(&graph),
+                    fno_agents::backlog::database_path(&graph),
+                );
+                eprintln!(
+                    "parity-probe: exists db/json={} db/db={} root/json={} root/db={}",
+                    graph.exists(),
+                    root.join("db").join("graph.db").exists(),
+                    root.join("graph.json").exists(),
+                    root.join("graph.db").exists(),
+                );
                 match fno_agents::graph_store::read_rows_where(
                     &graph,
                     &fno_agents::backlog::RowQuery::default(),
