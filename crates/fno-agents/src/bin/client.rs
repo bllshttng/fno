@@ -155,8 +155,7 @@ fn main() {
     if args.first().map(String::as_str) == Some("surface-check") {
         std::process::exit(fno_agents::surface_check::run_surface_check(&args[1..]));
     }
-    // executor-route: the executor-routing parsers' transport door; the body
-    // lives in executor_route.rs beside its goldens (registers no command).
+    // executor-route: the parser door; body in executor_route.rs (registers no command).
     if args.first().map(String::as_str) == Some("executor-route") {
         std::process::exit(fno_agents::executor_route::run(&args[1..]));
     }
@@ -185,10 +184,22 @@ fn main() {
     if args.first().map(String::as_str) == Some("pr") {
         std::process::exit(fno_agents::pr_front::run(&args[1..]));
     }
-    // gh-cache, target-status, launch-workdir, worktree-reapable: the early
-    // transport arms; client_transport.rs holds their bodies and comments.
+    // gh-cache, target-status: the early transport arms; client_transport.rs
+    // holds their bodies and comments. worktree-reapable and launch-workdir
+    // stay here: the x-9ee6 port owns their moves into their own modules.
     if let Some(code) = fno_agents::client_transport::transport_early_arms(&args) {
         std::process::exit(code);
+    }
+    // `launch-workdir`: the spawn door's launch-cwd resolution (see
+    // launch_workdir.rs doc). Transport-only: registers no client action; Python's
+    // ensure_launch_workdir reaches it through command_call, and a `hold`
+    // answer is a valid exit-0 answer the caller renders.
+    if args.first().map(String::as_str) == Some("launch-workdir") {
+        std::process::exit(fno_agents::launch_workdir::run_launch_workdir(&args[1..]));
+    }
+    // `worktree-reapable`: the worktree-removal gate; callers: worktree_gate.py, worktree-reapable.sh.
+    if args.first().map(String::as_str) == Some("worktree-reapable") {
+        std::process::exit(fno_agents::worktree_reapable::run_client(&args[1..]));
     }
     // `harness-probe` / `harness-matrix` / `harness-beat`: capability reads, transport-only.
     if matches!(
