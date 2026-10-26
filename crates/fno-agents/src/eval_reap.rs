@@ -70,7 +70,7 @@ pub(crate) fn finished_eval_workers() -> Option<HashSet<String>> {
 /// The evals history file (`fno.paths.evals_history`): the config override,
 /// else the state dir's history folder - the same resolution
 /// `backlog::triage_health` reads with.
-fn eval_history_path() -> Option<PathBuf> {
+pub(crate) fn eval_history_path() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     if let Some(v) = crate::agents_config::config_lookup(&cwd, &["paths", "evals_history"]) {
         let raw = v.as_str().unwrap_or_default();

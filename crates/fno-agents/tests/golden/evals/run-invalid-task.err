@@ -1,0 +1,1 @@
+Error: task 'invalid' (FIXTURE/run-refusals/repo/evals/bank/invalid.yaml): 'grade' must be a non-empty list of mechanical checks (a task with no runnable grade is invalid)
