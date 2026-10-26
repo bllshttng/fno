@@ -183,6 +183,7 @@ fn drive(
 ) -> (i32, String, String) {
     let mut cmd = Command::new(bin);
     cmd.args(argv)
+        .envs(fno_agents::test_run::self_owner_env())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1200,7 +1201,16 @@ fn sweep_and_apply_cases() {
     std::fs::write(sweep_wt.join("file.txt"), "two\n").expect("sweep wt writes");
     run_git(&sweep_wt, &["add", "-A"]);
     run_git(&sweep_wt, &["commit", "-q", "-m", "ahead"]);
+    // The in-process sweep reads the graph through the state root: pin it to
+    // the seeded one, restore after.
+    let prev_state = std::env::var("FNO_STATE_DIR").ok();
+    std::env::set_var("FNO_STATE_DIR", root.join("state"));
     let rows = fno_agents::worktree::stranded::sweep(&sw1);
+    if let Some(prev) = prev_state {
+        std::env::set_var("FNO_STATE_DIR", prev);
+    } else {
+        std::env::remove_var("FNO_STATE_DIR");
+    }
     let payload: Vec<Value> = rows
         .iter()
         .map(|r| {

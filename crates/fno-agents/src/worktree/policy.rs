@@ -376,7 +376,7 @@ pub fn resolve(repo_root: &Path, harness: Option<&str>) -> Result<Resolved, Stri
     };
     if !VALID_POLICIES.contains(&raw_str.as_str()) {
         return Err(format!(
-            "worktree policy {raw_str:?} is invalid; valid: never | harness-native | external"
+            "worktree policy '{raw_str}' is invalid; valid: never | harness-native | external"
         ));
     }
 

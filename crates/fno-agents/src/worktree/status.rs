@@ -163,7 +163,11 @@ fn run_status_print(repo: &Path, as_json: bool) -> i32 {
     }
     let rows = status_rows_join(repo, &join);
     if as_json {
-        println!("{}", sorted_json(&render_json(&rows)));
+        // The Python leg printed insertion order (no sort_keys), summary last.
+        println!(
+            "{}",
+            serde_json::to_string(&render_json(&rows)).unwrap_or_default()
+        );
     } else {
         print!("{}", render_text(&rows));
     }
