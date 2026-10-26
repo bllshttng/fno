@@ -130,7 +130,7 @@ fn fno_agents_bin() -> &'static str {
 fn drive(
     bin: &str,
     argv: &[String],
-    pins: &[(&str, String)],
+    pins: &[(String, String)],
     stdin_text: Option<&str>,
 ) -> (i32, String, String) {
     let mut cmd = Command::new(bin);
@@ -184,10 +184,10 @@ impl Pins {
 
     fn envs(&self, extra: &[(&str, Option<String>)]) -> Vec<(String, String)> {
         let mut env: Vec<(String, String)> = vec![
-            ("HOME", self.home.display().to_string()),
-            ("FNO_STATE_DIR", self.state.display().to_string()),
+            ("HOME".to_string(), self.home.display().to_string()),
+            ("FNO_STATE_DIR".to_string(), self.state.display().to_string()),
             (
-                "FNO_GLOBAL_SETTINGS_PATH",
+                "FNO_GLOBAL_SETTINGS_PATH".to_string(),
                 self.absent_global.display().to_string(),
             ),
         ];
