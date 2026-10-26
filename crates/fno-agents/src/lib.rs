@@ -632,6 +632,7 @@ pub mod wake_meter;
 pub mod wake_name;
 pub mod watch_expiry;
 pub mod wave;
+pub mod whoami;
 pub mod worked_nodes;
 pub mod worker_wake;
 pub mod worktree_reapable;

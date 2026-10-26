@@ -1,0 +1,5 @@
+project:  <FIXTURE>/project
+run:      20260512T010101Z-99999-fixaaa (target) phase=review status=IN_PROGRESS (ledger/run id - not a mail handle)
+mail:     879d8d26  (reply handle - pass as --from-name, or omit to self-stamp)
+harness:  claude
+agent:    t-env-worker (mesh)
