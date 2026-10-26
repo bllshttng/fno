@@ -1,0 +1,1 @@
+Error: no declared cohort split in FIXTURE/no-split/repo/evals/bank (cohorts.yaml): a tuning export must never be cut from an undeclared bank.

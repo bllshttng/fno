@@ -31,14 +31,14 @@ def test_policy_without_route_still_writes_the_scrub_floor(tmp_path, monkeypatch
     that survives the daemon fork, sandbox or not. No overlay and no policy
     writes nothing at all."""
     use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.account_env import SCRUB_AUTH_VARS
     from fno.agents.model_routing import route_settings_path_for
+    from fno.agents.spawn_overlay_client import compose_credentials
 
     path = route_settings_path_for(None, None, env={}, sandbox=SANDBOX)
     assert path is not None
     payload = json.loads(Path(path).read_text())
     assert payload["sandbox"] == SANDBOX
-    assert all(payload["env"][var] == "" for var in SCRUB_AUTH_VARS)
+    assert all(payload["env"][var] == "" for var in compose_credentials(None, None, {})["scrub"])
 
     assert route_settings_path_for(None, None, env={}, sandbox=None) is None
 

@@ -425,7 +425,7 @@ def headless_create(
     # claude prefers an env credential over the settings file, so a routed
     # headless spawn from a logged-in shell would authenticate with the primary
     # Claude account instead of the selected provider (routing failure / wrong
-    # billing). compose_worker_credentials scrubs the inherited auth vars
+    # billing). The credentials compose scrubs the inherited auth vars
     # whenever we route or pin an account and applies the same scrub/account/
     # route precedence as every other seam, belt-and-suspenders with
     # --settings. Without either overlay, inherit the parent env untouched.
@@ -466,11 +466,9 @@ def headless_create(
             spawn_env, routed=_restores_model
         )
         if account_env or route_env:
-            from fno.agents.account_env import compose_worker_credentials
+            from fno.agents.spawn_overlay_client import compose_credentials
 
-            spawn_env, _ = compose_worker_credentials(
-                account_env, route_env, spawn_env
-            )
+            spawn_env = compose_credentials(account_env, route_env, spawn_env)["env"]
     from fno.setup.github_cli import worker_environment
 
     proxy_env = worker_environment(spawn_env or os.environ)
@@ -680,7 +678,7 @@ def bg_create(
     )
     if not route_env:
         # Set-or-clear: an unrouted child must not wear its parent's provider.
-        # A route re-supplies the stamp through compose_worker_credentials below.
+        # A route re-supplies the stamp through the credentials compose below.
         from fno.agents.model_routing import ROUTE_PROVIDER_ENV
 
         spawn_env.pop(ROUTE_PROVIDER_ENV, None)
@@ -700,9 +698,9 @@ def bg_create(
     # changing within one launch.
     route: Optional[dict[str, str]] = dict(route_env) if route_env else None
     if account_env or route:
-        from fno.agents.account_env import compose_worker_credentials
+        from fno.agents.spawn_overlay_client import compose_credentials
 
-        spawn_env, _ = compose_worker_credentials(account_env, route, spawn_env)
+        spawn_env = compose_credentials(account_env, route, spawn_env)["env"]
 
     from fno.setup.github_cli import worker_environment
 

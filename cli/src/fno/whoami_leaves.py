@@ -1,16 +1,17 @@
 """The whoami leaves other families still own.
 
 ``fno whoami`` itself is native (the agent family's port deleted the Python
-render), but its four hidden leaves still run Python: ``context`` serves
+render), but its hidden leaves still register here: ``context`` serves
 ``fno.context_probe``, ``ledger`` serves ``fno.agents.history``,
-``scoreboard`` serves ``fno.scoreboard.cli``, and ``cost`` serves
-``fno.cost._session_cost``. Each is the same one-line re-registration the
+``scoreboard`` serves ``fno.scoreboard.cli``, and ``cost`` forwards to the
+native session-cost leg. Each is the same one-line re-registration the
 deleted group mounted, so the retired roots (``fno context`` -> ``whoami
 context``, ``fno cost`` -> ``whoami cost``) keep a registered destination
 and every spelling stays invocable one release out.
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 
 import typer
@@ -24,28 +25,22 @@ whoami_app = typer.Typer(
 def cost_command(
     ctx: typer.Context,
 ) -> None:
-    """Forward all args to the in-package cost command (``fno.cost._session_cost``).
+    """Forward all args to the native session-cost leg.
 
-    The heavy import stays deferred to call time, so loading this group
-    never pays for it. argparse owns the flag parsing; the bridge runs via
-    ``sys.argv`` and translates its ``SystemExit`` into a ``typer.Exit`` so
-    the exit code propagates cleanly.
+    The leaf keeps the command spelling and forwards verbatim; the native
+    body owns the flag parsing and the exit code, so this wrapper never
+    interprets the args.
     """
-    from fno.cost import _session_cost
+    from fno.rust_binary import resolve_binary
 
-    argv_backup = sys.argv
-    sys.argv = ["fno whoami cost", *list(ctx.args)]
-    try:
-        _session_cost.main()
-    except SystemExit as exc:  # argparse exits on -h / parse error / explicit exit
-        code = exc.code
-        if code is None:
-            code = 0
-        elif not isinstance(code, int):
-            code = 1
-        raise typer.Exit(code=code)
-    finally:
-        sys.argv = argv_backup
+    binary = resolve_binary()
+    if binary is None:
+        raise typer.Exit(code=14)
+    result = subprocess.run(
+        [str(binary), "context-run", "--session-cost", *list(ctx.args)],
+        check=False,
+    )
+    raise typer.Exit(code=result.returncode)
 
 
 whoami_app.command(

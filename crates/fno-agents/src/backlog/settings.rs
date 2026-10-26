@@ -184,7 +184,7 @@ pub fn node_id_hex_width() -> usize {
 
 /// The state directory the porcelain reads serve from: `FNO_STATE_DIR` when
 /// the env names a root (the carrier `fno.paths.state_dir` resolves and
-/// `seal_state_root` pins, so a sealed read serves the store its parent
+/// `accounts::credentials::seal` pins, so a sealed read serves the store its parent
 /// wrote), else `FNO_CONFIG`'s `state_dir` when the env names a file, else
 /// the first candidate carrying a `state_dir`, else `~/.fno`. `FNO_HOME`
 /// does not move the backlog.

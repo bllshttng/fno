@@ -276,21 +276,27 @@ def _run_evals_arm_phase(settings: Any, *, seconds_left_fn) -> None:
     try:
         import subprocess
 
-        from fno.evals.report import evals_health_summary
         from fno.paths import evals_history, state_dir
-        from fno.rust_binary import resolve_binary
+        from fno.rust_binary import command_call, resolve_binary
 
         binary = resolve_binary()
         if binary is None:
             raise RuntimeError("fno-agents binary not found")
+        stale_days = int(getattr(evals_cfg, "stale_days", 7) or 7)
+        # The native health projection (evals-trend op health); None when no
+        # history or no rows, which json.dumps passes through as null.
+        health = command_call(
+            "evals-trend",
+            {"op": "health", "history": str(evals_history()), "stale_days": stale_days},
+        )
         argv = [
             str(binary), "evals-arm",
+            "--summary-json", json.dumps(health),
             "--history", str(evals_history()),
             "--events", str(state_dir() / "events.jsonl"),
             "--fno-bin", _resolve_fno_binary(),
             "--schedule-days", str(days),
-            "--stale-days", str(int(getattr(evals_cfg, "stale_days", 7) or 7)),
-            "--summary-json", json.dumps(evals_health_summary(evals_history())),
+            "--stale-days", str(stale_days),
         ]
         proc = subprocess.run(argv, capture_output=True, text=True, check=False,
                               timeout=max(1.0, seconds_left_fn() or 30.0))

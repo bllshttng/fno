@@ -620,10 +620,32 @@ def _skills_from_transcript(lines: list[str]) -> list[str]:
     return found
 
 
-def _default_read_transcript(session_id: str) -> list[str] | None:
-    from fno.cost._session_cost import find_transcript
+# The session-id shape the transcript scan and the ledger's session rows
+# filter on; formerly fno.cost._session_cost.UUID_RE.
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
-    path = find_transcript(session_id)
+
+def _find_transcript(session_id: str) -> str | None:
+    """Find transcript JSONL by session ID across all project dirs.
+
+    Formerly fno.cost._session_cost.find_transcript, imported here since the
+    cost family ported to Rust. A malformed UUID reads as not found."""
+    if not UUID_RE.match(session_id):
+        return None
+    base = Path.home() / ".claude" / "projects"
+    if not base.is_dir():
+        return None
+    for project_dir in base.iterdir():
+        if not project_dir.is_dir():
+            continue
+        candidate = project_dir / f"{session_id}.jsonl"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _default_read_transcript(session_id: str) -> list[str] | None:
+    path = _find_transcript(session_id)
     if not path:
         return None
     try:
@@ -704,8 +726,6 @@ def _extract_skill_runs(row: dict, *, read_transcript) -> tuple[list[str], str]:
 
     method is "transcript" (real Skill tool_use found), "phase-proxy"
     (fallback to phases_completed), or "unattributed" (neither)."""
-    from fno.cost._session_cost import UUID_RE
-
     sessions = row.get("sessions")
     uuid_sessions = [s for s in sessions if isinstance(s, str) and UUID_RE.match(s)] if isinstance(sessions, list) else []
     found: list[str] = []
