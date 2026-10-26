@@ -353,7 +353,10 @@ pub enum TreeAction {
 /// team, provenance, open work, transcript, grace, retire. No boolean folds
 /// two questions together.
 pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>) {
-    if row.origin.as_deref() == Some("operator") {
+    // The done rule outranks the operator shield: an operator origin is
+    // often a guess (a mint that saw no spawner), and a row whose every node
+    // is done and that sat quiet past the hour has nothing left to protect.
+    if row.origin.as_deref() == Some("operator") && !past_idle_hour(row) {
         return (GcAction::Keep, Some(KeepReason::Operator));
     }
     if row.teamed {
@@ -589,14 +592,20 @@ fn idle_age_s(row: &GcRow) -> Option<i64> {
 
 /// An fno-started row, or an adopted row whose harness reads it terminal
 /// (ruling d-1538e896), idle past the origin ruling's hour with no live
-/// claim: it retires whatever its work state says. Operator rows never do.
+/// claim: it retires whatever its work state says. The done rule widens it
+/// to every origin: a row whose every node is done and that sat quiet past
+/// the hour retires, so no origin, open do row or settle refusal pins it.
+/// The tree still follows the worktree rule: a dirty or unmerged tree stays.
+/// The node must come from a dispatch record: a transcript mention is a
+/// witness, and a user's session that only named a done node keeps.
 pub fn past_idle_hour(row: &GcRow) -> bool {
     let fleet = match row.origin.as_deref() {
         Some("spawn") => true,
         Some("adopted") => row.session_terminal.is_some(),
         _ => false,
     };
-    fleet
+    let done_worked = row.worked_node && matches!(row.work, WorkState::AllDone { .. });
+    (fleet || done_worked)
         && row.live_claim.is_none()
         && idle_age_s(row).is_some_and(|age| age > SPAWN_IDLE_RETIRE_SECS)
 }
@@ -2555,17 +2564,41 @@ mod tests {
             (GcAction::Retire, None),
             "an fno-started row idle past the hour retires"
         );
-        // user-started: never removed, whatever the clock says.
+        // user-started on open work: never removed, whatever the clock says.
         let operator = GcRow {
             origin: Some("operator".into()),
             transcript_age_s: Some(5 * 24 * 3600),
+            work: WorkState::Open {
+                node: "N1".into(),
+                status: "in_progress".into(),
+            },
             ..retiring()
         };
         assert_eq!(
             gc_decide(&operator, GRACE),
             (GcAction::Keep, Some(KeepReason::Operator)),
-            "a user-started row is never the reaper's to remove"
+            "a user-started row on open work is never the reaper's to remove"
         );
+        // The done rule: every node done and quiet past the hour retires
+        // whatever the origin says - operator, or adopted and not terminal.
+        for origin in ["operator", "adopted"] {
+            let done = GcRow {
+                origin: Some(origin.into()),
+                transcript_age_s: Some(104 * 3600),
+                ..retiring()
+            };
+            assert_eq!(
+                gc_decide(&done, GRACE),
+                (GcAction::Retire, None),
+                "a done {origin} row quiet past the hour retires"
+            );
+            // A node only the transcript named is a witness: the row keeps.
+            let witnessed = GcRow {
+                worked_node: false,
+                ..done
+            };
+            assert_ne!(gc_decide(&witnessed, GRACE), (GcAction::Retire, None));
+        }
         // A live claim outranks the spent hour on the fno side too.
         let claimed = GcRow {
             live_claim: Some("node:N1 (holder s-1)".into()),
@@ -3030,11 +3063,15 @@ mod tests {
         };
         assert_eq!(tree_action(&bare), TreeAction::None);
 
-        // origin None is NOT the spawn fact: with no origin recorded, done
-        // work and a quiet transcript still keep the row - only an explicit
-        // spawn origin retires, and retiring() above carries one.
+        // origin None is NOT the spawn fact: with no origin recorded, open
+        // work and a quiet transcript still keep the row. Done work retires
+        // under the done rule whatever the origin.
         let unstamped = GcRow {
             origin: None,
+            work: WorkState::Open {
+                node: "N1".into(),
+                status: "in_progress".into(),
+            },
             ..retiring()
         };
         assert_eq!(

@@ -203,9 +203,6 @@ enum Role {
     DoctorUpdate(Vec<OsString>),
     /// `fno agents history ... --graph ...`: the native session-card reader.
     AgentsHistory(Vec<OsString>),
-    /// `fno whoami` and `fno whoami status`: Python's output plus the
-    /// session receipt (`fno-agents intel --receipt`).
-    Whoami(Vec<OsString>),
     /// `fno agents lead refresh-canon` (the front's rewrite of
     /// `fno agents org refresh-canon`): the beat's canon-doc refresh. The
     /// carried tail is empty by contract; the door resolves the plugin root
@@ -286,6 +283,15 @@ enum Role {
     /// `fno agents roles <op>` for an op the Rust door owns: exec'd as
     /// `fno-agents spawn-overlay roles`, the group options carried along.
     AgentsRoles(Vec<OsString>),
+    /// `fno whoami` and `fno whoami status`: the render with the session
+    /// receipt (`fno-agents intel --receipt`) appended. The seam runs the
+    /// front door as a marker child; the four leaves other families own
+    /// still forward to the Python leg; see `classify_whoami`.
+    Whoami(Vec<OsString>),
+    /// The retired root `fno status ...`: the move notice the Python
+    /// forwarder printed lands on stderr (byte-identical), then the same
+    /// exec as `fno whoami status`.
+    WhoamiStatusAlias(Vec<OsString>),
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
@@ -632,6 +638,58 @@ fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
         _ => return None,
     };
     Some(rest.to_vec())
+}
+
+/// The leaves still owned by other families' Python legs: `fno whoami
+/// context|ledger|scoreboard|cost` forward to them.
+const PYTHON_LEAVES: [&str; 4] = ["context", "ledger", "scoreboard", "cost"];
+
+/// `fno whoami ...` and the retired root `fno status ...`: the summary
+/// render and the status read, exec'd as `fno-agents spawn-overlay whoami`.
+/// The four leaves other families still own (context / ledger / scoreboard /
+/// cost) forward to the Python leg byte-verbatim; the retired `fno status`
+/// root prints the move notice the Python forwarder printed, on the same
+/// stream, before the same exec. A root `-J` before either folds into the
+/// group's own `-J`, byte-for-byte what `fno -J whoami` answered before.
+fn classify_whoami(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    match args.first()?.to_str()? {
+        "whoami" => {
+            // args[0] is `whoami` itself; the exec action re-prefixes the
+            // group name, so the tail is everything after it.
+            let tail = &args[1..];
+            let mut i = 0usize;
+            while i < tail.len() {
+                match tail[i].to_str()? {
+                    "--json" | "-J" | "--no-walker" | "--no-fleet" => {}
+                    "--state-file" => i += 1,
+                    a if a.starts_with("--state-file=") => {}
+                    "status" => return Some((claimed_tail(tail, root_json), false)),
+                    leaf if PYTHON_LEAVES.contains(&leaf) => return None,
+                    leaf if leaf.starts_with('-') => {}
+                    _ => return Some((claimed_tail(tail, root_json), false)),
+                }
+                i += 1;
+            }
+            Some((claimed_tail(tail, root_json), false))
+        }
+        "status" => {
+            let mut tail: Vec<OsString> = std::iter::once(OsString::from("status"))
+                .chain(args[1..].iter().cloned())
+                .collect();
+            let json = root_json.then(|| OsString::from("--json"));
+            let tail = json.into_iter().chain(tail.drain(..)).collect();
+            Some((tail, true))
+        }
+        _ => None,
+    }
+}
+
+/// The claimed tail, with a root `-J` folded into the group's own spelling.
+fn claimed_tail(tail: &[OsString], root_json: bool) -> Vec<OsString> {
+    let json = root_json.then(|| OsString::from("--json"));
+    json.into_iter().chain(tail.iter().cloned()).collect()
 }
 
 /// `fno config plugins ...` or `fno plugins ...`: the args after the group.
@@ -1004,6 +1062,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_agents_status(args) {
         return Role::AgentsStatus(rest);
+    }
+    if let Some((rest, alias)) = classify_whoami(args) {
+        return if alias {
+            Role::WhoamiStatusAlias(rest)
+        } else {
+            Role::Whoami(rest)
+        };
     }
     if let Some(rest) = classify_agents_roles(args) {
         return Role::AgentsRoles(rest);
@@ -1520,6 +1585,14 @@ fn main() {
             &["spawn-overlay", "roles"],
             &rest,
         )),
+        Role::WhoamiStatusAlias(rest) => {
+            eprintln!("fno status is now fno whoami status");
+            std::process::exit(fno_agents_exec(
+                "fno whoami",
+                &["spawn-overlay", "whoami"],
+                &rest,
+            ))
+        }
         Role::AgentsStatus(rest) => match fno::digest_overlay::fno_agents_bin_auto() {
             Some(bin) => std::process::exit(fno_agents_exec_bin(
                 "fno agents status",

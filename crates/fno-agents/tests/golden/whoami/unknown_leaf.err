@@ -1,0 +1,4 @@
+Usage: fno whoami [OPTIONS] COMMAND [ARGS]...
+Try 'fno whoami --help' for help.
+
+Error: No such command 'badleaf'.

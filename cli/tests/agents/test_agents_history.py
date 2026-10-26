@@ -74,7 +74,7 @@ def test_forwarder_execs_resolved_paths_with_optional_repo_slug(monkeypatch):
 
 
 def test_whoami_ledger_alias_is_hidden_and_forwards_to_history(monkeypatch):
-    from fno.agent.cli import whoami_app
+    from fno.whoami_leaves import whoami_app
 
     calls = []
     configured = _install_forwarder(monkeypatch, calls, "o/r")
