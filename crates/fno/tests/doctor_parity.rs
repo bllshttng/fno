@@ -13,7 +13,6 @@
 //! case, so the sibling-of-binary lookup finds no fno-agents (the capture
 //! machine had none) and the empty-machine shape stays byte-stable.
 
-use std::path::PathBuf;
 use std::process::Command;
 
 const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/doctor");
@@ -76,10 +75,13 @@ fn cases() -> Vec<Case> {
 }
 
 /// The masks the freeze applied; the test applies the same set to its own
-/// output so machine-varying numbers fold identically on both sides.
-fn mask(text: &str, case_dir: &str) -> String {
+/// output so machine-varying numbers fold identically on both sides. The
+/// token pairs are substituted in order: canonicalized paths first (a
+/// canonical macOS temp path contains the raw form as a substring), then
+/// the raw forms.
+fn mask(text: &str, paths: &[(&str, &str)]) -> String {
     let patterns: [(&str, &str); 6] = [
-        (r#""free_gb": [0-9.]+"#, "\"free_gb\": <MASKED>"),
+        (r#""free_gb": [0-9.]+"#, "\"free_gb\": <FREE>"),
         (r#""soft": [0-9]+"#, "\"soft\": <FD>"),
         (
             r#""hard": (?:\"?unlimited\"?|[0-9]+)"#,
@@ -93,14 +95,17 @@ fn mask(text: &str, case_dir: &str) -> String {
             r#""kern_maxfiles": (?:null|[0-9]+)"#,
             "\"kern_maxfiles\": <KERN>",
         ),
-        (r#"("git_version": \{"version": ")[0-9.]+"#, "$1<GITVER>"),
+        (r#"("git_version": \{"version": ")[^"]*"#, "$1<GITVER>"),
     ];
     let mut out = text.to_string();
     for (pattern, replacement) in patterns {
         let re = regex::Regex::new(pattern).expect("valid pattern");
         out = re.replace_all(&out, replacement).into_owned();
     }
-    out.replace(case_dir, "<CASE>")
+    for (needle, token) in paths {
+        out = out.replace(needle, token);
+    }
+    out
 }
 
 fn run_case(case: &Case) -> (Option<i32>, String, String) {
@@ -121,9 +126,6 @@ fn run_case(case: &Case) -> (Option<i32>, String, String) {
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/usr/sbin")
         .env("CARGO_HOME", tmp.path().join("cargo-home"));
-    if case.repo_root {
-        cmd.env("FNO_REPO_ROOT", &case_dir);
-    }
     for var in [
         "CODEX_HOME",
         "OPENCODE_CONFIG_DIR",
@@ -139,13 +141,29 @@ fn run_case(case: &Case) -> (Option<i32>, String, String) {
     ] {
         cmd.env_remove(var);
     }
+    // The repo-root cases pin FNO_REPO_ROOT after the strip, matching the
+    // capture environment; the empty-machine cases run with it unset.
+    if case.repo_root {
+        cmd.env("FNO_REPO_ROOT", &case_dir);
+    }
     let out = cmd.output().expect("fno binary runs");
     let code = out.status.code();
-    let case_str = case_dir.to_string_lossy().into_owned();
+    let canon = |p: &std::path::Path| -> String {
+        std::fs::canonicalize(p)
+            .unwrap_or_else(|_| p.to_path_buf())
+            .to_string_lossy()
+            .into_owned()
+    };
+    let paths = [
+        (canon(&case_dir), "<CASE>"),
+        (canon(&home), "<PINHOME>"),
+        (case_dir.to_string_lossy().into_owned(), "<CASE>"),
+        (home.to_string_lossy().into_owned(), "<PINHOME>"),
+    ];
     (
         code,
-        mask(&String::from_utf8_lossy(&out.stdout), &case_str),
-        mask(&String::from_utf8_lossy(&out.stderr), &case_str),
+        mask(&String::from_utf8_lossy(&out.stdout), &paths),
+        mask(&String::from_utf8_lossy(&out.stderr), &paths),
     )
 }
 

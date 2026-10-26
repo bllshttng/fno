@@ -226,6 +226,11 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Deprecated done shim; use `fno backlog done` (its flag surface is now identical).",
         {"hidden": True},
     ),
+    "doctor": (
+        "fno.rust_binary:_update_signpost",
+        "The doctor surface is native: the Rust front door answers `fno doctor` (report, blockers, bundle, plugin-file); install it from the source checkout.",
+        {"hidden": True},
+    ),
     "research": (
         "fno.research:research_command",
         "Retrieve + store: ddgs backbone -> self-fetch -> sources.jsonl.",
