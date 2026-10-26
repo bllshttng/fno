@@ -305,3 +305,10 @@ keeper-reap.sh
 # docs/hooks-fail-open.md) and by tests/hooks/test_hook_budget.sh; the bound
 # and the cache are pure library, no fno command wraps them.
 hook-budget.sh
+
+# The synthetic-process load generator behind tests/lib/test_loadgen.sh:
+# spawns the throwaway `fno-load-...` processes that orphan-sweep and
+# process-hygiene fixtures reap. Driven by `bash <path>` from its test; no
+# fno command wraps it. (Its only cli/src mention used to be a comment in
+# the deleted Python orphans module, which is what satisfied this lint.)
+loadgen.sh

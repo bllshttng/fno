@@ -385,6 +385,7 @@ crates/fno-agents/src/model_env_scrub.rs
 crates/fno-agents/src/plans_path.rs
 crates/fno-agents/src/plans_dirs.rs
 crates/fno-agents/src/plans_path.rs
+crates/fno-agents/src/orphans.rs
 crates/fno-agents/src/plugin_install.rs
 crates/fno/src/uninstall.rs
 crates/fno/src/cli_hooks.rs
