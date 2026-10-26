@@ -898,7 +898,7 @@ fn run_single_plan(
 /// [`run_single_plan`]'s computation without the stdout print - the timeout
 /// stamp still lands, the rows come back as the judge payload. The observer
 /// door shares it so the sweep's `--judge` tail and `fno doctor observer
-/// judge` answer from one judge body (x-470d).
+/// judge` answer from one judge body.
 pub(crate) fn judge_plan_rows(
     plan_path: &Path,
     node_id: Option<&str>,
@@ -942,7 +942,7 @@ fn run_calibration(
 }
 
 /// `run_calibration`'s computation, returning the payload the observer's
-/// labels view renders (the x-470d observer port shares the judge's
+/// labels view renders (the observer port shares the judge's
 /// calibration without re-running the spawn loop twice).
 pub(crate) fn calibration_result(
     labels_path: &Path,

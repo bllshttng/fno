@@ -499,7 +499,7 @@ pub(crate) fn build_corpus(
         }
     }
     // Same w4 gate as scoreboard: without any causal telemetry, node_outcome's
-    // "no fix found" branch is indistinguishable from "revert data doesn't
+    // a "no fix found" verdict is not distinguishable from "revert data doesn't
     // exist yet", so a shipped node is unjudgeable rather than a fake
     // merged_clean.
     let w4_available = graph_nodes

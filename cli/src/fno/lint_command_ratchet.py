@@ -100,6 +100,11 @@ NATIVE_SERVED_LEAVES = {
     "backlog session open",
     "backlog session reap-open",
     "config schema",
+    # The observer family (sweep | judge | replay) answers from the native
+    # spawn-overlay door now; the doctor group's typer tree no longer mounts it.
+    "doctor observer judge",
+    "doctor observer replay",
+    "doctor observer sweep",
     "do review resolve-level",
     "do review post-dispositions",
     "do review classify",

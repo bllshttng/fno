@@ -188,6 +188,11 @@ enum Role {
     /// skill-diff ops. The tail (op word + flags) rides byte-verbatim; a
     /// bare command or --help answers native help inside the op door.
     DoctorSkillDiff(Vec<OsString>),
+    /// `fno doctor observer <op>`: the observer family (sweep | judge |
+    /// replay) execs the native `fno-agents spawn-overlay observer` ops
+    /// door. The tail (op word + flags) rides byte-verbatim; the op door
+    /// refuses an unknown op with usage.
+    DoctorObserver(Vec<OsString>),
     /// `fno doctor lint style ...`: the native style check, exec'd through
     /// the sibling fno-agents `style-check` command. Args from the check name
     /// onward; Python keeps every other lint check until its port.
@@ -901,6 +906,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_skill_diff(args) {
         return Role::DoctorSkillDiff(rest);
     }
+    if let Some(rest) = classify_group_command(args, "doctor", "observer") {
+        return Role::DoctorObserver(rest);
+    }
     if let Some(rest) = classify_group_command(args, "doctor", "builds") {
         return Role::DoctorBuilds(rest);
     }
@@ -1487,6 +1495,11 @@ fn main() {
         Role::DoctorSkillDiff(rest) => {
             std::process::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))
         }
+        Role::DoctorObserver(rest) => std::process::exit(fno_agents_exec(
+            "fno doctor observer",
+            &["spawn-overlay", "observer"],
+            &rest,
+        )),
         Role::ClaimStore(rest) => {
             std::process::exit(fno_agents_exec("fno agents claim", &["claim"], &rest))
         }

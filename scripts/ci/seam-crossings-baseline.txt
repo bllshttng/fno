@@ -65,6 +65,7 @@ crossing	crates/fno-agents/src/mail_inject.rs	let mut cmd = std::process::Comman
 crossing	crates/fno-agents/src/mail_remote.rs	crate::scrape::fno_bin()
 crossing	crates/fno-agents/src/merge_close.rs	let output = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/merge_gates.rs	let out = Command::new(crate::scrape::fno_bin())
+crossing	crates/fno-agents/src/observer/mod.rs	let spawned = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/operator_notice.rs	let fno = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/operator_notice.rs	let fno = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/pane_spawn/mod.rs	Command::new(fno_bin())
