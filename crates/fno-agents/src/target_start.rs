@@ -370,6 +370,20 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
         request_codex_native_handoff(&repo_root, &node, &base, deadline);
     }
 
+    // Claim the node BEFORE the slow allocation steps (ensure, setup hook,
+    // init): the 2026-10-17 incident killed init at the 540s bound and left a
+    // half-made worktree with no claim and no manifest, so a re-dispatch read
+    // the node free and no receipt could name a holder. The holder string
+    // matches the init helper's own, and a same-holder acquire re-asserts,
+    // so the helper's later claim stays the single ownership story. Released
+    // when start itself fails before init runs; afterwards the claim belongs
+    // to the helper.
+    let early_claim = if start_node.is_some() {
+        Some(early_node_claim(&node, &repo_root)?)
+    } else {
+        None
+    };
+
     // 1. Create/reuse the worktree off origin/main via the ensure command (the
     //    one create/reuse path). Forward the current session's harness so a
     //    claude cold-start lands harness-native; no ambient marker omits it
@@ -387,16 +401,24 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
     let ens =
         crate::bounded_cmd::output_with_timeout_result(ensure_cmd, stage_timeout_secs(deadline));
     let Ok(ens) = ens else {
+        release_early_claim(&early_claim);
         return Err(refuse(
             "fno do target start: worktree ensure failed (step: ensure): could not run fno",
         ));
     };
     if ens.status.code().is_none() {
-        stage_timeout_exit("ensure", "Nothing was claimed.");
+        release_early_claim(&early_claim);
+        let note = if early_claim.is_some() {
+            "The early node claim was released; nothing was claimed."
+        } else {
+            "Nothing was claimed."
+        };
+        stage_timeout_exit("ensure", note);
     }
     let ens_out = String::from_utf8_lossy(&ens.stdout).trim().to_string();
     let ens_err = String::from_utf8_lossy(&ens.stderr).to_string();
     if !ens.status.success() || ens_out.is_empty() {
+        release_early_claim(&early_claim);
         return Err(refuse(format!(
             "fno do target start: worktree ensure failed (step: ensure): {}",
             if ens_err.trim().is_empty() {
@@ -446,17 +468,18 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
         match remote_base_ref(&repo_root, false) {
             Some(b) => b,
             None => {
+                release_early_claim(&early_claim);
                 return Err(Fail {
                     message: String::new(),
                     code: 1,
-                })
+                });
             }
         }
     };
 
     // Bind an existing manifest (idempotent re-run: never double-claim or
     // error) or fall through to a fresh init against this tree.
-    if bind_worktree(
+    match bind_worktree(
         &node,
         &wt_path,
         &base_label,
@@ -465,8 +488,13 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
         args.beastmode,
         args.no_merge,
         args.steps,
-    )? {
-        return Ok(0);
+    ) {
+        Ok(true) => return Ok(0),
+        Ok(false) => {}
+        Err(f) => {
+            release_early_claim(&early_claim);
+            return Err(f);
+        }
     }
     // 3. Init the session FROM the worktree (binds owner_cwd, claims the node
     //    exactly once - the helper's one-call claim).
@@ -1077,14 +1105,7 @@ fn claim_ttl_ms() -> i64 {
 /// acquire; the native `acquire` emits its own audit event.
 fn reacquire_node_claim(node_id: &str, wt_path: &Path) -> Result<(), Fail> {
     let key = format!("node:{node_id}");
-    let home = AgentsHome::from_env();
-    let owned =
-        crate::spawn_context::resolve_self_identity(&|k| std::env::var(k).ok(), None, None, &home);
-    let Some(session_id) = owned
-        .session_id
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    else {
+    let Some(holder) = session_holder() else {
         // Not the user-cancel sentinel (an identity refusal is not a user
         // cancel), and not the predecessor's manifest either: it is
         // write-once per session with the init hook as sole owner. The
@@ -1094,7 +1115,6 @@ fn reacquire_node_claim(node_id: &str, wt_path: &Path) -> Result<(), Fail> {
              harness session could not be proven, so no successor claim was written."
         )));
     };
-    let holder = format!("target-session:{session_id}");
     let (durable_pid, _harness) =
         crate::spawn_context::session_identity_ambient(std::process::id());
     let mut opts = crate::claims::AcquireOpts {
@@ -1130,6 +1150,63 @@ fn reacquire_node_claim(node_id: &str, wt_path: &Path) -> Result<(), Fail> {
              is unreadable or contended; refusing to risk a duplicate claim. Clear \
              it (fno agents claim release {key} --force -R <why>) and retry."
         ))),
+    }
+}
+
+/// The `(key, holder)` start holds while the allocation steps run.
+type EarlyClaim = (String, String);
+
+/// This session's claim holder string (`target-session:<id>`), or None when
+/// the identity cannot be proven: the same resolution the re-acquire path
+/// refuses on, so the holder both paths write is spelled once.
+fn session_holder() -> Option<String> {
+    let home = AgentsHome::from_env();
+    let owned =
+        crate::spawn_context::resolve_self_identity(&|k| std::env::var(k).ok(), None, None, &home);
+    owned
+        .session_id
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|sid| format!("target-session:{sid}"))
+}
+
+/// Acquire `node:<id>` under THIS session before any slow allocation step.
+/// A foreign live claim parks (before ensure pays its cost); an ours claim
+/// passes through unchanged, and a dead predecessor is re-acquired: the same
+/// acquire the successor-takeover path uses. Returns the `(key, holder)` the
+/// caller releases on a pre-init failure.
+fn early_node_claim(node_id: &str, park_hint: &Path) -> Result<EarlyClaim, Fail> {
+    let (verdict, _state_word, rec) = classify_node_claim(node_id);
+    if verdict == "foreign_live" {
+        print_foreign_holder_park(
+            node_id,
+            rec.as_ref().expect("foreign_live carries its record"),
+            park_hint,
+        );
+        return Err(Fail {
+            message: String::new(),
+            code: 1,
+        });
+    }
+    if verdict == "ours" {
+        let holder = rec.as_ref().map(|r| r.holder.clone()).unwrap_or_default();
+        return Ok((format!("node:{node_id}"), holder));
+    }
+    // free or a dead predecessor: the same acquire the successor-takeover
+    // path uses; it refuses when this session's identity cannot be proven.
+    reacquire_node_claim(node_id, park_hint)?;
+    let holder = session_holder().unwrap_or_default();
+    Ok((format!("node:{node_id}"), holder))
+}
+
+/// Best-effort release of the early claim: start failed before init ran, so
+/// the claim must not outlive this run for its full TTL. Non-strict: a lost
+/// race or a foreign re-take releases as a no-op.
+fn release_early_claim(claim: &Option<EarlyClaim>) {
+    if let Some((key, holder)) = claim {
+        if !holder.is_empty() {
+            let _ = crate::claims::release(key, holder, None, None);
+        }
     }
 }
 
