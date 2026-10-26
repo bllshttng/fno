@@ -28,6 +28,7 @@ fn a_spawn_reports_its_stuck_stage_once_and_its_first_turn_quietly() {
     for name in ["quick", "stuck", "refused"] {
         let launch = Launch {
             harness: "claude".into(),
+            resume: None,
             name: Some(name.into()),
             node: None,
             slot: None,
@@ -41,6 +42,7 @@ fn a_spawn_reports_its_stuck_stage_once_and_its_first_turn_quietly() {
     // launch, one watch.
     let twin = Launch {
         harness: "claude".into(),
+        resume: None,
         name: Some("quick".into()),
         node: None,
         slot: None,

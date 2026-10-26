@@ -300,6 +300,7 @@ pub(crate) mod ledger_workers;
 mod lifecycle_child;
 pub mod list_row;
 pub mod live_store_fence;
+pub mod liveness_cmd;
 pub mod liveness_sweep;
 pub mod lock_queue;
 pub mod logs;

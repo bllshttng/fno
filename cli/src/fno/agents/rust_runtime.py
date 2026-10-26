@@ -212,6 +212,14 @@ RUST_CLIENT_COMMANDS = frozenset(
         # ALL sessions, emitting review_wedged / budget_stop items. Dispatched in
         # client.rs before build_request (no daemon RPC, no Python impl).
         "needs",
+        # One "is this worker alive" answer per handle (the census rank-2
+        # remedy): transcript age + pid probe + registry status through the
+        # Rust verdict door, the caller's own row as positive control. No
+        # Python leg: the Python scripts it replaced were the bug. A
+        # status-arg leaf (_STATUS_ARG_LEAVES): the action list is
+        # shrink-only, so the router rewrites `fno agents liveness <h>...`
+        # into `fno-agents status --liveness <h>...`.
+        "liveness",
         "select-read",
         # Activity feed projection: questions.jsonl + graph.json ->
         # ordered rows carrying the node id + session id the mux deep link
@@ -515,6 +523,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     "subscribe": "Stream registry state transitions + pane exits as NDJSON (follows events.jsonl): [--agent <name>] [--kinds state,exit] [--json].",
     "digest": "Catch-up 'while you were gone' fold over events + ledger for a session: --session <s> --since <ts> [--json].",
     "needs": "Needs-me queue fold over events + ledger across all sessions (review_wedged/budget_stop): [--since-epoch <secs>] [--fires-floor <n>] [--json].",
+    "liveness": "One 'is this worker alive' answer per handle: <handle...> [-J|--json] reads the registry row, the transcript age (the one reader), and the pid through the one verdict door; the caller's own row (FNO_AGENT_SELF or a harness session env) rides along as the positive control. Exit 0 all live, 1 any finished, 2 any unknown, 3 no handle resolved. Daemon-free; starts nothing.",
     "select-read": "One bounded backlog read (next|undispatched) under [auto_continue] select_timeout_s; prints an ok/unmeasured/error receipt JSON.",
     "feed": "Activity feed projection over questions.jsonl + graph.json (questions, decisions, node lifecycle): [--since-epoch <secs>] [--limit <n>] [--node <id>] [--session <id>] [--json].",
     "adopt": "Register an orphaned session by its session id so it is addressable (peek/ask/resume/mail); resolves the registry, .fno/target-state.md, then harness stores.",
@@ -1281,6 +1290,7 @@ def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
 _STATUS_ARG_LEAVES = {
     "capabilities": "--capabilities",
     "target-family": "--target-family",
+    "liveness": "--liveness",
 }
 
 
