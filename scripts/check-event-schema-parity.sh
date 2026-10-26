@@ -366,6 +366,10 @@ dual_owner_kinds = {
     # worktree_removed: the archive path emits it (Python) and the merge
     # reaper emits it (Rust) at the same removal boundary.
     "worktree_removed",
+    # termination: the Python emit schema still declares the terminal row,
+    # and the standalone research round writes its DoneAdvisory row (Rust)
+    # under the same entry.
+    "termination",
     "control_plane_tick",
     "state_reap",
     # role_manifest_arm_failed: the manifest rebind at a promoted row's

@@ -3,8 +3,8 @@
 # init-target-state.sh::_derive_has_ui_from_plan (ab-15c470cf).
 #
 # The function must classify plan-referenced paths via the canonical
-# frontend-surface matcher (scripts/lib/infer-has-ui.sh ->
-# fno.executor._surface::is_frontend_surface_path), NOT a private regex.
+# frontend-surface matcher (scripts/lib/infer-has-ui.sh -> the executor-route
+# door's is_frontend_surface_path), NOT a private regex.
 # The discriminating case is `.vue`: the old inline regex matched it, the
 # canonical locked globs do NOT. If `.vue` ever derives `true` again, a
 # private regex has crept back in.

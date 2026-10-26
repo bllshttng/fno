@@ -47,6 +47,9 @@ RUST_CLIENT_EVENT_SOURCES = {
     "triage_applied": "backlog",
     # The native archive sweep emits from the backlog archive command.
     "graph_archive_swept": "backlog",
+    # A standalone research round records its DoneAdvisory terminal under the
+    # hook source, as its Python twin did.
+    "termination": "hook",
 }
 
 

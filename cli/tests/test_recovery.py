@@ -655,7 +655,7 @@ class TestMissionComplete:
         assert recovery.mission_complete(cand) is False
 
     def test_think_name_ignores_a_foreign_manifest(self, monkeypatch, tmp_path):
-        # spawn_think dispatches with --cwd on the node's CANONICAL root, where
+        # The think dispatch spawns with --cwd on the node's CANONICAL root, where
         # an unrelated /target session's manifest can sit; a think worker writes
         # none of its own. Reading that manifest would answer about x-1111 and
         # nudge a design pass that actually finished.
