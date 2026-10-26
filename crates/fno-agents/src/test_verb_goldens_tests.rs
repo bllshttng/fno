@@ -6,13 +6,15 @@
 //! fno.hermetic.neutralise, fno.hermetic.poison,
 //! fno.hermetic.AMBIENT_IDENTITY_ENV, fno.hermetic.AMBIENT_LEAK_CANARY,
 //! fno.test_cmd (check-parity-test-provenance.sh).
-use crate::test_env::{classify, neutralise, poison, passwd_home};
+use crate::test_env::{classify, neutralise, passwd_home, poison};
 use crate::test_smoke_registry as reg;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 fn golden(name: &str) -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/test_verb").join(name);
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden/test_verb")
+        .join(name);
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
@@ -40,7 +42,15 @@ fn specimen() -> BTreeMap<String, String> {
 
 /// The capture's placeholder map, applied in the capture's order (a longer
 /// path that contains a shorter one must be replaced first).
-fn norm(v: &str, sb: &str, sb_real: &str, tmp: &str, tmp_real: &str, fx: &str, home: &str) -> String {
+fn norm(
+    v: &str,
+    sb: &str,
+    sb_real: &str,
+    tmp: &str,
+    tmp_real: &str,
+    fx: &str,
+    home: &str,
+) -> String {
     v.replace(sb_real, "{SB}")
         .replace(sb, "{SB}")
         .replace(tmp_real, "{TMPR}")
@@ -62,7 +72,9 @@ fn fx_dir() -> String {
         .parent()
         .and_then(|p| p.parent())
         .unwrap_or(manifest.as_path());
-    repo.join("cli/tests/fixtures/ambient-poison").to_string_lossy().to_string()
+    repo.join("cli/tests/fixtures/ambient-poison")
+        .to_string_lossy()
+        .to_string()
 }
 
 fn cap() -> (String, String, String, String, String, String) {
@@ -71,11 +83,18 @@ fn cap() -> (String, String, String, String, String, String) {
     let sb = tmp.path().join("sb");
     std::fs::create_dir_all(&sb).unwrap();
     let sb_str = sb.to_string_lossy().to_string();
-    let sb_real = std::fs::canonicalize(&sb).unwrap().to_string_lossy().to_string();
+    let sb_real = std::fs::canonicalize(&sb)
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
     let tmp_root = tmp_root();
-    let tmp_real = std::fs::canonicalize(&tmp_root).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| tmp_root.clone());
+    let tmp_real = std::fs::canonicalize(&tmp_root)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| tmp_root.clone());
     let fx = fx_dir();
-    let home = passwd_home().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    let home = passwd_home()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
     // Hold the TempDir open for the run: dropping it removes the sandbox.
     std::mem::forget(tmp);
     (sb_str, sb_real, tmp_root, tmp_real, fx, home)
@@ -101,7 +120,11 @@ fn neutralise_matches_the_python_golden() {
     let mut repinned: Vec<String> = Vec::new();
     for (k, v) in &out {
         if parent.get(k).map(|p| p != v).unwrap_or(false) {
-            let line = format!("{}\t{}", k, norm(v, &sb, &sb_real, &tmp, &tmp_real, &fx, &home));
+            let line = format!(
+                "{}\t{}",
+                k,
+                norm(v, &sb, &sb_real, &tmp, &tmp_real, &fx, &home)
+            );
             repinned.push(line);
         }
     }
@@ -111,7 +134,11 @@ fn neutralise_matches_the_python_golden() {
     let mut added: Vec<String> = Vec::new();
     for (k, v) in &out {
         if !parent.contains_key(k) {
-            let line = format!("{}\t{}", k, norm(v, &sb, &sb_real, &tmp, &tmp_real, &fx, &home));
+            let line = format!(
+                "{}\t{}",
+                k,
+                norm(v, &sb, &sb_real, &tmp, &tmp_real, &fx, &home)
+            );
             added.push(line);
         }
     }
@@ -141,7 +168,11 @@ fn poison_matches_the_python_golden() {
     for (k, v) in &out {
         let in_parent = parent.get(k);
         if in_parent.map(|p| p != v).unwrap_or(true) {
-            changed.push(format!("{}\t{}", k, norm(v, &sb, &sb_real, &tmp, &tmp_real, &fx, &home)));
+            changed.push(format!(
+                "{}\t{}",
+                k,
+                norm(v, &sb, &sb_real, &tmp, &tmp_real, &fx, &home)
+            ));
         }
     }
     changed.sort();
@@ -154,8 +185,7 @@ fn structural_steps_match_the_captured_registry() {
     let want = golden("smoke_structural.tsv");
     let mut rows: Vec<String> = reg::STRUCTURAL_STEPS
         .iter()
-        .map(|(n, c, m)| format!("{n}\t{c}\t{}", m.replace('\n', "\u{1f}"))
-        )
+        .map(|(n, c, m)| format!("{n}\t{c}\t{}", m.replace('\n', "\u{1f}")))
         .collect();
     assert_eq!(
         rows.join("\n") + "\n",
@@ -173,21 +203,46 @@ fn deferred_list_matches_the_captured_quarantine() {
 
 #[test]
 fn constants_match_the_captured_json() {
-    let v: serde_json::Value =
-        serde_json::from_str(&golden("smoke_constants.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&golden("smoke_constants.json")).unwrap();
     assert_eq!(reg::TAIL_LINES, v["TAIL_LINES"].as_u64().unwrap() as usize);
-    assert_eq!(reg::AMBIENT_MODES, v["AMBIENT_MODES"].as_array().unwrap()
-        .iter().map(|x| x.as_str().unwrap()).collect::<Vec<_>>());
-    assert_eq!(reg::STATE_MODES, v["STATE_MODES"].as_array().unwrap()
-        .iter().map(|x| x.as_str().unwrap()).collect::<Vec<_>>());
-    assert_eq!(reg::STATE_CONTROL_TEST, v["STATE_CONTROL_TEST"].as_str().unwrap());
+    assert_eq!(
+        reg::AMBIENT_MODES,
+        v["AMBIENT_MODES"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        reg::STATE_MODES,
+        v["STATE_MODES"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        reg::STATE_CONTROL_TEST,
+        v["STATE_CONTROL_TEST"].as_str().unwrap()
+    );
     assert_eq!(
         reg::SMOKE_FAILURE_RECORD_DEFAULT,
         v["SMOKE_FAILURE_RECORD_DEFAULT"].as_str().unwrap()
     );
-    assert_eq!(reg::CHANGED_RC_UNSELECTED as i64, v["CHANGED_RC_UNSELECTED"].as_i64().unwrap());
-    assert_eq!(reg::CHANGED_RC_UNEVALUATED as i64, v["CHANGED_RC_UNEVALUATED"].as_i64().unwrap());
-    assert_eq!(reg::CHANGED_RC_PREREQ as i64, v["CHANGED_RC_PREREQ"].as_i64().unwrap());
+    assert_eq!(
+        reg::CHANGED_RC_UNSELECTED as i64,
+        v["CHANGED_RC_UNSELECTED"].as_i64().unwrap()
+    );
+    assert_eq!(
+        reg::CHANGED_RC_UNEVALUATED as i64,
+        v["CHANGED_RC_UNEVALUATED"].as_i64().unwrap()
+    );
+    assert_eq!(
+        reg::CHANGED_RC_PREREQ as i64,
+        v["CHANGED_RC_PREREQ"].as_i64().unwrap()
+    );
     assert_eq!(
         reg::CHANGED_RECEIPT_DEFAULT,
         v["CHANGED_RECEIPT_DEFAULT"].as_str().unwrap()
@@ -202,17 +257,29 @@ fn constants_match_the_captured_json() {
         ("TARGET_BIN_RELS", reg::TARGET_BIN_RELS),
         ("HARNESS_GLOBS", reg::HARNESS_GLOBS),
     ] {
-        let want_list: Vec<String> = v[key].as_array().unwrap()
-            .iter().map(|x| x.as_str().unwrap().to_string()).collect();
+        let want_list: Vec<String> = v[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap().to_string())
+            .collect();
         assert_eq!(got.to_vec(), want_list, "const {key} diverges");
     }
     for (key, got) in [
         ("ALWAYS_LINTS", reg::ALWAYS_LINTS),
         ("ORCHESTRATED_SUBTREES", reg::ORCHESTRATED_SUBTREES),
     ] {
-        let want_rows: Vec<Vec<String>> = v[key].as_array().unwrap()
-            .iter().map(|x| x.as_array().unwrap()
-                .iter().map(|y| y.as_str().unwrap().to_string()).collect())
+        let want_rows: Vec<Vec<String>> = v[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| {
+                x.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|y| y.as_str().unwrap().to_string())
+                    .collect()
+            })
             .collect();
         assert_eq!(got.to_vec(), want_rows, "const {key} diverges");
     }

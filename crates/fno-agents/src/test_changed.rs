@@ -367,12 +367,12 @@ pub fn select_changed(root: &Path, paths: &[String]) -> (Vec<Selection>, Vec<Str
     let mut unmapped: Vec<String> = Vec::new();
     let mut seen: BTreeSet<(&'static str, String)> = BTreeSet::new();
 
-    let mut add = |rule: &'static str,
-                   path: &str,
-                   kind: &'static str,
-                   target: String,
-                   out: &mut Vec<Selection>,
-                   seen: &mut BTreeSet<(&'static str, String)>| {
+    let add = |rule: &'static str,
+               path: &str,
+               kind: &'static str,
+               target: String,
+               out: &mut Vec<Selection>,
+               seen: &mut BTreeSet<(&'static str, String)>| {
         if seen.insert((kind, target.clone())) {
             out.push(Selection {
                 rule,
@@ -382,10 +382,10 @@ pub fn select_changed(root: &Path, paths: &[String]) -> (Vec<Selection>, Vec<Str
             });
         }
     };
-    let mut fallback = |rel: &str,
-                        out: &mut Vec<Selection>,
-                        seen: &mut BTreeSet<(&'static str, String)>,
-                        unmapped: &mut Vec<String>| {
+    let fallback = |rel: &str,
+                    out: &mut Vec<Selection>,
+                    seen: &mut BTreeSet<(&'static str, String)>,
+                    unmapped: &mut Vec<String>| {
         // Last resort before unmapped: a registry step that names this path.
         // Applies to every path shape; an orchestrated subtree names only its
         // runner in the registry, so the substring match cannot see the

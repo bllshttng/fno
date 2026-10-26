@@ -93,6 +93,12 @@ fn run_bounded(
                 );
             }
             Ok(None) => {}
+            Err(e) => {
+                // An unreadable wait is the census failing, not the harness
+                // finishing: record it RED rather than looping forever.
+                eprintln!("census: wait failed for {}: {e}", argv.join(" "));
+                return (1, start.elapsed().as_secs_f64(), false);
+            }
         }
         if Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(200));

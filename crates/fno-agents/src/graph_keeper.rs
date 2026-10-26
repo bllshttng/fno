@@ -4193,8 +4193,11 @@ pub fn sweep_orphaned(timeout_secs: f64) -> Vec<i32> {
         }
     }
     let deadline = std::time::Instant::now() + Duration::from_secs_f64(timeout_secs);
-    let mut pending: Vec<i32> =
-        candidates.iter().copied().filter(|p| keeper_alive(*p)).collect();
+    let mut pending: Vec<i32> = candidates
+        .iter()
+        .copied()
+        .filter(|p| keeper_alive(*p))
+        .collect();
     while !pending.is_empty() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
         pending.retain(|p| keeper_alive(*p));

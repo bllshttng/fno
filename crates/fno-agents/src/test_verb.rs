@@ -196,7 +196,7 @@ pub fn build_child_env(
     ambient: AmbientMode,
     sandbox: &Path,
 ) -> Result<ChildEnv, String> {
-    let mut parent: BTreeMap<String, String> = std::env::vars_os()
+    let parent: BTreeMap<String, String> = std::env::vars_os()
         .filter_map(|(k, v)| {
             Some((
                 k.to_string_lossy().to_string(),

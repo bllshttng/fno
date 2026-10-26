@@ -6,9 +6,7 @@
 //! _run_state_canary, _state_canary_snapshot, _shard_selected_indices,
 //! smoke_steps, smoke_step_weights) and the five cli/tests/unit
 //! smoke-test files they replaced.
-use crate::test_smoke::{
-    is_state_control, parse_smoke_args, run_state_canary, state_both_exit,
-};
+use crate::test_smoke::{is_state_control, parse_smoke_args, run_state_canary, state_both_exit};
 use crate::test_smoke_discovery as disc;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -49,35 +47,81 @@ fn skip_is_its_own_subset_mode() {
 fn a_step_name_containing_a_comma_still_selects_exactly() {
     let commad = "Command-surface ratchet (real count, both binaries)";
     assert!(crate::test_smoke_discovery::name_matches(commad, commad));
-    assert!(!crate::test_smoke_discovery::name_matches("Sync + build", commad));
-    assert!(crate::test_smoke_discovery::name_matches("Sync + build", "Sync + build,Pytest*"));
+    assert!(!crate::test_smoke_discovery::name_matches(
+        "Sync + build",
+        commad
+    ));
+    assert!(crate::test_smoke_discovery::name_matches(
+        "Sync + build",
+        "Sync + build,Pytest*"
+    ));
 }
 
 #[test]
 fn state_mode_parser_rejects_unknown_shapes() {
     let err = parse_smoke_args(&["--state".into(), "invalid".into()]).unwrap_err();
-    assert!(err.contains("--state") && err.contains("clean/populated/both"), "refusal: {err}");
+    assert!(
+        err.contains("--state") && err.contains("clean/populated/both"),
+        "refusal: {err}"
+    );
 }
 
 #[test]
 fn state_both_exit_green_only_when_control_fires_and_diff_is_canary_only() {
     let canary = "tests.unit.test_state_canary::test_state_canary_detects_populated_state";
     let other = "tests.unit.test_state::reads_live_graph";
-    assert_eq!(state_both_exit(0, &[canary], Some("passed"), Some("failed"), false, false), 0);
-    assert_eq!(state_both_exit(0, &[canary, other], Some("passed"), Some("failed"), false, false), 1);
-    assert_eq!(state_both_exit(0, &[canary], Some("passed"), Some("passed"), false, false), 1);
-    assert_eq!(state_both_exit(0, &[canary], None, Some("failed"), false, false), 1);
-    assert_eq!(state_both_exit(0, &[], Some("passed"), Some("failed"), false, false), 1);
-    assert_eq!(state_both_exit(3, &[canary], Some("passed"), Some("failed"), false, false), 3);
-    assert_eq!(state_both_exit(0, &[canary], Some("passed"), Some("failed"), true, false), 1);
+    assert_eq!(
+        state_both_exit(0, &[canary], Some("passed"), Some("failed"), false, false),
+        0
+    );
+    assert_eq!(
+        state_both_exit(
+            0,
+            &[canary, other],
+            Some("passed"),
+            Some("failed"),
+            false,
+            false
+        ),
+        1
+    );
+    assert_eq!(
+        state_both_exit(0, &[canary], Some("passed"), Some("passed"), false, false),
+        1
+    );
+    assert_eq!(
+        state_both_exit(0, &[canary], None, Some("failed"), false, false),
+        1
+    );
+    assert_eq!(
+        state_both_exit(0, &[], Some("passed"), Some("failed"), false, false),
+        1
+    );
+    assert_eq!(
+        state_both_exit(3, &[canary], Some("passed"), Some("failed"), false, false),
+        3
+    );
+    assert_eq!(
+        state_both_exit(0, &[canary], Some("passed"), Some("failed"), true, false),
+        1
+    );
 }
 
 #[test]
 fn state_both_exit_is_red_when_a_lane_never_took_a_baseline() {
     let canary = "tests.unit.test_state_canary::test_state_canary_detects_populated_state";
-    assert_eq!(state_both_exit(0, &[canary], Some("passed"), Some("failed"), false, true), 1);
-    assert_eq!(state_both_exit(0, &[canary], Some("passed"), Some("failed"), true, false), 1);
-    assert_eq!(state_both_exit(0, &[canary], Some("passed"), Some("failed"), false, false), 0);
+    assert_eq!(
+        state_both_exit(0, &[canary], Some("passed"), Some("failed"), false, true),
+        1
+    );
+    assert_eq!(
+        state_both_exit(0, &[canary], Some("passed"), Some("failed"), true, false),
+        1
+    );
+    assert_eq!(
+        state_both_exit(0, &[canary], Some("passed"), Some("failed"), false, false),
+        0
+    );
 }
 
 #[test]
@@ -142,7 +186,10 @@ fn company_boundary_gate_family_has_registered_callers() {
         "scripts/ci/check-company-function-agnostic.sh",
         "scripts/ci/check-plugins-function-agnostic.sh",
     ] {
-        assert!(blob.contains(required), "unreachable company boundary gate: {required}");
+        assert!(
+            blob.contains(required),
+            "unreachable company boundary gate: {required}"
+        );
     }
 }
 
@@ -159,25 +206,43 @@ fn shard_selectors() -> Vec<(String, usize, usize, String, String)> {
     let doc = workflow();
     let jobs = doc.get("jobs").unwrap();
     let needs = match jobs.get("smoke").unwrap().get("needs") {
-        Some(v) if !v.is_null() => v.as_sequence().unwrap().iter()
-            .map(|x| x.as_str().unwrap().to_string()).collect::<Vec<_>>(),
+        Some(v) if !v.is_null() => v
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap().to_string())
+            .collect::<Vec<_>>(),
         _ => vec![],
     };
     let shard_re = regex::Regex::new(r"--shard\s+\$\{\{\s*matrix\.shard\s*\}\}/(\d+)").unwrap();
-    let sel_re = regex::Regex::new(
-        r"--(only|skip)[= ]+'([^']*)'|--(only|skip)[= ]+(\S+)"
-    ).unwrap();
+    let sel_re = regex::Regex::new(r"--(only|skip)[= ]+'([^']*)'|--(only|skip)[= ]+(\S+)").unwrap();
     let mut found = Vec::new();
     for name in &needs {
         let job = jobs.get(name).unwrap();
-        let run = job.get("steps").map(|steps| steps.as_sequence().unwrap().iter()
-            .filter_map(|s| s.get("run").and_then(|r| r.as_str()))
-            .collect::<Vec<_>>().join("\n")).unwrap_or_default();
+        let run = job
+            .get("steps")
+            .map(|steps| {
+                steps
+                    .as_sequence()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|s| s.get("run").and_then(|r| r.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
         let shard = shard_re.captures(&run);
-        let matrix: Vec<usize> = job.get("strategy").and_then(|s| s.get("matrix"))
+        let matrix: Vec<usize> = job
+            .get("strategy")
+            .and_then(|s| s.get("matrix"))
             .and_then(|m| m.get("shard"))
-            .map(|m| m.as_sequence().unwrap().iter()
-                .map(|x| x.as_i64().unwrap() as usize).collect())
+            .map(|m| {
+                m.as_sequence()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_i64().unwrap() as usize)
+                    .collect()
+            })
             .unwrap_or_default();
         let legs: Vec<(usize, usize)> = match &shard {
             Some(c) => matrix.iter().map(|i| (*i, c[1].parse().unwrap())).collect(),
@@ -188,7 +253,8 @@ fn shard_selectors() -> Vec<(String, usize, usize, String, String)> {
             let globs = c.get(2).or(c.get(4)).unwrap().as_str().to_string();
             for (index, total) in &legs {
                 found.push((name.clone(), *index, *total, flag.clone(), globs.clone()));
-                let _ = &flag; let _ = &globs;
+                let _ = &flag;
+                let _ = &globs;
             }
         }
     }
@@ -214,7 +280,8 @@ fn selected_names(
         .map(|(i, _)| i)
         .collect();
     if total > 0 {
-        indices = crate::test_smoke::shard_selected_indices(&steps, &indices, shard, total, weights);
+        indices =
+            crate::test_smoke::shard_selected_indices(&steps, &indices, shard, total, weights);
     }
     indices.into_iter().map(|i| names[i].clone()).collect()
 }
@@ -222,7 +289,10 @@ fn selected_names(
 #[test]
 fn the_workflow_actually_shards_the_gate() {
     let selectors = shard_selectors();
-    assert!(!selectors.is_empty(), "the smoke gate needs no shard jobs carrying --only/--skip");
+    assert!(
+        !selectors.is_empty(),
+        "the smoke gate needs no shard jobs carrying --only/--skip"
+    );
     let mut by_job: BTreeMap<&str, usize> = BTreeMap::new();
     for (job, _, _, _, _) in &selectors {
         *by_job.entry(job.as_str()).or_insert(0) += 1;
@@ -259,19 +329,29 @@ fn every_pr_affected_job_overrides_the_implicit_success_gate() {
     ] {
         let job = jobs.get(name).unwrap();
         assert!(
-            job.get("if").and_then(|v| v.as_str()).unwrap_or("").contains("needs.pr-affected"),
+            job.get("if")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .contains("needs.pr-affected"),
             "{name} stopped being gated on pr-affected; update this guard"
         );
     }
     let smoke = jobs.get("smoke").unwrap();
     let needs: Vec<String> = match smoke.get("needs") {
-        Some(v) if !v.is_null() => v.as_sequence().unwrap().iter()
-            .map(|x| x.as_str().unwrap().to_string()).collect(),
+        Some(v) if !v.is_null() => v
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap().to_string())
+            .collect(),
         _ => vec![],
     };
     assert!(needs.contains(&"pr-affected".to_string()));
     let pr = jobs.get("pr-affected").unwrap();
-    assert_eq!(pr.get("if").and_then(|v| v.as_str()).unwrap(), "${{ !cancelled() }}");
+    assert_eq!(
+        pr.get("if").and_then(|v| v.as_str()).unwrap(),
+        "${{ !cancelled() }}"
+    );
     let changed_smoke = jobs.get("changed-smoke").unwrap();
     assert_eq!(
         changed_smoke.get("if").and_then(|v| v.as_str()).unwrap(),
@@ -283,7 +363,10 @@ fn every_pr_affected_job_overrides_the_implicit_success_gate() {
 fn the_shards_cover_every_step() {
     let steps = disc::smoke_steps(&repo());
     let names: Vec<String> = steps.iter().map(|(n, _, _)| n.clone()).collect();
-    assert!(!names.is_empty(), "the smoke registry is empty; this test would pass vacuously");
+    assert!(
+        !names.is_empty(),
+        "the smoke registry is empty; this test would pass vacuously"
+    );
     let weights = disc::smoke_step_weights(&repo());
     let mut covered: std::collections::BTreeSet<String> = Default::default();
     for (job, shard, total, flag, globs) in shard_selectors() {
@@ -331,40 +414,65 @@ fn the_rest_legs_split_by_measured_weight() {
         .into_iter()
         .filter(|(job, _, _, _, _)| job == "smoke-rest")
         .collect();
-    assert!(!rest.is_empty(), "no smoke-rest legs read from the workflow");
+    assert!(
+        !rest.is_empty(),
+        "no smoke-rest legs read from the workflow"
+    );
     for (_job, shard, total, flag, globs) in rest {
         let leg = selected_names(&names, &flag, &globs, shard, total, &weights);
         let seconds: f64 = leg
             .iter()
             .map(|n| weights.get(n).copied().unwrap_or(2.0))
             .sum();
-        assert!(seconds <= 600.0, "rest leg {shard}/{total} estimates {seconds:.0}s");
+        assert!(
+            seconds <= 600.0,
+            "rest leg {shard}/{total} estimates {seconds:.0}s"
+        );
     }
 }
 
 #[test]
 fn smoke_setup_cleans_before_building_cached_artifacts() {
-    let text = std::fs::read_to_string(repo().join(".github/actions/smoke-setup/action.yml")).unwrap();
+    let text =
+        std::fs::read_to_string(repo().join(".github/actions/smoke-setup/action.yml")).unwrap();
     let action: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).unwrap();
-    let run = action.get("runs").unwrap().get("steps").unwrap()
-        .as_sequence().unwrap().iter()
+    let run = action
+        .get("runs")
+        .unwrap()
+        .get("steps")
+        .unwrap()
+        .as_sequence()
+        .unwrap()
+        .iter()
         .filter_map(|s| s.get("run").and_then(|r| r.as_str()))
         .collect::<Vec<_>>()
         .join("\n");
-    let lines: Vec<&str> = run.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = run
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     for package in ["fno-agents", "fno"] {
         let clean = lines
             .iter()
-            .position(|l| *l == format!("cargo clean -p {package} --manifest-path crates/{package}/Cargo.toml"))
+            .position(|l| {
+                *l == format!(
+                    "cargo clean -p {package} --manifest-path crates/{package}/Cargo.toml"
+                )
+            })
             .unwrap_or_else(|| panic!("no clean line for {package}"));
         let build = lines
             .iter()
             .position(|l| {
-                l.starts_with(&format!("CARGO_BUILD_BUILD_DIR=\"$PWD/crates/{package}/target\" "))
-                    && l.contains(&format!("--manifest-path crates/{package}/Cargo.toml"))
+                l.starts_with(&format!(
+                    "CARGO_BUILD_BUILD_DIR=\"$PWD/crates/{package}/target\" "
+                )) && l.contains(&format!("--manifest-path crates/{package}/Cargo.toml"))
             })
             .unwrap_or_else(|| panic!("no build line for {package}"));
-        assert!(clean < build, "smoke setup can execute a stale cached {package} binary");
+        assert!(
+            clean < build,
+            "smoke setup can execute a stale cached {package} binary"
+        );
     }
 }
 
@@ -378,8 +486,7 @@ fn journey_cargo_builds_pin_the_classic_layout() {
     // itself reads and smoke-setup pre-builds warm. The invocation pattern
     // consumes shell assignment prefixes, so an indented build or one
     // carrying another env prefix (RUSTFLAGS=... cargo build) is caught too.
-    let lines =
-        std::fs::read_to_string(repo().join("tests/mux-workspace-standalone.sh")).unwrap();
+    let lines = std::fs::read_to_string(repo().join("tests/mux-workspace-standalone.sh")).unwrap();
     let invocation = regex::Regex::new(
         r#"(?:^|[;&|]\s*|\b(?:then|do|else)\s+)(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+)*cargo build\b"#,
     )

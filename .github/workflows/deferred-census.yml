@@ -68,6 +68,12 @@ jobs:
           }
           yq --version
 
+      - name: Provision the native test verb
+        # The census calls the native verb directly; without this step the job
+        # reds with "fno-agents: command not found" before it measures
+        # anything.
+        uses: ./.github/actions/smoke-setup
+
       - name: Census the deferred set
         # Exits non-zero when a held entry passes. That is the whole signal:
         # a green entry is coverage that is quietly off, and the fix is to

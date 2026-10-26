@@ -578,7 +578,7 @@ pub fn run(args: &[String], _stream: bool) -> i32 {
 }
 
 /// `--ambient both`: run the two ambient lanes and report divergence.
-fn run_ambient_both(root: &Path, args: &[String]) -> i32 {
+fn run_ambient_both(_root: &Path, args: &[String]) -> i32 {
     let rest = strip_lane_flag(args, "--ambient");
     println!("ambient: clean lane");
     let clean_rc = run(&rest, false);
@@ -627,7 +627,7 @@ fn strip_lane_flag(args: &[String], flag: &str) -> Vec<String> {
 }
 
 /// `--state both`: two state lanes, then the junit comparison is the verdict.
-fn run_state_both(root: &Path, args: &[String]) -> i32 {
+fn run_state_both(_root: &Path, args: &[String]) -> i32 {
     let rest = strip_lane_flag(args, "--state");
     println!("state: clean lane");
     let clean_rc = run(&rest, false);
@@ -783,7 +783,7 @@ fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
     // Selection: build the selected indices from the mode.
     let mut retry_fell_back = false;
     let failure_record = failure_record_path(&root, lane.ambient_label);
-    let selected: Vec<usize> = if opts.retry_failed {
+    let mut selected: Vec<usize> = if opts.retry_failed {
         let known = names.clone();
         let recorded = read_failure_record(&failure_record, &known);
         if recorded.is_empty() {
