@@ -2348,14 +2348,16 @@ fn init_from_worktree(
     let code = run_bounded_init(&init_args, wt_path, deadline, node)?;
     if code != 0 {
         if created_this_run && !in_place {
-            // One receipt line the run currently lacks: the refused init
-            // leaves a fresh tree holding an init-time manifest and no claim,
-            // which a later reader cannot tell from a live session. The tree
-            // is NOT deleted - deletion is the more dangerous mistake.
+            // One receipt line the run currently lacks: a refused init leaves
+            // a fresh tree a later reader cannot always tell from a live
+            // session. The tree is NOT deleted - deletion is the more
+            // dangerous mistake. The receipt leads with the resume path and
+            // keeps archive as the explicit discard.
             eprintln!(
                 "fno do target start: target init failed (step: init, exit {code}); \
-                 worktree at {} is created but unclaimed; reclaim with: fno agents \
-                 workspace worktree archive {}",
+                 worktree at {} is created. A rerun of fno do target start resumes \
+                 in this tree (idempotent, nothing is recreated); to discard it \
+                 instead: fno agents workspace worktree archive {}",
                 wt_path.display(),
                 wt_path.display()
             );
