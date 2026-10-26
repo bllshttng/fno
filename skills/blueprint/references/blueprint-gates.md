@@ -234,12 +234,12 @@ Transcription is purely mechanical: same Locked Decisions input yields the
 same frontmatter output. No LLM judgment in this step.
 
 ```bash
-# The locked-decision parser is the in-package module fno.executor._locked
-# (the SINGLE source of truth). In a checkout, point PYTHONPATH at cli/src so
-# it imports pre-install; an installed `fno` needs no PYTHONPATH.
-_PKG_SRC="$(cd "${CLAUDE_PLUGIN_ROOT:-$SKILL_DIR/../..}" 2>/dev/null && pwd)/cli/src"
-[[ -f "${_PKG_SRC}/fno/executor/_locked.py" ]] && export PYTHONPATH="${_PKG_SRC}${PYTHONPATH:+:${PYTHONPATH}}"
-LOCKED_VALUE=$(python3 -m fno.executor._locked < "$DESIGN_DOC_PATH")
+# The locked-decision parser is the native executor-route door
+# (crates/fno-agents/src/executor_route.rs, the SINGLE source of truth since
+# the worker-family port deleted the Python leg). Resolve the fno-agents
+# binary through the shared resolver (hooks/lib/agents-bin.sh) and exec the
+# door; a checkout with a built binary needs nothing else.
+LOCKED_VALUE=$(fno-agents executor-route locked < "$DESIGN_DOC_PATH")
 # LOCKED_VALUE is one of: '' | tdd | impeccable | mixed
 ```
 
@@ -303,10 +303,10 @@ sources in precedence order (frontmatter wins):
 ```bash
 # 1. Plan frontmatter `model:` (primary). Scope to the frontmatter block only.
 MODEL_PIN="$(awk '/^---[[:space:]]*$/{c++; next} c==1 && /^model:/{sub(/^model:[[:space:]]*/,""); print; exit}' "$PLAN_INDEX")"
-# 2. Fallback: a `Model: <token>` Locked Decision (same parser module as the
+# 2. Fallback: a `Model: <token>` Locked Decision (same native door as the
 #    executor lock, selected with --key model; empty when none).
 if [[ -z "$MODEL_PIN" ]]; then
-  MODEL_PIN="$(python3 -m fno.executor._locked --key model < "$DESIGN_DOC_PATH")"
+  MODEL_PIN="$(fno-agents executor-route locked --key model < "$DESIGN_DOC_PATH")"
 fi
 ```
 
