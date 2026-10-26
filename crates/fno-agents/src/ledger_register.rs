@@ -1107,7 +1107,7 @@ mod tests {
             "completion_gates:\n",
             "think: done\n",
             "review: pending\n",
-            "graph_node_id: ab-testnode\n"
+            "graph_node_id: ab-1234\n"
         );
         let p = write_manifest(dir.path(), body);
         let state = parse_target_state(&p).unwrap();
@@ -1119,7 +1119,7 @@ mod tests {
         let gates = state["_gates"].as_object().unwrap();
         assert_eq!(gates["think"], "done");
         assert_eq!(gates["review"], "pending");
-        assert_eq!(state["graph_node_id"], "ab-testnode");
+        assert_eq!(state["graph_node_id"], "ab-1234");
     }
 
     #[test]
@@ -1152,11 +1152,22 @@ mod tests {
         assert_eq!(completed, vec!["execute"]);
         assert_eq!(skipped, vec!["think", "plan"]);
 
-        // A node-shaped input binds planning the same way.
+        // A bare node-shaped input binds planning the same way.
         state.remove("plan_path");
-        state.insert("input".into(), json!("ab-1234 ship the thing"));
-        let (completed, _) = derive_phases(&state, Some(7));
+        state.insert("input".into(), json!("ab-1234"));
+        let (completed, skipped) = derive_phases(&state, Some(7));
         assert_eq!(completed, vec!["execute", "review", "ship"]);
+        assert_eq!(skipped, vec!["think", "plan"]);
+
+        // Trailing prose after the id does not bind: the Python pattern is
+        // start- and end-anchored, so only a whole-input node id counts.
+        state.insert("input".into(), json!("ab-1234 ship the thing"));
+        let (completed, skipped) = derive_phases(&state, Some(7));
+        assert_eq!(
+            completed,
+            vec!["execute", "think", "plan", "review", "ship"]
+        );
+        assert!(skipped.is_empty());
 
         // no_ship + optional-phase flags skip without a PR.
         let mut state = minimal_state();
