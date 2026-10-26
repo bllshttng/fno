@@ -797,7 +797,7 @@ def cmd_spawn(
     if "refusal" in answer:
         print(answer["refusal"], file=sys.stderr)
         raise typer.Exit(code=2)
-    harness = answer.get("harness") or harness or ""
+    harness = answer.get("harness") or harness
     harness_source = answer.get("source")
     # Provenance rides the pane receipt's harness_source field below - it is
     # the HARNESS axis's provenance, not the vendor's. The bg/once stdout
@@ -806,7 +806,7 @@ def cmd_spawn(
     # The substrate axis: an empty value resolves to the built-in default
     # (thread where seated).
     from fno.agents.harness_map import DispatchResolveError, fence_uncarried, thread_seatable
-    uncarried = fence_uncarried(harness, passthrough)
+    uncarried = fence_uncarried(harness or "", passthrough)
     if passthrough and message.startswith("-"):
         # A seed written after the fence lands here: the fence's first token
         # fills the prompt slot, so `-- -m X 'seed'` seeds the worker with `-m`.

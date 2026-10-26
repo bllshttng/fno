@@ -144,8 +144,8 @@ fn configured_mode(payload: &Value) -> Value {
             return json!({
                 "harness": stage,
                 "note": format!(
-                    "harness=deprecated dispatch.harness={legacy:?} ignored; \
-                     agents.profiles.{profile_key}.provider={stage:?} is the home"
+                    "harness=deprecated dispatch.harness='{legacy}' ignored; \
+                     agents.profiles.{profile_key}.provider='{stage}' is the home"
                 ),
                 "route": route,
             });
@@ -254,12 +254,9 @@ mod tests {
         assert_eq!(answer["harness"], "opencode");
         assert_eq!(answer["route"], "zai/glm-5.3");
         let note = answer["note"].as_str().unwrap();
+        assert!(note.contains("dispatch.harness='codex' ignored"), "{note}");
         assert!(
-            note.contains("dispatch.harness=\"codex\" ignored"),
-            "{note}"
-        );
-        assert!(
-            note.contains("agents.profiles.target.provider=\"opencode\" is the home"),
+            note.contains("agents.profiles.target.provider='opencode' is the home"),
             "{note}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
