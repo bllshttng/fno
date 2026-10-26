@@ -111,7 +111,7 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 2.25x | 27 | 12 | `cli/src/fno/graph/store.py:288` | `_normalize_lock_fields` |
 | 2.25x | 9 | 4 | `cli/src/fno/lint_command_ratchet.py:194` | `_locate_rust_front` |
 | 2.25x | 9 | 4 | `cli/src/fno/paths.py:1173` | `resolve_plugin_script_durable` |
-| 2.25x | 9 | 4 | `cli/src/fno/roles/context.py:48` | `catalog_revision` |
+| 2.25x | 9 | 4 | `crates/fno-agents/src/roles/context.rs:90` | `catalog_revision` |
 | 2.25x | 9 | 4 | `cli/src/fno/rust_binary.py:58` | `_sibling_binary` |
 | 2.25x | 9 | 4 | `cli/src/fno/worktree_paths.py:43` | `worktree_base` |
 | 2.22x | 20 | 9 | `cli/src/fno/executor/_surface.py:42` | `is_frontend_surface_path` |
