@@ -207,7 +207,7 @@ def test_next_fail_closed_names_the_backend(tmp_path, monkeypatch):
           fail_list_open=True)
     r = runner.invoke(app, ["backlog", "next"], catch_exceptions=False)
     assert r.exit_code == 1
-    assert "fake-external" in r.output
+    assert "github" in r.output  # the env-selected backend, the name the seam can report
     assert r.output.strip() != "null"
 
 
@@ -217,6 +217,7 @@ def test_next_fail_closed_names_the_id_on_sidecar_fault(tmp_path, monkeypatch):
     rows = _rows_basic()
     tracker, _g = _wire(monkeypatch, tmp_path, rows, {
         "EXT-hi": {"plan_path": "/plans/hi.md"},
+        "EXT-lo": {"plan_path": "/plans/lo.md"},
     })
     # Make the second candidate's sidecar unreadable at the store level:
     # a directory in place of the file raises on read, the fake names the id,

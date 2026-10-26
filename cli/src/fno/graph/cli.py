@@ -1995,8 +1995,8 @@ def _done_via_seam(task_id: str, *, skip_stamp: bool, force: bool, reason: Optio
 
     release_node_claim_at_closure(task_id, rung="done")
 
-    if sc.plan_path and not skip_stamp:
-        _stamp_and_graduate_plan(sc.plan_path, url=evidence_pr_url, session_id=None)
+    if sc.get("plan_path") and not skip_stamp:
+        _stamp_and_graduate_plan(sc["plan_path"], url=evidence_pr_url, session_id=None)
 
 
 @cli.command(

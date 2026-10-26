@@ -203,9 +203,7 @@ def read_entries(reader: str, *, strict: bool = False) -> list[dict]:
       - graph cli default-entry loader
       - lead drain (strict; also catches the store errors beside it)
     """
-    import os
-
-    if (os.environ.get("FNO_TRACKER_BACKEND") or "graph") != "graph":
+    if active_backend_name() != "graph":
         raise ExternalMetadataUnavailable(reader)
     from fno.graph.store import GraphCorruptError, read_graph_strict
 
