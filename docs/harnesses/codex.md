@@ -11,7 +11,7 @@ The plugin installs from the filtered stage of your checkout: git-tracked files 
 fno config plugin install codex
 ```
 
-The release channel is `codex plugin marketplace add bllshttng/fno@stable` (see [install](../install.md)). When the channel marker reads `release`, the dev install refuses with exit 3 and names the channel. Pass `--dev` to switch to your local checkout. To repair a release install, run `fno config setup run --only harness-wiring`.
+The release channel installs `fno@fno` from the `stable` branch of `bllshttng/fno`. `fno.sh` wires it after a verified install, through `fno config setup auto-wire`. That step runs `fno-agents plugin-install codex --release`, which leaves a fresh install and any dev-channel install alone and converges anything else onto release. When the channel marker reads `release`, the dev install refuses with exit 3 and names the channel. Pass `--dev` to switch to your local checkout. To repair a release install, run `fno config setup run --only harness-wiring`.
 
 Codex caches plugins by version, so local edits at the same manifest version require an explicit refresh.
 `--force` removes and re-adds the copy through Codex, which deterministically rebuilds its cache.
@@ -24,9 +24,9 @@ Install first validates the requested marketplace and plugin in an isolated temp
 
 Install also removes legacy registrations and their cache. They are `footnote-dev` (`fno@footnote-dev`) and `footnote` (`fno@footnote`). `footnote` is the marketplace name before the rename to `fno`. Until install runs, `fno doctor` reports an old `fno@footnote` install as `legacy-marketplace`.
 
-An already-correct install is a no-op unless `--force` is present. Every mutation can require hook approval and takes effect in a new Codex session. Blocking `cli-ci` installs Codex 0.145 and runs the isolated real-binary containment and rollback regressions on every affected pull request.
+An already-correct install is a no-op unless `--force` is present. Every mutation can require hook approval and takes effect in a new Codex session. The engine is `crates/fno-agents/src/codex_converge.rs`. Blocking `cli-ci` installs Codex 0.145 and runs its real-binary rollback regression on every pull request that touches the Rust crates.
 
-`fno doctor` reports Codex plugin freshness separately from Python and Rust CLI freshness.
+`fno doctor` reports Codex plugin freshness separately from Python and Rust CLI freshness. `fno-agents plugin-install codex --status` prints the same verdict as one JSON line.
 It compares the installed loadable source payload with `CODEX_HOME/plugins/cache/<marketplace>/fno/<version>` and gives the exact refresh command for wrong-channel, missing-cache, version-mismatch, and payload-drift findings.
 
 The verified payload preserves one loaded set of:

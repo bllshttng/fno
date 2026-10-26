@@ -6,8 +6,8 @@
 //! caches copy what they are pointed at.
 //!
 //! This module owns stage build, the `--check`/`--restage` deploy commands, the
-//! claude, opencode and agy arms plus the old env-export cleanup. The codex arm stays on
-//! the Python `converge` engine in the Python shim.
+//! claude, opencode and agy arms plus the old env-export cleanup. The codex arm
+//! converges through `codex_converge`.
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -1416,9 +1416,8 @@ struct PluginInstallArgs {
     dry_run: bool,
     /// Consent to replace a release-channel plugin with the local checkout.
     dev: bool,
-    /// The harness word after a flag mode (`--stage-only codex`), so the
-    /// codex door gets the same release-channel refusal.
-    stage_for: Option<String>,
+    /// Converge codex onto the release channel (setup's wiring).
+    release: bool,
     /// A deploy/read-only mode flag (`--check`, `--restage`, ...) that arrived
     /// AFTER a harness positional and was therefore not applied. Never silent:
     /// `plugin-install claude --check` once fell through to a full mutating
@@ -1446,7 +1445,7 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
         yes: false,
         dry_run: false,
         dev: false,
-        stage_for: None,
+        release: false,
         dropped_mode: None,
     };
     let mut i = 0;
@@ -1493,11 +1492,15 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 parsed.dev = true;
                 i += 1;
             }
+            "--release" => {
+                parsed.release = true;
+                i += 1;
+            }
             "--json" | "-J" => {
                 parsed.json = true;
                 i += 1;
             }
-            "--force" => {
+            "--force" | "-F" => {
                 parsed.force = true;
                 i += 1;
             }
@@ -1521,7 +1524,7 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 parsed.hooks_status = true;
                 i += 1;
             }
-            "--check" | "--restage" | "--stage-only" | "--env-only" => {
+            "--check" | "--restage" => {
                 if parsed.mode.is_none() {
                     parsed.mode = Some(args[i].clone());
                 } else {
@@ -1530,12 +1533,8 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 i += 1;
             }
             other => {
-                if !other.starts_with('-') {
-                    if parsed.mode.is_none() {
-                        parsed.mode = Some(other.to_string());
-                    } else if parsed.stage_for.is_none() {
-                        parsed.stage_for = Some(other.to_string());
-                    }
+                if !other.starts_with('-') && parsed.mode.is_none() {
+                    parsed.mode = Some(other.to_string());
                 }
                 i += 1;
             }
@@ -1564,7 +1563,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
         yes,
         dry_run,
         dev,
-        stage_for,
+        release,
         dropped_mode,
     } = parse_plugin_install_args(args);
     if let Some(flag) = dropped_mode {
@@ -1644,38 +1643,13 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 }
             }
         }
-        // Stage-only mode: build the filtered stage, print its path, exit. The
-        // Python codex arm uses it to hand converge a source_root.
-        Some("--stage-only") => {
-            if let Some(harness) = stage_for.as_deref() {
-                if let Some(channel) = release_channel_here(harness).filter(|_| !dev) {
-                    eprintln!("{}", release_refusal(harness, &channel));
-                    return 3;
-                }
-            }
-            let source_dir = source.map(PathBuf::from).unwrap_or_else(default_source_dir);
-            match repo_root(&source_dir).and_then(|root| {
-                let parent = state_root().join("plugin-stage");
-                build_stage(&root, &parent).map(|(p, _)| p)
-            }) {
-                Ok(stage) => {
-                    prime_plugin_root_pointer(&stage);
-                    println!("{}", stage.display());
-                    0
-                }
-                Err(e) => {
-                    eprintln!("plugin install: {e}");
-                    1
-                }
-            }
-        }
-        // Env-only mode: remove the old build-dir exports without an install,
-        // so the codex path (converge in Python) cleans up too.
-        Some("--env-only") => {
-            env_retract_receipt();
-            0
-        }
         Some(harness) => {
+            if harness == "codex" && status {
+                return crate::codex_converge::run_status();
+            }
+            if harness == "codex" && release {
+                return crate::codex_converge::run_release(json);
+            }
             if harness == "opencode" {
                 return run_opencode_arm(harness, json, uninstall, status, quick, yes, dry_run);
             }
@@ -1736,6 +1710,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
             eprintln!("       fno-agents plugin-install --check [--stage <dir>] [--source <dir>] [--json|-J]");
             eprintln!("         (no --stage checks every plugin root; exit is the worst status across roots)");
             eprintln!("       fno-agents plugin-install --restage [--source <dir>]");
+            eprintln!("       fno-agents plugin-install codex --release [--json] | --status");
+            eprintln!("         converges codex onto the GitHub stable channel, or prints its freshness verdict");
             2
         }
     }
@@ -2254,6 +2230,7 @@ fn install_harness(harness: &str, force: bool, source_dir: &Path) -> Result<Stri
     let detail = match harness {
         "claude" => install_claude(&stage, force)?,
         "agy" => install_agy(&stage, force)?,
+        "codex" => crate::codex_converge::run_dev(&stage, force)?,
         "grok" => install_grok(&stage, force)?,
         "zcode" => install_zcode(&stage, force)?,
         other => {
@@ -3114,20 +3091,13 @@ mod tests {
         assert_eq!(parsed.dropped_mode.as_deref(), Some("--check"));
         assert_eq!(run_plugin_install(&args), 2);
 
-        let args: Vec<String> = ["codex", "--stage-only"]
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        assert_eq!(run_plugin_install(&args), 2);
-
-        let args: Vec<String> = ["--stage-only", "codex", "--dev"]
+        let args: Vec<String> = ["--json", "--release", "codex", "-F"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
         let parsed = parse_plugin_install_args(&args);
-        assert_eq!(parsed.mode.as_deref(), Some("--stage-only"));
-        assert_eq!(parsed.stage_for.as_deref(), Some("codex"));
-        assert!(parsed.dev);
+        assert_eq!(parsed.mode.as_deref(), Some("codex"));
+        assert!(parsed.release && parsed.json && parsed.force && !parsed.dev);
     }
 
     /// A GitHub-sourced claude marketplace or a codex release marker is a

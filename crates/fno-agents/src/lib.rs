@@ -131,6 +131,7 @@ pub mod client;
 pub mod client_commands;
 pub mod client_render;
 pub mod codex_ask;
+pub mod codex_converge;
 pub mod codex_daemon_readiness;
 pub mod codex_daemon_upgrade;
 /// Test support: a fake shared codex app-server daemon. Public because the
@@ -178,6 +179,7 @@ pub mod escalation;
 pub mod eval_attempt;
 pub mod eval_part4;
 pub mod eval_reap;
+pub mod evals;
 pub mod evals_arm;
 pub mod evals_climb;
 pub mod evals_macro;
@@ -466,6 +468,7 @@ pub mod release_notes;
 pub mod removals;
 pub mod rename;
 pub mod repeated_asks;
+pub mod research;
 pub mod reserve;
 pub(crate) mod resolve_tier;
 pub mod restart_run;
@@ -604,6 +607,8 @@ pub mod test_hold;
 pub mod test_run;
 mod test_run_journal;
 pub mod think_daily;
+pub mod think_dispatch;
+pub mod think_inspect;
 pub mod thread_host;
 pub mod tick_ledger;
 pub mod tool_activity;
@@ -1524,6 +1529,9 @@ mod tests {
 /// output; only include kinds that appear as the first string argument to an
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
+    // A standalone research round ships its brief and records the
+    // DoneAdvisory terminal (research/deliverable.rs).
+    "termination",
     // The daemon trust-answer sweep: one row per attempt to answer a parked
     // codex folder-trust modal itself (daemon/sweeps.rs).
     "trust_prompt_answered",
