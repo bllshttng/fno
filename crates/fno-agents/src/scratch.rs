@@ -1584,7 +1584,7 @@ mod tests {
         assert_eq!(flag(c, "--origin-evidence"), Some("scratch-shape:ci_probe"));
         assert!(c.contains(&"--separate".to_string()), "got {c:?}");
         assert!(
-            fake.calls().iter().any(|c| c == &["help", "do", "--all"]),
+            fake.calls().iter().any(|c| c == &["do", "ci", "--help"]),
             "the remedy probe runs before filing: {:?}",
             fake.calls()
         );
