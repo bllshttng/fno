@@ -106,8 +106,6 @@ fn continuation_base(repo: &Path, name: &str, base: &str, br: &str) -> Option<Co
         if count > 0 {
             return Some(Continuation {
                 kind: "continued".to_string(),
-                source: format!("origin/{br}"),
-                count,
                 create_target: feat_ref,
             });
         }
@@ -135,8 +133,6 @@ fn continuation_base(repo: &Path, name: &str, base: &str, br: &str) -> Option<Co
 
 struct Continuation {
     kind: String,
-    source: String,
-    count: i64,
     create_target: String,
 }
 
@@ -162,8 +158,6 @@ fn continue_salvage_arm(
         if count > 0 {
             return Some(Continuation {
                 kind: "salvaged".to_string(),
-                source: salvage.to_string(),
-                count,
                 create_target: remote_salvage.to_string(),
             });
         }
@@ -175,8 +169,6 @@ fn continue_salvage_arm(
         if count > 0 {
             return Some(Continuation {
                 kind: "salvaged".to_string(),
-                source: salvage.to_string(),
-                count,
                 create_target: salvage.to_string(),
             });
         }
