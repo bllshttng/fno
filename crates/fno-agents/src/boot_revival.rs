@@ -286,46 +286,23 @@ fn ci_verdict(worker: &RegistryEntry, pr: u64) -> String {
 /// not this boot's news. `None` means the receipt exists but is unreadable -
 /// the caller renders that as a failed reading, never a silent zero.
 pub(crate) fn failed_rows_this_boot(home: &AgentsHome) -> Option<Vec<ReceiptRow>> {
-    let raw = std::fs::read_to_string(home.root().join(RECEIPT_FILE)).ok()?;
-    let boot = boot_time()?;
-    if !ran_this_boot(recorded_boot_value(&raw), boot) {
+    let receipt = home.root().join(RECEIPT_FILE);
+    let raw = std::fs::read_to_string(&receipt).ok()?;
+    if !ran_this_boot(recorded_boot(&receipt), boot_time()?) {
         return Some(Vec::new());
     }
     let v: Value = serde_json::from_str(&raw).ok()?;
+    let rows = v.get("rows")?.as_array()?;
     Some(
-        parse_rows(v.get("rows"))
-            .into_iter()
-            .filter(|r| r.outcome == "failed")
+        rows.iter()
+            .filter_map(|r| {
+                let name = r.get("name")?.as_str()?.to_string();
+                let reason = r.get("reason")?.as_str()?.to_string();
+                (r.get("outcome")?.as_str()? == "failed")
+                    .then_some(ReceiptRow::new(&name, "failed", reason))
+            })
             .collect(),
     )
-}
-
-fn recorded_boot_value(raw: &str) -> Option<u64> {
-    serde_json::from_str::<Value>(raw)
-        .ok()?
-        .get("boot")
-        .and_then(Value::as_u64)
-}
-
-fn parse_rows(rows: Option<&Value>) -> Vec<ReceiptRow> {
-    rows.and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|r| {
-                    Some(ReceiptRow {
-                        name: r.get("name").and_then(Value::as_str)?.to_string(),
-                        outcome: match r.get("outcome").and_then(Value::as_str)? {
-                            "revived" => "revived",
-                            "skipped" => "skipped",
-                            "failed" => "failed",
-                            _ => return None,
-                        },
-                        reason: r.get("reason").and_then(Value::as_str)?.to_string(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// Split the registry into leads to revive, workers to revive, and the rows
