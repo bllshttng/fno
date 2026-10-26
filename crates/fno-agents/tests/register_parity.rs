@@ -41,6 +41,7 @@ fn run_register(
             root.join("empty-opencode-storage"),
         )
         .env("FNO_MUX_DIR", root.join("empty-mux"))
+        .envs(fno_agents::test_run::self_owner_env())
         .current_dir(root);
     for (key, value) in env {
         cmd.env(key, value);
