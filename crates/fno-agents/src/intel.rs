@@ -947,6 +947,9 @@ pub fn run_intel(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--convert") {
         return crate::claude_records::run_convert(args);
     }
+    if args.iter().any(|a| a == "--receipt") {
+        return crate::session_receipt::run(args);
+    }
     if args
         .iter()
         .any(|a| a == "--corpus" || a == "--corpus-ingest")
@@ -962,6 +965,7 @@ pub fn run_intel(args: &[String]) -> i32 {
              [--readers <secs>] [--every-ms N] (CPU-seconds per process class over a window)\n\
              [--windows --session <id>|--team <scope>] [--since DATE] [--until DATE] [--write [dir]]\n\
              [--convert <transcript.jsonl> --from claude] (the transcript as footnote session records, one JSON line each)\n\
+             [--receipt [--session <id>] [--harness <h>] [--json]] (one session's last turn: who woke it, calls, edits, errors, cost, denials)\n\
              [--corpus <dir> [--days N] [-H claude,codex]] [--corpus-ingest <dir>]\n\n\
              The provenance fold: per-session operator/relay/harness/keepalive counters,\n\
              tool_use, commits, the node and PR join, and the relay facets of every bus\n\

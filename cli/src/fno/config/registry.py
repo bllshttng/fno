@@ -629,6 +629,7 @@ FIELD_META: dict[str, Meta] = {
     "store.remote_token": Meta("never", "Bearer token for store.remote_url, when the primary asks for one. Default unset."),
     "store.remote_addrs": Meta("never", "IPs (or IP:port) to dial, in order, when the host in store.remote_url does not answer, such as its Tailscale 100.x IP for when MagicDNS breaks. A bare IP takes the URL's port. Default unset."),
     "store.share_backlog": Meta("never", "true moves the backlog itself to the primary named by store.remote_url; both keys must be set. Default false."),
+    "store.ssh_peers": Meta("never", "Optional plan rescue: a map of host key to ssh destination, e.g. store.ssh_peers.\"macbook\" = \"macbook.lan\". When this host cannot place a plan file from the shared store, the plan carrier asks that peer over ssh (BatchMode, 5s connect timeout). A key is the pushing host's name, a host in the fno_plan_seen ledger, or the store host in store.remote_url. Off by default: the shared store stays the only required transport. Read from the global config only. Default unset."),
     "worktree.prune_done": Meta(
         "advanced",
         "How far the merged sweep's done-node arm goes on a done tree with "

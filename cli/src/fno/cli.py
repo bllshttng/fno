@@ -78,7 +78,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "The lead's board and its session manifest.",
         {"hidden": True},
     ),
-    "worker": ("fno.worker.cli:cli", "manage delivery worker phases", {"hidden": True}),
     "event": ("fno.events.cli:cli", "emit and audit events", {"hidden": True}),
     "inbox": (
         "fno.inbox.cli:inbox_app",
@@ -253,7 +252,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "state": set(),
     "stub-manifest": set(),
     "target": set(),
-    "worker": set(),
     "worktree": set(),
 }
 
