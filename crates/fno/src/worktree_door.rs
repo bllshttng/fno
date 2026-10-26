@@ -12,7 +12,7 @@ pub enum Launch {
     /// Exec `fno-agents <argv>` (stdio inherited, exit code returned).
     Agents(Vec<String>),
     /// Exec `bash scripts/lib/worktree-lifecycle.sh <leaf args>` from the
-    /// repo root, the composition the deleted Python verbs forwarded to.
+    /// repo root, the composition the deleted Python commands forwarded to.
     Lifecycle(Vec<String>),
     /// An argv shape the family owns but no leaf answers: refuse with the
     /// leaf list instead of forwarding to mounts that no longer exist.

@@ -1,4 +1,4 @@
-//! The worktree family's native verbs, ported from the deleted
+//! The worktree family's native commands, ported from the deleted
 //! `cli/src/fno/worktree*.py`, `runtime/`, and `workspace/` Python legs.
 //!
 //! Each op is a raw `fno-agents` client intercept (client.rs), so the curated
