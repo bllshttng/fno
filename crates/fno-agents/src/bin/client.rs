@@ -82,9 +82,6 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "honesty-sweep",
     "prove-it-verdicts",
     "test-run",
-    "test-env",
-    "test",
-    "keeper-sweep",
     "promote",
     "publish-review",
     "reap",
@@ -710,19 +707,22 @@ async fn run(args: Vec<String>) -> i32 {
     }
 
     // `test-env`: the hermetic child env door (test_env.rs). Direct
-    // dispatch like `test-run`: the env assembly must answer without a daemon.
+    // dispatch: the env assembly must answer without a daemon. Unregistered
+    // in ALL_CLIENT_ACTIONS (the shrink law); the conftest calls it by name.
     if command == "test-env" {
         return fno_agents::test_env::run_test_env(&args[1..]);
     }
 
     // `test`: the whole test-verb family, native (test_verb.rs). Direct
-    // dispatch, no daemon RPC; same registration story as test-run.
+    // dispatch, no daemon RPC. Unregistered in ALL_CLIENT_ACTIONS (the
+    // shrink law): the advertised surface is the `fno doctor test` front.
     if command == "test" {
         return fno_agents::test_verb::run_test(&args[1..]);
     }
 
     // `keeper-sweep`: the orphaned-keeper sweep door (graph_keeper.rs), for
-    // the pytest conftest. Direct dispatch, no daemon RPC.
+    // the pytest conftest. Direct dispatch, no daemon RPC; unregistered in
+    // ALL_CLIENT_ACTIONS (the shrink law).
     if command == "keeper-sweep" {
         return fno_agents::graph_keeper::run_keeper_sweep(&args[1..]);
     }

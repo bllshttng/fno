@@ -107,14 +107,16 @@ pub(super) const DISCOVERY_DEFERRED: &[&str] = &[
 ];
 
 /// Machine constants the smoke runner pins (from smoke_constants.json).
+/// The exit-code trio is i32: they are process exit codes, and the runners
+/// return i32; the goldens test casts them up for the captured-JSON read.
 pub(super) const TAIL_LINES: usize = 40;
 pub(super) const AMBIENT_MODES: &[&str] = &["clean", "dirty", "both"];
 pub(super) const STATE_MODES: &[&str] = &["clean", "populated", "both"];
 pub(super) const STATE_CONTROL_TEST: &str = "test_state_canary_detects_populated_state";
 pub(super) const SMOKE_FAILURE_RECORD_DEFAULT: &str = ".fno/preflight-last-failures.txt";
-pub(super) const CHANGED_RC_UNSELECTED: usize = 20;
-pub(super) const CHANGED_RC_UNEVALUATED: usize = 21;
-pub(super) const CHANGED_RC_PREREQ: usize = 22;
+pub(super) const CHANGED_RC_UNSELECTED: i32 = 20;
+pub(super) const CHANGED_RC_UNEVALUATED: i32 = 21;
+pub(super) const CHANGED_RC_PREREQ: i32 = 22;
 pub(super) const CHANGED_RECEIPT_DEFAULT: &str = ".fno/changed-last-receipt.json";
 pub(super) const INFRA_EXACT: &[&str] = &[
     "cli/src/fno/test_cmd.py",

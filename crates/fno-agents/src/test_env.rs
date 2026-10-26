@@ -52,6 +52,7 @@ pub fn ambient_leak_canary() -> &'static str {
 /// markers + ambient names + environment + runner passthrough): the
 /// golden test rebuilds the specimen from the same lists the Python
 /// capture walked.
+#[cfg(test)]
 pub(crate) fn vocab_lists() -> Vec<Vec<String>> {
     let v = vocab();
     vec![

@@ -13,10 +13,9 @@ use std::path::Path;
 use crate::test_smoke::SmokeOpts;
 use crate::test_smoke_discovery as disc;
 use crate::test_smoke_registry as reg;
-
-pub const CHANGED_RC_UNSELECTED: i32 = 20;
-pub const CHANGED_RC_UNEVALUATED: i32 = 21;
-pub const CHANGED_RC_PREREQ: i32 = 22;
+use crate::test_smoke_registry::{
+    CHANGED_RC_PREREQ, CHANGED_RC_UNEVALUATED, CHANGED_RC_UNSELECTED,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selection {

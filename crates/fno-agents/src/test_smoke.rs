@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::test_smoke_discovery as disc;
 use crate::test_smoke_registry as reg;
+use crate::test_smoke_registry::{AMBIENT_MODES, STATE_MODES};
 use crate::test_verb::{AmbientMode, SandboxGuard};
 
 #[derive(Debug, Default)]
@@ -22,9 +23,6 @@ pub struct SmokeOpts {
     pub ambient: String,
     pub state: String,
 }
-
-pub const AMBIENT_MODES: &[&str] = &["clean", "dirty", "both"];
-pub const STATE_MODES: &[&str] = &["clean", "populated", "both"];
 
 /// Parse smoke flags into options; `Err` is the caller's exit-2 line.
 pub fn parse_smoke_args(args: &[String]) -> Result<SmokeOpts, String> {
