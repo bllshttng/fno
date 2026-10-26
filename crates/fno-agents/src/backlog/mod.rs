@@ -1199,11 +1199,17 @@ pub(crate) fn save_aggregate(connection: &Connection, node: &Node) -> Result<(),
         &node.id,
         node.encounters.as_deref().unwrap_or(&[]),
     )?;
-    let mut prs: Vec<crate::backlog::model::PullRequest> = Vec::new();
+    // Seq 0 is the primary slot: the primary parks there, and the extras
+    // follow from 1 whether or not a primary exists. A primary-less row
+    // never parks an extra in seq 0, where the status recompute would read
+    // it back as a live primary.
+    let mut prs: Vec<(i64, crate::backlog::model::PullRequest)> = Vec::new();
     if let Some(primary) = &node.primary_pr {
-        prs.push(primary.clone());
+        prs.push((0, primary.clone()));
     }
-    prs.extend(node.additional_prs.iter().flatten().cloned());
+    for (index, pr) in node.additional_prs.iter().flatten().cloned().enumerate() {
+        prs.push((index as i64 + 1, pr));
+    }
     pull_requests::save(connection, &node.id, &prs)?;
     relations::save(connection, &node.id, &node.relations)?;
     costs::save(connection, &node.id, node.costs.as_deref().unwrap_or(&[]))?;

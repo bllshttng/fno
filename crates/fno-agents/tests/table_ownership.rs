@@ -147,6 +147,11 @@ fn scan_root(root: &Path, owners: &[(&str, &str)]) -> (Vec<String>, usize) {
             .collect::<Vec<_>>()
             .join("/");
         let text = fs::read_to_string(&path).expect("read source file");
+        // approvals.rs writes the tables of approvals.db, a separate database
+        // whose `decisions` table only shares a name with the graph store's.
+        if rel == "approvals.rs" {
+            continue;
+        }
         for (line_no, table) in scan_text(&text, owners) {
             let owner = owner_of(table, owners).expect("an owned table has an owner");
             if rel == owner {
