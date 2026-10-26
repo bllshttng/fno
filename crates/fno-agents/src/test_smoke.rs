@@ -192,10 +192,6 @@ pub fn state_junit_path(mode: &str) -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from(format!("/tmp/state-verdict-{mode}.xml")))
 }
 
-fn state_junit_path_ok(mode: &str) -> bool {
-    state_junit_path(mode).is_file()
-}
-
 /// Read pytest's positive testcase statuses from a JUnit report.
 /// `(classname, name) -> passed|failed|skipped`.
 pub fn state_verdicts(path: &Path) -> BTreeMap<String, String> {

@@ -163,12 +163,6 @@ cache_names = [
     "SCCACHE_DIR",
 ]
 
-# Cache defaults under the real home; an unset var still has to be pinned.
-[cache_defaults]
-CARGO_HOME = ".cargo"
-RUSTUP_HOME = ".rustup"
-XDG_CACHE_HOME = ".cache"
-
 # XDG config/data/state are sandboxed (they are state); XDG_CACHE_HOME is a
 # cache and rides cache_names instead.
 xdg_sandboxed = ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]
@@ -177,3 +171,12 @@ xdg_sandboxed = ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]
 # marker, so nothing scrubs it. It simulates the channel this inventory has
 # not thought of yet, and the dirty lane's canary test is its positive control.
 ambient_leak_canary = "AMBIENT_LEAK_CANARY"
+
+# Cache defaults under the real home; an unset var still has to be pinned.
+# This table stays LAST: every top-level key after a [table] header belongs
+# to that table, and the parser reads this file's scalars and sequences as
+# the vocabulary itself.
+[cache_defaults]
+CARGO_HOME = ".cargo"
+RUSTUP_HOME = ".rustup"
+XDG_CACHE_HOME = ".cache"
