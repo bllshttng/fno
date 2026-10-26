@@ -788,6 +788,11 @@ fn same_route_file(saved: &str, route: &str) -> bool {
     }
 }
 
+/// The revive pane's script. A relaunch can take seconds, so the pane says
+/// what it waits on. A failed relaunch keeps its error on screen: a pane that
+/// just exits reads as a blank, dead tap.
+const REVIVE_SCRIPT: &str = r#"printf 'reviving %s...\n' "$0"; "$@" && exec claude attach "$0"; printf 'revive of %s failed (exit %s); close this pane\n' "$0" "$?"; exec cat"#;
+
 /// One argv that runs the relaunch, then becomes `claude attach <short>`:
 /// the revive's pane shows the session it just brought back. The ids ride as
 /// positional arguments, never spliced into the script text.
@@ -795,7 +800,7 @@ fn relaunch_then_attach(relaunch: Vec<String>, short_id: &str) -> Vec<String> {
     let mut argv = vec![
         "sh".to_string(),
         "-c".to_string(),
-        r#""$@" && exec claude attach "$0""#.to_string(),
+        REVIVE_SCRIPT.to_string(),
         short_id.to_string(),
     ];
     argv.extend(relaunch);
@@ -1701,7 +1706,7 @@ mod tests {
                 vec![
                     "sh",
                     "-c",
-                    r#""$@" && exec claude attach "$0""#,
+                    REVIVE_SCRIPT,
                     "9a1b2c3d",
                     "claude",
                     "respawn",
@@ -1718,7 +1723,7 @@ mod tests {
             &[
                 "sh",
                 "-c",
-                r#""$@" && exec claude attach "$0""#,
+                REVIVE_SCRIPT,
                 "9a1b2c3d",
                 "claude",
                 "--bg",

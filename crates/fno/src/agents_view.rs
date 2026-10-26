@@ -224,7 +224,7 @@ pub enum Liveness {
     Unmeasured,
 }
 
-/// The harnesses whose transcripts `fno agents peek` can tail: the
+/// The harnesses whose transcripts `fno agents session peek` can tail: the
 /// reader arms registered in `recent_records` (cli/src/fno/agents/peek.py).
 /// A static mirror of a Python seam; `thread_reach_mirrors_the_peek_reader_seam`
 /// pins it against that file so the two cannot drift (Rust checked against
@@ -1867,12 +1867,23 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
                 // claude's attach target whether or not the row is
                 // pane-hosted - the pre-declaration claude behavior, now read
                 // off the declaration instead of a name comparison.
+                // A row that lost its cached short id (a mux restart drops
+                // it) still names its job: the jobId is the session uuid's
+                // leading 8 hex, the same derivation the re-entry planner
+                // uses, so the tap reaches Drive instead of a transcript tail.
                 IdKind::Short => row
                     .get("short_id")
                     .or_else(|| row.get("claude_short_id"))
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
-                    .map(attach_job_id),
+                    .map(attach_job_id)
+                    .or_else(|| {
+                        row.get("harness_session_id")
+                            .or_else(|| row.get("claude_session_uuid"))
+                            .and_then(|v| v.as_str())
+                            .map(attach_job_id)
+                            .filter(|id| id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+                    }),
                 // A full session id addresses a durable thread, and only a
                 // thread-shaped row may take one.
                 IdKind::Session if is_thread_shape => row
@@ -2732,6 +2743,7 @@ mod tests {
     mod roster_join_tests;
     mod spawned_by_name_tests;
     mod thread_row_status_tests;
+    mod uuid_attach_tests;
     fn reg(rows: &str) -> String {
         format!(r#"{{"schema_version": 6, "agents": [{rows}]}}"#)
     }
