@@ -931,8 +931,8 @@ fn print_foreign_holder_park(node_id: &str, rec: &crate::claims::ClaimRecord, wt
     eprintln!(
         "fno do target start: node {node_id} is held by a live session\n\
          \x20 {holder} (pid={pid}, host={host}).\n\
-         \x20 Refusing to share its worktree at {wt} (would corrupt a shared git index).\n\
-         \x20 If this is your session, cd {wt} to continue it;\n\
+         \x20 Refusing to displace a live claim (a shared git index would corrupt both sessions).\n\
+         \x20 If this is your session, cd {wt} to resume from there;\n\
          \x20 otherwise wait for it to release the claim, or pick another node.",
         holder = rec.holder,
         pid = rec.pid.map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
