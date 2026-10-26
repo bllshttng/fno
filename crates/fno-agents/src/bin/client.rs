@@ -61,7 +61,6 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "term-ledger",
     "route-slot",
     "list",
-    "liveness",
     "logs",
     "loop",
     "loop-check",
@@ -1160,10 +1159,6 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::wait::run_wait(&args[1..], &AgentsHome::from_env()).await;
     }
 
-    // `liveness`: the census rank-2 answer; daemon-free like `wait`.
-    if command == "liveness" {
-        return fno_agents::liveness_cmd::run(&args[1..], &AgentsHome::from_env());
-    }
 
     // The list path is an internal operand of the existing binary action;
     // public callers keep using `fno do pr list` through the Python adapter.
@@ -1260,6 +1255,14 @@ async fn run(args: Vec<String>) -> i32 {
                 .cloned()
                 .collect();
             return fno_agents::capability_leaves::run_capabilities(&sub);
+        }
+        if rest.iter().any(|a| a.as_str() == "--liveness") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--liveness")
+                .cloned()
+                .collect();
+            return fno_agents::liveness_cmd::run(&sub, &AgentsHome::from_env());
         }
         if has_family {
             let sub: Vec<String> = rest

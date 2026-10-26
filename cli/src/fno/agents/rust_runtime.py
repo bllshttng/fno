@@ -215,7 +215,10 @@ RUST_CLIENT_COMMANDS = frozenset(
         # One "is this worker alive" answer per handle (the census rank-2
         # remedy): transcript age + pid probe + registry status through the
         # Rust verdict door, the caller's own row as positive control. No
-        # Python leg: the Python scripts it replaced were the bug.
+        # Python leg: the Python scripts it replaced were the bug. A
+        # status-arg leaf (_STATUS_ARG_LEAVES): the action list is
+        # shrink-only, so the router rewrites `fno agents liveness <h>...`
+        # into `fno-agents status --liveness <h>...`.
         "liveness",
         "select-read",
         # Activity feed projection: questions.jsonl + graph.json ->
@@ -1329,6 +1332,7 @@ def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
 _STATUS_ARG_LEAVES = {
     "capabilities": "--capabilities",
     "target-family": "--target-family",
+    "liveness": "--liveness",
 }
 
 

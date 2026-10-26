@@ -47,7 +47,6 @@ pub const CLIENT_COMMAND_USAGE: &[&str] = &[
     "subscribe [--agent <name>] [--kinds state,exit] [--json]",
     "digest --session <s> [--since <ts> | --since-epoch <secs>] [--json]",
     "needs [--since-epoch <secs>] [--fires-floor <n>] [--json]",
-    "liveness <handle...> [-J|--json]",
     "feed [--since-epoch <secs>] [--until-epoch <secs>] [--limit <n>] [--before <cursor>] [--after <cursor>] [--node <ids>] [--session <id>] [--kind <prefix>] [--area <names>] [--agent <name>] [--harness <names>] [--lead <name>] [--json] [--otlp]",
     // `review-coverage` deliberately has NO entry here: the per-command --help
     // intercept would print a one-line usage and shadow the command's own
