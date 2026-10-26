@@ -1,11 +1,12 @@
-//! parity-stage: characterization
+//! parity-stage: differential
 //! parity-oracle: fno.agents.registry.register_existing_session
 //!
-//! The `fno agents register` command, characterized against goldens captured
-//! from the Python leg (tests/golden/register/capture.py). The Python front
-//! keeps the command signature for --help and refuses without a binary; the
-//! oracle module survives (registry.py keeps importers), so the provenance
-//! gate will not refuse while the command answers from this crate.
+//! The `fno agents register` command, pinned against goldens captured
+//! from the Python leg (tests/golden/register/capture.py). The oracle leg is
+//! deliberately LIVE: the SessionStart pane restamp still calls
+//! register_existing_session, so the provenance gate reads this file as a
+//! differential pin and asserts the oracle resolves. When a later wave
+//! deletes the leg, this stage flips to characterization in the same PR.
 
 use serde_json::{json, Value};
 use std::path::PathBuf;
