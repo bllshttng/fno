@@ -892,7 +892,9 @@ fn expand_tilde(path: &Path) -> PathBuf {
 fn archive_id_collisions() -> Value {
     // The canonical resolver reads db/graph-archive.json (graph_json's
     // parent), the layout table's row, never the bare root spelling.
-    let archive_path = graph_store_path().parent().join("graph-archive.json");
+    let state = state_dir();
+    let archive_dir = graph_store_path().parent().unwrap_or(state.as_path());
+    let archive_path = archive_dir.join("graph-archive.json");
     if !archive_path.exists() {
         return json!({"count": 0, "ids": []});
     }
