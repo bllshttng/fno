@@ -76,12 +76,8 @@ def _resolve_role(root: Path, role_id: str, function_id: str, *, extra_definitio
         r["definition"] for r in rows if r["definition"] is not None and r["role"] == role_ref
     ]
     revision = definitions[0]["snapshot_revision"]
-    work_order = {
-        "node_id": "wo-1",
-        "attempt_id": "attempt-1",
-        "principal_id": None,
-        "role_id": role_id,
-    }
+    work_order = {"node_id": "wo-1", "attempt_id": "attempt-1",
+                  "principal_id": None, "role_id": role_id}
     manifest = definitions[0]["manifest"]
     # The roles declare real required_capabilities now, so an empty fact list
     # would block with missing_capability. Mint work-order-scoped capability

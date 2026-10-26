@@ -294,13 +294,10 @@ def _assert_resolved_roles_match_every_declared_policy_axis(role_root: Path) -> 
             for record in rows
             if record["definition"] is not None and record["role"] == declared["role"]
         ]
+        role_id = declared["role"]["id"]
         revision = definitions[0]["snapshot_revision"]
-        work_order = {
-            "node_id": f"wo-{declared['role']['id']}",
-            "attempt_id": "attempt-current",
-            "principal_id": None,
-            "role_id": declared["role"]["id"],
-        }
+        work_order = {"node_id": f"wo-{role_id}", "attempt_id": "attempt-current",
+                      "principal_id": None, "role_id": role_id}
         facts = [
             {
                 "capability": capability,
