@@ -130,6 +130,7 @@ pub mod cli_args;
 pub mod client;
 pub mod client_commands;
 pub mod client_render;
+pub mod client_transport;
 pub mod codex_ask;
 pub mod codex_daemon_readiness;
 pub mod codex_daemon_upgrade;

@@ -155,11 +155,8 @@ fn main() {
     if args.first().map(String::as_str) == Some("surface-check") {
         std::process::exit(fno_agents::surface_check::run_surface_check(&args[1..]));
     }
-    // The executor-routing parsers: bash callers (infer-has-ui.sh,
-    // resolve-executor.sh, resolve-plan-executor.sh and the blueprint-gates.md
-    // instructions) exec HERE through the shared binary resolver. Registers no
-    // command (the shrink law allows no new action); the stdin/stdout contract
-    // is the deleted Python modules', frozen in the executor_route goldens.
+    // executor-route: the executor-routing parsers' transport door; the body
+    // lives in executor_route.rs beside its goldens (registers no command).
     if args.first().map(String::as_str) == Some("executor-route") {
         std::process::exit(fno_agents::executor_route::run(&args[1..]));
     }
@@ -188,26 +185,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("pr") {
         std::process::exit(fno_agents::pr_front::run(&args[1..]));
     }
-    // Permanent GitHub-fact rows (merged PRs, repo metadata); reconcile and
-    // base-lineage reach it through command_call; transport-only.
-    if args.first().map(String::as_str) == Some("gh-cache") {
-        std::process::exit(fno_agents::gh_cache::run());
-    }
-    // `target-status`: the orientation report door; Python's `fno do target
-    // status` reaches it through command_call, transport-only.
-    if args.first().map(String::as_str) == Some("target-status") {
-        std::process::exit(fno_agents::target_orient::run_status(&args[1..]));
-    }
-    // `launch-workdir`: the spawn door's launch-cwd resolution (see
-    // launch_workdir.rs doc). Transport-only: registers no client action; Python's
-    // ensure_launch_workdir reaches it through command_call, and a `hold`
-    // answer is a valid exit-0 answer the caller renders.
-    if args.first().map(String::as_str) == Some("launch-workdir") {
-        std::process::exit(fno_agents::launch_workdir::run_launch_workdir(&args[1..]));
-    }
-    // `worktree-reapable`: the worktree-removal gate; callers: worktree_gate.py, worktree-reapable.sh.
-    if args.first().map(String::as_str) == Some("worktree-reapable") {
-        std::process::exit(fno_agents::worktree_reapable::run_client(&args[1..]));
+    // gh-cache, target-status, launch-workdir, worktree-reapable: the early
+    // transport arms; client_transport.rs holds their bodies and comments.
+    if let Some(code) = fno_agents::client_transport::transport_early_arms(&args) {
+        std::process::exit(code);
     }
     // `harness-probe` / `harness-matrix` / `harness-beat`: capability reads, transport-only.
     if matches!(
