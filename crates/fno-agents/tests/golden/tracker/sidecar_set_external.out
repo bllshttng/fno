@@ -1,0 +1,9 @@
+{
+  "file_after": {
+    "cwd": "/one",
+    "id": "EXT-1",
+    "plan_path": "/p.md",
+    "pr_number": 5
+  },
+  "saved": "<ROOT>/state/sidecar/EXT-1.json"
+}

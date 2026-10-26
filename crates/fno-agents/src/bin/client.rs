@@ -155,6 +155,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("surface-check") {
         std::process::exit(fno_agents::surface_check::run_surface_check(&args[1..]));
     }
+    // executor-route: the parser door; body in executor_route.rs (registers no command).
+    if args.first().map(String::as_str) == Some("executor-route") {
+        std::process::exit(fno_agents::executor_route::run(&args[1..]));
+    }
     if args.first().map(String::as_str) == Some("wave") {
         std::process::exit(fno_agents::wave::run(&args[1..]));
     }
@@ -181,15 +185,11 @@ fn main() {
     if args.first() == Some(&"do".to_string()) && args.get(1) == Some(&"ci".to_string()) {
         std::process::exit(fno_agents::ci_front::run(&args[2..]));
     }
-    // Permanent GitHub-fact rows (merged PRs, repo metadata); reconcile and
-    // base-lineage reach it through command_call; transport-only.
-    if args.first().map(String::as_str) == Some("gh-cache") {
-        std::process::exit(fno_agents::gh_cache::run());
-    }
-    // `target-status`: the orientation report door; Python's `fno do target
-    // status` reaches it through command_call, transport-only.
-    if args.first().map(String::as_str) == Some("target-status") {
-        std::process::exit(fno_agents::target_orient::run_status(&args[1..]));
+    // gh-cache, target-status: the early transport arms; client_transport.rs
+    // holds their bodies and comments. worktree-reapable and launch-workdir
+    // stay here: their own ports own the moves into their modules.
+    if let Some(code) = fno_agents::client_transport::transport_early_arms(&args) {
+        std::process::exit(code);
     }
     // `launch-workdir`: the spawn door's launch-cwd resolution (see
     // launch_workdir.rs doc). Transport-only: registers no client action; Python's
@@ -1204,10 +1204,7 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::attest::dispatch(&args[1..]);
     }
 
-    // `needs`: read-only needs-me-queue fold over events.jsonl +
-    // ledger.json across ALL sessions, emitting review_wedged / budget_stop
-    // items. Never touches the daemon; exits 0 on empty. The mux client shells
-    // this off-loop when the prefix+a overlay opens.
+    // `needs`: read-only needs-me-queue fold over events + ledger; daemon-free.
     if command == "needs" {
         return fno_agents::needs::run_needs(&args[1..], &AgentsHome::from_env()).await;
     }
@@ -1257,6 +1254,14 @@ async fn run(args: Vec<String>) -> i32 {
                 .cloned()
                 .collect();
             return fno_agents::capability_leaves::run_capabilities(&sub);
+        }
+        if rest.iter().any(|a| a.as_str() == "--liveness") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--liveness")
+                .cloned()
+                .collect();
+            return fno_agents::liveness_cmd::run(&sub, &AgentsHome::from_env());
         }
         if has_family {
             let sub: Vec<String> = rest
@@ -4294,9 +4299,6 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             fno_agents::ask_project::parse(&mut params, &positional)?;
             "agent.ask"
         }
-        // `host`/`promote` (interactive daemon PTY hosting) were retired at G4
-        // and intercepted with a mux pointer before build_request; they
-        // never reach this match.
         "list" => "agent.list",
         "status" => "agent.status",
         "stop" => {

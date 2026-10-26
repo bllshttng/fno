@@ -120,6 +120,25 @@ impl ClaudeAgentsSnapshot {
         }
     }
 
+    /// A hosted process stands behind the session `id` names. Claude takes a
+    /// resume prefix of the full id, so any live row the prefix starts is a
+    /// hit: an ambiguous prefix refuses rather than guessing which session.
+    pub fn holds_session(&self, id: &str) -> bool {
+        let carries_pids = self.carries_pids();
+        let rows = match self {
+            Self::Known { rows, .. } | Self::Unknown { rows, .. } => rows,
+        };
+        !id.is_empty()
+            && rows.iter().any(|row| {
+                let named = row.short_id == id
+                    || row
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|sid| id.len() >= 8 && sid.starts_with(id));
+                named && row.has_live_process(carries_pids)
+            })
+    }
+
     /// True when at least one row parsed. Known rows can carry warnings (a
     /// partial list): presence checks on them are sound, absence checks are
     /// not - gate those on [`Self::warning_text`] being empty.

@@ -217,5 +217,5 @@ Twenty files with tests are unchanged and not listed.
 | `test_state_root_inventory.py` | 3 | 2 |
 | `test_status_fanout.py` | 98 | 45 |
 | `test_truth_status.py` | 23 | 10 |
-| `test_two_spelling_dispatch.py` | 2 | 1 |
+| `test_two_spelling_dispatch.py` | 2 | deleted |
 | `test_v2_paths.py` | 1 | deleted |
