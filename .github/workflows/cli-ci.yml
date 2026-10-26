@@ -1034,9 +1034,8 @@ jobs:
           CARGO_HOME: /home/runner/.cargo
           RUSTUP_HOME: /home/runner/.rustup
           FNO_TEST_HERMETIC: "0"
-        # No --no-fail-fast: nextest runs every test and reports all
-        # failures by default.
-        run: cargo nextest run --lib --bins
+        # --no-fail-fast keeps the old contract: nextest stops scheduling new tests after a failure by default, and the suite must run whole.
+        run: cargo nextest run --lib --bins --no-fail-fast
 
       - name: Write-gate shell test (relay + state-root policy)
         # The Rust unit tests cover refuse_for's verdicts; this runs the real
