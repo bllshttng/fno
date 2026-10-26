@@ -61,6 +61,7 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "term-ledger",
     "route-slot",
     "list",
+    "liveness",
     "logs",
     "loop",
     "loop-check",
@@ -1157,6 +1158,14 @@ async fn run(args: Vec<String>) -> i32 {
     // `wait`: poll registry.json directly for a state (no daemon RPC).
     if command == "wait" {
         return fno_agents::wait::run_wait(&args[1..], &AgentsHome::from_env()).await;
+    }
+
+    // `liveness`: the one "is this worker alive" answer per handle
+    // (census rank 2): transcript age + pid probe + registry status folded
+    // through the one verdict door, the caller's own row as positive
+    // control. Daemon-free like `wait`: starts nothing.
+    if command == "liveness" {
+        return fno_agents::liveness_cmd::run(&args[1..], &AgentsHome::from_env());
     }
 
     // The list path is an internal operand of the existing binary action;
