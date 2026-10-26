@@ -26,7 +26,7 @@ pub fn run(args: &[String]) -> i32 {
     match sub.as_str() {
         "trend" => crate::evals_trend::run_evals_trend(&trend_argv(rest, "trend")),
         "report" => crate::evals_trend::run_evals_trend(&trend_argv(rest, "report")),
-        "macro" => crate::evals_arm::run_evals_arm(&macro_argv(rest)),
+        "macro" => crate::evals_macro::run_evals_macro(&macro_argv(rest)),
         "grade" => crate::evals::research_grade::run(rest),
         "graduate" => crate::evals::graduate::run(rest),
         "run" => run_command(rest),
