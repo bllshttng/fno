@@ -1008,11 +1008,7 @@ pub fn run_intel(args: &[String]) -> i32 {
              prose-only-enforced shares with their denominator, a fleet mail graph\n\
              (who mails whom, unanswered tails, hops that relay a ruling id), and\n\
              the compliance limit: uncontested is no recorded counter-evidence,\n\
-             never proven obedience.\n\n\
-             --lens rules counts every event-rule fire in the window per rule, and\n\
-             how many the same session followed with a filed question within 10\n\
-             minutes (a proxy, not a label). Where fnod scored a fire, it splits the\n\
-             fires by fnod's is_ask answer against that proxy.\n"
+             never proven obedience.\n"
         );
         return 0;
     }
@@ -1176,9 +1172,7 @@ pub fn run_intel(args: &[String]) -> i32 {
                 match args.get(i) {
                     Some(v) => lens = Some(v.clone()),
                     None => {
-                        eprintln!(
-                            "fno-agents intel: --lens needs a name (known: decisions, rules)"
-                        );
+                        eprintln!("fno-agents intel: --lens needs a name (known: decisions)");
                         return 2;
                     }
                 }
@@ -1208,14 +1202,11 @@ pub fn run_intel(args: &[String]) -> i32 {
         return 2;
     }
     if let Some(name) = lens.as_deref() {
-        return match name {
-            "decisions" => crate::intel_lens::run_lens(days, json),
-            "rules" => crate::intel_rules_lens::run(days, json),
-            _ => {
-                eprintln!("fno-agents intel: unknown lens {name} (known: decisions, rules)");
-                2
-            }
-        };
+        if name != "decisions" {
+            eprintln!("fno-agents intel: unknown lens {name} (known: decisions)");
+            return 2;
+        }
+        return crate::intel_lens::run_lens(days, json);
     }
 
     let home = AgentsHome::from_env();
