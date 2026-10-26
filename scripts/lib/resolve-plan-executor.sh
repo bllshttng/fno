@@ -20,14 +20,30 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOLVER="$SCRIPT_DIR/../../skills/execute/scripts/resolve-executor.sh"
 
-# Surface inference lives in the in-package module fno.executor._surface
-# (the SINGLE source of truth, ported from the retired infer-task-executor.sh).
-# In a checkout, point PYTHONPATH at cli/src so `python3 -m fno.executor._surface`
-# runs pre-install; otherwise rely on the installed `fno` package.
-_FNO_PKG_SRC="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd)/cli/src"
-if [[ -f "${_FNO_PKG_SRC}/fno/executor/_surface.py" ]]; then
-    export PYTHONPATH="${_FNO_PKG_SRC}${PYTHONPATH:+:${PYTHONPATH}}"
+# Surface inference lives behind the native executor-route door
+# (crates/fno-agents/src/executor_route.rs, the SINGLE source of truth since
+# the worker-family port deleted the Python leg). The fno-agents binary
+# resolver, shared with the hooks; the canonical copy is
+# hooks/lib/agents-bin.sh, this same-shape inline fallback covers a partial
+# deploy whose hooks tree is not beside the scripts tree.
+if [[ -f "${BASH_SOURCE[0]%/*}/../../hooks/lib/agents-bin.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${BASH_SOURCE[0]%/*}/../../hooks/lib/agents-bin.sh"
+else
+    fno_agents_bin() {
+        local root="${1:-.}"
+        if [[ -n "${FNO_AGENTS_BIN:-}" ]] && [[ -x "${FNO_AGENTS_BIN}" ]]; then
+            printf '%s' "${FNO_AGENTS_BIN}"
+        elif [[ -x "$root/crates/fno-agents/target/release/fno-agents" ]]; then
+            printf '%s' "$root/crates/fno-agents/target/release/fno-agents"
+        elif [[ -x "$root/crates/fno-agents/target/debug/fno-agents" ]]; then
+            printf '%s' "$root/crates/fno-agents/target/debug/fno-agents"
+        else
+            command -v fno-agents || printf ''
+        fi
+    }
 fi
+bin="$(fno_agents_bin "$SCRIPT_DIR/../..")"
 
 plan_content=""
 if [[ $# -ge 1 ]]; then
@@ -90,8 +106,9 @@ plan_files="$(printf '%s\n' "$plan_content" \
 # PR #385): this lib lives in scripts/lib, but RESOLVER points into
 # skills/execute/scripts, which may not co-exist in a lightweight or
 # partially-bundled install. Rather than fail silently to an empty string,
-# fall back to the in-package locked matcher (fno.executor._surface, always
-# importable) honoring the plan-level executor first.
+# fall back to the native surface matcher honoring the plan-level executor
+# first. A missing binary leaves the inference empty and falls closed to
+# tdd, the same answer a missing module produced before the port.
 if [[ -f "$RESOLVER" ]]; then
     TASK_EXEC="" PLAN_EXEC="$plan_exec" TASK_FILES="$plan_files" \
         bash "$RESOLVER" 2>/dev/null
@@ -104,7 +121,10 @@ elif [[ -n "$plan_exec" ]]; then
         *)          echo "tdd" ;;
     esac
 else
-    inferred="$(printf '%s\n' "$plan_files" | python3 -m fno.executor._surface 2>/dev/null)"
+    inferred=""
+    if [[ -n "$bin" ]]; then
+        inferred="$(printf '%s\n' "$plan_files" | "$bin" executor-route surface 2>/dev/null)"
+    fi
     case "$inferred" in
         impeccable) echo "impeccable" ;;
         do|tdd|"")  echo "tdd" ;;

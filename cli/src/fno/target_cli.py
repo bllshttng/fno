@@ -427,7 +427,7 @@ def _refuse_dispatch_hold(node: Optional[dict], entries: Optional[list] = None) 
     if not isinstance(node, dict):
         return
     from fno.graph.ladder import DispatchHoldState, dispatch_hold_verdict
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     if active_backend_name() != "graph":
         # A hold is a footnote-graph-resident concept: under an external

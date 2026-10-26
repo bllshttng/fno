@@ -4,6 +4,11 @@ The emit is best-effort: routing (the stdout value) must be byte-identical
 whether or not the event emits (AC1-HP), and a missing `fno` must not break
 resolution (AC5-ERR). A stub `fno` on PATH captures the emit payload so the
 test asserts tier + warn_fallback without touching real events.jsonl.
+
+The inference tier resolves through the fno-agents executor-route door, so
+its test carries the dev_build marker: the full smoke shard deletes that
+binary on purpose, and there the test skips rather than reading the
+fail-closed tdd fallback as a telemetry defect.
 """
 from __future__ import annotations
 
@@ -15,6 +20,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "skills/execute/scripts/resolve-executor.sh"
+
+requires_rust = pytest.mark.dev_build
 
 
 @pytest.fixture()
@@ -44,6 +51,7 @@ def _run(env, extra):
     )
 
 
+@requires_rust
 def test_inference_tier_emits_and_stdout_is_only_the_value(stub_fno):
     env, log = stub_fno
     r = _run(env, {"TASK_ID": "1.2", "PLAN_PATH": "p.md", "TASK_FILES": "src/App.tsx"})

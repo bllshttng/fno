@@ -276,6 +276,10 @@ enum Role {
     /// `fno agents restart ...` and root `fno restart ...`: exec'd as
     /// `fno-agents restart`, the one implementation.
     AgentsRestart(Vec<OsString>),
+    /// `fno agents org chart fold ...` (forwarded as `agents org-fold`):
+    /// exec'd as `fno-agents org-fold`, so the Explorer org tab's read skips
+    /// the Python front.
+    AgentsOrgFold(Vec<OsString>),
     /// `fno agents status ...`: the read command hooks and wait loops spend,
     /// exec'd natively for the same reason as agents_top: the Python front
     /// only turned around and exec'd the same binary. The argv passes
@@ -1012,6 +1016,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_agents_restart(args) {
         return Role::AgentsRestart(rest);
     }
+    if let Some(rest) = classify_agents_command(args, "org-fold") {
+        return Role::AgentsOrgFold(rest);
+    }
     if let Some(rest) = classify_agents_status(args) {
         return Role::AgentsStatus(rest);
     }
@@ -1523,12 +1530,17 @@ fn main() {
         }
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
-            &["census", "--workers"],
+            fno::agents_menu::native_leaf("top"),
             &rest,
         )),
         Role::AgentsRestart(rest) => {
             std::process::exit(fno_agents_exec("fno agents restart", &["restart"], &rest))
         }
+        Role::AgentsOrgFold(rest) => std::process::exit(fno_agents_exec(
+            "fno agents org chart fold",
+            fno::agents_menu::native_leaf("org-fold"),
+            &rest,
+        )),
         Role::AgentsRoles(rest) => std::process::exit(fno_agents_exec(
             "fno agents roles",
             &["spawn-overlay", "roles"],

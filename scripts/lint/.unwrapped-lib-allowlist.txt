@@ -183,9 +183,9 @@ operator-override.sh
 # frontend-craft gate (frontend-craft-gate plan). infer-has-ui.sh and
 # resolve-plan-executor.sh are thin CLIs invoked via `bash <path>` from the
 # stop hook / skill bodies. Both delegate the locked surface matcher to the
-# in-package module fno.executor._surface (the SINGLE source of truth, ported
-# from the retired infer-task-executor.sh) and have no user-facing
-# `fno <command>` surface of their own.
+# native executor-route door behind the fno-agents binary (the SINGLE source
+# of truth since the worker-family port deleted the Python leg) and have no
+# user-facing `fno <command>` surface of their own.
 infer-has-ui.sh
 resolve-plan-executor.sh
 
