@@ -855,12 +855,17 @@ def _render_external_get(id: str, field: Optional[str]) -> None:
     try:
         node, sc = _read_external_node_and_sidecar(id)
     except NodeNotFound:
-        typer.echo(
+        from fno.handoff.output import json_mode
+
+        message = (
             f"fno backlog get: no node matches '{id}' "
             "(an external backend resolves exact ids; slug/bare-hex are "
-            "footnote-minted)",
-            err=True,
+            "footnote-minted)"
         )
+        if json_mode(typer.get_current_context()):
+            typer.echo(json.dumps({"ok": False, "error": message}))
+        else:
+            typer.echo(message, err=True)
         raise typer.Exit(code=1)
     state = str(node.state.value)
     joined: dict = {
