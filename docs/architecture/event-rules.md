@@ -89,7 +89,13 @@ Every fire writes a `decision_span` row with `span_kind` `block`, `nudge` or `no
 
 ## Measuring a rule
 
-Each row is a guess about a failure, so check it against its fires. `fno-agents intel --lens rules` reads the fire spans in the window. It prints fires, sessions and the last 7 days for each rule. It also samples fires with their excerpt, unlabeled fires first (`--sample N` or `all`, default 5). To judge them, write one line per fire to a file: `{"span_id":"s-...","verdict":"false"}`. A `true` verdict means the fire was right. Then pass `--labels <file>`, and the lens prints each rule's false-fire count and rate. Fix a noisy rule, or turn it off with `event_rules.<id> = false`. A fire with no excerpt prints its matched event instead. That is a question id, a span id, or the `stop:<session>:<turn>` key of the transcript turn. The lens reads this project's journal only, so it refuses the scope flags.
+Each row is a guess about a failure, so check it against its fires. `fno-agents intel --lens rules` reads the fire spans in the window. It prints fires, sessions and the last 7 days for each rule. It also samples fires with their excerpt, unlabeled fires first (`--sample N` or `all`, default 5). To judge them, write one line per fire to a file: `{"span_id":"s-...","verdict":"false"}`. A `true` verdict means the fire was right. Then pass `--labels <file>`, and the lens prints each rule's false-fire count and rate. Fix a noisy rule, or turn it off with `event_rules.<id> = false`. A fire with no excerpt prints its matched event instead. That is a question id, a span id, or the `stop:<session>:<turn>` key of the transcript turn. The lens reads this project's journal only, so it refuses the scope flags. Where fnod scored a fire, the `fnod_yes` and `fnod_no` columns split the fires by its advisory answer (yes means `fnod_is_ask` is 0.5 or more). Each sample line also shows the score.
+
+### The fnod score beside the keyword verdict
+
+A block on a row that names `last_message_decision_ask` also asks fnod, the local decision model, the `is_ask` question about the same message. The span then carries `keyword_ask: true` and either `fnod_is_ask` (the probability) with `fnod_ms`, or `fnod_error` with the reason the score is missing. The score is advice only. The keyword verdict has already fired the block, and fnod's answer changes nothing.
+
+fnod is the `kev.serve` server on loopback. Start it with `python -m kev.serve --run <student run dir> --port 8008` from the kev checkout. `fnod.url` in fno config moves it (default `http://127.0.0.1:8008`). It must resolve to a loopback address, or the call is refused and the message never leaves the machine. An empty value turns the score off. `fnod.timeout_ms` bounds the connect and the reply wait (default 500). No server, a timeout or a malformed reply writes `fnod_error` and the Stop goes on.
 
 ## Overrides
 

@@ -39,7 +39,7 @@ def _source_fixture(tmp_path: Path) -> Path:
     return source
 
 
-def _plugin(*, source: str, source_type: str, plugin_id: str = "fno@footnote") -> dict[str, object]:
+def _plugin(*, source: str, source_type: str, plugin_id: str = "fno@fno") -> dict[str, object]:
     return {
         "pluginId": plugin_id,
         "marketplaceName": plugin_id.split("@", 1)[1],
@@ -50,7 +50,7 @@ def _plugin(*, source: str, source_type: str, plugin_id: str = "fno@footnote") -
     }
 
 
-def _marketplace(*, source: str, source_type: str, name: str = "footnote") -> dict[str, object]:
+def _marketplace(*, source: str, source_type: str, name: str = "fno") -> dict[str, object]:
     return {
         "name": name,
         "root": source,
@@ -132,7 +132,7 @@ if args == ["plugin", "marketplace", "list", "--json"]:
 elif args == ["plugin", "list", "--json"]:
     print(json.dumps({{"installed": state["plugins"], "available": []}}))
 elif len(args) == 6 and args[:2] == ["plugin", "list"] and args[2:4] == ["--available", "--marketplace"] and args[5] == "--json":
-    available = [] if os.environ.get("FNO_TEST_BAD_CANDIDATE") else [{{"pluginId": "fno@footnote", "version": "0.3.0"}}]
+    available = [] if os.environ.get("FNO_TEST_BAD_CANDIDATE") else [{{"pluginId": "fno@fno", "version": "0.3.0"}}]
     print(json.dumps({{"installed": state["plugins"], "available": available}}))
 elif len(args) == 4 and args[:2] == ["plugin", "remove"] and args[3] == "--json":
     state["plugins"] = [row for row in state["plugins"] if row["pluginId"] != args[2]]
@@ -146,7 +146,7 @@ elif args[:3] == ["plugin", "marketplace", "add"] and args[-1] == "--json" and (
     supplied = args[3]
     source_type = "git" if supplied == "bllshttng/fno" else "local"
     root = str(source) if source_type == "git" else supplied
-    name = "footnote-dev" if Path(supplied).name == "footnote-dev" else "footnote"
+    name = "footnote-dev" if Path(supplied).name == "footnote-dev" else "fno"
     row = {{"name": name, "root": root, "marketplaceSource": {{"sourceType": source_type, "source": supplied}}}}
     state["marketplaces"] = [item for item in state["marketplaces"] if item["name"] != name]
     state["marketplaces"].append(row)
@@ -262,17 +262,17 @@ def test_public_cli_migrates_refreshes_and_switches_one_identity(tmp_path: Path)
 
     refreshed = _run_setup(env, "--channel", "dev", "--refresh")
     assert refreshed.returncode == 0, refreshed.stderr
-    assert "channel=dev action=refreshed id=fno@footnote version=0.3.0" in refreshed.stdout
+    assert "channel=dev action=refreshed id=fno@fno version=0.3.0" in refreshed.stdout
     state = json.loads(state_path.read_text())
-    assert [row["name"] for row in state["marketplaces"]] == ["footnote"]
-    assert [row["pluginId"] for row in state["plugins"]] == ["fno@footnote"]
+    assert [row["name"] for row in state["marketplaces"]] == ["fno"]
+    assert [row["pluginId"] for row in state["plugins"]] == ["fno@fno"]
     assert state["marketplaces"][0]["marketplaceSource"] == {
         "sourceType": "local",
         "source": str(source),
     }
     assert not legacy_cache.exists()
     for relative in ("skills", "agents", "commands", "hooks"):
-        assert (home / "plugins/cache/footnote/fno/0.3.0" / relative).is_dir()
+        assert (home / "plugins/cache/fno/fno/0.3.0" / relative).is_dir()
 
     doctor = _run_doctor(env, source)
     assert json.loads(doctor.stdout)["harness_surface"]["codex_plugin"]["status"] == "fresh"
@@ -283,8 +283,8 @@ def test_public_cli_migrates_refreshes_and_switches_one_identity(tmp_path: Path)
     release = _run_setup(env, "--channel", "release")
     assert release.returncode == 0, release.stderr
     state = json.loads(state_path.read_text())
-    assert [row["name"] for row in state["marketplaces"]] == ["footnote"]
-    assert [row["pluginId"] for row in state["plugins"]] == ["fno@footnote"]
+    assert [row["name"] for row in state["marketplaces"]] == ["fno"]
+    assert [row["pluginId"] for row in state["plugins"]] == ["fno@fno"]
     assert state["marketplaces"][0]["marketplaceSource"]["sourceType"] == "git"
     marker = json.loads((home / "footnote/plugin-channel.json").read_text())
     assert marker["channel"] == "release"
@@ -301,7 +301,7 @@ def test_public_cli_migrates_refreshes_and_switches_one_identity(tmp_path: Path)
     marker = json.loads((home / "footnote/plugin-channel.json").read_text())
     assert marker == {
         "channel": "dev",
-        "marketplace": "footnote",
+        "marketplace": "fno",
         "source": str(source),
         "ref": None,
     }
@@ -321,7 +321,7 @@ def test_invalid_candidate_never_replaces_live_channel(tmp_path: Path) -> None:
     )
     marker = home / "footnote/plugin-channel.json"
     marker.parent.mkdir(parents=True)
-    marker_bytes = b'{"channel":"dev","marketplace":"footnote","source":"working"}\n'
+    marker_bytes = b'{"channel":"dev","marketplace":"fno","source":"working"}\n'
     marker.write_bytes(marker_bytes)
     before = state_path.read_bytes()
     env = _environment(tmp_path, source, state_path)
@@ -356,7 +356,7 @@ def test_malformed_live_codex_state_fails_before_mutation(tmp_path: Path) -> Non
     )
     marker = home / "footnote/plugin-channel.json"
     marker.parent.mkdir(parents=True)
-    marker_bytes = b'{"channel":"dev","marketplace":"footnote","source":"working"}\n'
+    marker_bytes = b'{"channel":"dev","marketplace":"fno","source":"working"}\n'
     marker.write_bytes(marker_bytes)
     before = state_path.read_bytes()
     env = _environment(tmp_path, source, state_path)
@@ -391,7 +391,7 @@ def test_candidate_payload_change_never_commits_live_switch(tmp_path: Path) -> N
     )
     marker = home / "footnote/plugin-channel.json"
     marker.parent.mkdir(parents=True)
-    marker_bytes = b'{"channel":"dev","marketplace":"footnote","source":"working"}\n'
+    marker_bytes = b'{"channel":"dev","marketplace":"fno","source":"working"}\n'
     marker.write_bytes(marker_bytes)
     env = _environment(tmp_path, source, state_path)
     env["FNO_TEST_MUTATE_SOURCE_ON_LIVE"] = "1"
@@ -402,7 +402,7 @@ def test_candidate_payload_change_never_commits_live_switch(tmp_path: Path) -> N
     assert "live payload differs from validated candidate" in result.stderr
     state = json.loads(state_path.read_text())
     assert state["marketplaces"][0]["marketplaceSource"]["sourceType"] == "local"
-    assert [row["pluginId"] for row in state["plugins"]] == ["fno@footnote"]
+    assert [row["pluginId"] for row in state["plugins"]] == ["fno@fno"]
     assert marker.read_bytes() == marker_bytes
 
 
@@ -428,8 +428,8 @@ def test_concurrent_channel_selection_serializes_to_one_identity(tmp_path: Path)
         assert process.returncode == 0, stderr
         assert "verified" in stdout
     state = json.loads(state_path.read_text())
-    assert [row["name"] for row in state["marketplaces"]] == ["footnote"]
-    assert [row["pluginId"] for row in state["plugins"]] == ["fno@footnote"]
+    assert [row["name"] for row in state["marketplaces"]] == ["fno"]
+    assert [row["pluginId"] for row in state["plugins"]] == ["fno@fno"]
     marker = json.loads((Path(env["CODEX_HOME"]) / "footnote/plugin-channel.json").read_text())
     registration = state["marketplaces"][0]["marketplaceSource"]
     assert registration["sourceType"] == ("git" if marker["channel"] == "release" else "local")
@@ -437,5 +437,5 @@ def test_concurrent_channel_selection_serializes_to_one_identity(tmp_path: Path)
     doctor = _run_doctor(env, source)
     assert json.loads(doctor.stdout)["harness_surface"]["codex_plugin"]["status"] == "fresh"
     cache_root = Path(env["CODEX_HOME"]) / "plugins/cache"
-    assert [path.name for path in cache_root.iterdir() if path.is_dir()] == ["footnote"]
+    assert [path.name for path in cache_root.iterdir() if path.is_dir()] == ["fno"]
 

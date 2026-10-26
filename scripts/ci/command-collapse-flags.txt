@@ -9,6 +9,7 @@ agents rm !--audit-request-id
 agents rm !--audit-worktree-touched
 agents heal-token !--all-sources
 agents heal-token !--cross-project
+agents resume !--cross-project
 agents list !--provider
 agents mail hold-release !--poll-s
 agents mail pane-prepare !--session

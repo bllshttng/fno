@@ -1,6 +1,8 @@
-//! `fno config setup plan` and `fno config setup post-merge`, claimed before
-//! clap like `setup_run`. The root `fno setup <command>` spelling is claimed too,
-//! because the hidden root `setup` group served the same commands.
+//! The `fno config setup` commands, claimed before clap like `setup_run`:
+//! `plan`, `post-merge`, the two `cli-hooks` commands (in `cli_hooks`), the
+//! bare listing, and a refusal for an unknown name. `run` and `auto-wire`
+//! belong to their own modules. Every root `fno setup <command>` spelling is
+//! claimed too: the deprecated root group lives nowhere else now.
 //!
 //! `plan` prints the wizard question plan, rendered from the committed schema
 //! table (`config_schema::wizard_plan`).
@@ -27,32 +29,89 @@ const PARKING_KEY: &str = "post_merge.parking_lot_path";
 pub enum Cmd {
     Plan(Vec<OsString>),
     PostMerge(Vec<OsString>),
+    CliHooks(Vec<OsString>),
+    CliHooksCodex(Vec<OsString>),
+    /// A bare `config setup`, or its `--help`.
+    Help,
+    /// A root `fno setup run|auto-wire`: those live under `config setup` only.
+    Moved(String),
+    Unknown(String),
 }
 
-/// Claim `config setup plan|post-merge` and the root `setup plan|post-merge`
-/// lexically. Every other setup command forwards to its owner untouched.
+/// The `config setup` commands, for the help listing.
+const COMMANDS: &[(&str, &str)] = &[
+    (
+        "run",
+        "Run setup once over the one step table (--yes for no prompts).",
+    ),
+    (
+        "auto-wire",
+        "Wire the fno plugin into every detected harness.",
+    ),
+    ("plan", "Emit the wizard question plan as JSON."),
+    (
+        "post-merge",
+        "Scaffold post_merge.parking_lot_path for this repo.",
+    ),
+    (
+        "cli-hooks",
+        "Wire footnote's user-level CLI hooks (Codex, Gemini, Claude).",
+    ),
+    ("cli-hooks-codex", "Wire only the Codex SessionStart hook."),
+];
+
+/// Claim every `config setup` command except `run` and `auto-wire`, which
+/// their own modules claim, and every root `fno setup` spelling.
 pub fn classify(args: &[OsString]) -> Option<Cmd> {
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
     if words.len() != args.len() {
         return None;
     }
-    let at = match words.as_slice() {
-        ["config", "setup", ..] => 2,
-        ["setup", ..] => 1,
+    let (at, root) = match words.as_slice() {
+        ["config", "setup", ..] => (2, false),
+        ["setup", ..] => (1, true),
         _ => return None,
     };
     // A bare `config setup` has no word at `at`, so slice only after a match.
-    match words.get(at) {
-        Some(&"plan") => Some(Cmd::Plan(args[at + 1..].to_vec())),
-        Some(&"post-merge") => Some(Cmd::PostMerge(args[at + 1..].to_vec())),
-        _ => None,
+    let rest = || args[at + 1..].to_vec();
+    Some(match words.get(at).copied() {
+        None | Some("-h" | "--help") => Cmd::Help,
+        Some("plan") => Cmd::Plan(rest()),
+        Some("post-merge") => Cmd::PostMerge(rest()),
+        Some("cli-hooks") => Cmd::CliHooks(rest()),
+        Some("cli-hooks-codex") => Cmd::CliHooksCodex(rest()),
+        Some(w @ ("run" | "auto-wire")) if root => Cmd::Moved(w.to_string()),
+        Some("run" | "auto-wire") => return None,
+        Some(w) => Cmd::Unknown(w.to_string()),
+    })
+}
+
+fn listing() -> String {
+    let mut out = String::from("usage: fno config setup <command> [options]\n\ncommands:\n");
+    for (name, what) in COMMANDS {
+        out.push_str(&format!("  {name:<16} {what}\n"));
     }
+    out
 }
 
 pub fn run(cmd: Cmd) -> i32 {
     match cmd {
         Cmd::Plan(rest) => run_plan(&rest),
         Cmd::PostMerge(rest) => run_post_merge(&rest),
+        Cmd::CliHooks(rest) => crate::cli_hooks::run(&rest, false),
+        Cmd::CliHooksCodex(rest) => crate::cli_hooks::run(&rest, true),
+        Cmd::Help => {
+            print!("{}", listing());
+            0
+        }
+        Cmd::Moved(word) => {
+            eprintln!("`fno setup {word}` moved: run `fno config setup {word}`");
+            2
+        }
+        Cmd::Unknown(word) => {
+            eprintln!("unknown setup command: '{word}'\n\n{}", listing());
+            2
+        }
     }
 }
 
