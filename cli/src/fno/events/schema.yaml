@@ -8583,7 +8583,7 @@ event_types:
     sources: [daemon]
     data: {required: [branch, sha, offset_s, outcome]}
   - name: main_revert_check
-    description: "The main_revert arm read a red main head. outcome names what it did: seen, ambiguous, flaky, already_opened, opened, failed or unreadable."
+    description: "The main_revert arm read a red main head. outcome names what it did: seen, ambiguous, flaky, opened, failed or unreadable."
     sources: [daemon]
     data: {required: [slug, head, outcome]}
   - name: mcp_channel_demoted_to_socket

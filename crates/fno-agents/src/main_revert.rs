@@ -63,7 +63,12 @@ pub(crate) fn decide(
     let Some(pr) = pr else {
         return Decision::Ambiguous("the red head is not a PR merge".into());
     };
-    if !failing.is_empty() && failing.iter().all(|f| flakes.contains(f)) {
+    // main reads red on a cancelled run too (a runner outage): with no
+    // failing check, the merge broke nothing.
+    if failing.is_empty() {
+        return Decision::Ambiguous("no failing check at the red head".into());
+    }
+    if failing.iter().all(|f| flakes.contains(f)) {
         return Decision::Flaky;
     }
     Decision::Revert(pr)
@@ -114,16 +119,16 @@ fn read_head(root: &Path, workflow: &str, head: &str) -> Result<(String, String)
     Ok((subject, bucket.into()))
 }
 
-fn failing_checks(root: &Path, sha: &str) -> Vec<String> {
-    let rows = crate::pr_push::read_checks_rows("gh", root, sha).unwrap_or_default();
+fn failing_checks(root: &Path, sha: &str) -> Result<Vec<String>, String> {
+    let rows = crate::pr_push::read_checks_rows("gh", root, sha)?;
     let latest = crate::check_supersession::latest_per_name(&Value::Array(rows));
-    latest
+    Ok(latest
         .as_array()
         .into_iter()
         .flatten()
         .filter(|r| r["bucket"].as_str() == Some("fail"))
         .filter_map(|r| r["name"].as_str().map(str::to_string))
-        .collect()
+        .collect())
 }
 
 fn run(cwd: &Path, bin: &str, args: &[&str]) -> Result<String, String> {
@@ -148,8 +153,22 @@ fn open_revert(root: &Path, sha: &str, pr: u64, workflow: &str) -> Result<Value,
     let node = serde_json::from_str::<Value>(&receipt).ok();
     let node = node.and_then(|v| v["id"].as_str().map(str::to_string));
     let node = node.ok_or_else(|| format!("backlog idea printed no id: {receipt}"))?;
+    // Past this point a failure names the filed node, so the row points at
+    // the repair node left without a PR.
+    let opened = revert_for(root, sha, pr, &node, &title, &why);
+    opened.map_err(|e| format!("repair node {node} has no PR: {e}"))
+}
+
+fn revert_for(
+    root: &Path,
+    sha: &str,
+    pr: u64,
+    node: &str,
+    title: &str,
+    why: &str,
+) -> Result<Value, String> {
     let tag = format!("tags+={}", crate::authorized_merge::MAIN_REPAIR_TAG);
-    run(root, "fno", &["backlog", "update", &node, &tag])?;
+    run(root, "fno", &["backlog", "update", node, &tag])?;
     let branch = format!("bugfix/{node}-revert-pr{pr}");
     let tree = std::env::temp_dir().join(format!("fno-main-revert-{node}"));
     let tree_s = tree.to_string_lossy().into_owned();
@@ -203,19 +222,18 @@ fn check_repo(
         Some(first) if now_ms.saturating_sub(first) < delay_ms => return None,
         Some(_) => {}
     }
-    let (outcome, extra) = match read_head(root, &workflow, &head) {
+    let read = read_head(root, &workflow, &head)
+        .and_then(|(subject, parent)| Ok((subject, parent, failing_checks(root, &head)?)));
+    let (outcome, extra) = match read {
         Err(reason) => ("unreadable", json!({"reason": reason})),
-        Ok((subject, parent)) => {
-            let failing = failing_checks(root, &head);
-            match decide(&subject, &parent, &failing, flakes) {
-                Decision::Ambiguous(reason) => ("ambiguous", json!({"reason": reason})),
-                Decision::Flaky => ("flaky", json!({"failing": failing})),
-                Decision::Revert(pr) => match open_revert(root, &head, pr, &workflow) {
-                    Ok(opened) => ("opened", opened),
-                    Err(reason) => ("failed", json!({"pr": pr, "reason": reason})),
-                },
-            }
-        }
+        Ok((subject, parent, failing)) => match decide(&subject, &parent, &failing, flakes) {
+            Decision::Ambiguous(reason) => ("ambiguous", json!({"reason": reason})),
+            Decision::Flaky => ("flaky", json!({"failing": failing})),
+            Decision::Revert(pr) => match open_revert(root, &head, pr, &workflow) {
+                Ok(opened) => ("opened", opened),
+                Err(reason) => ("failed", json!({"pr": pr, "reason": reason})),
+            },
+        },
     };
     fields.extend(extra.as_object().cloned().unwrap_or_default());
     Some((outcome, fields))
@@ -313,12 +331,15 @@ mod tests {
             ("Revert \"Merge pull request #11\"", "pass"),
         ];
         for (subject, parent) in cases {
-            let decision = decide_with(subject, parent, &[], &[]);
+            let decision = decide_with(subject, parent, &["unit"], &[]);
             assert!(
                 matches!(decision, Decision::Ambiguous(_)),
                 "{subject} {parent}"
             );
         }
+        // A red made only of cancelled runs names no failing check.
+        let cancelled = decide_with(MERGE, "pass", &[], &[]);
+        assert!(matches!(cancelled, Decision::Ambiguous(_)));
     }
 
     #[test]
