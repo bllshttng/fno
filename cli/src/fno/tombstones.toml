@@ -8,8 +8,9 @@
 
 # (d-cf2d6fe1): the runtime root is RETIRED with the workspace
 # fold, not re-registered - it was a one-release shim whose destination
-# itself moved. The implementation modules (fno.runtime.registry,
-# fno.runtime.worktree) stay; only the CLI surface is gone.
+# itself moved. The implementation modules left with the worktree
+# family's Rust port; the family surface lives in the fno-agents binary
+# behind the front door (`fno worktree <leaf>`, `fno agents workspace ...`).
 "runtime" = "`fno agents workspace` - worktree lifecycle and worker registration (`register-worker` moved there with it)"
 
 # Four top-level groups whose every leaf scored zero in `command-callers.py

@@ -128,15 +128,3 @@ whoami ledger
 whoami scoreboard
 whoami status
 worker
-workspace reap
-workspace register-worker
-workspace worktree archive
-workspace worktree cleanup !--kill-orphans
-workspace worktree ensure
-workspace worktree overlap-record
-workspace worktree overlaps
-workspace worktree policy
-workspace worktree reapable
-workspace worktree status
-workspace worktree stranded
-worktree

@@ -122,17 +122,6 @@ agents worker external	T1	agents worker external	0
 agents worker reconcile	T1	agents worker reconcile	0
 agents worker review	T1	agents worker review	0
 agents worker ship	T1	agents worker ship	2
-agents workspace register-worker	T1	agents workspace register-worker	1
-agents workspace reap	T1	agents workspace reap	0
-agents workspace worktree archive	T1	agents workspace worktree archive	4
-agents workspace worktree cleanup	T1	agents workspace worktree cleanup	15
-agents workspace worktree ensure	T1	agents workspace worktree ensure	24
-agents workspace worktree overlap-record	T1	agents workspace worktree overlap-record	3
-agents workspace worktree overlaps	T1	agents workspace worktree overlaps	5
-agents workspace worktree policy	T1	agents workspace worktree policy	10
-agents workspace worktree reapable	T1	agents workspace worktree reapable	4
-agents workspace worktree status	T1	agents workspace worktree status	4
-agents workspace worktree stranded	T1	agents workspace worktree stranded	2
 agents yard	T1	agents yard	4
 annotate add	T1	annotate add	8
 annotate list	KEEP	annotate list	0	ruled KEEP: read-back half of the live annotate write path

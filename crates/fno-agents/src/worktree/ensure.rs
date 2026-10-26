@@ -9,14 +9,6 @@ use super::{git_bounded, git_out, resolve_lenient};
 use std::path::{Path, PathBuf};
 
 const FETCH_TIMEOUT_SECS: u64 = 60;
-const NODE_BRANCH_TIMEOUT_SECS: u64 = 30;
-
-struct EnsureCtx {
-    repo: PathBuf,
-    name: String,
-    branch: Option<String>,
-    harness: Option<String>,
-}
 
 /// The node's branch, minted by the one resolver: the Python leg asked
 /// `fno backlog get <name> --field _branch` through a subprocess; the native
@@ -25,14 +17,8 @@ struct EnsureCtx {
 fn node_branch_for(name: &str) -> Option<String> {
     let path = super::state_root().join("graph.db");
     let rows = crate::graph_store::read_rows(&path).unwrap_or_default();
-    let (id, row) = super::stranded::resolve_node(name, &rows)?;
-    let _ = id;
-    let row_branch = crate::node_branch::resolve(&row);
-    if row_branch.is_none() {
-        return None;
-    }
-    let _ = NODE_BRANCH_TIMEOUT_SECS;
-    row_branch
+    let (_, row) = super::stranded::resolve_node(name, &rows)?;
+    crate::node_branch::resolve(&row)
 }
 
 fn top_level(repo: &Path) -> Option<PathBuf> {

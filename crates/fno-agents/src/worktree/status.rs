@@ -74,36 +74,8 @@ pub struct StatusRow {
 
 /// The classified rows for `repo`.
 pub fn status_rows(repo: &Path) -> Vec<StatusRow> {
-    let join = registry_join();
-    let mut rows = Vec::new();
-    for (branch, wt_path) in porcelain(repo).unwrap_or_default() {
-        let (name, status) = join
-            .0
-            .get(&wt_path)
-            .cloned()
-            .unwrap_or((String::new(), String::new));
-        let (target, _live) = if name.is_empty() {
-            ("none".to_string(), false)
-        } else if OWNERSHIP_LIVE_STATUSES.contains(&status.as_str()) {
-            (format!("live:{name}"), true)
-        } else {
-            (
-                format!(
-                    "{}:{name}",
-                    if status.is_empty() { "exited" } else { &status }
-                ),
-                false,
-            )
-        };
-        rows.push(StatusRow {
-            branch,
-            path: wt_path.clone(),
-            last_commit: last_commit_age(&wt_path),
-            target,
-            session_name: name,
-        });
-    }
-    rows
+    let (join, _registry_ok) = registry_join();
+    status_rows_join(repo, &join)
 }
 
 /// The text render the bash lifecycle script's shim relays.

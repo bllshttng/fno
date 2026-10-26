@@ -35,7 +35,7 @@ def _isolate_worktree_base(tmp_path, monkeypatch):
     """Keep disposable eval worktrees inside tmp, never the real worktree base."""
     base = tmp_path / "wtbase"
     base.mkdir()
-    monkeypatch.setattr("fno.worktree_paths.worktree_base", lambda: base)
+    monkeypatch.setattr("fno.paths.worktrees_base", lambda: base)
 
 
 def _git_repo(tmp_path: Path) -> Path:
@@ -98,13 +98,13 @@ def test_sweep_spares_a_tree_whose_run_is_alive(tmp_path: Path) -> None:
     # Two concurrent `evals run` streams: each run's sweep used to delete the
     # other's live tree, and its worker died on a missing cwd.
     import os
-    from fno.worktree_paths import worktree_base
+    from fno.paths import worktrees_base
 
     root = _git_repo(tmp_path)
     finished = subprocess.Popen(["true"])
     finished.wait()
-    live = worktree_base() / "evals" / f"t-{os.getpid()}-1"
-    dead = worktree_base() / "evals" / f"t-{finished.pid}-2"
+    live = worktrees_base() / "evals" / f"t-{os.getpid()}-1"
+    dead = worktrees_base() / "evals" / f"t-{finished.pid}-2"
     for tree in (live, dead):
         subprocess.run(["git", "worktree", "add", "--detach", str(tree), "HEAD"],
                        cwd=str(root), check=True, capture_output=True)

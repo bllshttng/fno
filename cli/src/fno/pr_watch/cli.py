@@ -1399,7 +1399,7 @@ def tick() -> None:
                         "a stranded sweep costs"
                     )
                 from fno.branch_provenance_cache import write_cache
-                from fno.worktree_stranded import STRANDED, UNKNOWN, apply_sweep, sweep
+                from fno.rust_binary import call_binary_json
 
                 wake = lane_armed and _wd_wake_armed(settings)
                 changed, stranded_n, unknown_n, acted_n, failed_n, roots_done = False, 0, 0, 0, 0, 0
@@ -1428,14 +1428,26 @@ def tick() -> None:
                         )
                         break
                     try:
-                        stranded_rows = sweep(repo=root)
+                        door_args = ["--repo", str(root), "--json", "--apply"]
+                        if not wake:
+                            # The report posture still records UNKNOWN rows;
+                            # only the STRANDED push+file waits for the arm.
+                            door_args.append("--no-wake")
+                        door_err, payload = call_binary_json(
+                            "worktree-stranded", door_args, timeout=120
+                        )
+                        if door_err is not None or not isinstance(payload, dict):
+                            raise RuntimeError(
+                                f"worktree-stranded door failed: {door_err}"
+                            )
+                        stranded_rows = payload.get("rows") or []
+                        outcomes = payload.get("outcomes") or []
                         changed |= write_cache(root, stranded_rows)
-                        outcomes = apply_sweep(stranded_rows, wake=wake)
                     except Exception as exc:  # noqa: BLE001 - one bad repo never stops the rest
                         log.warning("pr-watch: stranded sweep failed for %s: %s", root, exc)
                         continue
-                    stranded_n += sum(1 for r in stranded_rows if r.klass == STRANDED)
-                    unknown_n += sum(1 for r in stranded_rows if r.klass == UNKNOWN)
+                    stranded_n += sum(1 for r in stranded_rows if r.get("klass") == "STRANDED")
+                    unknown_n += sum(1 for r in stranded_rows if r.get("klass") == "UNKNOWN")
                     acted_n += len(outcomes)
                     failed_n += sum(1 for o in outcomes if o["stopped_at"])
                     roots_done += 1

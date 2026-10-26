@@ -4,6 +4,7 @@
 //! status/cleanup/archive exec the guarded bash script, and an unknown leaf
 //! refuses here because the Python mounts died with the family port.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// One resolved launch: the sibling binary's argv, or the lifecycle script.
@@ -184,5 +185,39 @@ fn repo_root() -> PathBuf {
     match out {
         Ok(o) if o.status.success() => PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()),
         _ => cwd,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(words: &[&str]) -> Vec<OsString> {
+        words.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn workspace_reap_builds_the_state_files_only_argv() {
+        // The workspace reap leaf never touches mux tabs: the door inserts
+        // --state-files-only ahead of whatever the caller passed.
+        let launch = classify(&args(&["agents", "workspace", "reap", "--json"])).unwrap();
+        match launch {
+            Launch::Agents(argv) => {
+                assert_eq!(argv, vec!["reap", "--state-files-only", "--json"])
+            }
+            other => panic!("expected an agents launch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_workspace_leaf_refuses_with_the_leaf_list() {
+        let launch = classify(&args(&["workspace", "reassign"])).unwrap();
+        match launch {
+            Launch::Refuse(msg) => {
+                assert!(msg.contains("worktree <leaf>"), "refusal said: {msg}");
+                assert!(msg.contains("register-worker"), "refusal said: {msg}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
     }
 }

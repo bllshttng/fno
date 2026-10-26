@@ -200,9 +200,9 @@ def _default_spawn(
 
 
 def _make_disposable_worktree(repo_root: Path, ref: str, tag: str) -> Path:
-    from fno.worktree_paths import worktree_base
+    from fno.paths import worktrees_base
 
-    base = worktree_base() / "evals"
+    base = worktrees_base() / "evals"
     base.mkdir(parents=True, exist_ok=True)
     path = base / f"{tag}-{os.getpid()}-{int(time.time()*1000)}"
     subprocess.run(
@@ -268,7 +268,7 @@ def sweep_orphans(repo_root: Path) -> int:
     Returns the number of eval worktrees removed. Best-effort; errors are
     swallowed (a sweep failure must not block a fresh run).
     """
-    from fno.worktree_paths import worktree_base
+    from fno.paths import worktrees_base
 
     removed = 0
     try:
@@ -278,7 +278,7 @@ def sweep_orphans(repo_root: Path) -> int:
         )
     except Exception:  # noqa: BLE001
         return 0
-    evals_base = str(worktree_base() / "evals")
+    evals_base = str(worktrees_base() / "evals")
     for line in proc.stdout.splitlines():
         if line.startswith("worktree ") and evals_base in line:
             wt = line[len("worktree "):].strip()

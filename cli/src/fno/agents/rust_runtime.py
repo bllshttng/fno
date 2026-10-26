@@ -906,18 +906,28 @@ def _worktree_policy_pin_at_seam(args: "Sequence[str]") -> dict:
     try:
         if os.environ.get("FNO_WORKTREE_POLICY"):
             return {}
-        from pathlib import Path
-
         from fno.agents.spawn_defaults import _flag_value
-        from fno.worktree_paths import UNDECLARED_REPO_RECEIPT, undeclared_dispatch_pin
+        from fno.rust_binary import call_binary_json
 
         cwd = _flag_value(list(args), "--cwd", "-c")
         if not cwd:
             return {}
         harness = _flag_value(list(args), "--harness", "-H") or None
-        pin = undeclared_dispatch_pin(Path(cwd), Path(os.getcwd()), harness)
-        if pin:
-            print(UNDECLARED_REPO_RECEIPT, file=sys.stderr)
+        err, payload = call_binary_json(
+            "worktree-dispatch-pin",
+            [
+                "--target", cwd,
+                "--caller", os.getcwd(),
+                "--harness", harness or "",
+            ],
+            timeout=30,
+        )
+        if err is not None or not isinstance(payload, dict):
+            return {}
+        pin = payload.get("pin") or {}
+        receipt = payload.get("receipt")
+        if pin and receipt:
+            print(receipt, file=sys.stderr)
         return pin
     except Exception:
         return {}  # ponytail: a pin we cannot compute must never block the spawn

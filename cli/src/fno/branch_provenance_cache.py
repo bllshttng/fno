@@ -8,26 +8,30 @@ import os
 import tempfile
 from pathlib import Path
 
-from fno.worktree_stranded import CLEAN
-
 CACHE_RELPATH = ".fno/branch-provenance.json"
 
 
 def write_cache(repo: Path, rows: list) -> bool:
-    """Write the non-CLEAN rows when they differ from the cache; True then."""
+    """Write the non-CLEAN rows when they differ from the cache; True then.
+
+    Rows arrive as dicts from the native stranded door
+    (crates/fno-agents/src/worktree/stranded.rs, the family's one owner).
+    """
     out = [
         {
-            "branch": row.facts.get("branch"),
-            "node": row.node,
-            "klass": row.klass,
-            "unpushed": row.unpushed,
-            "has_remote": row.facts.get("has_remote"),
-            "age": row.age,
-            "pr_number": row.facts.get("pr_number"),
-            "live": row.facts.get("live"),
+            "branch": row.get("facts", {}).get("branch"),
+            "node": row.get("node"),
+            "klass": row.get("klass"),
+            "unpushed": row.get("unpushed"),
+            "has_remote": row.get("facts", {}).get("has_remote"),
+            "age": row.get("age"),
+            "pr_number": row.get("facts", {}).get("pr_number"),
+            "live": row.get("facts", {}).get("live"),
         }
         for row in rows
-        if row.klass != CLEAN
+        # The class vocabulary lives in the door; CLEAN is its informational
+        # bucket that never reaches the cache.
+        if row.get("klass") != "CLEAN"
     ]
     if out == read_cache(repo):
         return False
