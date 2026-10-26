@@ -192,6 +192,27 @@ fn run_case(key: &str, case: &Value) -> Value {
         }
         "sidecar_all" => {
             let out = fno_agents::tracker::run_door(&json!({"tracker": "sidecar-all"}));
+            // Diagnostics for the divergence the first CI run of this test
+            // found: what the store itself answers beside what the door did.
+            if let Ok(state) = std::env::var("FNO_STATE_DIR") {
+                let graph = std::path::PathBuf::from(&state)
+                    .join("db")
+                    .join("graph.json");
+                match fno_agents::graph_store::read_rows_where(
+                    &graph,
+                    &fno_agents::backlog::RowQuery::default(),
+                ) {
+                    Ok(rows) => eprintln!(
+                        "parity-probe: db={} rows={:?}",
+                        graph.display(),
+                        rows.iter()
+                            .filter_map(|r| r.get("id").and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                    ),
+                    Err(e) => eprintln!("parity-probe: db={} read err {e}", graph.display()),
+                }
+            }
+            eprintln!("parity-probe: door={out}");
             json!({"sidecars": out.get("sidecars").cloned().unwrap_or(Value::Null)})
         }
         "sidecar_set_merge" => {
