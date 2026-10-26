@@ -5,9 +5,9 @@ The Python legs these cases froze are the spawn seam this row deletes:
 `spawn_defaults._scan_projection` and `normalize_spawn_args` (the argv facts
 the compose transport sent and the normalization it ran first) and the three
 pre-route seed refusals (`seedless_thread_refusal`, `lost_command_refusal`,
-`cannot_fire_refusal`). They were deleted when the client's in-process
-admission took them over, so the goldens are frozen and this driver only
-re-runs at a commit that still has those legs.
+`cannot_fire_refusal`). They are deleted when the client's in-process
+admission takes them over, so this driver re-runs only at a commit that
+still has those legs.
 `spawn_seam_parity.rs` replays each file against the Rust owners.
 
     FNO_CAPTURE_GOLDEN=1 PYTHONPATH=cli/src python3 crates/fno-agents/tests/spawn_seam_golden_driver.py
@@ -118,6 +118,15 @@ CASES = {
     ),
     "refusal_lost_command": dict(
         op="refusal_lost", seed="$fno:target scratch",
+    ),
+    "refusal_lost_bash_eaten": dict(
+        op="refusal_lost", seed=":target x-9a6b",
+    ),
+    "refusal_lost_zsh_eaten": dict(
+        op="refusal_lost", seed="arget x-9a6b",
+    ),
+    "refusal_seedless_named": dict(
+        op="refusal_seedless", harness="claude", substrate="bg", name="w1", node="x-9a6b",
     ),
     "refusal_lost_plain_seed": dict(
         op="refusal_lost", seed="plain text seed",

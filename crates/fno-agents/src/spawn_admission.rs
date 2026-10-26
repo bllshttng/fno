@@ -1,18 +1,24 @@
-//! Spawn admission: the duties the Python seam ran before it exec'd this
-//! client, now run in-process (agents port group 2, row 10). Where
-//! `exec_python_front` used to bounce an unmarked spawn back to Python for
-//! normalization, the compose facts, the pre-route seed refusals and the
-//! headroom account pick, the client's spawn arm calls [`admit`] instead and
-//! the Python leg is gone with its callers.
+//! Spawn admission: the duties the Python seam (`rust_runtime.make_context`)
+//! runs before it execs this client, ported for the in-process arm (agents
+//! port group 2, row 10): the seed refusals, the node seed rewrite,
+//! normalization, the compose and the headroom account pick.
 //!
-//! The goldens (`tests/golden/spawn_seam/`, captured from the deleted legs
-//! by `spawn_seam_golden_driver.py`) pin the scan projection, the
-//! normalization and the refusal texts byte-for-byte;
-//! `spawn_seam_parity.rs` replays them against the fns here.
+//! [`admit`] is not on the client's spawn path yet. Python `cmd_spawn` still
+//! serves three shapes no Rust arm owns: a `--role` spawn, `--route` with an
+//! account flag, and a routed non-thread spawn (`spawn_route::route_seam`
+//! bounces the last two). The seam bounce and both Python legs stay until
+//! those shapes have an owner here.
+//!
+//! The goldens (`tests/golden/spawn_seam/`, captured from the live Python
+//! legs by `spawn_seam_golden_driver.py`) pin the scan projection, the
+//! normalization and the refusal texts; `spawn_seam_parity.rs` replays them
+//! against the fns here.
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::Path;
+
+use crate::claude_ask::py_repr;
 
 // --------------------------------------------------------------------------- //
 // The fence + flag vocabulary (spawn_defaults.py). Every scan stops at the
@@ -210,7 +216,7 @@ pub(crate) fn seed_of(toks: &[String]) -> Option<String> {
     let (i, form) = seed_slot(toks)?;
     let text = &toks[i];
     if form == "message_eq" {
-        text.split('=').nth(1).map(str::to_string)
+        text.split_once('=').map(|(_, v)| v.to_string())
     } else {
         Some(text.clone())
     }
@@ -301,7 +307,7 @@ fn scan_axes(toks: &[String]) -> (bool, Option<String>, bool, bool) {
         if HARNESS_FLAGS.contains(&key) {
             harness_present = true;
             if eq {
-                harness_value = t.split('=').nth(1).map(str::to_string);
+                harness_value = t.split_once('=').map(|(_, v)| v.to_string());
                 i += 1;
             } else {
                 harness_value = toks.get(i + 1).cloned();
@@ -413,7 +419,8 @@ const SLUG_NOUN: &[&str] = &[
 /// authoritative. The draw is a wall-clock/pid LCG: no rand dependency, and
 /// the goldens pin membership in the word lists, never a draw.
 fn mint_slug(existing: &HashSet<String>) -> Result<String, ()> {
-    let mut state = crate::state::wall_now().to_bits() ^ ((std::process::id() as u64) << 32);
+    let mut state =
+        crate::accounts::state::wall_now().to_bits() ^ ((std::process::id() as u64) << 32);
     let mut next = move || {
         state = state
             .wrapping_mul(6364136223846793005)
@@ -439,21 +446,10 @@ fn mint_node_name(
     slug_flag: Option<&str>,
     existing: &HashSet<String>,
 ) -> Option<String> {
-    if node.filter(|n| !n.trim().is_empty()).is_none()
-        && seed.filter(|s| !s.trim().is_empty()).is_none()
-    {
+    if node.filter(|n| !n.is_empty()).is_none() && seed.filter(|s| !s.is_empty()).is_none() {
         return None;
     }
-    let template = crate::naming::worker_template(cwd);
-    let name = crate::naming::render_worker_name(
-        &template,
-        &crate::naming::WorkerFacts {
-            node,
-            slug: slug_flag,
-            skill: None,
-            session: None,
-        },
-    )?;
+    let name = crate::naming::worker_mint(node, seed, slug_flag, cwd).1?;
     for n in 1..=5 {
         let candidate = if n == 1 {
             name.clone()
@@ -475,6 +471,20 @@ pub struct Normalized {
     pub exit: Option<i32>,
 }
 
+/// The harness flags a spawn accepts before the fence as shorthand for the
+/// same flag behind it, each mapped to its long spelling. Each takes one value.
+fn fence_shorthand_long(tok: &str) -> Option<&'static str> {
+    match tok {
+        "--model" | "-m" => Some("--model"),
+        "--effort" => Some("--effort"),
+        "--permission-mode" => Some("--permission-mode"),
+        "--add-dir" => Some("--add-dir"),
+        "--agent" => Some("--agent"),
+        "--tools" => Some("--tools"),
+        _ => None,
+    }
+}
+
 /// Move the head shorthands behind the `--` fence. A prompt-less spawn keeps
 /// an explicit empty MESSAGE, or the first fenced token would become the
 /// prompt.
@@ -489,19 +499,20 @@ fn fence_model_shorthand(toks: &[String]) -> Result<Vec<String>, (String, i32)> 
             skip = false;
             continue;
         }
+        if let Some(long) = fence_shorthand_long(tok) {
+            moved.push(long.to_string());
+            skip = true;
+            continue;
+        }
+        // Only a long flag takes the `=` spelling: `-m=x` stays where it is.
         match tok.split_once('=') {
-            Some((flag, value)) if fence_shorthand_long(flag).is_some() => {
-                moved.push(fence_shorthand_long(flag).unwrap().to_string());
+            Some((flag, value))
+                if flag.starts_with("--") && fence_shorthand_long(flag).is_some() =>
+            {
+                moved.push(fence_shorthand_long(flag).unwrap_or(flag).to_string());
                 moved.push(value.to_string());
             }
-            _ => {
-                if let Some(long) = fence_shorthand_long(tok) {
-                    moved.push(long.to_string());
-                    skip = true;
-                } else {
-                    kept.push(tok.clone());
-                }
-            }
+            _ => kept.push(tok.clone()),
         }
     }
     if moved.is_empty() {
@@ -510,9 +521,8 @@ fn fence_model_shorthand(toks: &[String]) -> Result<Vec<String>, (String, i32)> 
     if moved.len() % 2 == 1 {
         moved.push(String::new());
     }
-    let empties: Vec<&[String]> = moved.chunks(2).filter(|p| p[1].is_empty()).collect();
-    if !empties.is_empty() {
-        let mut names: Vec<String> = empties.iter().map(|p| p[0].clone()).collect();
+    if moved.chunks(2).any(|p| p[1].is_empty()) {
+        let mut names: Vec<String> = moved.chunks(2).map(|p| p[0].clone()).collect();
         names.sort();
         names.dedup();
         return Err((
@@ -631,7 +641,7 @@ pub fn normalize(
     };
     let extra = positional_indices(&toks);
     if extra.len() > 1 {
-        let listed: Vec<String> = extra.iter().map(|i| format!("{:?}", toks[*i])).collect();
+        let listed: Vec<String> = extra.iter().map(|i| py_repr(&toks[*i])).collect();
         notes.push(format!(
             "fno agents spawn: takes one positional (the prompt); got {} ({}). The agent name moved to --name, so pass `--name <n> \"<prompt>\"`.",
             extra.len(),
@@ -697,39 +707,10 @@ pub fn seedless_thread_refusal(
     ))
 }
 
-/// One command-seed token: `(command, namespaced)` or None. A leading `/` or
-/// `$` sigil, no second `/` inside the token, an optional `fno:` namespace,
-/// and a lowercase-word remainder.
-pub(crate) fn parse_command_token(tok: &str) -> Option<(String, bool)> {
-    let bytes = tok.as_bytes();
-    if tok.len() < 2 || (bytes[0] != b'/' && bytes[0] != b'$') {
-        return None;
-    }
-    let body = &tok[1..];
-    if body.contains('/') {
-        return None;
-    }
-    let namespaced = body.starts_with("fno:");
-    let body = if namespaced {
-        &body["fno:".len()..]
-    } else {
-        body
-    };
-    let mut chars = body.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit() => {}
-        _ => return None,
-    }
-    if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-') {
-        return None;
-    }
-    Some((body.to_string(), namespaced))
-}
-
 /// Whether `seed`'s FIRST token is a token the codex session cannot expand.
 pub fn is_command_seed(seed: Option<&str>) -> bool {
     seed.and_then(|s| s.split_whitespace().next())
-        .and_then(parse_command_token)
+        .and_then(crate::provider::parse_command_token)
         .is_some()
 }
 
@@ -758,7 +739,8 @@ pub fn lost_command_refusal(message: &str) -> Option<String> {
     for token in message.split_whitespace() {
         if let Some(command) = lost.get(token) {
             return Some(format!(
-                "the payload has {token:?} where '$fno:{command}' belongs. The shell expanded $fno to nothing inside double quotes, and zsh also drops the first letter of the command. Single-quote the payload: '$fno:{command} ...'"
+                "the payload has {} where '$fno:{command}' belongs. The shell expanded $fno to nothing inside double quotes, and zsh also drops the first letter of the command. Single-quote the payload: '$fno:{command} ...'",
+                py_repr(token)
             ));
         }
     }
@@ -780,49 +762,11 @@ pub fn cannot_fire_refusal(
     }
     if matches!(plugin_status, Some("missing") | Some("wrong-channel")) {
         return Some(format!(
-            "the seed invokes {:?} but the footnote plugin is not enabled for codex on this machine, so the command would not fire and the worker would read the seed as prose. Install it with 'fno config plugin install codex' and spawn again.",
-            message.trim().split_whitespace().next().unwrap_or(""),
+            "the seed invokes {} but the footnote plugin is not enabled for codex on this machine, so the command would not fire and the worker would read the seed as prose. Install it with 'fno config plugin install codex' and spawn again.",
+            py_repr(message.split_whitespace().next().unwrap_or("")),
         ));
     }
     None
-}
-
-/// The ambient session-identity env names a spawn's env must not carry into
-/// the worker (`harness_identity.AMBIENT_IDENTITY_ENV`), verbatim from the
-/// deleted Python list. A child inherits its parent's ROUTE but never its
-/// parent's IDENTITY; each harness re-mints its own, so the scrub is lossless.
-const AMBIENT_IDENTITY_ENV: &[&str] = &[
-    "FNO_HARNESS_NAME",
-    "FNO_HARNESS_SESSION_ID",
-    "CODEX_THREAD_ID",
-    "CLAUDE_CODE_SESSION_ID",
-    "CODEX_SESSION_ID",
-    "GEMINI_SESSION_ID",
-    "OPENCODE_SESSION_ID",
-    "CLAUDE_SESSION_ID",
-    "CLAUDECODE",
-    "CLAUDECODE_SESSION_ID",
-    "HERMES_SESSION_ID",
-    "TARGET_SESSION_ID",
-    "CODEX_CI",
-    "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
-    "CODEX_SHELL",
-    "CODEX_COMPANION_SESSION_ID",
-    "CODEX_COMPANION_TRANSCRIPT_PATH",
-    "FNO_AGENT_SUBSTRATE",
-];
-
-/// Drop every ambient identity name from this process's env; returns the
-/// names actually removed.
-pub fn scrub_ambient_identity() -> Vec<String> {
-    let mut removed = Vec::new();
-    for name in AMBIENT_IDENTITY_ENV {
-        if std::env::var(name).is_ok() {
-            std::env::remove_var(name);
-            removed.push((*name).to_string());
-        }
-    }
-    removed
 }
 
 /// footnote's headless arm reads `--once`, never `--as`: rewrite the
@@ -891,100 +835,197 @@ impl Admission {
     }
 }
 
-/// The seed refusals on the RAW argv: a check after normalization would read
-/// a minted name as the seed. Returns Some(refusal) to refuse with.
-fn seed_refusals(tail: &[String]) -> Option<String> {
-    if let Some(seed) = seed_of(tail) {
-        if let Some(text) = lost_command_refusal(&seed) {
-            return Some(text);
+/// The dispatch harness for a pre-route refusal: the explicit flag, else the
+/// invoking harness the ambient markers name, else the builtin `claude`.
+/// None for an explicit empty value, which the deleted leg skipped on.
+fn dispatch_harness(tail: &[String]) -> Option<String> {
+    match flag_value(tail, HARNESS_FLAGS) {
+        Some(explicit) => {
+            let harness = explicit.trim().to_string();
+            (!harness.is_empty()).then_some(harness)
+        }
+        None => Some(crate::claims::resolve_harness().unwrap_or_else(|| "claude".to_string())),
+    }
+}
+
+/// Whether the fno-arg head (up to the `--argv` payload and the bare `--`
+/// fence) carries a flag: a short as `-X`, `-X=V` or glued `-XV`, a long as
+/// `--foo` or `--foo=V`.
+fn has_flag(args: &[String], short: &str, longs: &[&str]) -> bool {
+    args.iter()
+        .take_while(|a| *a != "--argv" && *a != "--")
+        .any(|a| {
+            (!short.is_empty() && a.starts_with(short))
+                || longs
+                    .iter()
+                    .any(|l| a == l || a.starts_with(&format!("{l}=")))
+        })
+}
+
+/// `--resume` or `-r`, in any spelling.
+fn resume_bearing(args: &[String]) -> bool {
+    has_flag(args, "-r", &["--resume"])
+}
+
+/// The seed refusals on the RAW argv, in the deleted seam's order: a check
+/// after normalization would read a minted name as the seed.
+/// `plugin_status` is read only for a command seed bound for codex.
+fn seed_refusals(tail: &[String], plugin_status: &dyn Fn() -> Option<String>) -> Option<String> {
+    if let Some(substrate) = has_explicit_substrate(tail) {
+        if let Some(harness) = dispatch_harness(tail) {
+            let refusal = seedless_thread_refusal(
+                Some(harness.as_str()),
+                Some(substrate.as_str()),
+                seed_of(tail).as_deref(),
+                flag_value(tail, &["--resume"]).filter(|r| !r.is_empty()).as_deref(),
+                flag_present(tail, "--promote"),
+                flag_value(tail, &["--name"]).as_deref(),
+                flag_value(tail, &["--node"]).as_deref(),
+            );
+            if refusal.is_some() {
+                return refusal;
+            }
         }
     }
-    let substrate = has_explicit_substrate(tail);
-    if substrate.is_some() {
-        let harness = flag_value(tail, HARNESS_FLAGS);
-        return seedless_thread_refusal(
-            harness.as_deref(),
-            substrate.as_deref(),
-            seed_of(tail).as_deref(),
-            flag_value(tail, &["--resume"]).as_deref(),
-            flag_value(tail, &["--promote"]).is_some(),
-            flag_value(tail, &["--name"]).as_deref(),
-            flag_value(tail, &["--node"]).as_deref(),
-        );
+    let seed = seed_of(tail)?;
+    if let Some(text) = lost_command_refusal(&seed) {
+        return Some(text);
     }
-    None
+    if !is_command_seed(Some(&seed)) {
+        return None;
+    }
+    let harness = dispatch_harness(tail)?;
+    if harness != "codex" {
+        return None;
+    }
+    cannot_fire_refusal(&seed, &harness, plugin_status().as_deref())
+}
+
+/// The codex plugin verdict's `status`, the `plugin-install --status` read.
+fn codex_plugin_status() -> Option<String> {
+    let verdict = crate::codex_converge::inspect(
+        &mut crate::codex_converge::codex_runner,
+        &crate::codex_converge::codex_home(),
+    );
+    verdict.get("status").and_then(Value::as_str).map(str::to_string)
+}
+
+fn argv_of(answer: &Value) -> Option<Vec<String>> {
+    let arr = answer.get("argv").and_then(Value::as_array)?;
+    let toks: Vec<String> = arr
+        .iter()
+        .map(|t| t.as_str().map(str::to_string).unwrap_or_else(|| t.to_string()))
+        .collect();
+    (!toks.is_empty()).then_some(toks)
 }
 
 /// The node seed rewrite: the same decide the spawn-axes door answers, in
-/// process. Returns the (possibly rewritten) argv. A payload-named node's
-/// refusals name the payload, not `--node`.
-fn node_seed_rewrite(args: &[String], tail: &[String]) -> Result<Vec<String>, String> {
-    let nodeless = {
-        let payload = json!({
-            "family": ["/target", "/blueprint"],
-            "resume": flag_value(tail, &["--resume"]).is_some(),
-            "argv": args,
-        });
-        crate::node_seed::decide(&payload)
-    };
+/// process. Returns the (possibly rewritten) argv and the profile verb a
+/// `profile` answer names. A payload-named node's refusals name the
+/// payload, not `--node`.
+fn node_seed_rewrite(
+    args: &[String],
+    stderr: &mut Vec<String>,
+) -> Result<(Vec<String>, Option<String>), String> {
+    let family = json!(["/target", "/blueprint"]);
     let mut args = args.to_vec();
-    let mut node_from_payload = false;
-    if nodeless.get("action").and_then(Value::as_str) == Some("compose") {
-        if let Some(a) = nodeless.get("argv").and_then(Value::as_array).map(|arr| {
-            arr.iter()
-                .filter_map(|t| t.as_str().map(str::to_string))
-                .collect::<Vec<String>>()
-        }) {
-            args = a;
-        }
-        let tail2 = &args[1..];
-        let node = flag_value(tail2, &["--node"]).unwrap_or_default();
-        if node.is_empty() {
-            if let Some(reason) = flag_value(&args, &["--node-reason"]) {
-                std::env::set_var("FNO_NODE_REASON", reason);
-                if let Some(at) = args.iter().position(|t| t == "--node-reason") {
-                    args.drain(at..at + 2);
+    let mut node = flag_value(&args[1..], &["--node"])
+        .map(|n| n.trim().to_string())
+        .unwrap_or_default();
+    let mut node_source = Value::Null;
+    if node.is_empty() {
+        let answer = crate::node_seed::decide(&json!({
+            "family": family,
+            "resume": resume_bearing(&args),
+            "argv": args,
+        }));
+        match answer.get("action").and_then(Value::as_str) {
+            Some("compose") => {
+                if let Some(rewritten) = argv_of(&answer) {
+                    args = rewritten;
+                }
+                node = flag_value(&args[1..], &["--node"])
+                    .map(|n| n.trim().to_string())
+                    .unwrap_or_default();
+                if answer.get("source").and_then(Value::as_str) == Some("payload") {
+                    node_source = json!("payload");
+                }
+                if node.is_empty() {
+                    if let Some(reason) = flag_value(&args[1..], &["--node-reason"]) {
+                        std::env::set_var("FNO_NODE_REASON", reason);
+                        if let Some(at) = args.iter().position(|t| t == "--node-reason") {
+                            args.drain(at..(at + 2).min(args.len()));
+                        }
+                    }
                 }
             }
+            Some("refuse") => stderr.push(
+                "fno agents spawn: binary predates seed-node derivation; spawning nodeless"
+                    .to_string(),
+            ),
+            _ => {}
         }
-        node_from_payload = nodeless.get("source").and_then(Value::as_str) == Some("payload");
     }
-    if flag_value(&args[1..], &["--node"]).is_none() {
-        return Ok(args);
+    if node.is_empty() {
+        return Ok((args, None));
     }
+
     // The named-node pass: the row's lifecycle facts ride the same decide.
-    let node = flag_value(&args[1..], &["--node"]).unwrap_or_default();
     let row = crate::spawn_compose::graph_row_for(&node);
-    let (effective_command, derive_error, row_found) = match &row {
+    let (effective_command, derive_error) = match &row {
         Some(r) => match crate::backlog_ready::effective_command(r) {
-            Ok((_, cmd)) => (Some(cmd), None, true),
-            Err(e) => (None, Some(format!("derivation failed: {e}")), true),
+            Ok((_, cmd)) => (Some(cmd), None),
+            Err(e) => (None, Some(e)),
         },
-        None => (None, None, false),
+        None => (None, None),
     };
-    let tail3 = &args[1..];
-    let slot = seed_slot(tail3);
-    let payload = json!({
+    let stored = row
+        .as_ref()
+        .and_then(|r| r.get("dispatch_command"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(crate::backlog::fields::canonical_command_key)
+        .filter(|s| !s.is_empty());
+    let slot = seed_slot(&args[1..]);
+    let answer = crate::node_seed::decide(&json!({
         "node": node,
-        "row_found": row_found,
+        "row_found": row.is_some(),
         "effective_command": effective_command,
+        "stored_command": stored,
         "derive_error": derive_error,
-        "node_source": if node_from_payload { "payload" } else { Value::Null },
-        "family": ["/target", "/blueprint"],
-        "resume": flag_value(tail3, &["--resume"]).is_some(),
-        "argv": &args,
+        "node_source": node_source,
+        "family": family,
+        "resume": resume_bearing(&args),
+        "argv": args,
         "seed_index": slot.map(|(i, _)| i + 1),
         "seed_form": slot.map(|(_, f)| f),
-    });
-    let verdict = crate::node_seed::decide(&payload);
-    if verdict.get("action").and_then(Value::as_str) == Some("refuse") {
-        let text = verdict
+    }));
+    match answer.get("action").and_then(Value::as_str) {
+        Some("refuse") => Err(answer
             .get("message")
             .and_then(Value::as_str)
-            .unwrap_or("refused");
-        return Err(text.to_string());
+            .unwrap_or("refused")
+            .to_string()),
+        Some("compose") => Ok((argv_of(&answer).unwrap_or(args), None)),
+        Some("profile") => {
+            let verb = answer
+                .get("verb")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string);
+            Ok((args, verb))
+        }
+        _ => Ok((args, None)),
     }
-    Ok(args)
+}
+
+/// A literal `--verbose` before the first `--` fence or `--argv` payload.
+fn verbose_requested(argv: &[String]) -> bool {
+    argv.iter()
+        .skip(1)
+        .take_while(|t| *t != "--" && *t != "--argv")
+        .any(|t| t == "--verbose")
 }
 
 /// Run the full admission for one `spawn` argv: the seed refusals, the node
@@ -1003,15 +1044,27 @@ pub fn admit(args: &[String], cwd: &Path, existing_names: &HashSet<String>) -> A
     let tail: Vec<String> = args[1..].to_vec();
 
     // 1. The seed refusals, on the raw argv (pre-normalization).
-    if let Some(text) = seed_refusals(&tail) {
+    if let Some(text) = seed_refusals(&tail, &codex_plugin_status) {
         return Admission::refused(stderr, text);
     }
 
-    // 2. The node seed rewrite.
-    let args = match node_seed_rewrite(args, &tail) {
-        Ok(a) => a,
+    // 2. The node seed rewrite. A `profile` answer names the verb the compose
+    //    reads as the node's command.
+    let (args, node_command) = match node_seed_rewrite(args, &mut stderr) {
+        Ok(rewritten) => rewritten,
         Err(text) => return Admission::refused(stderr, text),
     };
+
+    // A help request skips the compose: its argv is the parser's to answer.
+    if args[1..]
+        .iter()
+        .take_while(|a| *a != "--argv")
+        .any(|a| a == "-h" || a == "--help")
+    {
+        let mut admitted = pass_through(&args);
+        admitted.stderr = stderr;
+        return admitted;
+    }
 
     // 3. Normalization. A normalization refusal keeps its exit code and the
     //    notes it printed.
@@ -1044,12 +1097,12 @@ pub fn admit(args: &[String], cwd: &Path, existing_names: &HashSet<String>) -> A
     let env_node = std::env::var("FNO_NODE").ok().filter(|v| !v.is_empty());
     let payload = json!({
         "argv": out,
-        "node_command": Value::Null,
+        "node_command": node_command,
         "env_node": env_node,
         "permission_builtin": "bypassPermissions",
         "scan": scan,
         "facts": facts,
-        "verbose": false,
+        "verbose": verbose_requested(out),
     });
     let inputs = crate::spawn_compose::gather(&payload, cwd);
     let answer = crate::spawn_compose::compose(&inputs);
@@ -1113,32 +1166,25 @@ fn pass_through(args: &[String]) -> Admission {
 /// carrying `--resume`, and one pinned to a non-claude harness. Advisory in
 /// every direction: a failure never blocks the spawn.
 fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
+    // The provenance carrier: drop any previous spawn's decision first, so a
+    // stale "config" never outlives its pick.
+    std::env::remove_var(crate::state::LAUNCH_ACCOUNT_SOURCE_ENV_KEY);
     let tail = &args[1..];
-    if flag_value(tail, &["--account"]).is_some() {
-        return args.to_vec();
-    }
-    if flag_value(tail, &["--role", "--promote"]).is_some()
-        || flag_present(tail, "--route")
-        || flag_value(tail, &["--provider", "-P"]).is_some()
+    if flag_value(tail, &["--account"]).is_some()
+        || has_flag(args, "", &["--role"])
+        || has_flag(args, "-P", &["--route", "--provider"])
+        // A revive continues an EXISTING transcript under the config dir it
+        // was created in, so an injected --account would point
+        // CLAUDE_CONFIG_DIR at a directory where the uuid does not exist.
+        || resume_bearing(args)
+        // A cutover already SELECTED its account; a second pick merges two
+        // overlays, the exact mis-bill the --route guard refuses.
+        || has_flag(args, "", &["--dispatch-account"])
     {
-        return args.to_vec();
-    }
-    // A revive continues an EXISTING transcript under the config dir it was
-    // created in, so an injected --account would point CLAUDE_CONFIG_DIR at a
-    // directory where the uuid does not exist.
-    if flag_value(tail, &["--resume"]).is_some() {
-        return args.to_vec();
-    }
-    // A cutover already SELECTED its account; a second pick merges two
-    // overlays, the exact mis-bill the --route guard refuses.
-    if flag_value(tail, &["--dispatch-account"]).is_some() {
         return args.to_vec();
     }
     let harness = flag_value(tail, HARNESS_FLAGS);
-    if harness
-        .map(|h| !h.is_empty() && h != "claude")
-        .unwrap_or(false)
-    {
+    if harness.is_some_and(|h| !h.is_empty() && h != "claude") {
         return args.to_vec();
     }
     let verdict = match crate::accounts::pick::pick_live(cwd, None, &[], true) {
@@ -1148,10 +1194,7 @@ fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
     let Some(account) = verdict.account else {
         return args.to_vec();
     };
-    // The provenance carrier: drop any previous spawn's decision before the
-    // stamp, so a stale "config" never outlives its pick, and the mint can
-    // tell an injected pick from a flag the operator typed.
-    std::env::remove_var(crate::state::LAUNCH_ACCOUNT_SOURCE_ENV_KEY);
+    // The mint tells an injected pick from a flag the operator typed.
     std::env::set_var(crate::state::LAUNCH_ACCOUNT_SOURCE_ENV_KEY, "config");
     let boundary = args
         .iter()

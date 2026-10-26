@@ -532,6 +532,7 @@ pub mod skill_drift;
 pub mod slot_cutover;
 pub mod source_pin;
 pub mod spawn;
+pub mod spawn_admission;
 pub mod spawn_axes;
 pub mod spawn_backends;
 pub mod spawn_compose;
