@@ -1,7 +1,7 @@
 //! parity-stage: differential
 //! parity-oracle: fno.agents.spawn_defaults._scan_projection
 //!
-//! Characterization parity for `spawn_admission`: the scan projection the
+//! Differential parity for `spawn_admission`: the scan projection the
 //! compose transport sent, the argv normalization it ran first, and the three
 //! pre-route seed refusals. Each `tests/golden/spawn_seam/*.json` case holds
 //! what the live Python leg answered, captured by `spawn_seam_golden_driver.py`.
