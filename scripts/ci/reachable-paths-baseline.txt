@@ -15,7 +15,6 @@ A	--tab needs a nonblank selector or pane-group name	py=cli/src/fno/agents/spawn
 A	--workspace/-s needs a nonblank workspace name	py=cli/src/fno/agents/spawn_defaults.py;rs=crates/fno-agents/src/bin/client.rs|crates/fno/src/mux_cli/pane_args.rs	# CLASSIFY protocol|msg-twin|data
 A	-//apple//dtd plist 1.0//en	py=cli/src/fno/pr_watch/_install.py;rs=crates/fno-agents/src/backlog/groom.rs|crates/fno-agents/src/pr_watch/install.rs	# CLASSIFY protocol|msg-twin|data
 A	.agents/context/product.md	py=skills/execute/orchestrator.py;rs=crates/fno-agents/src/blueprint_judge.rs	# CLASSIFY protocol|msg-twin|data
-A	.codex-plugin/plugin.json	py=cli/src/fno/setup/codex_plugin.py;rs=crates/fno-agents/ci/plugin_tree.rs	# shared-vocabulary: Codex plugin manifest path in developer convergence and CI package validation
 A	/var/lib/dbus/machine-id	py=cli/src/fno/claims/hostid.py;rs=crates/fno-agents/src/claims.rs|crates/fno/src/agents_view.rs	# CLASSIFY protocol|msg-twin|data
 A	; both plans can ship if the second one rebases on the first.	py=cli/src/fno/graph/collision.py;rs=crates/fno-agents/src/backlog/collision.rs	# CLASSIFY protocol|msg-twin|data
 A	; consider splitting the overlap into a shared dependency rather than two parallel touches.	py=cli/src/fno/graph/collision.py;rs=crates/fno-agents/src/backlog/collision.rs	# CLASSIFY protocol|msg-twin|data
@@ -135,6 +134,7 @@ A	fno agents mail: {label} from {sender}	py=cli/src/fno/mail/receipts.py;rs=crat
 A	fno agents resume: registry read failed: {exc}	py=cli/src/fno/agents/resume_cli.py;rs=crates/fno-agents/src/client_commands.rs	# CLASSIFY protocol|msg-twin|data
 A	fno agents trace: agent name is required unless --all is set	py=cli/src/fno/agents/trace_cli.py;rs=crates/fno-agents/src/client_commands.rs	# CLASSIFY protocol|msg-twin|data
 A	fno backlog undispatched --json	py=cli/src/fno/backlog/undispatched.py;rs=crates/fno-agents/src/backlog/next.rs|crates/fno-agents/src/backlog/undispatched.rs|crates/fno-agents/src/org_board.rs	# CLASSIFY protocol|msg-twin|data
+A	fno config plugin install codex --force	py=cli/src/fno/doctor.py;rs=crates/fno-agents/src/codex_converge.rs	# msg-twin: the doctor report's fallback remedy names the codex refresh the native verdict also names; the doctor.py leg deletes with the doctor family port
 A	fno config set active_backlog.enabled true	py=cli/src/fno/doctor.py;rs=crates/fno-agents/src/backlog/rank_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	fno-agents claim returned a non-object json value	py=cli/src/fno/claims/core.py;rs=crates/fno-agents/src/merge_command/mod.rs	# CLASSIFY protocol|msg-twin|data merge-command port in flight: byte-matched twins, the python leg deletes when the port lands
 A	fno-agents claim unavailable: set fno_agents_bin or reinstall fno	py=cli/src/fno/claims/core.py;rs=crates/fno-agents/src/merge_command/mod.rs	# CLASSIFY protocol|msg-twin|data merge-command port in flight: byte-matched twins, the python leg deletes when the port lands
