@@ -91,7 +91,7 @@ pub(crate) fn drain_msg_ids() -> BTreeSet<String> {
 /// The `agent_mail_drained` receipts, read raw from the project journal
 /// (the store commit is the write boundary; a torn store reads empty).
 fn query_drained_rows() -> Vec<Value> {
-    let journal = super::super::project_events_path();
+    let journal = super::project_events_path();
     let Ok(text) = std::fs::read_to_string(journal) else {
         return Vec::new();
     };

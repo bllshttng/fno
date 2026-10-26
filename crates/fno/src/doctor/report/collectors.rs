@@ -863,6 +863,13 @@ pub(crate) fn state_dir() -> PathBuf {
     expand_tilde(&PathBuf::from("~/.fno"))
 }
 
+pub(crate) fn project_events_path() -> PathBuf {
+    if let Some(pin) = std::env::var_os("FNO_EVENTS_PATH") {
+        return PathBuf::from(pin);
+    }
+    state_dir().join("events.jsonl")
+}
+
 fn expand_tilde(path: &Path) -> PathBuf {
     if let Ok(rest) = path.strip_prefix("~") {
         return home_dir().join(rest);
