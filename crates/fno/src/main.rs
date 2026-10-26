@@ -1588,7 +1588,7 @@ fn main() {
         }
         Role::InboxNotify(rest) => std::process::exit(fno::notify_dispatch::run(&rest)),
         Role::NotifyDeprecated(rest) => {
-            eprintln!("fno notify is now fno inbox notify");
+            eprintln!("{}", fno::notify_dispatch::DEPRECATED_MOVE_LINE);
             std::process::exit(fno::notify_dispatch::run(&rest))
         }
         Role::StatusFanoutDeprecated(rest) => {

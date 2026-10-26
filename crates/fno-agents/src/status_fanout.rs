@@ -403,7 +403,7 @@ fn active_inode(active: &Path) -> Option<u64> {
 /// appeared/vanished) between the stats, discard and re-run the pass ONCE;
 /// at-least-once tolerates the duplicate, only the index inflation had a
 /// loss path.
-fn stream_since(
+pub fn stream_since(
     active: &Path,
     since_ts: &str,
     after_seq: Option<i64>,
@@ -511,7 +511,8 @@ fn stream_pass(
 /// no historical event is replayed AND a later event in the SAME second as
 /// EOF is still delivered (it lands at occurrence index >= count). `("", 0)`
 /// for an empty/absent log means "deliver everything henceforth".
-fn eof_cursor(active: &Path) -> (String, i64) {
+/// `pub` for the parity test seam.
+pub fn eof_cursor(active: &Path) -> (String, i64) {
     let Ok(file) = std::fs::File::open(active) else {
         return (String::new(), 0);
     };
@@ -621,6 +622,8 @@ pub fn run_tick(
     tuning: &FanoutTuning,
     dry_run: bool,
     post: &mut dyn HttpPost,
+    dispatch: Option<&mut DispatchFn>,
+    stream: Option<&mut StreamFn>,
 ) -> TickResult {
     let enabled: Vec<&SinkConfig> = sinks.iter().filter(|s| s.enabled).collect();
     if enabled.is_empty() {
@@ -661,17 +664,40 @@ pub fn run_tick(
             ..Default::default()
         };
     };
-    run_locked(
-        project_root,
-        &state,
-        &live,
-        tuning,
-        dry_run,
-        post,
-        lock,
-        &parks,
-    )
+    match dispatch {
+        Some(d) => run_locked(
+            project_root,
+            &state,
+            &live,
+            tuning,
+            dry_run,
+            lock,
+            &parks,
+            d,
+            stream.unwrap_or(&mut |active, since, after| stream_since(active, since, after)),
+        ),
+        None => run_locked(
+            project_root,
+            &state,
+            &live,
+            tuning,
+            dry_run,
+            lock,
+            &parks,
+            &mut |sink, event| dispatch_event(sink, event, tuning, project_root, post),
+            &mut |active, since, after| stream_since(active, since, after),
+        ),
+    }
 }
+
+/// One dispatch call's outcome, scripted in tests and produced by the sink's
+/// adapter in production - the same seam shape the deleted Python leg's
+/// `run_tick(..., dispatch_fn=...)` carried.
+pub type DispatchFn<'a> = dyn FnMut(&SinkConfig, &Value) -> (String, String) + 'a;
+
+/// One stream read's rows: scripted in tests, produced by the journal reader
+/// in production.
+pub type StreamFn<'a> = dyn FnMut(&Path, &str, Option<i64>) -> (Vec<Value>, u64, Option<i64>) + 'a;
 
 fn run_locked(
     project_root: &Path,
@@ -679,9 +705,10 @@ fn run_locked(
     sinks: &[&SinkConfig],
     tuning: &FanoutTuning,
     dry_run: bool,
-    post: &mut dyn HttpPost,
     lock: &mut TickLock,
     parks: &BTreeMap<String, f64>,
+    dispatch: &mut DispatchFn,
+    stream: &mut StreamFn,
 ) -> TickResult {
     let active = journal_path(project_root);
     let scan = read_cursor(state, SCAN).map(|(_, n)| n);
@@ -714,7 +741,7 @@ fn run_locked(
         .min_by_key(|(ts, _)| ts_key(ts))
         .map(|(ts, _)| ts.clone())
         .unwrap_or_default();
-    let (mut events, skipped, high) = stream_since(&active, &min_ts, scan);
+    let (mut events, skipped, high) = stream(&active, &min_ts, scan);
     if scan.is_none() && high.is_some() && !events.is_empty() {
         // A first store-backed pass: the journal EOF can predate the store's
         // newest rows, so a fresh sink starts at the store's EOF instead.
@@ -786,7 +813,7 @@ fn run_locked(
             if dry_run {
                 continue;
             }
-            let (status, detail) = dispatch_event(sink, event, tuning, project_root, post);
+            let (status, detail) = dispatch(sink, event);
             if status == DELIVERED {
                 st.dispatched += 1;
                 st.new_cursor = Some((ets.clone(), idx + 1));
@@ -1194,8 +1221,9 @@ fn cloudevents_wrap(event: &Value) -> Value {
 /// `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)`
 /// - the exact canonical form the Python leg hashed, including the `\uXXXX`
 /// escapes for every non-ASCII code point (surrogate pairs past the BMP), so
-/// the deterministic id cannot drift between legs.
-fn python_json_compact_ascii(value: &Value) -> String {
+/// the deterministic id cannot drift between legs. `pub` so the parity test
+/// serializes its decision records with the same function.
+pub fn python_json_compact_ascii(value: &Value) -> String {
     match value {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
@@ -1285,8 +1313,9 @@ fn dispatch_json_webhook(
 /// empty instead of raising, positional refs render empty, and a malformed
 /// template (an unbalanced brace) degrades to the raw text rather than
 /// crashing the tick. Format specs are ignored (divergence from the Python
-/// `format_field`, declared in the parity test header).
-fn render_template(template: Option<&str>, event: &Value) -> String {
+/// `format_field`, declared in the parity test header). `pub` for the
+/// parity test seam.
+pub fn render_template(template: Option<&str>, event: &Value) -> String {
     let Some(template) = template else {
         return String::new();
     };
@@ -1524,7 +1553,7 @@ pub fn run_tick_command(args: &[String]) -> i32 {
         }
     };
     let mut post = CurlPost;
-    let result = run_tick(&cwd, &sinks, &tuning, dry_run, &mut post);
+    let result = run_tick(&cwd, &sinks, &tuning, dry_run, &mut post, None, None);
     if result.locked_out {
         println!("status-fanout: another tick holds the lock; skipped");
         return 0;

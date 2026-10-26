@@ -26,6 +26,10 @@ use std::time::Duration;
 /// The Python `_impl._NO_TOOL_MSG`, byte for byte.
 const NO_TOOL_MSG: &str = "fno inbox notify: no OS notification tool available (need osascript on macOS or notify-send on Linux); notification not sent.";
 
+/// The deprecated root spelling's move line (the Python move table's text,
+/// byte for byte). `pub` so the parity test pins it against the golden.
+pub const DEPRECATED_MOVE_LINE: &str = "fno notify is now fno inbox notify";
+
 /// The Python `events.NOTICE_CAP`: one field of the journal row.
 const NOTICE_CAP: usize = 2000;
 
@@ -153,7 +157,30 @@ fn print_help() {
 /// The dispatch decision table, the Python `send_notification` order.
 /// Returns `(exit_code, error_message)` - the empty message on any accepted
 /// channel, the degrade line only when no channel exists at all.
-fn send_notification(title: &str, message: &str, pointer: &str) -> (i32, String) {
+pub fn send_notification(title: &str, message: &str, pointer: &str) -> (i32, String) {
+    send_notification_seams(
+        title,
+        message,
+        pointer,
+        &mut |t, m| dispatch_local(t, m),
+        &mut |t, m| mux_clients(t, m),
+        &mut |t, m, p| emit_operator_notice(t, m, p),
+        &mut |e| sink_routes(e),
+    )
+}
+
+/// The table with its four channels injected: the parity test drives it
+/// exactly the way the deleted Python leg's tests monkeypatched the module
+/// functions (`_impl._dispatch_local` and friends).
+pub fn send_notification_seams(
+    title: &str,
+    message: &str,
+    pointer: &str,
+    local: &mut dyn FnMut(&str, &str) -> bool,
+    mux: &mut dyn FnMut(&str, &str) -> Option<u64>,
+    journal: &mut dyn FnMut(&str, &str, &str) -> bool,
+    sinks: &mut dyn FnMut(&str) -> bool,
+) -> (i32, String) {
     let title = if title.is_empty() { "target" } else { title };
     let message = if message.is_empty() {
         "Complete"
@@ -161,17 +188,17 @@ fn send_notification(title: &str, message: &str, pointer: &str) -> (i32, String)
         message
     };
 
-    let row = emit_operator_notice(title, message, pointer);
-    if mux_clients(title, message).is_some_and(|clients| clients > 0) {
+    let row = journal(title, message, pointer);
+    if mux(title, message).is_some_and(|clients| clients > 0) {
         return (0, String::new());
     }
-    if dispatch_local(title, message) {
+    if local(title, message) {
         return (0, String::new());
     }
     // No local tool: the sink lane is the only possible channel, so the only
     // case where the config read buys an answer is this one. A host with a
     // working notifier never pays a config load here.
-    if row && sink_routes("operator_notice") {
+    if row && sinks("operator_notice") {
         return (0, String::new());
     }
     (1, NO_TOOL_MSG.to_string())

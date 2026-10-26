@@ -118,8 +118,9 @@ fn python_list(values: &[Value]) -> Value {
 /// `json.dumps` defaults in Rust: insertion order (serde_json's
 /// preserve_order feature keeps Map order), ensure_ascii, and the default
 /// `", "` / `": "` separators. Powers the hidden op's stdout, byte-parity
-/// with the deleted Python print.
-fn python_json_default(value: &Value) -> String {
+/// with the deleted Python print. `pub` so the parity test renders its
+/// expected bytes with the same function.
+pub fn python_json_default(value: &Value) -> String {
     match value {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
