@@ -50,7 +50,7 @@ pub fn register_worker(
             f.write_all(sorted_json(&entry).as_bytes())
                 .and_then(|_| f.write_all(b"\n"))
         });
-    let _ = libc::flock(lock.as_raw_fd(), libc::LOCK_UN);
+    let _ = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
     drop(lock);
     append_result.map(|_| entry)
 }

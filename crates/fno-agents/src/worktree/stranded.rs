@@ -300,6 +300,8 @@ pub fn sweep(repo: &Path) -> Vec<Row> {
         Ok(rows) => entries = rows,
         Err(_) => graph_ok = false,
     }
+    let (join_map, registry_ok) = super::status::registry_join();
+    sweep_over(worktrees, entries, graph_ok, join_map, registry_ok)
 }
 
 fn sweep_over(
@@ -339,8 +341,8 @@ fn sweep_over(
             branch.as_deref(),
             unpushed,
             unpushed_ok,
-            node_id.as_deref(),
-            node_entry.as_ref(),
+            Some(node_id.as_str()),
+            Some(&node_entry),
             graph_ok,
             registry_status.as_deref(),
             registry_ok,
