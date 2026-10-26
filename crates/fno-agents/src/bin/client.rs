@@ -180,6 +180,14 @@ fn main() {
     if args.first().map(String::as_str) == Some("pr") {
         std::process::exit(fno_agents::pr_front::run(&args[1..]));
     }
+    // `fno do ci ...`: the per-sha CI-state namespace, the same lexical
+    // handover as do pr. No bare `ci` claim: the root word is unclaimed
+    // today and stays that way.
+    if args.first().map(String::as_str) == Some("do")
+        && args.get(1).map(String::as_str) == Some("ci")
+    {
+        std::process::exit(fno_agents::ci_front::run(&args[2..]));
+    }
     // Permanent GitHub-fact rows (merged PRs, repo metadata); reconcile and
     // base-lineage reach it through command_call; transport-only.
     if args.first().map(String::as_str) == Some("gh-cache") {

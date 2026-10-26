@@ -355,6 +355,9 @@ enum Role {
     /// namespace execs the sibling Rust binary's pr dispatcher. The argv
     /// passes through byte-verbatim, the backlog namespace's contract.
     DoPr,
+    /// `fno do ci ...`: the per-commit CI-state namespace execs the sibling
+    /// binary's ci dispatcher, the same byte-verbatim handover as DoPr.
+    DoCi,
     /// `fno backlog list [<query>]`: the native node-query door (the grammar
     /// and the read model both live in this crate, d-069a9fa1). Args after
     /// `list`.
@@ -1008,6 +1011,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     {
         return Role::DoPr;
     }
+    // The ci namespace claims itself lexically, the pr namespace's contract:
+    // the sibling dispatcher owns its spellings and the argv passes through
+    // byte-verbatim. No bare `ci` claim: the root word stays unclaimed.
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("ci")
+    {
+        return Role::DoCi;
+    }
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
     }
@@ -1277,6 +1288,7 @@ fn main() {
         Role::Forward => bootstrap::forward(&args),
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
+        Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
         Role::BacklogList(rest) => std::process::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
             // AC1-EDGE: piped/CI bare `fno` gets a notice, not a TUI. Exit 0 -
@@ -1713,6 +1725,27 @@ mod tests {
         assert_ne!(
             decide_role(&os(&["do", "review", "--help"]), false),
             Role::DoPr
+        );
+    }
+
+    #[test]
+    fn do_ci_claims_its_namespace_and_no_root_word() {
+        assert_eq!(
+            decide_role(&os(&["do", "ci", "status", "main"]), false),
+            Role::DoCi
+        );
+        assert_eq!(decide_role(&os(&["do", "ci", "--help"]), false), Role::DoCi);
+        // Bare `fno do ci` claims too: the grouped help is native.
+        assert_eq!(decide_role(&os(&["do", "ci"]), false), Role::DoCi);
+        // The root word `ci` stays unclaimed: only the do tree carries it.
+        assert_ne!(
+            decide_role(&os(&["ci", "status", "main"]), false),
+            Role::DoCi
+        );
+        // A non-ci `do` tree stays with its owners.
+        assert_ne!(
+            decide_role(&os(&["do", "pr", "status", "41"]), false),
+            Role::DoCi
         );
     }
 
