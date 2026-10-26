@@ -167,7 +167,6 @@ LAYERS = (
             "fno.plan",
         ),
     ),
-    (2, "roles", ("fno.roles",)),
     (5, "runtime", ("fno.runtime", "fno.agents")),
 )
 
@@ -255,9 +254,13 @@ for path, source, tree in parsed:
         for imported in imported_modules(
             node, source_module, source_is_package=path.name == "__init__.py"
         ):
+            # The control edge proves the scan reaches real content. The
+            # roles -> core pair it named retired with the roles package;
+            # this runtime -> core edge survives until the next deletion
+            # re-points it.
             if (
-                source_module == "fno.roles.models"
-                and imported == "fno.company.contracts"
+                source_module == "fno.agents.history"
+                and imported == "fno.graph._reconcile"
             ):
                 positive_control = True
             target_layer = layer_for(imported)
@@ -284,7 +287,7 @@ for path, source, tree in parsed:
 if not positive_control:
     print(
         "check-company-boundaries: positive control failed "
-        "(no roles -> core edge observed); scan did not reach content",
+        "(no runtime -> core edge observed); scan did not reach content",
         file=sys.stderr,
     )
     sys.exit(2)
@@ -325,7 +328,7 @@ rendered_cycle = None
 if cycle:
     rendered_cycle = " -> ".join(f"L{number} {names[number]}" for number in cycle)
 
-print("check-company-boundaries: positive control ok (roles -> core edge observed)")
+print("check-company-boundaries: positive control ok (runtime -> core edge observed)")
 # Printed on every run, not only a clean one: an unmapped module is invisible
 # to this scan, so the coverage figure is what tells a reader how much of a
 # green verdict is enforcement and how much is silence.
