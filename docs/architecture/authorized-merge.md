@@ -156,9 +156,9 @@ auto_revert = true
 revert_after_minutes = 10   # default 10
 ```
 
-Each minute the arm reads main's verdict through the gate's own cached reading. When a red head stays red past the window, the arm walks main's first-parent chain back to the last green commit. The oldest red commit after it is the culprit. When the culprit is a `Merge pull request #N` commit, the arm does three things. It files a node tagged `main-repair`. It opens a PR that reverts the merge (`git revert -m 1`) and names that node. It asks the author of PR N, on the PR and on its node, to re-land the change with the fix. The revert needs one CI run. A fix forward can wait behind a flaky test and a CI queue: on 2026-10-26 main stayed red about 3 hours that way.
+Each minute the arm reads main's verdict through the gate's own cached reading. A red head that stays red past the window is the culprit when it is a `Merge pull request #N` commit and its first parent ran green. The hold stops further merges once main reads red, so the red head is usually that merge. The arm then files a node tagged `main-repair`, opens a PR that reverts the merge (`git revert -m 1`) and names that node, and asks the author of PR N to re-land the change with the fix. The revert needs one CI run. A fix forward can wait behind a flaky test and a CI queue: on 2026-10-26 main stayed red about 3 hours that way.
 
-The arm refuses to guess. It journals `ambiguous` and opens nothing in these cases: a cancelled or missing run sits between the red head and the last green commit, the culprit is not a PR merge, or no green commit is in the last 10. A red whose failing checks all sit on heal's flake ledger journals `flaky`. Every outcome is one `main_revert_check` row per red head, so a daemon restart never opens a second revert. The arm never merges the revert. The owner merges it through this gate, as for any PR.
+The arm refuses to guess. It journals `ambiguous` and opens nothing when the parent run is red, cancelled or missing, or when the head is not a PR merge. A red whose failing checks all sit on heal's flake ledger journals `flaky`. Every outcome is one `main_revert_check` row per red head, so a daemon restart never opens a second revert. The arm never merges the revert. The owner merges it through this gate.
 
 ## The effect
 
