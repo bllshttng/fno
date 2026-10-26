@@ -72,10 +72,10 @@ def query_by_source_inbox_msg(msg_id: str, path: Path | None = None) -> list[dic
         from fno.graph.store import read_graph_strict
 
         return [e for e in read_graph_strict(path) if e.get("source_inbox_msg") == msg_id]
-    from fno.tracker import sidecar as sidecar_store
+    from fno import rust_binary
 
     return [
-        {"id": nid, "source_inbox_msg": sc.source_inbox_msg}
-        for nid, sc in sidecar_store.load_all().items()
-        if sc.source_inbox_msg == msg_id
+        {"id": nid, "source_inbox_msg": sc.get("source_inbox_msg")}
+        for nid, sc in rust_binary.sidecar_all().items()
+        if sc.get("source_inbox_msg") == msg_id
     ]

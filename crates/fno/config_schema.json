@@ -3082,6 +3082,21 @@
       "default": false,
       "title": "Share Backlog",
       "type": "boolean"
+     },
+     "ssh_peers": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Ssh Peers"
      }
     },
     "title": "StoreBlock",
@@ -4736,6 +4751,15 @@
    "question": "",
    "default_source": "",
    "doc": "true moves the backlog itself to the primary named by store.remote_url; both keys must be set. Default false."
+  },
+  {
+   "path": "store.ssh_peers",
+   "type": "dict[str, str] (optional)",
+   "default": null,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Optional plan rescue: a map of host key to ssh destination, e.g. store.ssh_peers.\"macbook\" = \"macbook.lan\". When this host cannot place a plan file from the shared store, the plan carrier asks that peer over ssh (BatchMode, 5s connect timeout). A key is the pushing host's name, a host in the fno_plan_seen ledger, or the store host in store.remote_url. Off by default: the shared store stays the only required transport. Read from the global config only. Default unset."
   },
   {
    "path": "agents.single_flight_ttl_seconds",

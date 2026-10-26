@@ -1,0 +1,18 @@
+{
+  "sidecars": {
+    "ab-1": {
+      "additional_prs": [],
+      "cost_sessions": [],
+      "cwd": "/repo",
+      "id": "ab-1",
+      "sessions": []
+    },
+    "ab-4": {
+      "additional_prs": [],
+      "cost_sessions": [],
+      "id": "ab-4",
+      "sessions": [],
+      "source_inbox_msg": "m-1"
+    }
+  }
+}
