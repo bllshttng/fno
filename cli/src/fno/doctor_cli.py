@@ -153,15 +153,3 @@ doctor_app.add_typer(observer_app, name="observer")
 # `doctor scratch` is the scratch-shape sweep; the Rust binary is
 # the only implementation and the leaf refuses without it.
 doctor_app.add_typer(scratch_app, name="scratch")
-# `doctor update` is native: the Rust front door's doctor_update.rs answers
-# it (both spellings). fno-py keeps only this signpost for the
-# no-front-door spelling, naming the one command that installs the door.
-def _update_signpost() -> None:
-    typer.echo(
-        "fno: the updater is native to the Rust front door; install it from the source checkout with "
-        "`cargo install --locked --path <src>/crates/fno`, then re-run `fno doctor update`."
-    )
-    raise typer.Exit(code=2)
-
-
-doctor_app.command("update", hidden=True)(_update_signpost)

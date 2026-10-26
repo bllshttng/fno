@@ -5233,19 +5233,42 @@ def _mux_recipient_transcript(entry: "AgentEntry") -> Optional[Path]:
     """Locate the mux recipient's OWN claude transcript by session uuid, the
     confirm target for :func:`_mux_pane_send`'s ``confirm`` mode (node).
 
-    Reuses the resolver `fno.doctor._find_transcript_for` already used for the
-    self-diagnostic surface rather than writing a second transcript-by-uuid
-    walk (the Rust control.sock lane's own mirror is `find_transcript` in
+    Reuses the native doctor module's hidden op door (`fno doctor
+    --find-transcript <uuid>`, the same resolver the self-diagnostic surface
+    reads) rather than writing a second transcript-by-uuid walk (the Rust
+    control.sock lane's own mirror is `find_transcript` in
     `crates/fno-agents/src/claude_drive.rs`). None when the entry carries no
     resolvable full session uuid, or no matching transcript file exists --
     both fail the confirm closed, never open.
     """
-    from fno.doctor import _find_transcript_for
+    import json
+    import subprocess
+
+    from fno.rust_binary import resolve_front_binary
 
     session_id = entry.harness_session_id or entry.session_id
     if not session_id:
         return None
-    return _find_transcript_for(session_id)
+    binary = resolve_front_binary()
+    if binary is None:
+        return None
+    try:
+        done = subprocess.run(
+            [str(binary), "doctor", "--find-transcript", session_id],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    try:
+        payload = json.loads(done.stdout)
+    except ValueError:
+        return None
+    found = payload.get("path")
+    return Path(found) if isinstance(found, str) and found else None
 
 
 def _mux_content_confirm(

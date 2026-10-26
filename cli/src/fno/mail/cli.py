@@ -377,12 +377,34 @@ def _codex_daemon_socket_absent() -> bool:
     durable when no daemon answers, so the demote line names the fix rather than
     only the reason.
 
-    Delegates to the doctor report so the send-time demote line and `fno doctor`
-    can never disagree about where the socket lives (lazy import: doctor is a
-    heavy module and this is one line on a cold path)."""
-    from fno.doctor import _codex_app_server_report
+    Delegates to the native doctor module's hidden op door so the send-time
+    demote line and `fno doctor` can never disagree about where the socket
+    lives (one bounded subprocess; any miss reads as absent, fail-closed,
+    which demotes to durable - the safe side)."""
+    import json
+    import subprocess
 
-    return not _codex_app_server_report().get("present", False)
+    from fno.rust_binary import resolve_front_binary
+
+    binary = resolve_front_binary()
+    if binary is None:
+        return True
+    try:
+        done = subprocess.run(
+            [str(binary), "doctor", "--codex-app-server"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if done.returncode != 0:
+        return True
+    try:
+        payload = json.loads(done.stdout)
+    except ValueError:
+        return True
+    return not payload.get("present", False)
 
 
 def _forced_pane_send(

@@ -21,6 +21,8 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+
+import typer
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -419,6 +421,16 @@ def resolve_front_binary() -> Optional[Path]:
         if (root / profile / "fno").exists():
             return root / profile / "fno"
     return Path(found) if (found := shutil.which("fno")) else None
+
+
+def _update_signpost() -> None:
+    """The no-front-door spelling: the updater is native to the Rust front
+    door, so this leaf only names the one command that installs it."""
+    typer.echo(
+        "fno: the updater is native to the Rust front door; install it from the source checkout with "
+        "`cargo install --locked --path <src>/crates/fno`, then re-run `fno doctor update`."
+    )
+    raise typer.Exit(code=2)
 
 class FrontTimeout(CommandUnavailable):
     """The law door gave no answer in time. A retry meets the same wait."""

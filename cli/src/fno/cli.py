@@ -247,7 +247,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "update": (
-        "fno.doctor_cli:_update_signpost",
+        "fno.rust_binary:_update_signpost",
         "The updater is native: the Rust front door answers `update` and `doctor update`.",
         {"hidden": True},
     ),
