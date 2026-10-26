@@ -801,6 +801,7 @@ fn status_and_list_cases() {
         )],
         None,
     );
+    let _ = err;
     check(
         "status_json form carries the summary",
         code,
@@ -815,6 +816,7 @@ fn status_and_list_cases() {
         &[],
         None,
     );
+    let _ = err;
     check(
         "status_missing registry degrades with a warning",
         code,
@@ -1113,7 +1115,6 @@ fn sweep_and_apply_cases() {
     let (root, home) = (tmp.path().join("root"), tmp.path().join("home"));
     fixture(&root, &home);
     let base = resolved(&root.join("wtbase"));
-    let pins = Pins::new(&root, &home);
     let sw1 = root.join("sw1");
     // The graph the sweep reads, seeded at the layout anchor the strict
     // read resolves (a migrated install keeps the store under db/).
@@ -1336,7 +1337,6 @@ fn policy_case(
     if let Some((repo_name, text)) = config {
         write_repo_config(&pins.root.join(repo_name), text);
     }
-    let harness_str = harness.unwrap_or_default().to_string();
     let (code, out, err) = match harness {
         Some(h) => pins.drive(
             &[
@@ -1458,6 +1458,7 @@ fn overlap_dispatch_register_cases() {
             ],
             Some(stdin_text),
         );
+        let _ = err;
         check(label, code, out, &root, &home, &base);
     }
     // The report op: missing / complete / malformed, JSON form; the text
