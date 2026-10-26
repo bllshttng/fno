@@ -104,6 +104,22 @@ fn an_empty_store_is_a_clean_miss_not_an_unreadable_one() {
 }
 
 #[test]
+fn a_field_render_miss_keeps_empty_stdout_for_scalar_consumers() {
+    // The scalar contract: --field consumers read empty-or-null as not-set
+    // (the ship flow reads --field pr_url exactly that way), so a miss keeps
+    // the old shape: empty stdout, the message on stderr, rc 1.
+    let (_dir, config, graph) = sandbox();
+    seed(
+        &graph,
+        &[serde_json::json!({"id": "x-aaaa1111", "title": "n"})],
+    );
+    let (code, stdout, stderr) = get(&config, &["--strict", "x-zzzz9999", "--field", "id"]);
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("No node matching"), "{stderr}");
+}
+
+#[test]
 fn an_unreadable_store_is_the_distinct_exit_3_naming_the_failure_never_absence() {
     let (_dir, config, graph) = sandbox();
     let db = fno_agents::backlog::database_path(&graph);
