@@ -1862,10 +1862,15 @@ pub(crate) fn run_with_release(
         }
         // The done rule: every node the row names is done and the row sat
         // quiet past the idle hour. No origin shields such a row; the claim,
-        // attended and tree gates below still run.
+        // attended and tree gates below still run. A node read only from the
+        // transcript is a witness, never the row's own work.
         let done_quiet = matches!(
             staged_row,
             Some((verdict, age)) if matches!(verdict.work, WorkState::AllDone { .. })
+                && !verdict
+                    .route
+                    .source
+                    .is_some_and(node_route::NodeSource::is_transcript)
                 && (*age)
                     .or_else(|| report_age(e, now))
                     .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS)

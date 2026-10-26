@@ -596,13 +596,16 @@ fn idle_age_s(row: &GcRow) -> Option<i64> {
 /// to every origin: a row whose every node is done and that sat quiet past
 /// the hour retires, so no origin, open do row or settle refusal pins it.
 /// The tree still follows the worktree rule: a dirty or unmerged tree stays.
+/// The node must come from a dispatch record: a transcript mention is a
+/// witness, and a user's session that only named a done node keeps.
 pub fn past_idle_hour(row: &GcRow) -> bool {
     let fleet = match row.origin.as_deref() {
         Some("spawn") => true,
         Some("adopted") => row.session_terminal.is_some(),
         _ => false,
     };
-    (fleet || matches!(row.work, WorkState::AllDone { .. }))
+    let done_worked = row.worked_node && matches!(row.work, WorkState::AllDone { .. });
+    (fleet || done_worked)
         && row.live_claim.is_none()
         && idle_age_s(row).is_some_and(|age| age > SPAWN_IDLE_RETIRE_SECS)
 }
@@ -2589,6 +2592,12 @@ mod tests {
                 (GcAction::Retire, None),
                 "a done {origin} row quiet past the hour retires"
             );
+            // A node only the transcript named is a witness: the row keeps.
+            let witnessed = GcRow {
+                worked_node: false,
+                ..done
+            };
+            assert_ne!(gc_decide(&witnessed, GRACE), (GcAction::Retire, None));
         }
         // A live claim outranks the spent hour on the fno side too.
         let claimed = GcRow {
