@@ -90,6 +90,7 @@ const ADMIT: &[Node] = &[
     command("slot", &["route-slot"], "Delivery-slot resolver over a stdin payload."),
     command("provider-cap", &["provider-cap"], "The provider-cap actor."),
     command("capabilities", &["capabilities"], "One harness's config-independent capability contract."),
+    command("liveness", &["liveness"], "One 'is this worker alive' answer per handle."),
     command("autonomy", &["autonomy"], "Every path that can start a session without an operator."),
 ];
 

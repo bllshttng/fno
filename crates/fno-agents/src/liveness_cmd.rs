@@ -390,6 +390,7 @@ mod tests {
         let row = entry(json!({
             "name": "me",
             "pid": std::process::id(),
+            "pid_start_time": crate::daemon::process_start_time(std::process::id()).unwrap_or(0),
             "transcript_path": "/tmp/t.jsonl",
         }));
         let (d, home) = fixture_home(vec![row]);
