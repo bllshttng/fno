@@ -83,6 +83,18 @@ def envelope(case, code, out, err, root, home):
     )
 
 
+def freeze(key, code_text, out_text, err_text):
+    """Write one golden triple; a stale .err from an earlier capture never
+    survives a case whose stderr is now empty."""
+    (GOLDEN_DIR / f"{key}.exit").write_text(code_text)
+    (GOLDEN_DIR / f"{key}.out").write_text(out_text)
+    err_path = GOLDEN_DIR / f"{key}.err"
+    if err_text:
+        err_path.write_text(err_text)
+    elif err_path.exists():
+        err_path.unlink()
+
+
 # --- fixture builders ------------------------------------------------------
 
 
@@ -811,6 +823,19 @@ def build_fixtures(root, home, case_list):
 def apply_case_overrides(root, home, case):
     """Layer one case's config shapes before its leg runs."""
     env = base_env(root, home)
+    # Per-case repo-config isolation: a write_config for one case used to
+    # persist into every later case reading the same fixture repo, so a
+    # mid-table corruption (work = "flat") refused five downstream policy
+    # cases and a per-project entry outranked the global policy a later case
+    # meant to test. Remove what the previous case left.
+    repo_dir = root / case["repo"] if case.get("repo") else None
+    if repo_dir is None and case.get("target"):
+        repo_dir = root / case["target"]
+    if repo_dir is not None:
+        for name in ("config.toml", "settings.yaml"):
+            leftover = repo_dir / ".fno" / name
+            if leftover.exists():
+                leftover.unlink()
     if case.get("global_config"):
         cfg = case["global_config"].replace("__ROOT__", str(root))
         gp = home / "global-config.toml"
@@ -876,10 +901,7 @@ def main():
         code, out, err = run_case(case, root, home, env)
         key = slug(case_env_key(case))
         code_text, out_text, err_text = envelope(case, code, out, err, root, home)
-        (GOLDEN_DIR / f"{key}.exit").write_text(code_text)
-        (GOLDEN_DIR / f"{key}.out").write_text(out_text)
-        if err_text:
-            (GOLDEN_DIR / f"{key}.err").write_text(err_text)
+        freeze(key, code_text, out_text, err_text)
         captured += 1
         print(f"froze {key} exit={code}")
     (FIXTURE_DIR / "cases.json").write_text(

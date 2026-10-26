@@ -1,1 +1,1 @@
-WorktreePolicyError: config `work` is present but not a table; cannot affirm worktree policy
+WorktreePolicyError: worktree policy 'wat' is invalid; valid: never | harness-native | external
