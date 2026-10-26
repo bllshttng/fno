@@ -52,6 +52,10 @@ fn run_register(
     ] {
         cmd.env_remove(key);
     }
+    cmd.arg("register");
+    for a in args {
+        cmd.arg(a);
+    }
     let out = cmd.output().expect("register ran");
     (
         out.status.code().unwrap_or(-1),
