@@ -144,7 +144,7 @@ The pr-nudge ladder pauses on a frozen PR, so its owner gets no merge retry whil
 
 The freeze does not cover a merge through the GitHub web page or a bare `gh pr merge` outside fno. The fleet breaker's total stop (`fno agents incident stop --hold merges`) stays separate.
 
-## When main turns red
+## Red main and the revert lane
 
 While main's latest settled run is red, the gate refuses every merge to main. One lane is exempt: a PR whose node carries the `main-repair` tag. That lane is how main turns green again.
 
@@ -156,9 +156,9 @@ auto_revert = true
 revert_after_minutes = 10   # default 10
 ```
 
-Each minute the arm reads main's verdict through the gate's own cached reading. A red head that stays red past the window is the culprit when it is a `Merge pull request #N` commit and its first parent ran green. The hold stops further merges once main reads red, so the red head is usually that merge. The arm then files a node tagged `main-repair`, opens a PR that reverts the merge (`git revert -m 1`) and names that node, and asks the author of PR N to re-land the change with the fix. The revert needs one CI run. A fix forward can wait behind a flaky test and a CI queue: on 2026-10-26 main stayed red about 3 hours that way.
+Each minute the arm reads main's verdict through the gate's own cached reading. If a red head stays red past the window, is a `Merge pull request #N` commit, and has a green first parent, it is the culprit. The hold stops further merges once main reads red, so the red head is usually that merge. The arm then files a node tagged `main-repair`. It opens a PR that reverts the merge (`git revert -m 1`) and names that node. It asks the author of PR N to re-land the change with the fix. The revert needs one CI run. A fix forward can wait behind a flaky test and a CI queue: on 2026-10-26 main stayed red about 3 hours that way.
 
-The arm refuses to guess. It journals `ambiguous` and opens nothing when the parent run is red, cancelled or missing, or when the head is not a PR merge. A red whose failing checks all sit on heal's flake ledger journals `flaky`. Every outcome is one `main_revert_check` row per red head, so a daemon restart never opens a second revert. The arm never merges the revert. The owner merges it through this gate.
+The arm refuses to guess. If the parent run is red, cancelled or missing, or the head is not a PR merge, it journals `ambiguous` and opens nothing. A red whose failing checks all sit on heal's flake ledger journals `flaky`. Every outcome is one `main_revert_check` row per red head, so a daemon restart never opens a second revert. The arm never merges the revert. The owner merges it through this gate.
 
 ## The effect
 
