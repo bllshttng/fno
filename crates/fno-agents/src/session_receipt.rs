@@ -27,7 +27,7 @@ const RECENT_TURNS: usize = 5;
 /// The three refusal classes a receipt counts.
 const DENIAL_CLASSES: [&str; 3] = ["permission_denied", "user_rejected", "hook_blocked"];
 
-enum Store {
+pub(crate) enum Store {
     /// A transcript file the harness writes in its own row shape.
     File(PathBuf),
     /// A store rendered claude-shaped (pi, opencode, agy): turns and call
@@ -44,7 +44,9 @@ fn rendered(src: &dyn TranscriptSource, session_id: &str) -> Result<Store, Strin
     Ok(Store::Rendered(src.read(&file)))
 }
 
-fn locate(harness: &str, session_id: &str) -> Result<Store, String> {
+/// One session's transcript store, found by its harness and id: the one
+/// resolver the receipt and the check-in readers share.
+pub(crate) fn locate(harness: &str, session_id: &str) -> Result<Store, String> {
     match harness {
         "claude" => crate::claude_drive::find_transcript(session_id)
             .map(Store::File)
