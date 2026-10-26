@@ -78,6 +78,34 @@ impl RealGhProbe {
             });
         }
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        // A `--paginate --slurp` read rides the paged door: the per-head
+        // runs listing and the annotations read repeat every status tick,
+        // and an unchanged single page answers 304 for no core point. The
+        // door's answer is the slurp shape, one JSON array of pages.
+        if let [api, path, paginate, slurp] = args {
+            let plain = [api.clone(), path.clone()];
+            if let (Some(door), "--paginate", "--slurp") = (
+                crate::gh_etag::eligible(&plain),
+                paginate.as_str(),
+                slurp.as_str(),
+            ) {
+                let fetch_all = || -> Result<String, String> {
+                    let (ok, stdout, stderr) = Self::bounded_gh(&refs, cwd, admit)?;
+                    if !ok {
+                        return Err(stderr);
+                    }
+                    Ok(String::from_utf8_lossy(&stdout).into_owned())
+                };
+                return Ok(
+                    match crate::gh_etag::conditional_paginated_get(cwd, door, fetch_all, |a| {
+                        Self::bounded_gh(a, cwd, admit)
+                    }) {
+                        Ok(answer) => answer,
+                        Err(stderr) => (false, String::new(), stderr),
+                    },
+                );
+            }
+        }
         let (ok, stdout, stderr) = Self::bounded_gh(&refs, cwd, admit)?;
         Ok((ok, String::from_utf8_lossy(&stdout).into_owned(), stderr))
     }
