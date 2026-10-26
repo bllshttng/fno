@@ -4,20 +4,28 @@ use crate::{
 };
 use serde_json::Value;
 
-/// The public `fno` commands the Explorer tabs read. The `fno` front owns
-/// their routing, so moving an internal fno-agents command cannot break a tab.
+/// The public `fno` commands the Explorer tabs read. They resolve through
+/// the front's own native-leaf table, so moving an internal fno-agents
+/// command cannot break a tab.
 pub const ORG_FOLD_ARGV: &[&str] = &["agents", "org", "chart", "fold"];
 pub const FLEET_TOP_ARGV: &[&str] = &["agents", "fleet", "top", "--machines", "--json"];
 
-/// Run a tab read under `bound`, in its own process group; None on timeout.
-/// The `fno` front waits on a fno-agents child, so killing the front alone
-/// (kill_on_drop) would orphan that leaf on every slow refresh. The deadline
-/// kills the whole group.
-pub(crate) async fn bounded_output(
-    mut command: tokio::process::Command,
-    bound: std::time::Duration,
+/// Exec the leaf a public tab argv resolves to, plus `tail`, under the 30 s
+/// tab bound; None on timeout. The leaf runs in its own process group, and
+/// the deadline kills the whole group, so no child it started outlives it.
+pub(crate) async fn tab_read(
+    public: &[&str],
+    tail: Vec<std::ffi::OsString>,
 ) -> Option<std::io::Result<std::process::Output>> {
     use std::process::Stdio;
+    let Some(leaf) = crate::agents_menu::native_leaf_argv(public) else {
+        return Some(Err(std::io::Error::other(format!(
+            "fno {} has no native leaf",
+            public.join(" ")
+        ))));
+    };
+    let mut command = tokio::process::Command::new(crate::digest_overlay::fno_agents_bin());
+    command.args(leaf).args(tail);
     #[cfg(unix)]
     command.process_group(0);
     command
@@ -30,6 +38,7 @@ pub(crate) async fn bounded_output(
         Err(error) => return Some(Err(error)),
     };
     let pid = child.id();
+    let bound = std::time::Duration::from_secs(30);
     match tokio::time::timeout(bound, child.wait_with_output()).await {
         Ok(output) => Some(output),
         Err(_) => {
@@ -91,16 +100,19 @@ pub async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> OrgInputs
     let teams: Vec<Value> = agents.iter().filter(|a| !a.exited).filter_map(|a| {
         Some(serde_json::json!({"scope": a.role_scope.as_ref()?, "level": a.role_level?, "holder": a.name}))
     }).collect();
-    let mut command = tokio::process::Command::new(crate::server::fno_bin());
-    command.args(ORG_FOLD_ARGV).arg("--graph").arg(graph).args([
-        "--teams-json",
-        &serde_json::to_string(&teams).expect("JSON values always serialize"),
-        "--format",
-        "json",
-    ]);
+    let tail = vec![
+        "--graph".into(),
+        graph.as_os_str().to_os_string(),
+        "--teams-json".into(),
+        serde_json::to_string(&teams)
+            .expect("JSON values always serialize")
+            .into(),
+        "--format".into(),
+        "json".into(),
+    ];
     let (backlog, output) = tokio::join!(
         crate::backlog_model::gather(graph, agents),
-        bounded_output(command, std::time::Duration::from_secs(30))
+        tab_read(ORG_FOLD_ARGV, tail)
     );
     let fold = match output {
         None => Err("org-fold timed out after 30s".into()),

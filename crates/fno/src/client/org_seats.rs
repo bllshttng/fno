@@ -127,11 +127,9 @@ impl Fleet {
 /// `fno agents fleet top --machines --json` beside the backlog read, each
 /// with its own failure, on the same 30 s bound the org fold had.
 pub(crate) async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> FleetInputs {
-    let mut command = tokio::process::Command::new(crate::server::fno_bin());
-    command.args(crate::org_model::FLEET_TOP_ARGV);
     let (backlog, output) = tokio::join!(
         crate::backlog_model::gather(graph, agents),
-        crate::org_model::bounded_output(command, std::time::Duration::from_secs(30))
+        crate::org_model::tab_read(crate::org_model::FLEET_TOP_ARGV, Vec::new())
     );
     let fleet = match output {
         None => Err("fleet top timed out after 30s".into()),

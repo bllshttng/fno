@@ -1446,7 +1446,7 @@ fn main() {
         }
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
-            &["census", "--workers"],
+            fno::agents_menu::native_leaf("top"),
             &rest,
         )),
         Role::AgentsRestart(rest) => {
@@ -1454,7 +1454,7 @@ fn main() {
         }
         Role::AgentsOrgFold(rest) => std::process::exit(fno_agents_exec(
             "fno agents org chart fold",
-            &["org-fold"],
+            fno::agents_menu::native_leaf("org-fold"),
             &rest,
         )),
         Role::AgentsRoles(rest) => std::process::exit(fno_agents_exec(
