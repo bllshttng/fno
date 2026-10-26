@@ -1162,7 +1162,7 @@ fn default_page() -> PathBuf {
 /// team comes from `fno agents org --nodes`, so the term ledger and the team
 /// read share one gather. The daemon's team_ledger arm greps the
 /// `lead ledger: ` line ([`run_ledger`]).
-fn run_ledger_verb(args: &[String]) -> i32 {
+fn run_ledger_command(args: &[String]) -> i32 {
     let out = match args {
         [] => None,
         [flag, path] if flag == "--out" => Some(PathBuf::from(path)),
@@ -1193,7 +1193,7 @@ fn run_ledger_verb(args: &[String]) -> i32 {
 
 pub fn run_lead_ledger(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("--ledger") {
-        return run_ledger_verb(&args[1..]);
+        return run_ledger_command(&args[1..]);
     }
     let mut org_json: Option<PathBuf> = None;
     let mut graph: Option<PathBuf> = None;
