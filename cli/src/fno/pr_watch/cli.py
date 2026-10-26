@@ -1045,7 +1045,6 @@ def tick() -> None:
                             for recovery_root, recovery_scan in recovery_scans:
                                 results = _wd.apply_recoverable(
                                     recovery_scan,
-                                    scope_cwd=recovery_root,
                                     should_apply=lambda: (
                                         phase_seconds_left() or 0.0
                                     ) >= _WAKE_APPLY_FLOOR_S,

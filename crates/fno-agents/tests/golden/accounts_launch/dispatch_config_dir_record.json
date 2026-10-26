@@ -1,0 +1,1 @@
+{"config": "[[accounts.records]]\nid = \"alt\"\nname = \"alt\"\nharness = \"claude\"\nauth = \"managed\"\nconfig_dir = \"{TMP}/alt\"\n", "dirs": ["alt"], "expect": {"credential_env_keys": ["CLAUDE_CONFIG_DIR"], "credential_source": "record-derived", "env": {"CLAUDE_CONFIG_DIR": "<TMP>/alt"}}, "harness": "claude", "id": "alt", "op": "dispatch"}

@@ -1,0 +1,6 @@
+lead: manifest written: <ROOT>/spaces/<ROOTSLUG>-repo/leads/epic-y,epic-z.md
+fno_id: <FNO_ID>
+scope:  epic-y,epic-z
+
+Settled findings under this role (done or superseded children; read before the first check-in, never re-derive):
+- A done child (x-a002)

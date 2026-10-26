@@ -712,7 +712,7 @@ fn normalize_volatile(v: &Value) -> Value {
             let mut out = serde_json::Map::new();
             for (k, val) in map {
                 let volatile = match k.as_str() {
-                    "created_at" | "touched_at" => val.is_string(),
+                    "created_at" | "touched_at" | "parented_at" => val.is_string(),
                     "plan_path" | "cwd" => val.is_string(),
                     _ => false,
                 };

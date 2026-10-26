@@ -4,7 +4,7 @@ Four close paths read a reopen, and one deliberate command (``cmd_done``, with
 its own --force plus --reason ladder) does not. The sweeps:
 
 - `_cascade_close_parents` on a child close - guarded by
-  `_reopen_outranks_child_closes`.
+  `_reopen_holds_epic`: only a child filed before the reopen expires it.
 - `_sweep_close_done_epics` on reconcile - guarded through
   `_strandable_epic_ids`.
 - reconcile's PR-merged close (`cmd_reconcile`'s closeable partition) and the
@@ -83,6 +83,22 @@ def test_cascade_positive_control_same_fixture_closes_without_the_reopen():
     parent, child = _pair()
     assert _cascade_close_parents([parent, child], "c") == ["p"]
     assert parent.get("completed_at")
+
+
+def test_a_child_filed_after_the_reopen_never_re_arms_the_epic_close():
+    """The epic was reopened with every filed child done. A child filed after
+    the reopen proves nothing about the owed leaves, so its close holds no
+    vote. The same child filed before the reopen expires it, unless the store
+    stamped its move under the epic after the reopen."""
+    cases = ((AFTER_CLOSE, None, []), (BEFORE_CLOSE, None, ["p"]), (BEFORE_CLOSE, AFTER_CLOSE, []))
+    for filed, parented, closed in cases:
+        parent, old = _pair(reopened_at=BEFORE_CLOSE)
+        old["created_at"] = "2026-09-01T00:00:00+00:00"
+        old["completed_at"] = "2026-09-02T00:00:00+00:00"
+        new = {"id": "n", "parent": "p", "created_at": filed, "completed_at": AFTER_CLOSE}
+        if parented:
+            new["parented_at"] = parented
+        assert _cascade_close_parents([parent, old, new], "n") == closed
 
 
 def _plan_pair():

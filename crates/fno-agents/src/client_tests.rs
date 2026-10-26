@@ -324,7 +324,7 @@ async fn rm_flow_rows() {
     let out = format_success("rm", "bar-agent", &result, false, true, false)
         .expect("rm renders a receipt");
     assert!(
-        out.contains("fno agents adopt 01a02125-4eb4-7bf1-b74e-d238887eb092 --cross-project"),
+        out.contains("fno agents adopt 01a02125-4eb4-7bf1-b74e-d238887eb092"),
         "{out}"
     );
     assert!(!out.contains("adopt 01a02125\n"), "{out}");
@@ -342,21 +342,17 @@ async fn rm_flow_rows() {
         out.starts_with("removed: bar-agent (fno + claude)"),
         "{out}"
     );
-    assert!(
-        out.contains("fno agents adopt 0a6e775f --cross-project"),
-        "{out}"
-    );
+    assert!(out.contains("fno agents adopt 0a6e775f"), "{out}");
     assert!(out.contains("resume handle"), "{out}");
 
     let resume = command_usage("resume").expect("resume usage");
-    assert!(resume.contains("--cross-project"), "{resume}");
     assert!(resume.contains("--cwd <existing-checkout>"), "{resume}");
     // The seam appends --account on a wake; the usage line naming it is
     // the parse contract that keeps the wake ladder honest.
     assert!(resume.contains("--account <id>"), "{resume}");
 
     let adopt = command_usage("adopt").expect("adopt usage");
-    assert!(adopt.contains("--cross-project"), "{adopt}");
+    assert!(!adopt.contains("--cross-project"), "{adopt}");
 
     let result = json!({
         "removed": true,
@@ -756,22 +752,20 @@ fn parse_rows() {
         build_request("rm", &["myagent".to_string(), "-F".to_string()]).expect("-F must parse");
     assert_eq!(force_params["force"], true);
 
-    let (method, params) = build_request(
+    let (method, _params) = build_request(
         "rm",
         &["myagent".to_string(), "--cross-project".to_string()],
     )
-    .expect("the refusal-prescribed --cross-project must parse on rm");
+    .expect("the retired --cross-project no-op still parses on rm");
     assert_eq!(method, "agent.rm");
-    assert_eq!(params["cross_project"], true);
     let (_, plain) = build_request("rm", &["myagent".to_string()]).expect("plain rm must parse");
     assert!(plain.get("cross_project").is_none());
-    let (stop_method, stop_params) = build_request(
+    let (stop_method, _stop_params) = build_request(
         "stop",
         &["myagent".to_string(), "--cross-project".to_string()],
     )
-    .expect("the refusal-prescribed --cross-project must parse on stop");
+    .expect("the retired --cross-project no-op still parses on stop");
     assert_eq!(stop_method, "agent.stop");
-    assert_eq!(stop_params["cross_project"], true);
     let err = build_request("list", &["--cross-project".to_string()]).unwrap_err();
     assert!(err.contains("unknown flag: --cross-project"), "got: {err}");
 
@@ -794,12 +788,11 @@ fn parse_rows() {
     assert!(!defaults.no_wait);
 }
 
-/// The lifecycle commands' store heal resolves through the project-confinement
-/// refusal that prescribes `--cross-project`, so `fno agents rm|stop <id>
-/// --cross-project` must PARSE (the old surface died with "unknown flag:
-/// --cross-project" before any resolution ran). The flag rides to the daemon
-/// as `cross_project`, where entry_for_lifecycle hands it to the scoped
-/// resolver; commands that take no such flag keep refusing it.
+/// The lifecycle commands accept the retired `--cross-project` flag as a
+/// silent no-op (d-460ea8c7: the store heal is machine-wide now), so
+/// `fno agents rm|stop <id> --cross-project` still PARSES (the old surface
+/// died with "unknown flag: --cross-project" before any resolution ran).
+/// Commands that never took the flag keep refusing it.
 
 /// x-c5cc: the spawn-gate flags parse on the spawn command (--force already
 /// shared with stop/rm; --no-wait is gate-only).

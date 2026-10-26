@@ -1011,8 +1011,7 @@ async fn run(args: Vec<String>) -> i32 {
     }
     // `plugin-install`: the filtered-stage installer for the plugin
     // harnesses, daemon-free. The Python surface `fno config plugin install`
-    // shells HERE for claude, opencode and agy; codex stays on the Python
-    // converge engine per the ship-phase ruling.
+    // shells HERE for every harness.
     if command == "plugin-install" {
         return fno_agents::plugin_install::run_plugin_install(&args[1..]);
     }
@@ -2315,21 +2314,18 @@ fn maybe_run_spawn(
         }
     };
 
-    // The account arm: native launch on a seam stamp naming the request;
-    // Python re-exec otherwise.
-    if let Some(code) = fno_agents::spawn_axes::account_seam_exit(
-        params.get("account").and_then(Value::as_str),
-        provider,
-        args,
-        exec_python_front,
-    ) {
+    // The account arm: both account flags resolve here, before the gate.
+    if let Some(code) = fno_agents::accounts::launch::seam_exit(params, provider) {
         return Some(code);
     }
 
     // The route arm: resolved before the gate, so a refusal takes no slot.
     let route = match fno_agents::spawn_route::route_seam(
         params.get("route").and_then(Value::as_str),
-        params.get("account").and_then(Value::as_str),
+        params
+            .get("account")
+            .or(params.get("dispatch_account"))
+            .and_then(Value::as_str),
         provider,
         public_substrate,
         &cwd,
@@ -3769,6 +3765,7 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
         "--take-over",
         "--output-format",
         "--monitor",
+        "--dispatch-account",
     ];
     let mut normalized: Vec<String> = Vec::with_capacity(rest.len());
     let mut rest_iter = rest.iter();
@@ -3958,11 +3955,8 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
                 params.insert("force".into(), Value::Bool(true));
             }
             "--cross-project" if command == "rm" || command == "stop" => {
-                // The lifecycle commands' store heal resolves through the same
-                // project-confinement refusal resume/adopt answer with this
-                // flag; accept it so the refusal's taught remedy is a form
-                // these commands take.
-                params.insert("cross_project".into(), Value::Bool(true));
+                // Retired (d-460ea8c7): the store heal is machine-wide;
+                // accepted as a silent no-op for one release.
             }
             "--no-wait" => {
                 // Spawn-gate escape: fail immediately at max_live
@@ -4048,15 +4042,11 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             // The row-9 flags: typed parse in spawn_axes (the equals form
             // split above); the value gates run after the loop where harness
             // and substrate are both known.
-            "--output-format" | "--monitor" if command == "spawn" => {
+            "--output-format" | "--monitor" | "--dispatch-account" if command == "spawn" => {
                 fno_agents::spawn_axes::insert_spawn_flag(&a, &mut it, &mut params)?;
             }
             "--account" => {
-                // per-spawn account selection. Parsed here so the spawn
-                // arm is not blocked by an unknown-flag error; the four-lane
-                // overlay resolution lives in Python (fno.agents.account_env), so
-                // an account spawn re-execs the Python CLI on EVERY substrate (see
-                // the spawn intercept) rather than duplicating the resolver here.
+                // Resolved by accounts::launch in the spawn arm.
                 params.insert("account".into(), str_arg(&mut it, "--account")?);
             }
             "--audit-actor" => {

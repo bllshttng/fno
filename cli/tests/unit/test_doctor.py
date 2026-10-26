@@ -1014,8 +1014,12 @@ def _write_skill_file(path: Path, content: bytes) -> None:
     path.write_bytes(content)
 
 
+# "footnote" is the marketplace dir of an install from before the rename.
+@pytest.mark.parametrize(
+    ("marketplace", "plugin_id"), [("fno", "fno@fno"), ("footnote", "fno@footnote")]
+)
 def test_plugin_file_stale_names_claude_refresh_and_digests(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, marketplace: str, plugin_id: str
 ) -> None:
     source = tmp_path / "source"
     active = (
@@ -1023,7 +1027,7 @@ def test_plugin_file_stale_names_claude_refresh_and_digests(
         / ".claude"
         / "plugins"
         / "cache"
-        / "footnote"
+        / marketplace
         / "fno"
         / "0.3.1"
         / "skills"
@@ -1040,7 +1044,7 @@ def test_plugin_file_stale_names_claude_refresh_and_digests(
     assert "PLUGIN_FILE_STALE" in result.stdout
     assert "active_sha256=" in result.stdout
     assert "source_sha256=" in result.stdout
-    assert "claude plugin update fno@footnote" in result.stdout
+    assert f"claude plugin update {plugin_id}" in result.stdout
     assert "fno doctor update" in result.stdout
     assert "does NOT refresh" in result.stdout
     assert "restart" in result.stdout
