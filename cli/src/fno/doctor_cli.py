@@ -22,7 +22,6 @@ from fno.lint_cli import lint
 from fno.observer.cli import observer_app
 from fno.route_cli import inventory_cmd
 from fno.scratch_cli import scratch_app
-from fno.skill_diff.cli import skill_diff_app
 from fno.status_fanout import status_fanout_app
 from fno.test_cmd import test_command
 
@@ -154,7 +153,6 @@ doctor_app.add_typer(observer_app, name="observer")
 # `doctor scratch` is the scratch-shape sweep; the Rust binary is
 # the only implementation and the leaf refuses without it.
 doctor_app.add_typer(scratch_app, name="scratch")
-doctor_app.add_typer(skill_diff_app, name="skill-diff")
 # `doctor update` is native: the Rust front door's doctor_update.rs answers
 # it (both spellings). fno-py keeps only this signpost for the
 # no-front-door spelling, naming the one command that installs the door.

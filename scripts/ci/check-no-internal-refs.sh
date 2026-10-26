@@ -26,7 +26,7 @@
 # -----------------------
 #   Two scopes, because the four classes do not share one:
 #
-#   prose scope: docs/, agents/, commands/, and the top-level AGENTS.md /
+#   prose scope: docs/, mintlify/, agents/, commands/, and the top-level AGENTS.md /
 #   README.md / CLAUDE.md / GEMINI.md - the user-facing prose surfaces.
 #   Both prose classes (internal-path, node-id) scan here.
 #
@@ -162,7 +162,7 @@ REPORT=""
 # Capture the file lists first so a git failure (not a repo, git unavailable)
 # is a loud error, not a vacuous "no violations" pass: the `done < <(git ...)`
 # process-substitution form hides git's exit status from `set -e`. (review #503, gemini)
-if ! files_prose=$(git ls-files -- 'docs/' 'agents/' 'commands/' 'AGENTS.md' 'README.md' 'CLAUDE.md' 'GEMINI.md'); then
+if ! files_prose=$(git ls-files -- 'docs/' 'mintlify/' 'agents/' 'commands/' 'AGENTS.md' 'README.md' 'CLAUDE.md' 'GEMINI.md'); then
     echo "check-no-internal-refs: 'git ls-files' failed (not a git repo or git unavailable)" >&2
     exit 1
 fi
@@ -252,6 +252,12 @@ NAME_ALLOWLIST=(
     # WHY: one row per tracked docs/*.md path, and one existing path carries a
     # barred term in its file name. The row proposes retiring that page.
     docs/docs-map.tsv
+    # WHY: the rule-9 glue wordlists are English dictionaries (google-10000-english
+    # plus a supplement, and a dwyl protection tier); they carry common words and
+    # given names that merely collide with barred terms. The lists are data, not
+    # a reference.
+    crates/fno-agents/src/backlog/style_words.txt
+    crates/fno-agents/src/backlog/style_protect.txt
 )
 
 competitor_terms=$(printf '%s' "$COMPETITOR_TERMS_B64" | base64 -d 2>/dev/null)

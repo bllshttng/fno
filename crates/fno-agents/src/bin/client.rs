@@ -185,6 +185,11 @@ fn main() {
     if args.first().map(String::as_str) == Some("gh-cache") {
         std::process::exit(fno_agents::gh_cache::run());
     }
+    // `target-status`: the orientation report door; Python's `fno do target
+    // status` reaches it through command_call, transport-only.
+    if args.first().map(String::as_str) == Some("target-status") {
+        std::process::exit(fno_agents::target_orient::run_status(&args[1..]));
+    }
     // `launch-workdir`: the spawn door's launch-cwd resolution (see
     // launch_workdir.rs doc). Transport-only: registers no client action; Python's
     // ensure_launch_workdir reaches it through command_call, and a `hold`
@@ -232,6 +237,20 @@ fn main() {
     // it dispatches before the runtime builds, with the other early arms.
     if args.first().map(String::as_str) == Some("mail-hold") {
         std::process::exit(fno_agents::mail_hold::run_mail_hold(&args[1..]));
+    }
+    // The resume receipt's argv door: transport-only, like mail-hold. The
+    // forwarding leaf (cli/src/fno/resume_receipt_cli.py) shells the do
+    // command here with the same options; the menu counter never sees
+    // transport arms.
+    if args.first().map(String::as_str) == Some("resume-receipt") {
+        std::process::exit(fno_agents::resume_receipt::run(&args[1..]));
+    }
+    // `delivery-evaluate`: the native evaluator behind the `fno delivery
+    // evaluate` forward leaf; transport-only (no client action - the shrink
+    // law allows none), answers in microseconds, so it dispatches before the
+    // runtime builds, with the other early arms.
+    if args.first().map(String::as_str) == Some("delivery-evaluate") {
+        std::process::exit(fno_agents::delivery_eval::run(&args[1..]));
     }
     // `mail-notify-self`: transport-only; the inject-mail-notify hook is the caller; early arm, answers in microseconds.
     if args.first().map(String::as_str) == Some("mail-notify-self") {
@@ -929,10 +948,9 @@ async fn run(args: Vec<String>) -> i32 {
     }
 
     // `lead-history`: the team-scope lead_checkin readback for
-    // `fno agents org history`. Daemon-free read, `==` dispatch like
-    // org-fold: Python resolves the caller's team scope and pins the
-    // journal path (identity and paths are Python-owned), the native side
-    // owns the scan so the file-budget Python-tree ratchet holds.
+    // `fno agents org history`, exec'd by the front door. Daemon-free
+    // read, `==` dispatch like org-fold: the caller's team scope and the
+    // live journals resolve natively when the argv names none.
     // `--verdict` is the same journals read as a tenure verdict (law
     // d-fe66560a: the verdict rides this action as an argument, never a
     // new action).
@@ -953,9 +971,8 @@ async fn run(args: Vec<String>) -> i32 {
     }
     // `evals-macro`: the macro-eval failure-pattern leaderboard for
     // `fno doctor evals macro`. Daemon-free read, `==` dispatch like
-    // lead-history: Python resolves the journal paths (identity and paths are
-    // Python-owned), the native side owns the fold so the file-budget
-    // Python-tree ratchet holds.
+    // lead-history: Python resolves the journal paths, the native side owns
+    // the fold so the file-budget Python-tree ratchet holds.
     if command == "evals-macro" {
         return fno_agents::evals_macro::run_evals_macro(&args[1..]);
     }
@@ -994,8 +1011,7 @@ async fn run(args: Vec<String>) -> i32 {
     }
     // `plugin-install`: the filtered-stage installer for the plugin
     // harnesses, daemon-free. The Python surface `fno config plugin install`
-    // shells HERE for claude, opencode and agy; codex stays on the Python
-    // converge engine per the ship-phase ruling.
+    // shells HERE for every harness.
     if command == "plugin-install" {
         return fno_agents::plugin_install::run_plugin_install(&args[1..]);
     }
@@ -1021,9 +1037,9 @@ async fn run(args: Vec<String>) -> i32 {
 
     // `board`: the lead board collector, read-only, daemon-free. Not a
     // routable `fno agents` command (same `matches!` treatment as graph-get): the
-    // Python surface is `fno inbox board` / `fno lead board`, whose typer
-    // command shells HERE and renders, and the stop hook reads the collector
-    // in-process. Matched with `==` beside graph-get so the routable-command
+    // front door execs `board --user-command` for `fno inbox board` / `fno lead
+    // board`, which renders the text page here, and the stop hook reads the
+    // collector in-process. Matched with `==` beside graph-get so the routable-command
     // parity guard does not see it - no advertised fno command is added.
     if command == "board" {
         return fno_agents::org_board::run_board(&args[1..]);
@@ -2298,21 +2314,18 @@ fn maybe_run_spawn(
         }
     };
 
-    // The account arm: native launch on a seam stamp naming the request;
-    // Python re-exec otherwise.
-    if let Some(code) = fno_agents::spawn_axes::account_seam_exit(
-        params.get("account").and_then(Value::as_str),
-        provider,
-        args,
-        exec_python_front,
-    ) {
+    // The account arm: both account flags resolve here, before the gate.
+    if let Some(code) = fno_agents::accounts::launch::seam_exit(params, provider) {
         return Some(code);
     }
 
     // The route arm: resolved before the gate, so a refusal takes no slot.
     let route = match fno_agents::spawn_route::route_seam(
         params.get("route").and_then(Value::as_str),
-        params.get("account").and_then(Value::as_str),
+        params
+            .get("account")
+            .or(params.get("dispatch_account"))
+            .and_then(Value::as_str),
         provider,
         public_substrate,
         &cwd,
@@ -3752,6 +3765,7 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
         "--take-over",
         "--output-format",
         "--monitor",
+        "--dispatch-account",
     ];
     let mut normalized: Vec<String> = Vec::with_capacity(rest.len());
     let mut rest_iter = rest.iter();
@@ -3941,11 +3955,8 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
                 params.insert("force".into(), Value::Bool(true));
             }
             "--cross-project" if command == "rm" || command == "stop" => {
-                // The lifecycle commands' store heal resolves through the same
-                // project-confinement refusal resume/adopt answer with this
-                // flag; accept it so the refusal's taught remedy is a form
-                // these commands take.
-                params.insert("cross_project".into(), Value::Bool(true));
+                // Retired (d-460ea8c7): the store heal is machine-wide;
+                // accepted as a silent no-op for one release.
             }
             "--no-wait" => {
                 // Spawn-gate escape: fail immediately at max_live
@@ -4031,15 +4042,11 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             // The row-9 flags: typed parse in spawn_axes (the equals form
             // split above); the value gates run after the loop where harness
             // and substrate are both known.
-            "--output-format" | "--monitor" if command == "spawn" => {
+            "--output-format" | "--monitor" | "--dispatch-account" if command == "spawn" => {
                 fno_agents::spawn_axes::insert_spawn_flag(&a, &mut it, &mut params)?;
             }
             "--account" => {
-                // per-spawn account selection. Parsed here so the spawn
-                // arm is not blocked by an unknown-flag error; the four-lane
-                // overlay resolution lives in Python (fno.agents.account_env), so
-                // an account spawn re-execs the Python CLI on EVERY substrate (see
-                // the spawn intercept) rather than duplicating the resolver here.
+                // Resolved by accounts::launch in the spawn arm.
                 params.insert("account".into(), str_arg(&mut it, "--account")?);
             }
             "--audit-actor" => {

@@ -14,14 +14,16 @@ In any Claude Code session:
 
 ```
 /plugin marketplace add bllshttng/fno#stable
-/plugin install fno@footnote
+/plugin install fno@fno
 ```
 
 `#stable` matters. Without it, the add clones `main` (7,949 files, 80s+) instead of `stable` (781 files, 4s). A slow connection can then hit Claude Desktop's 120s "Add marketplace" timeout.
 
-If the add refuses because the name `footnote` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
+If the add refuses because the name `fno` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
 
-`fno config plugin install claude` is the dev channel: it installs your local checkout for development. Claude's own `marketplace add` replaces a GitHub `footnote` source with the local stage and says nothing. When your plugin comes from a GitHub marketplace (stable, rc or nightly), the dev install refuses with exit 3 and names your channel. Pass `--dev` to switch to your local checkout.
+`fno config plugin install claude` is the dev channel: it installs your local checkout for development. Claude's own `marketplace add` replaces a GitHub `fno` source with the local stage and says nothing. When your plugin comes from a GitHub marketplace (stable, rc or nightly), the dev install refuses with exit 3 and names your channel. Pass `--dev` to switch to your local checkout.
+
+An install made before the marketplace rename reads `fno@footnote`. It keeps working, and `fno doctor` reads it and names the move. To move a GitHub install to `fno@fno`, run `/plugin uninstall fno@footnote` and `/plugin marketplace remove footnote`, then the two commands above. The dev install, `fno config plugin install claude`, moves a local `footnote` stage by itself. For Codex, `fno config setup run --only harness-wiring` moves a release install and `fno config plugin install codex` moves a dev install.
 
 On the first session after install, footnote prints the install plan and starts nothing: a person's yes is what runs it. On a yes, run `bash <plugin root>/.claude-plugin/postinstall.sh`. Its output ends with `installer exit 0` on success. Then open a new session, and `fno` is on your PATH.
 
@@ -31,7 +33,7 @@ Codex CLI:
 
 ```
 codex plugin marketplace add bllshttng/fno@stable
-codex plugin add fno@footnote
+codex plugin add fno@fno
 ```
 
 Antigravity (`agy`): run `bash scripts/install/agy-plugin.sh` from a clone. It installs a staged payload and checks that `agy plugin list` names Footnote. For a slow install, set `AGY_PLUGIN_INSTALL_TIMEOUT_S=120`.
@@ -97,13 +99,14 @@ Configuration lives in `.fno/config.toml` (project-local) layered over `~/.fno/c
 
 ```bash
 fno config setup run --yes         # takes every recommended default, never prompts, prints the JSON report
+fno config setup run --check       # names each missing piece (agent CLI, gh login, jq, git, fno-agents) and config drift, each with its fix
 fno config setup run --list --json # the step table (global, project, contributor layers)
 fno config setup plan --advanced   # the advanced config tier, as JSON
 ```
 
 Both walk the same schema-derived question plan and write through the validated config writer, so a typo or an out-of-range value is rejected, not silently stored.
 
-The terminal wizard also offers, defaulting to No, to wire fno's SessionStart context into Codex and Gemini user config. You can do the same later with `fno config setup cli-hooks`.
+To wire fno's SessionStart context into Codex and Gemini user config, run `fno config setup cli-hooks`. The wizard does not do this step.
 
 ### Reading and editing config directly
 
@@ -198,13 +201,13 @@ fno uninstall --yes        # no question; needed when stdin is not a terminal
 It removes each item through its own uninstall command, in this order:
 
 1. The launchd agents (`~/Library/LaunchAgents/sh.fno.*.plist` and the autocorrect agents).
-2. The Claude Code and Codex plugins and their `footnote` marketplaces, and the OpenCode plugin files.
+2. The Claude Code and Codex plugins, their `fno` or older `footnote` marketplaces, and the OpenCode plugin files.
 3. The hooks fno added to `~/.claude/settings.json`, `~/.gemini/settings.json` and `~/.codex/config.toml`. Your own hooks stay.
-4. The `uv` tool, the Homebrew formula and the bootstrap cache.
+4. The `uv` tool, the Homebrew formula and the bootstrap cache. When the install script installed `uv` itself, `uv` is listed too.
 5. The daemon and the mux sessions, which it stops.
 6. The `cargo` binaries, `fno` last.
 
-`~/.fno` stays. `--purge` deletes it too, after you type `purge`. It holds your backlog and any worktrees under `~/.fno/worktrees`, so commit or push that work first. The run ends with a list of anything named fno that is still on `PATH`, in `LaunchAgents` or running. Exit 0 means that list is empty.
+`~/.fno` stays. `--purge` deletes it too, after you type `purge`. It holds your backlog and any worktrees under `~/.fno/worktrees`, so commit or push that work first. The run ends with a list of anything named fno that is still on `PATH`, in `LaunchAgents`, in a plugin cache or running. Exit 0 means that list is empty. It also names each `~/.local/bin` PATH line in your shell profiles by file and line. Other `uv` tools share that line, so uninstall never removes it, and it does not change the exit.
 
 ## Next
 

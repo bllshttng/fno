@@ -92,6 +92,8 @@ fn request(question: &str, root: &Path) -> IntakeRequest {
         journal_path: None,
         display_name: None,
         render_cap: None,
+        op: None,
+        event: None,
     }
 }
 

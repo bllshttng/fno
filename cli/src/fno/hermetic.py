@@ -150,6 +150,9 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     # fno-py console script. Scrubbed, the resolver reads the default
     # ~/.local/share/uv layout instead of a developer's XDG customization.
     "XDG_DATA_HOME",
+    # Where uninstall looks for a fno-installed uv; a developer's value would
+    # point the residue check at their real bin dir.
+    "XDG_BIN_HOME",
     # Where cargo writes build intermediates. A developer shell that exports it
     # would point test-built artifacts at an arbitrary tree; neutralise re-pins
     # it into the sandbox after this scrub.
@@ -276,7 +279,6 @@ _RUNNER_PASSTHROUGH = (
     "FNO_AGENTS_WORKER",
     "FNO_BIN",  # the event store client pins the checkout's fno front door
     "FNO_AGENTS_FRONT",  # .github/actions/smoke-setup/action.yml
-    "FNO_REAL_CODEX_PLUGIN_TEST",  # .github/workflows/cli-ci.yml
     "FNO_RUST_FRONT",  # .github/workflows/cli-ci.yml, via $GITHUB_ENV
     # The smoke workflow sets this on the pytest step so each matrix leg keeps
     # its own collected test slice instead of silently running the full suite.
@@ -462,10 +464,13 @@ def neutralise(
     # sandboxed HOME already relocates ~/.fno/config.toml, and the ceiling below
     # bounds the rest of the chain.
     #
-    # The ceiling is the part HOME cannot do. The candidate chain climbs to the
-    # canonical checkout through ``git worktree list``, and git ignores HOME, so
-    # without a ceiling a suite run from a real checkout reads that checkout's
-    # config and local-red never equals CI-red.
+    # The canonical climb is the part HOME cannot do. The candidate chain
+    # climbs to the canonical checkout through ``git worktree list``, and git
+    # ignores HOME, so without a bound a suite run from a real checkout reads
+    # that checkout's config and local-red never equals CI-red. Both loaders
+    # drop that candidate under FNO_NO_CANONICAL_CONFIG=1. Only the Rust
+    # readers also honor the search ceiling below.
+    out["FNO_NO_CANONICAL_CONFIG"] = "1"
     #
     # TMPDIR is in the ceiling because a test's OWN config has to be findable.
     # Shell harnesses build their fixture under `mktemp -d` and pytest builds

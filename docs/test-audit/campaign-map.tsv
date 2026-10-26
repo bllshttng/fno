@@ -1,7 +1,6 @@
 # campaign	path	lang	declarations_at_0d421fbc04
 K1	cli/benchmarks/test_measure_fno.py	py	7
 K1	cli/src/fno/paths_testing.py	py	1
-K1	cli/src/fno/setup/test_recommended_rules.py	py	5
 K1	cli/src/fno/test_worktree_paths.py	py	11
 K1	cli/tests/agents/test_command_answer_blueprint_floor.py	py	4
 K1	cli/tests/goldens/test_advance_golden.py	py	3
@@ -84,7 +83,6 @@ K1	cli/tests/unit/test_config_optouts.py	py	13
 K1	cli/tests/unit/test_config_receipt.py	py	2
 K1	cli/tests/unit/test_config_routing.py	py	9
 K1	cli/tests/unit/test_config_schema.py	py	10
-K1	cli/tests/unit/test_config_search_ceiling.py	py	2
 K1	cli/tests/unit/test_config_set.py	py	16
 K1	cli/tests/unit/test_config_toml_readers.py	py	4
 K1	cli/tests/unit/test_config_unset.py	py	5
@@ -522,7 +520,6 @@ K4	cli/src/fno/adapters/providers/test_runtime_state.py	py	91
 K4	cli/src/fno/adapters/providers/test_staging.py	py	11
 K4	cli/src/fno/adapters/providers/test_usage.py	py	80
 K4	cli/src/fno/adapters/providers/test_usage_false_green.py	py	16
-K4	cli/src/fno/agents/test_account_env.py	py	23
 K4	cli/src/fno/agents/test_harness_map.py	py	80
 K4	cli/tests/agents/test_claude_parse_short_id.py	py	3
 K4	cli/tests/agents/test_claude_session_registry.py	py	30
@@ -542,7 +539,6 @@ K4	cli/tests/agents/test_harnesses_codex_argv.py	py	30
 K4	cli/tests/agents/test_harnesses_codex_create.py	py	29
 K4	cli/tests/agents/test_harnesses_env_inject.py	py	7
 K4	cli/tests/agents/test_role_grantor_identity.py	py	15
-K4	cli/tests/integration/test_canonical_account_binding.py	py	9
 K4	cli/tests/integration/test_codex_plugin_cli_boundary.py	py	8
 K4	cli/tests/integration/test_codex_plugin_real_boundary.py	py	2
 K4	cli/tests/integration/test_provider_usage_live.py	py	1
@@ -677,7 +673,6 @@ K5	cli/tests/test_graph_concurrent_writers.py	py	2
 K5	cli/tests/test_no_hardcoded_node_id.py	py	3
 K5	cli/tests/test_node_claim_release_authority.py	py	5
 K5	cli/tests/test_review_locking.py	py	8
-K5	cli/tests/unit/company/test_join.py	py	10
 K5	cli/tests/unit/plan/test_blueprint_claim_derived_status.py	py	5
 K5	cli/tests/unit/plan/test_blueprint_mutate_node_id_filename.py	py	3
 K5	cli/tests/unit/test_advance.py	py	199
@@ -787,7 +782,6 @@ K5	cli/tests/unit/test_mail_status_unclaimed.py	py	5
 K5	cli/tests/unit/test_maintain.py	py	135
 K5	cli/tests/unit/test_node_id_sh.py	py	4
 K5	cli/tests/unit/test_operator_capture.py	py	13
-K5	cli/tests/unit/test_orient_done_when.py	py	27
 K5	cli/tests/unit/test_planned_unclaimed.py	py	13
 K5	cli/tests/unit/test_promise_gate.py	py	36
 K5	cli/tests/unit/test_quota_lock.py	py	6
@@ -1141,9 +1135,7 @@ K6	crates/fno-agents/tests/task_context_journey.rs	rs	1
 K6	crates/fno/src/event_store_recovery.rs	rs	1
 K7	cli/src/fno/plan/test_boundary.py	py	21
 K7	cli/src/fno/plan/test_folder_audit.py	py	8
-K7	cli/src/fno/setup/test_starship.py	py	10
 K7	cli/src/fno/target/test_blast.py	py	25
-K7	cli/src/fno/target/test_orient.py	py	42
 K7	cli/src/fno/test_cost.py	py	20
 K7	cli/src/fno/test_target_init_blast.py	py	18
 K7	cli/src/fno/test_target_init_plan_backfill.py	py	17
@@ -1158,14 +1150,7 @@ K7	cli/tests/observer/test_fold.py	py	23
 K7	cli/tests/observer/test_judge.py	py	5
 K7	cli/tests/schemas/test_target_state_types.py	py	34
 K7	cli/tests/test_plan_schema_drift.py	py	8
-K7	cli/tests/unit/approvals/test_cli.py	py	15
-K7	cli/tests/unit/approvals/test_store.py	py	56
-K7	cli/tests/unit/company/test_campaign.py	py	9
 K7	cli/tests/unit/company/test_contracts.py	py	9
-K7	cli/tests/unit/company/test_coordinator.py	py	6
-K7	cli/tests/unit/company/test_topology.py	py	7
-K7	cli/tests/unit/company/test_topology_precedence.py	py	8
-K7	cli/tests/unit/company/test_topology_projection.py	py	3
 K7	cli/tests/unit/delivery/test_delivery_cli.py	py	21
 K7	cli/tests/unit/delivery/test_evaluator.py	py	27
 K7	cli/tests/unit/delivery/test_terminal_integrations.py	py	2
@@ -1629,7 +1614,6 @@ K10	cli/tests/agents/test_pane_journeys.py	py	2
 K10	cli/tests/integration/test_birth_hook_wiring.py	py	2
 K10	cli/tests/integration/test_consolidation_audit.py	py	10
 K10	cli/tests/integration/test_defer.py	py	30
-K10	cli/tests/integration/test_effect_idempotency.py	py	4
 K10	cli/tests/integration/test_first_run_documentation.py	py	5
 K10	cli/tests/integration/test_health_monitor.py	py	37
 K10	cli/tests/integration/test_list_misscoped.py	py	3

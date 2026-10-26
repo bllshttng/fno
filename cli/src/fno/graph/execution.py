@@ -7,8 +7,9 @@ runtime: it is derived, inspected, and thrown away. Code owns schema, routing,
 counts, barriers, and state transitions here; agents stay bounded judgment
 nodes.
 
-The types mirror the typed-evidence-artifact house style of
-``fno.resume.receipt``: frozen dataclasses, a module ``EXEC_GRAPH_VERSION``,
+The types mirror the typed-evidence-artifact house style of the native
+resume-receipt module (`crates/fno-agents/src/resume_receipt/`): frozen
+dataclasses, a module ``EXEC_GRAPH_VERSION``,
 ``to_dict()`` for stable JSON, and a strict ``parse_*``/``_from_dict`` that
 fails CLOSED on any schema defect (``MalformedGraphError``). Two invariants the
 compiler upholds:
@@ -369,7 +370,7 @@ class ExecGraph:
 # compile_graph is PURE: it takes already-gathered canonical state as plain
 # dicts and never touches disk. The CLI layer (graph/cli.py) enriches backlog
 # entries with live claims/liveness/ownership and hands them here, mirroring
-# how resume.receipt keeps build_receipt pure and does I/O separately.
+# how the native resume-receipt model keeps build_receipt pure and does I/O separately.
 
 
 def _entry_node(entry: dict, *, justification: str) -> ExecNode:

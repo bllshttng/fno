@@ -48,7 +48,7 @@ jobs:
     # code -- the committed format and the gate's format move together only
     # when this pin is bumped deliberately. Keep RUSTFMT_TOOLCHAIN in lockstep
     # with the version used for the next package-wide sweep.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       # The toolchain whose rustfmt produced the committed formatting. Bump
@@ -81,7 +81,7 @@ jobs:
     # cache key would rebuild its whole dep tree on every run. `cargo check`
     # here (no codegen, no test execution), so the failure means exactly one
     # thing: a warning.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       RUSTFLAGS: "-D warnings"
@@ -128,7 +128,7 @@ jobs:
     # PNGs as run artifacts. A shot that fails to render reds here, so the
     # gap is visible in the log rather than a silent empty picture.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -163,7 +163,7 @@ jobs:
         run: |
           files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
           case "$files" in
-            *src/client.rs*|*client/sideline.rs*|*client/card_line.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*modal_select.rs*|*client/feed_detail.rs*|*client/questions.rs*|*client/pane_paint.rs*|*client/terminal_cursor.rs*|*server/window_size.rs*|*mux-demo-snapshot.sh*)
+            *src/client.rs*|*client/sideline.rs*|*client/card_line.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*modal_select.rs*|*client/feed_detail.rs*|*client/questions.rs*|*client/pane_paint.rs*|*client/terminal_cursor.rs*|*client/org_*|*fleet_beacon.rs*|*server/window_size.rs*|*mux-demo-snapshot.sh*)
               echo "shoot=1" >> "$GITHUB_ENV"
               echo "the bell surface changed: shooting"
               ;;
@@ -195,7 +195,7 @@ jobs:
           # does; the Mac demo works because the binary is installed there.
           export PATH="$PWD/crates/fno-agents/target/debug:$PATH"
           mkdir -p shots
-          for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban navigator-pr navigator-model navigator-menu feed-detail question-detail; do
+          for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban navigator-pr navigator-model navigator-menu feed-detail question-detail org-table org-recent org-overview org-graph org-health org-seat org-feed org-system; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
           done
           # The selection paints with the theme's sel surface: shoot it light too.
@@ -226,7 +226,7 @@ jobs:
     # The nightly stamps a .devN version through these scripts; a PEP 440
     # spelling reaching a Cargo.toml kills every release build. This table
     # test is the gate that keeps the conversion honest.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -265,7 +265,7 @@ jobs:
     # leaves room for a slow runner without leaving room for the suite to grow
     # unnoticed. If this job approaches the cap, cut trials or split the
     # binaries across two jobs; do not raise it.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     # REPORTS, does not gate. The step publishes its trial count to the run
     # summary and always exits 0; graduate by making it assert failures=0, and
@@ -390,7 +390,7 @@ jobs:
     # untouched deps surface daily instead of waiting for the next crates/**
     # push. Runs locally as `cargo audit` from crates/fno-agents
     # (cargo install cargo-audit).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout

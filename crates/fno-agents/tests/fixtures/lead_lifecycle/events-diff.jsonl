@@ -1,0 +1,6 @@
+{"ts":"2026-10-24T09:00:00Z","type":"lead_checkin","session_id":"sess-lead","data":{"scope":"epic-y","beat":1,"change":"first beat: three workers seated"}}
+{"ts":"2026-10-24T09:20:00Z","type":"lead_checkin","session_id":"sess-lead","data":{"scope":"epic-y","beat":2,"change":"PR 3854 ready, merge held"}}
+{"ts":"2026-10-24T09:25:00Z","type":"lead_checkin","session_id":"sess-bare","data":{"scope":"epic-z","beat":1,"change":"another scope"}}
+{"ts":"2026-10-24T09:30:00Z","type":"lead_checkin","session_id":"sess-lead","data":{"role_scope":"epic-y","beat":3,"change":"legacy alias row"}}
+{"ts":"2026-10-24T09:40:00Z","type":"session_end","session_id":"sess-lead","data":{"scope":"epic-y"}}
+{"ts":"2026-10-24T10:00:00Z","type":"lead_checkin","source":"loop","session_id":"sess-lead","data":{"scope":"epic-y","open_prs":3,"free_claim_no_driver":1,"blocked":2,"escalations_open":1,"escalations_overdue":0,"owned_active":5,"live_workers":4,"undelivered":6,"held_open":1,"blueprint_running":0,"blueprint_ceiling":2,"change":"measured baseline"}}

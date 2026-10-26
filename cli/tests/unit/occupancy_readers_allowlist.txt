@@ -29,5 +29,3 @@ cli/src/fno/graph/cli.py:key = f"node:{node_id}"
 # control: core routing
 cli/src/fno/mail/job_address.py:key = f"node:{node_id}"
 # control: core routing
-cli/src/fno/resume/cli.py:return claim_status(f"node:{node}", root=claims_root)
-# control: core routing (root=None arg now routes by key)

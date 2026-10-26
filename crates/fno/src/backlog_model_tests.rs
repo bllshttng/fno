@@ -419,12 +419,12 @@ fn node_lists_children_blockers_and_live_sessions() {
     assert_eq!(view.sessions[1].action, "none");
     assert_eq!(
         view.sessions[1].command.as_deref(),
-        Some("fno agents adopt s-dead --cross-project")
+        Some("fno agents adopt s-dead")
     );
     assert_eq!(view.sessions[2].action, "resume");
     assert_eq!(
         view.sessions[2].command.as_deref(),
-        Some("fno agents resume s-park --cross-project --cwd '/tmp/it'\\''s here'")
+        Some("fno agents resume s-park --cwd '/tmp/it'\\''s here'")
     );
     assert_eq!(
         view.sessions[3].command, None,
@@ -460,17 +460,6 @@ fn node_lists_children_blockers_and_live_sessions() {
     );
     assert!(tree.leads[0].nodes[1].current.is_empty());
     assert!(tree.unowned.is_empty());
-    let mut snapshot = crate::org_model::OrgSnapshot::default();
-    snapshot.apply(&org, 100);
-    org.fold = Err("org-fold exited 1".into());
-    snapshot.apply(&org, 160);
-    assert_eq!(snapshot.tree.as_ref().unwrap().measured_at, 100);
-    assert_eq!(snapshot.error.as_deref(), Some("org-fold exited 1"));
-    assert_eq!(snapshot.error_at, Some(160));
-    let mut first = crate::org_model::OrgSnapshot::default();
-    first.apply(&org, 160);
-    assert!(first.tree.is_none());
-    assert_eq!(first.error, snapshot.error);
     org.fold = Ok(
         json!({"scope_nodes": {"territory": {"status": "ok", "nodes": [
         {"id": "x-top", "claim_state": "live"}, {"id": "x-kid1", "claim_state": "no-record"}

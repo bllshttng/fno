@@ -38,7 +38,7 @@
 #      scripts/save-session.py's read of the ~/.claude/.session-context.json
 #      statusline sidecar (its OWN transcript writes were re-homed to
 #      ${FNO_HOME}/saved-sessions - see below - so only the sidecar READ remains).
-#      setup/cli_hooks.py WRITES ~/.claude/settings.json for the same reason
+#      crates/fno/src/cli_hooks.rs WRITES ~/.claude/settings.json for the same reason
 #      its siblings write ~/.gemini/settings.json and ~/.codex/config.toml:
 #      it wires a hook into the CLI's OWN config. `claude rm` runs with no
 #      agent session and so never loads plugin hooks, which leaves the
@@ -93,7 +93,7 @@
 #      Read-only `is_dir`/`is_file` probes against Claude Code's OWN skill
 #      dirs; footnote stores nothing there, and an unreadable root resolves
 #      `unverifiable` rather than being reported absent.
-#      usage.py joins for the same reason account_env.py already is: its
+#      usage.py joins for the same reason accounts/env.rs already does: its
 #      shared-slot probe resolves the CANONICAL ~/.claude to read Claude
 #      Code's own credential for the stamped active account. It must be the
 #      literal path rather than the CLAUDE_CONFIG_DIR-honoring helper,
@@ -110,8 +110,9 @@
 #      accounts_binding_parity.rs builds a canonical ~/.claude and an alt dir
 #      under a temp root to prove two roots keep distinct credential
 #      identity. Read-only; footnote stores nothing under either.
-#      accounts/staging.rs and accounts/env.rs port staging.py, dispatch.py
-#      and the account_env.py overlay: they name a staged account's
+#      accounts/staging.rs, accounts/env.rs and accounts/launch.rs port
+#      staging.py, dispatch.py and the account_env.py overlay: they name a
+#      staged account's
 #      `<id>/.claude` dir and pin the shared ~/.claude slot for the active
 #      managed account. They build env values and write nothing there.
 #      managed.py resolves the same canonical path for the same reason, in
@@ -195,7 +196,7 @@
 #      boundary is hermetic. Read-only against real roots; nothing
 #      accumulates there.
 #      crates/fno/src/uninstall.rs reads Claude Code's plugin registry and
-#      removes the hook entry cli_hooks.py merged into its settings.json:
+#      removes the hook entry cli_hooks.rs merged into its settings.json:
 #      the reverse of that write, in Claude Code's own config. It stores
 #      nothing there.
 #      crates/fno-agents/src/mail_cli/send/resolve.rs reads Claude Code's
@@ -301,7 +302,6 @@ cli/src/fno/adapters/providers/usage.py
 cli/src/fno/adapters/test_claude_code.py
 cli/src/fno/adapters/test_init.py
 cli/src/fno/adapters/test_shared.py
-cli/src/fno/agents/account_env.py
 cli/src/fno/agents/cli.py
 cli/src/fno/agents/discover.py
 cli/src/fno/agents/dispatch.py
@@ -314,14 +314,15 @@ cli/src/fno/agents/registry.py
 cli/src/fno/agents/rust_runtime.py
 cli/src/fno/agents/self_stamp.py
 cli/src/fno/agents/spawn_gate.py
-cli/src/fno/agents/test_account_env.py
 cli/src/fno/agents/whoami.py
 crates/fno/src/doctor_update.rs
 crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/claude_vault.rs
 crates/fno-agents/src/accounts/binding.rs
+crates/fno-agents/src/accounts/credentials.rs
 crates/fno-agents/src/accounts/env.rs
+crates/fno-agents/src/accounts/launch.rs
 crates/fno-agents/src/accounts/staging.rs
 crates/fno-agents/src/accounts/store.rs
 crates/fno-agents/src/accounts/reconcile.rs
@@ -346,8 +347,6 @@ cli/src/fno/paths.py
 cli/src/fno/scratch_cli.py
 cli/src/fno/provenance/resolver.py
 cli/src/fno/recovery.py
-cli/src/fno/relay/registry.py
-cli/src/fno/relay/roundtrip.py
 cli/src/fno/review/confidence_scorer.py
 cli/src/fno/review/runners/agents_spawn_runner.py
 cli/src/fno/review/runners/claude_runner.py
@@ -355,18 +354,13 @@ cli/src/fno/review/scorers/__init__.py
 cli/src/fno/runtime/cli.py
 cli/src/fno/runtime/worktree.py
 cli/src/fno/scoreboard/fold.py
-cli/src/fno/setup_cli.py
-cli/src/fno/setup/cli_hooks.py
 cli/src/fno/setup/doctor.py
 cli/src/fno/setup/integration.py
 crates/fno/src/setup_autowire.rs
 crates/fno/src/setup_autowire_tests.rs
-cli/src/fno/setup/recommended_rules.py
-cli/src/fno/setup/test_recommended_rules.py
 cli/src/fno/target_cli.py
 cli/src/fno/test_dispatch_target.py
 cli/src/fno/test_worktree_paths.py
-cli/src/fno/update.py
 cli/src/fno/wake/detect.py
 cli/src/fno/worker/review.py
 cli/src/fno/worktree_cli/cli.py
@@ -395,6 +389,7 @@ crates/fno-agents/src/plans_dirs.rs
 crates/fno-agents/src/plans_path.rs
 crates/fno-agents/src/plugin_install.rs
 crates/fno/src/uninstall.rs
+crates/fno/src/cli_hooks.rs
 crates/fno-agents/src/provider.rs
 crates/fno-agents/src/gh_spend.rs
 crates/fno-agents/src/reclaim.rs

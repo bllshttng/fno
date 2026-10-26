@@ -159,3 +159,14 @@ fno agents ping|fno agents session status|the agents fold
 fno agents team-fold|fno agents org chart fold|the agents fold
 fno agents team-orphans|fno agents org chart vacancies|the agents fold
 fno agents term-ledger|fno agents org chart rundown|the agents fold
+# The setup dead-code deletion: the old wizard stub and the gh-proxy command.
+config setup wizard|fno do wizard|the setup dead-code deletion
+config setup github-cli|nothing: every worker spawn refreshes the gh proxy itself|the setup dead-code deletion
+# The two one-shot migrations: the loader converts settings.yaml and first run writes config.toml.
+config setup migrate-config|nothing: the config loader converts a legacy settings.yaml on first read|the setup migrate retirement
+config setup migrate-paths|fno do wizard|the setup migrate retirement
+fno do target cancel|end the session from its own harness, or touch .fno/.target-cancelled in its worktree|no such command; three refusal strings named a phantom
+# d-460ea8c7 (2026-10-25): the harness-store heal is machine-wide, so no
+# session id ever needed the flag. The parsers accept it as a silent no-op for
+# one release; no caller-facing string may teach it.
+--cross-project|nothing: a session id resolves from any project, so the flag has no work|d-460ea8c7

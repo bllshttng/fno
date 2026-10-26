@@ -20,8 +20,10 @@ def _commands(app) -> set[str]:
     return set(command.list_commands(click.Context(command)))
 
 
-def test_agents_registers_the_eight_folded_roots() -> None:
-    # x-3873 removed `dispatch`: one launch command, and it is spawn (d-496680aa).
+def test_agents_registers_the_six_folded_roots() -> None:
+    # One launch command, and it is spawn. `restart` answers at the Rust front
+    # door, so it is no folded root. mcp left the fold: the family is native
+    # and the front's agents-mcp route answers the send command.
     from fno.agents.cli import agents_app
 
     assert {
@@ -29,9 +31,6 @@ def test_agents_registers_the_eight_folded_roots() -> None:
         "claim",
         "lead",
         "mail",
-        "mcp",
-        "restart",
-        "roles",
         "worker",
     } <= _commands(agents_app)
 
@@ -51,9 +50,6 @@ def test_importing_agents_cli_does_not_import_folded_subgroups() -> None:
         "fno.dispatch",
         "fno.lead.cli",
         "fno.mail.cli",
-        "fno.mcp.cli",
-        "fno.restart",
-        "fno.roles.cli",
         "fno.worker.cli",
     }
     script = (

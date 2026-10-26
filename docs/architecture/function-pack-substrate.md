@@ -14,9 +14,9 @@ scenarios in one manifest; verify the pack before it is installed; and activate
 it so its roles become resolvable through the existing role resolver.
 
 The substrate grants nothing. A pack declares effects and capabilities; it never
-grants them. Activation projects packaged roles into the `RoleLayer.PLUGIN`
-directory the role registry already walks, and that is the whole integration:
-`cli/src/fno/roles/registry.py` and `cli/src/fno/roles/resolver.py` are unchanged
+grants them. Activation projects packaged roles into the plugin layer directory
+the role registry already walks, and that is the whole integration: the role
+registry and resolver (now `crates/fno-agents/src/roles/`) are unchanged
 by this work, which is what makes "activation changed no resolution behavior" a
 provable claim rather than an assertion.
 
@@ -64,7 +64,7 @@ boolean is how a verifier starts reporting green for a condition it never
 evaluated. The command exits zero only when every condition is checked and
 passed, so an unverified pack is never mistaken for a verified one.
 
-The compatibility family goes beyond schema. It checks each role's `default_topology` against the closed four-word vocabulary, and it runs the role resolver against a maximally permissive synthetic work order. So verify catches a manifest that cannot resolve before activation, not at execution. The vocabulary is a recorded dual with `fno.company.topology` until the company topology port deletes the Python leg.
+The compatibility family goes beyond schema. It checks each role's `default_topology` against the closed four-word vocabulary, and it runs the role resolver against a maximally permissive synthetic work order. So verify catches a manifest that cannot resolve before activation, not at execution. The verifier's `TOPOLOGIES` list is the one owner of the vocabulary.
 
 A corrupt manifest reports `blocked` naming the file and the parse error and
 never reports the pack as absent, mirroring the role registry's rule that a
@@ -110,12 +110,12 @@ ownership rather than overwriting.
 This substrate shares an epic with the company package. The split is the
 ownership treaty:
 
-- The company package owns execution-topology selection. Its campaign coordinator had no caller and was deleted.
+- The company package owns the company-work contracts. Its campaign coordinator had no caller and was deleted. Its topology and execution modules fed only an uncalled orchestrator hook and were deleted with it.
 - The function-pack substrate owns pack manifests, verification, registry,
   activation, packaged roles, workflows, evaluators, assets, and progressive
   capability exposure.
 
-The single shared seam is the closed topology vocabulary. The Rust verifier holds a copy of the four words that `fno.company.topology` owns. The copy is a recorded dual on the inventory page, and no parity test forces the two to agree.
+The closed topology vocabulary was the single shared seam. The Rust verifier now owns the four words alone, so no seam remains.
 
 ## Function-agnostic invariant
 

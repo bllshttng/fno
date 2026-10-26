@@ -279,7 +279,7 @@ pub(crate) fn fold(
     window_days: u64,
     budget: Option<u64>,
 ) -> Result<(Activity, FoldReceipt), String> {
-    let _guard = FileLock::acquire(&lock_path(cache));
+    let _guard = FileLock::try_acquire(&lock_path(cache))?;
     let mut receipt = FoldReceipt::default();
     let bus = BusIndex::load(&roots.bus_log);
     let (mut cursors, mut activity) = match load_cache(cache) {

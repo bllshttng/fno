@@ -10,6 +10,7 @@
 
 pub mod accounts_route;
 pub mod agents_history;
+pub mod agents_mcp_route;
 pub mod agents_menu;
 pub mod agents_view;
 pub mod argv_witness;
@@ -26,9 +27,11 @@ pub mod bootstrap;
 pub mod build_drift;
 pub mod chrome;
 pub mod cli_args;
+pub mod cli_hooks;
 pub mod client;
 pub mod clipboard;
 pub mod config_defaults;
+pub mod config_schema;
 pub mod connections_view;
 pub mod context_used;
 pub mod digest_overlay;
@@ -53,6 +56,8 @@ pub mod keys;
 pub mod lane_colors_panel;
 pub(crate) mod lattice;
 pub mod law_cli;
+pub mod lead_refresh_canon;
+pub mod lead_route;
 pub mod link;
 pub mod lint_cli;
 pub mod live_store_fence;
@@ -104,11 +109,13 @@ pub mod setup_autowire;
 #[cfg(test)]
 #[path = "setup_autowire_tests.rs"]
 mod setup_autowire_tests;
+pub mod setup_cmds;
 pub mod setup_detect;
 pub mod setup_profile;
 pub mod setup_run;
 pub mod setup_services;
 pub mod share;
+pub mod shim_check;
 pub mod sideline_color;
 pub mod spawn_floor;
 pub mod spawn_journal;

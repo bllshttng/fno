@@ -82,7 +82,7 @@ Ten measured 2026-09-02. Each is one question with two answerers that disagree:
 
 Nine are many answerers to one question. The tenth is the inverse: one answerer conflating two questions. Both ship the same way, one facet fixed with the next facet arriving as PR two.
 
-One of the ten is verified here rather than taken on report. "How long may this read take?" is real: each external read in the lead board gets a slice of ONE budget (`run_with_timeout` in `crates/fno-agents/src/lead_board.rs`), and the stop gate hands its own bound in as that whole-board budget (`BoardOpts.budget_ms`, set from `stopgate_read_timeout()` in `crates/fno-agents/src/loopcheck.rs`). The inner bound is a slice of the outer one, so the two can never disagree about who kills a slow read.
+One of the ten is verified here rather than taken on report. "How long may this read take?" is real: each external read in the lead board gets a slice of ONE budget (`run_with_timeout` in `crates/fno-agents/src/org_board/budget.rs`), and the stop gate hands its own bound in as that whole-board budget (`BoardOpts.budget_ms`, set from `stopgate_read_timeout()` in `crates/fno-agents/src/loopcheck/read_bounds.rs`). The inner bound is a slice of the outer one, so the two can never disagree about who kills a slow read.
 
 The eleventh, measured the same night: "is this the user?" has six env markers, a legacy marker, a process-tree walk and a tty as answerers. The markers outrank the tty, so a human at a keyboard was refused as agent `operator`. The fix is precedence in `resolve_owned_identity`, and it is its own node. The specimen records the shape.
 

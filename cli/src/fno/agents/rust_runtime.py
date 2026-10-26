@@ -254,17 +254,16 @@ RUST_CLIENT_COMMANDS = frozenset(
         # Role scope fold for `fno agents team --nodes`: daemon-free read;
         # graph.json and claims in, per-scope fold out; Python passes the roles.
         "org-fold",
-        # Role-scope checkin readback for `fno agents lead history`:
-        # daemon-free read; Python resolves the caller's role scope, passes
-        # every journal paths.event_journals resolves, and invokes the binary.
+        # Role-scope checkin readback: the front door execs it for `fno
+        # agents org history` and `verdict`; escalate's verdict relay
+        # invokes it directly. Never routed through `fno agents`.
         "lead-history",
         # Failure-pattern leaderboard fold for `fno doctor evals macro`:
         # daemon-free read; Python resolves the journal list and forwards
         # the flags, then invokes the binary (not via `fno agents` routing).
         "evals-macro",
-        # The check-in beat for `fno agents lead checkin`: daemon-free
-        # read; Python resolves the caller's role scope and the paths
-        # Python owns, then invokes the binary (not via `fno agents`).
+        # The check-in beat: the front door execs it for `fno agents org
+        # checkin`, and the beat resolves its scope and paths natively.
         "lead-checkin",
         # Rundown page renderer for `fno agents lead ledger`: team JSON and
         # the graph in, one HTML page out; Python resolves the team and the
@@ -342,10 +341,6 @@ RUST_CLIENT_COMMANDS = frozenset(
 #: ``_resolve_ask_provider``) is gone; the ``AUTO_ROUTE_COMMANDS`` identity below is
 #: now the whole routing contract except for ``send``.
 PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
-    # The public restart command now folds the former top-level process restart
-    # under agents. It still invokes the Rust daemon restart internally, then
-    # applies the existing mux/revival policy in Python.
-    "restart",
     # Human-attended in-place role grant. Pure shared-registry transaction;
     # spawn-time grant and succession remain on the Rust-backed spawn path.
     "role",
@@ -503,6 +498,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     # must not appear here (test_rust_only_command_help_covers_unregistered_commands
     # enforces the invariant).
     "status": "Report daemon liveness and the control-plane arms table (one row per scheduled arm, red when its last tick is stale); --json for the machine payload with `arms`.",
+    "restart": "Restart running fno processes onto fresh binaries: the daemon, stale keepers and the mux leg (stale idle servers by default, every live server with --mux); --force for the break-glass daemon kill, --json for one machine line.",
     "reap": "Retire finished agent rows (every node the session is named on is done AND its transcript is quiet past agents.retire_grace_s); stages a resume receipt, prunes a clean merged worktree, --json for machine output, --dry-run to rehearse (names the gate keeping every held-back row, with its age and escalation), --release <row> to apply a ruling to one escalated hold (refuses a fresh hold or open work by name). Also sweeps the mux tab sideline via `fno mux workspace prune --tabs-only --include-used-shells` and reports it as the receipt's `mux` half (ran/unread/skipped). --no-mux skips that half.",
     "loop-check": "Stop-hook decision: external-truth done()/backstop check (read-only).",
     "loops": "Global loop pause control: paused|status --json, pause-all --who <w> [--ttl <dur>|--ttl-ms N] [--reason <text>] --json (also holds this session's mail for the same window via `fno agents mail hold`), or resume-all --json.",
@@ -533,7 +529,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     "judge": "Blueprint judge: grade a plan against the five product questions, --budget <secs> to bound the whole pass (default 600s), or --labels/--split to calibrate against evals/blueprint-judge/labels.yaml; invoked by fno.observer.cli's judge_cmd/sweep through its own subprocess round-trip (_judge_via_rust), not `fno agents` routing.",
     "org-vacancies": "Roles whose registry row is gone but whose manifest holds them: --root <spaces-root> --held <scope> (repeatable, one flag per scope); invoked directly by `fno agents team`, not `fno agents` routing.",
     "org-fold": "The role scope fold: --graph <graph.json> --promotes-json <roles> --claims-dir <dir> --format json; invoked directly by `fno agents team`, not `fno agents` routing.",
-    "lead-history": "The role-scope lead_checkin readback: --scope <scope> --events-path <events.jsonl> [--events-path ...] [--json]; --verdict selects the term tenure verdict read (assembles its own inputs natively: role, manifest, config, graph scope, window, delivery split); invoked directly by `fno agents lead history` and `fno agents lead verdict`, which pass every journal paths.event_journals resolves.",
+    "lead-history": "The role-scope lead_checkin readback: --scope <scope> --events-path <events.jsonl> [--events-path ...] [--json]; --verdict selects the term tenure verdict read (assembles its own inputs natively: role, manifest, config, graph scope, window, delivery split); exec'd by the front door for `fno agents org history` and `verdict`, which resolve their own journals natively; escalate's verdict relay invokes it directly.",
     "evals-macro": "The macro-eval failure-pattern leaderboard fold: --events <journal.jsonl> [--events ...] [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json]; invoked directly by `fno doctor evals macro`, which resolves the journal defaults.",
     "lead-checkin": "One command runs the term check-in body: --scope <scope> --events-path <events.jsonl> [--events-path ...] --graph <graph.json> --handoffs-dir <dir> [--faqs-dir <dir>] [--board-state <manifest>] [--emit-path <events.jsonl>] [--no-emit] [--json]; invoked directly by `fno agents lead checkin`, which resolves the role and the paths.",
     "lead-rundown": "The term ledger page renderer: --team-json <team.json> --graph <graph.json> --generated <ts> [--out <page>]; with no --out the command resolves the lead page through the layout table. Invoked directly by `fno agents lead ledger`, which resolves the team.",
@@ -1055,19 +1051,23 @@ def _gate_rm_at_seam(args: Sequence[str]) -> bool:
         return True
 
 
-def _is_dispatch_account_bearing_spawn(command: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` carrying ``--dispatch-account`` (the cutover carrier).
+def _is_promotion_bearing_spawn(command: str, args: Sequence[str]) -> bool:
+    """Keep grant-at-spawn on the Python path that owns promotion."""
+    return command == "spawn" and _has_flag(args, longs=("--promote",))
 
-    The Rust spawn parser does not know the flag and exits ``unknown flag:
-    --dispatch-account``, killing the launch. Python owns it: it resolves the
-    destination record's env overlay and refuses a harness mismatch. Keeping the
-    decision HERE rather than at one caller is the point - a shell dispatcher
-    pinning its own runtime protects only itself, and the next caller to reach
-    for the flag would hit the binary.
+
+def _is_account_bearing_pane(command: str, args: Sequence[str]) -> bool:
+    """True for an explicit ``--as pane`` spawn carrying an account flag.
+
+    The binary's pane spine runs before the account seam and assumes no
+    account axis on its requests, so an account-bearing pane spawn keeps the
+    Python mux arm, whose pane transports compose the overlay.
     """
     if command != "spawn":
         return False
-    return _has_flag(args, longs=("--dispatch-account",))
+    if _spawn_flag_value(args, "--account", "--dispatch-account") is None:
+        return False
+    return _spawn_flag_value(args, "--as") == "pane"
 
 
 def _is_resume_bearing_spawn(command: str, args: Sequence[str]) -> bool:
@@ -1130,14 +1130,12 @@ def _spawn_flag_value(args: Sequence[str], *names: str) -> Optional[str]:
 def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
     """Inject a headroom-picked ``--account`` for a spawn that named none.
 
-    Runs at the SAME seam as the auth scrub below, for the same reason: a
-    bg/headless spawn auto-routes to the Rust client through an ``exec``, so
-    neither Python spawn seam is ever reached. A picker wired only there would
-    leave every such worker on the ambient - possibly exhausted - account while
-    ``pick_on_launch`` read enabled, which is the decorative-guard shape this
-    repo's corpus names. Injecting the flag here is the one edit BOTH runtimes
-    see, and the scrub below then applies the account's overlay exactly as it
-    does for an explicit ``--account``.
+    Runs at the seam because a bg/headless spawn auto-routes to the Rust
+    client through an ``exec``, so neither Python spawn seam is ever reached. A
+    picker wired only there would leave every such worker on the ambient -
+    possibly exhausted - account while ``pick_on_launch`` read enabled.
+    Injecting the flag here is the one edit BOTH runtimes see, and each then
+    resolves the account's overlay exactly as for an explicit ``--account``.
 
     Six spawns are left alone: one that already named an account (explicit
     intent always wins), one carrying ``--role`` or ``--route``/``--provider``
@@ -1165,7 +1163,7 @@ def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
         # the operator would be told to drop a flag they never typed. Nothing to
         # pick - the transcript already decided where it lives.
         return out
-    if _is_dispatch_account_bearing_spawn("spawn", out):
+    if _has_flag(out, longs=("--dispatch-account",)):
         # A cutover already SELECTED its account, and picking a second one here
         # merges two overlays: the destination's config_dir with the picked
         # account's api key, which is the mis-bill this function already refuses
@@ -1194,60 +1192,6 @@ def _pick_account_at_seam(args: Sequence[str]) -> list[str]:
     # stamps a config pick as "caller" - the misread this column ends.
     os.environ[LAUNCH_ACCOUNT_SOURCE_ENV] = "config"
     return [*out[:boundary], "--account", picked, *out[boundary:]]
-
-
-def _scrub_account_auth_at_seam(args: Sequence[str]) -> None:
-    """Drop inherited vendor auth/model vars from ``os.environ`` for an
-    ``--account`` spawn, at the seam, so the Rust client inherits the scrub too.
-
-    The three Python substrate seams already scrub ``SCRUB_AUTH_VARS`` before
-    layering the account overlay, but an ``--account`` spawn on ``--substrate
-    bg`` auto-routes to the Rust client, which has no ``ANTHROPIC_*`` handling
-    at all -- so the Python scrub never ran for it and the pinned account
-    inherited the parent's vendor endpoint and tier remaps. ``route_to_rust``
-    execs with ``os.environ``, so scrubbing here is the one edit both runtimes
-    see. The account overlay is still layered per-substrate afterwards, so an
-    account record that legitimately pins any of these still wins. A
-    route-bearing ``--account`` spawn skips this scrub entirely: routing is
-    Python-only and the create lane scrubs + applies route-wins itself, and a
-    vendor may name a scrubbed var (e.g. ``ANTHROPIC_AUTH_TOKEN``) as its
-    ``api_key_env``, so scrubbing first would strip the key before
-    ``resolve_explicit_route`` reads it.
-
-    Order is load-bearing: the overlay is resolved BEFORE the scrub. An api_key
-    record may reference the ambient environment (``ANTHROPIC_API_KEY =
-    "${ENV:ANTHROPIC_API_KEY}"``) and ``resolve_env_value`` reads
-    ``os.environ``, so scrubbing first would delete the source value and make a
-    previously valid ``--account`` spawn unresolvable. Resolve, then scrub, then
-    re-apply the resolved values.
-    """
-    os.environ.pop("FNO_LAUNCH_ACCOUNT", None)
-    account = _spawn_flag_value(args, "--account")
-    if not account:
-        # Its provenance twin dies with it, or a stale "config" mislabels
-        # the next spawn the way a stale id would.
-        os.environ.pop(LAUNCH_ACCOUNT_SOURCE_ENV, None)
-        return
-    if _is_route_bearing_spawn("spawn", args):
-        return
-    from fno.agents import account_env as _account_env
-
-    try:
-        overlay = _account_env.resolve_account_overlay(account)
-    except Exception:
-        return
-    if overlay is None:
-        return
-    for var in _account_env.SCRUB_AUTH_VARS:
-        os.environ.pop(var, None)
-    os.environ.update(overlay.env)
-    #: the account ID has no argv carrier on the Rust route (the binary
-    # has no --account flag), so publish it on the env for the row mint to
-    # stamp as launch_account. Set at the same seam as the overlay for the
-    # same reason: this is the one edit both runtimes see. An id, never a
-    # credential - the registry row carries it verbatim. The PROVENANCE
-    # carrier is deliberately untouched: _pick_account_at_seam owns it.
-    os.environ["FNO_LAUNCH_ACCOUNT"] = account
 
 
 #: Commands whose Rust-client handling launches a harness child that would inherit
@@ -1564,7 +1508,6 @@ def make_agents_group_cls() -> type:
                     if command == "spawn":  # after the export: the probe needs its roots
                         _refuse_codex_spawn_with_unreachable_tools(args)
                     args = _pick_account_at_seam(args)
-                    _scrub_account_auth_at_seam(args)
                 elif command == "rm":
                     if not _gate_rm_at_seam(args):
                         raise SystemExit(RM_DECLINED_EXIT)
@@ -1572,10 +1515,11 @@ def make_agents_group_cls() -> type:
                 mode = runtime_mode()
                 py_spawn = (
                     _is_role_bearing_spawn(command, args)
-                    or (_is_route_bearing_spawn(command, args) and _spawn_flag_value(args, "--account") is not None)
+                    or _is_promotion_bearing_spawn(command, args)
+                    or (_is_route_bearing_spawn(command, args) and _spawn_flag_value(args, "--account", "--dispatch-account") is not None)
+                    or _is_account_bearing_pane(command, args)
                     or _is_default_substrate_spawn(command, args)
                     or _is_retired_axis_spawn(command, args)
-                    or _is_dispatch_account_bearing_spawn(command, args)
                 )
                 if mode == "rust" and not py_spawn:
                     _pin = _worktree_policy_pin_at_seam(args)

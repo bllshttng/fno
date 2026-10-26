@@ -94,7 +94,7 @@ def test_sync_graph_status_binds_claims_only_plan(mutate_doc, monkeypatch, tmp_p
 
     mutate_doc._sync_graph_status({"claims": "x-7760"}, plan)
 
-    assert calls == [["fno", "backlog", "update", "x-7760", "plan_path", str(plan)]]
+    assert calls == [["fno", "backlog", "update", "x-7760", f"plan_path={plan}"]]
 
 
 def test_sync_graph_status_refuses_disagreement(mutate_doc, monkeypatch, tmp_path, capsys):

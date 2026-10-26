@@ -115,7 +115,6 @@ fi
 
 python3 - "$ROOT" "$MODE" "$BASELINE_FILE" <<'PY'
 import ast
-import os
 import re
 import sys
 from pathlib import Path
@@ -166,17 +165,6 @@ LAYERS = (
             "fno.graph",
             "fno.claims",
             "fno.plan",
-            "fno.approvals",
-            "fno.delivery",
-        ),
-    ),
-    (2, "roles", ("fno.roles",)),
-    (
-        3,
-        "composition",
-        (
-            "fno.company.topology",
-            "fno.company.execution",
         ),
     ),
     (5, "runtime", ("fno.runtime", "fno.agents")),
@@ -203,10 +191,6 @@ def module_name(path: Path) -> str:
 
 
 def layer_for(module: str):
-    if os.environ.get("FNO_BOUNDARY_TEST_COMPANY_PACKAGE_CORE") == "1" and (
-        module == "fno.company" or module.startswith("fno.company.")
-    ):
-        return 1, "core"
     matches = []
     for number, name, prefixes in LAYERS:
         for prefix in prefixes:
@@ -270,9 +254,11 @@ for path, source, tree in parsed:
         for imported in imported_modules(
             node, source_module, source_is_package=path.name == "__init__.py"
         ):
+            # Control edge (was fno.roles.models -> contracts); re-point when
+            # these modules retire.
             if (
-                source_module == "fno.roles.models"
-                and imported == "fno.company.contracts"
+                source_module == "fno.agents.history"
+                and imported == "fno.graph._reconcile"
             ):
                 positive_control = True
             target_layer = layer_for(imported)
@@ -299,7 +285,7 @@ for path, source, tree in parsed:
 if not positive_control:
     print(
         "check-company-boundaries: positive control failed "
-        "(no roles -> core edge observed); scan did not reach content",
+        "(no runtime -> core edge observed); scan did not reach content",
         file=sys.stderr,
     )
     sys.exit(2)
@@ -340,7 +326,7 @@ rendered_cycle = None
 if cycle:
     rendered_cycle = " -> ".join(f"L{number} {names[number]}" for number in cycle)
 
-print("check-company-boundaries: positive control ok (roles -> core edge observed)")
+print("check-company-boundaries: positive control ok (runtime -> core edge observed)")
 # Printed on every run, not only a clean one: an unmapped module is invisible
 # to this scan, so the coverage figure is what tells a reader how much of a
 # green verdict is enforcement and how much is silence.

@@ -1,8 +1,7 @@
 """Unit tests for fno doctor's single blocker authority, `_blockers()`.
 
-One pure function reading the assembled `result` dict that `fno doctor` and
-the setup wizard both call (x-75dc): see `_emit_blockers` in doctor.py and
-`report_machine_blockers` in setup_cli.py.
+One pure function reading the assembled `result` dict that every `fno doctor`
+path calls: see `_emit_blockers` in doctor.py.
 """
 from __future__ import annotations
 
