@@ -373,7 +373,7 @@ def test_state_dir_honors_fno_state_dir_env(
 ) -> None:
     """The env carrier moves the state root ahead of the config default.
 
-    seal_state_root pins this var around a forwarded HOME, so a worker on a
+    The state-root seal pins this var around a forwarded HOME, so a worker on a
     non-claude oauth_dir account resolves the same graph.json its parent did.
     """
     _set_settings(monkeypatch, tmp_path, "schema_version: 1\n")

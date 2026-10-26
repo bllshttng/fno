@@ -28,3 +28,26 @@ def spawn_overlay_call(
     from fno.rust_binary import command_call
 
     return command_call("spawn-overlay", payload, SpawnOverlayUnavailable, timeout=timeout)
+
+
+class AccountRefused(ValueError):
+    """``accounts::launch`` refused an account; the message is its receipt."""
+
+
+def account_overlay(account_id: str) -> dict[str, Any]:
+    """The ``--account`` answer (``account_id``, ``env``, ``lane``, ``scrub``,
+    ``login_probe``) from ``accounts::launch``, or :class:`AccountRefused`."""
+    import os
+
+    answer = spawn_overlay_call({"kind": "account-overlay", "account": account_id, "cwd": os.getcwd()})
+    if answer.get("refusal") is not None:
+        raise AccountRefused(answer["refusal"])
+    return answer
+
+
+def compose_credentials(account_env, route_env, base, *, account_id=None) -> dict[str, Any]:
+    """``accounts::credentials`` compose: ``env``, ``decision``, ``scrub``, ``secret``."""
+    return spawn_overlay_call({
+        "kind": "credentials", "account_env": dict(account_env or {}),
+        "route_env": dict(route_env or {}), "base": dict(base), "account_id": account_id,
+    })

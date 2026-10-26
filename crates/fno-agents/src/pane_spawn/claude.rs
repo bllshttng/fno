@@ -292,7 +292,7 @@ fn inject_route_model_argv(argv: Vec<String>, route_env: &BTreeMap<String, Strin
 /// demand the binary, then carry the argv on `happy` with the route's
 /// non-secret keys as `--claude-env` pairs. The secrets (ANTHROPIC_API_KEY,
 /// ANTHROPIC_AUTH_TOKEN) ride the env(1) wrapper, never the long-lived happy
-/// argv - `SECRET_ROUTE_VARS` (account_env.py:97).
+/// argv - `accounts::credentials::SECRET_ROUTE_VARS`.
 fn happy_wrap(
     argv: Vec<String>,
     route_env: &BTreeMap<String, String>,
@@ -326,7 +326,7 @@ fn happy_wrap(
     }
     let mut out = vec!["happy".to_string()];
     for (key, value) in route_env {
-        if key == "ANTHROPIC_API_KEY" || key == "ANTHROPIC_AUTH_TOKEN" {
+        if crate::accounts::credentials::SECRET_ROUTE_VARS.contains(&key.as_str()) {
             continue;
         }
         out.push("--claude-env".to_string());

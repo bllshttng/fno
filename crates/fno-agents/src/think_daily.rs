@@ -1,13 +1,14 @@
 //! The per-install, per-day ceiling on autonomous spawns: the shared
 //! `think-spawn-daily.json` counter.
 //!
-//! Two writers share this file today: Python `fno.provenance.spawn_think`
-//! (each `/think` dispatch) and the retro keep-going engine (each `/target`
-//! follow-up). Both must agree on its path, its JSON shape, and its write
-//! discipline, or one writer resets the other's count. The shape is
-//! `{"date": "YYYY-MM-DD", "count": N}` in `json.dumps` spelling, keyed on the
-//! LOCAL date, written through a pid-suffixed temp file and an atomic
-//! rename, so a reader sees the old file or the new one, never a torn one.
+//! Two writers share this file, both in this crate: the think dispatch
+//! (`crate::think_dispatch`, each `/think` spawn) and the retro keep-going
+//! engine (each `/target` follow-up). Both go through this module, so they
+//! agree on its path, its JSON shape, and its write discipline. The shape is
+//! `{"date": "YYYY-MM-DD", "count": N}` in `json.dumps` spelling (the file
+//! an older Python writer left still reads back), keyed on the LOCAL date,
+//! written through a pid-suffixed temp file and an atomic rename, so a
+//! reader sees the old file or the new one, never a torn one.
 //! The count itself is read-modify-write, last writer wins: a soft ceiling
 //! that bounds runaway fan-out, not exact rationing.
 

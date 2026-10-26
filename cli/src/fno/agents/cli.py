@@ -1082,105 +1082,48 @@ def cmd_spawn(
     # leaves the node dispatchable. Only a non-claude harness was refused above;
     # --account composes with --route/--role.
     account_env: dict[str, str] | None = None
+    from fno.agents.spawn_overlay_client import AccountRefused, SpawnOverlayUnavailable, account_overlay
+
     if account is not None:
-        from fno.agents.account_env import resolve_account_overlay_or_exit
+        try:
+            account_env = account_overlay(account)["env"]
+        except (AccountRefused, SpawnOverlayUnavailable) as exc:
+            print(str(exc), file=sys.stderr)
+            raise typer.Exit(code=2) from exc
 
-        overlay = resolve_account_overlay_or_exit(account)
-        account_env = overlay.env if overlay else None
-
-    # The proven-credential carrier (outage handoff) is claimed unconditionally:
-    # it carries real credential values, so a spawn that somehow sets it without
-    # --dispatch-account must refuse here rather than let the child inherit the
-    # carrier verbatim (a leak outside the one staged overlay that was proved).
+    # The autonomous-cutover carrier, resolved by accounts::launch against the
+    # WORKER's root: the record must exist there and its harness must equal
+    # the resolved one. The proven-credential carrier (outage handoff) is
+    # claimed unconditionally, so a spawn without --dispatch-account refuses
+    # rather than let the child inherit real credential values.
     proven_env_raw = os.environ.pop("FNO_DISPATCH_ACCOUNT_ENV", None)
-    if proven_env_raw is not None and dispatch_account is None:
-        print(
-            "refusing: the proven-credential carrier is set but no "
-            "--dispatch-account was given; no worker launched",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
-
-    # The autonomous-cutover carrier. Same fail-closed posture as --account, and
-    # deliberately a separate flag: --account's claude-only refusal is an operator
-    # contract, while a cutover's whole point is landing on another harness.
-    if dispatch_account is not None:
-        from fno.adapters.providers.dispatch import dispatch_env
-        from fno.adapters.providers.loader import load_providers
-
-        # The proven-credential carrier (outage handoff): the supervisor's
-        # health canary proved a SPECIFIC env for this account and passed it
-        # through the FNO_DISPATCH_ACCOUNT_ENV environment carrier (never
-        # argv). When present, it IS the dispatch overlay - re-deriving from
-        # the record here could stage different credentials than the ones
-        # proved, which is the exact disconnect that made the canary's proof
-        # decorative. The record still must exist and match the harness: the
-        # env proves the values, this check proves the target.
-        proven_env: dict[str, str] | None = None
-        if proven_env_raw:
-            try:
-                parsed = json.loads(proven_env_raw)
-                if not isinstance(parsed, dict) or not all(
-                    isinstance(k, str) and isinstance(v, str)
-                    for k, v in parsed.items()
-                ):
-                    raise ValueError("carrier payload must be a flat string map")
-                if not parsed:
-                    raise ValueError("carrier payload is empty")
-                proven_env = parsed
-            except (TypeError, ValueError) as exc:
-                print(
-                    f"refusing --dispatch-account {dispatch_account!r}: the "
-                    f"proven-credential carrier is unreadable ({exc}); "
-                    "no worker launched",
-                    file=sys.stderr,
-                )
-                raise typer.Exit(code=2) from exc
+    if dispatch_account is not None or proven_env_raw is not None:
+        from fno.agents.spawn_overlay_client import spawn_overlay_call
 
         try:
-            # Resolve against the WORKER's root, not the dispatcher's cwd: the
-            # record was selected out of the node's project registry, and reading
-            # a different one here would stage another project's account.
-            rec = load_providers(repo_root=workdir).by_id.get(dispatch_account)
-            if rec is None:
-                raise ValueError("not a registered provider record")
-            rec_harness = (getattr(rec, "harness", "") or "").strip()
-            # The overlay and the binary must agree. A codex record's CODEX_HOME
-            # handed to a claude spawn authenticates nothing and launches the
-            # wrong binary - the exact miss this carrier exists to prevent, so it
-            # is checked here rather than assumed from the caller's bookkeeping.
-            # Compare against the RESOLVED harness, not the raw --harness option:
-            # omitting the flag leaves it None, and trusting that would stage a
-            # codex account onto the resolved claude default unchecked.
-            # Require a harness AND exact equality. Treating an empty harness as
-            # "no objection" would wave through the one record we can say least
-            # about, which is the opposite of what a fail-closed guard is for.
-            if rec_harness != harness:
-                raise ValueError(
-                    f"record is a {rec_harness or '<no harness>'} account but "
-                    f"the spawn resolves {harness}"
-                )
-            dispatch_overlay = (
-                proven_env if proven_env is not None
-                else dispatch_env(dispatch_account, repo_root=workdir)
-            )
-            account_env = {
-                **(account_env or {}),
-                **dispatch_overlay,
-            }
-            if proven_env is not None:
-                credential_source = "canary-proven carrier"
-                credential_env_keys = sorted(proven_env)
-            else:
-                credential_source = "record-derived"
-                credential_env_keys = sorted(dispatch_overlay)
-        except Exception as exc:  # noqa: BLE001 - never spawn onto an unresolved record
-            print(
-                f"refusing --dispatch-account {dispatch_account!r}: {exc}; "
-                "no worker launched",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2) from exc
+            answer = spawn_overlay_call({
+                "kind": "dispatch-account", "account": dispatch_account, "harness": harness,
+                "cwd": str(workdir), "carrier": proven_env_raw,
+            })
+        except SpawnOverlayUnavailable as exc:
+            answer = {"refusal": f"refusing --dispatch-account {dispatch_account!r}: {exc}; no worker launched"}
+        if answer.get("refusal") is not None:
+            print(answer["refusal"], file=sys.stderr)
+            raise typer.Exit(code=2)
+        account_env = {**(account_env or {}), **answer["env"]}
+        credential_source = answer["credential_source"]
+        credential_env_keys = answer["credential_env_keys"]
+
+    # The row's launch stamp, the Python lane's half of the seam write the
+    # Rust client's arm does in accounts::launch: the worker's env carries the
+    # id so the row mint stamps it, and an id left by a parent's spawn dies
+    # here rather than labeling a row that launched on something else. The
+    # pick's provenance carrier stays the pick's (launch_provenance.py).
+    label = account if account is not None else dispatch_account
+    if label is not None:
+        os.environ["FNO_LAUNCH_ACCOUNT"] = label
+    else:
+        os.environ.pop("FNO_LAUNCH_ACCOUNT", None)
 
     #: the receipt's credential facts, read off the composed overlays
     # (never off the flags - a caller who typed `--account makers -P zai` reads
@@ -1191,12 +1134,14 @@ def cmd_spawn(
     # byte-identical to main (AC3) because the other overlay is absent.
     credential = None
     if account_env is not None and route_env is not None:
-        from fno.agents.account_env import compose_worker_credentials
+        from types import SimpleNamespace
+
+        from fno.agents.spawn_overlay_client import compose_credentials
 
         account_label = account if account is not None else dispatch_account
-        _, credential = compose_worker_credentials(
+        credential = SimpleNamespace(**compose_credentials(
             account_env, route_env, {}, account_id=account_label
-        )
+        )["decision"])
         print(
             f"account: {account_label} (profile only; auth {credential.auth}, "
             f"bills {credential.bills})",
