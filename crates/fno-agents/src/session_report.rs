@@ -1608,6 +1608,7 @@ mod tests {
         let mut record = crate::launch_record::Record {
             launch: crate::launch_record::Launch {
                 harness: "claude".into(),
+                resume: None,
                 name: Some("w1".into()),
                 node: None,
                 slot: None,
@@ -1646,6 +1647,7 @@ mod tests {
         let record = crate::launch_record::Record {
             launch: crate::launch_record::Launch {
                 harness: "claude".into(),
+                resume: None,
                 name: Some("w1".into()),
                 node: Some("x-aaaa".into()),
                 slot: None,
