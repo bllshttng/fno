@@ -2644,8 +2644,8 @@ class TestCatchupRoots:
         """
         import json
 
+        import fno.rust_binary as rb
         from fno.pr_watch import cli as pw
-        from fno.tracker import sidecar as sidecar_store
 
         alpha = tmp_path / "alpha"
         alpha.mkdir()
@@ -2657,13 +2657,13 @@ class TestCatchupRoots:
             "c": str(tmp_path / "gone"),  # deleted checkout
             "d": None,  # node with no cwd
         }
+        sidecars = {}
         for node_id, cwd in rows.items():
             payload = {"id": node_id}
             if cwd is not None:
                 payload["cwd"] = cwd
             (sidecar_dir / f"{node_id}.json").write_text(json.dumps(payload))
-        monkeypatch.setattr(
-            sidecar_store, "sidecar_path", lambda i: sidecar_dir / f"{i}.json"
-        )
+            sidecars[node_id] = payload
+        monkeypatch.setattr(rb, "sidecar_all", lambda: sidecars)
         monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
         assert pw._catchup_roots() == [alpha]

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # tests/lib/test_fno_python_resolve.sh
 #
-# Guards scripts/lib/fno-python.sh, the interpreter resolver the ledger writers
-# use. The bug it exists for: a bare `python3 -m fno.cost._register` runs under
-# whatever python is first on PATH, and one without fno's deps dies inside
-# fno.paths on `import fno.config` - so the ledger row is dropped while the
-# caller (which sends stderr to a log) reports nothing.
+# Guards scripts/lib/fno-python.sh, the interpreter resolver for the
+# `-m fno.<mod>` helpers. The bug it exists for: a bare `python3 -m fno.<mod>`
+# runs under whatever python is first on PATH, and one without fno's deps dies
+# inside fno.paths on `import fno.config` - so the helper's work is dropped
+# while the caller (which often sends stderr to a log) reports nothing.
 
 set -uo pipefail
 

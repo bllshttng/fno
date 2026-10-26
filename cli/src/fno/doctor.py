@@ -915,10 +915,15 @@ def _find_recent_session_with_transcript() -> Optional[tuple[str, Path]]:
 
 
 def _run_session_cost(session_id: str) -> Optional[float]:
-    """Our number: run the in-package _session_cost --json via `python3 -m`."""
+    """Our number: run the native session-cost leg's --json and read the cost."""
     try:
+        from fno.rust_binary import resolve_binary
+
+        binary = resolve_binary()
+        if binary is None:
+            return None
         result = subprocess.run(
-            [sys.executable, "-m", "fno.cost._session_cost", "--json", session_id],
+            [str(binary), "context-run", "--session-cost", "--json", session_id],
             capture_output=True,
             text=True,
             check=False,
@@ -992,7 +997,7 @@ def _cost_check() -> int:
 
     ours = _run_session_cost(session_id)
     if ours is None:
-        return skip(f"fno.cost._session_cost unavailable or failed for {session_id}")
+        return skip(f"session cost leg unavailable or failed for {session_id}")
 
     theirs, reason = _run_ref_cost_tool(session_id)
     if theirs is None:
@@ -1286,7 +1291,7 @@ def _archive_id_collisions() -> dict[str, Any]:
 
         from fno.graph.store import _apply_graph_defaults
         from fno.paths import graph_archive_json
-        from fno.tracker.metadata import read_entries
+        from fno.graph.api import read_entries
 
         archive_path = graph_archive_json()
         if not archive_path.exists():
@@ -1444,7 +1449,7 @@ def _mission_active_count() -> int:
     try:
         from fno import paths as _paths
         from fno.graph.store import read_graph_strict
-        from fno.tracker import active_backend_name
+        from fno.graph.api import active_backend_name
 
         if active_backend_name() != "graph":
             return 0
@@ -1457,6 +1462,90 @@ def _mission_active_count() -> int:
         )
     except Exception:  # noqa: BLE001 - advisory; never crash doctor
         return 0
+
+
+def parse_target_state(state_path: str) -> dict:
+    """Parse target-state.md YAML frontmatter into a dict.
+
+    Formerly ``fno.cost._register.parse_target_state``; moved to its one
+    reader when the cost family ported to Rust. The body is verbatim."""
+    from fno.graph._constants import NODE_ID_BODY
+
+    result = {}
+    with open(state_path) as f:
+        content = f.read()
+
+    # Extract frontmatter between --- markers
+    parts = content.split("---")
+    if len(parts) >= 3:
+        frontmatter = parts[1]
+    else:
+        frontmatter = content
+
+    for line in frontmatter.strip().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.match(r"^(\w[\w_]*):\s*(.*)", line)
+        if match:
+            key, value = match.group(1), match.group(2).strip()
+            # Strip quotes
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1]
+            elif value.startswith("'") and value.endswith("'"):
+                value = value[1:-1]
+            # Handle null/true/false
+            if value == "null" or value == "":
+                value = None
+            elif value == "true":
+                value = True
+            elif value == "false":
+                value = False
+            result[key] = value
+
+    # Also parse completion_gates section (not in frontmatter)
+    gates = {}
+    in_gates = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped == "completion_gates:":
+            in_gates = True
+            continue
+        if in_gates:
+            if not stripped or (not stripped.startswith("#") and ":" not in stripped):
+                in_gates = False
+                continue
+            gate_match = re.match(r"(\w+):\s*(.*)", stripped)
+            if gate_match:
+                gates[gate_match.group(1)] = gate_match.group(2).strip()
+
+    result["_gates"] = gates
+
+    # init-target-state.sh writes graph_node_id BELOW the closing frontmatter
+    # delimiter (it's appended to the file body, not the YAML block). Do a
+    # second targeted scan so the entry-builder can populate it without
+    # depending on placement. First match wins; null/empty stays None.
+    # Validate the captured value matches the canonical id shape
+    # (a `<prefix>-<4..8 lowercase hex>` token, legacy or configured). Keeps a
+    # future markdown-prose line like `> graph_node_id: x (deprecated)` from
+    # poisoning the
+    # entry with a parenthetical-laden ID. Comment lines (`# ...`) are
+    # already excluded by the leading-whitespace anchor `^\s*`.
+    if "graph_node_id" not in result or result.get("graph_node_id") is None:
+        for line in content.splitlines():
+            m = re.match(r"^\s*graph_node_id:\s*(.*?)\s*$", line)
+            if not m:
+                continue
+            raw = m.group(1).strip()
+            if raw.startswith('"') and raw.endswith('"'):
+                raw = raw[1:-1]
+            elif raw.startswith("'") and raw.endswith("'"):
+                raw = raw[1:-1]
+            if raw and raw != "null" and re.match(rf"^{NODE_ID_BODY}$", raw):
+                result["graph_node_id"] = raw
+            break
+
+    return result
 
 
 def _auto_merge_armed_manifests() -> dict[str, int]:
@@ -1488,11 +1577,6 @@ def _auto_merge_armed_manifests() -> dict[str, int]:
             bases.append(Path(repo) / ".claude" / "worktrees")
     except Exception:  # noqa: BLE001 - advisory; never crash doctor
         pass
-
-    try:
-        from fno.cost._register import parse_target_state
-    except Exception:
-        return {}
 
     counts: dict[str, int] = {}
     seen: set[Path] = set()

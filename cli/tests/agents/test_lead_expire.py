@@ -263,9 +263,10 @@ def test_done_writes_one_vacate_event_naming_scope_and_holder(team) -> None:
 def _stub_graph(monkeypatch, projects: dict[str, str]) -> None:
     """Feed find_presiding_role the epic -> project read the real graph
     gives it, at the seam the CLI reads (team's ``_graph_index``). Stubbing
-    the tracker module two layers down made the stub read whatever state a
-    sibling test left ``fno.tracker.metadata`` in, and the presiding path
-    answered "graph unreadable" for every role in the room."""
+    the graph read two layers down, instead of at the team module, is what
+    keeps the stub from reading whatever state a sibling test left the
+    guarded read in - the presiding path once answered "graph unreadable"
+    for every role in the room for exactly that reason."""
     import fno.agents.team as team_mod
 
     monkeypatch.setattr(

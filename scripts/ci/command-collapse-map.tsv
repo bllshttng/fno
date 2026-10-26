@@ -432,11 +432,6 @@ target status	T1	target status	8
 test	KEEP	test	108	single-leaf group
 update	KEEP	update	88	single-leaf group
 version	KEEP	version	15	single-leaf group
-worker blueprint	T1	worker blueprint	0
-worker external	T1	worker external	0
-worker reconcile	T1	worker reconcile	0
-worker review	T1	worker review	0
-worker ship	T1	worker ship	2
 worktree archive	T1	worktree archive	2
 worktree cleanup	T1	worktree cleanup	6
 worktree ensure	T1	worktree ensure	30

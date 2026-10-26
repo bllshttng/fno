@@ -1,0 +1,11 @@
+{
+  "sidecar": {
+    "additional_prs": [],
+    "cost_sessions": [],
+    "cost_usd": 1.5,
+    "cwd": "/repo",
+    "id": "ab-1",
+    "plan_path": "/p.md",
+    "sessions": []
+  }
+}
