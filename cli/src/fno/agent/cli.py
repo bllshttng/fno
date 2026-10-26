@@ -27,6 +27,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 from dataclasses import asdict, is_dataclass, replace
 from datetime import date, datetime
@@ -688,29 +689,22 @@ whoami_app.command("scoreboard", hidden=True)(scoreboard_command)
 def cost_command(
     ctx: typer.Context,
 ) -> None:
-    """Forward all args to the in-package cost CLI (``fno.cost._session_cost``).
+    """Forward all args to the native session-cost leg.
 
-    Moved under whoami from an eager root command (unit 6). The heavy
-    ``_session_cost`` import stays deferred to call time, so loading the
-    whoami group never pays for it. argparse owns the flag parsing; we bridge
-    via ``sys.argv`` and translate its ``SystemExit`` into a ``typer.Exit`` so
-    the exit code propagates cleanly.
+    Moved under whoami from an eager root command (unit 6). The leaf keeps
+    the command spelling and forwards verbatim; the native body owns the flag
+    parsing and the exit code, so this wrapper never interprets the args.
     """
-    from fno.cost import _session_cost
+    from fno.rust_binary import resolve_binary
 
-    argv_backup = sys.argv
-    sys.argv = ["fno whoami cost", *list(ctx.args)]
-    try:
-        _session_cost.main()
-    except SystemExit as exc:  # argparse exits on -h / parse error / explicit exit
-        code = exc.code
-        if code is None:
-            code = 0
-        elif not isinstance(code, int):
-            code = 1
-        raise typer.Exit(code=code)
-    finally:
-        sys.argv = argv_backup
+    binary = resolve_binary()
+    if binary is None:
+        raise typer.Exit(code=14)
+    result = subprocess.run(
+        [str(binary), "context-run", "--session-cost", *list(ctx.args)],
+        check=False,
+    )
+    raise typer.Exit(code=result.returncode)
 
 
 whoami_app.command(

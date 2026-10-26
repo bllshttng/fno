@@ -50,7 +50,7 @@ hooks/target-stop-hook.sh (grep for <aborted>, parse reason)
    │   runs the finalize accounting (the Rust finalize writer)
    │
    ▼
-fno.cost._register (python -m fno.cost._register)
+fno-agents finalize (the native ledger writer)
    │   writes ledger.json entry with status: aborted, reason: {reason}
    │
    ▼
@@ -152,7 +152,7 @@ checkpoint logic for that iteration - the session exits.
 |------|-----------|---------|
 | `.fno/target-state.md` (`status: ABORTED`, `abort_reason: {reason}`) | stop hook | Terminal state visible to next session / target resume |
 | `.fno/.aborted-archive/target-state.{ts}.md` | stop hook | Audit trail preserved across sessions |
-| `.fno/ledger.json` (`status: aborted`, `reason: {reason}`) | the finalize writer via `fno.cost._register` | Queryable history |
+| `.fno/ledger.json` (`status: aborted`, `reason: {reason}`) | the finalize writer (`ledger_register.rs`) | Queryable history |
 | Event stream `stop-hook / aborted` | emit_event | JSON `{reason, iteration}` payload |
 
 See `skills/target/references/state-schema.md` for the full status model.
