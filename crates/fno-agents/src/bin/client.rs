@@ -1195,10 +1195,7 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::attest::dispatch(&args[1..]);
     }
 
-    // `needs`: read-only needs-me-queue fold over events.jsonl +
-    // ledger.json across ALL sessions, emitting review_wedged / budget_stop
-    // items. Never touches the daemon; exits 0 on empty. The mux client shells
-    // this off-loop when the prefix+a overlay opens.
+    // `needs`: read-only needs-me-queue fold over events + ledger; daemon-free.
     if command == "needs" {
         return fno_agents::needs::run_needs(&args[1..], &AgentsHome::from_env()).await;
     }
@@ -1248,6 +1245,14 @@ async fn run(args: Vec<String>) -> i32 {
                 .cloned()
                 .collect();
             return fno_agents::capability_leaves::run_capabilities(&sub);
+        }
+        if rest.iter().any(|a| a.as_str() == "--liveness") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--liveness")
+                .cloned()
+                .collect();
+            return fno_agents::liveness_cmd::run(&sub, &AgentsHome::from_env());
         }
         if has_family {
             let sub: Vec<String> = rest
@@ -4285,9 +4290,6 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             fno_agents::ask_project::parse(&mut params, &positional)?;
             "agent.ask"
         }
-        // `host`/`promote` (interactive daemon PTY hosting) were retired at G4
-        // and intercepted with a mux pointer before build_request; they
-        // never reach this match.
         "list" => "agent.list",
         "status" => "agent.status",
         "stop" => {
