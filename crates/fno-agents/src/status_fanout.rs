@@ -948,7 +948,10 @@ fn ts_of(event: &Value) -> i64 {
 pub struct TickLock {
     path: PathBuf,
     token: String,
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Shared stop flag plus the condvar that wakes the parked renewer the
+    /// moment Drop flips it: a join must never wait out the renew interval
+    /// (the Python renewer parked on `Event.wait` for exactly this reason).
+    stop: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
     lost: std::sync::Arc<std::sync::atomic::AtomicBool>,
     renewer: Option<std::thread::JoinHandle<()>>,
 }
@@ -964,20 +967,30 @@ impl TickLock {
             return None;
         }
         let token = crate::claims::acquire_dir_mutex(&path, Duration::from_secs(0), false)?;
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
         let lost = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let renew_path = path.clone();
         let renew_token = token.clone();
         let renew_stop = stop.clone();
         let renew_lost = lost.clone();
-        let renewer = std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_secs_f64(TICK_LEASE_RENEW_EVERY_S));
-            if renew_stop.load(std::sync::atomic::Ordering::SeqCst) {
-                return;
-            }
-            if !renew_dir_mutex(&renew_path, &renew_token) {
-                renew_lost.store(true, std::sync::atomic::Ordering::SeqCst);
-                return;
+        let renewer = std::thread::spawn(move || {
+            let (flag, signal) = &*renew_stop;
+            // wait_timeout, never sleep: Drop joins this thread after setting
+            // the flag, and a sleep would make every fast tick pay the full
+            // renew interval before returning.
+            let mut parked = flag.lock().unwrap_or_else(|e| e.into_inner());
+            while !*parked {
+                let (guard, timed_out) = signal
+                    .wait_timeout(parked, Duration::from_secs_f64(TICK_LEASE_RENEW_EVERY_S))
+                    .unwrap_or_else(|e| e.into_inner());
+                parked = guard;
+                if *parked {
+                    return;
+                }
+                if timed_out.timed_out() && !renew_dir_mutex(&renew_path, &renew_token) {
+                    renew_lost.store(true, std::sync::atomic::Ordering::SeqCst);
+                    return;
+                }
             }
         });
         Some(TickLock {
@@ -1003,7 +1016,9 @@ impl TickLock {
 
 impl Drop for TickLock {
     fn drop(&mut self) {
-        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        let (flag, signal) = &*self.stop;
+        *flag.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        signal.notify_all();
         if let Some(handle) = self.renewer.take() {
             let _ = handle.join();
         }
@@ -1762,5 +1777,27 @@ mod tests {
         let event = json!({"type": "task_done", "outcome": "ok",
                            "data": {"reason": "ci red"}});
         assert_eq!(progress_line(&event), "task_done - ok - ci red");
+    }
+
+    #[test]
+    fn tick_lock_drop_wakes_the_renewer() {
+        // The external review round's P1: a renewer parked in an
+        // uninterruptible sleep made every Drop join wait out the 30s renew
+        // interval, taxing every fast tick. The condvar wakes the thread at
+        // once, so the drop must return well under one interval.
+        let dir = std::env::temp_dir().join(format!("fno-ticklock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let started = std::time::Instant::now();
+        {
+            let lock = TickLock::acquire(&dir).expect("lock acquires in a fresh temp dir");
+            drop(lock);
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "TickLock::drop waited out the renew interval: {elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

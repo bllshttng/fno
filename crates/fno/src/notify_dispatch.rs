@@ -244,36 +244,12 @@ fn emit_operator_notice(title: &str, message: &str, pointer: &str) -> bool {
     }
 }
 
-/// The project event journal: `<spaces_root>/<space_slug(canonical)>/events.jsonl`,
-/// mirroring Python `paths.project_log` (space-anchored so every worktree of
-/// one repo lands on the same file). `FNO_SPACES_DIR` > `config.paths.spaces_dir`
-/// > `<state root>/spaces`; the canonical root reads the `.git` gitfile the
-/// same way `digest_overlay::canonical_root_with` does.
+/// The project event journal, resolved through the crate's one resolver: the
+/// `FNO_EVENTS_PATH` pin, else the fno-agents-resolved space (the file the
+/// fanout lane reads). A hand-built path beside it splits the notice row from
+/// the sink lane under every pin a harness sets.
 fn project_journal() -> PathBuf {
-    let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let spaces = match std::env::var_os("FNO_SPACES_DIR").filter(|v| !v.is_empty()) {
-        Some(dir) => PathBuf::from(dir),
-        None => crate::model_catalog::state_dir().join("spaces"),
-    };
-    spaces
-        .join(space_slug(&canonical_root(&root)))
-        .join("events.jsonl")
-}
-
-fn canonical_root(root: &std::path::Path) -> PathBuf {
-    let gitdir = root.join(".git");
-    // A `.git` dir is a main checkout; an absent one is no repo. Only the
-    // linked-worktree gitfile needs the probe.
-    if !gitdir.exists() || gitdir.is_dir() {
-        return root.to_path_buf();
-    }
-    crate::digest_overlay::canonical_root_with(root, false).unwrap_or_else(|| root.to_path_buf())
-}
-
-/// The full canonical path with `/` swapped for `-` (Python `paths.space_slug`,
-/// mirrored byte for byte so the two languages read one space).
-fn space_slug(canonical_root: &std::path::Path) -> String {
-    canonical_root.to_string_lossy().replace('/', "-")
+    crate::review_invocation::review_events_path()
 }
 
 /// Wall-clock UTC stamp at the Python `_ts_now` precision (microseconds, `Z`).
@@ -349,13 +325,14 @@ fn dispatch_local(title: &str, message: &str) -> bool {
         let esc_message = message.replace('\\', "\\\\").replace('"', "\\\"");
         let esc_title = title.replace('\\', "\\\\").replace('"', "\\\"");
         let script = format!("display notification \"{esc_message}\" with title \"{esc_title}\"");
-        let _ = Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let _ = run_bounded(
+            Command::new("osascript")
+                .arg("-e")
+                .arg(&script)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        );
         return true;
     }
     if which("notify-send") {
@@ -364,18 +341,43 @@ fn dispatch_local(title: &str, message: &str) -> bool {
         }
         // argv-fence: exempt (a notification body, not a spawn seed: a
         // leading-dash body drops one toast, it never idles a worker).
-        let _ = Command::new("notify-send")
-            .arg(title)
-            .arg(message)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let _ = run_bounded(
+            Command::new("notify-send")
+                .arg(title)
+                .arg(message)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        );
         return true;
     }
     false
 }
 
+/// Run a notifier child under [`TOAST_TIMEOUT`]: spawn, poll `try_wait`, kill
+/// at the deadline. The Python leg bounded `subprocess.run` with `timeout=5`;
+/// a bare `.status()` has no deadline, so a hung `osascript` wedges the
+/// caller.
+fn run_bounded(command: &mut Command) -> bool {
+    let Ok(mut child) = command.spawn() else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + TOAST_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+            Err(_) => return false,
+        }
+    }
+}
 fn which(bin: &str) -> bool {
     std::env::var_os("PATH")
         .map(|path| std::env::split_paths(&path).any(|dir| dir.join(bin).is_file()))
@@ -479,14 +481,6 @@ mod tests {
         let big = "x".repeat(NOTICE_CAP + 50);
         let capped = cap(&big);
         assert_eq!(capped.chars().count(), NOTICE_CAP);
-    }
-
-    #[test]
-    fn space_slug_swaps_slashes_keeps_the_leading_dash() {
-        assert_eq!(
-            space_slug(std::path::Path::new("/Users/bb16/code/footnote/footnote")),
-            "-Users-bb16-code-footnote-footnote"
-        );
     }
 
     #[test]
