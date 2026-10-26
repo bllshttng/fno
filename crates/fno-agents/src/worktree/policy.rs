@@ -472,7 +472,7 @@ fn worktree_policy_client(args: &[String]) -> i32 {
                 harness = Some(args[i + 1].clone());
                 i += 2;
             }
-            "--json" => {
+            a if crate::json_output::is_flag(a) => {
                 as_json = true;
                 i += 1;
             }

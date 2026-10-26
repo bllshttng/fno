@@ -140,7 +140,7 @@ pub fn run_client(args: &[String]) -> i32 {
                 repo = PathBuf::from(&args[i + 1]);
                 i += 2;
             }
-            "--json" => {
+            a if crate::json_output::is_flag(a) => {
                 as_json = true;
                 i += 1;
             }

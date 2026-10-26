@@ -68,6 +68,7 @@ fn sorted(value: &Value) -> String {
                     out.push(':');
                     write_sorted(&map[*k], out);
                 }
+                out.push('}');
             }
             Value::Array(items) => {
                 out.push('[');
@@ -240,10 +241,10 @@ fn fixture(root: &Path, home: &Path) {
     .expect("fixture config writes");
     // Ensure/sweep/apply fixtures: clones of local bare remotes, so the
     // fetch/rev-list legs run offline with shared history.
-    for name in ["e1", "sw", "ap"] {
-        let repo = root.join(format!("{name}1"));
+    for (name, origin_name) in [("e1", "e1"), ("sw1", "sw"), ("ap1", "ap")] {
+        let repo = root.join(name);
         init_repo(&repo);
-        let origin = root.join(format!("{name}-origin.git"));
+        let origin = root.join(format!("{origin_name}-origin.git"));
         let _ = std::fs::create_dir_all(&origin);
         run_git(&repo, &["init", "--bare", "-q", origin.to_str().unwrap()]);
         run_git(
@@ -1224,7 +1225,11 @@ fn apply_case() {
     std::env::set_var("FNO_STATE_DIR", root.join("state"));
     let outcome = fno_agents::worktree::stranded::act_on_stranded(&row);
     let journal = root.join("state").join("events.jsonl");
-    let journal_text = std::fs::read_to_string(&journal).unwrap_or_default();
+    let journal_text = fno_agents::event_store::journal_text_checked(
+        &journal,
+        &fno_agents::event_store::EventQuery::of_types(&["stranded_sweep"]),
+    )
+    .unwrap_or_else(|e| panic!("journal unreadable at {journal:?}: {e}"));
     if let Some(prev) = prev_state {
         std::env::set_var("FNO_STATE_DIR", prev);
     } else {
@@ -1260,7 +1265,7 @@ fn overlap_line() -> String {
     let mut hasher = Sha256::new();
     Digest::update(&mut hasher, blob.as_bytes());
     let oid = format!("{:x}", Sha256::finalize(hasher));
-    sorted(&json!({
+    let mut line = sorted(&json!({
         "type": "worktree_overlap_observed",
         "ts": "2026-10-20T12:00:00+00:00",
         "source": "hook",
@@ -1272,7 +1277,9 @@ fn overlap_line() -> String {
             "observation_id": oid,
             "live_window_seconds": 120,
         },
-    }))
+    }));
+    line.push('\n');
+    line
 }
 
 /// The registry JSON the status cases join; driver-shaped rows.
