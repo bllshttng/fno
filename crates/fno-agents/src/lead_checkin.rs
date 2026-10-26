@@ -4228,7 +4228,7 @@ mod tests {
             .any(|l| l == "READER FAILED control_plane: journals unreadable"));
         assert!(lines
             .iter()
-            .any(|l| l.starts_with("coverage: 21 of 22 readings ok")));
+            .any(|l| l.starts_with("coverage: 22 of 23 readings ok")));
 
         let mut readings = sample_readings(board7(), org4(), cap_ok(), workers3());
         let data = build_data(&readings, "x-bbbb");

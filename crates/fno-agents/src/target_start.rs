@@ -36,6 +36,7 @@ use std::time::Instant;
 
 use crate::backlog::target_binding::{self, Phase, Request};
 use crate::paths::AgentsHome;
+use crate::state::RegistryEntry;
 
 /// Below the Claude Bash tool's 600s call cap, well below the 10+ minute
 /// stalls this bound targets. Keep the Python value.
@@ -896,7 +897,10 @@ fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     // pre-check classifies its own beneficiary as foreign and refuses
     // before init's adopt fallback can run (measured live 2026-10-26).
     if let Some(worker) = holder.strip_prefix(crate::claim_commands::HANDOVER_HOLDER_PREFIX) {
-        return handover_row_is_ours(&home, worker, own_sid.as_deref());
+        let entries = crate::state::load_registry(&home.registry_json())
+            .map(|r| r.entries)
+            .unwrap_or_default();
+        return handover_row_is_ours(&entries, worker, own_sid.as_deref());
     }
     if rec.pid_unavailable {
         return false;
@@ -906,18 +910,15 @@ fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     matches!(own_pid, Some(p) if rec.pid == Some(p as i32)) && same_machine
 }
 
-/// True when the registry row the handover's worker name resolves to carries
-/// this session's own id. One join: name -> row -> session id, the same join
-/// the liveness reader does for the same holder shape.
-fn handover_row_is_ours(home: &AgentsHome, worker: &str, own_sid: Option<&str>) -> bool {
+/// True when the registry rows carry a row named `worker` whose session id
+/// equals this session's own. One join: name -> row -> session id, the same
+/// join the liveness reader does for the same holder shape. Rows come from
+/// the caller, so the join stays testable without a store.
+fn handover_row_is_ours(entries: &[RegistryEntry], worker: &str, own_sid: Option<&str>) -> bool {
     let Some(own) = own_sid.map(str::trim).filter(|s| !s.is_empty()) else {
         return false;
     };
-    let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
-        return false;
-    };
-    registry
-        .entries
+    entries
         .iter()
         .any(|e| e.name == worker && e.harness_session_id.as_deref().map(str::trim) == Some(own))
 }
@@ -2455,20 +2456,20 @@ mod start_progress_tests {
 
     #[test]
     fn a_handover_row_joins_by_name_and_own_session() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = AgentsHome::at(dir.path());
-        std::fs::create_dir_all(home.root()).unwrap();
-        std::fs::write(
-            home.registry_json(),
-            r#"{"agents": [
-                {"name": "t-w", "harness_session_id": "sid-1"},
-                {"name": "lead-x", "harness_session_id": "sid-2"}
-            ]}"#,
-        )
-        .unwrap();
-        assert!(handover_row_is_ours(&home, "t-w", Some("sid-1")));
-        assert!(!handover_row_is_ours(&home, "t-w", Some("sid-2")));
-        assert!(!handover_row_is_ours(&home, "t-w", None));
-        assert!(!handover_row_is_ours(&home, "absent", Some("sid-1")));
+        let named = RegistryEntry {
+            name: "t-w".into(),
+            harness_session_id: Some("sid-1".into()),
+            ..Default::default()
+        };
+        let other = RegistryEntry {
+            name: "lead-x".into(),
+            harness_session_id: Some("sid-2".into()),
+            ..Default::default()
+        };
+        let entries = vec![named, other];
+        assert!(handover_row_is_ours(&entries, "t-w", Some("sid-1")));
+        assert!(!handover_row_is_ours(&entries, "t-w", Some("sid-2")));
+        assert!(!handover_row_is_ours(&entries, "t-w", None));
+        assert!(!handover_row_is_ours(&entries, "absent", Some("sid-1")));
     }
 }
