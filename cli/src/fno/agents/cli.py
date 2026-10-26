@@ -2693,121 +2693,15 @@ def cmd_register(
 ) -> None:
     """Join THIS session to the mesh roster so peers can `fno agents mail send` to it.
 
-    The self-service seam behind ``/fno-me``: a session a human started by hand
-    has no spawn-created roster row. This resolves the ambient harness identity
-    (CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID / ...) and writes an ``idle`` row
-    named by the canonical bare ``<shortid>`` handle, the same string the
-    session self-stamps and drains, so a durable ``fno agents mail send`` to it lands.
-    ``fno agents whoami`` then reports ``registered: true`` via its session-id
-    fallback, no ``FNO_AGENT_SELF`` env needed.
-
-    The handle is ALWAYS the canonical one (no custom-name override): a custom
-    alias would not be drained by ``mail drain-self`` (which scans only the
-    canonical handle), so mail to it would silently strand.
-
-    Idempotent (re-running refreshes the row). Exit 3 for a session with no
-    ambient harness identity (nothing addressable to register).
+    The Rust client verb owns register (the owned-identity ladder plus the row
+    mint under the shared registry lock); with an installed binary the runtime
+    router execs it before this function runs. There is no Python register
+    left: a missing binary is refused here.
     """
-    from fno.agents import events
-    from fno.agents.registry import register_existing_session
-    from fno.agents.self_stamp import IdentityAmbiguousError, require_self_identity
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    if delivery_policy is not None and delivery_policy not in ("bus-only", "off"):
-        sys.stderr.write(
-            f"error: --delivery-policy accepts 'bus-only' or 'off', "
-            f"got {delivery_policy!r}\n"
-        )
-        raise typer.Exit(code=2)
-
-    try:
-        ident = require_self_identity()
-    except IdentityAmbiguousError as exc:
-        sys.stderr.write(f"cannot register: {exc}\n")
-        raise typer.Exit(code=4) from exc
-    session_id = ident.session_id
-    harness = ident.harness or ("claude" if session_id else None)
-    if not session_id or not harness:
-        sys.stderr.write(
-            "no ambient harness identity - nothing to register "
-            "(run /fno-me inside a claude/codex session)\n"
-        )
-        raise typer.Exit(code=3)
-
-    try:
-        entry = register_existing_session(
-            harness=harness, session_id=session_id, cwd=os.getcwd(),
-            origin="operator",
-            delivery_policy=delivery_policy,
-        )
-    except Exception as exc:  # a deliberate manual join reports failure (unlike the fail-open hook)
-        sys.stderr.write(f"register failed: {exc}\n")
-        raise typer.Exit(code=1) from exc
-
-    # `origin` is write-once, so a human taking over a pane footnote spawned
-    # keeps `spawned` and this call cannot change it. Silence there reads as
-    # success: the operator believes they are registered as attended, while
-    # mail still treats them as unattended. The refusal is deliberate - a
-    # birth fact is not a claim a later caller gets to revise - so this says
-    # it rather than hiding it.
-    if entry.origin is not None and entry.origin != "operator":
-        sys.stderr.write(
-            f"note: origin stays {entry.origin!r}; it records what created this "
-            "row and is written once. Mail escalation reads it, so this "
-            f"session is still treated as {entry.origin!r}.\n"
-        )
-
-    #: record a clock saying "no expiry" beside a hand-stamped policy.
-    # Not for enforcement - an absent clock already never lapses. This is what
-    # lets the DND column on `fno agents list` say "held" for this row instead
-    # of leaving the operator to guess from a blank cell.
-    if delivery_policy is not None:
-        from fno.harness_identity import session_identity_key
-        from fno.mail.hold import _hold_transport
-
-        # Clock key is the collision-free identity key; the name-keyed clear removes a pre-migration clock.
-        clock_key = session_identity_key(session_id)
-        # Both stamps are the ABSENCE of a clock beside the flag: the native
-        # door's --clear drops any standing clock either way, and the policy
-        # flip also drops a pre-migration name-keyed one.
-        _hold_transport(["--clear", clock_key])
-        if delivery_policy != "bus-only":
-            _hold_transport(["--clear", entry.name])
-        else:
-            # Best effort: the row is already stamped, and an older
-            # fno-agents without --record-stamp must not fail the register.
-            try:
-                _hold_transport(["--record-stamp", session_id])
-            except Exception:  # noqa: BLE001 - the journal never fails the register
-                pass
-
-    events.emit(
-        "session_registered",
-        provider=entry.harness,
-        name=entry.name,
-        session_id=session_id,
-        cwd=entry.cwd,
-    )
-    if json_out or not bool(getattr(sys.stdout, "isatty", lambda: False)()):
-        import json as _json
-
-        sys.stdout.write(
-            _json.dumps({
-                "registered": True,
-                "name": entry.name,
-                "harness": entry.harness,
-                "delivery_policy": entry.delivery_policy,
-            }) + "\n"
-        )
-    else:
-        policy_note = (
-            " [bus-only: mail to this session queues durable, never injects]"
-            if getattr(entry, "delivery_policy", None) == "bus-only"
-            else ""
-        )
-        sys.stdout.write(
-            f"joined the mesh as {entry.name}{policy_note} - peers can now reach you with "
-            f"`fno agents mail send {entry.name} \"...\"`\n"
-        )
+    _ = delivery_policy
+    refuse_without_binary("register")
 
 
 @agents_app.command("top", hidden=True)

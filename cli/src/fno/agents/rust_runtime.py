@@ -132,6 +132,10 @@ RUST_CLIENT_COMMANDS = frozenset(
         "adopt",
         "attach",
         "logs",
+        # register: the /fno-me self-service join, ported to a daemon-free
+        # client verb (the owned-identity ladder plus the row mint under the
+        # shared registry lock). Starts nothing.
+        "register",
         # The daemon-free revival decision the spawn path calls. Client-side
         # dispatch starts nothing.
         "revival-check",
@@ -412,10 +416,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # peer's on-disk transcript / status events via fno.agents.peek. No Rust
     # client port, so it must never auto-route to the daemon.
     "peek",
-    # The /fno-me self-service join command: resolves ambient harness identity and
-    # writes an idle roster row (register_existing_session). Pure Python, no Rust
-    # client port, so it must never auto-route to the daemon.
-    "register",
     #: the transcript-tail supervision classifier (`fno agents truth`).
     # Read-only, pure Python (fno.agents.session_truth reads the transcript via
     # peek); no Rust client port, so it must never auto-route to the daemon.
