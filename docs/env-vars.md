@@ -271,6 +271,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TEST_PR_WATCH_LOADED` | rs | Test seam: pins the launchctl load state the `pr-watch status` command reports (`1` loaded, anything else not loaded) so the parity goldens do not depend on the capture machine's own registration. |
 | `FNO_TEST_PR_WATCH_TICK_PID` | rs | Test seam: pins the tick-in-flight answer the `pr-watch refresh` command defers on (`0` reads as no tick, a positive pid defers the bounce) so the parity goldens never probe the real launchd. |
 | `FNO_TEST_TIMEOUT_SECONDS` | py | unclear: cli/src/fno/test_runner.py:31 |
+| `FNO_THINK_SPAWN` | py | Forces the born-with-why /think spawner on or off above `think_spawn.enabled`, below the autonomy master switch; `fno agents admit autonomy status` reports it as the `env` rank. |
 | `FNO_THINK_SPAWN_WAVE0` | rs | unclear: crates/fno-agents/src/backlog/decompose.rs:2382 |
 | `FNO_THREAD_TURN_REFRESH_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:105 |
 | `FNO_TOUCH_EMIT` | rs | unclear: crates/fno/src/server.rs:10464 |
@@ -282,6 +283,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_UX_SHOTS` | rs | unclear: crates/fno/src/frame_html.rs:356 |
 | `FNO_VERBOSE` | rs | Set to 1 to print non-fatal notes that are quiet by default: the registry provenance heal and the loop-runtime global mirror failure. |
 | `FNO_VERIFY_GIT_BIN` | rs | unclear: crates/fno-agents/src/verify_evidence.rs:906 |
+| `FNO_WHOAMI_SEAM_CHILD` | rs | Set by the front door on the child it runs for `fno whoami`, so the child takes the plain Python forward instead of the receipt seam (crates/fno/src/whoami_seam.rs). |
 | `FNO_WORKER_ADD_DIRS` | rs | unclear: crates/fno-agents/src/claude_ask.rs:687 |
 | `FNO_WORKER_NAME` | py+rs | The spawned worker's name: the dispatcher pins it (py), the task-grain claim metadata reads it back (crates/fno-agents/src/backlog/task.rs). |
 | `FNO_WORKTREE_POLICY` | py+rs | Overrides the resolved worktree policy from env, above every config layer; the dispatcher sets it to never for a spawn into an undeclared repo. |
