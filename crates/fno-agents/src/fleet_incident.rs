@@ -1748,3 +1748,26 @@ mod tests {
         cleanup(&path);
     }
 }
+
+/// The `fleet-incident` client action's routing: the family body that used
+/// to live inline in bin/client.rs. gh-budget and cutover ride this action
+/// as its subcommands (law d-fe66560a allows no new client action), so the
+/// dispatch answers before every gh call even when the daemon is the thing
+/// wedged; the stdin door catches a bare admit.
+pub async fn run_dispatch(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) == Some("gh-budget") {
+        return crate::gh_budget::run_gh_budget(&args[1..]);
+    }
+    // `cutover` quiesces the writers and snapshots the stores for a machine
+    // move; it rides this action for the same reason.
+    if args.first().map(String::as_str) == Some("cutover") {
+        return crate::cutover::run_cutover(&args[1..]).await;
+    }
+    if args.is_empty() {
+        match crate::gh_budget::run_gh_budget_stdin_door() {
+            -1 => {}
+            code => return code,
+        }
+    }
+    run_fleet_incident(args)
+}

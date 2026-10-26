@@ -4209,3 +4209,16 @@ pub fn sweep_orphaned(timeout_secs: f64) -> Vec<i32> {
     survivors.dedup();
     survivors
 }
+
+/// The `keeper-sweep` door's body: SIGTERM/SIGKILL every store keeper whose
+/// --graph tree is gone, printing the survivor count. One optional argv
+/// element overrides the wait seconds (default 15).
+pub fn run_keeper_sweep(args: &[String]) -> i32 {
+    let secs = args
+        .first()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(15.0);
+    let survivors = sweep_orphaned(secs);
+    println!("{}", survivors.len());
+    0
+}

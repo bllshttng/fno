@@ -709,66 +709,29 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::test_run::run_test_run(&args[1..]);
     }
 
-    // `test-env`: the hermetic child env the native test verb and the pytest
-    // conftest share. Direct dispatch like `test-run`: the env assembly must
-    // answer without a daemon. One JSON payload in argv (mode, env, sandbox,
-    // fixtures), one JSON object out; see test_env.rs.
+    // `test-env`: the hermetic child env door (test_env.rs). Direct
+    // dispatch like `test-run`: the env assembly must answer without a daemon.
     if command == "test-env" {
         return fno_agents::test_env::run_test_env(&args[1..]);
     }
 
-    // `test`: the whole test-verb family ported native: pytest/rust
-    // suites, the smoke runner, --changed packets, and --census-deferred.
-    // Direct dispatch like `test-run`/`test-env`: a test run must not depend
-    // on a live daemon. Same `==` dispatch + ALL_CLIENT_ACTIONS registration,
-    // so it stays out of CLIENT_COMMAND_USAGE / menu caps and the
-    // routable-command parity guard.
+    // `test`: the whole test-verb family, native (test_verb.rs). Direct
+    // dispatch, no daemon RPC; same registration story as test-run.
     if command == "test" {
         return fno_agents::test_verb::run_test(&args[1..]);
     }
 
-    // `keeper-sweep`: SIGTERM/SIGKILL every store keeper whose --graph tree
-    // is gone. Raw door for the pytest conftest, which called the Python
-    // sweep in graph/store.py until the port retired that half; the keeper's
-    // own module carries it now. Direct dispatch, no daemon RPC: the sweep
-    // must answer when the daemon is the thing wedged (a wedged daemon is
-    // the orphan-keeper population's most common parent).
+    // `keeper-sweep`: the orphaned-keeper sweep door (graph_keeper.rs), for
+    // the pytest conftest. Direct dispatch, no daemon RPC.
     if command == "keeper-sweep" {
-        let secs = args
-            .get(1)
-            .and_then(|s| s.parse::<f64>().ok())
-            .unwrap_or(15.0);
-        let survivors = fno_agents::graph_keeper::sweep_orphaned(secs);
-        println!("{}", survivors.len());
-        return 0;
+        return fno_agents::graph_keeper::run_keeper_sweep(&args[1..]);
     }
 
     // `fleet-incident`: the durable fleet incident breaker (see
-    // fleet_incident.rs doc). Direct dispatch, no daemon RPC: a stop must be
-    // writable even when the daemon is the thing wedged. Python's `fno agents
-    // incident` adapter relays it; the admission gates call the library in
-    // process. Same `==` dispatch + ALL_CLIENT_ACTIONS registration as
-    // `test-run`, so the parity tests stay in sync. The fleet GitHub request
-    // budget rides THIS action as its `gh-budget` argument (law d-fe66560a
-    // allows no new client action): an admit must answer before every gh
-    // call, including when the daemon is the thing wedged, so it dispatches
-    // here with no daemon RPC either.
+    // fleet_incident.rs doc). Direct dispatch, no daemon RPC; the routing
+    // body lives in the module beside the breaker.
     if command == "fleet-incident" {
-        if args.get(1).map(String::as_str) == Some("gh-budget") {
-            return fno_agents::gh_budget::run_gh_budget(&args[2..]);
-        }
-        // `cutover` quiesces the writers and snapshots the stores for a
-        // machine move; it rides this action for the same reason.
-        if args.get(1).map(String::as_str) == Some("cutover") {
-            return fno_agents::cutover::run_cutover(&args[2..]).await;
-        }
-        if args.len() < 2 {
-            match fno_agents::gh_budget::run_gh_budget_stdin_door() {
-                -1 => {}
-                code => return code,
-            }
-        }
-        return fno_agents::fleet_incident::run_fleet_incident(&args[1..]);
+        return fno_agents::fleet_incident::run_dispatch(&args[1..]).await;
     }
 
     if command == "compaction" {
