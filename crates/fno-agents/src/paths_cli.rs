@@ -538,7 +538,7 @@ fn live_lookup(cwd: &Path, keys: &[&str]) -> Option<Result<toml::Value, ()>> {
     crate::agents_config::config_lookup(cwd, keys).map(Ok)
 }
 
-fn cfg_str(cwd: &Path, keys: &[&str]) -> Option<String> {
+pub(crate) fn cfg_str(cwd: &Path, keys: &[&str]) -> Option<String> {
     live_lookup(cwd, keys)
         .and_then(|r| r.ok())
         .and_then(|v| v.as_str().map(str::to_string))
