@@ -118,7 +118,6 @@ pub(crate) struct RunInputs {
     pub rows: Vec<Value>,
     pub graph_nodes: Vec<Value>,
     pub events_paths: Vec<std::path::PathBuf>,
-    pub ledger_path: std::path::PathBuf,
     pub classified: Value,
     pub by_node: Value,
 }
@@ -138,7 +137,6 @@ pub(crate) fn load_run(project: Option<&str>) -> Result<RunInputs, String> {
         .unwrap_or_else(|| json!({}));
     Ok(RunInputs {
         events_paths: super::readers::events_paths(&ledger_path),
-        ledger_path,
         rows,
         graph_nodes,
         classified,

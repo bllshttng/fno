@@ -1031,7 +1031,6 @@ pub(crate) fn plan_fidelity_op(params: &Value) -> Result<Value, String> {
     let classified = super::views::classify_deliveries(&graph_nodes, &rows, None, None, None)?;
     let inputs = super::views::RunInputs {
         events_paths: Vec::new(),
-        ledger_path: std::path::PathBuf::new(),
         by_node: classified
             .get("by_node")
             .cloned()
