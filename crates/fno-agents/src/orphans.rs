@@ -178,7 +178,7 @@ impl ScanResult {
     }
 }
 
-/// The ppids that mean "this process lost its parent".
+/// The ppids that mark a process whose parent is gone.
 ///
 /// A subreaper claims only its OWN descendants. PID 1 stays the reaper of last
 /// resort for everything else, so a host with `systemd --user` has TWO such
