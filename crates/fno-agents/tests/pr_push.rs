@@ -21,8 +21,8 @@ fn log_of(dir: &Path, name: &str) -> String {
 }
 
 /// Stub git. Behavior is file-flag driven: write `dirty` to make
-/// `status --porcelain` report a change, write `conflict` to make the rebase
-/// fail with two conflicting paths, drop `no-upstream` to make `@{u}` fail,
+/// `status --porcelain` report a change, write `conflict` to make the fold
+/// merge fail with two conflicting paths, drop `no-upstream` to make `@{u}` fail,
 /// drop `no-remote-branch` to make the same-name remote branch absent (a
 /// first push), write `remote-only` to make the cherry-pick log report one
 /// remote-only commit, write `remote-only-merge` to make the merges log
@@ -30,10 +30,10 @@ fn log_of(dir: &Path, name: &str) -> String {
 /// merge conflicted under `merge-tree` with a tree that differs from the
 /// parent auto-merge. Write `same-head` to make `rev-parse HEAD` answer the
 /// sha the remote branch carries (deadbeef0000000), so a no-integration run
-/// reads as a no-op. `rev-list --count` answers 3 until a rebase or merge
+/// reads as a no-op. `rev-list --count` answers 3 until the fold merge
 /// touches `counted` (the integration happened), so the receipt reads
 /// behind-before=3 behind-after=0 on an integrating push and 3/3 on one that
-/// integrates nothing. `rev-list --merges --count` always answers 0.
+/// integrates nothing.
 fn stub_git(dir: &Path) {
     write_exec(
         dir,
@@ -74,13 +74,13 @@ case "$1" in
   fetch) exit 0 ;;
   rebase)
     touch "$D/counted"
+    exit 0 ;;
+  merge)
+    touch "$D/counted"
     if [ -f "$D/conflict" ]; then
       echo "CONFLICT (content): Merge conflict in src/a.rs" >&2
       exit 1
     fi
-    exit 0 ;;
-  merge)
-    touch "$D/counted"
     exit 0 ;;
   diff) if [ -f "$D/conflict" ]; then printf "src/a.rs\nsrc/b.rs\n"; fi; exit 0 ;;
   log)
@@ -228,7 +228,7 @@ fn behind_rows() {
     let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("behind-before=3 behind-after=0"), "{out}");
-    assert!(out.contains("integrate=rebase"), "{out}");
+    assert!(out.contains("integrate=merge"), "{out}");
     assert!(out.contains("preflight=skipped"), "{out}");
     assert!(out.contains("ci=settled"), "{out}");
     assert!(out.contains("sha=abc1234"), "{out}");
@@ -367,7 +367,7 @@ fn inflight_rows() {
     std::fs::write(d.join("conflict"), "").unwrap();
     let (code, out, err) = run_command(&d, &[]);
     assert_eq!(code, 3, "{out}\n{err}");
-    assert!(err.contains("fno do pr rebase"), "the door: {err}");
+    assert!(err.contains("git merge --continue"), "the door: {err}");
     assert!(
         err.contains("src/a.rs") && err.contains("src/b.rs"),
         "the paths: {err}"
@@ -553,12 +553,12 @@ fn remote_rows() {
     assert_eq!(code, 3, "{out}\n{err}");
     assert!(err.contains("abc1234"), "the remote-only sha: {err}");
     assert!(
-        err.contains("git pull --rebase origin feature/x"),
+        err.contains("git pull --no-rebase origin feature/x"),
         "the door: {err}"
     );
     assert!(err.contains("Nothing pushed"), "{err}");
     assert!(
-        !err.contains("not safely rebasable"),
+        !err.contains("not safely mergeable"),
         "the refusal must not key heal's conflict phrase: {err}"
     );
     assert!(
@@ -577,11 +577,11 @@ fn remote_rows() {
     assert_eq!(code, 3, "{out}\n{err}");
     assert!(err.contains("m1234567"), "the merge sha: {err}");
     assert!(
-        err.contains("git pull --rebase origin feature/x"),
+        err.contains("git pull --no-rebase origin feature/x"),
         "the door: {err}"
     );
     assert!(
-        !err.contains("not safely rebasable"),
+        !err.contains("not safely mergeable"),
         "the refusal must not key heal's conflict phrase: {err}"
     );
     assert!(
@@ -795,12 +795,15 @@ fn merge_rows() {
     let before = git_in(&a, &["rev-parse", "HEAD"]);
     let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 3, "the merge conflict: {out}\n{err}");
-    assert!(err.contains("not safely rebasable"), "{err}");
+    assert!(err.contains("not safely mergeable"), "{err}");
     assert!(err.contains("status merge_conflict"), "{err}");
     assert!(err.contains("files: one.txt"), "{err}");
-    assert!(err.contains("Merge origin/main by hand"), "{err}");
+    assert!(err.contains("git merge --continue"), "{err}");
     assert_eq!(before.trim(), git_in(&a, &["rev-parse", "HEAD"]).trim());
-    assert!(!a.join(".git/MERGE_HEAD").exists());
+    assert!(
+        a.join(".git/MERGE_HEAD").exists(),
+        "the conflicted fold stays in progress for the caller"
+    );
 
     let (_t, root, a, b) = real_repo();
     let (code, out, err) = run_command_real(&a, &root);
@@ -821,11 +824,11 @@ fn merge_rows() {
     let (code, out, err) = run_command_real(&a, &root);
     assert_eq!(code, 3, "the remote-only refusal: {out}\n{err}");
     assert!(
-        err.contains("git pull --rebase origin feature/x"),
+        err.contains("git pull --no-rebase origin feature/x"),
         "the door: {err}"
     );
     assert!(
-        !err.contains("not safely rebasable"),
+        !err.contains("not safely mergeable"),
         "the refusal must not key heal's conflict phrase: {err}"
     );
     let after = git_in(
@@ -865,7 +868,7 @@ fn merge_rows() {
         "the refusal names the merge: {err}"
     );
     assert!(
-        err.contains("git pull --rebase origin feature/x"),
+        err.contains("git pull --no-rebase origin feature/x"),
         "the door: {err}"
     );
     let after = git_in(
@@ -899,7 +902,7 @@ fn merge_rows() {
     assert_eq!(
         remote.trim(),
         head.trim(),
-        "the remote branch equals the rebased HEAD"
+        "the remote branch equals the folded HEAD"
     );
 }
 
