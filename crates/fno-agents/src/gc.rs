@@ -3063,11 +3063,15 @@ mod tests {
         };
         assert_eq!(tree_action(&bare), TreeAction::None);
 
-        // origin None is NOT the spawn fact: with no origin recorded, done
-        // work and a quiet transcript still keep the row - only an explicit
-        // spawn origin retires, and retiring() above carries one.
+        // origin None is NOT the spawn fact: with no origin recorded, open
+        // work and a quiet transcript still keep the row. Done work retires
+        // under the done rule whatever the origin.
         let unstamped = GcRow {
             origin: None,
+            work: WorkState::Open {
+                node: "N1".into(),
+                status: "in_progress".into(),
+            },
             ..retiring()
         };
         assert_eq!(
