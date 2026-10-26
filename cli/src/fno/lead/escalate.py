@@ -59,10 +59,10 @@ def escalate(stalled_ids: "list[str]", reason: str, root: Path, session_id: "str
              scope: "str | None" = None) -> "tuple[str, str, bool, str | None]":
     """Record one operator question for this stalled set.
 
-    Returns ``(outcome, question_id, mail_crown, nudge)``; raises rather than
-    failing quiet. ``mail_crown`` is the renderer's ``questions.route``
+    Returns ``(outcome, question_id, mail_relay, nudge)``; raises rather than
+    failing quiet. ``mail_relay`` is the renderer's ``questions.route``
     verdict: False under direct, the default, so the caller skips the
-    presiding crown's mail copy. The board row still records.
+    presiding lead's mail copy. The board row still records.
     """
     from fno.agents.stale_escalate import dedupe_key, reconcile_channel
     from fno.harness_identity import canonical_handle
@@ -98,7 +98,7 @@ def escalate(stalled_ids: "list[str]", reason: str, root: Path, session_id: "str
         asker=canonical_handle(session_id) if session_id else None,
     )
     outcome = "recorded" if outcome == "asked" else outcome
-    return outcome, qid, bool(answer.get("mail_crown")), answer.get("nudge")
+    return outcome, qid, bool(answer.get("mail_relay")), answer.get("nudge")
 
 
 def resolve_presiding_lead(session_id: "str | None") -> "dict | None":

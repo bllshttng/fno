@@ -318,9 +318,9 @@ def escalate_cmd(
     A decision only the user can make does not ride this verb: file it
     straight on the question board with `fno inbox outstanding ask` (law
     d-fdab1af2). Under `questions.route=direct`, the default, the question
-    this verb records stays on the board alone: no crown mail copy goes out.
-    Set `questions.route=via_crown` in .fno/config.toml to route questions
-    through a triage crown.
+    this verb records stays on the board alone: no relay mail copy goes out.
+    Set `questions.route=triage` in .fno/config.toml to route questions
+    through a triage lead.
     """
     from fno.carveout.core import resolve_carveout_root, resolve_session_id
     from fno.lead.escalate import escalate, mail_presiding_lead, resolve_presiding_lead
@@ -361,7 +361,7 @@ def escalate_cmd(
         ids = ["reading:verdict:" + (verdict_scope or scope_arg).replace(",", "+")]
     presiding = resolve_presiding_lead(session_id)
     try:
-        outcome, qid, mail_crown, nudge = escalate(
+        outcome, qid, mail_relay, nudge = escalate(
             ids,
             reason=reason,
             root=resolve_carveout_root(),
@@ -380,7 +380,7 @@ def escalate_cmd(
     holder = presiding["holder"] if presiding is not None else None
     mailed = (
         holder is not None
-        and mail_crown
+        and mail_relay
         and mail_presiding_lead(holder, ids, reason, verdict=summary)
     )
     target = f"lead:{holder}" if mailed else f"operator:{qid}"

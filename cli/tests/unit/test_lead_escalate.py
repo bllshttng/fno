@@ -276,10 +276,10 @@ def test_two_serving_leads_send_distinct_scoped_lanes(
 # ---------------------------------------------------------------------------
 
 
-def test_direct_route_returns_the_crown_mail_verdict_and_nudge(
+def test_direct_route_returns_the_relay_mail_verdict_and_nudge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Under direct, the default, the renderer's verdict is mail_crown False
+    """Under direct, the default, the renderer's verdict is mail_relay False
     with a nudge naming the ask verb; the transport carries it verbatim."""
     monkeypatch.setattr(
         "fno.lead.escalate._render",
@@ -288,25 +288,25 @@ def test_direct_route_returns_the_crown_mail_verdict_and_nudge(
             "question": "[lead-escalation:k] q",
             "mail": "m",
             "marker": "lead-escalation",
-            "mail_crown": False,
+            "mail_relay": False,
             "nudge": "questions.route=direct (default): the question stays on the "
             "board. File user-only decisions with fno inbox outstanding ask.",
         },
     )
     _capture_transport(monkeypatch, answer={"outcome": "asked", "id": "ft-route00"})
 
-    outcome, qid, mail_crown, nudge = _run(tmp_path, STALLED)
+    outcome, qid, mail_relay, nudge = _run(tmp_path, STALLED)
     assert outcome == "recorded"
     assert qid == "ft-route00"
-    assert mail_crown is False
+    assert mail_relay is False
     assert nudge is not None
     assert "fno inbox outstanding ask" in nudge
 
 
-def test_via_crown_verdict_carries_no_nudge(
+def test_triage_verdict_carries_no_nudge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A via_crown team keeps the crown mail and gets no teaching line."""
+    """A triage team keeps the relay mail and gets no teaching line."""
     monkeypatch.setattr(
         "fno.lead.escalate._render",
         lambda *a, **k: {
@@ -314,13 +314,13 @@ def test_via_crown_verdict_carries_no_nudge(
             "question": "[lead-escalation:k] q",
             "mail": "m",
             "marker": "lead-escalation",
-            "mail_crown": True,
+            "mail_relay": True,
             "nudge": None,
         },
     )
     _capture_transport(monkeypatch, answer={"outcome": "asked", "id": "ft-route01"})
 
-    outcome, _, mail_crown, nudge = _run(tmp_path, STALLED)
+    outcome, _, mail_relay, nudge = _run(tmp_path, STALLED)
     assert outcome == "recorded"
-    assert mail_crown is True
+    assert mail_relay is True
     assert nudge is None
