@@ -28,10 +28,32 @@ use std::process::Command;
 
 const SUBJECT: &str = "tracker";
 
-/// The fields the store stamps on a write, which the write envelope masks:
-/// the mutation clock (`touched_at`) and the reading annotation the strict
-/// read-back attaches (`_reading`). Neither is the sidecar write's contract.
-const MASKED_ROW_KEYS: [&str; 2] = ["touched_at", "_reading"];
+/// The fields the store stamps on a write (`touched_at`, the mutation
+/// clock, and `_reading`, the strict read-back's annotation) plus the
+/// Python row model's null padding: the frozen `row_after` was read back
+/// through that model, which pads fields the Rust read model does not
+/// carry (the pre-overlay status twin, the archive and deferral families,
+/// the dispatch provenance pair). The write's contract is the values on
+/// the fields both models serve; these names are envelope, and they
+/// retire with the graph family's read model.
+const MASKED_ROW_KEYS: [&str; 16] = [
+    "touched_at",
+    "_reading",
+    "archived_at",
+    "created_at",
+    "persisted_status",
+    "caused_by",
+    "company_work",
+    "deferred_at",
+    "deferred_kind",
+    "deferred_reason",
+    "dispatch_brief",
+    "dispatch_command",
+    "fixes_pr",
+    "model",
+    "ownership_defect",
+    "reverted",
+];
 
 fn python() -> PathBuf {
     common::python_executable()
