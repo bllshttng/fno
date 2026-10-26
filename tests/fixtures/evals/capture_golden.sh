@@ -18,7 +18,7 @@
 #
 # Determinism: the fixture base is FIXED, every fixture commit pins
 # author/committer dates, the fold cases read history rows stamped far in
-# the past (outside every stale window), and the fixture settings.yaml
+# the past (outside every stale window), and the fixture config.toml
 # points state, worktrees and history inside FIXBASE. Each golden masks the
 # fixture base as FIXTURE and the Python warnings site prefix as WARNING:.
 set -euo pipefail
@@ -46,7 +46,7 @@ fno_leaf() {
   local cwd="$1"; shift
   ( cd "$cwd" && env -u FNO_TASK_CONTEXT_FILE -u FNO_CLAIMS_ROOT -u FNO_EVENTS_PATH \
       -u FNO_HOME -u FNO_REPO_ROOT \
-      FNO_CONFIG="$FIXBASE/settings.yaml" \
+      FNO_CONFIG="$FIXBASE/config.toml" \
       FNO_STATE_DIR="$FIXBASE/state" \
       FNO_NO_CANONICAL_CONFIG=1 \
       FNO_AGENTS_BIN="${AGENTS_BIN:-/nonexistent-fno-agents}" \
@@ -156,16 +156,17 @@ timeout_minutes: 1
 EOF
 }
 
-# The fixture settings file: state, worktrees and history all inside FIXBASE.
+# The fixture config: state, worktrees and history all inside FIXBASE. TOML,
+# because the native reader parses $FNO_CONFIG as TOML and warns on YAML.
 write_settings() {
   {
-    printf 'state_dir: %s/state\n' "$FIXBASE"
-    printf 'paths:\n'
-    printf '  worktrees_base: %s/wtbase\n' "$FIXBASE"
-    printf '  evals_history: %s/state/evals-history.jsonl\n' "$FIXBASE"
-    printf 'evals:\n'
-    printf '  enabled: true\n'
-  } > "$FIXBASE/settings.yaml"
+    printf 'state_dir = "%s/state"\n' "$FIXBASE"
+    printf '[paths]\n'
+    printf 'worktrees_base = "%s/wtbase"\n' "$FIXBASE"
+    printf 'evals_history = "%s/state/evals-history.jsonl"\n' "$FIXBASE"
+    printf '[evals]\n'
+    printf 'enabled = true\n'
+  } > "$FIXBASE/config.toml"
 }
 write_settings
 
@@ -177,7 +178,7 @@ uv run --project "$ROOT/cli" fno-py --help > /dev/null 2>&1 || true
 # fresh state dir would otherwise land in the first case's stderr.
 ( cd "$ROOT" && env -u FNO_TASK_CONTEXT_FILE -u FNO_CLAIMS_ROOT -u FNO_EVENTS_PATH \
     -u FNO_HOME -u FNO_REPO_ROOT \
-    FNO_CONFIG="$FIXBASE/settings.yaml" \
+    FNO_CONFIG="$FIXBASE/config.toml" \
     FNO_STATE_DIR="$FIXBASE/state" \
     FNO_NO_CANONICAL_CONFIG=1 \
     uv run --project "$ROOT/cli" fno-py doctor evals --help > /dev/null 2>&1 ) || true
