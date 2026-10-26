@@ -6,7 +6,7 @@
 use super::*;
 
 /// Read the `timeout` param as whole seconds; `None` when absent, negative, or fractional.
-fn opt_timeout(params: &Value) -> Option<std::time::Duration> {
+pub(super) fn opt_timeout(params: &Value) -> Option<std::time::Duration> {
     params
         .get("timeout")
         .and_then(|v| v.as_u64())
@@ -18,7 +18,7 @@ fn opt_timeout(params: &Value) -> Option<std::time::Duration> {
 /// daemon. Returns `Some(exit_code)` when the target is claude
 /// (resolved from an existing registry row, else the `--provider` flag), or
 /// `None` to fall through to the daemon RPC for codex/gemini.
-fn maybe_run_claude_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
+pub(super) fn maybe_run_claude_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
     use fno_agents::claude_ask::{dispatch_claude_ask, ClaudeHome};
     use fno_agents::state::load_registry;
 
@@ -92,27 +92,27 @@ fn maybe_run_claude_ask(home: &AgentsHome, params: &Value, name: &str) -> Option
 /// daemon. Returns `Some(exit_code)` when the target is codex
 /// (resolved from an existing registry row, else the `--provider` flag), or
 /// `None` to fall through to the next provider hook.
-fn maybe_run_codex_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
+pub(super) fn maybe_run_codex_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
     fno_agents::codex_ask::maybe_run_codex_ask(home, params, name)
 }
 
 /// Route a gemini `ask` to the client-side `gemini -p` path, bypassing the
 /// daemon. Returns `Some(exit_code)` when the target is gemini,
 /// or `None` to fall through to the unresolvable-`ask` surface.
-fn maybe_run_gemini_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
+pub(super) fn maybe_run_gemini_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
     fno_agents::gemini_ask::maybe_run_gemini_ask(home, params, name)
 }
 
 /// Route an agy `ask` to the client-side stateless guard (Phase C). agy is
 /// plain-text with no session id, so a stateful resume is unsupported; this
 /// returns `Some(2)` with a redirect error for an agy target, else `None`.
-fn maybe_run_agy_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
+pub(super) fn maybe_run_agy_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
     fno_agents::agy_ask::maybe_run_agy_ask(home, params, name)
 }
 
 /// Route an opencode `ask` to the client-side pane-only guard.
 /// opencode is hosted as a pane with no client-side stateful resume; this
 /// returns `Some(2)` with a redirect error for an opencode target, else `None`.
-fn maybe_run_opencode_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
+pub(super) fn maybe_run_opencode_ask(home: &AgentsHome, params: &Value, name: &str) -> Option<i32> {
     fno_agents::opencode_ask::maybe_run_opencode_ask(home, params, name)
 }

@@ -814,7 +814,10 @@ fn classify_bare_stub_manifest(
     if args.first().and_then(|a| a.to_str()) != Some("stub-manifest") {
         return None;
     }
-    Some((&["stub-manifest"], args[1..].to_vec()))/// `fno do research <tail>`: the whole leaf is native.
+    Some((&["stub-manifest"], args[1..].to_vec()))
+}
+
+/// `fno do research <tail>`: the whole leaf is native.
 fn classify_do_research(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_group_command(args, "do", "research")
 }
