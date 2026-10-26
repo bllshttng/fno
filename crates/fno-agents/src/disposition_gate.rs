@@ -308,8 +308,8 @@ mod tests {
         // verify invocation in evidence stays blocked (fail closed).
         use serde_json::json;
         let finding = json!({
-            "finding_key": "s.rs:82:conventions",
-            "category": "conventions",
+            "finding_key": "s.rs:82:security",
+            "category": "security",
             "verdict": null,
             "has_required_fields": true,
         });
@@ -331,7 +331,7 @@ mod tests {
             })
         };
         let fixed_disp = json!({
-            "finding_key": "s.rs:82:conventions",
+            "finding_key": "s.rs:82:security",
             "disposition": "fixed",
             "reason": "verified at h1 by the scoped pass",
         });

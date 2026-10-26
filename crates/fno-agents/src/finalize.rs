@@ -2274,12 +2274,12 @@ fn is_do_stamp_terminal(reason: &str) -> bool {
 /// one would spin.
 ///
 /// Also the do row's CLOSE, not only its backstop open: it now passes
-/// `--ended-at` alongside `--started-at`, so a do row that `claim release
-/// --stamp-do` never closed (the common case - a do session's claim is
-/// commonly freed by something other than `release`) still gets `ended_at`
-/// here, at its own finish line. `append_session_record`'s duplicate-fill is
-/// the same one `release --stamp-do` uses: it fills only timestamps the row
-/// left open, so when release already closed the row this is a no-op.
+/// `--ended-at` alongside `--started-at`, so a do row that its release never
+/// closed - freed by `--force`, which stamps nothing, or by a release whose
+/// own stamp skipped - still gets `ended_at` here, at its own finish line.
+/// `append_session_record`'s duplicate-fill is the same one the release
+/// stamp uses: it fills only timestamps the row left open, so when the
+/// release already closed the row this is a no-op.
 fn stamp_node_do(cwd: &Path, m: &ManifestFields, reason: &str) {
     let Some(node) = m.graph_node_id.as_deref() else {
         return;

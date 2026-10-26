@@ -1,0 +1,18 @@
+{
+ "expected": "## Skill-diff proposal: `fno:blueprint`\n\nSynthesized from observer run `r1`. Every hunk below cites the observed failure it responds to; a reviewer judges the evidence the same way they would any PR description.\n\n- skill version observed by the sweep: `aaa`\n- skill version this diff is against: `bbb`\n- note: the skill file moved between eval and proposal; the diff is computed against current content (AC9-FR).\n\n### Cited hunks\n\n**1. `skills/blueprint/SKILL.md`** \u2014 addresses: s1\n  why\n\n---\n_Structurally motivated by replay/sweep evidence; outcome confirmation accrues from post-merge observer sweeps. A human merges - this loop is assisted, never unattended._",
+ "input": {
+  "hunks": [
+   {
+    "cited_finding_ids": [
+     "s1"
+    ],
+    "file": "skills/blueprint/SKILL.md",
+    "rationale": "why"
+   }
+  ],
+  "run_id": "r1",
+  "skill_id": "fno:blueprint",
+  "version_against": "bbb",
+  "version_observed": "aaa"
+ }
+}

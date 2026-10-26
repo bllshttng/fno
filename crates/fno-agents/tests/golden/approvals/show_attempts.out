@@ -1,0 +1,14 @@
+request     cbac9777437fe6c312ad7dead7e5a40a93436322f8a827efa420f3ba83be4441
+  principal   agent-1
+  work order  wo-5
+  attempt     att-5
+  effect      eff-5
+  class       communication.external
+  destination mail:list-e
+  action      act-5
+  expires     <FUTURE>
+  decision    approved by founder at 2025-02-03T09:00:00+00:00
+  effect      key-a: acknowledged
+               destination ref: msg-9
+  effect      key-b: unknown
+               outcome ambiguous: retry only through an adapter that enforces this idempotency key remotely, or read the destination and supply that reconciliation result

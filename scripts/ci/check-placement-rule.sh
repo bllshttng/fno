@@ -344,8 +344,6 @@ cli/src/fno/paths.py
 cli/src/fno/scratch_cli.py
 cli/src/fno/provenance/resolver.py
 cli/src/fno/recovery.py
-cli/src/fno/relay/registry.py
-cli/src/fno/relay/roundtrip.py
 cli/src/fno/review/confidence_scorer.py
 cli/src/fno/review/runners/agents_spawn_runner.py
 cli/src/fno/review/runners/claude_runner.py

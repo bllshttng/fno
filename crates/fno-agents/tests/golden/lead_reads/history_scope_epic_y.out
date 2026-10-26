@@ -1,0 +1,12 @@
+2026-10-24T09:20:00Z  epic-y
+  change: PR 3854 ready, merge held
+  evidence: {"beat":2}
+2026-10-24T09:00:00Z  epic-y
+  change: first beat: three workers seated
+  evidence: {"beat":1}
+history: 2 canonical check-in(s) for "epic-y", read 3 lead row(s) from 3 store(s), 5 row(s) ingested, 1 legacy-invalid lead row(s)
+complete since <NOW>; earlier unknown
+  "<ROOT>/state/events.jsonl": store "<ROOT>/state/events.db", 0 row(s) ingested, 0 lead row(s) read, 0 matched
+  "<ROOT>/home/events.jsonl": store "<ROOT>/home/events.db", 0 row(s) ingested, 0 lead row(s) read, 0 matched
+  "<ROOT>/project/events.jsonl": store "<ROOT>/project/events.db", 5 row(s) ingested, 3 lead row(s) read, 2 matched
+  rejected legacy row in "<ROOT>/project/events.db" at 2026-10-24T09:30:00Z: forbidden=["role_scope"] missing=["scope"]

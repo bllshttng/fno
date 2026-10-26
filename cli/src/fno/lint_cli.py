@@ -62,7 +62,6 @@ SPAWN_SHAPE_ALLOWLIST = frozenset(
         # Canonical tool-less one-shot judgment seam; consolidated the
         # former inbox/graph/review call-site shapes here.
         "cli/src/fno/llm.py",
-        "cli/src/fno/skill_diff/synthesize.py",
     }
 )
 _SPAWN_SHAPE_RE = re.compile(

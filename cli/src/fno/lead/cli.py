@@ -4,26 +4,15 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import NoReturn, Optional, cast
+from typing import NoReturn, Optional
 
 import typer
-
-from fno.lead.lead_faq import faq_app
 
 lead_app = typer.Typer(
     name="lead",
     help="The lead's board: what still needs doing, and the session manifest for its loop.",
     no_args_is_help=True,
 )
-
-
-#: Per-queue render cap for the human board view (was board.DEFAULT_MAX_ROWS;
-#: the count in the payload stays whole, only the rendered rows are cut).
-DEFAULT_MAX_ROWS = 25
-
-
-def _default_max_rows() -> int:
-    return DEFAULT_MAX_ROWS
 
 
 def _refuse(msg: str) -> NoReturn:
@@ -566,34 +555,6 @@ def _own_role_argv(command: str, scope: str) -> tuple[list[str], str]:
     return argv, own
 
 
-@lead_app.command("shape")
-def shape_cmd(
-    shape: str = typer.Argument(..., help="pass or team."),
-    scope: str = typer.Option(
-        "", "--scope", help="Role scope to reshape. Default: this session's own role."
-    ),
-) -> None:
-    """Declare this term's shape: a pure pass, or a team holding workers.
-
-    The field the Stop nudge reads; declare ``team`` at the first worker. The
-    write lives in Rust; this shell keeps the caller ladder (Python self-stamp).
-    """
-    import subprocess
-
-    from fno._subprocess_util import propagate_returncode
-
-    if shape not in ("pass", "team"):
-        _refuse("lead: shape must be 'pass' or 'team'.")
-    argv, own = _own_role_argv("lead-shape", scope)
-    argv += ["--shape", shape]
-    result = subprocess.run(argv, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        typer.echo(f"lead: {result.stderr.strip()}", err=True)
-        raise typer.Exit(code=propagate_returncode(result.returncode))
-    typer.echo(f"lead: shape declared: {result.stdout.strip()}")
-    typer.echo(f"scope:  {own}")
-
-
 @lead_app.command(
     "term",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
@@ -639,48 +600,6 @@ def term_cmd(ctx: typer.Context) -> None:
         raise typer.Exit(code=propagate_returncode(result.returncode))
     typer.echo(f"lead: term declared: {result.stdout.strip()}")
     typer.echo(f"scope:  {own}")
-
-
-@lead_app.command("manifest-path", hidden=True)
-def manifest_path_cmd(
-    harness_session_id: str = typer.Option(..., "--harness-session-id"),
-    harness: str = typer.Option("", "--harness"),
-    state_root: Optional[Path] = typer.Option(None, "--state-root"),
-) -> None:
-    """Print this live promoted session's existing scope manifest path."""
-    from fno.lead.state import resolve_lead_manifest_path
-
-    path, reason = resolve_lead_manifest_path(
-        harness_session_id,
-        harness or None,
-        state_root=state_root,
-    )
-    if path is None:
-        typer.echo(f"lead manifest-path: {reason}", err=True)
-        raise typer.Exit(1)
-    typer.echo(path)
-
-
-def history_cmd(
-    scope: str = typer.Option(
-        "", "--scope", help="Role scope to read. Default: this session's own role."
-    ),
-    as_json: bool = typer.Option(False, "--json", "-J", help="Emit the full JSON payload."),
-) -> None:
-    """Read this role's recorded term: its check-ins, newest first, verbatim.
-
-    ``fno agents team -n`` answers who rules NOW; this answers what
-    happened across the term. Contract: docs/architecture/lead.md.
-    """
-    from fno.lead.history import run_native
-    from fno.paths import event_journals
-
-    code, out, err = run_native(event_journals(), scope, as_json)
-    if out:
-        typer.echo(out.rstrip("\n"))
-    if err:
-        typer.echo(err.rstrip("\n"), err=True)
-    raise typer.Exit(code)
 
 
 def checkin_cmd(ctx: typer.Context) -> None:
@@ -734,19 +653,6 @@ def checkin_cmd(ctx: typer.Context) -> None:
     raise typer.Exit(code=propagate_returncode(proc.returncode))
 
 
-def verdict_cmd(
-    scope: str = typer.Argument("", help="Role scope. Default: this session's own."),
-) -> None:
-    """Read the term tenure verdict; the native renderer's words pass through."""
-    from fno.lead.history import verdict_read
-    from fno.paths import event_journals
-
-    code, out, err = verdict_read(event_journals(), scope or None, as_json=False)
-    typer.echo(out, nl=False)
-    if code != 0:
-        _refuse(f"lead verdict unreadable: {err.strip()}")
-
-
 def ledger_cmd(
     out: Optional[Path] = typer.Option(
         None, "--out", help="Write the page here instead of the layout table's lead page."
@@ -770,107 +676,37 @@ def ledger_cmd(
 
 @lead_app.command("board")
 def board_cmd(
-    as_json: bool = typer.Option(False, "--json", "-J", help="Emit the board payload."),
-    max_rows: int = typer.Option(
-        _default_max_rows(), "--max-rows", help="Rows rendered per queue."
-    ),
     last_run: bool = typer.Option(
         False,
         "--last-run",
-        help="Instead of reading the board, ask whether a lead walk terminated recently.",
+        help="Ask whether a lead walk terminated recently.",
     ),
     since: str = typer.Option("24h", "--since", help="Window for --last-run (e.g. 24h, 90m, 7d)."),
-    budget_ms: Optional[int] = typer.Option(
-        None,
-        "--budget-ms",
-        help="Whole-board budget in milliseconds. Every per-source slice is "
-        "derived from this one total; a caller that enforces an outer timer "
-        "(the stop gate) passes that same bound in, so the board returns a "
-        "payload naming what it could not read instead of being killed.",
-    ),
-    state: Optional[Path] = typer.Option(
-        None,
-        "--state",
-        help="Lead manifest whose scope bounds the board. Defaults to this "
-        "session's own role; pass one explicitly to read outside it.",
-    ),
 ) -> None:
-    """Report every queue that would keep a lead working.
+    """Ask whether a lead walk terminated recently (``--last-run``).
 
-    The collector is the Rust runtime (d-e11b2b3e): this command is a
-    shell over `fno-agents board` - it resolves the binary, passes the whole
-    budget and the manifest through, and renders or emits the returned payload.
-    A bare call from a promoted session defaults to that role's manifest (the
-    registry row plus the file, never presence alone, is the authority);
-    anything else reads the fleet-wide board. Exits non-zero when any queue
-    could not be read: an unreadable queue is not an empty one.
+    The board read itself answers at the front door (``fno-agents board
+    --user-command``). This leg keeps ``--last-run`` because its predicate,
+    ``last_run_is_fresh``, is the one the PR watcher's lead wake reads.
     """
-    import subprocess
-
-    from fno.rust_binary import resolve_binary
-
-    if last_run:
-        from fno.lead.state import last_run_is_fresh, parse_window
-        from fno.paths import project_events_json
-
-        try:
-            window_s = parse_window(since)
-        except ValueError as exc:
-            typer.echo(str(exc), err=True)
-            raise typer.Exit(2) from exc
-        fresh = last_run_is_fresh(project_events_json(), since_s=window_s)
-        typer.echo(f"last lead walk within {since}: {'yes' if fresh else 'no'}")
-        raise typer.Exit(0 if fresh else 1)
-
-    binary = resolve_binary()
-    if binary is None:
+    if not last_run:
         typer.echo(
-            "fno inbox board: the fno-agents binary was not found, and the board reads "
-            "through the Rust runtime. Reinstall fno, run `fno doctor update --rust`, "
-            "or set FNO_AGENTS_BIN.",
+            "fno inbox board: the board answers through the fno front door; "
+            "this leg serves only --last-run.",
             err=True,
         )
-        raise typer.Exit(code=2)
+        raise typer.Exit(2)
+    from fno.lead.state import last_run_is_fresh, parse_window
+    from fno.paths import project_events_json
 
-    if state is None:
-        # A lead reads its own board, so the role it already holds is the
-        # scope it means. An unreadable, terminal, or unpromoted reading
-        # resolves nothing and the board stays fleet-wide, exactly as before.
-        from fno.agents.role import calling_agent_row
-        from fno.lead.state import resolve_lead_manifest_path
-
-        caller = calling_agent_row()
-        session_id = (
-            getattr(caller, "harness_session_id", None)
-            or getattr(caller, "cc_session_id", None)
-            or ""
-        )
-        if session_id:
-            resolved, _ = resolve_lead_manifest_path(
-                session_id, getattr(caller, "harness", None)
-            )
-            if resolved is not None:
-                state = resolved
-
-    cmd = [str(binary), "board", "--json"]
-    if budget_ms is not None:
-        cmd += ["--budget-ms", str(budget_ms)]
-    if state is not None:
-        cmd += ["--state", str(state)]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    # The board prints a full payload even when queues are unreadable (its exit
-    # code carries that); parse the stdout regardless, as the stop gate does.
     try:
-        board = json.loads(proc.stdout or "")
+        window_s = parse_window(since)
     except ValueError as exc:
-        detail = (proc.stderr or proc.stdout or "").strip()[:300]
-        typer.echo(f"lead: board unreadable (exit {proc.returncode}): {detail or exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    if as_json:
-        typer.echo(json.dumps(board, indent=2))
-    else:
-        _render(board, max_rows)
-    raise typer.Exit(cast(int, board.get("exit_code", 1)))
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+    fresh = last_run_is_fresh(project_events_json(), since_s=window_s)
+    typer.echo(f"last lead walk within {since}: {'yes' if fresh else 'no'}")
+    raise typer.Exit(0 if fresh else 1)
 
 
 @lead_app.command("escalate")
@@ -996,28 +832,6 @@ def drain_cmd(
     typer.echo(json.dumps({"scope": scope, "undelivered": undelivered}))
 
 
-def _render(board: dict, max_rows: int) -> None:
-    typer.echo(f"actionable: {board['actionable']}")
-    for q in board["queues"]:
-        if q["status"] == "unreadable":
-            typer.echo(f"  {q['name']:<20} UNREADABLE  {q['error']}")
-        elif q["status"] == "over_budget":
-            typer.echo(f"  {q['name']:<20} NOT READ    {q['error']}")
-        else:
-            mark = "*" if q["actionable"] and q["count"] else " "
-            command = f"  -> {q['verb']}" if q.get("verb") else ""
-            note = f"  ({q['note']})" if q["note"] and q["count"] else ""
-            typer.echo(f" {mark}{q['name']:<20} {q['count']}{command}{note}")
-            for row in q["rows"][:max_rows]:
-                typer.echo(f"      {row}")
-            hidden = max(0, len(q["rows"]) - max_rows)
-            if hidden:
-                typer.echo(f"      ... {hidden} more not shown")
-        typer.echo(f"      source: {q['source']}")
-    for warning in board["warnings"]:
-        typer.echo(f"warning: {warning}", err=True)
-
-
 agents_lead_app = typer.Typer(
     name="lead",
     help="The lead session manifest and escalation controls.",
@@ -1028,24 +842,15 @@ agents_lead_app.command("done")(done_cmd)
 agents_lead_app.command("cancel")(cancel_cmd)
 agents_lead_app.command("escalate")(escalate_cmd)
 agents_lead_app.command("drain")(drain_cmd)
-agents_lead_app.command("shape")(shape_cmd)
 agents_lead_app.command(
     "term",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )(term_cmd)
-# The stop hooks resolve the role manifest through this hidden command: the
-# deprecated `fno lead` spelling once missed the command_moves fold and burned
-# every stop's unavailable-retries. The hooks now name `agents lead` directly.
-agents_lead_app.command("manifest-path", hidden=True)(manifest_path_cmd)
-# Here only, like the faq typer: the retired bare `fno lead` menu stays capped.
-agents_lead_app.command("history")(history_cmd)
 agents_lead_app.command(
     "checkin",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )(checkin_cmd)
-agents_lead_app.command("verdict")(verdict_cmd)
 agents_lead_app.command("ledger")(ledger_cmd)
-agents_lead_app.add_typer(faq_app, name="faq")
 
 
 def main() -> None:  # pragma: no cover - console-script shim

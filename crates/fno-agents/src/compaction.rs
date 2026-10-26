@@ -329,9 +329,10 @@ pub fn run_compaction(args: &[String]) -> i32 {
         Some((action, rest)) if action == "outstanding" => {
             crate::outstanding::run_outstanding(rest)
         }
+        Some((action, rest)) if action == "approvals" => crate::approvals::run(rest),
         _ => {
             eprintln!(
-                "usage: compaction outstanding [--json] | mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]] | ack <turn> --outcome <o> [--why <w>] [--session <id>] [--capture-dir <dir>] | inbox-peers [--json]"
+                "usage: compaction outstanding [--json|-J] | outstanding mine|ask|clear|reindex ... | mark --session <id> | status --harness <h> --session <id> [--transcript <path>] [--json] | operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>]] | ack <turn> --outcome <o> [--why <w>] [--session <id>] [--capture-dir <dir>] | inbox-peers [--json] | approvals ls|show|decide ..."
             );
             2
         }
