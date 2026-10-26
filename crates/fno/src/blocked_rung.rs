@@ -263,7 +263,7 @@ mod tests {
                  "inside_leg":{{"state":"working","seq":9,
                                 "received_at":"{recent}","ttl_ms":60000}},
                  "screen_state":{{"state":"idle","rule":"idle_prompt","seq":1,
-                                  "at":"{recent}","ttl_ms":120000}}},
+                                  "at":"{recent}","ttl_ms":120000}}}},
                {{"name":"unnamed-harness","cwd":"/w","status":"live",
                  "inside_leg":{{"state":"working","seq":9,
                                 "received_at":"{recent}","ttl_ms":60000}},
