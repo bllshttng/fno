@@ -1044,7 +1044,12 @@ fn escalation(
     })
 }
 
-/// Mail the presiding holder; true only on a confirmed hosted delivery.
+/// The sender stamp on an escalation's mail to the presiding holder.
+const ESCALATE_SENDER: &str = "fno/lead-escalate";
+
+/// Mail the presiding holder; true once the durable envelope lands. The
+/// daemon's mail-wake arm delivers it, and the operator question is already
+/// recorded, so a holder that never reads it still leaves a record.
 fn mail_presiding(holder: &str, ids: &[String], key: &str, reason: &str, verdict: &str) -> bool {
     let answer = escalation(
         ids,
@@ -1055,11 +1060,7 @@ fn mail_presiding(holder: &str, ids: &[String], key: &str, reason: &str, verdict
     let Some(message) = answer.mail.filter(|_| answer.ok) else {
         return false;
     };
-    let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
-    cmd.args(["agents", "mail", "send", holder, &message]);
-    crate::bounded_cmd::output_with_timeout(cmd, 15).is_some_and(|out| {
-        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("delivered (hosted)")
-    })
+    crate::lead_mail::send_to_name(ESCALATE_SENDER, holder, &message).is_ok()
 }
 
 /// `fno agents org escalate [SCOPE] [--stalled IDS] [--reason R]`: record one
