@@ -144,6 +144,22 @@ The pr-nudge ladder pauses on a frozen PR, so its owner gets no merge retry whil
 
 The freeze does not cover a merge through the GitHub web page or a bare `gh pr merge` outside fno. The fleet breaker's total stop (`fno agents incident stop --hold merges`) stays separate.
 
+## When main turns red
+
+While main's latest settled run is red, the gate refuses every merge to main. One lane is exempt: a PR whose node carries the `main-repair` tag. That lane is how main turns green again.
+
+The `main_revert` daemon arm opens that lane on its own. It is off by default. Turn it on per repo:
+
+```toml
+[main_repair]
+auto_revert = true
+revert_after_minutes = 10   # default 10
+```
+
+Each minute the arm reads main's verdict through the gate's own cached reading. When a red head stays red past the window, the arm walks main's first-parent chain back to the last green commit. The oldest red commit after it is the culprit. When the culprit is a `Merge pull request #N` commit, the arm does three things. It files a node tagged `main-repair`. It opens a PR that reverts the merge (`git revert -m 1`) and names that node. It asks the author of PR N, on the PR and on its node, to re-land the change with the fix. The revert needs one CI run. A fix forward can wait behind a flaky test and a CI queue: on 2026-10-26 main stayed red about 3 hours that way.
+
+The arm refuses to guess. It journals `ambiguous` and opens nothing in these cases: a cancelled or missing run sits between the red head and the last green commit, the culprit is not a PR merge, or no green commit is in the last 10. A red whose failing checks all sit on heal's flake ledger journals `flaky`. Every outcome is one `main_revert_check` row per red head, so a daemon restart never opens a second revert. The arm never merges the revert. The owner merges it through this gate, as for any PR.
+
 ## The effect
 
 `gh pr merge <n> [--auto] --<strategy> --match-head-commit <head>`.
