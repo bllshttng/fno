@@ -6,7 +6,7 @@
 //! corrupt line rather than crash the command. The store beside a journal
 //! answers first (SQL authority); only a store-less path reads the raw file.
 
-use chrono::{DateTime, Datelike, Local, TimeZone};
+use chrono::{DateTime, Local, TimeZone};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -456,11 +456,6 @@ pub(crate) fn event_data(event: &Value) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
-/// The naive-local `datetime.min` bucket marker the undated sort rides.
-pub(crate) fn datetime_min() -> DateTime<Local> {
-    Local.with_ymd_and_hms(1, 1, 1, 0, 0, 0).single().unwrap()
-}
-
 /// Python's `datetime.max` stand-in: undated loop_check fires sort LAST.
 pub(crate) fn datetime_max() -> DateTime<Local> {
     Local
@@ -494,15 +489,4 @@ pub(crate) fn ledger_path() -> PathBuf {
         .parent()
         .map(|p| p.join("ledger.json"))
         .unwrap_or_else(|| PathBuf::from(".fno/ledger.json"))
-}
-
-/// Python `datetime.min`-style comparison helper for optional timestamps.
-pub(crate) fn ts_or_min(raw: Option<&Value>) -> DateTime<Local> {
-    parse_ts(raw).unwrap_or_else(datetime_min)
-}
-
-/// The `Datelike` import stays used through the date helpers the
-/// views module pulls from here; keep one canonical week-start anchor.
-pub(crate) fn iso_date(dt: DateTime<Local>) -> String {
-    format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day())
 }

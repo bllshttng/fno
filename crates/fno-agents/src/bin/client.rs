@@ -296,6 +296,13 @@ fn main() {
     if args.first().map(String::as_str) == Some("evals-attempt") {
         std::process::exit(fno_agents::eval_attempt::run_evals_attempt(&args[1..]));
     }
+    // `scoreboard`: the telemetry family's transport door, dispatched here
+    // like evals-trend because the shrink law bars a new `run` arm. The
+    // front door (`fno whoami scoreboard`) execs here; the parity goldens
+    // replay the same spelling.
+    if args.first().map(String::as_str) == Some("scoreboard") {
+        std::process::exit(fno_agents::scoreboard::run_scoreboard(&args[1..]));
+    }
     // `pr-park` and `pr-watch`: the two command families behind `fno do pr
     // watch`; both dispatch here like evals-arm because the shrink law bars
     // a new `run` arm. Their module docs carry the per-command contract.
@@ -981,11 +988,6 @@ async fn run(args: Vec<String>) -> i32 {
     // stalls` shells HERE through resolve_binary.
     if command == "stalls" {
         return fno_agents::stalls::run_stalls(&args[1..]);
-    }
-    // `scoreboard`: == dispatch like stalls (body in scoreboard/, not here:
-    // the client.rs line budget is 5,000). `fno whoami scoreboard` execs HERE.
-    if command == "scoreboard" {
-        return fno_agents::scoreboard::run_scoreboard(&args[1..]);
     }
     // `lead-rundown`: the lead ledger page for `fno agents lead ledger`.
     // Same split as lead-history: Python resolves the org and the paths,
