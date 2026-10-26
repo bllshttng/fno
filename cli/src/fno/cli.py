@@ -231,11 +231,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Retrieve + store: ddgs backbone -> self-fetch -> sources.jsonl.",
         {"hidden": True},
     ),
-    "scoreboard": (
-        "fno.scoreboard.cli:scoreboard_command",
-        "Read-only telemetry: stop-cause, spend, autonomy, survival, coverage.",
-        {"hidden": True},
-    ),
     "test": (
         "fno.test_cmd:test_command",
         "Run pytest honestly (now `fno doctor test`): worktree-pinned PYTHONPATH, rtk-bypassed, real exit code.",

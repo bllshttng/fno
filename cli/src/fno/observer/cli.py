@@ -88,7 +88,8 @@ def _load_corpus(skill: str, since: int) -> tuple[dict, dict]:
     """Build the read-only corpus and return ``(corpus, by_id)`` where ``by_id``
     maps graph node id -> node dict (for PR lookup in review scoring)."""
     from fno import paths as _paths
-    from fno.scoreboard.fold import classify_deliveries, load_ledger_rows, read_graph_nodes
+    from fno.cost._register import load_ledger_rows
+    from fno.observer.fold import classify_deliveries, read_graph_nodes
 
     ledger_path = _paths.ledger_json()
     graph_path = _paths.graph_json()
@@ -623,7 +624,8 @@ def _load_target_corpus(since: int, repo_override: Optional[str], gh_runner) -> 
     from datetime import datetime as _dt
 
     from fno import paths as _paths
-    from fno.scoreboard.fold import load_ledger_rows, read_graph_nodes
+    from fno.cost._register import load_ledger_rows
+    from fno.observer.fold import read_graph_nodes
 
     rows = load_ledger_rows(_paths.ledger_json())
     nodes = read_graph_nodes(_paths.graph_json())
@@ -664,7 +666,7 @@ def _read_target_events() -> dict:
     (fires / promise intent / ci) and termination (terminal reason) - grouped by
     ``data.session_id``. The plan's promise/gate_escape/phase_transition kinds do
     not exist as events; the fold grounds on what does."""
-    from fno.scoreboard.fold import read_jsonl_events
+    from fno.events.log import read_jsonl_events
 
     events = read_jsonl_events(_events_paths(), kinds={"loop_check", "termination"})
     by_session: dict[str, list[dict]] = {}
@@ -729,7 +731,7 @@ def _write_target_digest(summary: dict, coverage: dict, meta: dict, crosstab: di
     date = datetime.now().strftime("%Y-%m-%d")
     path = reports_dir / f"target-{date}.md"
 
-    from fno.scoreboard.fold import _pct
+    from fno.observer.fold import _pct
 
     attributed = coverage["attributed"]
     no_pr = coverage["no_pr_attempts"]
@@ -792,7 +794,7 @@ def _sweep_target(*, since: int, repo: Optional[str], json_out: bool) -> None:
     """PR-anchored target sweep: enumerate real deliveries, walk each back to its
     node/sessions, score the three verdict dimensions, and emit the falsifier
     cross-tab + the survivorship-corrected no-PR class."""
-    from fno.scoreboard.fold import _default_skill_version
+    from fno.observer.fold import _default_skill_version
 
     skill_id = fold._SKILL_IDS["target"]
     gh_runner = _capped_gh(_default_gh, _GH_FANOUT_CAP)

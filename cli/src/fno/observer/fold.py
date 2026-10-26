@@ -3,8 +3,8 @@
 Read-only over already-captured signals (ledger, graph, events, postmortems) -
 corpus construction is a read-time fold, never a new write-path for historical
 facts (Locked Decision 1). Skill-invocation attribution and version resolution
-are reused verbatim from ``fno.scoreboard.fold`` (Locked Decision 7) - this
-module does not re-derive them.
+moved here verbatim when the scoreboard family went native: one implementation of each, the moved bodies; the native verb answers
+``fno whoami scoreboard``.
 
 I/O (plan-file reads, gh PR-thread fetches) stays at the CLI layer; the
 functions here take pre-fetched inputs so they are unit-testable without
@@ -13,6 +13,7 @@ touching disk or the network, mirroring ``scoreboard/fold.py``'s style.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import tempfile
@@ -25,21 +26,8 @@ from fno.cost._register import LEDGER_SESSION_UNRESOLVED
 from fno.plan._doc import FrontmatterError, ParseError, load_plan_text
 from fno.plan.brief import BriefParseError, parse_execution_strategy
 from fno.rust_binary import find_dev_binary, resolve_binary
-from fno.scoreboard.fold import (
-    _WEDGE_REASONS,
-    _ci_reds_from_fires,
-    _default_read_transcript,
-    _default_skill_version,
-    _extract_skill_runs,
-    _is_shipped_reason,
-    _node_outcome,
-    _parse_ts,
-    _pct,
-    _row_session_ids,
-    _row_shipped,
-    _transcript_counts,
-    classify_deliveries,
-)
+from fno.events.log import _parse_ts
+
 
 # Mirrors _CALIBRATION_MIN_VERDICTS (scoreboard/fold.py): below this, a ranking
 # is fabricated confidence, not a real trend (Locked Decision 11).
@@ -659,6 +647,299 @@ def build_run_summary(
     if skill_ref is not None:
         out["skill_ref"] = skill_ref
     return out
+
+
+
+
+# ---------------------------------------------------------------------------
+# Moved verbatim from the deleted scoreboard fold when the family went
+# native (`fno whoami scoreboard` answers in Rust); these remain the Python
+# implementations the observer serves. One implementation of each.
+
+_WEDGE_REASONS = frozenset({"NoProgress", "Budget", "Aborted"})
+
+# Survival follow-up window: a fix-node created within this many days of a
+# node's ship counts against that node's survival.
+_SURVIVAL_FOLLOWUP_DAYS = 14
+
+# think/plan/execute/review/docs/ship/external are /target's own phase names;
+# ship+external both route through /fno:ship pr (create vs check) so they
+# collapse to one skill id. "do" is the phase's retired spelling: ledger.json history rows
+# still carry it, so its key stays until those rows age out.
+_PHASE_TO_SKILL = {
+    "think": "fno:think",
+    "plan": "fno:blueprint",
+    "do": "fno:do",
+    "execute": "fno:execute",
+    "review": "fno:review",
+    "docs": "fno:ship-docs",
+    "ship": "fno:ship",
+    "external": "fno:ship",
+}
+
+def _is_shipped_reason(termination_reason: str | None) -> bool:
+    """True iff a terminal reason counts as a delivered node for telemetry.
+    Non-string junk (a hand-edited/partial ledger row) is never a ship reason,
+    and must not reach the frozenset membership test unhashable."""
+    from fno.rust_binary import delivered_terminals
+
+    tr = termination_reason if isinstance(termination_reason, str) else ""
+    return tr in delivered_terminals()
+
+
+def classify_deliveries(
+    graph_nodes: list[dict],
+    rows: list[dict],
+    project: str | None = None,
+    now=None,
+    since_days: int | None = None,
+) -> dict:
+    """The one delivery classification (Rust keeper): by_node, coverage,
+    survival, flow, and with a project the scoped entries/rows/node_ids."""
+    from fno.graph.store import request_scoreboard_classify
+
+    return request_scoreboard_classify(graph_nodes, rows, project, now, since_days)
+
+
+def _row_shipped(row: dict, deliveries: dict | None) -> bool:
+    """A terminal proves the ROW shipped only when its node delivered; a row
+    with no node keeps the terminal check (nothing else to consult). A
+    reconcile backstop is a delivery row created after a merged PR, even
+    though it is not a worker terminal."""
+    termination_reason = row.get("termination_reason")
+    is_backstop = termination_reason == "reconcile-backstop" and row.get("pr_number")
+    if not _is_shipped_reason(termination_reason) and not is_backstop:
+        return False
+    nid = row.get("graph_node_id")
+    if not isinstance(nid, str) or not nid or deliveries is None:
+        return True
+    c = deliveries.get(nid)
+    return bool(c and c.get("delivered"))
+
+
+def read_graph_nodes(path: Path) -> list[dict]:
+    from fno.graph.store import STORE_READ_ERRORS, read_graph_strict
+
+    try:
+        return read_graph_strict(Path(path))
+    except STORE_READ_ERRORS:
+        return []
+
+
+def _pct(n: int, d: int) -> int:
+    return round(100 * n / d) if d else 0
+
+def _node_outcome(nid: str, shipped_at, by_id: dict, fixes: dict) -> str:
+    """Derive a shipped node's outcome from the W4/W5 signals: `reverted` flag,
+    else a caused_by fix-node within the follow-up window -> bounced, else
+    merged_clean. Un-time-boundable fixes count against the node (conservative,
+    mirrors _survival)."""
+    if by_id.get(nid, {}).get("reverted"):
+        return "reverted"
+    for fx in fixes.get(nid, []):
+        fx_at = _parse_ts(fx.get("created_at"))
+        if shipped_at and fx_at:
+            if timedelta(0) <= (fx_at - shipped_at) <= timedelta(days=_SURVIVAL_FOLLOWUP_DAYS):
+                return "bounced"
+        else:
+            return "bounced"
+    return "merged_clean"
+
+
+def _skills_from_transcript(lines: list[str]) -> list[str]:
+    """Scan transcript JSONL lines for Skill tool_use blocks; return the
+    `input.skill` id of each (duplicates kept - callers dedupe if needed)."""
+    found: list[str] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):  # valid JSON, junk shape (e.g. a bare scalar) - skip, don't crash
+            continue
+        message = obj.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Skill":
+                input_ = block.get("input")
+                skill = input_.get("skill") if isinstance(input_, dict) else None
+                if skill:
+                    found.append(skill)
+    return found
+
+def _default_read_transcript(session_id: str) -> list[str] | None:
+    from fno.cost._session_cost import find_transcript
+
+    path = find_transcript(session_id)
+    if not path:
+        return None
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+
+
+# Process-lifetime cache: skill git history is append-only, so fetching it
+# once per (repo root, path) and bisecting in memory turns version resolution
+# from O(N) git-log subprocess spawns (one per row) into O(S) (one per unique
+# skill) - the ledger already holds thousands of rows (gemini + code-reviewer
+# both flagged the naive per-row subprocess as a real latency risk).
+_SKILL_COMMIT_HISTORY_CACHE: dict[tuple[str, str], list[tuple[datetime, str]]] = {}
+
+# The ledger phase and skill directory are separate vocabularies. Keep old
+
+
+
+def _skill_commit_history(root: Path, rel: str) -> list[tuple[datetime, str]]:
+    """All commits touching rel, oldest first: [(commit datetime, short hash), ...].
+    Empty on any git failure - never raises."""
+    import subprocess
+
+    key = (str(root), rel)
+    if key in _SKILL_COMMIT_HISTORY_CACHE:
+        return _SKILL_COMMIT_HISTORY_CACHE[key]
+    history: list[tuple[datetime, str]] = []
+    try:
+        out = subprocess.run(
+            ["git", "log", "--follow", "--format=%h %aI", "--", rel],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if out.returncode == 0:
+            for line in out.stdout.splitlines():
+                h, _, iso = line.partition(" ")
+                dt = _parse_ts(iso)
+                if h and dt:
+                    history.append((dt, h))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    history.sort(key=lambda pair: pair[0])
+    _SKILL_COMMIT_HISTORY_CACHE[key] = history
+    return history
+
+def _default_skill_version(skill_id: str, ts_raw: str | None) -> str:
+    """Best-effort git hash of the skill's SKILL.md at (or before) ts_raw.
+    No git history / no such file / any subprocess failure -> "unknown",
+    never an error (AC-EDGE)."""
+    from fno.paths import resolve_repo_root
+
+    name = skill_id.split(":", 1)[1] if ":" in skill_id else skill_id
+    name = _PHASE_TO_SKILL_DIR.get(name, name)
+    rel = f"skills/{name}/SKILL.md"
+    try:
+        root = resolve_repo_root()
+    except Exception:
+        return "unknown"
+    if not (root / rel).exists():
+        return "unknown"
+
+    until_dt = _parse_ts(ts_raw) or datetime.now()
+    best: str | None = None
+    for dt, h in _skill_commit_history(root, rel):
+        if dt > until_dt:
+            break
+        best = h
+    return best or "unknown"
+
+
+def _extract_skill_runs(row: dict, *, read_transcript) -> tuple[list[str], str]:
+    """Return (distinct skill ids, method) for one ledger row.
+
+    method is "transcript" (real Skill tool_use found), "phase-proxy"
+    (fallback to phases_completed), or "unattributed" (neither)."""
+    from fno.cost._session_cost import UUID_RE
+
+    sessions = row.get("sessions")
+    uuid_sessions = [s for s in sessions if isinstance(s, str) and UUID_RE.match(s)] if isinstance(sessions, list) else []
+    found: list[str] = []
+    for sid in uuid_sessions:
+        lines = read_transcript(sid)
+        if lines:
+            found.extend(_skills_from_transcript(lines))
+    if found:
+        return sorted(set(found)), "transcript"
+
+    phases = row.get("phases_completed")
+    proxy = sorted({_PHASE_TO_SKILL[p] for p in phases if p in _PHASE_TO_SKILL}) if isinstance(phases, list) else []
+    if proxy:
+        return proxy, "phase-proxy"
+    return [], "unattributed"
+
+
+_CI_RED_PREFIX = "FAILURE:"
+_CI_RECOGNIZED_NONRED = frozenset({"SUCCESS", "PENDING", "none", "unknown", "skipped"})
+
+def _row_session_ids(row: dict) -> set[str]:
+    """A row's session ids: the `sessions` list (both UUID and 20260708T-style),
+    falling back to the scalar `session_id` for rows predating the list."""
+    ids: set[str] = set()
+    sessions = row.get("sessions")
+    if isinstance(sessions, list):
+        ids.update(s for s in sessions if isinstance(s, str) and s)
+    scalar = row.get("session_id")
+    if isinstance(scalar, str) and scalar:
+        ids.add(scalar)
+
+def _ci_reds_from_fires(ci_ordered: list[str]) -> tuple[int | None, int]:
+    """Count distinct red EPISODES (transitions into FAILURE:*) across a
+    session's loop_check ci values in ts order. A red streak of N fires counts
+    once. Returns (ci_reds, unparsed_count); ci_reds is None when any fire
+    carried an unrecognized ci shape (drift must not be silently miscounted)."""
+    unparsed = 0
+    for ci in ci_ordered:
+        if isinstance(ci, str) and (ci.startswith(_CI_RED_PREFIX) or ci in _CI_RECOGNIZED_NONRED):
+            continue
+        unparsed += 1
+    if unparsed:
+        return None, unparsed
+    episodes = 0
+    prev_red = False  # the pre-run state is non-red, so a leading FAILURE is one episode
+    for ci in ci_ordered:
+        is_red = isinstance(ci, str) and ci.startswith(_CI_RED_PREFIX)
+        if is_red and not prev_red:
+            episodes += 1
+        prev_red = is_red
+    return episodes, 0
+
+def _transcript_counts(session_ids: set[str], read_transcript) -> tuple[int | None, int | None]:
+    """Best-effort (turns, toolcalls) from a row's transcript(s): count message
+    lines and tool_use blocks. Both None when no transcript resolves (GC'd /
+    per-machine) - never 0, so unmeasurable stays distinct from measured-zero."""
+    turns = 0
+    toolcalls = 0
+    found_any = False
+    for sid in session_ids:
+        lines = read_transcript(sid)
+        if not lines:
+            continue
+        found_any = True
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("message") is not None or obj.get("type") in ("user", "assistant"):
+                turns += 1
+            message = obj.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, list):
+                toolcalls += sum(1 for b in content if isinstance(b, dict) and b.get("type") == "tool_use")
+    if not found_any:
+        return None, None
+    return turns, toolcalls
+
 
 
 if __name__ == "__main__":

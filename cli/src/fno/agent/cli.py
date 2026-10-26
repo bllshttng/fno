@@ -4,14 +4,13 @@
 still the one-line operating-stack summary, byte-identical to the former
 single command. The session-read leaves folded under it: ``status`` (the
 former top-level status root, one session read under two names),
-``context``, ``cost``, and ``scoreboard``. The old top-level spellings stay
+``context`` and ``cost``. The old top-level spellings stay
 one-release shims (``fno.command_moves``).
 
     whoami            - operating-stack summary (project + fleet + walker + session)
     whoami status     - gate satisfaction + bounded events tail + inconsistencies
     whoami context    - context-window usage for this session or a transcript
     whoami cost       - cost + usage metrics from transcripts and ledger.json
-    whoami scoreboard - read-only telemetry: stop-cause, spend, autonomy, coverage
 
 All are read-only (no state mutations, no events emitted); tests assert
 paired-state hash invariance. Shared options on the summary and status:
@@ -678,11 +677,9 @@ whoami_app.command("status")(status_command)
 
 from fno.context_probe import context_command  # noqa: E402
 from fno.agents.history import history_command  # noqa: E402
-from fno.scoreboard.cli import scoreboard_command  # noqa: E402
 
 whoami_app.command("context", hidden=True)(context_command)
 whoami_app.command("ledger", hidden=True)(history_command)
-whoami_app.command("scoreboard", hidden=True)(scoreboard_command)
 
 
 def cost_command(

@@ -1015,7 +1015,7 @@ def denominator_ratio(
     from datetime import datetime, timedelta
 
     from fno.paths import resolve_repo_root
-    from fno.scoreboard.fold import read_jsonl_events
+    from fno.events.log import read_jsonl_events
 
     events = read_jsonl_events(
         [resolve_repo_root() / ".fno" / "events.jsonl"], {"target_denominator"}

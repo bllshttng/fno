@@ -1,6 +1,6 @@
 """All graph readers speak one migrated vocabulary.
 
-`load_graph` and `read_graph_nodes` (scoreboard) read the graph.json seed
+`load_graph` and `read_graph_nodes` (observer fold) read the graph.json seed
 through the keeper's defaults pass; `read_graph_strict` serves typed rows from
 the store. The store owns import policy now: a seed row the typed model cannot
 represent is CARRIED verbatim (nodes_raw) and every reader applies the same
@@ -18,7 +18,7 @@ from tests.fixtures.graph_seed import seed_graph
 
 from fno.graph.load import load_graph
 from fno.graph.store import read_graph_strict
-from fno.scoreboard.fold import read_graph_nodes
+from fno.observer.fold import read_graph_nodes
 
 # One legacy row per shape the migration has to handle, plus a current-vocabulary
 # row that must survive untouched.

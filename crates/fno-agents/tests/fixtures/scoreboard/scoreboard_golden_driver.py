@@ -488,8 +488,27 @@ def main() -> int:
     import secrets
 
     _write(GOLDEN_DIR / "cases.json", json.dumps(results, indent=1) + "\n")
+    prune_capture_artifacts()
     print(f"captured {len(results)} scoreboard goldens under {GOLDEN_DIR}")
     return 0
+
+
+def prune_capture_artifacts() -> None:
+    """Remove the run-time writes a fresh clone must not carry: the case
+    repos' .git dirs (the parity replay rebuilds the pinned history), the
+    settings backup dirs (a wall-clock name), and the registry snapshot
+    dirs (a unix-stamp name). The committed fixtures stay pristine."""
+    for case_dir in sorted(FIXTURE_DIR.iterdir()):
+        for relative in (
+            "repo/.git",
+            "state/backups",
+            "state/agents/registry-snapshots",
+        ):
+            victim = case_dir / relative
+            if victim.is_dir():
+                shutil.rmtree(victim)
+            elif victim.exists():
+                victim.unlink()
 
 
 if __name__ == "__main__":

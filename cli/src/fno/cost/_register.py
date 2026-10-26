@@ -562,6 +562,39 @@ def build_entry(
     return entry
 
 
+# -- Read-side (moved from the deleted scoreboard fold; the one ledger reader) --
+
+
+class BrokenLedger(Exception):
+    """Ledger failed to parse twice - a real corruption, not a mid-append race."""
+
+    def __init__(self, path: str, offset: int, msg: str):
+        self.path = path
+        self.offset = offset
+        self.msg = msg
+        super().__init__(f"{path}: parse error at byte {offset}: {msg}")
+
+
+def load_ledger_rows(path: Path, *, _retry: bool = True) -> list[dict]:
+    """Load ledger.json rows. Retry once on a parse error (AC5-FR); a second
+    failure raises BrokenLedger (AC5-ERR). Missing file = empty (fresh install)."""
+    import time
+
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except json.JSONDecodeError as e:
+        if _retry:
+            time.sleep(0.1)  # ponytail: fixed backoff; the writer holds flock for ms
+            return load_ledger_rows(path, _retry=False)
+        raise BrokenLedger(str(path), e.pos, e.msg) from e
+    rows = data.get("entries", data) if isinstance(data, dict) else data
+    if not isinstance(rows, list):  # {"entries": null} etc. - valid JSON, junk shape
+        return []
+    return [r for r in rows if isinstance(r, dict)]
+
+
 def _load_ledger_data(tasks_path: Path) -> dict:
     """Load a ledger.json into the canonical ``{"entries": [...]}`` shape.
 

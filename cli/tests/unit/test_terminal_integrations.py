@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.scoreboard.fold import _is_shipped_reason
+from fno.observer.fold import _is_shipped_reason
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

@@ -945,3 +945,16 @@ mod tests {
         assert_eq!(flow["deliveries"]["doc"], 1);
     }
 }
+
+// The views, readers and renderers ported from `cli/src/fno/scoreboard/`
+// (fold.py + cli.py). The classifier above stays the one delivery answer
+// every view here consumes in process.
+mod args;
+mod door;
+pub(crate) mod plan_join;
+mod readers;
+mod render;
+mod views;
+mod context_trace;
+
+pub use door::run_scoreboard;

@@ -207,6 +207,11 @@ enum Role {
     AgentsLeadRefreshCanon(Vec<OsString>),
     /// `fno agents transcript ...`: the native session-bundle transfer.
     AgentsTranscript(Vec<OsString>),
+    /// `fno whoami scoreboard ...`: the telemetry views, native via the
+    /// binary-direct `fno-agents scoreboard` door. The deprecated root
+    /// `fno scoreboard` keeps its Python deprecation line and re-spells to
+    /// this verb, so only the whoami spelling claims here.
+    WhoamiScoreboard(Vec<OsString>),
     /// `fno agents claim backlog|export ...`: the shared-store commands, run
     /// by `fno-agents claim`.
     ClaimStore(Vec<OsString>),
@@ -590,6 +595,18 @@ fn classify_agents_roles(args: &[OsString]) -> Option<Vec<OsString>> {
     None
 }
 
+/// `fno whoami scoreboard ...`: the telemetry views claim natively; the
+/// tail rides verbatim to the binary-direct door. A bare `fno whoami`
+/// scoreboard leaf also claims (its Python leg dies in this port).
+fn classify_whoami_scoreboard(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.first().and_then(|a| a.to_str()) == Some("whoami")
+        && args.get(1).and_then(|a| a.to_str()) == Some("scoreboard")
+    {
+        return Some(args[2..].to_vec());
+    }
+    None
+}
+
 fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Option<Vec<OsString>> {
     if args.len() < 2 || args[0].to_str()? != group || args[1].to_str()? != command {
         return None;
@@ -904,6 +921,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_agents_transcript(args) {
         return Role::AgentsTranscript(rest);
+    }
+    if let Some(rest) = classify_whoami_scoreboard(args) {
+        return Role::WhoamiScoreboard(rest);
     }
     if let Some(rest) = classify_claim_store(args) {
         return Role::ClaimStore(rest);
@@ -1372,6 +1392,19 @@ fn main() {
             std::process::exit(fno::lead_refresh_canon::run(&rest))
         }
         Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),
+        Role::WhoamiScoreboard(rest) => {
+            // The emission counter rides as data over one wire read here,
+            // never a nested `fno` spawn inside the door (the seam budget
+            // bars a second crossing site).
+            if let Some(stats) = fno::server_stats::snapshot_for_scoreboard() {
+                std::env::set_var("FNO_MUX_STATS_JSON", stats);
+            }
+            std::process::exit(fno_agents_exec(
+                "fno whoami scoreboard",
+                &["scoreboard"],
+                &rest,
+            ))
+        }
         Role::MailShow(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail show",
             &["chats", "show"],

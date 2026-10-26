@@ -10,8 +10,8 @@
   "shipped_by_terminal": 2,
   "merged_nodes_without_ledger_row": 0,
   "delivery_classes": {
-    "delivered_doc": 1,
-    "merged": 1
+    "merged": 1,
+    "delivered_doc": 1
   },
   "stop_cause": {
     "DonePRGreen": 2,

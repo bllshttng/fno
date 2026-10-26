@@ -982,6 +982,11 @@ async fn run(args: Vec<String>) -> i32 {
     if command == "stalls" {
         return fno_agents::stalls::run_stalls(&args[1..]);
     }
+    // `scoreboard`: == dispatch like stalls (body in scoreboard/, not here:
+    // the client.rs line budget is 5,000). `fno whoami scoreboard` execs HERE.
+    if command == "scoreboard" {
+        return fno_agents::scoreboard::run_scoreboard(&args[1..]);
+    }
     // `lead-rundown`: the lead ledger page for `fno agents lead ledger`.
     // Same split as lead-history: Python resolves the org and the paths,
     // the native side owns the page assembly, and the fold's scope_nodes ride

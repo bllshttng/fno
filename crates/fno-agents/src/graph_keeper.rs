@@ -1222,6 +1222,11 @@ pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> Value {
         "scoreboard_by_provider" => {
             crate::scoreboard_provider::view(&params).map_err(StoreError::Invalid)
         }
+        // The plan-fidelity join (scoreboard::plan_join): the gate ships its
+        // pre-filtered rows + entries, the one fold answers both readers.
+        "scoreboard_plan_fidelity" => {
+            crate::scoreboard::plan_join::plan_fidelity_op(&params).map_err(StoreError::Invalid)
+        }
         // The escalation-vs-stayed fold (scoreboard_escalation.rs): client-
         // shipped entries + rows + delegated events in, view + text out.
         "scoreboard_escalation" => {

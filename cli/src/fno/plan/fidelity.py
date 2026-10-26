@@ -1,7 +1,7 @@
 """Plan fidelity as a gate decision.
 
-The fold (`fno.scoreboard.fold.build_plan_fidelity`) computes the planned-to-
-delivered join for TELEMETRY: an unjoined plan is unmeasurable, never 0%. That
+The fold (``fno whoami scoreboard --plan-fidelity`` shares the native join)
+computes the planned-to-delivered join for TELEMETRY: an unjoined plan is unmeasurable, never 0%. That
 is exactly wrong for a gate, where an unjoined planned row means a declared
 deliverable never shipped. The inversion is ONE parameter on the same join
 (``unmeasurable='refuse'``), not a second implementation - so the scoreboard and
@@ -19,6 +19,22 @@ from pathlib import Path
 from typing import Any, Optional
 
 __all__ = ["fidelity_refusal", "compute_plan_fidelity"]
+
+
+def _plan_key(plan_path, project=None) -> str | None:
+    """Normalize a plan_path for join, scoped to a `project`. Uses the last two
+    path segments (parent dir + file) rather than the bare basename, so a
+    recurring folder-plan filename (`00-INDEX.md`) does not collapse unrelated
+    plans in the GLOBAL ledger; the `project` prefix scopes across repos. Still
+    prefix-independent, so the planning row and its shipped row match regardless
+    of the worktree each was stamped under."""
+    if not isinstance(plan_path, str) or not plan_path:
+        return None
+    p = Path(plan_path.split("#", 1)[0])
+    tail = f"{p.parent.name}/{p.name}" if p.parent.name else p.name
+    if not tail or tail == "/":
+        return None
+    return f"{project or ''}::{tail}"
 
 
 def fidelity_refusal(
@@ -76,7 +92,8 @@ def compute_plan_fidelity(
     from datetime import datetime
 
     from fno import paths as _paths
-    from fno.scoreboard.fold import _plan_key, build_plan_fidelity, load_ledger_rows
+    from fno.cost._register import load_ledger_rows
+    from fno.graph.store import request_scoreboard_plan_fidelity
 
     now = now or datetime.now()
 
@@ -116,7 +133,7 @@ def compute_plan_fidelity(
     # Any declared value but `allowed` is forbidden, so a typo fails closed.
     forbidden = fm.get("carveouts") is not None and str(fm["carveouts"]).strip().lower() != "allowed"
     node_id = fm.get("node") or fm.get("claims")
-    pf = build_plan_fidelity(
+    pf = request_scoreboard_plan_fidelity(
         rows, graph_nodes, since_days=since_days, now=now, unmeasurable="refuse"
     )
     if pf.get("state") != "ok":
