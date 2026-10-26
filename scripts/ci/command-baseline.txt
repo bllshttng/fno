@@ -87,12 +87,9 @@ inbox user ack
 inbox user list
 inbox user status
 lead board
-lead cancel
 lead done
 lead drain
 lead escalate
-lead init
-lead term
 lint
 loops
 loops resume-all
