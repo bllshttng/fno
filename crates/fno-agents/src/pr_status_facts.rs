@@ -81,14 +81,19 @@ impl RealGhProbe {
         // A `--paginate --slurp` read rides the paged door: the per-head
         // runs listing and the annotations read repeat every status tick,
         // and an unchanged single page answers 304 for no core point. The
-        // door's answer is the slurp shape, one JSON array of pages.
-        if let [api, path, paginate, slurp] = args {
-            let plain = [api.clone(), path.clone()];
-            if let (Some(door), "--paginate", "--slurp") = (
-                crate::gh_etag::eligible(&plain),
-                paginate.as_str(),
-                slurp.as_str(),
-            ) {
+        // door's answer is the slurp shape, one JSON array of pages. The
+        // path rides either before or after the two flags.
+        let paged_path = match args {
+            [api, path, p, s] | [api, p, s, path]
+                if api == "api" && p == "--paginate" && s == "--slurp" =>
+            {
+                Some(path)
+            }
+            _ => None,
+        };
+        if let Some(path) = paged_path {
+            let plain = ["api".to_string(), path.clone()];
+            if let Some(door) = crate::gh_etag::eligible(&plain) {
                 // A spawn error stays an Err, as on the plain path, so the
                 // caller keeps the bounded-read diagnostic; only a gh exit
                 // that is not success reads as Ok(false).

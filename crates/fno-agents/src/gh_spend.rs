@@ -537,15 +537,7 @@ pub(crate) fn top_spenders(journal: &std::path::Path, now: i64, n: usize) -> Val
         .as_array()
         .map(|rows| rows.iter().take(n).cloned().collect())
         .unwrap_or_default();
-    let top_shape = report["by_shape"]
-        .as_array()
-        .and_then(|rows| {
-            rows.iter()
-                .find(|r| r["bucket"] == "core" && r["conditional"] == false)
-        })
-        .cloned()
-        .unwrap_or(Value::Null);
-    json!({"callers": callers, "top_core_shape": top_shape})
+    json!({"callers": callers, "top_core_shape": report["top_core_shape"]})
 }
 
 /// The `spend` op body, with the clock and the probe outcome injected so
@@ -635,6 +627,15 @@ pub(crate) fn spend_report_at(
 
     let mut shapes: Vec<_> = by_shape.into_iter().collect();
     shapes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    // Picked before the cut: 25 cached or GraphQL shapes can outrank every
+    // uncached core one, and this is the shape a person acts on.
+    let top_core_shape = shapes
+        .iter()
+        .find(|((_, _, bucket, conditional), _)| bucket == "core" && !conditional)
+        .map(|((caller, shape, _, _), count)| {
+            json!({"caller": caller, "shape": shape, "count": count})
+        })
+        .unwrap_or(Value::Null);
     shapes.truncate(25);
 
     let github_value = match github {
@@ -716,6 +717,7 @@ pub(crate) fn spend_report_at(
                 "count": count,
             }))
             .collect::<Vec<_>>(),
+        "top_core_shape": top_core_shape,
         "blind_spots": BLIND_SPOTS,
     });
     if let Some(g) = github_value {
