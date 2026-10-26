@@ -89,21 +89,26 @@ impl RealGhProbe {
                 paginate.as_str(),
                 slurp.as_str(),
             ) {
+                // A spawn error stays an Err, as on the plain path, so the
+                // caller keeps the bounded-read diagnostic; only a gh exit
+                // that is not success reads as Ok(false).
+                let spawn_failed = std::cell::Cell::new(false);
+                let spawn = |a: &[&str]| {
+                    Self::bounded_gh(a, cwd, admit).inspect_err(|_| spawn_failed.set(true))
+                };
                 let fetch_all = || -> Result<String, String> {
-                    let (ok, stdout, stderr) = Self::bounded_gh(&refs, cwd, admit)?;
+                    let (ok, stdout, stderr) = spawn(&refs)?;
                     if !ok {
                         return Err(stderr);
                     }
                     Ok(String::from_utf8_lossy(&stdout).into_owned())
                 };
-                return Ok(
-                    match crate::gh_etag::conditional_paginated_get(cwd, door, fetch_all, |a| {
-                        Self::bounded_gh(a, cwd, admit)
-                    }) {
-                        Ok(answer) => answer,
-                        Err(stderr) => (false, String::new(), stderr),
-                    },
-                );
+                return match crate::gh_etag::conditional_paginated_get(cwd, door, fetch_all, &spawn)
+                {
+                    Ok(answer) => Ok(answer),
+                    Err(why) if spawn_failed.get() => Err(why),
+                    Err(stderr) => Ok((false, String::new(), stderr)),
+                };
             }
         }
         let (ok, stdout, stderr) = Self::bounded_gh(&refs, cwd, admit)?;
