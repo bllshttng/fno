@@ -1,0 +1,4 @@
+0 distinct worktree overlap observation(s) in the last 28 days
+  worktrees: 0  observers: 0
+  coverage: PARTIAL - 1 malformed journal line(s) skipped (counts may understate)
+  report: fno agents workspace worktree overlaps --since 28 --json
