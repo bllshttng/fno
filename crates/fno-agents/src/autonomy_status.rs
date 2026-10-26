@@ -458,6 +458,17 @@ mod tests {
     }
 
     #[test]
+    fn absent_env_falls_through_to_the_config_rank() {
+        // The override answers only when SET: an absent FNO_THINK_SPAWN
+        // drops the row to its config read (the same fallback the deleted
+        // Python leg took), and the empty-string value still reads as env.
+        let _guard = EnvGuard::clear("FNO_THINK_SPAWN");
+        let (armed, rank) = spawn_think_resolve(None);
+        assert_eq!(rank, "config");
+        assert_eq!(armed, Some(false));
+    }
+
+    #[test]
     fn master_switch_off_vetoes_every_other_row() {
         // The master switch reads through the settings stack; a root whose
         // .fno config.toml carries autonomy.enabled=false vetoes every gated
