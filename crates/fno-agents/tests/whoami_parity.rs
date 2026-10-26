@@ -138,11 +138,26 @@ fn whoami_matches_the_python_goldens() {
         build_fixture(&case.name, root);
         // The door folds a root -J into the group's own spelling before the
         // exec, and the exec prefixes the group name, so the binary sees
-        // `spawn-overlay whoami <argv after `fno whoami`>`.
+        // `spawn-overlay whoami <argv after `fno whoami`>`. The `<MISSING>`
+        // sentinel substitutes to the same real path the driver's runner
+        // hands the Python leg.
+        let missing = root
+            .join("does-not-exist.md")
+            .to_string_lossy()
+            .into_owned();
         let rest: Vec<String> = if case.argv.first().map(String::as_str) == Some("-J") {
             vec!["--json".to_string()]
         } else {
-            case.argv[1..].to_vec()
+            case.argv[1..]
+                .iter()
+                .map(|a| {
+                    if a == "<MISSING>" {
+                        missing.clone()
+                    } else {
+                        a.clone()
+                    }
+                })
+                .collect()
         };
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
         cmd.args(["spawn-overlay", "whoami"]);
