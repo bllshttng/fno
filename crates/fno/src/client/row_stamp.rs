@@ -186,11 +186,11 @@ impl View {
 pub(super) fn no_pane_notice(a: &AgentRow) -> String {
     match a.no_pane_reason {
         Some(AgentNoPaneReason::LivePaneless) => format!(
-            "fno agents session peek {} --follow — worker {} is live but has no pane; resume refused because it would create a second writer",
+            "fno agents peek {} --follow — worker {} is live but has no pane; resume refused because it would create a second writer",
             a.name, a.name
         ),
         Some(AgentNoPaneReason::LivenessUnmeasured) => format!(
-            "worker {} has no pane here: liveness reading is absent (neither confirmed dead nor confirmed live{}); run fno agents session peek {} to see before resuming",
+            "worker {} has no pane here: liveness reading is absent (neither confirmed dead nor confirmed live{}); run fno agents peek {} to see before resuming",
             a.name,
             // The reading is absent, but a measurement may still
             // exist and be old - say how old, so "unmeasured" cannot be
