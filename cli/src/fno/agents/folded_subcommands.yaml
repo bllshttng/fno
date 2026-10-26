@@ -27,10 +27,6 @@ mcp:
   - fno.mcp.cli:mcp_app
   - MCP sidecar client commands.
   - hidden: true
-roles:
-  - fno.roles.cli:roles_app
-  - Inspect bounded business-role definitions and resolutions.
-  - hidden: true
 # (d-cf2d6fe1): worktree lifecycle folds under agents, which also
 # resolves the Python/Rust `workspace` collision - root `workspace` then
 # unambiguously means the mux one. Old spellings stay one-release shims.

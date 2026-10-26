@@ -71,7 +71,6 @@ from fno.config._tiers import TIER_ALIASES
 
 if TYPE_CHECKING:
     from fno.config import ModelRoutingBlock, SettingsModel
-    from fno.roles import RoleResolutionBlocked
 
 # Built-in default endpoint for the z.ai provider: the Anthropic-compatible
 # endpoint a claude worker needs. The preset itself (base_url, key env, key
@@ -110,11 +109,14 @@ class RouteCompositionError(ValueError):
 class BusinessRoleResolutionBlockedError(RouteCompositionError):
     """A business role exists but its typed resolution failed closed."""
 
-    def __init__(self, result: "RoleResolutionBlocked") -> None:
+    def __init__(self, result: dict) -> None:
         self.result = result
-        detail = f": {result.detail}" if result.detail else ""
+        # reason arrives as the refusal vocabulary's own string (the Rust
+        # schema owns it), so the message keeps its pre-port bytes.
+        detail = f": {result['detail']}" if result.get("detail") else ""
+        role_id = (result.get("role") or {}).get("id")
         super().__init__(
-            f"business role {result.role.id!r} is blocked ({result.reason.value}){detail}; "
+            f"business role {role_id!r} is blocked ({result['reason']}){detail}; "
             "no worker launched"
         )
 
@@ -1371,14 +1373,13 @@ def _resolve_business_role(role: str) -> Optional[dict]:
     business-role): None when no business role has the name, the routing
     answer, or the typed refusal, raised before any routing policy."""
     from fno import rust_binary
-    from fno.roles import RoleResolutionBlocked
 
     answer = rust_binary.command_call("spawn-overlay", {"kind": "business-role", "role": role})
     if "reason" not in answer:
         return answer
     if answer["reason"] == "not_found":
         return None
-    raise BusinessRoleResolutionBlockedError(RoleResolutionBlocked.model_validate(answer))
+    raise BusinessRoleResolutionBlockedError(answer)
 
 
 def _business_role_target(
