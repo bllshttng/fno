@@ -225,6 +225,10 @@ enum Role {
     /// `fno do target blast-check <plan>`: the blast classifier is native
     /// (target_blast.rs); the Python command is a thin forward.
     TargetBlastCheck(Vec<OsString>),
+    /// (x-9516) `fno do target|state|phase <verb>` and `fno do pr
+    /// stub-manifest <verb>`: the target-family verbs. The door names the op
+    /// argv under the fno-agents binary; the tail rides byte-verbatim.
+    TargetFamily(&'static [&'static str], Vec<OsString>),
     /// `fno do review post-dispositions ...`: the disposition-comment leaf,
     /// exec'd through the sibling fno-agents `review-level findings post`
     /// door. The tail passes through byte-verbatim, --help included: the
@@ -351,9 +355,9 @@ enum Role {
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
     Backlog,
-    /// `fno do pr ...` (except watch and stub-manifest): the whole pr
-    /// namespace execs the sibling Rust binary's pr dispatcher. The argv
-    /// passes through byte-verbatim, the backlog namespace's contract.
+    /// `fno do pr ...` (except watch): the whole pr namespace execs the
+    /// sibling Rust binary's pr dispatcher. The argv passes through
+    /// byte-verbatim, the backlog namespace's contract.
     DoPr,
     /// `fno backlog list [<query>]`: the native node-query door (the grammar
     /// and the read model both live in this crate, d-069a9fa1). Args after
@@ -697,6 +701,77 @@ fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[3..].to_vec())
 }
 
+/// `fno do target <verb> ...` (x-9516): the nine family verbs claim lexically
+/// beside init/start/blast-check, so they never reach the Python forward.
+/// The tail rides to the family door under the fno-agents binary.
+fn classify_target_family(args: &[OsString]) -> Option<(&'static [&'static str], Vec<OsString>)> {
+    if args.len() < 3 || args[0].to_str()? != "do" || args[1].to_str()? != "target" {
+        return None;
+    }
+    let door: &'static [&'static str] = match args[2].to_str()? {
+        "status" => &["target-status"],
+        "resolve-model" => &["target-gates", "resolve-model"],
+        "request-self-review" => &["target-gates", "request-self-review"],
+        "resolve-owned-identity" => &["target-gates", "resolve-owned-identity"],
+        "check-contained" => &["target-gates", "check-contained"],
+        "check-dispatch-hold" => &["target-gates", "check-dispatch-hold"],
+        "check-review-gate" => &["target-gates", "check-review-gate"],
+        "review-invocation" => &["target-gates", "review-invocation"],
+        "denominator-ratio" => &["target-gates", "denominator-ratio"],
+        _ => return None,
+    };
+    Some((door, args[3..].to_vec()))
+}
+
+/// `fno do state <anything>` (x-9516): the whole group claims; the tail
+/// rides to the state-verbs door.
+fn classify_state_family(args: &[OsString]) -> Option<(&'static [&'static str], Vec<OsString>)> {
+    if args.first().and_then(|a| a.to_str()) != Some("do")
+        || args.get(1).and_then(|a| a.to_str()) != Some("state")
+    {
+        return None;
+    }
+    Some((&["state-verbs"], args[2..].to_vec()))
+}
+
+/// `fno do phase <anything>` (x-9516): the whole group claims (kill-check is
+/// the group's one verb, and it strips its own name from the tail).
+fn classify_phase_family(args: &[OsString]) -> Option<(&'static [&'static str], Vec<OsString>)> {
+    if args.first().and_then(|a| a.to_str()) != Some("do")
+        || args.get(1).and_then(|a| a.to_str()) != Some("phase")
+    {
+        return None;
+    }
+    Some((&["kill-check"], args[2..].to_vec()))
+}
+
+/// `fno do pr stub-manifest <verb> ...` (x-9516): the manifest verbs claim
+/// ahead of the do-pr lexical claim, whose handback narrows to watch only.
+fn classify_pr_stub_manifest(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>)> {
+    if args.len() < 4
+        || args[0].to_str()? != "do"
+        || args[1].to_str()? != "pr"
+        || args[2].to_str()? != "stub-manifest"
+    {
+        return None;
+    }
+    Some((&["stub-manifest"], args[3..].to_vec()))
+}
+
+/// The deprecated bare `fno stub-manifest <verb> ...` spelling (x-9516): the
+/// command_moves.py Move row redirected it to `do pr stub-manifest`; the
+/// Move row dies with the wheel, so the front door re-claims the spelling.
+fn classify_bare_stub_manifest(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>)> {
+    if args.first().and_then(|a| a.to_str()) != Some("stub-manifest") {
+        return None;
+    }
+    Some((&["stub-manifest"], args[1..].to_vec()))
+}
+
 /// `fno do review post-dispositions ...`: the disposition-comment leaf,
 /// claimed by the same literal three-token prefix. The Python leaf is gone,
 /// so the door's help is the only help: --help/-h no longer refuses the
@@ -921,6 +996,17 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_target_blast_check(args) {
         return Role::TargetBlastCheck(rest);
     }
+    // (x-9516) The target-family claims: the nine `do target` verbs, the
+    // whole `do state` and `do phase` groups, and `do pr stub-manifest`,
+    // before the do-pr lexical claim whose handback narrows to watch only.
+    if let Some((door, rest)) = classify_target_family(args)
+        .or_else(|| classify_state_family(args))
+        .or_else(|| classify_phase_family(args))
+        .or_else(|| classify_pr_stub_manifest(args))
+        .or_else(|| classify_bare_stub_manifest(args))
+    {
+        return Role::TargetFamily(door, rest);
+    }
     if let Some(rest) = classify_review_post_dispositions(args) {
         return Role::ReviewPostDispositions(rest);
     }
@@ -984,16 +1070,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     // The pr namespace claims itself lexically, like backlog: the sibling
     // dispatcher owns the 29 spellings and the handover stays byte-verbatim
-    // (pr port 7). The two carve-outs stay with the Python wheel: `watch`
-    // and `stub-manifest` are the watcher's own surface, and do_cli.py keeps
-    // their mounts answering under `fno do pr`. Bare `fno do pr` claims too:
-    // the grouped help is native once the Python pr_app is gone.
+    // (pr port 7). The one carve-out stays with the Python wheel: `watch` is
+    // the watcher's own surface, and do_cli.py keeps its mount answering
+    // under `fno do pr`. Bare `fno do pr` claims too: the grouped help is
+    // native once the Python pr_app is gone. (`stub-manifest` joined the
+    // native claim in x-9516; its verbs route through the family door.)
     if args.first().and_then(|a| a.to_str()) == Some("do")
         && args.get(1).and_then(|a| a.to_str()) == Some("pr")
-        && !matches!(
-            args.get(2).and_then(|a| a.to_str()),
-            Some("watch") | Some("stub-manifest")
-        )
+        && args.get(2).and_then(|a| a.to_str()) != Some("watch")
     {
         return Role::DoPr;
     }
@@ -1001,10 +1085,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     // hidden lazy entry points at the deleted Python pr_app, so a claim here
     // keeps the muscle-memory spelling answering instead of a traceback.
     if args.first().and_then(|a| a.to_str()) == Some("pr")
-        && !matches!(
-            args.get(1).and_then(|a| a.to_str()),
-            Some("watch") | Some("stub-manifest")
-        )
+        && args.get(1).and_then(|a| a.to_str()) != Some("watch")
     {
         return Role::DoPr;
     }
@@ -1500,6 +1581,9 @@ fn main() {
             &["target-blast-check"],
             &rest,
         )),
+        Role::TargetFamily(door, rest) => {
+            std::process::exit(fno_agents_exec("fno do target family", door, &rest))
+        }
         Role::ReviewPostDispositions(rest) => std::process::exit(fno_agents_exec(
             "fno do review post-dispositions",
             &["review-level", "findings", "post"],
@@ -1699,11 +1783,19 @@ mod tests {
         // wheel's hidden lazy entry died with the Python pr_app.
         assert_eq!(decide_role(&os(&["pr", "status", "41"]), false), Role::DoPr);
         assert_ne!(decide_role(&os(&["pr", "watch"]), false), Role::DoPr);
-        // The two Python mounts stay unclaimed: they forward to the wheel.
+        // The one Python mount stays unclaimed: it forwards to the wheel.
         assert_ne!(decide_role(&os(&["do", "pr", "watch"]), false), Role::DoPr);
+        // (x-9516) `stub-manifest` joined the native claim: the family verbs
+        // route through the TargetFamily door, no longer the wheel.
         assert_ne!(
             decide_role(&os(&["do", "pr", "stub-manifest", "list"]), false),
-            Role::DoPr
+            Role::Forward
+        );
+        // The deprecated bare spelling re-claimed: it rides to the native
+        // door once the Move row's Python group dies with the wheel.
+        assert_ne!(
+            decide_role(&os(&["stub-manifest", "write", "--node", "x-1"]), false),
+            Role::Forward
         );
         // A non-pr `do` tree stays with its owners.
         assert_ne!(
