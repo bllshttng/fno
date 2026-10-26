@@ -1867,23 +1867,12 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
                 // claude's attach target whether or not the row is
                 // pane-hosted - the pre-declaration claude behavior, now read
                 // off the declaration instead of a name comparison.
-                // A row that lost its cached short id (a mux restart drops
-                // it) still names its job: the jobId is the session uuid's
-                // leading 8 hex, the same derivation the re-entry planner
-                // uses, so the tap reaches Drive instead of a transcript tail.
                 IdKind::Short => row
                     .get("short_id")
                     .or_else(|| row.get("claude_short_id"))
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
-                    .map(attach_job_id)
-                    .or_else(|| {
-                        row.get("harness_session_id")
-                            .or_else(|| row.get("claude_session_uuid"))
-                            .and_then(|v| v.as_str())
-                            .map(attach_job_id)
-                            .filter(|id| id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()))
-                    }),
+                    .map(attach_job_id),
                 // A full session id addresses a durable thread, and only a
                 // thread-shaped row may take one.
                 IdKind::Session if is_thread_shape => row
@@ -2494,6 +2483,27 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
         });
     }
     drop(reg_ids); // release the borrow of `out` before extending it
+
+    // A claude row that lost its cached short id (a mux restart drops it)
+    // still names its job: the jobId is the session uuid's leading 8 hex, the
+    // re-entry planner's own derivation, so a tap reaches Drive instead of a
+    // transcript tail. Only after the join: a roster worker answering the row
+    // by name holds the real job id, and a derived one would shadow it.
+    let roster_names: HashSet<&str> = roster.iter().map(|w| w.name.as_str()).collect();
+    for r in &mut out {
+        if r.attach_id.is_some()
+            || r.harness.as_deref() != Some("claude")
+            || roster_names.contains(r.name.as_str())
+        {
+            continue;
+        }
+        r.attach_id = r
+            .harness_session_id
+            .as_deref()
+            .or(r.claude_session_uuid.as_deref())
+            .map(attach_job_id)
+            .filter(|id| id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
 
     // A PARKED fork id renders as a lineage child of its
     // primary while the roster still lists it live. The second uuid a fork
