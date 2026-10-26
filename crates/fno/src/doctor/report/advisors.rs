@@ -62,7 +62,7 @@ fn load_doctor_config() -> DoctorConfig {
     cfg
 }
 
-fn config_candidates() -> Vec<PathBuf> {
+pub(crate) fn config_candidates() -> Vec<PathBuf> {
     let mut paths = vec![home_dir().join(".fno/config.toml")];
     if let Ok(cwd) = std::env::current_dir() {
         let mut cur: Option<&Path> = Some(cwd.as_path());

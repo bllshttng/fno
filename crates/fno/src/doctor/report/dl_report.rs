@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use super::command_call;
 use super::state_dir;
-use super::{resolve_source, Probes};
+use super::{config_candidates, resolve_source, Probes};
 
 const BLOCK_VERSION: i64 = 1;
 
@@ -51,32 +51,48 @@ fn walk_to_repo_root() -> std::path::PathBuf {
     root
 }
 
+/// `evals.stale_days` from the config ladder, the deleted leg's
+/// `int(getattr(load_settings().evals, "stale_days", 7) or 7)`: a falsy or
+/// unreadable value reads the door's own default.
+fn evals_stale_days() -> i64 {
+    for path in config_candidates() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(doc) = toml::from_str::<toml::Value>(&text) else {
+            continue;
+        };
+        if let Some(v) = doc
+            .get("evals")
+            .and_then(|e| e.get("stale_days"))
+            .and_then(|v| v.as_integer())
+        {
+            if v != 0 {
+                return v;
+            }
+        }
+    }
+    7
+}
+
 pub(crate) fn evals_summary() -> Value {
     let path = state_dir().join("history/evals-history.jsonl");
     if !path.exists() {
         return Value::Null;
     }
-    let payload = command_call(
+    // The native health projection (evals-trend op health): one denominator
+    // authority; the doctor never re-folds. The door prints literal null on
+    // zero rows, keeping the None-on-error posture.
+    command_call(
         &["evals-trend"],
-        json!({"op": "summary", "history": path.to_string_lossy(), "stale_days": 7}),
+        json!({
+            "op": "health",
+            "history": path.to_string_lossy(),
+            "stale_days": evals_stale_days(),
+        }),
         30,
     )
-    .ok()
-    .filter(|p| p.get("row_count").and_then(Value::as_i64).unwrap_or(0) > 0)
-    .unwrap_or(Value::Null);
-    match payload {
-        Value::Null => Value::Null,
-        p => json!({
-            "regression_pass_rate": p.get("regression_pass_rate").cloned().unwrap_or(Value::Null),
-            "flake_count": p.get("flake_count").cloned().unwrap_or(Value::from(0)),
-            "regression_alarm": p.get("regression_alarm").cloned().unwrap_or(Value::Array(vec![])),
-            "regressed": p.get("regressed").cloned().unwrap_or(Value::Array(vec![])),
-            "window_days": 7,
-            "age_days": p.get("age_days").cloned().unwrap_or(Value::Null),
-            "stale": p.get("stale").cloned().unwrap_or(Value::Bool(false)),
-            "never_ran": p.get("never_ran").cloned().unwrap_or(Value::Bool(false)),
-        }),
-    }
+    .unwrap_or(Value::Null)
 }
 
 /// Root freshness, folded natively by the Rust command; transport only
