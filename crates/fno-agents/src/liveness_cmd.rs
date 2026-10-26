@@ -353,7 +353,9 @@ mod tests {
         // finishes the row even with a fresh transcript; evidence-free reads
         // unknown, never dead; a handle nothing answers for is its own word.
         let gone = crate::row_verdict::reaped_pid();
-        let (d1, home) = fixture_home(vec![entry(json!({"name": "dead-row", "pid": gone}))]);
+        let (d1, home) = fixture_home(vec![entry(
+            json!({"name": "dead-row", "pid": gone, "pid_start_time": 1}),
+        )]);
         let _ = d1;
         assert_eq!(
             run_measured(
