@@ -1,7 +1,6 @@
 # campaign	path	lang	declarations_at_0d421fbc04
 K1	cli/benchmarks/test_measure_fno.py	py	7
 K1	cli/src/fno/paths_testing.py	py	1
-K1	cli/src/fno/setup/test_recommended_rules.py	py	5
 K1	cli/src/fno/test_worktree_paths.py	py	11
 K1	cli/tests/agents/test_command_answer_blueprint_floor.py	py	4
 K1	cli/tests/goldens/test_advance_golden.py	py	3
@@ -84,7 +83,6 @@ K1	cli/tests/unit/test_config_optouts.py	py	13
 K1	cli/tests/unit/test_config_receipt.py	py	2
 K1	cli/tests/unit/test_config_routing.py	py	9
 K1	cli/tests/unit/test_config_schema.py	py	10
-K1	cli/tests/unit/test_config_search_ceiling.py	py	2
 K1	cli/tests/unit/test_config_set.py	py	16
 K1	cli/tests/unit/test_config_toml_readers.py	py	4
 K1	cli/tests/unit/test_config_unset.py	py	5
@@ -677,7 +675,6 @@ K5	cli/tests/test_graph_concurrent_writers.py	py	2
 K5	cli/tests/test_no_hardcoded_node_id.py	py	3
 K5	cli/tests/test_node_claim_release_authority.py	py	5
 K5	cli/tests/test_review_locking.py	py	8
-K5	cli/tests/unit/company/test_join.py	py	10
 K5	cli/tests/unit/plan/test_blueprint_claim_derived_status.py	py	5
 K5	cli/tests/unit/plan/test_blueprint_mutate_node_id_filename.py	py	3
 K5	cli/tests/unit/test_advance.py	py	199
@@ -787,7 +784,6 @@ K5	cli/tests/unit/test_mail_status_unclaimed.py	py	5
 K5	cli/tests/unit/test_maintain.py	py	135
 K5	cli/tests/unit/test_node_id_sh.py	py	4
 K5	cli/tests/unit/test_operator_capture.py	py	13
-K5	cli/tests/unit/test_orient_done_when.py	py	27
 K5	cli/tests/unit/test_planned_unclaimed.py	py	13
 K5	cli/tests/unit/test_promise_gate.py	py	36
 K5	cli/tests/unit/test_quota_lock.py	py	6
@@ -800,7 +796,6 @@ K5	cli/tests/unit/test_relatedness_consolidation.py	py	3
 K5	cli/tests/unit/test_relatedness_dedup.py	py	13
 K5	cli/tests/unit/test_render_targets.py	py	22
 K5	cli/tests/unit/test_render_trigger.py	py	3
-K5	cli/tests/unit/test_retro_reconcile_findings.py	py	9
 K5	cli/tests/unit/test_rollup_maintain.py	py	10
 K5	cli/tests/unit/test_scoreboard.py	py	35
 K5	cli/tests/unit/test_stale_escalate.py	py	4
@@ -935,7 +930,6 @@ K6	cli/tests/events/test_schema_files.py	py	12
 K6	cli/tests/events/test_schema_manifest.py	py	8
 K6	cli/tests/integration/test_authorized_merge.py	py	7
 K6	cli/tests/integration/test_pr_watch_auto_merge.py	py	1
-K6	cli/tests/integration/test_retro_pr_scope.py	py	25
 K6	cli/tests/integration/test_worktree_cleanup_merged.py	py	63
 K6	cli/tests/mcp/test_channel_wire.py	py	17
 K6	cli/tests/mcp/test_request_id.py	py	10
@@ -1143,9 +1137,7 @@ K6	crates/fno-agents/tests/task_context_journey.rs	rs	1
 K6	crates/fno/src/event_store_recovery.rs	rs	1
 K7	cli/src/fno/plan/test_boundary.py	py	21
 K7	cli/src/fno/plan/test_folder_audit.py	py	8
-K7	cli/src/fno/setup/test_starship.py	py	10
 K7	cli/src/fno/target/test_blast.py	py	25
-K7	cli/src/fno/target/test_orient.py	py	42
 K7	cli/src/fno/test_cost.py	py	20
 K7	cli/src/fno/test_target_init_blast.py	py	18
 K7	cli/src/fno/test_target_init_plan_backfill.py	py	17
@@ -1154,22 +1146,13 @@ K7	cli/tests/integration/test_blueprint_mutation.py	py	56
 K7	cli/tests/integration/test_fno_plan_brief.py	py	24
 K7	cli/tests/integration/test_product_delivery_journey.py	py	6
 K7	cli/tests/integration/test_provenance_cmd.py	py	18
-K7	cli/tests/integration/test_retro_land.py	py	11
-K7	cli/tests/integration/test_retro_sentinel_consumer.py	py	19
 K7	cli/tests/integration/test_target_start.py	py	101
 K7	cli/tests/observer/test_cli.py	py	30
 K7	cli/tests/observer/test_fold.py	py	23
 K7	cli/tests/observer/test_judge.py	py	5
 K7	cli/tests/schemas/test_target_state_types.py	py	34
 K7	cli/tests/test_plan_schema_drift.py	py	8
-K7	cli/tests/unit/approvals/test_cli.py	py	15
-K7	cli/tests/unit/approvals/test_store.py	py	56
-K7	cli/tests/unit/company/test_campaign.py	py	9
 K7	cli/tests/unit/company/test_contracts.py	py	9
-K7	cli/tests/unit/company/test_coordinator.py	py	6
-K7	cli/tests/unit/company/test_topology.py	py	7
-K7	cli/tests/unit/company/test_topology_precedence.py	py	8
-K7	cli/tests/unit/company/test_topology_projection.py	py	3
 K7	cli/tests/unit/delivery/test_delivery_cli.py	py	21
 K7	cli/tests/unit/delivery/test_evaluator.py	py	27
 K7	cli/tests/unit/delivery/test_terminal_integrations.py	py	2
@@ -1224,12 +1207,6 @@ K7	cli/tests/unit/test_research_core.py	py	26
 K7	cli/tests/unit/test_research_deliverable.py	py	17
 K7	cli/tests/unit/test_research_grade.py	py	10
 K7	cli/tests/unit/test_resolve_executor_emit.py	py	5
-K7	cli/tests/unit/test_retro_classify.py	py	11
-K7	cli/tests/unit/test_retro_dedup.py	py	7
-K7	cli/tests/unit/test_retro_gate_escape.py	py	4
-K7	cli/tests/unit/test_retro_harvest.py	py	56
-K7	cli/tests/unit/test_retro_postmortems.py	py	27
-K7	cli/tests/unit/test_retro_sweep.py	py	28
 K7	cli/tests/unit/test_target_cli.py	py	73
 K7	cli/tests/unit/test_target_denominator.py	py	10
 K7	cli/tests/unit/test_target_start_bound.py	py	9
@@ -1639,7 +1616,6 @@ K10	cli/tests/agents/test_pane_journeys.py	py	2
 K10	cli/tests/integration/test_birth_hook_wiring.py	py	2
 K10	cli/tests/integration/test_consolidation_audit.py	py	10
 K10	cli/tests/integration/test_defer.py	py	30
-K10	cli/tests/integration/test_effect_idempotency.py	py	4
 K10	cli/tests/integration/test_first_run_documentation.py	py	5
 K10	cli/tests/integration/test_health_monitor.py	py	37
 K10	cli/tests/integration/test_list_misscoped.py	py	3
@@ -1677,7 +1653,6 @@ K10	cli/tests/unit/test_agy_plugin_payload.py	py	4
 K10	cli/tests/unit/test_alias_conflict_suppression.py	py	5
 K10	cli/tests/unit/test_ambient_canary.py	py	1
 K10	cli/tests/unit/test_ambient_surface.py	py	5
-K10	cli/tests/unit/test_anchor_check.py	py	11
 K10	cli/tests/unit/test_annotate.py	py	4
 K10	cli/tests/unit/test_archive_in_db.py	py	6
 K10	cli/tests/unit/test_archive_sweep.py	py	37
@@ -1690,7 +1665,6 @@ K10	cli/tests/unit/test_batch_policy.py	py	15
 K10	cli/tests/unit/test_bundle_cli.py	py	8
 K10	cli/tests/unit/test_cached_state_surface.py	py	9
 K10	cli/tests/unit/test_cascade_reopen_guard.py	py	37
-K10	cli/tests/unit/test_causal_fields.py	py	17
 K10	cli/tests/unit/test_check_migration.py	py	2
 K10	cli/tests/unit/test_cleanup_lane.py	py	5
 K10	cli/tests/unit/test_cli_help.py	py	5
@@ -1736,7 +1710,6 @@ K10	cli/tests/unit/test_human_touch.py	py	8
 K10	cli/tests/unit/test_incarnation_fence.py	py	17
 K10	cli/tests/unit/test_inherited_tier_remap.py	py	49
 K10	cli/tests/unit/test_internal_gh.py	py	12
-K10	cli/tests/unit/test_keep_going.py	py	14
 K10	cli/tests/unit/test_keeper_lane.py	py	31
 K10	cli/tests/unit/test_keyless_smoke.py	py	1
 K10	cli/tests/unit/test_law_command_form_gate.py	py	5

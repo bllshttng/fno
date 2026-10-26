@@ -1,7 +1,7 @@
 {
   "name": "fno",
   "displayName": "Footnote",
-  "version": "0.4.5-dev.20261025",
+  "version": "0.4.5-dev.20261026",
   "description": "Set a target and walk away. Say f[no] to mostly done.",
   "author": {
     "name": "Jason Noah Choi"

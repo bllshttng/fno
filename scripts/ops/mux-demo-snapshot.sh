@@ -138,6 +138,23 @@ export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENTS_HOME="$
 # root provisions the python leg's executables under .local/bin. Without
 # this every fold dies with "could not run" and the org views shoot empty.
 export PATH="$ROOT/.local/bin:$PATH"
+# The org view reads `fno-agents top --machines --json`. The demo root has
+# no fleet primary, and fleet top keeps only seats with a live pid, so the
+# org views would shoot empty. This shim answers that one call with the
+# invented fleet map seeded below, and hands every other call to the real
+# binary.
+mkdir -p "$ROOT/fleetbin"
+cat >"$ROOT/fleetbin/fno-agents" <<SH
+#!/bin/sh
+if [ "\$*" = "top --machines --json" ]; then exec cat "$ROOT/fleet-top.json"; fi
+# Drop this directory wherever it sits in PATH: a process that prepends its
+# own directory would otherwise send the call back here forever.
+PATH="\$(printf '%s' "\$PATH" | tr ':' '\\n' | grep -vxF "$ROOT/fleetbin" | paste -sd: -)"
+export PATH
+exec fno-agents "\$@"
+SH
+chmod +x "$ROOT/fleetbin/fno-agents"
+export PATH="$ROOT/fleetbin:$PATH"
 # The claims legacy lock takes a FILESYSTEM root; a fresh root carries the
 # graph.db migration tombstone at .fno/claims, which is not a directory and
 # crashes the lock. Give the demo's claims their own directory.
@@ -213,8 +230,7 @@ file p2 "Unify the three checkout config surfaces into one documented schema wit
 file p3 "Split the merchant onboarding wizard into three steps with save-and-resume and a progress indicator"
 
 # Real teams: every node carries a scope, and the two seeded leads hold
-# those scopes, so Tree and Graph draw a two-team hierarchy instead of a
-# wall of unowned workers.
+# those scopes.
 for i in "${!IDS[@]}"; do
   if [ $((i % 2)) -eq 0 ]; then s=payments; else s=search; fi
   "$FNO" backlog update "${IDS[$i]}" --set project="$s" >/dev/null
@@ -448,6 +464,61 @@ conn.execute(
 )
 conn.commit()
 conn.close()
+PY
+
+# The fleet map the org view reads: this machine and a second one. Three
+# local seats carry the pane sessions above, so they join their registry
+# rows. Each seat's parent is its spawner's session id prefix: rowan (the mux
+# lead) and wren (the fleet lead) spawned the rest, and reviewer was spawned
+# by archer, so it walks up to wren. One remote seat comes from an old daemon,
+# publishes no seat facts and reaches no lead.
+python3 - "$ROOT/fleet-top.json" "${SIDS[@]}" "${IDS[@]}" <<'PY'
+import json, sys, datetime
+out = sys.argv[1]
+sids = sys.argv[2:5]
+ids = sys.argv[5:]
+now = datetime.datetime.now(datetime.timezone.utc)
+def ts(mins_ago):
+    return (now - datetime.timedelta(minutes=mins_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+MUX_LEAD = "a0d1e2f3-demo-mux-lead"
+FLEET_LEAD = "b1e2f3a4-demo-fleet-lead"
+def seat(name, harness, model, project, status, mins, sid=None, node=None, role=None, short=None, parent=None):
+    return {
+        "name": name, "session": short or (sid or name)[:8], "harness": harness, "node": node,
+        "status": status, "age_s": mins * 60, "rss_mb": 410.0,
+        "parent": parent[:8] if parent else None,
+        "session_id": sid, "model": model, "model_basis": "registry",
+        "started_at": ts(mins + 95), "last_message_at": ts(mins), "cwd": "~/code/checkout",
+        "project": project, "role": role, "context_pct": 38, "parent_at": None,
+    }
+def machine(mid, host, local, age, sessions):
+    return {
+        "machine_id": mid, "host": host, "owner": "demo", "role": "worker",
+        "beat_at": int(now.timestamp()) - age, "cpu": None, "mem_used": 0.62,
+        "mem_pressure": 1, "watts": None, "gpu": None, "verdict": None, "cap": 16,
+        "ceiling": 24, "takes_work": True, "fresh": True, "age_s": age, "local": local,
+        "sessions": sessions,
+    }
+local = [
+    seat("rowan", "claude", "opus", "payments", "quiet", 12, sid=MUX_LEAD, role="lead", short="demo-ld1"),
+    seat("scout", "claude", "opus", "payments", "writing", 1, sid=sids[0], node=ids[0], parent=MUX_LEAD),
+    seat("pager", "pi", "glm-5", "payments", "parked", 150, node=ids[4], short="demo-pg1", parent=MUX_LEAD),
+    seat("wren", "codex", "gpt-6-sol", "search", "quiet", 30, sid=FLEET_LEAD, role="lead", short="demo-ld2"),
+    seat("archer", "codex", "gpt-6-sol", "search", "writing", 2, sid=sids[1], node=ids[1], parent=FLEET_LEAD),
+    seat("reviewer", "opencode", "zen", "search", "parked", 9, sid=sids[2], node=ids[2], parent=sids[1]),
+]
+remote = [
+    seat("kestrel", "claude", "sonnet", "payments", "writing", 3, sid="4a1b2c3d-remote-0001", node=ids[6], parent=MUX_LEAD),
+    seat("heron", "codex", "gpt-6-sol", "payments", "quiet", 44, sid="5b2c3d4e-remote-0002", node=ids[8], parent=FLEET_LEAD),
+    seat("ibis", "opencode", "zen", "search", "writing", 5, sid="6c3d4e5f-remote-0003", node=ids[3], parent=MUX_LEAD),
+    {"name": "plover", "session": "7d4e5f60", "harness": "claude", "node": None,
+     "status": "unknown", "age_s": None, "rss_mb": None, "parent": None},
+]
+fleet = {"fresh_s": 300, "machines": [
+    machine("demo-bb16", "bb16", True, 4, local),
+    machine("demo-imac2d2", "imac2d2", False, 21, remote),
+]}
+open(out, "w").write(json.dumps(fleet))
 PY
 
 # Mail and feed events. The bell, the Messages tab and the activity feed read

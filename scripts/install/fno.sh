@@ -168,6 +168,12 @@ ensure_uv() {
 	if ! find_uv; then
 		die "uv was installed but is not resolvable; add \$HOME/.local/bin to PATH and re-run, or install uv from https://docs.astral.sh/uv/."
 	fi
+	# The marker lets `fno uninstall` offer `uv self uninstall`; a uv found on
+	# PATH above is the user's own and gets no marker.
+	_uv_marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/fno-bootstrap"
+	if ! { mkdir -p "$_uv_marker_dir" && : >"$_uv_marker_dir/uv-installed-by-fno"; }; then
+		say "warning: could not record that fno installed uv; 'fno uninstall' will not offer to remove it."
+	fi
 	say "installed uv ($FNO_UV)"
 }
 
@@ -469,14 +475,14 @@ frontdoor_receipt() {
 }
 
 # The post-install shim sweep: repair any fno* shim in the tool bin
-# that dangles or resolves into a temp dir; fail loud when unrepairable.
+# that is missing, dangles, or resolves into a temp dir; fail loud when unrepairable.
 shim_sweep() {
 	[ -n "$FNO_TOOL_BIN" ] || FNO_TOOL_BIN="${HOME:-}/.local/bin"
 	# An installed fno predating the sweep module has nothing to sweep; the
 	# wheel that ships the module always sweeps.
 	"$FNO_VENV_PY" -c "import fno.setup.shim_check" 2>/dev/null || return 0
 	"$FNO_VENV_PY" -m fno.setup.shim_check --repair --bin-dir "$FNO_TOOL_BIN" && return 0
-	say "INCOMPLETE install: fno shims in $FNO_TOOL_BIN dangle or point into a temp dir and could not be relinked to the durable copy. Inspect: $FNO_VENV_PY -m fno.setup.shim_check --bin-dir $FNO_TOOL_BIN"
+	say "INCOMPLETE install: fno shims in $FNO_TOOL_BIN are missing, dangle, or point into a temp dir and could not be relinked to the durable copy. Inspect: $FNO_VENV_PY -m fno.setup.shim_check --bin-dir $FNO_TOOL_BIN"
 	return 1
 }
 
@@ -589,6 +595,17 @@ main() {
 	case "$(uname -s 2>/dev/null)" in
 		MINGW* | MSYS* | CYGWIN* | Windows_NT)
 			die "footnote is not supported on native Windows yet. Please run under WSL2 (a Linux environment)."
+			;;
+	esac
+
+	# PyPI ships prebuilt wheels (all four Rust binaries inside) for four
+	# targets only. Any other platform gets the Python-only install, so name
+	# that before provisioning and give the build route.
+	case "$(uname -s 2>/dev/null)/$(uname -m 2>/dev/null)" in
+		Darwin/arm64 | Darwin/x86_64 | Linux/x86_64 | Linux/aarch64) ;;
+		*)
+			say "no prebuilt wheel for $(uname -s 2>/dev/null)/$(uname -m 2>/dev/null): PyPI ships wheels for macOS arm64, macOS x86_64, Linux x86_64 and Linux aarch64 only."
+			say "this install will be Python-only. A Rust toolchain (https://rustup.rs) is required for the rest: run 'cargo install --locked fno' once it is installed."
 			;;
 	esac
 

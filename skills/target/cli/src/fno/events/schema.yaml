@@ -3146,7 +3146,9 @@ event_types:
     description: >
       One local test run through `fno doctor test`. A started row lands at
       spawn and a finished row at exit, joined by run_id. A started row with
-      no finished row names a killed runner. A refused run writes nothing.
+      no finished row names a killed runner. A refused run lands one refused
+      row naming the reason, the exit the caller saw and the pid that
+      answered.
     sources: [daemon]
     data:
       required: [run_id, stage]
@@ -3155,7 +3157,7 @@ event_types:
           type: string
         stage:
           type: string
-          enum: [started, finished]
+          enum: [started, finished, refused]
         command:
           type: string
         command_key:
@@ -3170,6 +3172,8 @@ event_types:
           type: string
         exit_code:
           type: integer
+        reason:
+          type: string
         duration_ms:
           type: integer
     consumers: [fno-agents test-run stats]
@@ -4257,8 +4261,8 @@ event_types:
       properties:
         reason:
           type: string
-          enum: [gate, timeout, error, no_rows]
-          description: "Why the run could not fire: gate (spawn gate refused), timeout (the tick budget killed the subprocess), error (non-zero exit or spawn trouble), no_rows (exit 0 but no history rows appended)."
+          enum: [gate, timeout, error, no_rows, no_bank]
+          description: "Why the run could not fire: gate (spawn gate refused), timeout (the tick budget killed the subprocess), error (non-zero exit or spawn trouble), no_rows (exit 0 but no history rows appended), no_bank (no checkout carries evals/bank, so nothing launched)."
         detail:
           type: string
           description: "Optional. The refusal, exit line, or stderr tail naming the cause."
@@ -7942,9 +7946,9 @@ event_types:
   # The `decision` and `state` enums below are ADVISORY at the validator layer,
   # matching the `outcome` crumb further down: both validators check required
   # fields and envelope shape, not per-type data enums, unless a type opts into a
-  # hardcoded check. Real enforcement is at the only emitter -- fno.approvals'
-  # DecisionKind and EffectState are typed enums, so an out-of-vocabulary value
-  # cannot be constructed. Promote to a hardcoded check in BOTH validators (and
+  # hardcoded check. Real enforcement is at the emitter -- the Rust effect gate
+  # and approvals module write only the vocabulary below, so an out-of-vocabulary
+  # value cannot be produced. Promote to a hardcoded check in BOTH validators (and
   # add invalid corpus fixtures) if a second, untyped emitter ever appears.
 
   - name: approval_requested
@@ -8570,6 +8574,14 @@ event_types:
     description: "The daemon nudged an ended Codex worker turn on an open node. The session and last activity timestamp identify one quiet episode."
     sources: [daemon]
     data: {required: [session_id, node, last_activity_ms, via]}
+  - name: pr_push_landed
+    description: "fno do pr push landed a commit. The ci_cadence arm checks the PR's CI at 1, 15, 30 and 55 minutes from this row."
+    sources: [daemon, rust]
+    data: {required: [branch, sha, cwd]}
+  - name: ci_cadence_check
+    description: "The ci_cadence arm read a pushed head's CI at one offset. outcome names what it did: pending, green, superseded, flake_wait, flake_rerun, stale_red, woke, red_no_session or unreadable."
+    sources: [daemon]
+    data: {required: [branch, sha, offset_s, outcome]}
   - name: mcp_channel_demoted_to_socket
     description: "Legacy agents-family telemetry kind, envelope-mapped by the shared emitter."
     sources: [daemon, agents]
