@@ -898,24 +898,6 @@ def test_default_substrate_spawn_stays_python() -> None:
     assert not rr._is_default_substrate_spawn("ask", ["ask", "w", "--as", "pane"])
 
 
-def test_is_dispatch_account_bearing_spawn_predicate() -> None:
-    # The cutover carrier is Python-only: the Rust spawn parser exits
-    # "unknown flag: --dispatch-account" and the launch dies before it starts.
-    # The rule lives in the router, not at one caller, so every caller is covered.
-    assert rr._is_dispatch_account_bearing_spawn(
-        "spawn", ["spawn", "w", "--dispatch-account", "ccr"]
-    )
-    assert rr._is_dispatch_account_bearing_spawn(
-        "spawn", ["spawn", "--name", "w", "--dispatch-account=ccr"]
-    )
-    assert not rr._is_dispatch_account_bearing_spawn(
-        "spawn", ["spawn", "w", "--account", "ccr"]
-    )
-    assert not rr._is_dispatch_account_bearing_spawn(
-        "ask", ["ask", "w", "--dispatch-account", "ccr"]
-    )
-
-
 def test_routing_predicates_stop_at_argv_boundary() -> None:
     # codex P1: a provider payload's own flags after --argv must not force Python.
     assert not rr._is_resume_bearing_spawn(

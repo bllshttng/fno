@@ -3,10 +3,8 @@
 The dev channel: it installs your local checkout for development. Over a
 release-channel plugin (stable, rc or nightly) it refuses unless ``--dev``.
 
-Thin Typer front door over ``fno-agents plugin-install``: the Rust command owns
-the stage build, the claude/opencode/agy arms, the env cleanup and the
-reclaim call. The codex arm stays on the Python ``converge`` engine, which
-receives the stage via ``plugin-install --stage-only``.
+Thin Typer front door over ``fno-agents plugin-install``, which owns the
+stage build, every harness arm, the env cleanup and the reclaim call.
 """
 from __future__ import annotations
 
@@ -69,35 +67,6 @@ def install(
             err=True,
         )
         raise typer.Exit(code=2)
-    harness, extra = tail[0], tail[1:]
-    force = "--force" in extra or "-F" in extra
-    argv = ["plugin-install"]
-    if harness == "codex":
-        # The codex arm stays on the Python converge engine (ship-phase ruling).
-        stage_out = subprocess.run(
-            [str(binary), "plugin-install", "--stage-only", "codex", *extra],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if stage_out.returncode != 0:
-            typer.echo(stage_out.stderr or "stage build failed", err=True)
-            raise typer.Exit(code=stage_out.returncode)
-        stage = Path(stage_out.stdout.strip().splitlines()[-1])
-        from fno.setup.codex_plugin import CodexPluginError, converge
-
-        try:
-            result = converge(channel="dev", refresh=force, source_root=stage)
-        except CodexPluginError as exc:
-            typer.echo(f"codex arm: {exc.stage}: {exc.detail}", err=True)
-            raise typer.Exit(code=1) from exc
-        typer.echo(
-            f"plugin install codex: converged {result.plugin_id} {result.version} "
-            f"(action={result.action})"
-        )
-        argv = ["plugin-install", "--env-only"]
-    else:
-        argv += [harness, *extra]
-    proc = subprocess.run([str(binary), *argv], check=False)
+    proc = subprocess.run([str(binary), "plugin-install", *tail], check=False)
     if proc.returncode != 0:
         raise typer.Exit(code=proc.returncode)

@@ -319,37 +319,77 @@ def test_done_audit_tags_operator_when_driving(tmp_graph, monkeypatch):
     assert captured["kw"]["source"] == "backlog"
 
 
-class _SnapshotFakeTracker:
-    """A NodeTracker fake carrying sentinels distinct from any graph value."""
+class _GetFakeTracker:
+    """A tracker-door fake carrying sentinels distinct from any graph value.
+
+    The seam is the native door, so the fake answers the door's payload
+    shapes (read, sidecar-get, sidecar-all) and the command_call stub routes
+    every tracker op through it. Per-id sidecar answers read the fixture
+    files under ``sidecar_dir``.
+    """
 
     name = "fake-external"
 
-    def __init__(self):
-        from fno.tracker.types import TrackerCandidate, TrackerState
+    def __init__(self, sidecar_dir):
+        self.sidecar_dir = sidecar_dir
 
-        self._TrackerCandidate = TrackerCandidate
-        self._TrackerState = TrackerState
+    @staticmethod
+    def _node(id, title, state="open", **extra):
+        return {
+            "id": id, "title": title, "state": state,
+            "parent": extra.get("parent"),
+            "blocked_by": extra.get("blocked_by", []),
+        }
 
     def read(self, id):
         if id == "EXT-done":
-            return self._TrackerCandidate(
-                id=id, title="Closed blocker", state=self._TrackerState.closed
-            )
-        from fno.tracker.types import NodeNotFound
+            return {"node": self._node(id, "Closed blocker", state="closed")}
+        if id == "EXT-1":
+            return {"node": self._node(id, "Free work", blocked_by=["EXT-done"])}
+        if id == "EXT-2":
+            return {"node": self._node(id, "Waiting")}
+        return {"not_found": True}
 
-        raise NodeNotFound(id)
+    def _sc(self, sid):
+        path = self.sidecar_dir / f"{sid}.json"
+        body = {"id": sid}
+        if path.exists():
+            body.update(json.loads(path.read_text(encoding="utf-8")))
+        return body
 
-    def list_open(self):
-        T, S = self._TrackerCandidate, self._TrackerState
-        return [
-            T(id="EXT-1", title="Free work", state=S.open, priority="p1",
-              created_at="2026-01-02T00:00:00Z", blocked_by=["EXT-done"]),
-            T(id="EXT-2", title="Waiting", state=S.open, priority="p2",
-              created_at="2026-01-03T00:00:00Z"),
-        ]
+    def door(self, op, payload):
+        if op == "read":
+            return self.read(payload["id"])
+        if op == "list-open":
+            return {"candidates": [
+                self._node("EXT-1", "Free work", priority="p1",
+                           created_at="2026-01-02T00:00:00Z",
+                           blocked_by=["EXT-done"]),
+                self._node("EXT-2", "Waiting", priority="p2",
+                           created_at="2026-01-03T00:00:00Z"),
+            ]}
+        if op == "sidecar-get":
+            return {"sidecar": self._sc(payload["id"])}
+        if op == "sidecar-all":
+            out = {}
+            for path in sorted(self.sidecar_dir.glob("*.json")):
+                out[path.stem] = json.loads(path.read_text(encoding="utf-8"))
+            return {"sidecars": out}
+        raise AssertionError(f"these read paths never call {op}")
 
-    def close(self, id):
-        raise AssertionError("close is not part of the snapshot read path")
+    def install(self, monkeypatch):
+        import fno.rust_binary as rb
+
+        real_call = rb.command_call
+        fake = self
+
+        def _door_call(command, payload, *args, **kwargs):
+            op = payload.get("tracker") if isinstance(payload, dict) else None
+            if op:
+                return fake.door(op, payload)
+            return real_call(command, payload, *args, **kwargs)
+
+        monkeypatch.setattr(rb, "command_call", _door_call)
 
 
 # --- rank (curated intra-lane ordering) ---
@@ -840,19 +880,6 @@ def test_maintain_apply_skips_in_review_node(tmp_graph):
     assert not node.get("deferred_at")  # never quarantined
 
 
-class _GetFakeTracker(_SnapshotFakeTracker):
-    """Extends the snapshot fake: read() answers the open sentinels too."""
-
-    def read(self, id):
-        if id == "EXT-1":
-            T, S = self._TrackerCandidate, self._TrackerState
-            return T(id=id, title="Free work", state=S.open, blocked_by=["EXT-done"])
-        if id == "EXT-2":
-            T, S = self._TrackerCandidate, self._TrackerState
-            return T(id=id, title="Waiting", state=S.open)
-        return super().read(id)
-
-
 def test_get_external_reads_tracker_and_sidecar_sentinels(
     tmp_graph, tmp_path, monkeypatch
 ):
@@ -873,12 +900,8 @@ def test_get_external_reads_tracker_and_sidecar_sentinels(
         json.dumps({"id": "EXT-1", "cwd": "/external-cwd", "pr_number": 7}),
         encoding="utf-8",
     )
-    monkeypatch.setattr("fno.tracker.get_tracker", lambda *a, **k: _GetFakeTracker())
+    _GetFakeTracker(sidecars).install(monkeypatch)
     monkeypatch.setattr("fno.paths.graph_json", lambda: tmp_graph)
-    import fno.tracker.sidecar as sidecar_store
-
-    monkeypatch.setattr(sidecar_store, "sidecar_path",
-                        lambda i: sidecars / f"{i}.json")
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
 
     r = _invoke("backlog", "get", "EXT-1")
@@ -926,12 +949,8 @@ def test_provenance_external_reads_sidecar_edges(
                     "source_node_id": "EXT-done"}),
         encoding="utf-8",
     )
-    monkeypatch.setattr("fno.tracker.get_tracker", lambda *a, **k: _GetFakeTracker())
+    _GetFakeTracker(sidecars).install(monkeypatch)
     monkeypatch.setattr("fno.paths.graph_json", lambda: tmp_graph)
-    import fno.tracker.sidecar as sidecar_store
-
-    monkeypatch.setattr(sidecar_store, "sidecar_path",
-                        lambda i: sidecars / f"{i}.json")
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
 
     r = _invoke("backlog", "provenance", "EXT-1", "--json")

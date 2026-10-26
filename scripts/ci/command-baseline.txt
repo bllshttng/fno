@@ -95,7 +95,6 @@ loops
 loops resume-all
 mail
 mail send !--origin !--provider
-mcp send
 mux
 notify
 observer
@@ -103,9 +102,7 @@ paths
 phase kill-check
 plan
 pr-watch
-research
 resume
-roles
 route
 scoreboard
 state
@@ -114,7 +111,6 @@ status-fanout tick
 stub-manifest
 target
 test
-think
 uninstall
 update
 version
@@ -123,7 +119,6 @@ whoami cost
 whoami ledger
 whoami scoreboard
 whoami status
-worker
 workspace reap
 workspace register-worker
 workspace worktree archive

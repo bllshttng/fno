@@ -87,7 +87,7 @@ pub fn route_seam(
         return RouteSeam::None;
     };
     if account.is_some() {
-        return RouteSeam::Python("--route with --account composes in the Python CLI");
+        return RouteSeam::Python("--route with an account flag composes in the Python CLI");
     }
     if harness != "claude" {
         return RouteSeam::Refuse(format!(

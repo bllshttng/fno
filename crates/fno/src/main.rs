@@ -200,6 +200,9 @@ enum Role {
     DoctorUpdate(Vec<OsString>),
     /// `fno agents history ... --graph ...`: the native session-card reader.
     AgentsHistory(Vec<OsString>),
+    /// `fno whoami` and `fno whoami status`: Python's output plus the
+    /// session receipt (`fno-agents intel --receipt`).
+    Whoami(Vec<OsString>),
     /// `fno agents lead refresh-canon` (the front's rewrite of
     /// `fno agents org refresh-canon`): the beat's canon-doc refresh. The
     /// carried tail is empty by contract; the door resolves the plugin root
@@ -225,6 +228,15 @@ enum Role {
     /// `fno do target blast-check <plan>`: the blast classifier is native
     /// (target_blast.rs); the Python command is a thin forward.
     TargetBlastCheck(Vec<OsString>),
+    /// `fno do research <topic> ...`: exec'd through the sibling fno-agents
+    /// `research` door. No Python leg remains.
+    DoResearch(Vec<OsString>),
+    /// `fno do think inspect ...` and `fno do think dispatch ...`: exec'd
+    /// through the `think-inspect` and `think-dispatch` doors.
+    ThinkInspect(Vec<OsString>),
+    ThinkDispatch(Vec<OsString>),
+    /// Bare `fno do think`, `--help`, or an unknown leaf (named, exit 2).
+    ThinkUsage(Option<String>),
     /// `fno do review post-dispositions ...`: the disposition-comment leaf,
     /// exec'd through the sibling fno-agents `review-level findings post`
     /// door. The tail passes through byte-verbatim, --help included: the
@@ -337,6 +349,11 @@ enum Role {
     /// The `fno agents org` lead commands and `fno inbox board`, exec'd as
     /// arguments of existing fno-agents actions. Their Python legs are gone.
     Lead(fno::lead_route::Claim),
+    /// `fno agents mcp send ...` and the deprecated root `fno mcp send ...`:
+    /// the ported MCP channel family's send command, exec'd through the
+    /// worker's --mcp-exec lane with the tail byte-verbatim. The bool is the
+    /// root spelling, whose move notice prints before the same exec.
+    AgentsMcpRoot(bool, Vec<OsString>),
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
@@ -696,6 +713,24 @@ fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(args[3..].to_vec())
 }
 
+/// `fno do research <tail>`: the whole leaf is native.
+fn classify_do_research(args: &[OsString]) -> Option<Vec<OsString>> {
+    classify_group_command(args, "do", "research")
+}
+
+/// `fno do think <tail>`: the group is native, so the bare group and its help
+/// claim here too; only the first tail token names a leaf.
+fn classify_do_think(args: &[OsString]) -> Option<Role> {
+    let tail = classify_group_command(args, "do", "think")?;
+    let rest = tail.get(1..).unwrap_or_default().to_vec();
+    Some(match tail.first().and_then(|a| a.to_str()) {
+        Some("inspect") => Role::ThinkInspect(rest),
+        Some("dispatch") => Role::ThinkDispatch(rest),
+        None | Some("--help") | Some("-h") => Role::ThinkUsage(None),
+        Some(other) => Role::ThinkUsage(Some(other.to_string())),
+    })
+}
+
 /// `fno do review post-dispositions ...`: the disposition-comment leaf,
 /// claimed by the same literal three-token prefix. The Python leaf is gone,
 /// so the door's help is the only help: --help/-h no longer refuses the
@@ -878,6 +913,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(claim) = fno::lead_route::classify(args) {
         return Role::Lead(claim);
     }
+    if let Some((root_alias, rest)) = fno::agents_mcp_route::classify(args) {
+        return Role::AgentsMcpRoot(root_alias, rest);
+    }
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
     }
@@ -899,6 +937,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
     }
+    if let Some(rest) = fno::whoami_seam::classify(args) {
+        return Role::Whoami(rest);
+    }
     if let Some(rest) = classify_agents_lead_refresh_canon(args) {
         return Role::AgentsLeadRefreshCanon(rest);
     }
@@ -919,6 +960,12 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_target_blast_check(args) {
         return Role::TargetBlastCheck(rest);
+    }
+    if let Some(rest) = classify_do_research(args) {
+        return Role::DoResearch(rest);
+    }
+    if let Some(role) = classify_do_think(args) {
+        return role;
     }
     if let Some(rest) = classify_review_post_dispositions(args) {
         return Role::ReviewPostDispositions(rest);
@@ -1341,6 +1388,9 @@ fn main() {
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
         Role::Lead(claim) => std::process::exit(fno::lead_route::run(&claim)),
+        Role::AgentsMcpRoot(root_alias, rest) => {
+            std::process::exit(fno::agents_mcp_route::run(root_alias, &rest))
+        }
         Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],
@@ -1368,6 +1418,7 @@ fn main() {
         }
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
+        Role::Whoami(rest) => std::process::exit(fno::whoami_seam::run(&rest)),
         Role::AgentsLeadRefreshCanon(rest) => {
             std::process::exit(fno::lead_refresh_canon::run(&rest))
         }
@@ -1499,6 +1550,34 @@ fn main() {
             &["target-blast-check"],
             &rest,
         )),
+        Role::DoResearch(rest) => {
+            std::process::exit(fno_agents_exec("fno do research", &["research"], &rest))
+        }
+        Role::ThinkInspect(rest) => std::process::exit(fno_agents_exec(
+            "fno do think inspect",
+            &["think-inspect"],
+            &rest,
+        )),
+        Role::ThinkDispatch(rest) => std::process::exit(fno_agents_exec(
+            "fno do think dispatch",
+            &["think-dispatch"],
+            &rest,
+        )),
+        Role::ThinkUsage(unknown) => {
+            if let Some(leaf) = &unknown {
+                eprintln!("fno do think: no such command '{leaf}'");
+            }
+            println!("usage: fno do think <command> [ARGS]...");
+            println!();
+            println!("Read-only discovery inspection and explicit conversational dispatch.");
+            println!();
+            println!("commands:");
+            println!(
+                "  inspect <seed> [--repo DIR] [--json]   collect discovery evidence, no writes"
+            );
+            println!("  dispatch <node> [--json]               hand a node to a bg /think");
+            std::process::exit(if unknown.is_some() { 2 } else { 0 })
+        }
         Role::ReviewPostDispositions(rest) => std::process::exit(fno_agents_exec(
             "fno do review post-dispositions",
             &["review-level", "findings", "post"],
@@ -1712,6 +1791,34 @@ mod tests {
         assert_ne!(
             decide_role(&os(&["do", "review", "--help"]), false),
             Role::DoPr
+        );
+    }
+
+    #[test]
+    fn do_research_and_do_think_claim_their_whole_groups() {
+        assert_eq!(
+            decide_role(&os(&["do", "research", "a topic", "--no-claim"]), false),
+            Role::DoResearch(os(&["a topic", "--no-claim"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "inspect", "x-1", "--json"]), false),
+            Role::ThinkInspect(os(&["x-1", "--json"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "dispatch", "x-1"]), false),
+            Role::ThinkDispatch(os(&["x-1"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think"]), false),
+            Role::ThinkUsage(None)
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "--help"]), false),
+            Role::ThinkUsage(None)
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "ponder"]), false),
+            Role::ThinkUsage(Some("ponder".to_string()))
         );
     }
 

@@ -346,7 +346,7 @@ fn resolve_state_path(raw: &str, cwd: &Path) -> Option<PathBuf> {
 }
 
 /// Configured Python state root, including its `~/.fno` default. `FNO_STATE_DIR`
-/// first: the carrier `fno.paths.state_dir` resolves and `seal_state_root` pins,
+/// first: the carrier `fno.paths.state_dir` resolves and `credentials::seal` pins,
 /// so a sealed read serves the root its parent wrote.
 pub fn state_dir(cwd: &Path) -> Option<PathBuf> {
     if let Some(root) = non_empty_env("FNO_STATE_DIR") {
@@ -374,7 +374,7 @@ pub fn machine_locks_dir() -> Option<PathBuf> {
 }
 
 /// `state-root`: the seal-handshake door. A parent that pins
-/// `FNO_STATE_DIR` around a moved HOME (Python `seal_state_root`) execs
+/// `FNO_STATE_DIR` around a moved HOME (`accounts::credentials::seal`) execs
 /// this binary before relying on the pin and reads this door's one-line
 /// answer: the state root the inherited env actually resolves. A binary
 /// built before the carrier existed fails the echo check, and the parent
@@ -875,8 +875,9 @@ pub fn reap_receipt_retain_days(cwd: &Path) -> u64 {
 /// today's behavior: only rows whose provenance resolves and whose work is
 /// done. `All` widens to resolved rows with open work. `Off` retires nothing.
 /// The one rule no value can cross: an unowned session retires only on an
-/// fno-ownership marker (a sessions[] row fno wrote, or a reap receipt an
-/// earlier retirement staged), so a session with no marker at all is
+/// fno-ownership marker (a sessions[] row fno wrote, a reap receipt an
+/// earlier retirement staged, or a claimed launch record naming the
+/// launcher session), so a session with no marker at all is
 /// unreachable by construction, not by default value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RosterScope {

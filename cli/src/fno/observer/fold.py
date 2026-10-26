@@ -21,8 +21,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fno.cost._register import LEDGER_SESSION_UNRESOLVED
-from fno.plan._doc import FrontmatterError, ParseError, load_plan_text
+from fno.plan._doc import FrontmatterError, ParseError, load_plan_text  # noqa: E402
 from fno.plan.brief import BriefParseError, parse_execution_strategy
 from fno.rust_binary import find_dev_binary, resolve_binary
 from fno.scoreboard.fold import (
@@ -44,6 +43,12 @@ from fno.scoreboard.fold import (
 # Mirrors _CALIBRATION_MIN_VERDICTS (scoreboard/fold.py): below this, a ranking
 # is fabricated confidence, not a real trend (Locked Decision 11).
 MIN_ATTRIBUTABLE = 10
+
+# The recorded value when a ledger row's sessions resolved to nothing; the
+# same sentinel the native ledger writer stamps (ledger_axes.rs). Formerly
+# fno.cost._register.LEDGER_SESSION_UNRESOLVED, read here since the cost
+# family ported to Rust.
+LEDGER_SESSION_UNRESOLVED = "unresolved:no-harness-session"
 
 _SKILL_IDS = {"blueprint": "fno:blueprint", "review": "fno:review", "target": "fno:target"}
 

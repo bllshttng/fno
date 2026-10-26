@@ -96,6 +96,9 @@ pub fn run_context_run(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("--model-price") {
         return run_model_price(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("--session-cost") {
+        return crate::session_cost::run_session_cost(&args[1..]);
+    }
     let mut group_name: Option<&str> = None;
     let mut plugin_root: Option<&str> = None;
     let mut rest = args.iter();

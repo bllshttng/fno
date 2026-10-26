@@ -224,9 +224,9 @@ def _routed_claude_row(
     """A registry holding one routed claude worker, plus its route file path."""
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents.model_routing import _write_settings_env_file
-    from fno.agents.account_env import SCRUB_AUTH_VARS
+    from fno.agents.spawn_overlay_client import compose_credentials
 
-    env = {var: "" for var in SCRUB_AUTH_VARS}
+    env = {var: "" for var in compose_credentials(None, None, {})["scrub"]}
     env.update(ROUTE_ENV)
     path = _write_settings_env_file(env)
     from fno.agents.registry import AgentEntry, write_registry
@@ -449,13 +449,12 @@ def test_direct_resume_refuses_an_incomplete_forward_registry(
 def test_a_route_file_holding_only_the_scrub_floor_refuses(tmp_path, monkeypatch) -> None:
     """Readable but routeless is the same silent fallback as missing."""
     from fno.agents.dispatch import DispatchAskError, restore_route_for_relaunch
-    from fno.agents.account_env import SCRUB_AUTH_VARS
     from fno.agents.registry import load_registry
+    from fno.agents.spawn_overlay_client import compose_credentials
 
     path = _routed_claude_row(tmp_path, monkeypatch)
-    Path(path).write_text(
-        json.dumps({"env": {v: "" for v in SCRUB_AUTH_VARS}}), encoding="utf-8"
-    )
+    scrub = compose_credentials(None, None, {})["scrub"]
+    Path(path).write_text(json.dumps({"env": {v: "" for v in scrub}}), encoding="utf-8")
     with pytest.raises(DispatchAskError) as exc:
         restore_route_for_relaunch(load_registry()[0])
     assert exc.value.exit_code == 2
@@ -598,14 +597,10 @@ def test_matrix_spawn_resume_inherits_the_recorded_account(tmp_path, monkeypatch
         "fno.agents.harnesses.claude.bg_create", _fake_bg_create
     )
 
-    class _Overlay:
-        account_id = "makers"
-        env = {"CLAUDE_CONFIG_DIR": "/acct/makers/.claude"}
-        lane = "config-dir"
-
     monkeypatch.setattr(
-        "fno.agents.account_env.resolve_account_overlay",
-        lambda account_id, **kwargs: _Overlay(),
+        "fno.agents.spawn_overlay_client.account_overlay",
+        lambda account_id, **kwargs: {"account_id": "makers", "lane": "config-dir",
+                                      "env": {"CLAUDE_CONFIG_DIR": "/acct/makers/.claude"}},
     )
     result = dispatch.dispatch_spawn(
         name="router",

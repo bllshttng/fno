@@ -2605,7 +2605,7 @@ class ThinkSpawnBlock(BaseModel):
     rather than failing the whole settings load - false-enabled (a background
     ``/think`` dispatched against the operator's intent) is the dangerous
     direction. The enable + presence + spawn logic lives in
-    :mod:`fno.provenance.spawn_think`.
+    ``crates/fno-agents/src/think_dispatch.rs`` and ``backlog/birth.rs``.
 
     ``max_per_run`` is the per-node-generation-run blast-radius cap (AC4-EDGE):
     a bulk run exceeding it skips the remainder and logs the truncation.
