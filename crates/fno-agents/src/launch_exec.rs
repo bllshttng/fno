@@ -127,6 +127,7 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
         home.root(),
         crate::launch_record::Launch {
             harness: harness.clone(),
+            resume: None,
             name: Some(name),
             node: payload
                 .get("node")

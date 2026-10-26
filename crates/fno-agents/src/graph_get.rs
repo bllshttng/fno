@@ -29,7 +29,7 @@ pub(crate) fn entry_status<'a>(entry: &'a Value) -> &'a str {
 
 /// `graph.json`'s default location: `$FNO_STATE_DIR/graph.json`, else
 /// `$FNO_HOME/graph.json`, else `$HOME/.fno/graph.json`. `FNO_STATE_DIR` first:
-/// it is the root `fno.paths.state_dir` resolves, and `seal_state_root` pins it
+/// it is the root `fno.paths.state_dir` resolves, and `credentials::seal` pins it
 /// around a forwarded HOME, so a sealed Rust child reads the graph its parent
 /// wrote. A `~`-prefixed carrier expands like Python's, so both legs resolve
 /// the same store. Mirrors the FNO_HOME-first resolution every other

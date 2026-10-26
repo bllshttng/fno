@@ -197,7 +197,7 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 54 | fleet_state | 220 | 2 | 0/- | 0 | 3 |
 | 55 | projects | 359 | 2 | 0/- | 70 | 3 |
 | 56 | research | 860 | 2 | 1/- | 27 | 6 |
-| 57 | setup_cli | 882 | 2 | 2/- | 0 | 5 |
+| 57 | setup_cli (ported to Rust and deleted 2026-10, gone on next regen) | 882 | 2 | 2/- | 0 | 5 |
 | 58 | schemas | 406 | 2 | 2/- | 9 | 3 |
 | 59 | stub_manifest | 356 | 2 | 3/- | 0 | 3 |
 | 60 | wake | 158 | 2 | 3/- | 20 | 3 |

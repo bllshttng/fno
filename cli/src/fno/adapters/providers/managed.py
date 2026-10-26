@@ -350,7 +350,7 @@ def _read_claude_blob(cfg: Path, *, shared: bool) -> Optional[str]:
     if sys.platform == "darwin":
         acct = _claude_keychain_account()
         # The unscoped Keychain item belongs to the default ~/.claude account
-        # (account_env._login_present reads the scoped item ONLY, never the
+        # (the overlay's login check reads the scoped item ONLY, never the
         # unscoped fallback, for exactly this reason). Fall back to it only when
         # reading that account; for an alternate config_dir the credential lives
         # only in its scoped item, so falling through would return the default

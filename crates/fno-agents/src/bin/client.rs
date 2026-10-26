@@ -155,6 +155,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("surface-check") {
         std::process::exit(fno_agents::surface_check::run_surface_check(&args[1..]));
     }
+    // executor-route: the parser door; body in executor_route.rs (registers no command).
+    if args.first().map(String::as_str) == Some("executor-route") {
+        std::process::exit(fno_agents::executor_route::run(&args[1..]));
+    }
     if args.first().map(String::as_str) == Some("wave") {
         std::process::exit(fno_agents::wave::run(&args[1..]));
     }
@@ -180,15 +184,11 @@ fn main() {
     if args.first().map(String::as_str) == Some("pr") {
         std::process::exit(fno_agents::pr_front::run(&args[1..]));
     }
-    // Permanent GitHub-fact rows (merged PRs, repo metadata); reconcile and
-    // base-lineage reach it through command_call; transport-only.
-    if args.first().map(String::as_str) == Some("gh-cache") {
-        std::process::exit(fno_agents::gh_cache::run());
-    }
-    // `target-status`: the orientation report door; Python's `fno do target
-    // status` reaches it through command_call, transport-only.
-    if args.first().map(String::as_str) == Some("target-status") {
-        std::process::exit(fno_agents::target_orient::run_status(&args[1..]));
+    // gh-cache, target-status: the early transport arms; client_transport.rs
+    // holds their bodies and comments. worktree-reapable and launch-workdir
+    // stay here: their own ports own the moves into their modules.
+    if let Some(code) = fno_agents::client_transport::transport_early_arms(&args) {
+        std::process::exit(code);
     }
     // `launch-workdir`: the spawn door's launch-cwd resolution (see
     // launch_workdir.rs doc). Transport-only: registers no client action; Python's
@@ -275,6 +275,10 @@ fn main() {
     // The Python evals phase reaches this arm through resolve_binary.
     if args.first().map(String::as_str) == Some("evals-arm") {
         std::process::exit(fno_agents::evals_arm::run_evals_arm(&args[1..]));
+    }
+    // `evals`: the leaf's family dispatch; the shrink law bars a new `run` arm (contract in evals.rs).
+    if args.first().map(String::as_str) == Some("evals") {
+        std::process::exit(fno_agents::evals::run(&args[1..]));
     }
     // `evals-trend` and `corrections-verify`: transport-only folds (the
     // shrink law allows no new `run` arm); their module docs carry the
@@ -947,13 +951,9 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::org_fold::run_org_fold(&args[1..]);
     }
 
-    // `lead-history`: the team-scope lead_checkin readback for
-    // `fno agents org history`, exec'd by the front door. Daemon-free
-    // read, `==` dispatch like org-fold: the caller's team scope and the
-    // live journals resolve natively when the argv names none.
-    // `--verdict` is the same journals read as a tenure verdict (law
-    // d-fe66560a: the verdict rides this action as an argument, never a
-    // new action).
+    // `lead-history`: the team-scope lead_checkin readback for `fno agents org history`, exec'd by the front door.
+    //
+    // Daemon-free `==` dispatch like org-fold: the caller's team scope and the live journals resolve natively when the argv names none. `--verdict` reads the same journals as a tenure verdict (law d-fe66560a).
     if command == "lead-history" {
         if args.iter().skip(1).any(|a| a == "--verdict") {
             return fno_agents::lead_history::run_lead_verdict(&args[1..]);
@@ -1011,8 +1011,7 @@ async fn run(args: Vec<String>) -> i32 {
     }
     // `plugin-install`: the filtered-stage installer for the plugin
     // harnesses, daemon-free. The Python surface `fno config plugin install`
-    // shells HERE for claude, opencode and agy; codex stays on the Python
-    // converge engine per the ship-phase ruling.
+    // shells HERE for every harness.
     if command == "plugin-install" {
         return fno_agents::plugin_install::run_plugin_install(&args[1..]);
     }
@@ -1204,10 +1203,7 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::attest::dispatch(&args[1..]);
     }
 
-    // `needs`: read-only needs-me-queue fold over events.jsonl +
-    // ledger.json across ALL sessions, emitting review_wedged / budget_stop
-    // items. Never touches the daemon; exits 0 on empty. The mux client shells
-    // this off-loop when the prefix+a overlay opens.
+    // `needs`: read-only needs-me-queue fold over events + ledger; daemon-free.
     if command == "needs" {
         return fno_agents::needs::run_needs(&args[1..], &AgentsHome::from_env()).await;
     }
@@ -1257,6 +1253,14 @@ async fn run(args: Vec<String>) -> i32 {
                 .cloned()
                 .collect();
             return fno_agents::capability_leaves::run_capabilities(&sub);
+        }
+        if rest.iter().any(|a| a.as_str() == "--liveness") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--liveness")
+                .cloned()
+                .collect();
+            return fno_agents::liveness_cmd::run(&sub, &AgentsHome::from_env());
         }
         if has_family {
             let sub: Vec<String> = rest
@@ -2315,21 +2319,18 @@ fn maybe_run_spawn(
         }
     };
 
-    // The account arm: native launch on a seam stamp naming the request;
-    // Python re-exec otherwise.
-    if let Some(code) = fno_agents::spawn_axes::account_seam_exit(
-        params.get("account").and_then(Value::as_str),
-        provider,
-        args,
-        exec_python_front,
-    ) {
+    // The account arm: both account flags resolve here, before the gate.
+    if let Some(code) = fno_agents::accounts::launch::seam_exit(params, provider) {
         return Some(code);
     }
 
     // The route arm: resolved before the gate, so a refusal takes no slot.
     let route = match fno_agents::spawn_route::route_seam(
         params.get("route").and_then(Value::as_str),
-        params.get("account").and_then(Value::as_str),
+        params
+            .get("account")
+            .or(params.get("dispatch_account"))
+            .and_then(Value::as_str),
         provider,
         public_substrate,
         &cwd,
@@ -3769,6 +3770,7 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
         "--take-over",
         "--output-format",
         "--monitor",
+        "--dispatch-account",
     ];
     let mut normalized: Vec<String> = Vec::with_capacity(rest.len());
     let mut rest_iter = rest.iter();
@@ -3958,11 +3960,8 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
                 params.insert("force".into(), Value::Bool(true));
             }
             "--cross-project" if command == "rm" || command == "stop" => {
-                // The lifecycle commands' store heal resolves through the same
-                // project-confinement refusal resume/adopt answer with this
-                // flag; accept it so the refusal's taught remedy is a form
-                // these commands take.
-                params.insert("cross_project".into(), Value::Bool(true));
+                // Retired (d-460ea8c7): the store heal is machine-wide;
+                // accepted as a silent no-op for one release.
             }
             "--no-wait" => {
                 // Spawn-gate escape: fail immediately at max_live
@@ -4048,15 +4047,11 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             // The row-9 flags: typed parse in spawn_axes (the equals form
             // split above); the value gates run after the loop where harness
             // and substrate are both known.
-            "--output-format" | "--monitor" if command == "spawn" => {
+            "--output-format" | "--monitor" | "--dispatch-account" if command == "spawn" => {
                 fno_agents::spawn_axes::insert_spawn_flag(&a, &mut it, &mut params)?;
             }
             "--account" => {
-                // per-spawn account selection. Parsed here so the spawn
-                // arm is not blocked by an unknown-flag error; the four-lane
-                // overlay resolution lives in Python (fno.agents.account_env), so
-                // an account spawn re-execs the Python CLI on EVERY substrate (see
-                // the spawn intercept) rather than duplicating the resolver here.
+                // Resolved by accounts::launch in the spawn arm.
                 params.insert("account".into(), str_arg(&mut it, "--account")?);
             }
             "--audit-actor" => {
@@ -4303,9 +4298,6 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             fno_agents::ask_project::parse(&mut params, &positional)?;
             "agent.ask"
         }
-        // `host`/`promote` (interactive daemon PTY hosting) were retired at G4
-        // and intercepted with a mux pointer before build_request; they
-        // never reach this match.
         "list" => "agent.list",
         "status" => "agent.status",
         "stop" => {

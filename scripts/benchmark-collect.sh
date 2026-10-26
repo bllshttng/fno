@@ -85,19 +85,11 @@ try:
 except: print('--')
 " 2>/dev/null || echo "--")
 
-# 2. fno.cost._session_cost - compactions, duration, branch attribution
-echo "[2/6] fno.cost._session_cost (compactions, duration, branch)..."
-# The cost helper moved into the fno package (cli/src/fno/cost/). Point
-# PYTHONPATH at the package source in a checkout so it runs pre-install.
-_REPO_ROOT="$(git rev-parse --show-toplevel)"
-if [[ -f "$_REPO_ROOT/cli/src/fno/cost/_session_cost.py" ]]; then
-  export PYTHONPATH="$_REPO_ROOT/cli/src${PYTHONPATH:+:${PYTHONPATH}}"
-  BRANCH=$(git branch --show-current)
-  python3 -m fno.cost._session_cost --json --branch "$BRANCH" "$SESSION_ID" \
-    > "$RESULTS_DIR/${TOOL}-session.json" 2>/dev/null || echo '{"error": "session-cost failed"}' > "$RESULTS_DIR/${TOOL}-session.json"
-else
-  echo '{"error": "fno.cost._session_cost not found"}' > "$RESULTS_DIR/${TOOL}-session.json"
-fi
+# 2. the native session-cost leg - compactions, duration, branch attribution
+echo "[2/6] session-cost (compactions, duration, branch)..."
+BRANCH=$(git branch --show-current)
+fno-agents context-run --session-cost --json --branch "$BRANCH" "$SESSION_ID" \
+  > "$RESULTS_DIR/${TOOL}-session.json" 2>/dev/null || echo '{"error": "session-cost failed"}' > "$RESULTS_DIR/${TOOL}-session.json"
 
 # Extract operational metadata from session-cost.py
 SESSION_DURATION=$(python3 -c "

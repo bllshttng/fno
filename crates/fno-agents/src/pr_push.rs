@@ -29,10 +29,16 @@
 //! A head with no red row is never cancelled: an all-green or clean run
 //! still refuses with exit 2 and gets to finish.
 //!
-//! A rebased branch is pushed with `--force-with-lease` pinned to the exact
-//! remote sha this run fetched, and only after a patch-equivalence check
-//! proves the remote branch holds no commit the branch lacks, so the lease
-//! can never drop a commit another writer pushed. A merge commit on the
+//! The fold is a merge, never a rebase: a rebase rewrites the pushed
+//! commits, so the compare leg could refuse the commits the fold itself
+//! produced, and the forced push a rebase needs cancels CI on the old head
+//! and voids a head-pinned attestation. A merge keeps the remote commits as
+//! true ancestors of HEAD, so the push is a plain fast-forward.
+//!
+//! A branch the CALLER rebased is pushed with `--force-with-lease` pinned to
+//! the exact remote sha this run fetched, and only after a patch-equivalence
+//! check proves the remote branch holds no commit the branch lacks, so the
+//! lease can never drop a commit another writer pushed. A merge commit on the
 //! remote side counts only when its tree equals the automatic merge of its
 //! parents: a merge carrying hand-resolved content is refused, never
 //! leased over. The git pre-push hook is unaffected: it refuses protected
@@ -52,8 +58,8 @@ pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(60);
 /// the repo's own doc prices the full rehearsal at 22 to 47 minutes.
 const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(3600);
 
-/// Branches the push command refuses to move, same set the rebase leg refuses
-/// to rebase.
+/// Branches the push command refuses to move, same set the rebase door
+/// refuses to rebase.
 const PROTECTED: [&str; 4] = ["main", "master", "develop", "dev"];
 
 /// The hook's own debounce window (`hooks/git-protection.py`
@@ -496,11 +502,11 @@ fn compare_fail(remote_ref: &str, err: &str) -> i32 {
 
 /// The exit-3 refusal: the remote branch holds something this push would
 /// drop, and `detail` names it. The text must not contain `not safely
-/// rebasable`, which heal's conflict parser keys on.
+/// mergeable`, which heal's conflict parser keys on.
 fn remote_only_refusal(remote_ref: &str, branch: &str, detail: &str) -> i32 {
     eprintln!(
         "pr-push: {remote_ref} carries commits this branch lacks: {detail}. \
-         Integrate them with git pull --rebase origin {branch}, then re-run \
+         Integrate them with git pull --no-rebase origin {branch}, then re-run \
          the push. Nothing pushed."
     );
     3
@@ -893,6 +899,42 @@ fn emit_bypass_row(ctx: &PushCtx) {
     );
 }
 
+/// The `pr_push_landed` row the `ci_cadence` arm schedules its checks from.
+/// Best-effort: a lost row costs the cadence, never the push.
+fn emit_landed(ctx: &PushCtx, branch: &str) {
+    let sha = run_labeled(
+        "pr-push",
+        &ctx.git_bin,
+        &["rev-parse", "HEAD"],
+        &ctx.cwd,
+        READ_TIMEOUT,
+    )
+    .map(|(_, out, _)| out.trim().to_string())
+    .unwrap_or_default();
+    if sha.is_empty() {
+        return;
+    }
+    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
+        return;
+    };
+    let (session_id, harness) = crate::claims::resolve_identity();
+    let row = json!({
+        "branch": branch,
+        "sha": sha,
+        "cwd": ctx.cwd.to_string_lossy(),
+        "session_id": session_id,
+        "harness": harness,
+    });
+    if let Err(e) =
+        crate::events::EventEmitter::new(crate::daemon::global_events_path(&home), "rust")
+            .emit("pr_push_landed", &row)
+    {
+        eprintln!(
+            "pr-push: the pr_push_landed row did not land ({e}); no CI cadence for this push"
+        );
+    }
+}
+
 /// The current branch, for the bypass journal row.
 fn current_branch_quoted(ctx: &PushCtx) -> String {
     run_labeled(
@@ -1153,129 +1195,62 @@ fn commit_citation_failures(log: &str) -> Vec<String> {
     failures
 }
 
-/// The integrate leg: bring the fetched base into the branch. A plain rebase
-/// drops every merge commit, so a branch that already merges origin/main
-/// merges the fetched base instead. The door depends on the status:
-/// needs_resolver LEFT the rebase in-progress (plain `fno do pr rebase`
-/// would dead-end on the dirty guard or abort the caller's resolutions),
-/// refused/failed aborted it. `Err` carries the exit code; nothing moved.
+/// The integrate leg: bring the fetched base into the branch. The fold is a merge, never a rebase: a rebase rewrites the pushed commits, so the compare leg's patch-equivalence check could refuse the very commits this leg produced, and the forced push it needs cancels CI on the old head and invalidates a head-pinned attestation. A merge keeps the remote commits as true ancestors of HEAD, so the compare passes trivially and the push fast-forwards. A conflicted fold is LEFT in progress for the caller (the door never aborts the integration it started); the dirty guard refuses the next push until it is concluded. `Err` carries the exit code.
 fn integrate_origin_main(git: &str, cwd: &Path) -> Result<&'static str, i32> {
-    let merge_count = match run_labeled(
+    let (ok, _, err) = match run_labeled(
         "pr-push",
         git,
-        &["rev-list", "--merges", "--count", "origin/main..HEAD"],
+        &["merge", "--no-edit", "origin/main"],
         cwd,
         READ_TIMEOUT,
     ) {
-        Ok((true, out, _)) => match out.trim().parse::<u64>() {
-            Ok(count) => count,
-            Err(_) => {
-                eprintln!(
-                    "pr-push: could not count merge commits on the branch (non-numeric output: {}); nothing moved",
-                    out.trim()
-                );
-                return Err(4);
-            }
-        },
-        Ok((false, _, err)) => {
-            eprintln!(
-                "pr-push: could not count merge commits on the branch (git failed: {}); nothing moved",
-                err.trim()
-            );
-            return Err(4);
-        }
-        Err(err) => {
-            eprintln!(
-                "pr-push: could not count merge commits on the branch ({err}); nothing moved"
-            );
-            return Err(4);
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("pr-push: the fold merge of origin/main could not run ({e}); nothing moved");
+            return Err(3);
         }
     };
-    if merge_count == 0 {
-        let (rc, v) = crate::pr_rebase::phase_a("origin/main", cwd, git);
-        if rc != 0 {
-            let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("?");
-            let files = v
-                .get("files")
-                .and_then(|f| f.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            let door = match status {
-                "needs_resolver" => {
-                    "Resolve the conflicts, then run `fno do pr rebase --continue`, \
-                     and re-run the push."
-                }
-                "refused" => {
-                    "The rebase was aborted (a guardrail refused auto-resolution); \
-                     resolve by hand, then re-run the push."
-                }
-                "dirty" => "Commit or stash the working-tree changes, then re-run the push.",
-                _ => "The rebase was aborted; rebase by hand, then re-run the push.",
-            };
+    if !ok {
+        let files = crate::pr_rebase::conflict_files(git, cwd);
+        if files.is_empty() {
             eprintln!(
-                "pr-push: the branch is not safely rebasable onto origin/main \
-                 (status {status}{}). {door}",
-                if files.is_empty() {
-                    String::new()
-                } else {
-                    format!("; files: {files}")
-                }
+                "pr-push: the fold merge of origin/main refused ({}); nothing moved",
+                err.trim()
             );
             return Err(3);
         }
-        Ok("rebase")
-    } else {
-        let (ok, _, _err) = match run_labeled(
-            "pr-push",
-            git,
-            &["merge", "--no-edit", "origin/main"],
-            cwd,
-            READ_TIMEOUT,
-        ) {
-            Ok(result) => result,
-            Err(err) => {
-                eprintln!(
-                    "pr-push: the branch is not safely rebasable onto origin/main \
-                     (status merge_failed). The branch already merges origin/main, so the command merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push. ({err})"
-                );
-                return Err(3);
-            }
-        };
-        if !ok {
-            let files = crate::pr_rebase::conflict_files(git, cwd);
-            let _ = run_labeled("pr-push", git, &["merge", "--abort"], cwd, READ_TIMEOUT);
-            if files.is_empty() {
-                eprintln!(
-                    "pr-push: the branch is not safely rebasable onto origin/main \
-                     (status merge_failed). The branch already merges origin/main, so the command merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push."
-                );
-            } else {
-                eprintln!(
-                    "pr-push: the branch is not safely rebasable onto origin/main \
-                     (status merge_conflict; files: {}). The branch already merges origin/main, so the command merged instead of rebasing; the merge was aborted. Merge origin/main by hand, resolve, commit, then re-run the push.",
-                    files.join(", ")
-                );
-            }
-            return Err(3);
+        // The parenthetical keeps the `files: X)` shape heal's conflict parser reads, and the marker below is the parser's conflict key.
+        eprintln!(
+            "pr-push: the branch is not safely mergeable onto origin/main \
+             (status merge_conflict; files: {}). Resolve, then \
+             `git merge --continue`, and re-run the push.",
+            files.join(", ")
+        );
+        return Err(3);
+    }
+    // A branch config like mergeOptions=--no-commit (or --squash) can exit 0 with the merge staged but not committed: HEAD unmoved, the tree dirty. Verify the fold actually landed before the push legs trust it.
+    match run_labeled(
+        "pr-push",
+        git,
+        &["merge-base", "--is-ancestor", "origin/main", "HEAD"],
+        cwd,
+        READ_TIMEOUT,
+    ) {
+        Ok((true, _, _)) => Ok("merge"),
+        Ok((false, _, _)) => {
+            eprintln!(
+                "pr-push: the fold merge exited 0 but origin/main is not an ancestor of HEAD (a non-committing merge option is in effect); conclude or undo the staged merge, then re-run the push"
+            );
+            Err(3)
         }
-        Ok("merge")
+        Err(e) => {
+            eprintln!("pr-push: could not verify the fold ({e}); nothing pushed");
+            Err(4)
+        }
     }
 }
 
-/// The guarded push, command entry. Sequence: refuse protected/dirty, fetch,
-/// measure behind-before, integrate origin/main only when GitHub reads the
-/// PR dirty or behind (rebase, or merge when the branch already holds
-/// merges; refuse on conflict, naming the resolver door; otherwise none),
-/// measure behind-after,
-/// compare against the fetched remote branch (refuse remote-only commits),
-/// preflight, in-flight read on the remote head, push exactly once (leased
-/// when the branch was rebased), stamp, receipt. Exit codes: 0 pushed, 1
-/// preflight red, 2 in flight, 3 refusal, 4 read error.
+/// The guarded push, command entry. Sequence: refuse protected/dirty, fetch, measure behind-before, integrate origin/main only when GitHub reads the PR dirty or behind (one fold merge; a conflict stays in progress for the caller; otherwise none), measure behind-after, compare against the fetched remote branch (refuse remote-only commits), preflight, in-flight read on the remote head, push exactly once (leased only when a caller-rebased head demands it), stamp, receipt. Exit codes: 0 pushed, 1 preflight red, 2 in flight, 3 refusal, 4 read error.
 pub fn run_push(argv: &[String]) -> i32 {
     let mut a = match parse_command_args(argv) {
         Ok(a) => a,
@@ -1694,6 +1669,7 @@ pub fn run_push(argv: &[String]) -> i32 {
             ci,
             remote_branch,
         } => {
+            emit_landed(&ctx, &remote_branch);
             println!(
                 "pr-push: origin/main behind-before={before} behind-after={after} integrate={integrate} \
                  preflight={} ci={ci} sha={sha} ref=refs/heads/{remote_branch} pushed=1",

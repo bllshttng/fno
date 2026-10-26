@@ -453,11 +453,12 @@ def happy_pane_argv(
             "config.agents.happy_routed_panes = false to accept a local-only pane.",
             exit_code=127,
         )
-    from fno.agents.account_env import SECRET_ROUTE_VARS
+    from fno.agents.spawn_overlay_client import compose_credentials
 
+    secret = compose_credentials(None, None, {})["secret"]
     claude_env: list[str] = []
     for key, value in route_env.items():
-        if key in SECRET_ROUTE_VARS:
+        if key in secret:
             continue
         claude_env += ["--claude-env", f"{key}={value}"]
     return ["happy", *claude_env, *argv[1:]]
@@ -1217,18 +1218,17 @@ def _mesh_env_pairs(
         # the completeness refusals must fire on it like every other path.
         resolved_route = resolve_spawn_route(role, None)
     if account_env or resolved_route:
-        from fno.agents.account_env import SCRUB_AUTH_VARS, compose_worker_credentials
+        from fno.agents.spawn_overlay_client import compose_credentials
 
-        composed, _decision = compose_worker_credentials(
-            account_env, resolved_route, {}
-        )
-        # The scrub floor is claude-shaped (SCRUB_AUTH_VARS are all
+        answer = compose_credentials(account_env, resolved_route, {})
+        composed = answer["env"]
+        # The scrub floor is claude-shaped (the scrub list is all
         # ANTHROPIC_*/CLAUDE_* vars): an OpenAI-protocol route on another
         # harness must not strip unrelated inherited Claude auth. `env -u` on
         # an unset var is a harmless no-op; `unset +=` (not `=`) so the
         # identity/provenance unsets above are preserved.
         if harness == "claude":
-            for _k in SCRUB_AUTH_VARS:
+            for _k in answer["scrub"]:
                 unset += ["-u", _k]
         pairs += [f"{k}={v}" for k, v in composed.items()]
     # The inherited-model scrub runs OUTSIDE the account/route block above: the

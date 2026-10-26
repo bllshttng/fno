@@ -88,31 +88,32 @@ def test_tracker_owned_commands_refuse_under_external(tmp_path, monkeypatch):
 def test_footnote_owned_read_command_still_works_under_external(tmp_path, monkeypatch):
     """The refusal is scoped: `get` (footnote-owned) still answers through
     the seam under the same backend selection."""
-    from fno.tracker.types import NodeNotFound, TrackerCandidate, TrackerState
+    import fno.rust_binary as rb
 
-    class _T:
-        name = "fake-external"
+    class _Door:
+        """The door's read and sidecar-get shapes for one fixture id."""
 
-        def read(self, id):
-            if id == "EXT-1":
-                return TrackerCandidate(id=id, title="Ext item",
-                                        state=TrackerState.open)
-            raise NodeNotFound(id)
+        def door(self, op, payload):
+            if op == "read":
+                if payload["id"] == "EXT-1":
+                    return {"node": {"id": "EXT-1", "title": "Ext item",
+                                     "state": "open", "parent": None,
+                                     "blocked_by": []}}
+                return {"not_found": True}
+            if op == "sidecar-get":
+                return {"sidecar": {"id": payload["id"]}}
+            raise AssertionError(f"this read never calls {op}")
 
-        def list_open(self):
-            return []
+    _door = _Door()
+    real_call = rb.command_call
 
-        def close(self, id):
-            raise AssertionError("not part of this read")
+    def _door_call(command, payload, *args, **kwargs):
+        op = payload.get("tracker") if isinstance(payload, dict) else None
+        if op:
+            return _door.door(op, payload)
+        return real_call(command, payload, *args, **kwargs)
 
-    sidecars = tmp_path / "sidecars"
-    sidecars.mkdir()
-    (sidecars / "EXT-1.json").write_text(json.dumps({"id": "EXT-1"}))
-    import fno.tracker.sidecar as sidecar_store
-
-    monkeypatch.setattr(sidecar_store, "sidecar_path",
-                        lambda i: sidecars / f"{i}.json")
-    monkeypatch.setattr("fno.tracker.get_tracker", lambda *a, **k: _T())
+    monkeypatch.setattr(rb, "command_call", _door_call)
     g = tmp_path / "graph.json"
     seed_graph(g, json.dumps({"entries": []}))
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)

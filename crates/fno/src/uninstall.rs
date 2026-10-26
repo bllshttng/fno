@@ -39,7 +39,7 @@ const BUILD_DIR_KEY: &str = "CARGO_BUILD_BUILD_DIR";
 const SCCACHE_DIR_KEY: &str = "SCCACHE_DIR";
 const RC_MARK: &str = "# fno: cargo build-dir";
 /// The first line of the block `fno config setup cli-hooks` appends to codex.
-const CODEX_BLOCK_MARK: &str = "# Added by `fno config setup cli-hooks`";
+pub(crate) const CODEX_BLOCK_MARK: &str = "# Added by `fno config setup cli-hooks`";
 const PURGE_WORD: &str = "purge";
 /// The uv tool name the wheel installs under (a directory in `uv tool dir`).
 const UV_TOOL: &str = "fno";
@@ -50,6 +50,8 @@ const CRON_END: &str = "# END autocorrect-managed";
 /// The plugin name agy knows: the repo plugin.json "name", the same name
 /// `scripts/install/agy-plugin.sh` installs and `agy plugin uninstall` takes.
 const AGY_PLUGIN: &str = "footnote";
+/// The plugin marketplace name, then the name it had before the rename.
+const MARKETPLACE_NAMES: [&str; 2] = ["fno", "footnote"];
 
 enum Action {
     Run(Vec<String>),
@@ -322,7 +324,7 @@ fn join_lines(lines: &[&str]) -> String {
 }
 
 /// Line-based, so a codex config keeps its comments and layout. Drops the
-/// marked SessionStart block, the `fno@footnote` hook trust tables and the
+/// marked SessionStart block, the `fno@fno` and `fno@footnote` hook trust tables and the
 /// build-dir and sccache exports. `None` when nothing matched.
 pub(crate) fn strip_codex_toml(text: &str) -> Option<String> {
     let mut out = Vec::new();
@@ -353,7 +355,9 @@ pub(crate) fn strip_codex_toml(text: &str) -> Option<String> {
             continue;
         }
         if t.starts_with('[') && t.ends_with(']') {
-            in_trust_table = t.starts_with("[hooks.state.\"fno@footnote:");
+            in_trust_table = MARKETPLACE_NAMES
+                .iter()
+                .any(|name| t.starts_with(&format!("[hooks.state.\"fno@{name}:")));
         }
         let env_export = [BUILD_DIR_KEY, SCCACHE_DIR_KEY]
             .iter()
@@ -438,25 +442,26 @@ fn discover() -> Vec<Item> {
         }
     }
 
+    // An install made before the marketplace moved to "fno" still carries
+    // the old "footnote" name, so both are removed.
     let claude = env_dir("CLAUDE_CONFIG_DIR", ".claude");
     if on_path("claude").is_some() {
-        if read(&claude.join("plugins/installed_plugins.json")).contains("\"fno@footnote\"") {
-            add(
-                "Claude Code plugin fno@footnote".into(),
-                Action::Run(argv(&["claude", "plugin", "uninstall", "fno@footnote"])),
-            );
-        }
-        if read(&claude.join("plugins/known_marketplaces.json")).contains("\"footnote\"") {
-            add(
-                "Claude Code marketplace footnote".into(),
-                Action::Run(argv(&[
-                    "claude",
-                    "plugin",
-                    "marketplace",
-                    "remove",
-                    "footnote",
-                ])),
-            );
+        let installed = read(&claude.join("plugins/installed_plugins.json"));
+        let known = read(&claude.join("plugins/known_marketplaces.json"));
+        for name in MARKETPLACE_NAMES {
+            let id = format!("fno@{name}");
+            if installed.contains(&format!("\"{id}\"")) {
+                add(
+                    format!("Claude Code plugin {id}"),
+                    Action::Run(argv(&["claude", "plugin", "uninstall", id.as_str()])),
+                );
+            }
+            if known.contains(&format!("\"{name}\"")) {
+                add(
+                    format!("Claude Code marketplace {name}"),
+                    Action::Run(argv(&["claude", "plugin", "marketplace", "remove", name])),
+                );
+            }
         }
     }
 
@@ -464,23 +469,20 @@ fn discover() -> Vec<Item> {
     let codex_config = codex.join("config.toml");
     if on_path("codex").is_some() {
         let text = read(&codex_config);
-        if text.contains("[plugins.\"fno@footnote\"]") {
-            add(
-                "Codex plugin fno@footnote".into(),
-                Action::Run(argv(&["codex", "plugin", "remove", "fno@footnote"])),
-            );
-        }
-        if text.contains("[marketplaces.footnote]") {
-            add(
-                "Codex marketplace footnote".into(),
-                Action::Run(argv(&[
-                    "codex",
-                    "plugin",
-                    "marketplace",
-                    "remove",
-                    "footnote",
-                ])),
-            );
+        for name in MARKETPLACE_NAMES {
+            let id = format!("fno@{name}");
+            if text.contains(&format!("[plugins.\"{id}\"]")) {
+                add(
+                    format!("Codex plugin {id}"),
+                    Action::Run(argv(&["codex", "plugin", "remove", id.as_str()])),
+                );
+            }
+            if text.contains(&format!("[marketplaces.{name}]")) {
+                add(
+                    format!("Codex marketplace {name}"),
+                    Action::Run(argv(&["codex", "plugin", "marketplace", "remove", name])),
+                );
+            }
         }
     }
 
@@ -756,10 +758,16 @@ fn residue() -> Vec<String> {
             "agy plugin {AGY_PLUGIN}: agy plugin uninstall {AGY_PLUGIN}"
         ));
     }
-    for cache in [
-        env_dir("CLAUDE_CONFIG_DIR", ".claude").join("plugins/cache/footnote"),
-        env_dir("CODEX_HOME", ".codex").join("plugins/cache/footnote"),
-    ] {
+    for cache in MARKETPLACE_NAMES.iter().flat_map(|name| {
+        [
+            env_dir("CLAUDE_CONFIG_DIR", ".claude")
+                .join("plugins/cache")
+                .join(name),
+            env_dir("CODEX_HOME", ".codex")
+                .join("plugins/cache")
+                .join(name),
+        ]
+    }) {
         if cache.exists() {
             left.push(format!("plugin cache remains: {}", cache.display()));
         }
@@ -958,7 +966,7 @@ mod tests {
             })
         );
 
-        let codex = "model = \"x\"\n\n# Added by `fno config setup cli-hooks` - footnote SessionStart context injection.\n# Codex treats this as an UNMANAGED hook: approve/trust it in Codex before it\n# runs. Remove this block to uninstall.\n[[hooks.SessionStart]]\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"env FNO_PLATFORM=codex /p/hooks/session-start.sh\"\n[shell_environment_policy.set]\nSCCACHE_DIR = \"/u/.fno/b/sccache\"\n[hooks.state.\"fno@footnote:hooks/codex-hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"abc\"\n[plugins.\"other@x\"]\nenabled = true\n";
+        let codex = "model = \"x\"\n\n# Added by `fno config setup cli-hooks` - footnote SessionStart context injection.\n# Codex treats this as an UNMANAGED hook: approve/trust it in Codex before it\n# runs. Remove this block to uninstall.\n[[hooks.SessionStart]]\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"env FNO_PLATFORM=codex /p/hooks/session-start.sh\"\n[shell_environment_policy.set]\nSCCACHE_DIR = \"/u/.fno/b/sccache\"\n[hooks.state.\"fno@footnote:hooks/codex-hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"abc\"\n[hooks.state.\"fno@fno:hooks/codex-hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"def\"\n[plugins.\"other@x\"]\nenabled = true\n";
         assert_eq!(
             strip_codex_toml(codex).as_deref(),
             Some("model = \"x\"\n\n[shell_environment_policy.set]\n[plugins.\"other@x\"]\nenabled = true\n")

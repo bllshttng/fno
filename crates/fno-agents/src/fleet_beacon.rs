@@ -656,7 +656,8 @@ whose newest beat is older than --since (default 5m) shows offline. --takes-work
 off makes the spawn gate on THIS machine refuse new agent work; the next beat \
 publishes the flag. With no store.remote_url this machine shows alone.";
 
-/// `fno-agents top --machines ...`.
+/// `fno-agents census --workers --machines ...`, which the public
+/// `fno agents fleet top --machines` execs.
 pub fn run(args: &[String]) -> i32 {
     let mut as_json = false;
     let mut fresh_s = DEFAULT_FRESH_S;

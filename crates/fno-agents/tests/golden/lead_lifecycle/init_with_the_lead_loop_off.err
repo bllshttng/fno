@@ -1,0 +1,1 @@
+lead: config.lead.enabled is false, so no lead is promoted. Enable it with `fno config set lead.enabled true`.

@@ -186,8 +186,12 @@ pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) 
     let Some(dir) = state_dir(cwd) else {
         return "steward_error";
     };
-    let _pass_lock =
-        crate::gh_budget::FileLock::acquire(&crate::gh_budget::lock_path(&dir.join("pass")));
+    // Another pass holds the lock: skip this one, the next tick walks again.
+    let Ok(_pass_lock) =
+        crate::gh_budget::FileLock::try_acquire(&crate::gh_budget::lock_path(&dir.join("pass")))
+    else {
+        return "steward_busy";
+    };
 
     // A per-PR failure is remembered, not fatal: the pass walks on so one bad
     // PR cannot starve the rest, and the error token still surfaces at the end.
@@ -1217,6 +1221,17 @@ mod tests {
         io.backoff = true;
         assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_budget_backoff");
         assert!(io.gh_calls().is_empty(), "{:?}", io.calls.borrow());
+
+        // Another pass holds the lock: skip, never panic, no network call.
+        let stage_dir = state_dir(&cwd).expect("the test stage dir resolves");
+        let held = crate::gh_budget::FileLock::try_acquire(&crate::gh_budget::lock_path(
+            &stage_dir.join("pass"),
+        ))
+        .expect("the test holds the pass lock");
+        let io = FakeIo::new();
+        assert_eq!(run_pass(&io, &cwd, &pages, false), "steward_busy");
+        assert!(io.gh_calls().is_empty(), "{:?}", io.calls.borrow());
+        drop(held);
 
         // Two reader failures spend the budget, leave a note, and close.
         let io = FakeIo::new();

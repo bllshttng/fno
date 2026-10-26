@@ -27,11 +27,12 @@ A file is treated as a frontend surface if it matches any of:
 
 These are locked by plan 2026-05-04-operator-impeccable-executor (locked
 decision #2). Changing the list requires plan revision. The list is
-implemented once in the in-package module `fno.executor._surface`, which
-exposes `is_frontend_surface_path()` and `any_frontend_surface()` plus a CLI
-(`python3 -m fno.executor._surface` echoes `impeccable`/`do`; `--has-ui`
-echoes `true`/`false`). The `has_ui` changeset inference
-(`scripts/lib/infer-has-ui.sh`) delegates to that module's `--has-ui` mode,
+implemented once in the native executor-route door
+`crates/fno-agents/src/executor_route.rs`, which exposes
+`is_frontend_surface_path()` and `any_frontend_surface()` plus the stdin
+CLI (`fno-agents executor-route surface` echoes `impeccable`/`do`;
+`--has-ui` echoes `true`/`false`). The `has_ui` changeset inference
+(`scripts/lib/infer-has-ui.sh`) delegates to that door's `--has-ui` mode,
 so executor routing and `has_ui` can never drift from one copy of the
 patterns.
 
@@ -86,7 +87,7 @@ of their file paths.
   as the canonical fail-closed behavior. The intent is that a typo or a
   removed-but-still-referenced executor name does not silently route to a
   wrong subagent.
-- **Inference module unavailable** (`fno.executor._surface` not importable):
+- **Inference binary unavailable** (`fno-agents` not on PATH or unresolved):
   the resolver produces an empty value and falls closed to `tdd` via the
   `is_known_executor` check. Surface inference matters only when neither task
   nor plan declared an executor; an explicit declaration bypasses it.

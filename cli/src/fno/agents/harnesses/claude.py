@@ -425,7 +425,7 @@ def headless_create(
     # claude prefers an env credential over the settings file, so a routed
     # headless spawn from a logged-in shell would authenticate with the primary
     # Claude account instead of the selected provider (routing failure / wrong
-    # billing). compose_worker_credentials scrubs the inherited auth vars
+    # billing). The credentials compose scrubs the inherited auth vars
     # whenever we route or pin an account and applies the same scrub/account/
     # route precedence as every other seam, belt-and-suspenders with
     # --settings. Without either overlay, inherit the parent env untouched.
@@ -466,11 +466,9 @@ def headless_create(
             spawn_env, routed=_restores_model
         )
         if account_env or route_env:
-            from fno.agents.account_env import compose_worker_credentials
+            from fno.agents.spawn_overlay_client import compose_credentials
 
-            spawn_env, _ = compose_worker_credentials(
-                account_env, route_env, spawn_env
-            )
+            spawn_env = compose_credentials(account_env, route_env, spawn_env)["env"]
     from fno.setup.github_cli import worker_environment
 
     proxy_env = worker_environment(spawn_env or os.environ)
@@ -680,7 +678,7 @@ def bg_create(
     )
     if not route_env:
         # Set-or-clear: an unrouted child must not wear its parent's provider.
-        # A route re-supplies the stamp through compose_worker_credentials below.
+        # A route re-supplies the stamp through the credentials compose below.
         from fno.agents.model_routing import ROUTE_PROVIDER_ENV
 
         spawn_env.pop(ROUTE_PROVIDER_ENV, None)
@@ -700,9 +698,9 @@ def bg_create(
     # changing within one launch.
     route: Optional[dict[str, str]] = dict(route_env) if route_env else None
     if account_env or route:
-        from fno.agents.account_env import compose_worker_credentials
+        from fno.agents.spawn_overlay_client import compose_credentials
 
-        spawn_env, _ = compose_worker_credentials(account_env, route, spawn_env)
+        spawn_env = compose_credentials(account_env, route, spawn_env)["env"]
 
     from fno.setup.github_cli import worker_environment
 
@@ -1530,6 +1528,24 @@ def release_session_writer_claim(
 # liveness scan.
 
 
+def _mcp_status_argv(timeout: float) -> list[str]:
+    """Argv for the native sidecar status door: the fno-agents-worker
+    binary beside the resolved fno-agents binary, else PATH. The probe's
+    one subprocess (the claims-forward shape); the caller's budget rides
+    through as --timeout-secs so a wedged sidecar cannot stretch a
+    250 ms probe into five seconds.
+    """
+    from fno import rust_binary
+
+    argv_tail = ["--mcp-exec", "status", "--timeout-secs", repr(timeout)]
+    agents_bin = rust_binary.resolve_binary()
+    if agents_bin is not None:
+        worker = agents_bin.parent / "fno-agents-worker"
+        if worker.is_file() and os.access(worker, os.X_OK):
+            return [str(worker)] + argv_tail
+    return ["fno-agents-worker", *argv_tail]
+
+
 def mcp_channel_reachable(
     mcp_channel_id: str,
     *,
@@ -1554,12 +1570,28 @@ def mcp_channel_reachable(
     Spec: LD10 — ``ReachabilityProbeError`` is the lifted base class
     from US4-gemini Wave 1.1; ``reason="mcp_channel_disconnected"`` is
     the discriminator for this probe.
-    """
-    from fno.mcp import client as _mcp_client
 
+    The probe rides the native sidecar door (`fno-agents-worker
+    --mcp-exec status`): exit 0 parses the status JSON, exit 1 (the
+    sidecar unreachable) raises the probe error, so the tri-state
+    contract holds with no Python sidecar client left.
+    """
+    import subprocess
+
+    completed = subprocess.run(
+        _mcp_status_argv(timeout),
+        capture_output=True,
+        text=True,
+        timeout=timeout + 5.0,
+    )
+    if completed.returncode != 0:
+        raise ReachabilityProbeError(
+            provider="claude",
+            reason="mcp_channel_disconnected",
+        )
     try:
-        resp = _mcp_client.status(timeout=timeout)
-    except _mcp_client.MCPSidecarUnreachable as exc:
+        resp = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
         raise ReachabilityProbeError(
             provider="claude",
             reason="mcp_channel_disconnected",
