@@ -13,10 +13,6 @@ description: >
 runs:
   using: composite
   steps:
-    # The test sandbox and the cargo build dir inside it follow TMPDIR.
-    - name: Put TMPDIR on the runner disk
-      uses: ./.github/actions/tmpdir-on-disk
-
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
