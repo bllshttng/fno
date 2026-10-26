@@ -1015,8 +1015,8 @@ fn open_pr_verdict_asks_only_a_quiet_candidate_and_folds_the_answer() {
 // ── an adopted row keeps only while there is a session to own it ────────
 
 /// A live listing keeps, whatever the registry's stale status reads: the
-/// listing is the live fact, so the adopted row listed `idle` stays under
-/// `not a spawn row`. A row listed `stopped` has finished and takes the
+/// listing is the live fact, so the adopted row listed `idle` on open work
+/// stays under `not a spawn row`. A row listed `stopped` has finished and takes the
 /// adopted-retire carve-out, and so does a codex row (no claude roster
 /// governs it) with a terminal registry status.
 #[test]
@@ -1050,7 +1050,7 @@ fn a_roster_listed_adopted_row_keeps_and_an_unlisted_one_takes_the_carve_out() {
 
     let graph = graph_read(
         &[
-            ("prrow000-1111-2222-3333-444444444444", "NM", "done"),
+            ("prrow000-1111-2222-3333-444444444444", "NO", "in_progress"),
             ("strow000-1111-2222-3333-444444444444", "NM", "done"),
             ("sess-cx", "NM", "done"),
         ],

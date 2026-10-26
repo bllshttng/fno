@@ -33,22 +33,33 @@ pub fn heartbeat_fresh(record: &Path, now_secs: u64) -> bool {
     if now_secs.saturating_sub(written) >= HEARTBEAT_STALE_SECS {
         return false;
     }
-    let len = meta.len();
+    newest_heartbeat_in(&mut file, meta.len())
+        .is_some_and(|(at, _)| now_secs.saturating_sub(at) < HEARTBEAT_STALE_SECS)
+}
+
+/// The record's newest heartbeat: its instant in epoch seconds and the pid
+/// the session wrote into it. None when the tail holds no heartbeat.
+pub fn newest_heartbeat(record: &Path) -> Option<(u64, Option<u32>)> {
+    let mut file = std::fs::File::open(record).ok()?;
+    let len = file.metadata().ok()?.len();
+    newest_heartbeat_in(&mut file, len)
+}
+
+fn newest_heartbeat_in(file: &mut std::fs::File, len: u64) -> Option<(u64, Option<u32>)> {
     let mut tail = Vec::new();
-    if file
-        .seek(SeekFrom::Start(len.saturating_sub(HEARTBEAT_TAIL_BYTES)))
+    file.seek(SeekFrom::Start(len.saturating_sub(HEARTBEAT_TAIL_BYTES)))
         .and_then(|_| file.read_to_end(&mut tail))
-        .is_err()
-    {
-        return false;
-    }
-    String::from_utf8_lossy(&tail)
+        .ok()?;
+    let beat = String::from_utf8_lossy(&tail)
         .lines()
         .rev()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .find(|r| r["type"] == "heartbeat")
-        .and_then(|r| r["ts"].as_str().and_then(ts_secs))
-        .is_some_and(|at| now_secs.saturating_sub(at) < HEARTBEAT_STALE_SECS)
+        .find(|r| r["type"] == "heartbeat")?;
+    let at = beat["ts"].as_str().and_then(ts_secs)?;
+    let pid = beat["data"]["pid"]
+        .as_u64()
+        .and_then(|p| u32::try_from(p).ok());
+    Some((at, pid))
 }
 
 /// The cwd the record's first line, its header, names.
