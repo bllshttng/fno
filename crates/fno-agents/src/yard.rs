@@ -331,7 +331,8 @@ mod tests {
             .chain(std::iter::repeat("codex").take(25))
             .chain(std::iter::repeat("agy").take(10))
             .chain(std::iter::repeat("opencode").take(4))
-            .chain(std::iter::once("zai".to_string()))
+            .chain(std::iter::once("zai"))
+            .map(String::from)
             .collect();
         let tiers = rarity_tiers(&population);
         assert_eq!(tiers.get("claude").unwrap(), "common");

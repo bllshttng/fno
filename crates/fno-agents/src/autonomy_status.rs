@@ -377,7 +377,7 @@ mod tests {
         // Golden captured from cli/src/fno/autonomy_cli.py format_table
         // before deletion (port protocol). Trailing spaces included: every
         // cell ljust-pads, the last column too.
-        let rows = vec![
+        let mut rows = vec![
             row(
                 "autonomy (master switch)",
                 "every row below",
