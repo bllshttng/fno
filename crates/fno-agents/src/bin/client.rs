@@ -155,6 +155,14 @@ fn main() {
     if args.first().map(String::as_str) == Some("surface-check") {
         std::process::exit(fno_agents::surface_check::run_surface_check(&args[1..]));
     }
+    // The executor-routing parsers: bash callers (infer-has-ui.sh,
+    // resolve-executor.sh, resolve-plan-executor.sh and the blueprint-gates.md
+    // instructions) exec HERE through the shared binary resolver. Registers no
+    // command (the shrink law allows no new action); the stdin/stdout contract
+    // is the deleted Python modules', frozen in the executor_route goldens.
+    if args.first().map(String::as_str) == Some("executor-route") {
+        std::process::exit(fno_agents::executor_route::run(&args[1..]));
+    }
     if args.first().map(String::as_str) == Some("wave") {
         std::process::exit(fno_agents::wave::run(&args[1..]));
     }

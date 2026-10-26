@@ -188,6 +188,7 @@ pub mod event_store;
 pub mod events;
 pub mod events_limits;
 pub mod evidence;
+pub mod executor_route;
 pub mod fallback_chain;
 pub mod feed;
 pub mod finalize;
