@@ -837,13 +837,14 @@ pub(crate) fn gh_pr_is_open(pr: u64, cwd: &str) -> Option<bool> {
 /// Every open do row sitting on a settled node. Every clause is a positive
 /// marker: `status == "done"`; the merge question settled one of two ways -
 /// `merge_status == "merged"`, a field written only when a caller resolved
-/// MERGED from `gh`, or no PR ever recorded (`pr_number` null beside a null
-/// `merge_status`: a measurement or report node ships no PR, so there is no
-/// merge to wait for); a recorded PR with an unrecorded outcome still
-/// holds, and the stamp pass resolves it or the hold stands. And no
-/// `additional_prs` entry still open under the three settle rules
-/// ([`crate::additional_prs`]) - presence alone never holds the row, and an
-/// entry no rule settles does.
+/// MERGED from `gh`, or no PR ever recorded (`pr_number` null and `pr_url`
+/// blank beside a null `merge_status`: a measurement or report node ships
+/// no PR, so there is no merge to wait for); a recorded PR - by number or
+/// by a parseable url alone, the shape [`crate::additional_prs`] reads -
+/// with an unrecorded outcome still holds, and the stamp pass resolves it
+/// or the hold stands. And no `additional_prs` entry still open under the
+/// three settle rules ([`crate::additional_prs`]) - presence alone never
+/// holds the row, and an entry no rule settles does.
 pub(crate) fn stale_open_do_rows(entries: &[Value]) -> Vec<StaleDoRow> {
     let mut stale = Vec::new();
     let primaries = crate::additional_prs::primary_index(entries);
@@ -855,7 +856,11 @@ pub(crate) fn stale_open_do_rows(entries: &[Value]) -> Vec<StaleDoRow> {
             continue;
         }
         let merge = entry.get("merge_status").and_then(Value::as_str);
-        let pr_recorded = entry.get("pr_number").is_some_and(|v| !v.is_null());
+        let pr_url_present = entry
+            .get("pr_url")
+            .and_then(Value::as_str)
+            .is_some_and(|u| !u.trim().is_empty());
+        let pr_recorded = entry.get("pr_number").is_some_and(|v| !v.is_null()) || pr_url_present;
         if merge != Some("merged") && (merge.is_some() || pr_recorded) {
             continue;
         }
@@ -4862,6 +4867,19 @@ mod tests {
             "a done node with no recorded PR has no merge to wait for"
         );
         assert_eq!(stale[0].session_id, "s-nopr");
+    }
+
+    /// A recorded PR URL with a null `pr_number` is still a recorded PR: the
+    /// stamp pass reads that url, and an open or unreadable answer leaves
+    /// the merge unrecorded, so the row holds.
+    #[test]
+    fn done_node_with_pr_url_only_holds() {
+        let mut entry = one_done_no_pr_entry("x-url");
+        entry["pr_url"] = serde_json::json!("https://github.com/owner/repo/pull/4242");
+        assert!(
+            stale_open_do_rows(&[entry]).is_empty(),
+            "a recorded url keeps the merge question open"
+        );
     }
 
     /// A recorded PR with an unrecorded outcome still holds: the stamp pass
