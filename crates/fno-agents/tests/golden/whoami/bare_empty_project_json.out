@@ -1,0 +1,15 @@
+{
+  "detected_paths": [],
+  "fleet": null,
+  "harness": "claude",
+  "harness_session_id": null,
+  "mail_handle": null,
+  "model": null,
+  "project_root": "<FIXTURE>/project",
+  "session": null,
+  "visitor": null,
+  "walker": null,
+  "warnings": [
+    "not a git repo, using cwd"
+  ]
+}
