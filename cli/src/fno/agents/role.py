@@ -179,7 +179,7 @@ def _graph_index() -> Optional[dict[str, dict]]:
     index: without it a containment or agreement check would silently degrade to
     "not contained" / "not in the graph" on a machine it never read.
     """
-    from fno.tracker.metadata import read_entries
+    from fno.graph.api import read_entries
 
     try:
         entries = read_entries("agents.role")
