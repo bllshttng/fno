@@ -38,7 +38,16 @@ fn spawn_env(root: &Path, spaces: &Path) -> Vec<(String, String)> {
 }
 
 fn write_events(root: &Path, spaces: &Path, lines: &[String]) {
+    // The resolution must see the same pins the child sees, and both tests
+    // in this binary share one process env: serialize the pin window.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = ENV_LOCK.lock().unwrap();
+    std::env::set_var("FNO_SPACES_DIR", spaces);
+    std::env::set_var("FNO_TEST_HERMETIC", "1");
     let dir = fno_agents::paths::space_dir(root);
+    std::env::remove_var("FNO_SPACES_DIR");
+    std::env::remove_var("FNO_TEST_HERMETIC");
+    drop(guard);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("events.jsonl"), lines.join("\n") + "\n").unwrap();
 }
