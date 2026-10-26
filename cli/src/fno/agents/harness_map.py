@@ -685,12 +685,12 @@ def cannot_fire_refusal(message: str, harness: str) -> Optional[str]:
     """
     if harness != "codex" or not is_command_seed(message):
         return None
-    from fno.setup.codex_plugin import CodexPluginError, inspect_freshness
+    from fno.rust_binary import call_binary_json
 
-    try:
-        status = inspect_freshness().get("status")
-    except (CodexPluginError, OSError, ValueError):
+    error, verdict = call_binary_json("plugin-install", ["--status", "--json", "codex"], timeout=300)
+    if error is not None or not isinstance(verdict, dict):
         return None
+    status = verdict.get("status")
     if status in ("missing", "wrong-channel"):
         return (
             f"the seed invokes {message.strip().split()[0]!r} but the footnote "

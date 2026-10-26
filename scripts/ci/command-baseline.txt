@@ -102,9 +102,7 @@ paths
 phase kill-check
 plan
 pr-watch
-research
 resume
-roles
 scoreboard
 state
 status
@@ -112,7 +110,6 @@ status-fanout tick
 stub-manifest
 target
 test
-think
 uninstall
 update
 version

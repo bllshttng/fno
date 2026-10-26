@@ -11,8 +11,8 @@ use super::merge_evidence::node_pr_refs;
 use super::supersession::normalize_surface;
 use crate::backlog::workflows::{
     apply_completion_fields, auto_closed_note, children_all_closed, is_live, pr_ref_set,
-    release_contained_row, reopen_outranks_child_closes, reopen_outranks_merge,
-    reparent_live_children, text_at,
+    release_contained_row, reopen_holds_epic_children, reopen_outranks_child_closes,
+    reopen_outranks_merge, reparent_live_children, text_at,
 };
 use crate::graph_store::has_own_plan_work;
 
@@ -37,7 +37,7 @@ pub(crate) fn strandable_epic_ids(entries: &[Value]) -> BTreeSet<String> {
             continue;
         }
         if children_all_closed(parent, &kids)
-            && !reopen_outranks_child_closes(parent, &kids)
+            && !reopen_holds_epic_children(parent, &kids)
             && !has_own_plan_work(parent)
         {
             out.insert(pid.to_string());
@@ -408,6 +408,42 @@ mod tests {
         assert_eq!(entries[0]["status"], "done");
         let note = entries[0]["completion_note"].as_str().unwrap_or_default();
         assert!(note.contains("all children complete"), "{note}");
+    }
+
+    #[test]
+    fn a_child_filed_after_the_reopen_never_re_arms_the_epic_close() {
+        // The epic was reopened with every filed child done, so the owed
+        // leaves were not yet filed. A child filed after the reopen closes:
+        // the sweep and the cascade both leave the epic open.
+        let rows = |kid_filed: &str| {
+            vec![
+                json!({"id": "x-epic", "reopened_at": "2026-10-25T13:51:00Z"}),
+                json!({"id": "x-old", "parent": "x-epic", "status": "done",
+                       "created_at": "2026-10-20T00:00:00Z",
+                       "completed_at": "2026-10-24T00:00:00Z"}),
+                json!({"id": "x-new", "parent": "x-epic", "status": "done",
+                       "created_at": kid_filed,
+                       "completed_at": "2026-10-26T08:22:00Z"}),
+            ]
+        };
+        let mut entries = rows("2026-10-25T20:00:00Z");
+        assert!(strandable_epic_ids(&entries).is_empty());
+        assert_eq!(
+            sweep_close_done_epics(&mut entries, &Default::default()),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            cascade_close_parents(&mut entries, "x-new", &Default::default()),
+            Vec::<String>::new()
+        );
+        assert!(entries[0].get("completed_at").is_none());
+        // Positive control: a child filed before the reopen that closes after
+        // it is evidence the reopened work finished.
+        let mut entries = rows("2026-10-25T10:00:00Z");
+        assert_eq!(
+            cascade_close_parents(&mut entries, "x-new", &Default::default()),
+            vec!["x-epic".to_string()]
+        );
     }
 
     #[test]

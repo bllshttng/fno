@@ -6,13 +6,9 @@ that died on turn one: a z.ai/GLM parent exports
 reached Anthropic asking for a GLM model id.
 """
 
-import os
-from types import SimpleNamespace
-
 import pytest
 
 from fno.adapters.providers.model import ProviderRecord
-from fno.agents.account_env import SCRUB_AUTH_VARS
 from fno.agents.model_routing import (
     ENV_SCRUB_VAR,
     MODEL_ENV_KEYS,
@@ -28,9 +24,6 @@ from fno.agents.model_routing import (
     scrub_incoherent_model_env_and_notify,
     unrouted_model_keys,
 )
-from fno.agents.rust_runtime import (
-    _scrub_account_auth_at_seam,
-)
 
 ZAI_ENV = {
     "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
@@ -38,8 +31,6 @@ ZAI_ENV = {
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.2[1m]",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.5-air",
 }
-
-BASE = ["spawn", "--name", "w", "hi"]
 
 
 
@@ -64,70 +55,6 @@ def test_routed_env_covers_every_tier_alias():
     assert set(MODEL_ENV_KEYS) == {"ANTHROPIC_MODEL"} | {
         f"ANTHROPIC_DEFAULT_{a.upper()}_MODEL" for a in TIER_ALIASES
     }
-
-
-def test_account_spawn_scrubs_at_the_seam_so_rust_inherits_it(monkeypatch):
-    # An --account spawn on the headless lane auto-routes to the Rust client,
-    # which has no ANTHROPIC_* handling; route_to_rust execs with os.environ,
-    # so the seam is the only edit that lane sees.
-    for k, v in ZAI_ENV.items():
-        monkeypatch.setenv(k, v)
-    monkeypatch.setattr(
-        "fno.agents.account_env.resolve_account_overlay",
-        lambda aid: SimpleNamespace(env={"CLAUDE_CONFIG_DIR": "/tmp/x"}),
-    )
-    _scrub_account_auth_at_seam([*BASE, "--account", "makers"])
-    assert not [k for k in SCRUB_AUTH_VARS if k in os.environ]
-    assert os.environ["CLAUDE_CONFIG_DIR"] == "/tmp/x"
-
-
-def test_seam_clears_a_stale_launch_account_on_an_unaccounted_spawn(monkeypatch):
-    # A worker spawned under --account carries FNO_LAUNCH_ACCOUNT in its env.
-    # When THAT worker spawns a child with no account of its own, the seam must
-    # clear the inherited id: the Rust mint reads it first, so a stale value
-    # stamps the parent's account onto a row that pinned nothing.
-    monkeypatch.setenv("FNO_LAUNCH_ACCOUNT", "parent-acct")
-    _scrub_account_auth_at_seam([*BASE])
-    assert "FNO_LAUNCH_ACCOUNT" not in os.environ
-
-
-def test_seam_drops_the_launch_account_when_resolution_fails(monkeypatch):
-    # The fail-open this closes: a worker spawned under --account inherits
-    # FNO_LAUNCH_ACCOUNT, and when THAT worker's own --account child fails to
-    # resolve, a surviving stamp would let the Rust client trust the parent's
-    # overlay and launch the child on an account the seam never applied. The
-    # stamp drops at entry, before resolution, so the client re-exec's Python,
-    # whose resolve_account_overlay_or_exit owns the refusal receipt.
-    monkeypatch.setenv("FNO_LAUNCH_ACCOUNT", "parent-acct")
-
-    def _boom(account_id):
-        raise RuntimeError("resolution failed")
-
-    monkeypatch.setattr("fno.agents.account_env.resolve_account_overlay", _boom)
-    _scrub_account_auth_at_seam([*BASE, "--account", "parent-acct", "--model", "opus"])
-    assert "FNO_LAUNCH_ACCOUNT" not in os.environ
-
-
-def test_seam_resolves_the_account_before_scrubbing(monkeypatch):
-    # An api_key record may reference the ambient env
-    # (ANTHROPIC_API_KEY = "${ENV:ANTHROPIC_API_KEY}") and resolve_env_value
-    # reads os.environ, so scrubbing first would delete the source value and
-    # make a previously valid --account spawn unresolvable.
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-parent")
-    seen = {}
-
-    def fake_resolve(account_id):
-        seen["account"] = account_id
-        seen["key_at_resolve"] = os.environ.get("ANTHROPIC_API_KEY")
-        return SimpleNamespace(env={"ANTHROPIC_API_KEY": "sk-resolved"})
-
-    monkeypatch.setattr(
-        "fno.agents.account_env.resolve_account_overlay", fake_resolve
-    )
-    _scrub_account_auth_at_seam([*BASE, "--account=acct"])
-    assert seen["account"] == "acct"
-    assert seen["key_at_resolve"] == "sk-from-parent"
-    assert os.environ["ANTHROPIC_API_KEY"] == "sk-resolved"
 
 
 # ---- auth=api_key recognizes ANTHROPIC_AUTH_TOKEN ----
@@ -257,7 +184,7 @@ def test_an_unrouted_scrub_clears_a_coherent_claim_and_says_so(capsys):
 
 
 def test_overlay_restores_model_env_requires_an_actual_model_var():
-    # A config-dir/managed-active account overlay (resolve_account_overlay's
+    # A config-dir/managed-active account overlay (accounts::env::overlay's
     # "config-dir"/"active-slot" lanes) sets only CLAUDE_CONFIG_DIR - no
     # MODEL_ENV_KEYS entry - so the dropped var is never resupplied and the
     # child genuinely falls back to its account's own default. A caller that

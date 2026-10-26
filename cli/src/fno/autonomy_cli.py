@@ -142,9 +142,22 @@ def _reconcile_dispatch_status(project_root: Optional[Path]) -> SpawnerStatus:
 
 
 def _spawn_think_status(project_root: Optional[Path]) -> SpawnerStatus:
-    from fno.provenance.spawn_think import _think_spawn_resolve
+    """The native birth gate's precedence, resolved inline like keep_going:
+    master switch, then FNO_THINK_SPAWN, then config.think_spawn.enabled."""
+    from fno.config import autonomy_master_enabled
 
-    armed, rank = _think_spawn_resolve(project_root=project_root)
+    try:
+        if not autonomy_master_enabled(project_root):
+            armed, rank = False, "autonomy"
+        else:
+            env = os.environ.get("FNO_THINK_SPAWN")
+            if env is not None:
+                armed, rank = env.strip().lower() in {"1", "true", "yes", "on"}, "env"
+            else:
+                settings = _settings_for(project_root)
+                armed, rank = bool(settings.think_spawn.enabled), "config"
+    except Exception:  # noqa: BLE001
+        armed, rank = False, "default"
     return SpawnerStatus(
         "spawn_think (context /think)", "node birth / work-start / retro",
         "config.think_spawn.enabled", armed, rank,

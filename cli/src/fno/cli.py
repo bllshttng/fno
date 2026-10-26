@@ -138,19 +138,9 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
         {"hidden": True},
     ),
-    "think": (
-        "fno.provenance.cli:think_app",
-        "Think inspection and explicit conversational dispatch.",
-        {"hidden": True},
-    ),
     "phase": (
         "fno.phase:phase_app",
         "Phase utilities (kill-check via the fno-agents binary)",
-        {"hidden": True},
-    ),
-    "roles": (
-        "fno.roles.cli:roles_app",
-        "Inspect bounded business-role definitions and resolutions.",
         {"hidden": True},
     ),
     "config": ("fno.config_cli:app", "Configuration management"),
@@ -171,7 +161,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     # answers natively: the front classifies it onto route-slot's
     # config-route mode, so no Python mount remains.
     "evals": (
-        "fno.evals.cli:evals_app",
+        "fno.evals_cli:evals_app",
         "Golden-task efficacy evals (run / report / diff)",
         {"hidden": True},
     ),
@@ -219,11 +209,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Deprecated done shim; use `fno backlog done` (its flag surface is now identical).",
         {"hidden": True},
     ),
-    "research": (
-        "fno.research:research_command",
-        "Retrieve + store: ddgs backbone -> self-fetch -> sources.jsonl.",
-        {"hidden": True},
-    ),
     "scoreboard": (
         "fno.scoreboard.cli:scoreboard_command",
         "Read-only telemetry: stop-cause, spend, autonomy, survival, coverage.",
@@ -265,11 +250,9 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "plan": set(),
     "pr-watch": set(),
     "resume": set(),
-    "roles": set(),
     "state": set(),
     "stub-manifest": set(),
     "target": set(),
-    "think": set(),
     "worker": set(),
     "worktree": set(),
 }

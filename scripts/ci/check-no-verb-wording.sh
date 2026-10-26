@@ -46,6 +46,8 @@ ALLOW_FILES+='|^(crates/(fno-agents|fno)/src/(event_store|effect_map|tick_ledger
 ALLOW_FILES+='|^(docs/harnesses/command-matrix\.md|docs/loops\.md|docs/architecture/help-routing\.md|skills/agent/references/launch-[a-z-]+\.md)$'
 # A recorded transcript: what the agent typed, kept byte for byte.
 ALLOW_FILES+='|^crates/fno-agents/tests/fixtures/lead/lead-2026-08-05\.json$'
+# The HTML5 entity table: `Verbar` and `verbar` are standard entity names.
+ALLOW_FILES+='|^crates/fno-agents/src/research/html5_entities\.tsv$'
 # The v3 graph schema a migration test replays: the column it names is history.
 ALLOW_FILES+='|^crates/fno-agents/tests/fixtures/graph_db_schema_v3\.sql$'
 # The config-route settings golden: the deleted python leg spelled the slot

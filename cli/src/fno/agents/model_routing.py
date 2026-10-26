@@ -71,7 +71,6 @@ from fno.config._tiers import TIER_ALIASES
 
 if TYPE_CHECKING:
     from fno.config import ModelRoutingBlock, SettingsModel
-    from fno.roles import RoleResolutionBlocked
 
 # Built-in default endpoint for the z.ai provider: the Anthropic-compatible
 # endpoint a claude worker needs. The preset itself (base_url, key env, key
@@ -110,11 +109,12 @@ class RouteCompositionError(ValueError):
 class BusinessRoleResolutionBlockedError(RouteCompositionError):
     """A business role exists but its typed resolution failed closed."""
 
-    def __init__(self, result: "RoleResolutionBlocked") -> None:
+    def __init__(self, result: dict) -> None:
         self.result = result
-        detail = f": {result.detail}" if result.detail else ""
+        detail = f": {result['detail']}" if result.get("detail") else ""
+        role_id = (result.get("role") or {}).get("id")
         super().__init__(
-            f"business role {result.role.id!r} is blocked ({result.reason.value}){detail}; "
+            f"business role {role_id!r} is blocked ({result['reason']}){detail}; "
             "no worker launched"
         )
 
@@ -587,8 +587,8 @@ def overlay_restores_model_env(*overlays: Optional[Mapping[str, str]]) -> bool:
 
     A caller composing account_env/route_env right after the incoherent
     scrub must not assume ANY overlay re-supplies a dropped model var: the
-    config-dir and managed-active account lanes (``resolve_account_overlay``
-    in ``account_env.py``) return an overlay of just ``CLAUDE_CONFIG_DIR`` -
+    config-dir and managed-active account lanes (``accounts::env::overlay``
+    in the Rust crate) return an overlay of just ``CLAUDE_CONFIG_DIR`` -
     no model var - so the dropped var stays dropped and the child genuinely
     falls back to its account's own default. Only a route, or an
     ``own-dir``/api-key account overlay that carries its own model pins,
@@ -1371,14 +1371,13 @@ def _resolve_business_role(role: str) -> Optional[dict]:
     business-role): None when no business role has the name, the routing
     answer, or the typed refusal, raised before any routing policy."""
     from fno import rust_binary
-    from fno.roles import RoleResolutionBlocked
 
     answer = rust_binary.command_call("spawn-overlay", {"kind": "business-role", "role": role})
     if "reason" not in answer:
         return answer
     if answer["reason"] == "not_found":
         return None
-    raise BusinessRoleResolutionBlockedError(RoleResolutionBlocked.model_validate(answer))
+    raise BusinessRoleResolutionBlockedError(answer)
 
 
 def _business_role_target(
