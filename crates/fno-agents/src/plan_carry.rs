@@ -1000,7 +1000,10 @@ mod tests {
         assert!(!stored.contains(home_a.path().to_str().unwrap()));
         // A reader whose home differs places the body under its own root,
         // even though its node row still names the writer's absolute path.
-        let b = replica(&[("x-1", plan.to_str().unwrap())]);
+        // The binding names a path that does not exist on this machine, the
+        // way a real peer's home spelling reads here.
+        let writer_path = "/Users/alice/vault/fno/plans/20261021-portable-plans-row.md";
+        let b = replica(&[("x-1", writer_path)]);
         let out = sync_with(
             &b,
             &bare_cwds(),
@@ -1140,7 +1143,10 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("outside this host's home"), "{err}");
-        assert!(!placed.exists());
+        // The configured half placed the body; the unconfigured attempt left
+        // it untouched.
+        assert!(placed.exists());
+        assert_eq!(std::fs::read_to_string(&placed).unwrap(), "v1");
     }
 
     #[test]
@@ -1215,9 +1221,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.pushed, vec!["x-1"]);
-        // B places the body under its own root, then edits that copy.
+        // B places the body under its own root, then edits that copy. Its
+        // binding names the writer's path, which does not exist here.
         let placed = root_b.join("20261021-portable-plans-row.md");
-        let b = replica(&[("x-1", plan_a.to_str().unwrap())]);
+        let b = replica(&[(
+            "x-1",
+            "/Users/alice/vault/fno/plans/20261021-portable-plans-row.md",
+        )]);
         let out = sync_with(
             &b,
             &bare_cwds(),
