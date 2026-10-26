@@ -1011,8 +1011,7 @@ async fn run(args: Vec<String>) -> i32 {
     }
     // `plugin-install`: the filtered-stage installer for the plugin
     // harnesses, daemon-free. The Python surface `fno config plugin install`
-    // shells HERE for claude, opencode and agy; codex stays on the Python
-    // converge engine per the ship-phase ruling.
+    // shells HERE for every harness.
     if command == "plugin-install" {
         return fno_agents::plugin_install::run_plugin_install(&args[1..]);
     }

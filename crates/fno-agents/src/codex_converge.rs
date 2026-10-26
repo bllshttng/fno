@@ -1155,6 +1155,40 @@ fn read_marker(home: &Path) -> Result<Map<String, Value>, Option<ConvergeError>>
 
 // --- converge ----------------------------------------------------------------
 
+/// Holds SIGINT, SIGTERM and SIGHUP pending while the live install is mid
+/// switch. An interrupt then lands after the commit or the rollback, never
+/// between a removal and its restore. The plugin-install door runs on the
+/// client's main thread, so this thread's mask is the one that receives them.
+struct DeferSignals(libc::sigset_t);
+
+impl DeferSignals {
+    fn hold() -> DeferSignals {
+        // SAFETY: both sets are initialised by sigemptyset before use, and
+        // pthread_sigmask only reads `set` and writes `previous`.
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            let mut previous: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut set);
+            libc::sigemptyset(&mut previous);
+            for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+                libc::sigaddset(&mut set, signal);
+            }
+            libc::pthread_sigmask(libc::SIG_BLOCK, &set, &mut previous);
+            DeferSignals(previous)
+        }
+    }
+}
+
+impl Drop for DeferSignals {
+    fn drop(&mut self) {
+        // SAFETY: restores the mask `hold` saved; a pending signal is
+        // delivered here, after the install is whole again.
+        unsafe {
+            libc::pthread_sigmask(libc::SIG_SETMASK, &self.0, std::ptr::null_mut());
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Converged {
     pub channel: String,
@@ -1293,6 +1327,7 @@ pub fn converge(r: Runner, home: &Path, req: &Request) -> Result<Converged, Conv
         None
     };
     let needs_install = selected.is_none() || req.refresh || !selected_ok || !market_ok;
+    let _deferred = DeferSignals::hold();
     let mut changed = false;
     let mut quarantines: Vec<Quarantine> = Vec::new();
     let mut transaction = || -> Res<Converged> {

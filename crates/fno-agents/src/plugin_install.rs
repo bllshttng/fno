@@ -1500,7 +1500,7 @@ fn parse_plugin_install_args(args: &[String]) -> PluginInstallArgs {
                 parsed.json = true;
                 i += 1;
             }
-            "--force" => {
+            "--force" | "-F" => {
                 parsed.force = true;
                 i += 1;
             }
@@ -3091,13 +3091,13 @@ mod tests {
         assert_eq!(parsed.dropped_mode.as_deref(), Some("--check"));
         assert_eq!(run_plugin_install(&args), 2);
 
-        let args: Vec<String> = ["--json", "--release", "codex"]
+        let args: Vec<String> = ["--json", "--release", "codex", "-F"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
         let parsed = parse_plugin_install_args(&args);
         assert_eq!(parsed.mode.as_deref(), Some("codex"));
-        assert!(parsed.release && parsed.json && !parsed.dev);
+        assert!(parsed.release && parsed.json && parsed.force && !parsed.dev);
     }
 
     /// A GitHub-sourced claude marketplace or a codex release marker is a

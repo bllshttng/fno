@@ -20,6 +20,8 @@ struct Fake {
     fail: Option<(String, usize)>,
     /// Answer this argv (joined by spaces) with unparseable stdout, any home.
     garbage: Option<String>,
+    /// Whether SIGINT was held pending during the last live `plugin add`.
+    sigint_held_on_live_add: Option<bool>,
     live: PathBuf,
 }
 
@@ -49,12 +51,22 @@ impl Fake {
             calls: Vec::new(),
             fail: None,
             garbage: None,
+            sigint_held_on_live_add: None,
             live: tmp.join("codex-home"),
         }
     }
 
     fn call(&mut self, argv: &[String], home: &Path) -> Ran {
         self.calls.push((home.to_path_buf(), argv.to_vec()));
+        if home == self.live && argv.get(2).map(String::as_str) == Some("add") {
+            // SAFETY: reads this thread's mask into a zeroed set.
+            let held = unsafe {
+                let mut mask: libc::sigset_t = std::mem::zeroed();
+                libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), &mut mask);
+                libc::sigismember(&mask, libc::SIGINT) == 1
+            };
+            self.sigint_held_on_live_add = Some(held);
+        }
         let joined = argv.join(" ");
         if let Some((target, left)) = &mut self.fail {
             if *left > 0 && *target == joined && home == self.live {
@@ -333,6 +345,8 @@ fn a_failed_switch_restores_the_working_install_and_its_bytes() {
     fake.fail = Some(("codex plugin add fno@fno --json".into(), 1));
     let err = converge_with(&mut fake, "release", None, false).unwrap_err();
     assert_eq!(err.stage, "plugin-add");
+    // An interrupt during the switch waits for the rollback that just ran.
+    assert_eq!(fake.sigint_held_on_live_add, Some(true));
     assert_eq!(fs::read(marker_path(&fake.live)).unwrap(), marker);
     assert_eq!(
         fs::read_to_string(fake.live.join("config.toml")).unwrap(),
