@@ -88,7 +88,7 @@ def _load_corpus(skill: str, since: int) -> tuple[dict, dict]:
     """Build the read-only corpus and return ``(corpus, by_id)`` where ``by_id``
     maps graph node id -> node dict (for PR lookup in review scoring)."""
     from fno import paths as _paths
-    from fno.cost._register import load_ledger_rows
+    from fno.observer.fold import load_ledger_rows
     from fno.observer.fold import classify_deliveries, read_graph_nodes
 
     ledger_path = _paths.ledger_json()
@@ -624,7 +624,7 @@ def _load_target_corpus(since: int, repo_override: Optional[str], gh_runner) -> 
     from datetime import datetime as _dt
 
     from fno import paths as _paths
-    from fno.cost._register import load_ledger_rows
+    from fno.observer.fold import load_ledger_rows
     from fno.observer.fold import read_graph_nodes
 
     rows = load_ledger_rows(_paths.ledger_json())

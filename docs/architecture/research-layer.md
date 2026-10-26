@@ -76,7 +76,7 @@ By default `fno do research "X"` now ships, after retrieval, a `doc`:
 
 ### The eval: research's "CI green" (US5)
 
-`fno doctor evals grade --brief <slug>.md --golden <discovery-*.md>` is the gate - **three mechanical assertions, no model in the loop** (`cli/src/fno/evals/research_grade.py`):
+`fno doctor evals grade --brief <slug>.md --golden <discovery-*.md>` is the gate - **three mechanical assertions, no model in the loop** (`crates/fno-agents/src/evals/research_grade.rs`):
 
 1. **Zero uncited claims** - every claim (a list item under a content section) cites a `[Sn]` that resolves to a URL present as a `sources.jsonl` row.
 2. **Zero dead URLs** - every sidecar row is `verified` after a self-fetch, or is a `web.archive.org` (Wayback) URL.

@@ -22,8 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fno.cost._register import LEDGER_SESSION_UNRESOLVED
-from fno.plan._doc import FrontmatterError, ParseError, load_plan_text
+from fno.plan._doc import FrontmatterError, ParseError, load_plan_text  # noqa: E402
 from fno.plan.brief import BriefParseError, parse_execution_strategy
 from fno.rust_binary import find_dev_binary, resolve_binary
 from fno.events.log import _parse_ts
@@ -32,6 +31,12 @@ from fno.events.log import _parse_ts
 # Mirrors _CALIBRATION_MIN_VERDICTS (scoreboard/fold.py): below this, a ranking
 # is fabricated confidence, not a real trend (Locked Decision 11).
 MIN_ATTRIBUTABLE = 10
+
+# The recorded value when a ledger row's sessions resolved to nothing; the
+# same sentinel the native ledger writer stamps (ledger_axes.rs). Formerly
+# fno.cost._register.LEDGER_SESSION_UNRESOLVED, read here since the cost
+# family ported to Rust.
+LEDGER_SESSION_UNRESOLVED = "unresolved:no-harness-session"
 
 _SKILL_IDS = {"blueprint": "fno:blueprint", "review": "fno:review", "target": "fno:target"}
 
@@ -247,6 +252,38 @@ _PR_URL_REPO_RE = re.compile(r"github\.com/([^/]+/[^/]+)/pull/")
 
 # Moved from the deleted scoreboard fold with the block at the file tail;
 # defined here because _NO_PR_TERMINALS below unions it at import time.
+# -- Read-side (moved from the deleted scoreboard fold; the one ledger reader) --
+
+
+class BrokenLedger(Exception):
+    """Ledger failed to parse twice - a real corruption, not a mid-append race."""
+
+    def __init__(self, path: str, offset: int, msg: str):
+        self.path = path
+        self.offset = offset
+        self.msg = msg
+        super().__init__(f"{path}: parse error at byte {offset}: {msg}")
+
+
+def load_ledger_rows(path: Path, *, _retry: bool = True) -> list[dict]:
+    """Load ledger.json rows. Retry once on a parse error (AC5-FR); a second
+    failure raises BrokenLedger (AC5-ERR). Missing file = empty (fresh install)."""
+    import time
+
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except json.JSONDecodeError as e:
+        if _retry:
+            time.sleep(0.1)  # ponytail: fixed backoff; the writer holds flock for ms
+            return load_ledger_rows(path, _retry=False)
+        raise BrokenLedger(str(path), e.pos, e.msg) from e
+    rows = data.get("entries", data) if isinstance(data, dict) else data
+    if not isinstance(rows, list):  # {"entries": null} etc. - valid JSON, junk shape
+        return []
+    return [r for r in rows if isinstance(r, dict)]
+
 _WEDGE_REASONS = frozenset({"NoProgress", "Budget", "Aborted"})
 
 # no-PR class terminals: a run that reached one of these STOPPED without shipping
@@ -774,10 +811,31 @@ def _skills_from_transcript(lines: list[str]) -> list[str]:
                     found.append(skill)
     return found
 
-def _default_read_transcript(session_id: str) -> list[str] | None:
-    from fno.cost._session_cost import find_transcript
+# The session-id shape the transcript scan filters on, and the scan itself:
+# formerly fno.cost._session_cost.find_transcript, imported by the scoreboard
+# fold until the cost family ported to Rust and the fold's survivors inlined
+# it. A malformed UUID reads as not found.
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
-    path = find_transcript(session_id)
+
+def _find_transcript(session_id: str) -> str | None:
+    """Find transcript JSONL by session ID across all project dirs."""
+    if not UUID_RE.match(session_id):
+        return None
+    base = Path.home() / ".claude" / "projects"
+    if not base.is_dir():
+        return None
+    for project_dir in base.iterdir():
+        if not project_dir.is_dir():
+            continue
+        candidate = project_dir / f"{session_id}.jsonl"
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _default_read_transcript(session_id: str) -> list[str] | None:
+    path = _find_transcript(session_id)
     if not path:
         return None
     try:
@@ -856,8 +914,6 @@ def _extract_skill_runs(row: dict, *, read_transcript) -> tuple[list[str], str]:
 
     method is "transcript" (real Skill tool_use found), "phase-proxy"
     (fallback to phases_completed), or "unattributed" (neither)."""
-    from fno.cost._session_cost import UUID_RE
-
     sessions = row.get("sessions")
     uuid_sessions = [s for s in sessions if isinstance(s, str) and UUID_RE.match(s)] if isinstance(sessions, list) else []
     found: list[str] = []

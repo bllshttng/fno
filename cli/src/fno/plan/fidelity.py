@@ -92,7 +92,7 @@ def compute_plan_fidelity(
     from datetime import datetime
 
     from fno import paths as _paths
-    from fno.cost._register import load_ledger_rows
+    from fno.observer.fold import load_ledger_rows
     from fno.graph.store import request_scoreboard_plan_fidelity
 
     now = now or datetime.now()
