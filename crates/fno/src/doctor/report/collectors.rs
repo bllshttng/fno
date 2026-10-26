@@ -727,7 +727,11 @@ fn fd_limit_report() -> Value {
     extern "C" {
         fn getrlimit(resource: i32, rlim: *mut RLimit) -> i32;
     }
-    const RLIMIT_NOFILE: i32 = 8; // macOS and Linux agree on 8
+    // RLIMIT_NOFILE is resource 8 on macOS and 7 on Linux.
+    #[cfg(target_os = "macos")]
+    const RLIMIT_NOFILE: i32 = 8;
+    #[cfg(not(target_os = "macos"))]
+    const RLIMIT_NOFILE: i32 = 7;
     const RLIM_INFINITY: u64 = u64::MAX;
     let mut limit = RLimit { soft: 0, hard: 0 };
     // SAFETY: getrlimit on RLIMIT_NOFILE only writes the caller's struct.
@@ -835,7 +839,7 @@ pub(crate) fn groom_install_agent() -> Value {
 /// backlog reads; a torn store reads as empty, never a false alarm).
 fn working_graph_ids() -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
-    let path = state_dir().join("graph.db");
+    let path = super::graph_store_path();
     if !path.exists() {
         return ids;
     }
@@ -863,11 +867,51 @@ pub(crate) fn state_dir() -> PathBuf {
     expand_tilde(&PathBuf::from("~/.fno"))
 }
 
+/// `fno.paths.project_events_json()`, minus the one-shot checkout migration:
+/// the FNO_EVENTS_PATH pin, then the repo space's journal. Every worktree of
+/// a repo shares the space, so the canonical root decides the slug.
 pub(crate) fn project_events_path() -> PathBuf {
     if let Some(pin) = std::env::var_os("FNO_EVENTS_PATH") {
         return PathBuf::from(pin);
     }
-    state_dir().join("events.jsonl")
+    space_dir().join("events.jsonl")
+}
+
+fn space_dir() -> PathBuf {
+    spaces_root().join(space_slug(&canonical_repo_root()))
+}
+
+fn spaces_root() -> PathBuf {
+    if let Some(pin) = std::env::var_os("FNO_SPACES_DIR") {
+        return expand_tilde(&PathBuf::from(pin));
+    }
+    state_dir().join("spaces")
+}
+
+fn space_slug(root: &Path) -> String {
+    root.to_string_lossy().replace('/', "-")
+}
+
+/// FNO_REPO_ROOT, else the main worktree (git-common-dir's parent), else the
+/// checkout root: `fno.paths.resolve_canonical_repo_root`'s order.
+fn canonical_repo_root() -> PathBuf {
+    if let Some(pin) = std::env::var_os("FNO_REPO_ROOT") {
+        return PathBuf::from(pin);
+    }
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+    {
+        if out.status.code() == Some(0) {
+            let gitdir = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+            if let Some(parent) = gitdir.parent() {
+                if !parent.as_os_str().is_empty() {
+                    return parent.to_path_buf();
+                }
+            }
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 fn expand_tilde(path: &Path) -> PathBuf {

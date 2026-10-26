@@ -46,6 +46,20 @@ pub(crate) fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// The store the backlog reads: the db twin of the graph.json anchor, on
+/// `fno.paths.place_anchor`'s ladder (a root mid-migration answers the store
+/// it actually holds).
+pub(crate) fn graph_store_path() -> PathBuf {
+    let root = collectors::state_dir();
+    if root.join("db").join("graph.db").exists() {
+        return root.join("db").join("graph.db");
+    }
+    if root.join("graph.db").exists() {
+        return root.join("graph.db");
+    }
+    root.join("db").join("graph.db")
+}
+
 pub(crate) fn codex_home() -> PathBuf {
     match std::env::var_os("CODEX_HOME") {
         Some(v) if !v.is_empty() => PathBuf::from(v),

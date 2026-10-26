@@ -85,6 +85,18 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
         Some("stalls") => {
             let mut argv = vec![OsString::from("stalls")];
             argv.extend(args[2..].iter().cloned());
+            // The deleted Python wrapper populated the event journals when the
+            // caller named none (doctor_cli.py stalls_command); the fold
+            // refuses an argv with no --events.
+            let has_events = args[2..].iter().any(
+                |a| matches!(a.to_str(), Some(w) if w == "--events" || w.starts_with("--events=")),
+            );
+            if !has_events {
+                for path in stall_event_journals() {
+                    argv.push(OsString::from("--events"));
+                    argv.push(path.into_os_string());
+                }
+            }
             Some(Claim::AgentsExec("fno doctor stalls", argv))
         }
         Some("harness") => {
@@ -122,20 +134,21 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
             if context {
                 return None;
             }
-            let claimed = args[1..].iter().any(|a| {
-                matches!(
-                    a.to_str(),
-                    Some("--fix")
-                        | Some("--blockers")
-                        | Some("--json")
-                        | Some("-J")
-                        | Some("--source")
-                        | Some("--cost-check")
-                        | Some("--codex-hooks")
-                        | Some("--codex-bind")
-                        | Some("--codex-app-server")
-                        | Some("--find-transcript")
-                )
+            let claimed = args[1..].iter().any(|a| match a.to_str() {
+                Some("--fix")
+                | Some("--blockers")
+                | Some("--json")
+                | Some("-J")
+                | Some("--source")
+                | Some("--cost-check")
+                | Some("--codex-hooks")
+                | Some("--codex-bind")
+                | Some("--codex-app-server")
+                | Some("--find-transcript") => true,
+                Some(w) if w.starts_with("--source=") || w.starts_with("--find-transcript=") => {
+                    true
+                }
+                _ => false,
             });
             claimed.then(|| Claim::Home(args[1..].to_vec()))
         }
@@ -147,6 +160,41 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
 fn usage_error(message: &str) -> i32 {
     eprintln!("Usage: fno doctor [OPTIONS]\nTry 'fno doctor --help' for help.\n\nError: {message}");
     2
+}
+
+/// The three live event journals for the stalls fold's default
+/// (`fno.paths.event_journals`' live set, without the retained rotations: the
+/// fold's window is days and an explicit --events names archives). Ephemeral
+/// siblings ride when they exist, resolved and de-duplicated like Python's.
+fn stall_event_journals() -> Vec<std::path::PathBuf> {
+    let mut live: Vec<std::path::PathBuf> = vec![
+        report::state_dir().join("events.jsonl"),
+        match std::env::var_os("FNO_AGENTS_HOME") {
+            Some(home) => std::path::PathBuf::from(home).join("events.jsonl"),
+            None => report::home_dir().join(".fno/agents/events.jsonl"),
+        },
+        report::project_events_path(),
+    ];
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    let mut seen: Vec<std::path::PathBuf> = Vec::new();
+    for base in live.drain(..) {
+        let resolved = std::fs::canonicalize(&base).unwrap_or_else(|_| base.clone());
+        let mut bases = vec![resolved.clone()];
+        let ephemeral = resolved.with_file_name(format!(
+            "{}.ephemeral",
+            resolved.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        if ephemeral.exists() {
+            bases.push(ephemeral);
+        }
+        for path in bases {
+            if !seen.contains(&path) {
+                seen.push(path.clone());
+                out.push(path);
+            }
+        }
+    }
+    out
 }
 
 /// `python_json`: the report's JSON stdout keeps the Python `json.dumps`

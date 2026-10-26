@@ -86,7 +86,7 @@ fn config_candidates() -> Vec<PathBuf> {
 /// Backlog entries carrying `mission_active`, from the store's nodes table
 /// extras (the canonical fail-safe reader: a torn graph reads as 0).
 fn mission_active_count() -> i64 {
-    let path = super::super::state_dir().join("graph.db");
+    let path = super::super::graph_store_path();
     if !path.exists() {
         return 0;
     }

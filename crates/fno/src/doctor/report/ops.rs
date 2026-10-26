@@ -101,7 +101,7 @@ pub(crate) fn run_ref_cost_tool(session_id: &str) -> (Option<f64>, Option<String
     let Some(ref_bin) = super::which(REF_COST_TOOL) else {
         return (None, Some("reference cost tool not installed".to_string()));
     };
-    let argv = vec![ref_bin, "session --json".to_string()];
+    let argv = vec![ref_bin, "session".to_string(), "--json".to_string()];
     let outcome = bounded_command_for(&argv, 120);
     if outcome.is_none() {
         return (None, Some("reference cost tool failed to run".to_string()));

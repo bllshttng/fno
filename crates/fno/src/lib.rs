@@ -148,6 +148,6 @@ pub mod wizard_term;
 pub mod wordmark;
 pub mod yard_overlay;
 
-pub mod doctor_cost;
 pub mod doctor;
+pub mod doctor_cost;
 pub mod otel_read;
