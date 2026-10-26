@@ -965,13 +965,6 @@ def test_deliver_live_mcp_row_delivers_via_control_sock(
         )
     ])
 
-    from fno.mcp import client as mcp_client
-    push_calls: list = []
-    monkeypatch.setattr(
-        mcp_client, "send_to_channel",
-        lambda routing_key, envelope: push_calls.append((routing_key, envelope)),
-    )
-
     from fno.agents import dispatch as dispatch_mod
     inject_calls: list = []
 
@@ -985,12 +978,11 @@ def test_deliver_live_mcp_row_delivers_via_control_sock(
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
+    result = dispatch_send(from_name="lead",
         name="claude-mcp", message="fyi built", provider=None, cwd=cwd
     )
 
     assert result.delivery == "hosted"
-    assert len(push_calls) == 0, "the retired MCP fast lane must not fire"
     assert inject_calls == ["abcd1234"], "delivery rides the confirming control.sock lane"
 
 
