@@ -814,7 +814,8 @@ pub fn read_graph_entries(home: &AgentsHome) -> Option<GraphRead> {
 }
 
 /// One open do row the sweep may settle: its node is done, GitHub-confirmed
-/// merged, and carries no additional PR whose outcome nothing recorded.
+/// merged or shipped with no PR, and carries no additional PR whose outcome
+/// nothing recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaleDoRow {
     pub node: String,
@@ -837,6 +838,8 @@ pub(crate) fn gh_pr_is_open(pr: u64, cwd: &str) -> Option<bool> {
 /// explanations and neither is asserted here; and no `additional_prs` entry
 /// still open under the three settle rules ([`crate::additional_prs`]) -
 /// presence alone never holds the row, and an entry no rule settles does.
+/// A done node that shipped with no PR at all (no `pr_number`, no
+/// `additional_prs`) has no merge to record, so it settles on done alone.
 pub(crate) fn stale_open_do_rows(entries: &[Value]) -> Vec<StaleDoRow> {
     let mut stale = Vec::new();
     let primaries = crate::additional_prs::primary_index(entries);
@@ -847,7 +850,12 @@ pub(crate) fn stale_open_do_rows(entries: &[Value]) -> Vec<StaleDoRow> {
         if entry.get("status").and_then(Value::as_str) != Some("done") {
             continue;
         }
-        if entry.get("merge_status").and_then(Value::as_str) != Some("merged") {
+        let no_pr = entry.get("pr_number").is_none_or(Value::is_null)
+            && entry
+                .get("additional_prs")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty);
+        if !no_pr && entry.get("merge_status").and_then(Value::as_str) != Some("merged") {
             continue;
         }
         let holds_pr = entry
@@ -1665,8 +1673,19 @@ pub(crate) fn run_with_release(
             .map(|c| std::path::Path::new(c.as_str()).join(crate::claims::CLAIMS_DIRNAME)),
     );
     let claim_records = crate::claims::list_in(&claims_dirs, None, false).unwrap_or_default();
+    // A claim on a done node is not live work: the node it guards is over,
+    // so it never shields the row that still holds it.
+    let claim_on_done_node = |key: &str| {
+        key.strip_prefix("node:").is_some_and(|node| {
+            graph
+                .as_ref()
+                .and_then(|g| g.statuses.get(node))
+                .is_some_and(|status| status == "done")
+        })
+    };
     let claims_by_session: std::collections::HashMap<String, String> = claim_records
         .iter()
+        .filter(|rec| !claim_on_done_node(&rec.key))
         .filter_map(|rec| {
             let sid = rec.session_id.as_deref()?.trim().to_ascii_lowercase();
             (!sid.is_empty()).then_some((sid, format!("{} (holder {})", rec.key, rec.holder)))
@@ -1841,7 +1860,17 @@ pub(crate) fn run_with_release(
                 continue;
             }
         }
-        if e.origin.as_deref() == Some("operator") {
+        // The done rule: every node the row names is done and the row sat
+        // quiet past the idle hour. No origin shields such a row; the claim,
+        // attended and tree gates below still run.
+        let done_quiet = matches!(
+            staged_row,
+            Some((verdict, age)) if matches!(verdict.work, WorkState::AllDone { .. })
+                && (*age)
+                    .or_else(|| report_age(e, now))
+                    .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS)
+        );
+        if e.origin.as_deref() == Some("operator") && !done_quiet {
             summary.kept_operator.push(id);
             continue;
         }
@@ -1890,7 +1919,7 @@ pub(crate) fn run_with_release(
                 e.harness_session_id.as_deref().unwrap_or("").trim(),
                 e.launch_account.as_deref(),
             );
-        if !is_spawn && !adopted_finished(e) && !adopted_terminal {
+        if !is_spawn && !adopted_finished(e) && !adopted_terminal && !done_quiet {
             let corpse_probe = crate::gc_adopt::origin_corpse(e, quiet, &agents_memo, agents_read);
             // An adopted bg row falls through as a live row judged like a
             // spawn one, never as a corpse: only a row the corpse probe
@@ -1953,11 +1982,13 @@ pub(crate) fn run_with_release(
         // Locked Decision 1: every named node done but one still carries an
         // OPEN do row for this session -> the row stays and the node is
         // named. The retirement never settles graph rows itself. Past the
-        // origin ruling's idle hour a spawn row no longer holds on it.
-        let idle_hour_past = (is_spawn || adopted_terminal)
-            && (*age)
-                .or_else(|| report_age(e, now))
-                .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS);
+        // origin ruling's idle hour a spawn row no longer holds on it, and
+        // under the done rule no row does.
+        let idle_hour_past = done_quiet
+            || ((is_spawn || adopted_terminal)
+                && (*age)
+                    .or_else(|| report_age(e, now))
+                    .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS));
         if matches!(work, WorkState::AllDone { .. }) && !idle_hour_past {
             if let Some(nodes) = graph.open_do.get(&sid.to_ascii_lowercase()) {
                 let node = nodes.first().cloned().unwrap_or_default();
@@ -4827,5 +4858,23 @@ mod tests {
         assert!(settled.is_empty());
         assert_eq!(crate::backlog::version(&path).unwrap(), version_before);
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// A done node that shipped with no PR has no merge to record, so its
+    /// open do row settles on done alone. A done node with a PR and no
+    /// recorded merge still waits for the merge.
+    #[test]
+    fn a_done_node_with_no_pr_settles_and_one_with_an_unrecorded_pr_waits() {
+        let open = serde_json::json!({"phase": "execute", "harness": "claude",
+            "session_id": "s-open", "started_at": "2026-10-21T00:00:00Z"});
+        let entries = vec![
+            serde_json::json!({"id": "fb-nopr", "status": "done", "pr_number": null,
+                "sessions": [open.clone()]}),
+            serde_json::json!({"id": "fb-pr", "status": "done", "pr_number": 7,
+                "sessions": [open]}),
+        ];
+        let stale = stale_open_do_rows(&entries);
+        assert_eq!(stale.len(), 1, "{stale:?}");
+        assert_eq!(stale[0].node, "fb-nopr");
     }
 }
