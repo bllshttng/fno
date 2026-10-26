@@ -274,6 +274,7 @@ pub mod launch_workdir;
 pub mod law_match;
 pub mod lead_answers;
 pub mod lead_checkin;
+pub(crate) mod lead_checkin_beat_budget;
 pub mod lead_checkin_blueprint;
 pub mod lead_checkin_evals;
 pub mod lead_checkin_lineup;
