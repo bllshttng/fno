@@ -311,7 +311,6 @@ fn run_tick_case(sb: &Sandbox, label: &str, rows: &[Value], sinks: &[SinkConfig]
             exit: Some(0),
             streams: vec![dumped],
         },
-        None,
     );
 }
 
@@ -688,7 +687,6 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
                 exit: Some(0),
                 streams: vec![python_json_compact_ascii(&record)],
             },
-            None,
         );
     }
 
@@ -729,7 +727,6 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
             exit: Some(0),
             streams: vec![python_json_compact_ascii(&record)],
         },
-        None,
     );
 
     // The dry-run CLI case: spawn the real binary the way the doctor door
@@ -750,6 +747,5 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
                 String::from_utf8_lossy(&out.stderr).to_string(),
             ],
         },
-        None,
     );
 }
