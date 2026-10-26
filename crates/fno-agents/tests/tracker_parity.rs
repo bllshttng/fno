@@ -36,7 +36,7 @@ const SUBJECT: &str = "tracker";
 /// the dispatch provenance pair). The write's contract is the values on
 /// the fields both models serve; these names are envelope, and they
 /// retire with the graph family's read model.
-const MASKED_ROW_KEYS: [&str; 16] = [
+const MASKED_ROW_KEYS: [&str; 17] = [
     "touched_at",
     "_reading",
     "archived_at",
@@ -44,6 +44,7 @@ const MASKED_ROW_KEYS: [&str; 16] = [
     "persisted_status",
     "caused_by",
     "company_work",
+    "contained_in",
     "deferred_at",
     "deferred_kind",
     "deferred_reason",
