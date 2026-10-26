@@ -668,7 +668,7 @@ def sync(
     """Idempotent whole-vault mirror-field sweep."""
     from fno.graph import api as graph_api
     from fno.plan._project import project_graph_nodes
-    from fno.tracker.metadata import ExternalMetadataUnavailable, read_entries
+    from fno.graph.api import ExternalMetadataUnavailable, read_entries
 
     watermark = _plan_sync_watermark()
     try:

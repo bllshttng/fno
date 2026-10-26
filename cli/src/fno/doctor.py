@@ -1291,7 +1291,7 @@ def _archive_id_collisions() -> dict[str, Any]:
 
         from fno.graph.store import _apply_graph_defaults
         from fno.paths import graph_archive_json
-        from fno.tracker.metadata import read_entries
+        from fno.graph.api import read_entries
 
         archive_path = graph_archive_json()
         if not archive_path.exists():
@@ -1449,7 +1449,7 @@ def _mission_active_count() -> int:
     try:
         from fno import paths as _paths
         from fno.graph.store import read_graph_strict
-        from fno.tracker import active_backend_name
+        from fno.graph.api import active_backend_name
 
         if active_backend_name() != "graph":
             return 0

@@ -36,5 +36,6 @@ def test_partition_holds_on_real_models():
     assert "exactly the join key ['id']" in r.stdout
     # Every tracker-owned projection is named in the receipt: the selection
     # projection joins the inspection set, so the marker proves the gate saw
-    # more than TrackerNode.
-    assert "TrackerCandidate" in r.stdout
+    # more than TrackerNode. The Rust selection projection is `Candidate`
+    # (the Python `TrackerCandidate` class died with the package).
+    assert "Candidate" in r.stdout

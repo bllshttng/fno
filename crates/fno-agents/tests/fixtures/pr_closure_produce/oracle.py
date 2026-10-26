@@ -48,7 +48,7 @@ from fno.pr.closure import (
     render_pr_closure_trailer,
     resolve_branch_node_id,
 )
-from fno.tracker import active_backend_name
+from fno.graph.api import active_backend_name
 
 CORRUPT_BYTES = b"this fixture graph is deliberately corrupt\n"
 
