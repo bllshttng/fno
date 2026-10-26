@@ -2613,16 +2613,21 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                         "rebased",
                         &format!("{trigger}; behind {before} -> {after}"),
                     );
-                    // The conflict cleared: the task heal filed for it closes.
-                    if let Err(e) = crate::fleet_task::close(
-                        &questions_store(a),
-                        "heal",
-                        &format!("PR {pr} fold conflict"),
-                        a.cwd.to_string_lossy().as_ref(),
-                        "rebased",
-                        "heal",
-                    ) {
-                        eprintln!("pr-heal: task close refused: {e}");
+                    // The conflict cleared: the task heal filed for it closes, under the new key and, across an upgrade window, under the pre-rename key.
+                    for key in [
+                        format!("PR {pr} fold conflict"),
+                        format!("PR {pr} rebase conflict"),
+                    ] {
+                        if let Err(e) = crate::fleet_task::close(
+                            &questions_store(a),
+                            "heal",
+                            &key,
+                            a.cwd.to_string_lossy().as_ref(),
+                            "rebased",
+                            "heal",
+                        ) {
+                            eprintln!("pr-heal: task close refused: {e}");
+                        }
                     }
                     // The push restarted CI; classifying the old sha's checks
                     // would classify a dead run.
@@ -2641,6 +2646,15 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     bump(&mut counts, "skip_fold_conflict");
                     receipt(&pr, "skip_fold_conflict", &files);
                     let key = format!("PR {pr} fold conflict");
+                    // The pre-rename key: an open task under it would orphan once the new key files, so the upgrade retires it beside the new filing.
+                    let _ = crate::fleet_task::close(
+                        &questions_store(a),
+                        "heal",
+                        &format!("PR {pr} rebase conflict"),
+                        a.cwd.to_string_lossy().as_ref(),
+                        "superseded",
+                        "heal",
+                    );
                     let at = (!files.is_empty())
                         .then(|| format!(" in: {files}"))
                         .unwrap_or_default();

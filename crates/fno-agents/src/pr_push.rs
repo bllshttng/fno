@@ -1228,7 +1228,26 @@ fn integrate_origin_main(git: &str, cwd: &Path) -> Result<&'static str, i32> {
         );
         return Err(3);
     }
-    Ok("merge")
+    // A branch config like mergeOptions=--no-commit (or --squash) can exit 0 with the merge staged but not committed: HEAD unmoved, the tree dirty. Verify the fold actually landed before the push legs trust it.
+    match run_labeled(
+        "pr-push",
+        git,
+        &["merge-base", "--is-ancestor", "origin/main", "HEAD"],
+        cwd,
+        READ_TIMEOUT,
+    ) {
+        Ok((true, _, _)) => Ok("merge"),
+        Ok((false, _, _)) => {
+            eprintln!(
+                "pr-push: the fold merge exited 0 but origin/main is not an ancestor of HEAD (a non-committing merge option is in effect); conclude or undo the staged merge, then re-run the push"
+            );
+            Err(3)
+        }
+        Err(e) => {
+            eprintln!("pr-push: could not verify the fold ({e}); nothing pushed");
+            Err(4)
+        }
+    }
 }
 
 /// The guarded push, command entry. Sequence: refuse protected/dirty, fetch, measure behind-before, integrate origin/main only when GitHub reads the PR dirty or behind (one fold merge; a conflict stays in progress for the caller; otherwise none), measure behind-after, compare against the fetched remote branch (refuse remote-only commits), preflight, in-flight read on the remote head, push exactly once (leased only when a caller-rebased head demands it), stamp, receipt. Exit codes: 0 pushed, 1 preflight red, 2 in flight, 3 refusal, 4 read error.
