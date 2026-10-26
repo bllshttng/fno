@@ -465,7 +465,7 @@ pub(crate) fn build_calibration(
     node_maps: &NodeMaps,
 ) -> Value {
     let _ = since_days_unused;
-    let mut final_verdict: Vec<(String, &str)> = Vec::new();
+    let mut final_verdict: Vec<(String, String)> = Vec::new();
     let mut unattributed = 0i64;
     for e in verdict_events {
         let data = event_data(e);
@@ -481,18 +481,18 @@ pub(crate) fn build_calibration(
         };
         // Append order: last write wins.
         final_verdict.retain(|(existing, _)| existing != nid);
-        final_verdict.push((nid.to_string(), v));
+        final_verdict.push((nid.to_string(), v.to_string()));
     }
     let mut excluded = Map::new();
     for (_, v) in &final_verdict {
-        if !COUNTABLE_VERDICTS.contains(v) {
+        if !COUNTABLE_VERDICTS.contains(v.as_str()) {
             let counter = excluded.entry(v.to_string()).or_insert(json!(0));
             *counter = json!(counter.as_i64().unwrap_or(0) + 1);
         }
     }
-    let counted: Vec<(String, &str)> = final_verdict
+    let counted: Vec<(String, String)> = final_verdict
         .iter()
-        .filter(|(_, v)| COUNTABLE_VERDICTS.contains(v))
+        .filter(|(_, v)| COUNTABLE_VERDICTS.contains(v.as_str()))
         .cloned()
         .collect();
     let n = counted.len() as i64;
@@ -537,7 +537,7 @@ pub(crate) fn build_calibration(
             &node_maps.fixes,
         );
         let cell = table
-            .get_mut(*v)
+            .get_mut(v.as_str())
             .and_then(|row| row.get_mut(outcome))
             .unwrap_or_else(|| panic!("calibration table cell missing {v}/{outcome}"));
         *cell = json!(cell.as_i64().unwrap_or(0) + 1);
@@ -697,7 +697,7 @@ pub(crate) fn skill_commit_history(
                 let (h, iso) = line.split_once(' ').unwrap_or((line, ""));
                 let value = Value::String(iso.to_string());
                 if let (false, Some(dt)) = (h.is_empty(), parse_ts(Some(&value))) {
-                    history.push((dt, h));
+                    history.push((dt, h.to_string()));
                 }
             }
         }
@@ -825,7 +825,6 @@ pub(crate) fn build_skill_scoreboard(
     let touches_by_node = count_touches_by_node(touch_events, cutoff, now);
     let deliveries = &inputs.by_node;
 
-    let mut buckets: BTreeMap<(String, String), SkillBucket> = BTreeMap::new();
     let mut attributed = 0i64;
     let mut ordered_buckets: Vec<((String, String), SkillBucket)> = Vec::new();
     let mut bucket_index: HashMap<(String, String), usize> = HashMap::new();

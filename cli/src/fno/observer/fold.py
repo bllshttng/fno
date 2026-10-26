@@ -28,8 +28,8 @@ from fno.rust_binary import find_dev_binary, resolve_binary
 from fno.events.log import _parse_ts
 
 
-# Mirrors _CALIBRATION_MIN_VERDICTS (scoreboard/fold.py): below this, a ranking
-# is fabricated confidence, not a real trend (Locked Decision 11).
+# Mirrors CALIBRATION_MIN_VERDICTS (fno-agents scoreboard views.rs): below
+# this, a ranking is fabricated confidence, not a real trend (Locked Decision 11).
 MIN_ATTRIBUTABLE = 10
 
 # The recorded value when a ledger row's sessions resolved to nothing; the
@@ -819,7 +819,9 @@ UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 
 
 def _find_transcript(session_id: str) -> str | None:
-    """Find transcript JSONL by session ID across all project dirs."""
+    """Find transcript JSONL by session ID across all project dirs.
+    Formerly fno.cost._session_cost.find_transcript, imported here since the
+    cost family ported to Rust. A malformed UUID reads as not found."""
     if not UUID_RE.match(session_id):
         return None
     base = Path.home() / ".claude" / "projects"
@@ -884,6 +886,11 @@ def _skill_commit_history(root: Path, rel: str) -> list[tuple[datetime, str]]:
     _SKILL_COMMIT_HISTORY_CACHE[key] = history
     return history
 
+# The ledger phase and skill directory are separate vocabularies. Keep old
+# phase rows pointed at the renamed skill until the compatibility shim retires.
+_PHASE_TO_SKILL_DIR = {"do": "execute", "execute": "execute"}
+
+
 def _default_skill_version(skill_id: str, ts_raw: str | None) -> str:
     """Best-effort git hash of the skill's SKILL.md at (or before) ts_raw.
     No git history / no such file / any subprocess failure -> "unknown",
@@ -944,6 +951,8 @@ def _row_session_ids(row: dict) -> set[str]:
     scalar = row.get("session_id")
     if isinstance(scalar, str) and scalar:
         ids.add(scalar)
+    return ids
+
 
 def _ci_reds_from_fires(ci_ordered: list[str]) -> tuple[int | None, int]:
     """Count distinct red EPISODES (transitions into FAILURE:*) across a

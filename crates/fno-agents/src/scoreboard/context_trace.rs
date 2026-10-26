@@ -402,10 +402,10 @@ pub(crate) fn build_context_outcome_trace(
     let mut reviewed: Option<bool> = loop_data.get("reviewed").and_then(Value::as_bool);
     let review_observed = reviewed.is_some() || attestations > 0 || findings > 0;
     if reviewed.is_none() && attestations > 0 {
-        reviewed = matching.iter().any(|e| {
+        reviewed = Some(matching.iter().any(|e| {
             event_kind(e) == Some("review_attestation")
                 && event_data(e).get("verdict").and_then(Value::as_str) == Some("pass")
-        });
+        }));
     }
     let merge_events: Vec<&Value> = matching
         .iter()

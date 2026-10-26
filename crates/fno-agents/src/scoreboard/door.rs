@@ -263,7 +263,7 @@ pub fn run_scoreboard(args: &[String]) -> i32 {
             if let Some(rp) = row.get("root_path").and_then(Value::as_str) {
                 let p = std::path::PathBuf::from(rp);
                 if p.exists() {
-                    trace_paths.push(p.join(".fno").join("events.jsonl"));
+                    trace_paths.push(crate::outstanding::project_log(&p, "events.jsonl"));
                 }
             }
             if let Some(cr) = row.get("canonical_root_path").and_then(Value::as_str) {
@@ -301,7 +301,7 @@ pub fn run_scoreboard(args: &[String]) -> i32 {
             .filter(|e| e.get("type").and_then(Value::as_str) == Some("loop_check"))
             .cloned()
             .collect();
-        let mut pf = super::plan_join::build_plan_fidelity(
+        let mut pf = match super::plan_join::build_plan_fidelity(
             &inputs,
             parsed.since_days,
             chrono::Local::now(),
@@ -309,7 +309,13 @@ pub fn run_scoreboard(args: &[String]) -> i32 {
             &trace_events,
             Some(&coverage),
             "unjoined",
-        );
+        ) {
+            Ok(view) => view,
+            Err(e) => {
+                eprintln!("{e}");
+                return 1;
+            }
+        };
         pf["event_coverage"] = coverage;
         return finish(&mut pf, R::Pf);
     }
