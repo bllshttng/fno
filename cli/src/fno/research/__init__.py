@@ -6,7 +6,7 @@ __all__ = ["research_command"]
 
 def __getattr__(name: str):
     # Lazy: defer the typer-dependent CLI import until the command is invoked
-    # (mirrors fno.executor's lazy attribute pattern - keeps `fno --help` cheap).
+    # (keeps `fno --help` cheap).
     if name == "research_command":
         from fno.research.cli import research_command
 

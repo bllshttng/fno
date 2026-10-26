@@ -53,7 +53,6 @@ def test_importing_agents_cli_does_not_import_folded_subgroups() -> None:
         "fno.mail.cli",
         "fno.mcp.cli",
         "fno.roles.cli",
-        "fno.worker.cli",
     }
     script = (
         "import json, sys; import fno.agents.cli; "

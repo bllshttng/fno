@@ -361,7 +361,6 @@ cli/src/fno/target_cli.py
 cli/src/fno/test_dispatch_target.py
 cli/src/fno/test_worktree_paths.py
 cli/src/fno/wake/detect.py
-cli/src/fno/worker/review.py
 cli/src/fno/worktree_cli/cli.py
 cli/src/fno/worktree_paths.py
 cli/src/fno/worktree.py

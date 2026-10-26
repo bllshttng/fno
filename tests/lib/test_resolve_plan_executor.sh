@@ -6,8 +6,7 @@
 # backend-only plan resolves `tdd`. Mirrors /operator's resolution at the
 # flat-plan granularity /execute works at.
 #
-# The Python parity legs (python -m fno.executor.cli resolve compared byte
-# for byte with the bash) died with the worker-family port that deleted the
+# The Python parity legs died with the worker-family port that deleted the
 # leg. The canonical stdout bytes stay: the bash resolver answers them alone,
 # and the deleted leg's answers are frozen in the executor_route goldens.
 

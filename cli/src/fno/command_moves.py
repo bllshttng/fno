@@ -108,7 +108,6 @@ COMMAND_MOVES: dict[str, Move] = {
     "target": Move(kind="deprecated", to="do target"),
     "test": Move(kind="deprecated", to="doctor test"),
     "think": Move(kind="deprecated", to="do think"),
-    "worker": Move(kind="deprecated", to="agents worker"),
     "workspace": Move(kind="deprecated", to="agents workspace"),
     "worktree": Move(kind="deprecated", to="agents workspace worktree"),
     "yard": Move(kind="deprecated", to="agents yard"),
