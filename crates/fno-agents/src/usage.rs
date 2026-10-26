@@ -24,9 +24,9 @@ pub const CLIENT_COMMAND_USAGE: &[&str] = &[
     "reap [--json] [--dry-run] [--release <row>] [--keep <row>] [--unkeep <row>] [--kept]",
     "rename <name> --name <new-label>   -- renames the registry label and, for a teamed session, its team name (generation restarts at 1); old label stays an alias; harness session is untouched",
     "rename --from-journal [--apply]    -- plan registry label rebuilds from the agents journal; --apply renames",
-    "stop <name> [--force] [--cross-project]   --cross-project lets the store heal resolve a session whose cwd sits outside this project (the store-scan refusal prescribes it)",
+    "stop <name> [--force]",
     // retired-ok: help names the existing Claude callee to describe actual behavior, not to teach a direct retired command.
-    "rm <name> [--force] [--cross-project]   --force drops the registry row even when the row is LIVE or harness teardown fails; a live pane worker that cannot be stopped is still refused; a claude row's harness session is removed too (claude rm <short_id>), and claude removes that session's WORKTREE under its own guards - it keeps a worktree with uncommitted changes and refuses one holding commits it cannot confirm are saved elsewhere; a non-claude bg or headless process survives, a mux-hosted pane is killed with it; --cross-project lets the store heal resolve a session whose cwd sits outside this project (the store-scan refusal prescribes it)",
+    "rm <name> [--force]   --force drops the registry row even when the row is LIVE or harness teardown fails; a live pane worker that cannot be stopped is still refused; a claude row's harness session is removed too (claude rm <short_id>), and claude removes that session's WORKTREE under its own guards - it keeps a worktree with uncommitted changes and refuses one holding commits it cannot confirm are saved elsewhere; a non-claude bg or headless process survives, a mux-hosted pane is killed with it",
     "loop-check --state <target-state.md> --transcript <transcript.jsonl> --cwd <project-root> [--events <events.jsonl>] [--global-events <global.jsonl>] [--settings <config.toml>] [--ledger <ledger.json>] [--now <rfc3339>] [--gh-bin <path>] [--git-bin <path>]",
     "finalize --state <target-state.md> --cwd <project-root> --reason <TerminationReason> [--transcript <transcript.jsonl>]",
     "reconcile",
@@ -37,9 +37,9 @@ pub const CLIENT_COMMAND_USAGE: &[&str] = &[
     // converts a live pane into a persistent thread under the same session
     // id. The three flags that belong to it are spelled out here because
     // this line is what `resume --help` prints.
-    "resume <name> [--print-command] [--message/-m <text>] [--cross-project] [--cwd <existing-checkout>] [--account <id>] [--substrate thread] [--dry-run] [--allow-new-id]   # --substrate thread converts a live pane into a persistent thread, keeping the session id, node, claims and team; --dry-run prints the plan and moves nothing; --allow-new-id accepts a relaunch that minted a different session id (refused on a teamed row). Both need --substrate thread. A claude session that has exited relaunches itself on a thread under its original name. Exit codes: 0 done; 13 refused (stderr names why); 16 no live process and fno could not relaunch it (stderr names the cause and the hand-run relaunch)",
-    "adopt <session-id> [--cross-project]",
-    "attach <name> [--cross-project]   --cross-project lets the store heal resolve a session whose cwd sits outside this project (the store-scan refusal prescribes it)",
+    "resume <name> [--print-command] [--message/-m <text>] [--cwd <existing-checkout>] [--account <id>] [--substrate thread] [--dry-run] [--allow-new-id]   # --substrate thread converts a live pane into a persistent thread, keeping the session id, node, claims and team; --dry-run prints the plan and moves nothing; --allow-new-id accepts a relaunch that minted a different session id (refused on a teamed row). Both need --substrate thread. A claude session that has exited relaunches itself on a thread under its original name. Exit codes: 0 done; 13 refused (stderr names why); 16 no live process and fno could not relaunch it (stderr names the cause and the hand-run relaunch)",
+    "adopt <session-id>",
+    "attach <name>",
     "logs <name> [--follow] [options]",
     "loop run --driver target [options]",
     "report --session-id <uuid> --seq <n> --state working|blocked|done [--reason <text>] [--ttl-ms <n>]",

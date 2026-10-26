@@ -12,7 +12,6 @@ pub(crate) struct TraceArgs {
     pub(crate) json_out: bool,
     pub(crate) limit: i64,
     pub(crate) since: Option<String>,
-    pub(crate) cross_project: bool,
 }
 
 pub(crate) fn parse_trace_args(rest: &[String]) -> Result<TraceArgs, String> {
@@ -23,10 +22,6 @@ pub(crate) fn parse_trace_args(rest: &[String]) -> Result<TraceArgs, String> {
         json_out: false,
         limit: 200,
         since: None,
-        // The store heal's project-confinement refusal prescribes
-        // --cross-project; accept it so the taught remedy is a form this
-        // command takes.
-        cross_project: false,
     };
     let rest = expand_eq(rest);
     let mut it = rest.iter().cloned().peekable();
@@ -36,7 +31,8 @@ pub(crate) fn parse_trace_args(rest: &[String]) -> Result<TraceArgs, String> {
             // Python typer.Option aliases so Rust-routed `trace` honors them.
             "--all" | "-A" => a.all_agents = true,
             "--json" | "-J" => a.json_out = true,
-            "--cross-project" => a.cross_project = true,
+            // Retired (d-460ea8c7): healing is machine-wide; silent no-op.
+            "--cross-project" => {}
             "--request-id" => {
                 a.request_id = Some(it.next().ok_or("--request-id needs a value")?);
             }
@@ -72,7 +68,6 @@ pub(crate) struct LogsArgs {
     pub(crate) tail: i64,
     pub(crate) follow: bool,
     pub(crate) json_out: bool,
-    pub(crate) cross_project: bool,
 }
 
 pub(crate) fn parse_logs_args(rest: &[String]) -> Result<LogsArgs, (i32, String)> {
@@ -80,16 +75,14 @@ pub(crate) fn parse_logs_args(rest: &[String]) -> Result<LogsArgs, (i32, String)
     let mut tail: i64 = 100;
     let mut follow = false;
     let mut json_out = false;
-    // The store heal's project-confinement refusal prescribes --cross-project;
-    // accept it so the taught remedy is a form this command takes.
-    let mut cross_project = false;
     let rest = expand_eq(rest);
     let mut it = rest.iter().cloned().peekable();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--follow" | "-f" => follow = true,
             "--json" | "-J" => json_out = true, // global-register short
-            "--cross-project" => cross_project = true,
+            // Retired (d-460ea8c7): healing is machine-wide; silent no-op.
+            "--cross-project" => {}
             "--tail" | "-n" => {
                 let v = it.next().ok_or((2, "--tail needs a value".to_string()))?;
                 tail = v
@@ -134,7 +127,6 @@ pub(crate) fn parse_logs_args(rest: &[String]) -> Result<LogsArgs, (i32, String)
         tail,
         follow,
         json_out,
-        cross_project,
     })
 }
 
@@ -178,13 +170,10 @@ mod tests {
         let a = parse_logs_args(&["w".to_string(), "-J".to_string()]).unwrap();
         assert!(a.json_out);
 
-        // The store heal's project-confinement refusal prescribes
-        // --cross-project on logs too; the old surface died with "unknown
-        // logs flag" before any resolution ran.
+        // The retired --cross-project flag still parses on logs as a
+        // silent no-op; the old surface died with "unknown logs flag".
         let a = parse_logs_args(&["w".to_string(), "--cross-project".to_string()]).unwrap();
-        assert!(a.cross_project);
-        let plain = parse_logs_args(&["w".to_string()]).unwrap();
-        assert!(!plain.cross_project);
+        assert_eq!(a.name, "w");
 
         // (codex P2, PR #431): -A/-J must parse identically to
         // --all/--json on the Rust-routed `trace` path.
@@ -194,12 +183,9 @@ mod tests {
         assert_eq!(short.all_agents, long.all_agents);
         assert_eq!(short.json_out, long.json_out);
 
-        // The refusal prescribes --cross-project on trace as well;
-        // the flag rides to the scoped resolver with the resolution, not to
-        // the daemon (trace is client-local).
+        // The retired flag still parses on trace as a silent no-op; the
+        // old surface died with "unknown trace flag".
         let a = parse_trace_args(&["w".to_string(), "--cross-project".to_string()]).unwrap();
-        assert!(a.cross_project);
-        let plain = parse_trace_args(&["w".to_string()]).unwrap();
-        assert!(!plain.cross_project);
+        assert_eq!(a.name.as_deref(), Some("w"));
     }
 }
