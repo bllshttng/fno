@@ -845,7 +845,11 @@ mod tests {
         ]);
         assert_eq!(heal, "pr-heal");
         assert!(is_poll_class(&heal));
-        let checkin = label(&["fno-agents", "lead-checkin", "3984 queued; x-d27e respawn"]);
+        let checkin = label(&[
+            "fno-agents",
+            "lead-checkin",
+            "3984 queued; the dead claim respawns",
+        ]);
         assert_eq!(checkin, "lead-checkin");
         assert!(is_poll_class(&checkin));
         assert_eq!(
