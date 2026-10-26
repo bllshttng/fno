@@ -79,9 +79,11 @@ pub fn run_measured(
 
     let self_row_ref = self_row(rows, self_name, self_sid);
     let mut out_rows: Vec<Value> = Vec::with_capacity(handles.len());
-    let mut worst = 0;
+    let mut resolved_any = false;
+    let mut any_finished = false;
+    let mut any_unknown = false;
     for handle in &handles {
-        let row = find_row(rows, handle);
+        let (row, ambiguous) = find_row(rows, handle);
         let truth_handle = row
             .as_deref()
             .and_then(crate::row_truth::row_truth_handle)
@@ -91,20 +93,33 @@ pub fn run_measured(
             row.as_deref(),
             probe(&truth_handle).as_ref(),
             is_control(&row, &self_row_ref),
+            ambiguous,
         );
-        let word = answer
-            .get("verdict")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        let code = match word {
-            "live" => 0,
-            "finished" => 1,
-            "absent" => ABSENT_EXIT,
-            _ => 2,
-        };
-        worst = worst.max(code);
+        match answer.get("verdict").and_then(Value::as_str) {
+            Some("live") => resolved_any = true,
+            Some("finished") => {
+                resolved_any = true;
+                any_finished = true;
+            }
+            Some("absent") => {}
+            _ => {
+                resolved_any = true;
+                any_unknown = true;
+            }
+        }
         out_rows.push(answer);
     }
+    // The documented ladder, not a max(): absent only when NOTHING resolved,
+    // unknown over finished otherwise, so a mixed set keeps the doc's word.
+    let worst = if !resolved_any {
+        ABSENT_EXIT
+    } else if any_unknown {
+        2
+    } else if any_finished {
+        1
+    } else {
+        0
+    };
 
     if json_out {
         // The control row is the self row re-read through the same door, so
@@ -113,7 +128,7 @@ pub fn run_measured(
             .map(|row| {
                 let th =
                     crate::row_truth::row_truth_handle(row).unwrap_or_else(|| row.name.clone());
-                answer_row(&row.name, Some(row), probe(&th).as_ref(), true)
+                answer_row(&row.name, Some(row), probe(&th).as_ref(), true, false)
             })
             .unwrap_or(Value::Null);
         println!(
@@ -155,12 +170,14 @@ fn self_row<'a>(
     None
 }
 
-fn find_row<'a>(rows: &'a [RegistryEntry], handle: &str) -> Option<&'a RegistryEntry> {
+fn find_row<'a>(rows: &'a [RegistryEntry], handle: &str) -> (Option<&'a RegistryEntry>, bool) {
     match agent_ref::resolve(rows, Key::Name(handle), |_| true) {
-        Join::One(row) => Some(row),
-        _ => match agent_ref::resolve(rows, Key::Id(handle), |_| true) {
-            Join::One(row) => Some(row),
-            _ => None,
+        Join::One(row) => (Some(row), false),
+        Join::Ambiguous => (None, true),
+        Join::None => match agent_ref::resolve(rows, Key::Id(handle), |_| true) {
+            Join::One(row) => (Some(row), false),
+            Join::Ambiguous => (None, true),
+            Join::None => (None, false),
         },
     }
 }
@@ -174,20 +191,30 @@ fn is_control(row: &Option<&RegistryEntry>, self_row: &Option<&RegistryEntry>) -
 
 /// One handle's answer: the census fields plus the probe words the reading
 /// rode in on. A rowless handle whose transcript resolved folds its probe
-/// state through the door's vendor rung, never a bare guess.
+/// state through the door's vendor rung, never a bare guess. An ambiguous
+/// join (two rows match the handle) reads unknown naming the ambiguity,
+/// never absent, so the basis names the real cause.
 fn answer_row(
     handle: &str,
     row: Option<&RegistryEntry>,
     probe: Option<&TruthProbe>,
     control: bool,
+    ambiguous: bool,
 ) -> Value {
     let state = probe.map(|p| p.state.as_str());
-    let (verdict, basis) = match (row, probe) {
-        (None, None) => (
-            "absent".to_string(),
-            Some("no row, no transcript".to_string()),
-        ),
-        _ => fold(row, state),
+    let (verdict, basis) = if ambiguous {
+        (
+            "unknown".to_string(),
+            Some("ambiguous handle: two rows match the join".to_string()),
+        )
+    } else {
+        match (row, probe) {
+            (None, None) => (
+                "absent".to_string(),
+                Some("no row, no transcript".to_string()),
+            ),
+            _ => fold(row, state),
+        }
     };
     let pid = row.and_then(|r| r.pid);
     json!({
@@ -379,7 +406,13 @@ mod tests {
         let me = self_row(&reg.entries, &Some("me".to_string()), &NONE);
         assert!(me.is_some_and(|r| r.name == "me"));
         assert!(self_row(&reg.entries, &NONE, &NONE).is_none());
-        let answer = answer_row("me", me, probe("working", 7.0).as_ref(), me.is_some());
+        let answer = answer_row(
+            "me",
+            me,
+            probe("working", 7.0).as_ref(),
+            me.is_some(),
+            false,
+        );
         let fields = [
             "handle",
             "name",
