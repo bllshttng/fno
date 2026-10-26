@@ -361,8 +361,8 @@ fn is_user_placeholder(text: &str) -> bool {
     !text.is_empty() && strip(text) == strip(PLACEHOLDER)
 }
 
-fn r_user_notes(ctx: &Ctx) -> Result<Value, String> {
-    let doc = team_handoff_doc(&ctx.handoffs_dir, &ctx.scope)?;
+fn r_user_notes(handoffs_dir: &Path, scope: &str) -> Result<Value, String> {
+    let doc = team_handoff_doc(handoffs_dir, scope)?;
     let text =
         std::fs::read_to_string(&doc).map_err(|e| format!("{}: unreadable: {e}", doc.display()))?;
     let block = extract_user_marker(&text)
@@ -1047,8 +1047,8 @@ fn r_wake_meter(since: Option<&str>) -> Result<Value, String> {
     }
 }
 
-fn r_drain(ctx: &Ctx) -> Result<Value, String> {
-    let (_, out, err) = fno_command(&["agents", "org", "drain", &ctx.scope])?;
+fn r_drain(scope: &str) -> Result<Value, String> {
+    let (_, out, err) = fno_command(&["agents", "org", "drain", scope])?;
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("drain payload did not parse: {e}: {}", err.trim()))?;
     Ok(payload.get("undelivered").cloned().unwrap_or(Value::Null))
@@ -1081,7 +1081,7 @@ fn r_parked() -> Result<Value, String> {
 /// threshold, then the stuck-work findings, as the lines a page would carry.
 /// Read in process - the same journals, predicate and threshold arm_watch
 /// ticks with - so a check-in line and a page can never disagree.
-fn r_control_plane(ctx: &Ctx) -> Result<Value, String> {
+fn r_control_plane(cwd: &Path) -> Result<Value, String> {
     let home = crate::paths::AgentsHome::from_env();
     let now_unix = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1090,7 +1090,7 @@ fn r_control_plane(ctx: &Ctx) -> Result<Value, String> {
     let journals = crate::tick_ledger::journals(&home);
     let mut rows = {
         let mut rows = crate::tick_ledger::read_arms(&journals, now_unix);
-        crate::tick_ledger::fill_arm_values(&mut rows, &ctx.cwd);
+        crate::tick_ledger::fill_arm_values(&mut rows, cwd);
         rows
     };
     let trace = crate::tick_ledger::read_tick_trace_live(&journals, &rows, now_unix);
@@ -1102,9 +1102,9 @@ fn r_control_plane(ctx: &Ctx) -> Result<Value, String> {
         },
         &trace,
     );
-    let findings = crate::stuck_work::collect(&ctx.cwd)?;
+    let findings = crate::stuck_work::collect(cwd)?;
     crate::arm_repair::annotate(&mut rows, &crate::arm_repair::RepairFacts::live(&findings));
-    let threshold = crate::agents_config::notify_arm_failing_after_s(&ctx.cwd);
+    let threshold = crate::agents_config::notify_arm_failing_after_s(cwd);
     let attention = control_plane_attention(&rows, &trace, &findings, threshold);
     Ok(json!({ "attention": attention }))
 }
@@ -1182,9 +1182,9 @@ fn control_plane_attention(
 /// read from the same projection the spawn
 /// gate's cap enforces. An `membership: unknown` row is a failed reading, so
 /// a blind spot prints `READER FAILED territory` instead of an empty table.
-fn r_territory(ctx: &Ctx) -> Result<Value, String> {
+fn r_territory(cwd: &Path) -> Result<Value, String> {
     let registry = crate::paths::AgentsHome::from_env().registry_json();
-    let rows = crate::territory::territory_rows(&ctx.cwd, &registry);
+    let rows = crate::territory::territory_rows(cwd, &registry);
     if rows.len() == 1 && rows[0].get("membership").and_then(Value::as_str) == Some("unknown") {
         let reason = rows[0]
             .get("reason")
@@ -1216,55 +1216,119 @@ struct Beat {
     folded: Result<Value, String>,
 }
 
+/// One bounded computation on a detached thread: the result returns through
+/// a channel, and past `remaining` the beat abandons the thread and moves
+/// on, so work blocked on I/O can never hold the beat past its ceiling.
+/// `Ok(None)` is the deadline firing; `Err` names a thread that ended
+/// without a result.
+fn run_bounded<T: Send + 'static>(
+    remaining: std::time::Duration,
+    what: &str,
+    task: impl FnOnce() -> T + Send + 'static,
+) -> Result<Option<T>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let label = format!("lead-checkin:{what}");
+    std::thread::Builder::new()
+        .name(label)
+        .spawn(move || {
+            let _ = tx.send(task());
+        })
+        .map_err(|e| format!("reader thread failed to spawn: {e}"))?;
+    match rx.recv_timeout(remaining) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("reader thread ended without a result".to_string())
+        }
+    }
+}
+
 /// One reader, behind the beat budget: past it, the reader is skipped with a
-/// named failed reading instead of running, so the beat always reaches
-/// `finish_checkin` and journals partial coverage.
+/// named failed reading instead of running, and a reader that starts inside
+/// the budget still runs bounded by the time left, so the beat always
+/// reaches `finish_checkin` and journals partial coverage.
 fn take_reading(
     readings: &mut Vec<Reading>,
     beat_started: std::time::Instant,
     name: &'static str,
-    read: impl FnOnce() -> Result<Value, String>,
+    read: impl FnOnce() -> Result<Value, String> + Send + 'static,
 ) {
     take_reading_within(readings, beat_started, BEAT_BUDGET, name, read)
 }
 
 /// The parameterized form: a test proves the skip without waiting out the
-/// real budget.
+/// real budget, and a second proves a slow running reader cannot outlive it.
 fn take_reading_within(
     readings: &mut Vec<Reading>,
     beat_started: std::time::Instant,
     budget: std::time::Duration,
     name: &'static str,
-    read: impl FnOnce() -> Result<Value, String>,
+    read: impl FnOnce() -> Result<Value, String> + Send + 'static,
 ) {
-    if beat_started.elapsed() >= budget {
+    let Some(remaining) = budget.checked_sub(beat_started.elapsed()) else {
         readings.push(Reading::failed(
             name,
             format!("beat budget exceeded after {budget:?} (skipped)"),
         ));
         return;
-    }
-    match read() {
-        Ok(value) => readings.push(Reading::took(name, value)),
-        Err(error) => readings.push(Reading::failed(name, ReaderError(error).0)),
+    };
+    // The reader runs on a detached thread behind the beat deadline: past
+    // `remaining` the reading journals failed and the beat moves on, so a
+    // reader that starts just before the limit cannot hold finish_checkin.
+    match run_bounded(remaining, name, read) {
+        Ok(Some(Ok(value))) => readings.push(Reading::took(name, value)),
+        Ok(Some(Err(error))) => readings.push(Reading::failed(name, ReaderError(error).0)),
+        Ok(None) => readings.push(Reading::failed(
+            name,
+            format!("beat deadline exceeded after {remaining:?} (reader timed out)"),
+        )),
+        Err(error) => readings.push(Reading::failed(name, error)),
     }
 }
 
 fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading> {
     let beat_started = std::time::Instant::now();
     let mut readings: Vec<Reading> = Vec::new();
-    take_reading(&mut readings, beat_started, "user_notes", || {
-        r_user_notes(ctx)
+    // Every reader runs on a detached thread behind the beat deadline, so
+    // each closure captures owned clones: a borrowed local could dangle past
+    // the skip.
+    let board = beat.board.clone();
+    let folded = beat.folded.clone();
+    let handoffs_dir = ctx.handoffs_dir.clone();
+    let cwd = ctx.cwd.clone();
+    let scope = ctx.scope.clone();
+    let events_paths = ctx.events_paths.clone();
+    let since = since.map(str::to_string);
+    take_reading(&mut readings, beat_started, "user_notes", {
+        let handoffs_dir = handoffs_dir.clone();
+        let scope = scope.clone();
+        move || r_user_notes(&handoffs_dir, &scope)
     });
-    take_reading(&mut readings, beat_started, "board", || {
-        r_board(&beat.board, &beat.folded, open_pr_count())
+    take_reading(&mut readings, beat_started, "board", {
+        let board = board.clone();
+        let folded = folded.clone();
+        move || r_board(&board, &folded, open_pr_count())
     });
     // The scope compile rides the beat once: the blueprint, answered, and
     // quiet readings share it, and the idle-scope attention reads the two
     // counts it feeds. Past the beat budget it is skipped, and every reading
-    // downstream of it inherits the skip as its own named failure.
+    // downstream of it inherits the skip as its own named failure. Like the
+    // readers it runs bounded, so a blocked compile cannot hold the beat.
     let scope_ids = if beat_started.elapsed() < BEAT_BUDGET {
-        crate::lead_answers::scope_node_ids(&ctx.graph, &ctx.cwd, &ctx.scope, ctx.level)
+        let graph = ctx.graph.clone();
+        let cwd = cwd.clone();
+        let scope = scope.clone();
+        let level = ctx.level;
+        let remaining = BEAT_BUDGET - beat_started.elapsed();
+        match run_bounded(remaining, "scope compile", move || {
+            crate::lead_answers::scope_node_ids(&graph, &cwd, &scope, level)
+        }) {
+            Ok(Some(value)) => value,
+            Ok(None) => Err(format!(
+                "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+            )),
+            Err(error) => Err(error),
+        }
     } else {
         Err(format!(
             "beat budget exceeded after {BEAT_BUDGET:?} (skipped)"
@@ -1276,51 +1340,65 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         .as_ref()
         .map_err(Clone::clone)
         .and_then(|ids| crate::lead_answers::idea_children_reading(&ctx.graph, ids));
-    take_reading(&mut readings, beat_started, "blueprint", || {
-        let (session_id, _harness) = crate::claims::resolve_identity();
-        let claims = crate::claims::list(Some("node:"), None, false)
-            .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
-        let home = crate::paths::AgentsHome::from_env();
-        let slots = crate::spawn_gate_lanes::share_reading(
-            &home.registry_json(),
-            crate::capacity::effective_for(&ctx.cwd).cap,
-            session_id.as_deref(),
-            Some(&home.terminal_runs_dir()),
-        )
-        .share
-        .ok_or_else(|| "lead share unreadable".to_string());
-        let floor = crate::agents_config::config_lookup(&ctx.cwd, &["dispatch", "blueprint_floor"])
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
-        let other_owned =
-            crate::lead_checkin_blueprint::other_owned_scopes(&beat.folded, &ctx.scope);
-        crate::lead_checkin_blueprint::r_blueprint(
-            &beat.board,
-            &ctx.cwd,
-            session_id,
-            claims,
-            slots,
-            &floor,
-            &other_owned,
-            &idea_children.as_ref().map_err(Clone::clone).and_then(|v| {
-                v.get("count")
-                    .and_then(Value::as_u64)
-                    .map(|c| c as usize)
-                    .ok_or_else(|| "idea children unreadable".to_string())
-            }),
-        )
+    take_reading(&mut readings, beat_started, "blueprint", {
+        let board = board.clone();
+        let folded = folded.clone();
+        let cwd = cwd.clone();
+        let scope = scope.clone();
+        let idea_children = idea_children.clone();
+        move || {
+            let (session_id, _harness) = crate::claims::resolve_identity();
+            let claims = crate::claims::list(Some("node:"), None, false)
+                .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
+            let home = crate::paths::AgentsHome::from_env();
+            let slots = crate::spawn_gate_lanes::share_reading(
+                &home.registry_json(),
+                crate::capacity::effective_for(&cwd).cap,
+                session_id.as_deref(),
+                Some(&home.terminal_runs_dir()),
+            )
+            .share
+            .ok_or_else(|| "lead share unreadable".to_string());
+            let floor = crate::agents_config::config_lookup(&cwd, &["dispatch", "blueprint_floor"])
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
+            let other_owned = crate::lead_checkin_blueprint::other_owned_scopes(&folded, &scope);
+            crate::lead_checkin_blueprint::r_blueprint(
+                &board,
+                &cwd,
+                session_id,
+                claims,
+                slots,
+                &floor,
+                &other_owned,
+                &idea_children.as_ref().map_err(Clone::clone).and_then(|v| {
+                    v.get("count")
+                        .and_then(Value::as_u64)
+                        .map(|c| c as usize)
+                        .ok_or_else(|| "idea children unreadable".to_string())
+                }),
+            )
+        }
     });
-    take_reading(&mut readings, beat_started, "escalations", || {
-        std::env::current_dir()
-            .map_err(|e| format!("unreadable (process cwd: {e})"))
-            .and_then(|cwd| r_escalations(&cwd, &beat.folded))
+    take_reading(&mut readings, beat_started, "escalations", {
+        let folded = folded.clone();
+        move || {
+            std::env::current_dir()
+                .map_err(|e| format!("unreadable (process cwd: {e}"))
+                .and_then(|cwd| r_escalations(&cwd, &folded))
+        }
     });
-    take_reading(&mut readings, beat_started, "blocked_child", || {
-        r_blocked_child(&beat.board)
+    take_reading(&mut readings, beat_started, "blocked_child", {
+        let board = board.clone();
+        move || r_blocked_child(&board)
     });
-    take_reading(&mut readings, beat_started, "org", || r_org(&beat.folded));
-    take_reading(&mut readings, beat_started, "territory", || {
-        r_territory(ctx)
+    take_reading(&mut readings, beat_started, "org", {
+        let folded = folded.clone();
+        move || r_org(&folded)
+    });
+    take_reading(&mut readings, beat_started, "territory", {
+        let cwd = cwd.clone();
+        move || r_territory(&cwd)
     });
     take_reading(&mut readings, beat_started, "peer_blocked", || {
         peer_blocked::reading()
@@ -1330,68 +1408,102 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     });
     take_reading(&mut readings, beat_started, "capacity", || r_capacity());
     take_reading(&mut readings, beat_started, "layout", || r_layout());
-    take_reading(&mut readings, beat_started, "telemetry", || {
-        crate::otel_read::health(
-            crate::paths::AgentsHome::from_env().root(),
-            crate::agents_config::telemetry_claude_otel(&ctx.cwd),
-        )
+    take_reading(&mut readings, beat_started, "telemetry", {
+        let cwd = cwd.clone();
+        move || {
+            crate::otel_read::health(
+                crate::paths::AgentsHome::from_env().root(),
+                crate::agents_config::telemetry_claude_otel(&cwd),
+            )
+        }
     });
-    take_reading(&mut readings, beat_started, "machine", || {
-        crate::lead_checkin_machine::newest_reading(&ctx.events_paths)
+    take_reading(&mut readings, beat_started, "machine", {
+        let events_paths = events_paths.clone();
+        move || crate::lead_checkin_machine::newest_reading(&events_paths)
     });
     let workers_payload = if beat_started.elapsed() < BEAT_BUDGET {
-        crate::lead_answers::fetch_workers_payload()
+        let remaining = BEAT_BUDGET - beat_started.elapsed();
+        match run_bounded(
+            remaining,
+            "workers fetch",
+            crate::lead_answers::fetch_workers_payload,
+        ) {
+            Ok(Some(value)) => value,
+            Ok(None) => Err(format!(
+                "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+            )),
+            Err(error) => Err(error),
+        }
     } else {
         Err(format!(
             "beat budget exceeded after {BEAT_BUDGET:?} (skipped)"
         ))
     };
-    take_reading(&mut readings, beat_started, "workers", || {
-        workers_payload
-            .as_ref()
-            .map_err(Clone::clone)
-            .and_then(crate::lead_answers::workers_summary)
+    take_reading(&mut readings, beat_started, "workers", {
+        let workers_payload = workers_payload.clone();
+        move || {
+            workers_payload
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(crate::lead_answers::workers_summary)
+        }
     });
     // The lineup reads the payload rows for the seated nodes' observed
     // harness/model: memory-only, never journaled.
-    take_reading(&mut readings, beat_started, "worker_rows", || {
-        workers_payload
-            .as_ref()
-            .map_err(Clone::clone)
-            .and_then(|p| {
-                crate::lead_answers::payload_workers(p).map(|rows| Value::Array(rows.to_vec()))
-            })
+    take_reading(&mut readings, beat_started, "worker_rows", {
+        let workers_payload = workers_payload.clone();
+        move || {
+            workers_payload
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|p| {
+                    crate::lead_answers::payload_workers(p).map(|rows| Value::Array(rows.to_vec()))
+                })
+        }
     });
     take_reading(&mut readings, beat_started, "watch_expiry", || {
         watch_projection::read()
     });
     // The scope-answer readings share the scope compile hoisted beside the
     // blueprint reading and one top call.
-    take_reading(&mut readings, beat_started, "answered", || {
-        scope_ids
-            .as_ref()
-            .map_err(Clone::clone)
-            .and_then(|ids| crate::lead_answers::answered_reading(&ctx.cwd, ids))
-    });
-    take_reading(&mut readings, beat_started, "quiet_workers", || {
-        let top = workers_payload.as_ref().ok();
-        match (top, scope_ids.as_ref()) {
-            (Some(top), Ok(ids)) => crate::lead_answers::quiet_reading(Some(top), ids),
-            (None, _) => Err("the workers reading failed; quiet workers are unreadable".into()),
-            (_, Err(e)) => Err(e.clone()),
+    take_reading(&mut readings, beat_started, "answered", {
+        let cwd = cwd.clone();
+        let scope_ids = scope_ids.clone();
+        move || {
+            scope_ids
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|ids| crate::lead_answers::answered_reading(&cwd, ids))
         }
     });
-    take_reading(&mut readings, beat_started, "scope_live_workers", || {
-        let top = workers_payload.as_ref().ok();
-        match (top, scope_ids.as_ref()) {
-            (Some(top), Ok(ids)) => crate::lead_answers::payload_workers(top)
-                .map(|rows| json!(crate::lead_answers::scope_live_worker_count(rows, ids))),
-            (None, _) => Err("the workers reading failed; scope workers are unreadable".into()),
-            (_, Err(e)) => Err(e.clone()),
+    take_reading(&mut readings, beat_started, "quiet_workers", {
+        let workers_payload = workers_payload.clone();
+        let scope_ids = scope_ids.clone();
+        move || {
+            let top = workers_payload.as_ref().ok();
+            match (top, scope_ids.as_ref()) {
+                (Some(top), Ok(ids)) => crate::lead_answers::quiet_reading(Some(top), ids),
+                (None, _) => Err("the workers reading failed; quiet workers are unreadable".into()),
+                (_, Err(e)) => Err(e.clone()),
+            }
         }
     });
-    take_reading(&mut readings, beat_started, "scope_idea_children", || {
-        idea_children.clone()
+    take_reading(&mut readings, beat_started, "scope_live_workers", {
+        let workers_payload = workers_payload.clone();
+        let scope_ids = scope_ids.clone();
+        move || {
+            let top = workers_payload.as_ref().ok();
+            match (top, scope_ids.as_ref()) {
+                (Some(top), Ok(ids)) => crate::lead_answers::payload_workers(top)
+                    .map(|rows| json!(crate::lead_answers::scope_live_worker_count(rows, ids))),
+                (None, _) => Err("the workers reading failed; scope workers are unreadable".into()),
+                (_, Err(e)) => Err(e.clone()),
+            }
+        }
+    });
+    take_reading(&mut readings, beat_started, "scope_idea_children", {
+        let idea_children = idea_children.clone();
+        move || idea_children
     });
     take_reading(&mut readings, beat_started, "team", || r_team());
     take_reading(&mut readings, beat_started, "posture", || {
@@ -1406,15 +1518,20 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take_reading(&mut readings, beat_started, "subagents", || {
         crate::lead_answers::r_subagents()
     });
-    take_reading(&mut readings, beat_started, "wake_meter", || {
-        r_wake_meter(since)
+    take_reading(&mut readings, beat_started, "wake_meter", {
+        let since = since.clone();
+        move || r_wake_meter(since.as_deref())
     });
     take_reading(&mut readings, beat_started, "correction_meter", || {
         crate::correction_meter::r_correction_meter()
     });
-    take_reading(&mut readings, beat_started, "drain", || r_drain(ctx));
-    take_reading(&mut readings, beat_started, "held", || {
-        crate::lead_answers::held_reading(&ctx.scope)
+    take_reading(&mut readings, beat_started, "drain", {
+        let scope = scope.clone();
+        move || r_drain(&scope)
+    });
+    take_reading(&mut readings, beat_started, "held", {
+        let scope = scope.clone();
+        move || crate::lead_answers::held_reading(&scope)
     });
     take_reading(&mut readings, beat_started, "repeated_asks", || {
         crate::repeated_asks::reading()
@@ -1425,11 +1542,13 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take_reading(&mut readings, beat_started, "main_ci", || {
         crate::main_ci::r_main_ci()
     });
-    take_reading(&mut readings, beat_started, "evals", || {
-        crate::lead_checkin_evals::reading(&ctx.events_paths)
+    take_reading(&mut readings, beat_started, "evals", {
+        let events_paths = events_paths.clone();
+        move || crate::lead_checkin_evals::reading(&events_paths)
     });
-    take_reading(&mut readings, beat_started, "control_plane", || {
-        r_control_plane(ctx)
+    take_reading(&mut readings, beat_started, "control_plane", {
+        let cwd = cwd.clone();
+        move || r_control_plane(&cwd)
     });
     take_reading(&mut readings, beat_started, "self_hold", || {
         crate::claims::resolve_identity()
@@ -4776,5 +4895,59 @@ mod reader_budget_tests {
                 reading.error
             );
         }
+    }
+
+    /// A reader that starts inside the budget but runs past the remaining
+    /// time is cut off and named: the beat does not wait out the reader's
+    /// own runtime, and partial coverage still journals. This is the
+    /// running-reader path the zero budget above cannot exercise.
+    #[test]
+    fn the_beat_deadline_bounds_a_slow_running_reader() {
+        let mut readings: Vec<Reading> = Vec::new();
+        let started = std::time::Instant::now();
+        take_reading_within(
+            &mut readings,
+            started,
+            std::time::Duration::from_secs(1),
+            "board",
+            || {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                Ok(json!({"ok": 1}))
+            },
+        );
+        assert_eq!(
+            readings.len(),
+            1,
+            "the reader must be journaled: {readings:?}"
+        );
+        let reading = &readings[0];
+        assert!(!reading.ok, "the timeout must read as failed: {reading:?}");
+        assert!(
+            reading.error.contains("beat deadline exceeded"),
+            "the deadline must be named: {}",
+            reading.error
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the bound fired, not the reader's own exit: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A reader that finishes inside its remaining time still lands its
+    /// value: the thread handoff must not lose a healthy reading.
+    #[test]
+    fn a_healthy_reader_still_lands_through_the_thread_handoff() {
+        let mut readings: Vec<Reading> = Vec::new();
+        take_reading_within(
+            &mut readings,
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(10),
+            "team",
+            || Ok(json!({"ok": 1})),
+        );
+        assert_eq!(readings.len(), 1, "the read must land: {readings:?}");
+        assert!(readings[0].ok, "the healthy read must land: {readings:?}");
+        assert_eq!(readings[0].value, json!({"ok": 1}));
     }
 }
