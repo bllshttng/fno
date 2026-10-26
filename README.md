@@ -24,7 +24,7 @@ Claude Code:
 
 ```
 /plugin marketplace add bllshttng/fno#stable
-/plugin install fno@footnote
+/plugin install fno@fno
 ```
 
 `#stable` pins the add to the `stable` branch (781 files). Without it, the add clones `main` (7,949 files, 80s+), which can time out: Claude Desktop's "Add marketplace" dialog gives up after 120s and reports "Failed to add marketplace."
@@ -33,7 +33,7 @@ Codex CLI:
 
 ```
 codex plugin marketplace add bllshttng/fno@stable
-codex plugin add fno@footnote
+codex plugin add fno@fno
 ```
 
 The plugin-only route gets its CLI on the next session: the first session you start after installing runs the installer. Until then `fno` is not on PATH and the `/fno:` skills cannot run.

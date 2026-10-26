@@ -252,7 +252,7 @@ check_plugin_root() {
   manifest="$PLUGIN_ROOT/.claude-plugin/plugin.json"
   if [[ ! -r "$manifest" ]]; then
     emit_check "plugin_root" "missing" 1 "$PLUGIN_ROOT" "no .claude-plugin/plugin.json above this script; run it from a plugin tree or checkout." \
-      "reinstall the plugin (/plugin install fno@footnote)"
+      "reinstall the plugin (/plugin install fno@fno)"
     return 0
   fi
   version="$(sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$manifest" 2>/dev/null | head -1)"
@@ -260,7 +260,7 @@ check_plugin_root() {
     emit_check "plugin_root" "ok" 1 "$PLUGIN_ROOT" "plugin tree at version $version." ""
   else
     emit_check "plugin_root" "broken" 1 "$PLUGIN_ROOT" "plugin.json exists but its version is unreadable." \
-      "reinstall the plugin (/plugin install fno@footnote)"
+      "reinstall the plugin (/plugin install fno@fno)"
   fi
 }
 
