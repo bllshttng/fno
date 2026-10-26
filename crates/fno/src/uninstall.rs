@@ -39,7 +39,7 @@ const BUILD_DIR_KEY: &str = "CARGO_BUILD_BUILD_DIR";
 const SCCACHE_DIR_KEY: &str = "SCCACHE_DIR";
 const RC_MARK: &str = "# fno: cargo build-dir";
 /// The first line of the block `fno config setup cli-hooks` appends to codex.
-const CODEX_BLOCK_MARK: &str = "# Added by `fno config setup cli-hooks`";
+pub(crate) const CODEX_BLOCK_MARK: &str = "# Added by `fno config setup cli-hooks`";
 const PURGE_WORD: &str = "purge";
 /// The uv tool name the wheel installs under (a directory in `uv tool dir`).
 const UV_TOOL: &str = "fno";

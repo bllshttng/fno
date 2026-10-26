@@ -165,11 +165,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
-    "setup": (
-        "fno.setup_cli:app",
-        "Interactive settings.yaml wizard",
-        {"hidden": True},
-    ),
     "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
     "worktree": ("fno.worktree_cli:app", "Worktree management", {"hidden": True}),
     "workspace": (
@@ -279,7 +274,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "resume": set(),
     "roles": set(),
     "route": set(),
-    "setup": set(),
     "state": set(),
     "stub-manifest": set(),
     "target": set(),
