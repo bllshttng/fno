@@ -56,7 +56,6 @@ NATIVE_SERVED_LEAVES = {
     "agents mail show",
     "mail show",
     "agents roles ls",
-    "roles ls",
     "backlog advance",
     "backlog album",
     "backlog archive",

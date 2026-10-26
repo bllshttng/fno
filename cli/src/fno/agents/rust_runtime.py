@@ -262,9 +262,8 @@ RUST_CLIENT_COMMANDS = frozenset(
         # daemon-free read; Python resolves the journal list and forwards
         # the flags, then invokes the binary (not via `fno agents` routing).
         "evals-macro",
-        # The check-in beat for `fno agents lead checkin`: daemon-free
-        # read; Python resolves the caller's role scope and the paths
-        # Python owns, then invokes the binary (not via `fno agents`).
+        # The check-in beat: the front door execs it for `fno agents org
+        # checkin`, and the beat resolves its scope and paths natively.
         "lead-checkin",
         # Rundown page renderer for `fno agents lead ledger`: team JSON and
         # the graph in, one HTML page out; Python resolves the team and the

@@ -131,6 +131,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_HOOK_CONTEXT` | rs | Set to 1 on every hook command; an fno call that carries it never joins its session to fno. Spawned children have it cleared. |
 | `FNO_IDLE_EXIT_GRACE_MS` | rs | unclear: crates/fno/src/server.rs:14324 |
 | `FNO_INBOX_ROOT` | py+rs | unclear: cli/src/fno/inbox/store.py:218 |
+| `FNO_INIT_PROGRESS_FILE` | rs | Step-marker file `fno do target start` hands its init door; the door appends begin/done markers and the parent prints the last marker in the 540s timeout receipt. Unset (a bare `fno do target init`), the markers are skipped. See target_init.rs `init_progress`. |
 | `FNO_INSTALL_BUILD` | rs | unclear: cli/src/fno/update.py:1748 |
 | `FNO_KEEP_GOING` | py+rs | Forces the retro keep-going engine on or off above `keep_going.enabled`; truthy words are 1, true, yes, on. |
 | `FNO_KEEPER_ORPHAN_POLL_MS` | rs | Pane keeper poll interval in ms for the socket-dir-gone check; default 30000. Tests set it low. |
@@ -154,7 +155,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_MAIL_LANDED_SETTLE_S` | py+rs | Seconds a just-sent durable row waits before the send command re-reads the recipient for the `landed`/`NOT LANDED` verdict. Tests read 0. |
 | `FNO_MAIL_LOCAL_FORWARD` | rs | `1` on the same-host forward `mail-remote` execs (`mail_remote.rs`). The front door's cross-host intercept skips any argv carrying it, so a forwarded send reaches the local command instead of re-entering the relay. |
 | `FNO_MAIL_SUBJECT` | py+rs | The peeled `mail send --subject`; the front exports it, the envelope render and the bus-append door stamp it as `meta.subject`. |
-| `FNO_MCP_SIDECAR_LOG` | py | unclear: cli/src/fno/mcp/sidecar.py:646 |
 | `FNO_MERGE_AUTHORITY` | rs | Selects the `fno do pr merge` authority arm: `durable_grant` swaps the manifest posture for the durable-grant resolution a parked worker rides; unset or any other value rides the manifest fields as written. |
 | `FNO_MERGE_STEP_TRACE` | rs | Non-empty: each probe of the authorized-merge decide chain prints a began and a took line on stderr. `fno do pr merge` sets it for its child, so a timeout names the step the child was inside. Unset prints nothing. |
 | `FNO_MUSE_BIN` | rs | The `muse` binary `-H muse` launches for `muse serve` and `muse exec`; unset, fno-agents looks on PATH. |
@@ -218,7 +218,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_REVIEW_ROUND` | rs | The verified round a --verify-fixes pass declares, carried to the disposition comment when the shell producer emits; the attest flow's function argument outranks it. Set by skills/review/scripts/emit-attestation.sh, read in crates/fno-agents/src/review_findings.rs `resolve_round`. |
 | `FNO_RM_ASSUME_YES` | py | Assume yes for the rm confirm prompt. |
 | `FNO_RM_NOTICE_SHOWN` | py | Set to 1 once the resume-handle notice prints, so it shows once per process. |
-| `FNO_ROLES_ROOT` | py+rs | The business-role definition root; unset means `<repo root>/.fno/roles`. Python model routing reads it for the root tri-state (cli/src/fno/agents/model_routing.py), and role discovery reads it in crates/fno-agents/src/roles/registry.rs `default_role_root`. |
+| `FNO_ROLES_ROOT` | rs | The business-role definition root; unset means `<repo root>/.fno/roles`. Role discovery and the business-role tri-state read it in crates/fno-agents/src/roles/registry.rs `default_role_root`. |
 | `FNO_ROUTE_MODEL` | rs | Fallback model a thread row stamps when the caller named no model and the writer session's observed model is absent (comment_create, api.rs). |
 | `FNO_ROUTE_PROVIDER` | py+rs | unclear: cli/src/fno/agent/cli.py:303; the lead check-in's blueprint reading also reads it (crates/fno-agents/src/lead_checkin.rs r_blueprint) to pick the blueprint-subagent ceiling. |
 | `FNO_ROUTE_SETTINGS_DIR` | rs | unclear: crates/fno-agents/src/claude_adopt.rs:112 |
@@ -231,7 +231,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SESSION_HARNESS` | rs | The launcher-stamped harness half of the session-proof pair; a known name beside a live `FNO_SESSION_PID` answers the harness before the census walk (spawn_context.rs stamp_pair_harness). |
 | `FNO_SESSION_ID` | rs | Current session id. `fleet-incident` uses it for caller attribution; `loops pause-all` records a full UUID or `ses_` id as the mail-hold owner, falling back to `fno whoami --json` otherwise. |
 | `FNO_SESSION_PID` | rs | The launcher-stamped pid half of the session-proof pair; must be a positive, live pid or the pair is ignored (spawn_context.rs stamp_pid_is_live). |
-| `FNO_SIDECAR_SOCKET` | py | unclear: cli/src/fno/mcp/sidecar.py:97 |
+| `FNO_SIDECAR_SOCKET` | rs | Overrides the MCP sidecar's socket path (default `$XDG_RUNTIME_DIR/fno/sidecar.sock`, else the state dir's `sidecar.sock`). The client's lazy-start forwards it to the spawned sidecar, so a caller asking for a non-default path never races the default. Set by callers and tests; read at `crates/fno-agents/src/mcp/sidecar.rs` (`socket_path`). |
 | `FNO_SKIP_MIGRATION` | py | unclear: cli/src/fno/cli.py:402 |
 | `FNO_SOURCE` | rs | unclear: crates/fno/src/doctor_update.rs:388 |
 | `FNO_SPACES_DIR` | py+rs | unclear: cli/src/fno/paths.py:299 |
@@ -349,7 +349,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `XDG_CACHE_HOME` | rs | unclear: crates/fno/src/bootstrap.rs:1395 |
 | `XDG_CONFIG_HOME` | rs | Relocates OpenCode's config dir ($XDG_CONFIG_HOME/opencode) ahead of the ~/.config/opencode default; unset reads the default. |
 | `XDG_DATA_HOME` | rs | Relocates uv's tools dir where the fno-py console script is resolved; unset reads the default ~/.local/share/uv layout. |
-| `XDG_RUNTIME_DIR` | py+rs | Runtime dir base (mcp sidecar); the session-state entry also parents its 0700 turn-pin rendezvous dir here when set (session_state.rs). |
-| `XDG_STATE_HOME` | py | unclear: cli/src/fno/mcp/client.py:118 |
+| `XDG_RUNTIME_DIR` | rs | Runtime dir base (mcp sidecar); the session-state entry also parents its 0700 turn-pin rendezvous dir here when set (session_state.rs). |
+| `XDG_STATE_HOME` | rs | Roots the sidecar log at `<state-home>/fno/sidecar.log` when set (default `~/.local/state`); read by the lazy-start in `crates/fno-agents/src/mcp/client.rs` (`state_log_path`). |
 | `ZDOTDIR` | rs | unclear: crates/fno/src/pty.rs:1770 |
 | `_FNO_MACHINE_MAIL_LOCK_TIMEOUT` | rs | Machine-mail lane's internal lock-timeout pop: internal dispatch shortens the recipient lock to prove the lane stays internal. Popped after read, a normal caller never sees it. |

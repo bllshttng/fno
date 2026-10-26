@@ -136,16 +136,19 @@ uv_install_verifies() {
 }
 
 # The post-install shim sweep (x-c911): repair any fno* shim in the tool bin
-# that dangles or resolves into a temp dir; fail loud when unrepairable.
+# that is missing, dangles, or resolves into a temp dir; fail loud when
+# unrepairable.
 shim_sweep() {
-  local py td
-  py="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir 2>/dev/null)/fno/bin/fno-py"
+  local fno td
+  # The venv copy of the front door, never the tool-bin shim under check.
+  fno="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir 2>/dev/null)/fno/bin/fno"
   td="$(NO_COLOR=1 UV_NO_COLOR=1 uv tool dir --bin 2>/dev/null)" || td="${UV_TOOL_BIN_DIR:-$HOME/.local/bin}"
-  [[ -x "$py" ]] || return 0  # no venv python: the verify gate already failed
-  # An installed fno predating the sweep module has nothing to sweep.
-  "$py" -c "import fno.setup.shim_check" 2>/dev/null || return 0
-  "$py" -m fno.setup.shim_check --repair --bin-dir "$td" && return 0
-  err "fno shims in $td dangle or point into a temp dir and could not be relinked to the durable copy. Inspect: $py -m fno.setup.shim_check --bin-dir $td"
+  # A Python-only install has no front door, and one predating the sweep
+  # refuses the command: either way there is nothing to sweep with.
+  [[ -x "$fno" ]] || return 0
+  "$fno" config setup shim-check --help >/dev/null 2>&1 || return 0
+  "$fno" config setup shim-check --repair --bin-dir "$td" && return 0
+  err "fno shims in $td are missing, dangle, or point into a temp dir and could not be relinked to the durable copy. Inspect: $fno config setup shim-check --bin-dir $td"
   return 1
 }
 

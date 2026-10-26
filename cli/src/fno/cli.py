@@ -106,13 +106,8 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     # the entries between this comment and `agents` below whose names
-    # sit in COMMAND_MOVES are one-release shims kept reachable for muscle
-    # memory; their canonical homes are the move destinations.
-    "mcp": (
-        "fno.mcp.cli:mcp_app",
-        "MCP sidecar client commands (send an envelope to a channel).",
-        {"hidden": True},
-    ),
+    # sit in COMMAND_MOVES are one-release shims in their canonical homes;
+    # their move rows stay in command_moves.py.
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
     "stub-manifest": (
@@ -153,11 +148,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Phase utilities (kill-check via the fno-agents binary)",
         {"hidden": True},
     ),
-    "roles": (
-        "fno.roles.cli:roles_app",
-        "Inspect bounded business-role definitions and resolutions.",
-        {"hidden": True},
-    ),
     "config": ("fno.config_cli:app", "Configuration management"),
     "notify": (
         "fno.notify:notify_app",
@@ -165,11 +155,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
-    "setup": (
-        "fno.setup_cli:app",
-        "Interactive settings.yaml wizard",
-        {"hidden": True},
-    ),
     "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
     "route": (
         "fno.route_cli:route_app",
@@ -271,9 +256,7 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "plan": set(),
     "pr-watch": set(),
     "resume": set(),
-    "roles": set(),
     "route": set(),
-    "setup": set(),
     "state": set(),
     "stub-manifest": set(),
     "target": set(),

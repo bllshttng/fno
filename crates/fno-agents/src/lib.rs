@@ -102,6 +102,7 @@ pub(crate) mod cargo_orphans;
 pub mod census;
 pub mod chats;
 pub mod check_supersession;
+pub mod ci_cadence;
 pub mod claim_cli;
 pub mod claim_commands;
 pub mod claim_lanes_cli;
@@ -130,6 +131,7 @@ pub mod client;
 pub mod client_commands;
 pub mod client_render;
 pub mod codex_ask;
+pub mod codex_converge;
 pub mod codex_daemon_readiness;
 pub mod codex_daemon_upgrade;
 /// Test support: a fake shared codex app-server daemon. Public because the
@@ -198,6 +200,7 @@ pub mod fleet_load;
 pub mod fleet_page;
 pub mod fleet_task;
 pub mod flight_gate;
+pub(crate) mod fnod;
 pub mod footnote_harness;
 pub mod footnote_transcript;
 pub(crate) mod footprint_cache;
@@ -250,6 +253,7 @@ pub mod intel_html;
 pub mod intel_insights;
 pub mod intel_lens;
 pub mod intel_rollup;
+pub mod intel_rules_lens;
 pub mod intel_scorecard;
 pub mod interrupt_classify;
 pub mod join_marker;
@@ -276,6 +280,7 @@ pub mod lead_eval;
 pub mod lead_goal;
 pub mod lead_history;
 pub mod lead_hygiene;
+pub mod lead_lifecycle;
 pub mod lead_mail;
 pub mod lead_pushback;
 pub mod lead_reads;
@@ -326,6 +331,7 @@ pub mod main_ci_proof;
 pub mod main_ci_transition;
 pub mod manifest;
 pub mod manifest_lookup;
+pub mod mcp;
 pub mod memory_groups;
 pub mod merge_close;
 pub mod merge_command;
@@ -571,6 +577,7 @@ pub mod subscribe;
 pub mod succession_txn;
 pub mod supervisor;
 pub mod surface_check;
+pub mod symptom_recheck;
 pub mod sync_canonical;
 pub mod system_sender;
 pub mod target_blast;
@@ -1380,9 +1387,10 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), four
+        // The allowed files: production binary repair (install_verify), five
         // production dir modes (paths, fleet_incident, chats, the
-        // session-state pin dir), two dir-mode
+        // session-state pin dir, the mcp sidecar's socket-parent tightening),
+        // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
         // production mode-preserve on its atomic plan-file replace
@@ -1397,6 +1405,7 @@ mod tests {
             ("plan_doc/codec.rs", 1),
             ("fleet_incident.rs", 1),
             ("chats.rs", 1),
+            ("mcp/sidecar.rs", 1),
         ];
         let allowed_counts: std::collections::HashMap<&str, usize> =
             ALLOWED.iter().copied().collect();
@@ -1802,6 +1811,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // dedupe memory the arm folds before it wakes again (lead_wake.rs).
     "lead_wake",
     "worker_wake",
+    // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
+    "pr_push_landed",
+    "ci_cadence_check",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.

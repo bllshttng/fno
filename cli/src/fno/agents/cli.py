@@ -2489,11 +2489,11 @@ def cmd_heal_token(
         hidden=True,
         help="Resolve against the registry and stores as one namespace.",
     ),
-    cross_project: bool = typer.Option(
+    _cross_project: bool = typer.Option(
         False,
         "--cross-project",
         hidden=True,
-        help="Authorize machine-wide store selection after uniqueness checks.",
+        help="Retired: healing is machine-wide; accepted as a silent no-op.",
     ),
 ) -> None:
     """Internal: adopt the session TOKEN names from its harness store, as JSON.
@@ -2526,8 +2526,6 @@ def cmd_heal_token(
             resolved = resolve_agent(
                 token,
                 path=Path(registry) if registry else None,
-                scope_cwd=os.getcwd(),
-                cross_project=cross_project,
             )
             resolved_entry = resolved.entry
         except AgentResolutionError as exc:
@@ -2538,8 +2536,6 @@ def cmd_heal_token(
                 sys.stderr.write(f"{exc}\n")
                 raise typer.Exit(code=HEAL_TOKEN_UNAVAILABLE_EXIT)
             raise typer.Exit(code=HEAL_TOKEN_MISS_EXIT)
-        if cross_project and resolved.matched_by == "harness_store":
-            sys.stderr.write("scope=cross-project\n")
         sys.stdout.write(_json.dumps(asdict(resolved_entry)))
         sys.stdout.write("\n")
         return
@@ -2548,16 +2544,12 @@ def cmd_heal_token(
         entry = resolve_from_harness_store(
             token,
             registry_path=Path(registry) if registry else None,
-            scope_cwd=os.getcwd(),
-            cross_project=cross_project,
         )
     except AgentResolutionError as exc:
         sys.stderr.write(f"{exc}\n")
         raise typer.Exit(code=HEAL_TOKEN_AMBIGUOUS_EXIT)
     if entry is None:
         raise typer.Exit(code=HEAL_TOKEN_MISS_EXIT)
-    if cross_project:
-        sys.stderr.write("scope=cross-project\n")
     sys.stdout.write(_json.dumps(asdict(entry)))
     sys.stdout.write("\n")
 
@@ -3394,7 +3386,7 @@ def cmd_watchdog(
 
         def _apply_and_emit():
             # One move shared by both lanes: apply, then the JSON emit.
-            results = wd.apply_recoverable(scan, scope_cwd=scope_cwd)
+            results = wd.apply_recoverable(scan)
             if json_out:
                 sys.stdout.write(
                     json.dumps(

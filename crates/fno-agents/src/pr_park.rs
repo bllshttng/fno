@@ -415,7 +415,7 @@ fn unpark_where(
         // One flock per file across the whole read-modify-write: the watcher
         // tick's next full-dict `set()` must land after this rewrite, not on
         // top of a snapshot taken before it.
-        let _lock = crate::gh_budget::FileLock::acquire(&crate::gh_budget::lock_path(path));
+        let _lock = crate::gh_budget::FileLock::try_acquire(&crate::gh_budget::lock_path(path))?;
         let text = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".to_string());
         let mut data: Map<String, Value> = match serde_json::from_str(&text) {
             Ok(Value::Object(m)) => m,
@@ -569,7 +569,7 @@ fn do_unpark(paths: &Paths, key: &str, by: &str) -> Result<(), String> {
 
 fn record_parked_head(paths: &Paths, key: &str, head: &str) -> Result<(), String> {
     for path in [&paths.state, &paths.delivery] {
-        let _lock = crate::gh_budget::FileLock::acquire(&crate::gh_budget::lock_path(path));
+        let _lock = crate::gh_budget::FileLock::try_acquire(&crate::gh_budget::lock_path(path))?;
         let text = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".to_string());
         let mut data: Map<String, Value> = match serde_json::from_str(&text) {
             Ok(Value::Object(m)) => m,
@@ -588,7 +588,7 @@ fn record_parked_head(paths: &Paths, key: &str, head: &str) -> Result<(), String
 fn mark_handled(paths: &Paths, keys: &[String]) -> Result<usize, String> {
     let mut changed = 0usize;
     for path in [&paths.state, &paths.delivery] {
-        let _lock = crate::gh_budget::FileLock::acquire(&crate::gh_budget::lock_path(path));
+        let _lock = crate::gh_budget::FileLock::try_acquire(&crate::gh_budget::lock_path(path))?;
         let text = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".to_string());
         let mut data: Map<String, Value> = match serde_json::from_str(&text) {
             Ok(Value::Object(m)) => m,

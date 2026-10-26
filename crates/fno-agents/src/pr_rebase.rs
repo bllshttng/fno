@@ -465,6 +465,7 @@ mod tests {
 
     #[test]
     fn protected_branch_exits_3() {
+        let _path = crate::path_test_guard();
         let tmp = tempfile::tempdir().unwrap();
         let work = init_repo_with_origin(tmp.path()); // on main
         let (rc, v) = phase_a_full("origin/main", &work, "git");
@@ -474,6 +475,7 @@ mod tests {
 
     #[test]
     fn dirty_tree_exits_2() {
+        let _path = crate::path_test_guard();
         let tmp = tempfile::tempdir().unwrap();
         let work = init_repo_with_origin(tmp.path());
         git(&work, &["checkout", "-b", "feature/dirty"]);
@@ -485,6 +487,7 @@ mod tests {
 
     #[test]
     fn conflict_needs_resolver_exits_42_and_leaves_rebase_in_progress() {
+        let _path = crate::path_test_guard();
         let tmp = tempfile::tempdir().unwrap();
         let work = make_conflict(tmp.path(), "base.txt");
         let (rc, v) = phase_a_full("origin/main", &work, "git");

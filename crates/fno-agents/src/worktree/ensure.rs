@@ -80,20 +80,6 @@ fn ahead_count(repo: &Path, base: &str, ref_name: &str) -> Option<i64> {
     text.trim().parse::<i64>().ok()
 }
 
-/// The one fatal line containing the word "fatal", minus the "couldn't find
-/// remote ref" shape that is a normal miss here.
-fn fetch_failure(fetch: Option<&std::process::Output>) -> String {
-    let Some(out) = fetch else {
-        return "git fetch origin timed out after 60s".to_string();
-    };
-    for line in String::from_utf8_lossy(&out.stderr).lines() {
-        if line.contains("fatal") && !line.contains("couldn't find remote ref") {
-            return line.trim().to_string();
-        }
-    }
-    String::new()
-}
-
 /// What a re-dispatch should continue: origin/<br> ahead of base, then a
 /// salvage ref ahead of base. Returns (kind, source, count, fetch-target).
 fn continuation_base(repo: &Path, name: &str, base: &str, br: &str) -> Option<Continuation> {

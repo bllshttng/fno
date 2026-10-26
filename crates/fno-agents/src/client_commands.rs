@@ -739,11 +739,9 @@ fn trace_logic(args: &TraceArgs, events_path: &Path, registry_path: &Path) -> Tr
                 }
                 Ok(rows) => match find_agent_entry(&rows, token) {
                     // A token that lives only in a foreign project's harness
-                    // store misses the local registry; --cross-project lets
-                    // the store heal find it.
-                    Err(err)
-                        if !(args.cross_project && matches!(err, ResolveError::NotFound(_))) =>
-                    {
+                    // store misses the local registry; the store heal finds it
+                    // machine-wide.
+                    Err(err) if !matches!(err, ResolveError::NotFound(_)) => {
                         let detail = match err {
                             ResolveError::Ambiguous(_) => err.message(),
                             ResolveError::NotFound(_) => {
@@ -756,13 +754,7 @@ fn trace_logic(args: &TraceArgs, events_path: &Path, registry_path: &Path) -> Tr
                             stderr: format!("fno agents trace: {detail}\n"),
                         };
                     }
-                    _ => match resolve_entry_with_heal_scoped(
-                        &rows,
-                        token,
-                        registry_path,
-                        args.cross_project,
-                        None,
-                    ) {
+                    _ => match resolve_entry_with_heal_scoped(&rows, token, registry_path, None) {
                         Ok(e) => {
                             resolved_name = Some(
                                 e.get("name")
@@ -1162,7 +1154,6 @@ pub(crate) fn resolve_entry_with_heal_scoped(
     rows: &[Value],
     token: &str,
     registry_path: &Path,
-    cross_project: bool,
     scope_cwd: Option<&Path>,
 ) -> Result<Value, ResolveError> {
     match find_agent_entry(rows, token) {
@@ -1170,7 +1161,7 @@ pub(crate) fn resolve_entry_with_heal_scoped(
             if entry_session_tier(e, token) == Some(0) || !is_session_shaped(token) {
                 return Ok(e.clone());
             }
-            match heal_token(token, registry_path, cross_project, scope_cwd) {
+            match heal_token(token, registry_path, scope_cwd) {
                 Ok(Some(row)) => Ok(row),
                 Ok(None) => Err(ResolveError::Ambiguous(format!(
                     "cannot safely resolve token {} because the harness stores could not be checked. Use the full session id.",
@@ -1186,7 +1177,7 @@ pub(crate) fn resolve_entry_with_heal_scoped(
             if !is_session_shaped(token) {
                 return Err(err);
             }
-            match heal_token(token, registry_path, cross_project, scope_cwd) {
+            match heal_token(token, registry_path, scope_cwd) {
                 Ok(Some(row)) => Ok(row),
                 Ok(None) => Err(err),
                 Err(candidates) => Err(ResolveError::Ambiguous(candidates)),
@@ -1693,7 +1684,6 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         message,
         message_already_queued,
         from_name,
-        cross_project,
         cwd: cwd_override,
         account,
         ..
@@ -1714,7 +1704,6 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         &entries,
         &name,
         &home.registry_json(),
-        cross_project,
         scope_cwd,
     ) {
         Ok(e) => e,
@@ -2101,7 +2090,6 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
             message_already_queued,
             from_name.as_deref(),
             reentry_plan.as_ref(),
-            cross_project,
             home,
         );
     }
@@ -2409,12 +2397,13 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
 /// through the existing registry writer; adopt takes NO single-writer claim (its
 /// process is transient -- the claim is acquired by `resume`'s dead arm, whose
 /// pid survives exec; a transient-pid claim would recreate the reanchor bug).
-fn parse_adopt_args(rest: &[String]) -> Result<(String, bool), i32> {
+fn parse_adopt_args(rest: &[String]) -> Result<String, i32> {
     let mut session_id: Option<String> = None;
-    let mut cross_project = false;
     for a in expand_eq(rest) {
         match a.as_str() {
-            "--cross-project" => cross_project = true,
+            // Retired (d-460ea8c7): a full session id resolves from any
+            // project; the flag rides along as a silent no-op.
+            "--cross-project" => {}
             other if other.starts_with("--") => {
                 eprintln!("fno-agents: unknown adopt flag: {other}");
                 return Err(2);
@@ -2432,7 +2421,7 @@ fn parse_adopt_args(rest: &[String]) -> Result<(String, bool), i32> {
         }
     }
     match session_id {
-        Some(s) => Ok((s, cross_project)),
+        Some(s) => Ok(s),
         None => {
             eprintln!("fno-agents: adopt needs a <session-id>");
             Err(2)
@@ -2441,7 +2430,7 @@ fn parse_adopt_args(rest: &[String]) -> Result<(String, bool), i32> {
 }
 
 pub fn run_adopt(rest: &[String], home: &AgentsHome) -> i32 {
-    let (session_id, cross_project) = match parse_adopt_args(rest) {
+    let session_id = match parse_adopt_args(rest) {
         Ok(v) => v,
         Err(code) => {
             if code == 2 && rest.is_empty() {
@@ -2454,7 +2443,7 @@ pub fn run_adopt(rest: &[String], home: &AgentsHome) -> i32 {
         }
     };
 
-    match crate::adopt_identity::synthesize_and_adopt(&session_id, home, cross_project) {
+    match crate::adopt_identity::synthesize_and_adopt(&session_id, home) {
         Ok((row, fno_id, source)) => {
             let name = row.get("name").and_then(Value::as_str).unwrap_or("");
             let short = row.get("short_id").and_then(Value::as_str).unwrap_or("");
@@ -2465,9 +2454,6 @@ pub fn run_adopt(rest: &[String], home: &AgentsHome) -> i32 {
                     "fno agents adopt: short_id={short} (resolved from {})",
                     source.label()
                 );
-            }
-            if cross_project && source == AdoptSource::HarnessStore {
-                eprintln!("scope=cross-project");
             }
             if let Some(fid) = fno_id {
                 if !fid.is_empty() {
@@ -2665,19 +2651,14 @@ pub async fn run_logs(rest: &[String], home: &AgentsHome) -> i32 {
             return 1;
         }
     };
-    let entry = match resolve_entry_with_heal_scoped(
-        &entries,
-        &args.name,
-        &home.registry_json(),
-        args.cross_project,
-        None,
-    ) {
-        Ok(e) => e,
-        Err(err) => {
-            eprintln!("{}", err.message());
-            return 13;
-        }
-    };
+    let entry =
+        match resolve_entry_with_heal_scoped(&entries, &args.name, &home.registry_json(), None) {
+            Ok(e) => e,
+            Err(err) => {
+                eprintln!("{}", err.message());
+                return 13;
+            }
+        };
     let entry = &entry;
     let harness = entry
         .get("harness")
@@ -3848,7 +3829,6 @@ mod tests {
         let res = crate::adopt_identity::synthesize_and_adopt(
             "deadbeef-1111-2222-3333-444455556666",
             &home,
-            false,
         );
         assert!(
             matches!(res, Err(AdoptError::NoEvidence) | Err(AdoptError::Io(_))),

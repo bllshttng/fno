@@ -34,6 +34,7 @@ pub(super) struct FleetArms {
     // The periodic arms: each module owns its cadence, gate and memory.
     machine_watch: crate::machine_watch::Arm,
     merge_close: crate::merge_close::Arm,
+    symptom_recheck: crate::symptom_recheck::Arm,
     team_ledger: crate::rundown::Arm,
     lead_eval: crate::lead_eval::Arm,
     fleet_page: crate::fleet_page::Arm,
@@ -46,6 +47,7 @@ pub(super) struct FleetArms {
     otlp_export: crate::otlp_export::Arm,
     burn_watch: crate::burn_watch::Arm,
     watch_expiry: crate::watch_expiry::Arm,
+    ci_cadence: crate::ci_cadence::Arm,
     codex_watch: crate::codex_watch::Arm,
     lead_wake: crate::lead_wake::Arm,
     worker_wake: crate::worker_wake::Arm,
@@ -122,6 +124,7 @@ impl FleetArms {
             last_tool_scan: Instant::now(),
             machine_watch: crate::machine_watch::Arm::default(),
             merge_close: crate::merge_close::Arm::default(),
+            symptom_recheck: crate::symptom_recheck::Arm::default(),
             team_ledger: crate::rundown::Arm::default(),
             lead_eval: crate::lead_eval::Arm::default(),
             fleet_page: crate::fleet_page::Arm::new(opts.agents_config_cwd.clone()),
@@ -134,6 +137,7 @@ impl FleetArms {
             otlp_export: crate::otlp_export::Arm::new(opts.agents_config_cwd.clone()),
             burn_watch: crate::burn_watch::Arm::default(),
             watch_expiry: crate::watch_expiry::Arm::default(),
+            ci_cadence: crate::ci_cadence::Arm::default(),
             codex_watch: crate::codex_watch::Arm::default(),
             lead_wake: crate::lead_wake::Arm::new(opts.agents_config_cwd.clone()),
             worker_wake: crate::worker_wake::Arm::default(),
@@ -320,6 +324,7 @@ impl FleetArms {
         );
         crate::machine_watch::maybe_tick(&self.machine_watch, ctx.home.clone());
         crate::merge_close::maybe_tick(&self.merge_close, ctx.home.clone());
+        crate::symptom_recheck::maybe_tick(&self.symptom_recheck, ctx.home.clone());
         // The board render: graph.md plus every configured board target,
         // once per moved version, off every caller's write path.
         crate::board_render_arm::maybe_tick(&self.board_render, ctx.home.clone());
@@ -336,6 +341,9 @@ impl FleetArms {
         crate::otlp_export::maybe_tick(&self.otlp_export, ctx.home.clone());
         crate::burn_watch::maybe_tick(&self.burn_watch, ctx.home.clone());
         crate::watch_expiry::maybe_tick(&self.watch_expiry, ctx.home.clone());
+        // The post-push CI reader: each pushed head is read at 1, 15, 30
+        // and 55 minutes; a real red cancels its runs and wakes the pusher.
+        crate::ci_cadence::maybe_tick(&self.ci_cadence, ctx.home.clone());
         // The settle waker: on CI settle it wakes the parked session
         // through its harness lane - codex turn/start, every other harness
         // the mail lane. Registered beside its expiry sibling.

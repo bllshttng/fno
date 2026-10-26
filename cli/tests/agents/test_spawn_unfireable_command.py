@@ -15,12 +15,11 @@ from fno.agents.rust_runtime import _refuse_unfireable_seed
 
 @pytest.fixture(autouse=True)
 def _plugin_state(monkeypatch):
-    """Pin the codex plugin verdict; tests set it via `state`."""
-    from fno.setup import codex_plugin
-
+    """Pin the codex plugin verdict the native door returns; tests set it via `state`."""
     holder = {"status": "fresh"}
     monkeypatch.setattr(
-        codex_plugin, "inspect_freshness", lambda **_: {"status": holder["status"]}
+        "fno.rust_binary.call_binary_json",
+        lambda *_a, **_k: (None, {"status": holder["status"]}),
     )
     yield holder
 
