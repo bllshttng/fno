@@ -432,31 +432,6 @@ keeping your own harness's markers; each harness re-mints its own for a child\n"
     .to_string()
 }
 
-/// Ambient identity names with their harness family, in the Python
-/// `AMBIENT_IDENTITY_ENV` order: the one list the strip remedy walks, so a
-/// name without a classified family is never suggested for deletion.
-const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
-    ("FNO_HARNESS_NAME", "fno"),
-    ("FNO_HARNESS_SESSION_ID", "fno"),
-    ("CODEX_THREAD_ID", "codex"),
-    ("CLAUDE_CODE_SESSION_ID", "claude"),
-    ("CODEX_SESSION_ID", "codex"),
-    ("GEMINI_SESSION_ID", "gemini"),
-    ("OPENCODE_SESSION_ID", "opencode"),
-    ("CLAUDE_SESSION_ID", "claude"),
-    ("CLAUDECODE", "claude"),
-    ("CLAUDECODE_SESSION_ID", "claude"),
-    ("HERMES_SESSION_ID", "hermes"),
-    ("TARGET_SESSION_ID", "fno"),
-    ("CODEX_CI", "codex"),
-    ("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "codex"),
-    ("CODEX_SHELL", "codex"),
-    ("CODEX_COMPANION_SESSION_ID", "codex"),
-    ("CODEX_COMPANION_TRANSCRIPT_PATH", "codex"),
-    ("FNO_AGENT_SUBSTRATE", "fno"),
-    ("FNO_NODE_REASON", "fno"),
-];
-
 /// The `env -u` flag pairs for identity names present in the environment
 /// that belong to a foreign harness family (mirror of Python
 /// `ambient_identity_strip_flags`): the self-rescue an ambiguous session
@@ -469,14 +444,8 @@ fn ambient_identity_strip_flags(
     keep_family: &str,
     get: &impl Fn(&str) -> Option<String>,
 ) -> Vec<String> {
-    let table: &[(&str, &str)] = &[
-        ("CODEX_THREAD_ID", "codex"),
-        ("CLAUDE_CODE_SESSION_ID", "claude"),
-        ("CODEX_SESSION_ID", "codex"),
-        ("GEMINI_SESSION_ID", "gemini"),
-        ("OPENCODE_SESSION_ID", "opencode"),
-    ];
-    let legacy: &[(&str, &str)] = &[("CLAUDE_SESSION_ID", "claude")];
+    let table = crate::claims::HARNESS_SESSION_MARKERS;
+    let legacy = crate::claims::LEGACY_HARNESS_SESSION_MARKERS;
     let mut keep_session_id: Option<String> = None;
     for (marker, family) in table.iter().chain(legacy.iter()) {
         if *family != keep_family {
@@ -491,7 +460,7 @@ fn ambient_identity_strip_flags(
         }
     }
     let mut flags: Vec<String> = Vec::new();
-    for (name, family) in AMBIENT_IDENTITY_FAMILIES {
+    for (name, family) in crate::claims::AMBIENT_IDENTITY_FAMILIES {
         if *family == keep_family || *family == "fno" || *family == "hermes" {
             continue;
         }
