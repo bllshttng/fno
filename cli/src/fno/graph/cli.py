@@ -60,7 +60,10 @@ cli = typer.Typer(
     epilog=(
         "Corrections: reopen (undo done) | remove (hard delete) | unarchive | "
         "undefer | unqueue | unsupersede | unclaim. All hidden; "
-        "`fno help backlog --all` lists every command."
+        "`fno help backlog --all` lists every command. "
+        "JSON contract: `-J` sits before the verb (`fno backlog -J get <id>`), "
+        "and `get` prints one JSON document on stdout - the node object on a "
+        "hit, `{\"ok\": false, \"error\": ...}` with rc 1 on a miss."
     ),
 )
 
@@ -1128,7 +1131,11 @@ def cmd_provenance(
     match = resolve_node(id, entries)
     if match.kind != "exact":
         from fno.graph.store import served_store_path
-        typer.echo(f"No node matching '{id}' in {served_store_path(_graph_path())}", err=True)
+        message = f"No node matching '{id}' in {served_store_path(_graph_path())}"
+        if json_out:
+            typer.echo(json.dumps({"ok": False, "error": message}))
+        else:
+            typer.echo(message, err=True)
         raise typer.Exit(code=1)
 
     e = match.candidates[0]
