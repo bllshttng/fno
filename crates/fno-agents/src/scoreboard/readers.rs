@@ -387,15 +387,56 @@ pub(crate) fn read_graph_nodes(graph_db: &Path) -> Vec<Value> {
 
 /// The graph rows every view and the classifier share. Unfiltered, so the
 /// in-process classifier sees exactly the rows the keeper's own read ships.
-pub(crate) fn graph_db_path() -> PathBuf {
-    let home = crate::paths::AgentsHome::from_env();
-    let fno_dir = home
-        .root()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(".fno"));
-    fno_dir.join("db").join("graph.db")
+/// One `config.paths.<key>` override read the way Python `_resolve` does for
+/// these files: `~/` expands against HOME, everything else rides verbatim,
+/// and a relative value anchors under `~/.fno` at the call site.
+fn config_path_override(cwd: &Path, key: &str) -> Option<PathBuf> {
+    let raw = crate::agents_config::config_lookup(cwd, &["paths", key])?
+        .as_str()?
+        .to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        let home = std::env::var_os("HOME")?;
+        return Some(PathBuf::from(home).join(rest));
+    }
+    Some(PathBuf::from(raw))
 }
+
+pub(crate) fn graph_db_path() -> PathBuf {
+    // Python `graph_json()` anchors on `state_dir()` and the store is the db
+    // sibling: the FNO_STATE_DIR seal wins, then the config `state_dir` key,
+    // else `~/.fno/`.
+    if let Ok(dir) = std::env::var("FNO_STATE_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir).join("db").join("graph.db");
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let state_dir = crate::agents_config::config_lookup(&cwd, &["state_dir"])
+        .and_then(|v| v.as_str().map(String::from))
+        .filter(|s| !s.is_empty())
+        .map(|raw| match raw.strip_prefix("~/") {
+            Some(rest) => match std::env::var_os("HOME") {
+                Some(home) => PathBuf::from(home).join(rest),
+                None => PathBuf::from(raw),
+            },
+            None => PathBuf::from(raw),
+        })
+        .unwrap_or_else(|| {
+            let home = crate::paths::AgentsHome::from_env();
+            home.root()
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(".fno"))
+        });
+    state_dir.join("db").join("graph.db")
+}
+
+/// The state-root files the fold reads beside the ledger: the live journal
+/// and its ephemeral sibling (`events.jsonl` + `.ephemeral`).
+pub(crate) fn events_paths(ledger_path: &Path) -> Vec<PathBuf> {
 
 /// The state-root files the fold reads beside the ledger: the live journal
 /// and its ephemeral sibling (`events.jsonl` + `.ephemeral`).
@@ -432,15 +473,25 @@ pub(crate) fn datetime_max() -> DateTime<Local> {
         .unwrap()
 }
 
-/// The ledger's one path: the `FNO_STATE_DIR` seal wins first (the pinned
-/// global rule the Python paths module owned), the agents-home sibling
-/// answers otherwise. A `config.paths.ledger_json` override is a Python
-/// config surface the native fold does not read.
+/// Python `paths.ledger_json()`: the FNO_STATE_DIR seal wins first, then an
+/// absolute `config.paths.ledger_json` override (a relative one anchors
+/// under `~/.fno`), else the pinned global file.
 pub(crate) fn ledger_path() -> PathBuf {
     if let Ok(dir) = std::env::var("FNO_STATE_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir).join("ledger.json");
         }
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if let Some(override_path) = config_path_override(&cwd, "ledger_json") {
+        if override_path.is_absolute() {
+            return override_path;
+        }
+        let home = crate::paths::AgentsHome::from_env();
+        return match home.root().parent() {
+            Some(fno_dir) => fno_dir.join(override_path),
+            None => PathBuf::from(".fno").join(override_path),
+        };
     }
     let home = crate::paths::AgentsHome::from_env();
     home.root()

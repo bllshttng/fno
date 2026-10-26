@@ -15,15 +15,23 @@ pub(crate) struct ScoreboardArgs {
     pub by_provider: ArgFlag,
     pub lanes: ArgFlag,
     pub project: Option<String>,
+    pub help: ArgFlag,
 }
 
 pub(crate) type ArgFlag = bool;
 
-/// The two refusal exits, with the Python leg's exit code 2.
+/// The refusal exits, with the Python leg's typer exit code 2. The Python
+/// leg refused through typer: help printed usage at exit 0, a misspelled
+/// flag or stray positional refused, and a value-less option refused.
 pub(crate) enum ArgError {
     SinceBelowOne,
     MutuallyExclusive(Vec<&'static str>),
+    Unknown(String),
+    MissingValue(&'static str),
 }
+
+/// The usage line `--help` prints (the typer help's own verb line).
+pub(crate) const USAGE: &str = "usage: fno-agents scoreboard [--since <days>] [--json] [--project <slug>]\n       or one view: --calibration | --by-skill | --efficiency | --plan-fidelity | --by-provider | --lanes";
 
 pub(crate) fn parse(args: &[String]) -> Result<ScoreboardArgs, ArgError> {
     let mut out = ScoreboardArgs {
@@ -36,14 +44,19 @@ pub(crate) fn parse(args: &[String]) -> Result<ScoreboardArgs, ArgError> {
         by_provider: false,
         lanes: false,
         project: None,
+        help: false,
     };
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--help" | "-h" => {
+                out.help = true;
+                return Ok(out);
+            }
             "--since" => {
                 i += 1;
                 let Some(value) = args.get(i) else {
-                    return Err(ArgError::SinceBelowOne);
+                    return Err(ArgError::MissingValue("--since"));
                 };
                 out.since_days = value.parse().map_err(|_| ArgError::SinceBelowOne)?;
             }
@@ -56,9 +69,14 @@ pub(crate) fn parse(args: &[String]) -> Result<ScoreboardArgs, ArgError> {
             "--lanes" => out.lanes = true,
             "--project" => {
                 i += 1;
-                out.project = args.get(i).cloned();
+                out.project = Some(
+                    args.get(i)
+                        .filter(|v| !v.starts_with('-'))
+                        .ok_or(ArgError::MissingValue("--project"))?
+                        .clone(),
+                );
             }
-            _ => {}
+            other => return Err(ArgError::Unknown(other.to_string())),
         }
         i += 1;
     }

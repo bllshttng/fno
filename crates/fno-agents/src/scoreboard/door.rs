@@ -26,7 +26,17 @@ pub(crate) fn run_scoreboard(args: &[String]) -> i32 {
                 .to_string(),
             );
         }
+        Err(ArgError::Unknown(arg)) => {
+            return refuse(&format!("fno-agents scoreboard: unknown argument {arg}"));
+        }
+        Err(ArgError::MissingValue(flag)) => {
+            return refuse(&format!("fno-agents scoreboard: {flag} needs a value"));
+        }
     };
+    if parsed.help {
+        println!("{}", super::args::USAGE);
+        return 0;
+    }
     let project = parsed.project.clone();
     let mut inputs = match super::views::load_run(project.as_deref()) {
         Ok(inputs) => inputs,
