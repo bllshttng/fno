@@ -709,3 +709,12 @@ whoami_app.command(
     hidden=True,
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )(cost_command)
+
+
+def _scoreboard_signpost() -> None:
+    """One-release signpost for the moved root: the views are native now."""
+    typer.echo(
+        "fno: the scoreboard views are native; use `fno whoami scoreboard`. "
+        "This spelling retires after one release."
+    )
+    raise typer.Exit(code=2)

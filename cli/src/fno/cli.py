@@ -161,6 +161,11 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Provider route lanes: ls / set / unset / env (GLM build lane).",
         {"hidden": True},
     ),
+    "scoreboard": (
+        "fno.agent.cli:_scoreboard_signpost",
+        "Native telemetry: use `fno whoami scoreboard` (one release left for this spelling).",
+        {"hidden": True},
+    ),
     "evals": (
         "fno.evals_cli:evals_app",
         "Golden-task efficacy evals (run / report / diff)",
