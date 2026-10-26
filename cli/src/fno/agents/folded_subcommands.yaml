@@ -23,7 +23,3 @@ mail:
   - fno.mail.cli:mail_app
   - "Durable polled mailbox: send/unread/ack/reply/drain/status (canonical spelling; root `fno mail` is the shim)."
   - hidden: true
-worker:
-  - fno.worker.cli:cli
-  - Manage delivery worker phases.
-  - hidden: true

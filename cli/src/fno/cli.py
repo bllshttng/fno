@@ -249,7 +249,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "state": set(),
     "stub-manifest": set(),
     "target": set(),
-    "worker": set(),
 }
 
 for _group_name, _keep in COLLAPSE_KEEP.items():

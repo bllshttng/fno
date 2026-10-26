@@ -185,7 +185,10 @@ impl Pins {
     fn envs(&self, extra: &[(&str, Option<String>)]) -> Vec<(String, String)> {
         let mut env: Vec<(String, String)> = vec![
             ("HOME".to_string(), self.home.display().to_string()),
-            ("FNO_STATE_DIR".to_string(), self.state.display().to_string()),
+            (
+                "FNO_STATE_DIR".to_string(),
+                self.state.display().to_string(),
+            ),
             (
                 "FNO_GLOBAL_SETTINGS_PATH".to_string(),
                 self.absent_global.display().to_string(),
