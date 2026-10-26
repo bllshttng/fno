@@ -1158,7 +1158,6 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::wait::run_wait(&args[1..], &AgentsHome::from_env()).await;
     }
 
-
     // The list path is an internal operand of the existing binary action;
     // public callers keep using `fno do pr list` through the Python adapter.
     if matches!(command, "pr-heal") {
