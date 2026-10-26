@@ -1,7 +1,7 @@
-//! The `fno do target` gate verbs, ported from `cli/src/fno/target_cli.py`
+//! The `fno do target` gate commands, ported from `cli/src/fno/target_cli.py`
 //!: `check-review-gate`, `check-contained`, `check-dispatch-hold`,
 //! `resolve-owned-identity`, `resolve-model`, `denominator-ratio`, and the
-//! `target_handoff prepare` module call. One op per verb, each composing the
+//! `target_handoff prepare` module call. One op per command, each composing the
 //! same machinery the Python composed over subprocess doors - in-process
 //! where the crate owns the piece (review capability, hold verdict), through
 //! a self-exec of this binary's own doors where the composition point is the
@@ -9,7 +9,7 @@
 //!
 //! Exit contracts, pinned by `tests/golden/target_family/`:
 //!
-//! - `check-review-gate`: 0 clear, 9 refused (the Python verb restamped the
+//! - `check-review-gate`: 0 clear, 9 refused (the Python command restamped the
 //!   door's exit 2 to the shell callers' REVIEW_GATE_REFUSED = 9), anything
 //!   else reads as a BROKEN gate and proceeds.
 //! - `check-contained` / `check-dispatch-hold`: the same 0/9/broken shape; an
@@ -50,7 +50,7 @@ fn kebab_re() -> &'static regex::Regex {
 /// BROKEN gate and proceeds, so this must stay distinct from typer's
 /// usage-error 2.
 const REVIEW_GATE_REFUSED: i32 = 9;
-/// The exit the Python refusals used internally before the verb restamped.
+/// The exit the Python refusals used internally before the command restamped.
 const REFUSED: i32 = 2;
 
 fn env_input(name: &str) -> Option<String> {
@@ -128,7 +128,7 @@ fn graph_get_row(input: &str) -> Option<serde_json::Value> {
 /// Rust twin of `config_io._deep_merge`, so a value `fno config` resolves
 /// resolves here identically. No candidate carrying the key degrades to an
 /// empty table: a config without a review gate is a no-op gate, the
-/// fail-open the Python verb kept.
+/// fail-open the Python command kept.
 fn load_review_config() -> toml::Value {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let review = crate::agents_config::config_value_deep(&cwd, &["review"])
@@ -193,7 +193,7 @@ fn descriptors_payload(review: &toml::Value) -> serde_json::Value {
     serde_json::Value::Object(out)
 }
 
-/// The reviewers-plus-peers axis. The Python verb loaded the configured
+/// The reviewers-plus-peers axis. The Python command loaded the configured
 /// reviewers, the descriptor registry, and the peers, then forwarded all of
 /// it to `review-level capability reviewers`; the op reads the same keys
 /// itself and relays the same note and refusal lines.
@@ -475,7 +475,7 @@ fn check_contained_run(args: &[String]) -> i32 {
     let entries = match graph_entries() {
         Ok(rows) => rows,
         Err(error) => {
-            // The Python verb printed the DID-NOT-RUN line on an unreachable
+            // The Python command printed the DID-NOT-RUN line on an unreachable
             // store and proceeded: an unreachable store must not block every
             // bootstrap, and the pre-claim check plus the live-claim refusal
             // both still stand.
@@ -733,7 +733,7 @@ fn resolve_model_run(args: &[String]) -> i32 {
         eprintln!("fno do target resolve-model: a node id is required");
         return REFUSED;
     };
-    // The Python verb was the one projection of route_resolve for bash
+    // The Python command was the one projection of route_resolve for bash
     // dispatchers; node-route is the native resolver it projected.
     let mut cmd = Command::new(self_exe());
     cmd.arg("node-route").arg(&node);
@@ -1064,7 +1064,7 @@ impl SelfReviewCtx {
 }
 
 /// `fno-agents target-gates request-self-review [--pr-number N]`: the Python
-/// verb composed four native doors over subprocesses; this op composes the
+/// command composed four native doors over subprocesses; this op composes the
 /// same four. One JSON receipt on stdout, exit 2 on refused or unconfirmed -
 /// the contract the two request-self-review goldens pin.
 pub fn run_request_self_review(args: &[String]) -> i32 {
@@ -1099,7 +1099,7 @@ pub fn run_request_self_review(args: &[String]) -> i32 {
     }
 }
 
-/// The composed try-block of the Python verb: resolve the review target,
+/// The composed try-block of the Python command: resolve the review target,
 /// the identity, the invocation payload, then the send and the best-effort
 /// hold. Ok carries the send receipt merged with the identity fields; Err
 /// carries the refusal reason (the caller renders the refused receipt).
@@ -1251,7 +1251,7 @@ fn request_self_review_identity() -> Result<(String, String), String> {
 }
 
 /// Build the review invocation payload through the review-level capability
-/// door - the same argv the Python verb assembled, empty payload on stdin.
+/// door - the same argv the Python command assembled, empty payload on stdin.
 fn request_self_review_invocation(
     cwd: &Path,
     harness: &str,
@@ -1417,17 +1417,17 @@ fn review_invocation_run(args: &[String]) -> i32 {
     }
 }
 
-/// The op router: `fno-agents target-gates <verb> [flags]`, one verb per
+/// The op router: `fno-agents target-gates <op> [flags]`, one op per
 /// ported Python gate. Registered in client.rs.
 pub fn run(args: &[String]) -> i32 {
-    let (verb, rest) = match args.split_first() {
-        Some((verb, rest)) => (verb.as_str(), rest),
+    let (op, rest) = match args.split_first() {
+        Some((op, rest)) => (op.as_str(), rest),
         None => {
-            eprintln!("fno-agents target-gates: name a verb");
+            eprintln!("fno-agents target-gates: name an op");
             return REFUSED;
         }
     };
-    match verb {
+    match op {
         "check-review-gate" => run_check_review_gate(rest),
         "check-contained" => check_contained_run(rest),
         "check-dispatch-hold" => check_dispatch_hold_run(rest),
@@ -1438,7 +1438,7 @@ pub fn run(args: &[String]) -> i32 {
         "target-handoff-prepare" => handoff_prepare_run(rest),
         "request-self-review" => run_request_self_review(rest),
         other => {
-            eprintln!("fno-agents target-gates: unknown verb {other}");
+            eprintln!("fno-agents target-gates: unknown op {other}");
             REFUSED
         }
     }
