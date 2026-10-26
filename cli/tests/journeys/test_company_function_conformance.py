@@ -300,11 +300,8 @@ def _assert_resolved_roles_match_every_declared_policy_axis(role_root: Path) -> 
                       "principal_id": None, "role_id": role_id}
         facts = [
             {
-                "capability": capability,
-                "available": True,
-                "source_id": "journey-fixture",
-                "snapshot_revision": revision,
-                "work_order_scope": work_order,
+                "capability": capability, "available": True, "source_id": "journey-fixture",
+                "snapshot_revision": revision, "work_order_scope": work_order,
             }
             for capability in declared["required_capabilities"]
         ]
@@ -326,11 +323,8 @@ def _assert_resolved_roles_match_every_declared_policy_axis(role_root: Path) -> 
                 },
                 "unchecked_definitions": [
                     {
-                        "layer": record["layer"],
-                        "source": record["source"],
-                        "status": record["status"],
-                        "role": record["role"],
-                        "has_definition": record["definition"] is not None,
+                        "layer": record["layer"], "source": record["source"], "status": record["status"],
+                        "role": record["role"], "has_definition": record["definition"] is not None,
                         "error": record["error"],
                     }
                     for record in rows

@@ -254,10 +254,8 @@ for path, source, tree in parsed:
         for imported in imported_modules(
             node, source_module, source_is_package=path.name == "__init__.py"
         ):
-            # The control edge proves the scan reaches real content. The
-            # roles -> core pair it named retired with the roles package;
-            # this runtime -> core edge survives until the next deletion
-            # re-points it.
+            # Control edge: proves the scan reaches content; re-point when
+            # the named modules retire (was fno.roles.models -> contracts).
             if (
                 source_module == "fno.agents.history"
                 and imported == "fno.graph._reconcile"

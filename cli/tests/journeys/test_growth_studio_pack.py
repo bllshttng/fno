@@ -54,18 +54,11 @@ def _pack_asset(identifier: str, sensitivity: str, revision: str) -> dict:
     data = asset.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     return {
-        "kind": "artifact",
-        "identifier": identifier,
-        "provenance": str(asset),
-        "work_order_scope": None,
-        "content_digest": digest,
-        "content_revision": digest,
-        "snapshot_revision": revision,
-        "fresh_until": None,
-        "sensitivity": sensitivity,
-        "byte_size": len(data),
-        "readable": True,
-        "unavailable_reason": None,
+        "kind": "artifact", "identifier": identifier, "provenance": str(asset),
+        "work_order_scope": None, "content_digest": digest, "content_revision": digest,
+        "snapshot_revision": revision, "fresh_until": None,
+        "sensitivity": sensitivity, "byte_size": len(data),
+        "readable": True, "unavailable_reason": None,
     }
 
 
@@ -85,11 +78,8 @@ def _resolve_role(root: Path, role_id: str, function_id: str, *, extra_definitio
     # goldens exercise, not a weakening of the roles.
     facts = [
         {
-            "capability": capability,
-            "available": True,
-            "source_id": "test-fixture",
-            "snapshot_revision": revision,
-            "work_order_scope": work_order,
+            "capability": capability, "available": True, "source_id": "test-fixture",
+            "snapshot_revision": revision, "work_order_scope": work_order,
         }
         for capability in manifest["required_capabilities"]
     ]
