@@ -574,6 +574,19 @@ pub fn scrape_sweep(home: &AgentsHome, emitter: &EventEmitter, notify_on_blocked
     }
 }
 
+/// The authority `detect explain` names for a row, folded through the shared
+/// [`crate::wait::effective_state`] lattice the daemon waits on, so this
+/// diagnostic cannot report hook or liveness where a fresh screen blocked
+/// verdict outranks the leg for a no-blocked-producer harness. Under an
+/// inside-leg report, `"screen"` is always that merge.
+pub(crate) fn explain_rung(e: &state::RegistryEntry, now_secs: u64) -> &'static str {
+    if matches!(e.status, AgentStatus::Exited | AgentStatus::PermanentDead) {
+        return "pane-exit";
+    }
+    let (_, authority) = crate::wait::effective_state(e, now_secs);
+    authority
+}
+
 /// The hidden `fno-agents detect` debug command (precedent: the hidden `claim`
 /// command - matched with `matches!` in bin/client.rs, out of CLIENT_COMMAND_USAGE
 /// and the routable-command parity guard). `detect explain <agent>` prints which
@@ -608,15 +621,34 @@ pub fn run_detect(args: &[String]) -> i32 {
         }
     };
     println!("agent: {} (provider {})", entry.name, entry.harness_name());
-    // Mirrors the reader lattice: pane-exit > hook (capability) >
-    // screen-manifest > liveness.
+    // Authority names fold through the shared effective_state lattice
+    // (explain_rung): pane-exit tops the ladder, and the inside-leg branch
+    // defers its decision so a fresh screen blocked verdict for a
+    // no-blocked-producer harness reports as "screen".
     if matches!(
         entry.status,
         AgentStatus::Exited | AgentStatus::PermanentDead
     ) {
         println!("authority: pane-exit (status {:?})", entry.status);
     } else if let Some(leg) = &entry.inside_leg {
-        if leg.is_live_at(now_secs) {
+        if explain_rung(entry, now_secs) == "screen" {
+            let Some(ss) = &entry.screen_state else {
+                // Unreachable: effective_state answers "screen" under a leg
+                // only for a fresh blocked verdict, which requires the row.
+                return 1;
+            };
+            println!(
+                "authority: screen (rule {:?} -> {}, seq {}, age {}, ttl {:?}ms; \
+                 outranks the {:?} inside-leg report for a harness whose \
+                 wiring names no blocked producer)",
+                ss.rule,
+                ss.state,
+                ss.seq,
+                age(&ss.at),
+                ss.ttl_ms,
+                leg.state
+            );
+        } else if leg.is_live_at(now_secs) {
             println!(
                 "authority: hook (inside-leg report: state {:?}, seq {}, age {})",
                 leg.state,
@@ -624,11 +656,19 @@ pub fn run_detect(args: &[String]) -> i32 {
                 age(&leg.received_at)
             );
         } else {
+            let no_producer = crate::harness_capabilities::session_state_names_no_blocked_producer(
+                entry.harness_name(),
+            );
             println!(
-                "authority: liveness (hook report lapsed: seq {}, age {}; \
-                 row is hook-capable so the screen-manifest rung stays off)",
+                "authority: liveness (hook report lapsed: seq {}, age {}; {})",
                 leg.seq,
-                age(&leg.received_at)
+                age(&leg.received_at),
+                if no_producer {
+                    "the screen rung owns blocked for this harness, but no \
+                     fresh blocked verdict stands here"
+                } else {
+                    "row is hook-capable so the screen-manifest rung stays off"
+                }
             );
         }
     } else if let Some(ss) = &entry.screen_state {
@@ -893,6 +933,28 @@ mod tests {
             posture: None,
         });
         assert_eq!(write_disposition(&row, &scraped), WriteDisposition::Apply);
+    }
+
+    // -- detect explain ---------------------------------------------------
+
+    // The explain lattice folds the inside-leg branch through the shared
+    // effective_state merge: a legged codex row (wiring names no blocked
+    // producer) with a fresh screen blocked verdict explains as "screen",
+    // and keeps the leg's "hook" word when no merge fires.
+    #[test]
+    fn detect_explain_folds_the_leg_branch_through_the_shared_merge() {
+        let mut codex_row = entry("codex-at-prompt", "codex");
+        codex_row.inside_leg = Some(state::InsideLegReport {
+            state: state::InsideLegState::Working,
+            seq: 1,
+            reason: None,
+            received_at: NOW_STAMP.into(),
+            ttl_ms: Some(120_000),
+            posture: None,
+        });
+        assert_eq!(explain_rung(&codex_row, now_secs()), "hook");
+        codex_row.screen_state = Some(rep("blocked", NOW_STAMP, 2));
+        assert_eq!(explain_rung(&codex_row, now_secs()), "screen");
     }
 
     // -- decide: write-on-change ------------------------------------------
