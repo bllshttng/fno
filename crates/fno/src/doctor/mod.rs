@@ -50,25 +50,6 @@ const FOREIGN_LEAVES: &[&str] = &[
     "fanout",
 ];
 
-/// The flag arms `doctor_command` answers natively (besides the report
-/// flags). `--context-audit` is deliberately absent: it forwards.
-const NATIVE_FLAG_ARMS: &[&str] = &[
-    "--fix",
-    "--blockers",
-    "--json",
-    "-J",
-    "--source",
-    "--cost-check",
-    "--codex-hooks",
-    "--codex-bind",
-    "--codex-app-server",
-    "--find-transcript",
-    "--context-harness",
-    "--context-entry",
-    "--context-budget",
-    "--context-host",
-];
-
 pub fn classify(args: &[OsString]) -> Option<Claim> {
     if args.first()?.to_str()? != "doctor" {
         return None;

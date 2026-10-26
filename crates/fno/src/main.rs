@@ -1527,11 +1527,14 @@ fn main() {
             &rest,
         )),
         Role::DoctorHome(rest) => std::process::exit(fno::doctor::run(&rest)),
-        Role::DoctorAgentsExec(label, argv) => std::process::exit(fno_agents_exec(
-            label,
-            &argv.iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>(),
-            &[],
-        )),
+        Role::DoctorAgentsExec(label, argv) => {
+            let action: Vec<String> = argv
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            let refs: Vec<&str> = action.iter().map(|s| s.as_str()).collect();
+            std::process::exit(fno_agents_exec(label, &refs, &[]))
+        }
         Role::DoctorSkillDiff(rest) => {
             std::process::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))
         }

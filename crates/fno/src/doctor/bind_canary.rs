@@ -13,8 +13,6 @@ const BIND_WINDOW_S: u64 = 60;
 const PROBE_TIMEOUT_S: u64 = 2;
 const POLL_MS: u64 = 750;
 const DAEMON_INTERVAL_MS: u64 = 2000;
-const BACKFILL_ATTEMPTS: u32 = 5;
-const BACKFILL_DELAY_MS: u64 = 750;
 const PANE_TAIL_LINES: u64 = 200;
 const WAIT_EXITED: i32 = 12;
 const DEFAULT_SESSION: &str = "main";
@@ -177,7 +175,7 @@ fn pane_alive(session: &str, pane_id: i64) -> Option<bool> {
         "0".into(),
     ];
     match run_mux(&args, PROBE_TIMEOUT_S) {
-        Some((12, _, _)) => Some(false),
+        Some((WAIT_EXITED, _, _)) => Some(false),
         Some((0, _, _)) | Some((11, _, _)) => Some(true),
         Some((_, _, _)) => {
             let absent = pane_absent_from_listing(session, pane_id);
@@ -551,7 +549,15 @@ pub(crate) fn codex_bind_report() -> Value {
         });
     }
     let error = if sid.is_empty() {
-        "neither oracle bound within the window".to_string()
+        // Both signals corroborate before naming pane death over a blown
+        // window: the probe's last answer and the loop's own exit verdict.
+        let died_early = binding.pane_alive_at_exit == Some(false)
+            && binding.reason == "pane-died-before-binding";
+        if died_early {
+            "the canary pane died before binding".to_string()
+        } else {
+            "neither oracle bound within the window".to_string()
+        }
     } else {
         let which = binding
             .oracle

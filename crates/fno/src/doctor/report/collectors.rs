@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use super::super::bounded_command;
 use super::{command_call, home_dir, resolve_binary, s, which, Probes};
@@ -23,10 +23,6 @@ pub(crate) struct Report {
 }
 
 impl Report {
-    pub(crate) fn get(&self, key: &str) -> Option<&Value> {
-        self.value.get(key)
-    }
-
     /// `build_report` (doctor.py:4234): assemble the verdict plus every
     /// advisory section, in the frozen field order.
     pub(crate) fn build(source: Option<&str>) -> Report {
@@ -452,42 +448,6 @@ fn installed_pkg_dir() -> Option<PathBuf> {
     }
     let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!line.is_empty()).then(|| PathBuf::from(line))
-}
-
-fn live_tool_env_processes() -> Vec<String> {
-    let Some(pkg) = installed_pkg_dir() else {
-        return Vec::new();
-    };
-    // <tool>/fno/lib/*/site-packages/fno -> the tool env root named `fno`.
-    let mut env_root: Option<PathBuf> = None;
-    let mut cur = pkg.parent();
-    while let Some(dir) = cur {
-        if dir.file_name().map(|n| n == "fno").unwrap_or(false) {
-            env_root = Some(dir.to_path_buf());
-            break;
-        }
-        cur = dir.parent();
-    }
-    let Some(env_root) = env_root else {
-        return Vec::new();
-    };
-    let root = env_root.to_string_lossy().into_owned();
-    let me = format!("{} ", std::process::id());
-    let Ok(out) = Command::new("ps").args(["-axo", "pid=,args="]).output() else {
-        return Vec::new();
-    };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| {
-            !l.is_empty()
-                && l.contains(&root)
-                && !l.starts_with(&me)
-                && !l.contains(" awk -")
-                && !l.contains(" ps -")
-        })
-        .map(str::to_string)
-        .collect()
 }
 
 fn python_content_drift(source: Option<&Path>) -> Option<i64> {

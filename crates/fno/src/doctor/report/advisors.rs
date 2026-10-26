@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::{command_call, home_dir, read_json_object, resolve_binary, resolve_source, state_dir};
+use super::{command_call, home_dir, resolve_binary};
 
 // ---------------------------------------------------------------------------
 // Config reading (the silent-switch inputs)
