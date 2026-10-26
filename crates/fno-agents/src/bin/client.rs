@@ -138,6 +138,19 @@ fn main() {
     if args.first().map(String::as_str) == Some("backlog") {
         std::process::exit(fno_agents::backlog::cli::run(&args[1..]));
     }
+    // cli/src/fno/target_cli.py + state/cli.py + stub_manifest.py serve their
+    // family verbs HERE (x-9516): hidden daemon-free leaves in the graph-get
+    // mold, dispatch by `==` on the first token and never registered
+    // ALL_CLIENT_ACTIONS tokens (the shrink law allows no added token).
+    if args.first().map(String::as_str) == Some("target-gates") {
+        std::process::exit(fno_agents::target_gates::run(&args[1..]));
+    }
+    if args.first().map(String::as_str) == Some("state-verbs") {
+        std::process::exit(fno_agents::state::verbs::run(&args[1..]));
+    }
+    if args.first().map(String::as_str) == Some("stub-manifest") {
+        std::process::exit(fno_agents::stub_manifest::run(&args[1..]));
+    }
     if args.first().map(String::as_str) == Some("question-intake") {
         std::process::exit(fno_agents::question_intake::run_question_intake());
     }

@@ -1123,6 +1123,31 @@ fn run(args: &[String]) -> RunOutput {
 
 /// Print stdout/stderr and return the exit code. Used by `bin/client.rs`.
 pub fn run_kill_check(args: &[String]) -> i32 {
+    // Absorb the Python wrapper's default: with no plan argument, the plan
+    // comes from the manifest's plan_path field (phase/cli.py resolved it via
+    // fno.state.io.read_frontmatter; the manifest format is the one this
+    // crate already reads).
+    if args.is_empty() {
+        let state_file = std::env::var("STATE_FILE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| git_root("git").join(".fno/target-state.md"));
+        let plan_path = std::fs::read_to_string(&state_file)
+            .ok()
+            .and_then(|text| {
+                crate::state::verbs::parse_frontmatter_text(&text)
+                    .0
+                    .remove("plan_path")
+            })
+            .unwrap_or_default();
+        let owned = vec![plan_path];
+        return kill_check_with_args(&owned);
+    }
+    kill_check_with_args(args)
+}
+
+fn kill_check_with_args(args: &[String]) -> i32 {
     let out = run(args);
     if !out.stdout.is_empty() {
         print!("{}", out.stdout);
