@@ -517,3 +517,36 @@ def call_front_json(payload: dict, *, timeout: Optional[float] = None) -> dict:
     if done.returncode != 0:
         raise CommandUnavailable(f"fno inbox law match exited {done.returncode}: {done.stderr.strip()}")
     return json.loads(done.stdout)
+
+
+def find_transcript(session_id: str) -> Optional[Path]:
+    """The native doctor op door's transcript-by-uuid answer; None when absent.
+
+    The deleted Python leg's own walk and the door share one resolver, so the
+    confirm target for `_mux_recipient_transcript` reads through the same
+    surface the self-diagnostic uses: a missing binary, non-zero exit,
+    timeout, or a null path all fail the confirm closed.
+    """
+    import json
+    import subprocess
+
+    binary = resolve_front_binary()
+    if binary is None:
+        return None
+    try:
+        done = subprocess.run(
+            [str(binary), "doctor", "--find-transcript", session_id],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    try:
+        payload = json.loads(done.stdout)
+    except ValueError:
+        return None
+    found = payload.get("path")
+    return Path(found) if isinstance(found, str) and found else None

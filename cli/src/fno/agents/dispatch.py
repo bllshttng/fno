@@ -5215,42 +5215,18 @@ def _mux_recipient_transcript(entry: "AgentEntry") -> Optional[Path]:
     """Locate the mux recipient's OWN claude transcript by session uuid, the
     confirm target for :func:`_mux_pane_send`'s ``confirm`` mode (node).
 
-    Reuses the native doctor module's hidden op door (`fno doctor
-    --find-transcript <uuid>`, the same resolver the self-diagnostic surface
-    reads) rather than writing a second transcript-by-uuid walk (the Rust
-    control.sock lane's own mirror is `find_transcript` in
-    `crates/fno-agents/src/claude_drive.rs`). None when the entry carries no
-    resolvable full session uuid, or no matching transcript file exists --
-    both fail the confirm closed, never open.
+    Reads through :func:`fno.rust_binary.find_transcript`, the native doctor
+    op door (`fno doctor --find-transcript`), the same resolver the Rust
+    control.sock lane mirrors as `find_transcript` in claude_drive.rs. None
+    when the entry carries no resolvable full session uuid, or no matching
+    transcript file exists -- both fail the confirm closed, never open.
     """
-    import json
-    import subprocess
-
-    from fno.rust_binary import resolve_front_binary
+    from fno.rust_binary import find_transcript
 
     session_id = entry.harness_session_id or entry.session_id
     if not session_id:
         return None
-    binary = resolve_front_binary()
-    if binary is None:
-        return None
-    try:
-        done = subprocess.run(
-            [str(binary), "doctor", "--find-transcript", session_id],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if done.returncode != 0:
-        return None
-    try:
-        payload = json.loads(done.stdout)
-    except ValueError:
-        return None
-    found = payload.get("path")
-    return Path(found) if isinstance(found, str) and found else None
+    return find_transcript(session_id)
 
 
 def _mux_content_confirm(

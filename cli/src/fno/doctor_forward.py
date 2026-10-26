@@ -79,14 +79,6 @@ doctor_app.command("bash-census", hidden=True)(bash_census_command)
 doctor_app.command("lanes", hidden=True)(lanes_command)
 
 
-class _TestGroup(typer.core.TyperGroup):
-    """The test command is Click-based; add it outside the typer decorator."""
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.add_command(test_command, name="test")
-
-
 # The family's own leaves: registered so the teaching, not a generic
 # unknown-command error, answers them on a Python-only install.
 
