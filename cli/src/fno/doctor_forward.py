@@ -50,10 +50,9 @@ def _signpost(spelling: str) -> None:
 # Sub-apps (foreign families) ----------------------------------------------
 
 from fno.codemap_cli import app as codemap_app  # noqa: E402
-from fno.evals.cli import evals_app  # noqa: E402
+from fno.evals_cli import evals_app  # noqa: E402
 from fno.events.cli import cli as event_app  # noqa: E402
 from fno.observer.cli import observer_app  # noqa: E402
-from fno.route_cli import inventory_cmd  # noqa: E402
 from fno.scratch_cli import scratch_app  # noqa: E402
 from fno.status_fanout import status_fanout_app  # noqa: E402
 from fno.test_cmd import test_command  # noqa: E402
