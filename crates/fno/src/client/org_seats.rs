@@ -128,17 +128,15 @@ impl Fleet {
 /// with its own failure, on the same 30 s bound the org fold had.
 pub(crate) async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> FleetInputs {
     let mut command = tokio::process::Command::new(crate::server::fno_bin());
-    command
-        .args(crate::org_model::FLEET_TOP_ARGV)
-        .kill_on_drop(true);
+    command.args(crate::org_model::FLEET_TOP_ARGV);
     let (backlog, output) = tokio::join!(
         crate::backlog_model::gather(graph, agents),
-        tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
+        crate::org_model::bounded_output(command, std::time::Duration::from_secs(30))
     );
     let fleet = match output {
-        Err(_) => Err("fleet top timed out after 30s".into()),
-        Ok(Err(error)) => Err(format!("fleet top could not run: {error}")),
-        Ok(Ok(output)) if !output.status.success() => Err(format!(
+        None => Err("fleet top timed out after 30s".into()),
+        Some(Err(error)) => Err(format!("fleet top could not run: {error}")),
+        Some(Ok(output)) if !output.status.success() => Err(format!(
             "fleet top exited {}: {}",
             output
                 .status
@@ -147,7 +145,7 @@ pub(crate) async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> Fl
                 .unwrap_or_else(|| "by signal".into()),
             String::from_utf8_lossy(&output.stderr).trim()
         )),
-        Ok(Ok(output)) => serde_json::from_slice(&output.stdout)
+        Some(Ok(output)) => serde_json::from_slice(&output.stdout)
             .map_err(|e| format!("fleet top invalid JSON: {e}")),
     };
     FleetInputs {

@@ -9,6 +9,45 @@ use serde_json::Value;
 pub const ORG_FOLD_ARGV: &[&str] = &["agents", "org", "chart", "fold"];
 pub const FLEET_TOP_ARGV: &[&str] = &["agents", "fleet", "top", "--machines", "--json"];
 
+/// Run a tab read under `bound`, in its own process group; None on timeout.
+/// The `fno` front waits on a fno-agents child, so killing the front alone
+/// (kill_on_drop) would orphan that leaf on every slow refresh. The deadline
+/// kills the whole group.
+pub(crate) async fn bounded_output(
+    mut command: tokio::process::Command,
+    bound: std::time::Duration,
+) -> Option<std::io::Result<std::process::Output>> {
+    use std::process::Stdio;
+    #[cfg(unix)]
+    command.process_group(0);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => return Some(Err(error)),
+    };
+    let pid = child.id();
+    match tokio::time::timeout(bound, child.wait_with_output()).await {
+        Ok(output) => Some(output),
+        Err(_) => {
+            #[cfg(unix)]
+            if let Some(pid) = pid {
+                // SAFETY: process_group(0) made the child a group leader, so
+                // its pid is the pgid.
+                unsafe {
+                    libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+                }
+            }
+            #[cfg(not(unix))]
+            let _ = pid;
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OrgInputs {
     pub backlog: Inputs,
@@ -53,25 +92,20 @@ pub async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> OrgInputs
         Some(serde_json::json!({"scope": a.role_scope.as_ref()?, "level": a.role_level?, "holder": a.name}))
     }).collect();
     let mut command = tokio::process::Command::new(crate::server::fno_bin());
-    command
-        .args(ORG_FOLD_ARGV)
-        .arg("--graph")
-        .arg(graph)
-        .args([
-            "--teams-json",
-            &serde_json::to_string(&teams).expect("JSON values always serialize"),
-            "--format",
-            "json",
-        ])
-        .kill_on_drop(true);
+    command.args(ORG_FOLD_ARGV).arg("--graph").arg(graph).args([
+        "--teams-json",
+        &serde_json::to_string(&teams).expect("JSON values always serialize"),
+        "--format",
+        "json",
+    ]);
     let (backlog, output) = tokio::join!(
         crate::backlog_model::gather(graph, agents),
-        tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
+        bounded_output(command, std::time::Duration::from_secs(30))
     );
     let fold = match output {
-        Err(_) => Err("org-fold timed out after 30s".into()),
-        Ok(Err(error)) => Err(format!("org-fold could not run: {error}")),
-        Ok(Ok(output)) if !output.status.success() => Err(format!(
+        None => Err("org-fold timed out after 30s".into()),
+        Some(Err(error)) => Err(format!("org-fold could not run: {error}")),
+        Some(Ok(output)) if !output.status.success() => Err(format!(
             "org-fold exited {}: {}",
             output
                 .status
@@ -80,7 +114,7 @@ pub async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> OrgInputs
                 .unwrap_or_else(|| "by signal".into()),
             String::from_utf8_lossy(&output.stderr).trim()
         )),
-        Ok(Ok(output)) => serde_json::from_slice(&output.stdout)
+        Some(Ok(output)) => serde_json::from_slice(&output.stdout)
             .map_err(|e| format!("org-fold invalid JSON: {e}")),
     };
     OrgInputs {
