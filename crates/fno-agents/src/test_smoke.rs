@@ -8,7 +8,7 @@ use crate::test_smoke_discovery as disc;
 use crate::test_smoke_registry as reg;
 use crate::test_smoke_registry::{AMBIENT_MODES, STATE_MODES};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SmokeOpts {
     pub list: bool,
     pub verbose: bool,
@@ -22,6 +22,28 @@ pub struct SmokeOpts {
     pub shard: String,
     pub ambient: String,
     pub state: String,
+}
+
+impl Default for SmokeOpts {
+    /// The Python leg's unparsed defaults: both lanes start clean. The
+    /// derived Default would leave "" in the lane fields, and validate()
+    /// refuses "" as not one of the modes - the shard legs died on it.
+    fn default() -> Self {
+        Self {
+            list: false,
+            verbose: false,
+            keep_going: false,
+            retry_failed: false,
+            changed: false,
+            only: String::new(),
+            skip: String::new(),
+            base: String::new(),
+            head: String::new(),
+            shard: String::new(),
+            ambient: "clean".to_string(),
+            state: "clean".to_string(),
+        }
+    }
 }
 
 /// Parse smoke flags into options; `Err` is the caller's exit-2 line.
