@@ -51,7 +51,7 @@ chmod +x "$T/bin/fno"
 # env to the double too - the smoke runner pins it to the checkout binary.
 cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" "$T/bin/fno-agents"
 chmod +x "$T/bin/fno-agents"
-# HOME is sandboxed: finalize's ledger step runs the real fno.cost._register,
+# HOME is sandboxed: finalize's ledger step runs the real native register leg,
 # which writes ~/.fno/ledger.json. Without this the suite appends fixture rows
 # to the developer's own ledger, and then DEDUPES against it -- so a rerun takes
 # a different branch than the first run and the suite stops being reproducible.

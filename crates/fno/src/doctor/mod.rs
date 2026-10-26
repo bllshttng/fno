@@ -667,7 +667,7 @@ fn cost_check_report() -> i32 {
     };
     let Some(ours) = report::run_session_cost(&session_id) else {
         return skip(&format!(
-            "fno.cost._session_cost unavailable or failed for {session_id}"
+            "session cost leg unavailable or failed for {session_id}"
         ));
     };
     let (theirs, reason) = report::run_ref_cost_tool(&session_id);

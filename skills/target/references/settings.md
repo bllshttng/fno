@@ -77,4 +77,4 @@ cost=$(estimate_cost "opus" "$input_tokens" "$output_tokens")
 
 Append feature-level metrics to `.fno/ledger.json`: feature name, plan path, start/end time, token count, cost_estimate_usd, fork count, PR number, status, iterations.
 
-Per-session cost calculation lives in the in-package `fno.cost._session_cost` module, driven by the finalize writer ([pre-promise.md](pre-promise.md)).
+Per-session cost calculation is native (`fno-agents context-run --session-cost`, forwarded by `fno agent cost`), driven by the finalize writer ([pre-promise.md](pre-promise.md)).

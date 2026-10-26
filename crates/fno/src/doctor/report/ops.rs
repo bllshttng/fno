@@ -72,14 +72,15 @@ pub(crate) fn find_recent_session_with_transcript() -> Option<(String, PathBuf)>
     None
 }
 
-/// Our number: the in-package `_session_cost --json` via `python3 -m`
-/// (doctor.py:914-929). The seam crossing runs the installed fno-py wheel's
-/// cost module under the ambient interpreter.
+/// Our number: the native session-cost leg's --json (doctor.py:914-929 at
+/// the cost family's fold): `context-run --session-cost --json` through the
+/// resolved fno-agents binary.
 pub(crate) fn run_session_cost(session_id: &str) -> Option<f64> {
+    let binary = super::resolve_binary()?;
     let argv = vec![
-        "python3".to_string(),
-        "-m".to_string(),
-        "fno.cost._session_cost".to_string(),
+        binary,
+        "context-run".to_string(),
+        "--session-cost".to_string(),
         "--json".to_string(),
         session_id.to_string(),
     ];

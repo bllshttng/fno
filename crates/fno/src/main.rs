@@ -200,6 +200,9 @@ enum Role {
     DoctorUpdate(Vec<OsString>),
     /// `fno agents history ... --graph ...`: the native session-card reader.
     AgentsHistory(Vec<OsString>),
+    /// `fno whoami` and `fno whoami status`: Python's output plus the
+    /// session receipt (`fno-agents intel --receipt`).
+    Whoami(Vec<OsString>),
     /// `fno agents lead refresh-canon` (the front's rewrite of
     /// `fno agents org refresh-canon`): the beat's canon-doc refresh. The
     /// carried tail is empty by contract; the door resolves the plugin root
@@ -943,6 +946,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
     }
+    if let Some(rest) = fno::whoami_seam::classify(args) {
+        return Role::Whoami(rest);
+    }
     if let Some(rest) = classify_agents_lead_refresh_canon(args) {
         return Role::AgentsLeadRefreshCanon(rest);
     }
@@ -1421,6 +1427,7 @@ fn main() {
         }
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
+        Role::Whoami(rest) => std::process::exit(fno::whoami_seam::run(&rest)),
         Role::AgentsLeadRefreshCanon(rest) => {
             std::process::exit(fno::lead_refresh_canon::run(&rest))
         }
