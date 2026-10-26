@@ -78,7 +78,7 @@ graph = os.environ.get("GRAPH_JSON") or ""
 if not graph:
     try:
         from fno.paths import graph_json as configured_graph
-        from fno.tracker import active_backend_name
+        from fno.graph.api import active_backend_name
 
         if active_backend_name() != "graph":
             sys.exit(6)
