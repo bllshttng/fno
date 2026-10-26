@@ -29,7 +29,10 @@ fn paneless_route_hint_names_both_routes_for_a_drive_tier_row() {
     // `view`, and `focus` share this one builder, so one assertion covers
     // all three doors.
     let drive = paneless_route_hint("fno mux where", &paneless_row("t-live", Some("deadbee1")));
-    assert!(drive.contains("fno agents session peek t-live --follow"), "{drive}");
+    assert!(
+        drive.contains("fno agents session peek t-live --follow"),
+        "{drive}"
+    );
     assert!(drive.contains("fno agents attach t-live"), "{drive}");
     assert!(drive.contains("hosts no live pane"), "{drive}");
 
