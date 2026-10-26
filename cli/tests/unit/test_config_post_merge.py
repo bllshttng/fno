@@ -2,16 +2,15 @@
 
 Covers the mechanical, deterministic half of the post-merge ritual BDD:
 per-project parking-lot-path resolution and the "missing config fails loud /
-never guesses" guarantee. The skill reads these values via `fno config get
-config.post_merge.parking_lot_path`, so the CliRunner tests below exercise the
-exact resolution path the skill uses (in-process, against the source schema).
+never guesses" guarantee, at the model level. The skill reads these values
+through `fno config get`, whose resolution contract the native door owns and
+the parity goldens freeze.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
 
 # ---------------------------------------------------------------------------
@@ -36,18 +35,6 @@ def _load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str):
     from fno import config as config_mod
 
     return config_mod.load_settings()
-
-
-def _config_get(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, content: str):
-    """Invoke `fno config get <key>` in-process against the source schema."""
-    monkeypatch.delenv("FNO_CONFIG", raising=False)
-    settings_file = _write_settings(tmp_path, content)
-    monkeypatch.setenv("FNO_CONFIG", str(settings_file))
-
-
-    from fno.cli import app
-
-    return CliRunner().invoke(app, ["config", "get", key])
 
 
 # ---------------------------------------------------------------------------
@@ -90,26 +77,6 @@ def test_post_merge_parking_lot_path_rejects_dotdot(
             "schema_version: 1\nconfig:\n  post_merge:\n"
             "    parking_lot_path: ../../outside/parking-lot.md\n",
         )
-
-
-# ---------------------------------------------------------------------------
-# CLI resolution path (`fno config get`) - exactly what the skill calls
-# ---------------------------------------------------------------------------
-
-
-def test_config_get_unset_parking_lot_path_is_empty(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC6-ERR: Missing config: `config get` prints an empty value (exit 0).
-
-    The known key resolves to None, which prints as an empty line. The skill
-    treats empty output as 'unset' and fails loud - it never guesses a path.
-    """
-    result = _config_get(
-        tmp_path, monkeypatch, "config.post_merge.parking_lot_path", "schema_version: 1\n"
-    )
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == ""
 
 
 # ---------------------------------------------------------------------------

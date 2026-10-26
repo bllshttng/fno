@@ -685,21 +685,6 @@ def test_fanout_resolver_includes_only_projects_with_enabled_sinks(monkeypatch):
     assert targets[0].interval_seconds == 5  # default status_fanout.interval_secs
 
 
-def test_config_status_sinks_json_command(monkeypatch):
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.active_backlog as ab
-    from fno.config import SettingsModel
-
-    monkeypatch.setattr(ab, "_workspace_paths", lambda: {"p": "/p"})
-    monkeypatch.setattr("fno.config.load_settings_for_repo",
-                        lambda root: SettingsModel(
-                            status_sinks=[{"name": "s", "type": "backlog-progress"}]))
-    res = CliRunner().invoke(app, ["config", "status-sinks", "--json"], catch_exceptions=False)
-    assert res.exit_code == 0
-    import json as _json
-    payload = _json.loads(res.stdout)
-    assert payload == [{"project": "p", "cwd": "/p", "interval_seconds": 5}]
 
 
 # ── review follow-ups: same-second tiebreak, tick_cmd surface, new validators ─

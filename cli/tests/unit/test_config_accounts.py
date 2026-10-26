@@ -1,21 +1,17 @@
 """Tests for accounts configuration resolution.
 
-Tests that `fno config get`, `set`, `unset`, and `doctor` can see and manipulate
-the `[accounts]` namespace (including `accounts.quota.defer_dispatch`), and
-properly aliases the pre-rename `providers` namespace.
+Tests that `doctor` can see the `[accounts]` namespace (including
+`accounts.quota.defer_dispatch`). The `fno config get` answers, including the
+pre-rename `providers` alias, are the native door's contract, frozen by the
+parity goldens.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from fno.cli import app
 from fno.setup.doctor import check_accounts
-
-
-runner = CliRunner()
 
 
 def _write_config(tmp_path: Path, content: str) -> Path:
@@ -24,15 +20,6 @@ def _write_config(tmp_path: Path, content: str) -> Path:
     f = d / "config.toml"
     f.write_text(content, encoding="utf-8")
     return f
-
-
-def test_get_legacy_providers_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    cfg = _write_config(tmp_path, '[accounts.quota]\ndefer_dispatch = true\n')
-    monkeypatch.setenv("FNO_CONFIG", str(cfg))
-
-    r = runner.invoke(app, ["config", "get", "providers.quota.defer_dispatch"])
-    assert r.exit_code == 0, r.output
-    assert r.stdout.strip() == "True"
 
 
 def test_doctor_check_accounts_invalid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
