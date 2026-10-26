@@ -952,6 +952,7 @@ mod tests {
         // An unreachable primary is an error the tick logs, never a panic.
         assert!(sync_with(
             &b,
+            &bare_cwds(),
             &test_primary::dead(),
             "b",
             home.path(),
