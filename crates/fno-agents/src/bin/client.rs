@@ -155,6 +155,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("surface-check") {
         std::process::exit(fno_agents::surface_check::run_surface_check(&args[1..]));
     }
+    // executor-route: the parser door; body in executor_route.rs (registers no command).
+    if args.first().map(String::as_str) == Some("executor-route") {
+        std::process::exit(fno_agents::executor_route::run(&args[1..]));
+    }
     if args.first().map(String::as_str) == Some("wave") {
         std::process::exit(fno_agents::wave::run(&args[1..]));
     }
@@ -180,15 +184,11 @@ fn main() {
     if args.first().map(String::as_str) == Some("pr") {
         std::process::exit(fno_agents::pr_front::run(&args[1..]));
     }
-    // Permanent GitHub-fact rows (merged PRs, repo metadata); reconcile and
-    // base-lineage reach it through command_call; transport-only.
-    if args.first().map(String::as_str) == Some("gh-cache") {
-        std::process::exit(fno_agents::gh_cache::run());
-    }
-    // `target-status`: the orientation report door; Python's `fno do target
-    // status` reaches it through command_call, transport-only.
-    if args.first().map(String::as_str) == Some("target-status") {
-        std::process::exit(fno_agents::target_orient::run_status(&args[1..]));
+    // gh-cache, target-status: the early transport arms; client_transport.rs
+    // holds their bodies and comments. worktree-reapable and launch-workdir
+    // stay here: their own ports own the moves into their modules.
+    if let Some(code) = fno_agents::client_transport::transport_early_arms(&args) {
+        std::process::exit(code);
     }
     // `launch-workdir`: the spawn door's launch-cwd resolution (see
     // launch_workdir.rs doc). Transport-only: registers no client action; Python's

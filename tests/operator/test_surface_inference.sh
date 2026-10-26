@@ -6,7 +6,8 @@
 #   AC1.2-EDGE empty stdin defaults to 'do'
 #
 # Locked patterns (from plan 2026-05-04-operator-impeccable-executor;
-# see fno.executor._surface for the canonical list):
+# see crates/fno-agents/src/executor_route.rs for the canonical list, the
+# single source of truth since the worker-family port deleted the Python leg):
 #   **/*.tsx, **/*.jsx
 #   components/**, **/components/**
 #   routes/**, **/routes/**
@@ -18,16 +19,34 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PKG_SRC="$REPO_ROOT/cli/src"
-if [[ -f "$PKG_SRC/fno/executor/_surface.py" ]]; then
-    export PYTHONPATH="${PKG_SRC}${PYTHONPATH:+:${PYTHONPATH}}"
+if [[ -f "$REPO_ROOT/hooks/lib/agents-bin.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/hooks/lib/agents-bin.sh"
+else
+    fno_agents_bin() {
+        local root="${1:-.}"
+        if [[ -n "${FNO_AGENTS_BIN:-}" ]] && [[ -x "${FNO_AGENTS_BIN}" ]]; then
+            printf '%s' "${FNO_AGENTS_BIN}"
+        elif [[ -x "$root/crates/fno-agents/target/release/fno-agents" ]]; then
+            printf '%s' "$root/crates/fno-agents/target/release/fno-agents"
+        elif [[ -x "$root/crates/fno-agents/target/debug/fno-agents" ]]; then
+            printf '%s' "$root/crates/fno-agents/target/debug/fno-agents"
+        else
+            command -v fno-agents || printf ''
+        fi
+    }
+fi
+BIN="$(fno_agents_bin "$REPO_ROOT")"
+if [[ -z "$BIN" ]]; then
+    echo "test_surface_inference: SKIP - fno-agents binary not built (FNO_AGENTS_BIN or cargo build crates/fno-agents)"
+    exit 0
 fi
 
 PASS=0
 FAIL=0
 
 infer() {
-    printf '%s\n' "$1" | python3 -m fno.executor._surface
+    printf '%s\n' "$1" | "$BIN" executor-route surface
 }
 
 assert() {
@@ -77,25 +96,25 @@ assert "*/src/styles/ in monorepo"  "impeccable" "$(infer 'packages/web/src/styl
 echo ""
 echo "Trailing-newline robustness (Gemini review fix)"
 # When stdin lacks a trailing newline, the last line MUST still be processed.
-result=$(printf 'src/components/Foo.tsx' | python3 -m fno.executor._surface)
+result=$(printf 'src/components/Foo.tsx' | "$BIN" executor-route surface)
 assert "no-trailing-newline frontend" "impeccable" "$result"
-result=$(printf 'cli/src/loop.py' | python3 -m fno.executor._surface)
+result=$(printf 'cli/src/loop.py' | "$BIN" executor-route surface)
 assert "no-trailing-newline backend"  "do"         "$result"
 
 echo ""
 echo "AC1.2-EDGE: empty stdin -> do"
-result=$(printf '' | python3 -m fno.executor._surface)
+result=$(printf '' | "$BIN" executor-route surface)
 assert "empty input"               "do" "$result"
 
-result=$(printf '\n\n' | python3 -m fno.executor._surface)
+result=$(printf '\n\n' | "$BIN" executor-route surface)
 assert "blank lines only"          "do" "$result"
 
 echo ""
 echo "Mixed file lists: any frontend match wins"
-result=$(printf 'cli/src/loop.py\nsrc/components/Foo.tsx\n' | python3 -m fno.executor._surface)
+result=$(printf 'cli/src/loop.py\nsrc/components/Foo.tsx\n' | "$BIN" executor-route surface)
 assert "py + tsx -> impeccable"    "impeccable" "$result"
 
-result=$(printf 'src/utils/format.ts\ncli/src/loop.py\n' | python3 -m fno.executor._surface)
+result=$(printf 'src/utils/format.ts\ncli/src/loop.py\n' | "$BIN" executor-route surface)
 assert "ts util + py -> do"        "do" "$result"
 
 echo ""

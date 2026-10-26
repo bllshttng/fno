@@ -398,14 +398,14 @@ def drain_cmd(
     nonzero on purpose - a walk that cannot see the scope must not read the
     failure as drained.
     """
+    from fno import paths
     from fno.graph.store import GraphCorruptError, GraphUnreadableError, StoreUnavailable
     from fno.lead import drain_cache
     from fno.lead.scope import scope_undelivered
-    from fno.tracker import active_backend_name
-    from fno.tracker.metadata import ExternalMetadataUnavailable
-    from fno.tracker.metadata import _graph_store_path, read_entries
+    from fno.graph.api import active_backend_name
+    from fno.graph.api import ExternalMetadataUnavailable, read_entries
 
-    path = _graph_store_path()
+    path = paths.graph_json()
     ident = drain_cache.graph_ident(path) if active_backend_name() == "graph" else None
     if ident is not None:
         cached = drain_cache.load(scope, ident)
