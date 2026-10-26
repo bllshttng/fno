@@ -14,7 +14,10 @@ use crate::test_smoke_registry as reg;
 /// as-is: bash reports them rc 127, recorded as RED.
 fn census_entries() -> Vec<String> {
     let Ok(override_file) = std::env::var("CENSUS_DEFERRED_FILE") else {
-        return reg::DISCOVERY_DEFERRED.iter().map(|s| s.to_string()).collect();
+        return reg::DISCOVERY_DEFERRED
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
     };
     let text = match std::fs::read_to_string(&override_file) {
         Ok(t) => t,
@@ -82,7 +85,11 @@ fn run_bounded(
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                return (status.code().unwrap_or(1), start.elapsed().as_secs_f64(), false);
+                return (
+                    status.code().unwrap_or(1),
+                    start.elapsed().as_secs_f64(),
+                    false,
+                );
             }
             Ok(None) => {}
         }
@@ -102,8 +109,11 @@ fn census_kill_bound(tranche: usize) -> usize {
     let raw = std::env::var("CENSUS_KILL_BOUND_S").ok();
     let bound = match &raw {
         None => reg::CENSUS_KILL_BOUND_S_DEFAULT,
-        Some(text) => match text.parse::<usize>() {
-            Ok(v) => v,
+        Some(text) => match text.parse::<i64>() {
+            // i64, not usize: the Python leg accepted a negative and let the
+            // tranche floor clamp it; a usize parse would turn that into a
+            // default-bound surprise instead.
+            Ok(v) => v.clamp(0, i64::from(u32::MAX)) as usize,
             Err(_) => {
                 eprintln!(
                     "census: ignoring non-integer CENSUS_KILL_BOUND_S={text:?}, using {}",
@@ -180,6 +190,9 @@ pub fn run(args: &[String]) -> i32 {
         }
         return 1;
     }
-    eprintln!("census: no GREEN entries; {} held as RED/SLOW", entries.len());
+    eprintln!(
+        "census: no GREEN entries; {} held as RED/SLOW",
+        entries.len()
+    );
     0
 }
