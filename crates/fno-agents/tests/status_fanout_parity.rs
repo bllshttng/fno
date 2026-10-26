@@ -22,6 +22,8 @@ use fno_agents::status_fanout::{
     python_json_compact_ascii, run_tick, DispatchFn, FanoutTuning, HttpPost, HttpResult,
     SinkConfig, StreamFn, TickResult,
 };
+use fno_agents::wake_read::python_json_default;
+use std::cell::RefCell;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -67,7 +69,7 @@ fn sink_cfg(
                 "match" => {
                     for (mk, mv) in v.as_object().unwrap() {
                         s.match_keys
-                            .insert(mk.clone(), mv.as_str().unwrap().to_string());
+                            .insert(mk.clone(), mv.clone());
                     }
                 }
                 "template" => s.template = v.as_str().map(str::to_string),
@@ -148,9 +150,10 @@ impl Sandbox {
         std::env::set_var("FNO_NO_CANONICAL_CONFIG", "1");
         let _ = std::env::remove_var("FNO_SPACES_DIR");
         let _ = std::env::remove_var("FNO_CONFIG");
+        let state = fno_agents::paths::space_dir(&root).join("status-sinks");
         Sandbox {
             root,
-            state: fno_agents::paths::space_dir(&root).join("status-sinks"),
+            state,
             _guard,
         }
     }
@@ -303,8 +306,7 @@ fn run_tick_case(sb: &Sandbox, label: &str, rows: &[Value], sinks: &[SinkConfig]
     );
     let record = projection(&result, &sb.state, label);
     let dumped = fno_agents::status_fanout::python_json_compact_ascii(&record);
-    assert_golden(
-        "status_fanout",
+    assert_fanout_golden(
         label,
         &Golden {
             exit: Some(0),
@@ -312,6 +314,92 @@ fn run_tick_case(sb: &Sandbox, label: &str, rows: &[Value], sinks: &[SinkConfig]
         },
         None,
     );
+}
+
+/// The Python capture driver's `asdict(result)`: the tick outcome as the
+/// record's `result` field (field names are the deleted leg's dataclass).
+fn tick_result_value(result: &TickResult) -> Value {
+    json!({
+        "sinks": result
+            .sinks
+            .iter()
+            .map(|s| {
+                json!({
+                    "name": s.name,
+                    "matched": s.matched,
+                    "dispatched": s.dispatched,
+                    "dropped": s.dropped,
+                    "short_circuited": s.short_circuited,
+                    "new_cursor": s.new_cursor,
+                })
+            })
+            .collect::<Vec<_>>(),
+        "skipped_lines": result.skipped_lines,
+        "rows_read": result.rows_read,
+        "locked_out": result.locked_out,
+        "lease_lost": result.lease_lost,
+        "undeliverable_sinks": result.undeliverable_sinks,
+        "parked_sinks": result.parked_sinks,
+    })
+}
+
+/// One adapter case, the capture driver's shape: fresh state, a pre-seeded
+/// cursor at the fixture event's instant with occurrence 0, the single event
+/// as the journal, one tick, then the frozen `{"calls": [...]}` record. The
+/// driver serialized with `json.dumps(..., sort_keys=True)` default
+/// separators, so keys go in sorted order through `python_json_default`.
+fn adapter_case(
+    sb: &Sandbox,
+    label: &str,
+    sink: SinkConfig,
+    post: &mut RecordingPost,
+    ev: &Value,
+) {
+    let _ = std::fs::remove_dir_all(&sb.state);
+    std::fs::create_dir_all(&sb.state).unwrap();
+    let cursor = json!({"ts": "2026-01-01T00:00:02Z", "n": 0}).to_string();
+    std::fs::write(sb.state.join(format!("{}.cursor", sink.name)), cursor).unwrap();
+    let journal = fno_agents::paths::events_path(&sb.root);
+    std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
+    std::fs::write(&journal, format!("{ev}\n")).unwrap();
+    let mut dispatch_seam: Box<DispatchFn> =
+        Box::new(|_sink, _event| ("delivered".to_string(), String::new()));
+    let _ = run_tick(
+        &sb.root,
+        std::slice::from_ref(&sink),
+        &FanoutTuning::default(),
+        false,
+        post,
+        Some(&mut *dispatch_seam),
+        None,
+    );
+    let calls: Vec<Value> = post
+        .calls
+        .borrow()
+        .iter()
+        .map(|(url, body, content_type)| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("body".into(), body.clone());
+            obj.insert("content_type".into(), Value::String(content_type.clone()));
+            obj.insert("url".into(), Value::String(url.clone()));
+            Value::Object(obj)
+        })
+        .collect();
+    post.calls.borrow_mut().clear();
+    let record = json!({"calls": calls});
+    assert_fanout_golden(
+        label,
+        &Golden {
+            exit: Some(0),
+            streams: vec![python_json_default(&record)],
+        },
+    );
+}
+
+/// Every status_fanout golden lives under the capture driver's `fanout `
+/// label prefix; the shared helper takes the label verbatim.
+fn assert_fanout_golden(label: &str, golden: &Golden) {
+    assert_golden("status_fanout", &format!("fanout {label}"), golden, None);
 }
 
 /// A dispatch script entry for one sink.
@@ -601,8 +689,7 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
     ] {
         let rendered = fno_agents::status_fanout::render_template(Some(template), &ev);
         let record = json!({"rendered": rendered});
-        assert_golden(
-            "status_fanout",
+        assert_fanout_golden(
             &format!("template {label}"),
             &Golden {
                 exit: Some(0),
@@ -643,8 +730,7 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
     let eof = fno_agents::status_fanout::eof_cursor(&journal);
     let eof_empty = fno_agents::status_fanout::eof_cursor(&sb.root.join("none.jsonl"));
     let record = json!({"eof": eof, "eof_empty": eof_empty});
-    assert_golden(
-        "status_fanout",
+    assert_fanout_golden(
         "eof cursor values",
         &Golden {
             exit: Some(0),
@@ -662,8 +748,7 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
         .env("FNO_CONFIG", sb.root.join("no-config.toml"))
         .output()
         .unwrap();
-    assert_golden(
-        "status_fanout",
+    assert_fanout_golden(
         "cli doctor event fanout tick dry run",
         &Golden {
             exit: out.status.code(),
