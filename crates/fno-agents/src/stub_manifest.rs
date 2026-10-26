@@ -115,18 +115,53 @@ enum LoadError {
     Malformed(String),
 }
 
+/// The deadline Python's `_run_contract_test` bounded the subprocess with:
+/// a contract test that waits on input or deadlocks must not strand the
+/// draft PR and its reconciliation worker forever.
+const CONTRACT_TEST_TIMEOUT_SECS: u64 = 600;
+
 /// Run the blocker's contract-test command in the dependent's root. The
 /// command is a trusted artifact written by the first-pass worker (same
 /// trust boundary as a Makefile target), so it runs via the shell. Returns
 /// (passed, "exit N: tail").
 fn run_contract_test(cmd: &str, root: &str) -> (bool, String) {
-    let output = Command::new("sh")
+    let mut child = match Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .current_dir(root)
-        .output();
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => return (false, format!("contract-test did not complete: {e}")),
+    };
+    // Poll instead of `.output()`: a deadline needs try_wait, and the
+    // kill-plus-drain on expiry mirrors subprocess.TimeoutExpired.
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(CONTRACT_TEST_TIMEOUT_SECS);
+    let output = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break child.wait_with_output().ok(),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return (
+                        false,
+                        format!(
+                            "contract-test did not complete: timed out after {}s",
+                            CONTRACT_TEST_TIMEOUT_SECS
+                        ),
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            Err(e) => return (false, format!("contract-test did not complete: {e}")),
+        }
+    };
     let output = match output {
-        Ok(out) => out,
+        Some(out) => out,
         Err(e) => return (false, format!("contract-test did not complete: {e}")),
     };
     let code = output.status.code().unwrap_or(-1);

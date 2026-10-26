@@ -702,8 +702,13 @@ fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
 
 /// `fno do target <verb> ...`: the nine family verbs claim lexically
 /// beside init/start/blast-check, so they never reach the Python forward.
-/// The tail rides to the family door under the fno-agents binary.
+/// The tail rides to the family door under the fno-agents binary. A root
+/// `-J`/`--json` before the group peels and re-enters the tail only for the
+/// doors that parse it (status, denominator-ratio); the rest read the same
+/// accept-and-ignore the global Python flag kept.
 fn classify_target_family(args: &[OsString]) -> Option<(&'static [&'static str], Vec<OsString>)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
     if args.len() < 3 || args[0].to_str()? != "do" || args[1].to_str()? != "target" {
         return None;
     }
@@ -719,23 +724,43 @@ fn classify_target_family(args: &[OsString]) -> Option<(&'static [&'static str],
         "denominator-ratio" => &["target-gates", "denominator-ratio"],
         _ => return None,
     };
+    // A root `-J`/`--json` re-enters the tail only for the doors that parse
+    // it: status (the argv mode) and denominator-ratio. The rest read the
+    // same accept-and-ignore the global Python flag kept, so the flag drops.
+    if root_json && matches!(args[2].to_str()?, "status" | "denominator-ratio") {
+        let mut tail: Vec<OsString> = Vec::with_capacity(args.len() - 2);
+        tail.push(OsString::from("--json"));
+        tail.extend(args[3..].iter().cloned());
+        return Some((door, tail));
+    }
     Some((door, args[3..].to_vec()))
 }
 
 /// `fno do state <anything>`: the whole group claims; the tail
-/// rides to the state-verbs door.
+/// rides to the state-verbs door. A root `-J`/`--json` peels and re-enters
+/// the tail, which every verb parses.
 fn classify_state_family(args: &[OsString]) -> Option<(&'static [&'static str], Vec<OsString>)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
     if args.first().and_then(|a| a.to_str()) != Some("do")
         || args.get(1).and_then(|a| a.to_str()) != Some("state")
     {
         return None;
     }
-    Some((&["state-verbs"], args[2..].to_vec()))
+    let mut tail: Vec<OsString> = args[2..].to_vec();
+    if root_json {
+        tail.insert(0, OsString::from("--json"));
+    }
+    Some((&["state-verbs"], tail))
 }
 
 /// `fno do phase <anything>`: the whole group claims (kill-check is
-/// the group's one verb, and it strips its own name from the tail).
+/// the group's one verb, and it strips its own name from the tail). A root
+/// `-J`/`--json` peels and drops: kill-check parses no JSON flag, and the
+/// global Python flag it accepted was inert.
 fn classify_phase_family(args: &[OsString]) -> Option<(&'static [&'static str], Vec<OsString>)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
     if args.first().and_then(|a| a.to_str()) != Some("do")
         || args.get(1).and_then(|a| a.to_str()) != Some("phase")
     {
@@ -746,21 +771,22 @@ fn classify_phase_family(args: &[OsString]) -> Option<(&'static [&'static str], 
 
 /// `fno do pr stub-manifest <verb> ...` and the bare `fno pr stub-manifest
 /// <verb> ...` legacy spelling: the manifest verbs claim ahead of the do-pr
-/// lexical claims, whose handbacks narrow to watch only.
+/// lexical claims, whose handbacks narrow to watch only. The two spellings
+/// put `stub-manifest` at different offsets, so each matches its own head;
+/// a root `-J`/`--json` peels and drops (the manifest verbs emit JSON by
+/// default and ignored the global flag).
 fn classify_pr_stub_manifest(
     args: &[OsString],
 ) -> Option<(&'static [&'static str], Vec<OsString>)> {
-    if args.len() < 4 {
-        return None;
-    }
-    let first = args[0].to_str()?;
-    let second = args[1].to_str()?;
-    let third = args[2].to_str()?;
-    let matches_head = (first == "do" && second == "pr") || first == "pr";
-    if !matches_head || third != "stub-manifest" {
-        return None;
-    }
-    Some((&["stub-manifest"], args[3..].to_vec()))
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    let first = args.first()?.to_str()?;
+    let tail: &[OsString] = match (first, args.get(1)?.to_str()?, args.get(2)?.to_str()?) {
+        ("do", "pr", "stub-manifest") => &args[3..],
+        ("pr", "stub-manifest", _) => &args[2..],
+        _ => return None,
+    };
+    Some((&["stub-manifest"], tail.to_vec()))
 }
 
 /// The deprecated bare `fno stub-manifest <verb> ...` spelling: the
@@ -769,6 +795,8 @@ fn classify_pr_stub_manifest(
 fn classify_bare_stub_manifest(
     args: &[OsString],
 ) -> Option<(&'static [&'static str], Vec<OsString>)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
     if args.first().and_then(|a| a.to_str()) != Some("stub-manifest") {
         return None;
     }
@@ -1800,6 +1828,26 @@ mod tests {
             decide_role(&os(&["stub-manifest", "write", "--node", "x-1"]), false),
             Role::Forward
         );
+        // The bare `pr stub-manifest` spelling puts the marker one word
+        // earlier than the grouped form; both claim, neither forwards.
+        assert_ne!(
+            decide_role(&os(&["pr", "stub-manifest", "list"]), false),
+            Role::Forward
+        );
+        assert_eq!(
+            decide_role(&os(&["pr", "stub-manifest", "list"]), false),
+            decide_role(&os(&["do", "pr", "stub-manifest", "list"]), false)
+        );
+        // The root `-J`/`--json` the global Python flag carried peels before
+        // the family claim and re-enters the tail for the JSON doors.
+        assert_eq!(
+            decide_role(&os(&["--json", "do", "state", "show"]), false),
+            decide_role(&os(&["-J", "do", "state", "show"]), false)
+        );
+        assert!(matches!(
+            decide_role(&os(&["--json", "do", "state", "show"]), false),
+            Role::TargetFamily(_, _)
+        ));
         // A non-pr `do` tree stays with its owners.
         assert_ne!(
             decide_role(&os(&["do", "wizard", "--json"]), false),

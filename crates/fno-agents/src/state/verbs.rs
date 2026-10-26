@@ -138,9 +138,10 @@ pub fn serialize_frontmatter(map: &BTreeMap<String, String>, body: &str) -> Stri
 }
 
 /// Atomic replace: temp file in the same directory, fsync, rename. The
-/// manifest write races only with other manifest writers, which the
-/// write-once rule makes rare enough that the rename's atomicity is the
-/// guarantee that matters (a reader sees the old or the new file, never torn).
+/// calling verb holds the `<manifest>.lock` flock across the whole
+/// read-check-write transaction (the Python `atomic_write` flocked the same
+/// path), so a reader sees the old or the new file, never torn, and two
+/// writers never interleave.
 fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
@@ -319,6 +320,18 @@ pub fn run_set(args: &[String]) -> i32 {
         usage_fail("state set: --field is required");
     }
     let state_path = resolve_state_path(path, type_);
+    // The read-check-write transaction holds the same `<manifest>.lock` flock
+    // the claim handover's refresh takes (`claim_cli::manifest_refresh`):
+    // atomic rename prevents torn reads, not lost updates, and a concurrent
+    // refresh racing a first-fill must not erase either side's write. A
+    // contended lock is a failed write, not a race.
+    let _lock = match crate::claim_cli::manifest_refresh::lock_manifest(&state_path) {
+        Some(lock) => lock,
+        None => {
+            eprintln!("error: state write failed: manifest stayed locked");
+            return 1;
+        }
+    };
     let (mut map, body) = match read_frontmatter(&state_path) {
         Some(pair) => pair,
         None => {
@@ -444,6 +457,13 @@ pub fn run_init(args: &[String]) -> i32 {
         );
         return 1;
     }
+    let _lock = match crate::claim_cli::manifest_refresh::lock_manifest(&out_path) {
+        Some(lock) => lock,
+        None => {
+            eprintln!("error: state write failed: manifest stayed locked");
+            return 1;
+        }
+    };
     let mut defaults = BTreeMap::new();
     defaults.insert("fno_id".to_string(), String::new());
     defaults.insert("harness".to_string(), String::new());
@@ -490,6 +510,13 @@ pub fn run_archive(args: &[String]) -> i32 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default();
+    let _lock = match crate::claim_cli::manifest_refresh::lock_manifest(&state_path) {
+        Some(lock) => lock,
+        None => {
+            eprintln!("error: archive rename failed: manifest stayed locked");
+            return 1;
+        }
+    };
     let stem = state_path
         .file_stem()
         .and_then(|s| s.to_str())

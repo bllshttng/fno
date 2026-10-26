@@ -23,9 +23,27 @@
 //! - `target-handoff-prepare`: the archived-manifest handoff op, receipts 0 /
 //!   10 restored / 12 unrestored.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
+
+// The one regex engine the crate already ships; three token shapes from
+// Python's `_TARGET_NODE_TOKEN_RE` + the hex and kebab matchers.
+fn node_token_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"(?i)^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$").unwrap())
+}
+
+fn bare_hex_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"^[0-9a-fA-F]{4,8}$").unwrap())
+}
+
+fn kebab_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"^[a-z0-9]+(-[a-z0-9]+)+$").unwrap())
+}
 
 /// The gate refusal code the shell callers read as "this gate refused"
 /// (target_cli.py REVIEW_GATE_REFUSED). Every other non-zero reads as a
@@ -42,7 +60,7 @@ fn env_input(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-fn resolve_repo_root() -> PathBuf {
+pub(crate) fn resolve_repo_root() -> PathBuf {
     if let Ok(root) = std::env::var("FNO_REPO_ROOT") {
         if !root.trim().is_empty() {
             return PathBuf::from(root);
@@ -104,12 +122,20 @@ fn graph_get_row(input: &str) -> Option<serde_json::Value> {
 // check-review-gate
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn load_config(root: &Path) -> toml::Value {
-    let path = root.join(".fno").join("config.toml");
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| toml::from_str(&text).ok())
-        .unwrap_or(toml::Value::Table(Default::default()))
+/// The deep-merged `config.review` table, read through the same candidate
+/// chain the Python loader walked (`$FNO_CONFIG` sole-when-set, project,
+/// canonical checkout, global): `agents_config::config_value_deep` is the
+/// Rust twin of `config_io._deep_merge`, so a value `fno config` resolves
+/// resolves here identically. No candidate carrying the key degrades to an
+/// empty table: a config without a review gate is a no-op gate, the
+/// fail-open the Python verb kept.
+fn load_review_config() -> toml::Value {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let review = crate::agents_config::config_value_deep(&cwd, &["review"])
+        .unwrap_or(toml::Value::Table(Default::default()));
+    let mut root = toml::map::Map::new();
+    root.insert("review".to_string(), review);
+    toml::Value::Table(root)
 }
 
 fn config_str_list(config: &toml::Value, key: &str) -> Vec<String> {
@@ -123,6 +149,48 @@ fn config_str_list(config: &toml::Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The `descriptors` payload the review-level capability door reads: the
+/// project's `review.reviewer_registry` union the built-in reviewers,
+/// built-ins winning a name collision (the `resolvable_reviewers` contract:
+/// a project must not redefine `sigma` as a self-cert). Each built-in
+/// composes the parity-pinned invocation row (`reviewer_entry`) with its
+/// `requires` column from `REVIEWER_BUILTIN_REQUIRES`.
+fn descriptors_payload(review: &toml::Value) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    if let Some(registry) = review.get("reviewer_registry").and_then(|v| v.as_table()) {
+        for (name, descriptor) in registry {
+            out.insert(name.clone(), toml_to_json(descriptor));
+        }
+    }
+    for (name, requires) in crate::loopcheck::self_review_floor::REVIEWER_BUILTIN_REQUIRES {
+        let Some((invocation, self_cert, per_harness)) =
+            crate::loopcheck::self_review_floor::reviewer_entry(name)
+        else {
+            continue;
+        };
+        let mut descriptor = serde_json::json!({
+            "kind": "local-attestation",
+            "requires": requires,
+            "invocation": invocation,
+            "asserts": if *self_cert { "self-cert" } else { "review-evidence" },
+        });
+        if !per_harness.is_empty() {
+            let mut invocations = serde_json::Map::new();
+            for pair in per_harness.split(';') {
+                if let Some((harness, command)) = pair.split_once('=') {
+                    invocations.insert(
+                        harness.to_string(),
+                        serde_json::Value::String(command.to_string()),
+                    );
+                }
+            }
+            descriptor["invocations"] = serde_json::Value::Object(invocations);
+        }
+        out.insert((*name).to_string(), descriptor);
+    }
+    serde_json::Value::Object(out)
 }
 
 /// The reviewers-plus-peers axis. The Python verb loaded the configured
@@ -139,10 +207,7 @@ fn check_review_gate(config: &toml::Value) -> i32 {
         .get("review")
         .cloned()
         .unwrap_or(toml::Value::Table(Default::default()));
-    let descriptors: serde_json::Value = review
-        .get("reviewer_registry")
-        .map(toml_to_json)
-        .unwrap_or(serde_json::json!({}));
+    let descriptors = descriptors_payload(&review);
     let peer_identity = review
         .get("peer_identity")
         .map(toml_to_json)
@@ -248,7 +313,7 @@ fn toml_to_json(value: &toml::Value) -> serde_json::Value {
 /// `fno-agents target-check-review-gate`
 pub fn run_check_review_gate(args: &[String]) -> i32 {
     let _ = args;
-    let config = load_config(&resolve_repo_root());
+    let config = load_review_config();
     let reviewers_axis = check_review_gate(&config);
     if reviewers_axis != 0 {
         return reviewers_axis;
@@ -260,26 +325,171 @@ pub fn run_check_review_gate(args: &[String]) -> i32 {
 // check-contained
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// The graph rows one resolution reads, in-process: the store-keeper read
+/// Python's `_graph_entries_or_none` served. `Err` names an unreadable
+/// store, and the CALLER owns the failure policy (the hold gate refuses,
+/// the containment check proceeds fail-open).
+fn graph_entries() -> Result<Vec<serde_json::Value>, String> {
+    let graph_path = crate::graph_get::graph_path_for(
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    );
+    crate::graph_store::read_rows_where(
+        &graph_path,
+        &crate::backlog::RowQuery {
+            with_blockers: true,
+            ..Default::default()
+        },
+    )
+    .map(|rows| crate::backlog::api::rows_in(&rows))
+    .map_err(|error| error.to_string())
+}
+
+/// True when the input shape can name a backlog node: canonical/compact
+/// prefix-hex, bare hex, or a kebab slug. Spaced free text and paths cannot
+/// name one, so an unreadable graph stays proceed-able for them (Python's
+/// `_input_may_name_a_node`).
+fn input_may_name_a_node(text: Option<&str>) -> bool {
+    let Some(text) = text else {
+        return false;
+    };
+    text.split().any(|tok| {
+        node_token_re().is_match(tok) || bare_hex_re().is_match(tok) || kebab_re().is_match(tok)
+    })
+}
+
+/// The absolute comparison the Python plan leg ran: expanduser + resolve on
+/// both sides. `Path::canonicalize` fails on a missing file, so the fallback
+/// normalizes lexically (Python's resolve is not strict either).
+fn plan_key(path: &str) -> PathBuf {
+    let expand = |raw: &str| -> PathBuf {
+        match raw.strip_prefix("~/") {
+            Some(rest) => std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(raw))
+                .join(rest),
+            None => PathBuf::from(raw),
+        }
+    };
+    let joined = {
+        let p = expand(path);
+        if p.is_absolute() {
+            p
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(p)
+        }
+    };
+    joined.canonicalize().unwrap_or_else(|_| {
+        let mut out = PathBuf::from("/");
+        for component in joined.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    out.pop();
+                }
+                std::path::Component::CurDir | std::path::Component::RootDir => {}
+                other => out.push(other),
+            }
+        }
+        out
+    })
+}
+
+/// The exact-match resolver Python's `_resolve_dispatch_node` ran: node
+/// tokens in the input first (exactly one id match wins), then the plan leg
+/// comparing TARGET_PLAN_PATH against every entry's plan_path with the
+/// contained-owner narrowing. `None` is unresolvable: free text and fresh
+/// plans PROCEED, they never refuse.
+fn resolve_dispatch_node(
+    input: Option<&str>,
+    plan: Option<&str>,
+    entries: &[serde_json::Value],
+) -> Option<serde_json::Value> {
+    let node_tokens: HashSet<String> = input
+        .into_iter()
+        .flat_map(|t| t.split())
+        .filter(|tok| node_token_re().is_match(tok))
+        .map(|tok| tok.to_ascii_lowercase())
+        .collect();
+    if !node_tokens.is_empty() {
+        let matches: Vec<&serde_json::Value> = entries
+            .iter()
+            .filter(|e| {
+                e.get("id")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|id| node_tokens.contains(&id.to_ascii_lowercase()))
+            })
+            .collect();
+        return matches
+            .first()
+            .map(|m| (*m).clone())
+            .filter(|_| matches.len() == 1);
+    }
+    let plan = plan?;
+    let wanted = plan_key(&plan);
+    let matches: Vec<&serde_json::Value> = entries
+        .iter()
+        .filter(|e| {
+            e.get("plan_path")
+                .and_then(|v| v.as_str())
+                .filter(|c| !c.is_empty())
+                .is_some_and(|c| plan_key(c) == wanted)
+        })
+        .collect();
+    if matches.len() == 1 {
+        return matches.first().map(|m| (*m).clone());
+    }
+    if matches.len() > 1 {
+        // A plan shared by a delivery unit and its contained children is the
+        // LEGAL shape: exactly one of those nodes owns the PR. Narrow to the
+        // delivery unit; all-contained resolves to the one shared owner.
+        let units: Vec<&&serde_json::Value> = matches
+            .iter()
+            .filter(|e| {
+                e.get("contained_in")
+                    .and_then(|v| v.as_str())
+                    .map(str::is_empty)
+                    .unwrap_or(true)
+            })
+            .collect();
+        if units.len() == 1 {
+            return Some((*units[0]).clone());
+        }
+        if units.is_empty() {
+            let owners: HashSet<&str> = matches
+                .iter()
+                .filter_map(|e| e.get("contained_in").and_then(|v| v.as_str()))
+                .collect();
+            if owners.len() == 1 {
+                return matches.first().map(|m| (*m).clone());
+            }
+        }
+    }
+    None
+}
+
 fn check_contained_run(args: &[String]) -> i32 {
     let _ = args;
-    let Some(input) = env_input("TARGET_INPUT") else {
-        // No input to check: "not resolvable, or nothing to check" exits 0.
-        return 0;
+    let input = env_input("TARGET_INPUT");
+    let plan = env_input("TARGET_PLAN_PATH");
+    let entries = match graph_entries() {
+        Ok(rows) => rows,
+        Err(error) => {
+            // The Python verb printed the DID-NOT-RUN line on an unreachable
+            // store and proceeded: an unreachable store must not block every
+            // bootstrap, and the pre-claim check plus the live-claim refusal
+            // both still stand.
+            eprintln!(
+                "fno do target check-contained: the graph store is unavailable \
+                 ({error}); the containment check DID NOT RUN. Proceeding."
+            );
+            return 0;
+        }
     };
-    let Some(node) = graph_get_row(&input) else {
-        // The store read failed or the row is missing. The Python verb
-        // distinguished an unreachable STORE (fail-open, DID-NOT-RUN line)
-        // from an unresolvable node (silent exit 0); the self-exec'd read
-        // cannot tell them apart, and both exit 0 in Python. The message
-        // names what happened rather than passing a refusal off as a clear.
-        eprintln!(
-            "fno do target check-contained: the graph store is unavailable \
-             (graph-get failed or the row is missing); the containment check \
-             DID NOT RUN. Proceeding."
-        );
-        return 0;
-    };
-    redirect_if_contained(&node)
+    match resolve_dispatch_node(input.as_deref(), plan.as_deref(), &entries) {
+        Some(node) => redirect_if_contained(&node),
+        None => 0,
+    }
 }
 
 fn redirect_if_contained(node: &serde_json::Value) -> i32 {
@@ -355,28 +565,34 @@ fn check_dispatch_hold_run(args: &[String]) -> i32 {
     let _ = args;
     let input = env_input("TARGET_INPUT");
     let plan = env_input("TARGET_PLAN_PATH");
-    let Some(input) = input else {
-        return 0;
-    };
-    let node = match graph_get_row(&input) {
-        Some(node) => node,
-        None if plan.is_some() => {
-            // An input that may name a node with an unreadable hold world
-            // refuses; the Python verb keyed the refusal on the node being
-            // resolvable but the graph unreadable. A missing row with a plan
-            // path is the same refuse-to-assume-unheld shape.
-            eprintln!(
-                "fno do target: dispatch-hold-invalid:{input}: backlog graph is unreadable; \
-                 refusing to assume unheld. Nothing was claimed."
-            );
-            return REVIEW_GATE_REFUSED;
+    let entries = match graph_entries() {
+        Ok(rows) => rows,
+        Err(_) => {
+            if input_may_name_a_node(input.as_deref()) || plan.is_some() {
+                eprintln!(
+                    "fno do target check-dispatch-hold: dispatch-hold-invalid: \
+                     backlog graph is unreadable; refusing to assume unheld. \
+                     Nothing was claimed. Fix or restore graph.json and retry."
+                );
+                return REVIEW_GATE_REFUSED;
+            }
+            return 0;
         }
-        None => return 0,
+    };
+    // A hold is a footnote-graph-resident concept: under an external tracker
+    // backend the graph is not the delivery record of truth, so there is no
+    // plan hold to enforce here (Python checked after resolution; the exit is
+    // the same 0 either way, and an unreadable store still refuses above).
+    if crate::graph_get::external_backend_selected() {
+        return 0;
+    }
+    let Some(node) = resolve_dispatch_node(input.as_deref(), plan.as_deref(), &entries) else {
+        return 0;
     };
     let node_id = node
         .get("id")
         .and_then(|v| v.as_str())
-        .unwrap_or(input.as_str())
+        .unwrap_or(input.as_deref().unwrap_or("unknown"))
         .to_string();
     // The hold verdict is one native op already (authorized-merge
     // hold-verdict): the Python ladder wrapper was transport over it.
