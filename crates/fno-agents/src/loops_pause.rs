@@ -916,7 +916,7 @@ pub fn run_loops(args: &[String]) -> i32 {
     }
     // `loops ls` + `loops level <name>`: the config reads behind `fno do
     // loops ls` (see loops_config.rs). Direct dispatch inside the group
-    // door; the pause verbs keep their arm below.
+    // door; the pause commands keep their arm below.
     if args.first().map(String::as_str) == Some("ls") {
         return crate::loops_config::run(&args[1..]);
     }

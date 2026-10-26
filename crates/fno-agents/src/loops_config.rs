@@ -1,6 +1,6 @@
 //! `fno-agents loops ls` and `fno-agents loops level <name>`: the loop-level
 //! config reads the deleted `cli/src/fno/loops.py` answered. The
-//! pause verbs live in [crate::loops_pause]; these two reads need the
+//! pause commands live in [crate::loops_pause]; these two reads need the
 //! settings stack and the project journal, so they live beside it in a
 //! module named for the question they answer.
 //!

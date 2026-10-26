@@ -8,7 +8,7 @@
 //! daemon never crashes on an operator config typo).
 //!
 //! Consumers: the active-backlog daemon (in-process now, instead of shelling
-//! the old Python verb - one crossing retired), the config verb's forward
+//! the old Python command - one crossing retired), the config command's forward
 //! leaf, and the characterization tests.
 
 use std::path::PathBuf;
@@ -166,7 +166,7 @@ pub fn fanout_targets_as_dicts() -> Value {
         .collect::<Vec<_>>())
 }
 
-/// `fno-agents status-sinks [--json]`: the verb surface the forward leaf in
+/// `fno-agents status-sinks [--json]`: the command surface the forward leaf in
 /// config_cli.py execs. Compact JSON list on `--json`; a tab render
 /// otherwise; exit 0 always (best-effort read, never a gate).
 pub fn run(args: &[String]) -> i32 {

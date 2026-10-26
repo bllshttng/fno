@@ -401,7 +401,6 @@ fn op_read(params: &Params) -> Result<Value, String> {
 /// param the argv did not name, so the Python callers speak one shape.
 struct Params {
     flags: Map<String, Value>,
-    positional: Vec<String>,
     path_override: Option<PathBuf>,
 }
 
@@ -499,7 +498,6 @@ fn parse_args(args: &[String]) -> Result<(String, Params), String> {
         op.clone(),
         Params {
             flags,
-            positional,
             path_override,
         },
     ))
@@ -569,7 +567,6 @@ mod tests {
     fn params(path: &Path, flags: Value) -> Params {
         Params {
             flags: flags.as_object().cloned().unwrap_or_default(),
-            positional: Vec::new(),
             path_override: Some(path.to_path_buf()),
         }
     }
