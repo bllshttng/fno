@@ -787,7 +787,7 @@ fn denominator_ratio_run(args: &[String]) -> i32 {
         }
     }
     let root = resolve_repo_root();
-    let events_path = root.join(".fno").join("events.jsonl");
+    let events_path = crate::paths::events_path(&root);
     let cutoff = chrono::Local::now().naive_local() - chrono::Duration::days(since_days);
     let mut counts: BTreeMap<&str, i64> = ["plan", "deliverables", "derived", "none"]
         .into_iter()

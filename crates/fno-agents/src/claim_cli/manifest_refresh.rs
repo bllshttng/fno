@@ -40,7 +40,7 @@ pub(crate) struct ManifestLock {
 
 /// Take the same `<manifest>.lock` flock `fno do state set` holds while it
 /// rewrites the manifest (the Python `atomic_write` flocked this path with a
-/// 10s filelock timeout; the native verbs mirror the ~5s budget). Best-effort:
+/// 10s filelock timeout; the native commands mirror the ~5s budget). Best-effort:
 /// `None` after ~5s of contention means the caller skips rather than racing
 /// the other writer. `pub(crate)`: the `state-cli` door shares the lock.
 pub(crate) fn lock_manifest(manifest: &Path) -> Option<ManifestLock> {

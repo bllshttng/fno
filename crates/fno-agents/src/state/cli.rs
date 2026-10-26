@@ -187,29 +187,20 @@ fn resolve_repo_root() -> PathBuf {
     cwd
 }
 
-fn target_state_path(root: &Path) -> PathBuf {
-    let v2 = root.join(".fno").join("target-state.md");
-    let legacy = root.join(".fno").join("state.md");
-    if v2.exists() || !legacy.exists() {
-        v2
-    } else {
-        legacy
-    }
-}
-
-/// Resolve the state file the way `_resolve_path` did: explicit `--path`
-/// wins; otherwise the v2-aware repo root, target type or default.
+/// Resolve the state file: explicit `--path` wins; otherwise the one
+/// `target-state` resolver (the worktree space manifest, falling back to the
+/// pre-space checkout manifest) for the target type, or the typed file
+/// beside it.
 fn resolve_state_path(path: Option<&str>, type_: Option<&str>) -> PathBuf {
     if let Some(path) = path {
         return PathBuf::from(path);
     }
     let root = resolve_repo_root();
     if type_.is_none() || type_ == Some("target") {
-        target_state_path(&root)
-    } else {
-        root.join(".fno")
-            .join(format!("{}-state.md", type_.unwrap_or("target")))
+        return crate::state_path::resolve("target-state", &root).unwrap_or_default();
     }
+    root.join(".fno")
+        .join(format!("{}-state.md", type_.unwrap_or("target")))
 }
 
 fn emit_json(map: &BTreeMap<String, String>) {
