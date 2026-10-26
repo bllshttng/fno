@@ -377,7 +377,11 @@ mod tests {
     /// `TestMcpSendCli::test_send_command_delivers_to_registered_channel`
     /// pinned: a stdin envelope crosses the sidecar to a registered channel,
     /// byte-equal including meta keys, exit 0.
-    #[tokio::test]
+    /// Two workers model the two processes production has: `send_at` probes
+    /// the live sidecar with a blocking ping, and on one worker the spawned
+    /// server it probes could never answer, so the probe read it as stale,
+    /// unlinked it, and lazy-started an empty replacement.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_send_door_delivers_to_a_registered_channel() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("s.sock");
@@ -386,7 +390,10 @@ mod tests {
         let server = tokio::spawn(async move {
             let _ = super::super::sidecar::bind_and_serve(state, &server_sock).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !sock.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         let mut conn_a = tokio::net::UnixStream::connect(&sock).await.unwrap();
         let register = json!({
             "op": "register_channel",
