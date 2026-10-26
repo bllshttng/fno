@@ -11,11 +11,11 @@ Not for: installing fno. If `fno --version` fails, start at [install](install.md
 Check three things:
 
 ```bash
-fno --version          # prints a version
-gh auth status         # GitHub is authenticated
+fno --version                  # prints a version
+fno config setup run --check   # names each missing piece and its fix
 ```
 
-Inside Claude Code, type `/fno:` and `target` appears in the autocomplete. If any check fails, [install](install.md) has the fix.
+Inside Claude Code, type `/fno:` and `target` appears in the autocomplete. If a check fails, [install](install.md) has more detail.
 
 Run the one-time setup and accept every default:
 

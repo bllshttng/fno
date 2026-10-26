@@ -53,7 +53,12 @@ pub(crate) fn bounded_for(argv: &[&str], cap: Duration) -> Result<String, String
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        // A doctor prints its blockers on stdout and exits non-zero: an
+        // empty stderr falls back to them so the failure names its reason.
+        let mut detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if detail.is_empty() {
+            detail = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        }
         Err(format!(
             "`{}` exited {}: {detail}",
             argv.join(" "),
@@ -237,7 +242,11 @@ fn detect_accounts() -> Value {
 /// The optional machine tools setup may name. `macmon` feeds the resource
 /// meter; absent is a normal state, not an error.
 fn detect_tools() -> Value {
-    json!({ "macmon": crate::setup_autowire::on_path("macmon") })
+    json!({
+        "macmon": crate::setup_autowire::on_path("macmon"),
+        "jq": crate::setup_autowire::on_path("jq"),
+        "git": crate::setup_autowire::on_path("git"),
+    })
 }
 
 const SERVICE_LABELS: [&str; 2] = [

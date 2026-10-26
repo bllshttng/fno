@@ -951,11 +951,9 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::org_fold::run_org_fold(&args[1..]);
     }
 
-    // `lead-history`: the team-scope lead_checkin readback for
-    // `fno agents org history`, exec'd by the front door. Daemon-free
-    // `==` dispatch like org-fold: the caller's team scope and the
-    // live journals resolve natively when the argv names none. `--verdict`
-    // reads the same journals as a tenure verdict (law d-fe66560a).
+    // `lead-history`: the team-scope lead_checkin readback for `fno agents org history`, exec'd by the front door.
+    //
+    // Daemon-free `==` dispatch like org-fold: the caller's team scope and the live journals resolve natively when the argv names none. `--verdict` reads the same journals as a tenure verdict (law d-fe66560a).
     if command == "lead-history" {
         if args.iter().skip(1).any(|a| a == "--verdict") {
             return fno_agents::lead_history::run_lead_verdict(&args[1..]);

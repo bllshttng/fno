@@ -14,6 +14,13 @@ The package owns effect-policy classification, approval requests and decisions, 
 It does not own who may approve, which is independent project policy, and it does not own work identity or lifecycle, which stay with the graph.
 It emits facts that a delivery evaluator consumes; it never declares an aggregate delivery verdict.
 
+## Where the code lives now
+
+The Python `fno.approvals` package is gone.
+Rust owns the live parts: `crates/fno-agents/src/effect_gate.rs` classifies and submits a request, and `approvals.rs` answers `fno inbox approvals ls|show|decide`.
+The attempt journal (`prepare`, `settle`, `authorize_retry`) had no production caller and went with the package.
+Sections below that name those methods describe the design the table schema still carries. A new executor builds them in Rust against the same `attempts` table.
+
 ## Three separations that the code enforces
 
 Approval is not execution.
