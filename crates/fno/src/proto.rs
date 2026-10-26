@@ -156,7 +156,7 @@ fn default_true() -> bool {
 /// plus optional directional split placement.
 ///
 /// v29: `Command::PeekAgent { name, seq }` asks the server for a
-/// sideline row's recent transcript (shelled `fno agents peek <name>`, read-only)
+/// sideline row's recent transcript (shelled `fno agents session peek <name>`, read-only)
 /// and `ServerMsg::PeekBody { seq, name, lines }` returns it to the requesting
 /// client only; the client drops any body whose `seq` is not the current request.
 ///
@@ -1893,7 +1893,7 @@ pub enum Command {
     /// (v29) Ask the server for a sideline row's recent transcript so the
     /// operator can peek BEFORE attaching (peek reads disk; only attach spawns a
     /// pane). `name` is an `AgentRow.name` from the last `Layout` (the same union
-    /// resolver `fno agents peek` accepts); the server shells `fno agents peek
+    /// resolver `fno agents session peek` accepts); the server shells `fno agents session peek
     /// <name>` OFF the core loop and replies with a [`ServerMsg::PeekBody`] to the
     /// requesting client only. `seq` is a client-local monotonic counter echoed
     /// back on the body so the client can drop a stale reply (A->B->A cycling

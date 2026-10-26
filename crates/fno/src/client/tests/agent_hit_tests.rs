@@ -119,7 +119,7 @@ fn agent_hit_resolves_pane_then_attach_then_notice() {
     narrow.set_notice(no_pane_notice(&orphan));
     let (_, clipped) = narrow.notice_overlay(80).expect("notice is set");
     assert!(
-        clipped.contains("fno agents peek t-live-paneless --follow"),
+        clipped.contains("fno agents session peek t-live-paneless --follow"),
         "the actionable command must survive narrow clipping: {clipped}"
     );
 

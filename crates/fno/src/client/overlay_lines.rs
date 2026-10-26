@@ -133,7 +133,7 @@ pub(crate) fn peek_overlay_lines(
         return vec![pad_to(" peek · row gone", PEEK_OVERLAY_W)];
     };
     // Sanitize every external-sourced line (transcript body, scraped reason)
-    // before it becomes overlay cells (codex review): `fno agents peek` reads
+    // before it becomes overlay cells (codex review): `fno agents session peek` reads
     // raw on-disk transcript text that can carry ANSI escapes / C0 controls, and
     // the peek path does NOT VT-parse (unlike pane output), so an unstripped
     // ESC/CR would reach the operator's terminal. Tabs become spaces; every
