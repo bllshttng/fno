@@ -276,8 +276,13 @@ mod tests {
         let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
         let lapsed = get("cx-lapsed-ss");
         assert_eq!(
-            lapsed.badge, None,
-            "lapsed screen verdict ages out; leg liveness only"
+            lapsed.badge,
+            Some(AgentBadge::Working),
+            "a lapsed screen verdict ages out; the live leg's own word stands"
+        );
+        assert!(
+            lapsed.reason.is_none(),
+            "the lapsed screen's rule never leaks into the badge reason"
         );
         let working = get("cx-working-ss");
         assert_eq!(
