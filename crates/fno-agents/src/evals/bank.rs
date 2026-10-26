@@ -53,8 +53,9 @@ fn require(cond: bool, msg: String) -> Result<(), BankError> {
 }
 
 /// The display form Python's frozenset repr takes at seed 0 for the
-/// trivial commands (the capture pins PYTHONHASHSEED=0).
-pub const TRIVIAL_COMMANDS_REPR: &str = "frozenset({'', ':', 'true'})";
+/// trivial commands (the capture pins PYTHONHASHSEED=0). The order is the
+/// one real seed-0 CPython prints, not the source order.
+pub const TRIVIAL_COMMANDS_REPR: &str = "frozenset({'', 'true', ':'})";
 
 /// Load and validate one bank YAML file; refusals name the id and file.
 pub fn load_task(path: &std::path::Path) -> Result<TaskSpec, BankError> {
