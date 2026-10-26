@@ -199,6 +199,7 @@ pub mod fleet_load;
 pub mod fleet_page;
 pub mod fleet_task;
 pub mod flight_gate;
+pub(crate) mod fnod;
 pub mod footnote_harness;
 pub mod footnote_transcript;
 pub(crate) mod footprint_cache;
