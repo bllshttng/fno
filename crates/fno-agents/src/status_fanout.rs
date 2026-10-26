@@ -354,37 +354,41 @@ fn now_rfc3339_micros() -> String {
     let dur = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let secs = dur.as_secs();
-    let micros = dur.subsec_micros();
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    let (hour, min, sec) = (
-        (rem / 3600) as u32,
-        (rem % 3600) / 60 as u32,
-        (rem % 60) as u32,
-    );
-    let (year, month, day) = civil_from_days(days);
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}.{micros:06}Z")
-}
-
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (y, m as u32, d as u32)
+    // The micros shape Python's `_ts_now` wrote; `events::now_rfc3339` is
+    // the daemon's millisecond stamp, a different contract.
+    let (year, month, day, hour, min, sec) = crate::events::civil_from_unix(dur.as_secs());
+    format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}.{:06}Z",
+        dur.subsec_micros()
+    )
 }
 
 fn ts_key(ts: &str) -> i64 {
     if ts.is_empty() {
         return i64::MIN;
     }
-    crate::event_store::parse_rfc3339_ms(ts).unwrap_or(i64::MIN)
+    let Some(ms) = crate::event_store::parse_rfc3339_ms(ts) else {
+        return i64::MIN;
+    };
+    // The Python leg keyed on a datetime: MICROsecond precision. The store
+    // parser truncates to whole milliseconds, so refine with the fraction's
+    // remainder - two events a few hundred microseconds apart are distinct
+    // peers in the occurrence index, never one slot.
+    let mut micros = ms as i64 * 1000;
+    if let Some(dot) = ts.find('.') {
+        let digits: String = ts[dot + 1..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if digits.len() > 3 {
+            let mut frac = digits[3..].to_string();
+            while frac.len() < 3 {
+                frac.push('0');
+            }
+            micros += frac[..3].parse::<i64>().unwrap_or(0);
+        }
+    }
+    micros
 }
 
 // ---------------------------------------------------------------------------
@@ -758,8 +762,11 @@ fn run_locked(
             .unwrap_or_default()
             .to_string();
         let count_at_last = events.iter().filter(|e| ts_of(e) == last_key).count() as i64;
-        for s in start.iter_mut() {
-            if ts_key(&s.0) < last_key {
+        // FRESH sinks only: a resumed sink's stored cursor is the delivery
+        // contract, and fast-forwarding it past the store's EOF window would
+        // silently drop every journal event between the two.
+        for (i, s) in start.iter_mut().enumerate() {
+            if stored[i].is_none() && ts_key(&s.0) < last_key {
                 *s = (last_ts.clone(), count_at_last);
             }
         }
@@ -1534,8 +1541,15 @@ fn append_plan_progress(plan_path: &str, text: &str, project_root: &Path) {
 /// `fno doctor event fanout tick` claim. One pass, the Python leg's receipt
 /// lines byte for byte; an idle pass prints nothing.
 pub fn run_tick_command(args: &[String]) -> i32 {
+    // The typer surface nested `tick` under the app; both doors carry the
+    // word as the first remaining token.
+    let rest: &[String] = if args.first().map(String::as_str) == Some("tick") {
+        &args[1..]
+    } else {
+        args
+    };
     let mut dry_run = false;
-    for a in args {
+    for a in rest {
         match a.as_str() {
             "--dry-run" | "-N" => dry_run = true,
             other => {

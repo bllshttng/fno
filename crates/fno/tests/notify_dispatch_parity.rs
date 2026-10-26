@@ -246,11 +246,9 @@ fn status_fanout_deprecated_move_wiring() {
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(
-        &stub,
-        std::fs::metadata(&stub).unwrap().permissions().mode(0o755),
-    )
-    .unwrap();
+    let mut perms = std::fs::metadata(&stub).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&stub, perms).unwrap();
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_fno"))
         .args(["status-fanout", "tick", "--dry-run"])
         .env("FNO_AGENTS_BIN", &stub)

@@ -1,9 +1,9 @@
 """``fno inbox`` - what is waiting on a human.
 
 Mints the inbox root (unit 2 of the command reorg). approvals
-and notify fold in whole - each app is registered here exactly as it was
-registered at the top level, so `fno inbox approvals ls` etc. reach the same
-commands `fno approvals ls` did. The lead board LEAF joins them too (ruling
+folded in whole - the app is registered here exactly as it was registered at
+the top level, so `fno inbox approvals ls` reaches the same command
+`fno approvals ls` did. The lead board LEAF joins them too (ruling
 d-8c62113b: a leaf places by its own meaning); the lead root itself stays put
 here and folds into agents in a later unit, so `board_cmd` is registered under
 both `lead` and `inbox` rather than moved. The board read answers at the Rust
