@@ -101,6 +101,8 @@ The migration moves every movable file into a named subfolder (`docs/state-root-
 | `.env`, `.gitignore` | Operator-owned, edited by hand at that path. |
 | `.DS_Store`, `.metadata_never_index` | macOS Finder and Spotlight; Spotlight reads the opt-out marker only at the folder root. |
 | `.path-migration-done` | The Python startup migration's sentinel (`cli/src/fno/cli.py`). Parking it re-fires that migration, which rewrites root files. It moves when that migration is deleted or ported. |
+| `events.jsonl` | The retired journal family's anchor and stray-hunt root (`global_events_json`): writers committed to the routed store, so it is read-only, and the doctor's stall fold reads it for the retained rotations beside it. |
+| `posture.json` | The removed `fno posture` command's advisory stamp; the doctor reads it until the file ages out of every machine it landed on. |
 | `ledger.json`, `ledger.md`, `decisions.jsonl`, `decisions.jsonl.compact`, `decisions.jsonl.corrupt`, `questions.jsonl` | Python locators. `paths.py` resolves the journals from the state root, and the Python event sites that once hardcoded `state_dir() / "events.jsonl"` now pass that address to the store, which derives the `.db` from it. `ledger.md` has no writer and parks with `ledger.json` when that slice lands. Over the 30-line budget; they move when those callers port. Their `.db` stores DO move (Rust derives them). |
 
 ## Owned subfolders and remaining root state
