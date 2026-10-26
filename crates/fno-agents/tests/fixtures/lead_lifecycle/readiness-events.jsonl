@@ -1,0 +1,4 @@
+{"ts":"2026-10-24T09:00:00Z","type":"context_snapshot","source":"hooks","data":{"harness":"claude","session_id":"sess-lead","entry_state":"startup","measurement_complete":true}}
+{"ts":"2026-10-24T09:00:05Z","type":"stop_decision","source":"hooks","data":{"session_id":"sess-lead","correlation_id":"stop:sess-lead:1"}}
+{"ts":"2026-10-24T09:02:00Z","type":"context_snapshot","source":"hooks","data":{"harness":"claude","session_id":"sess-plain","entry_state":"startup","measurement_complete":true}}
+{"ts":"2026-10-24T09:02:05Z","type":"stop_decision","source":"hooks","data":{"session_id":"sess-plain","correlation_id":"stop:sess-plain:1"}}

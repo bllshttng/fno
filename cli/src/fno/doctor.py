@@ -190,9 +190,12 @@ def _plugin_file_report(active_path: Path) -> dict[str, Any]:
         "source_digest": source_digest,
     }
     if stale and _is_claude_plugin_cache(active_path):
+        # A cache under the pre-rename "footnote" marketplace updates by its old id.
+        legacy = "/.claude/plugins/cache/footnote/" in active_path.as_posix()
+        plugin_id = "fno@footnote" if legacy else "fno@fno"
         report["detail"] = (
-            "active Claude plugin bytes are stale; run `claude plugin update "
-            "fno@footnote`, then restart the session; `fno doctor update` does "
+            f"active Claude plugin bytes are stale; run `claude plugin update "
+            f"{plugin_id}`, then restart the session; `fno doctor update` does "
             "NOT refresh this artifact"
         )
     return report
@@ -1735,7 +1738,7 @@ def _silent_switch_report(
                 finding["cause"] = (
                     f"deployed plugin cache is stale ({sha}, {when}); likely "
                     "predates the auto_merge_source writer. Fix: claude plugin "
-                    "update fno@footnote (not fno doctor update), then restart"
+                    "update fno@fno (or fno@footnote; not fno doctor update), then restart"
                 )
         findings.append(finding)
     return {"findings": findings, "posture": _read_posture_stamp()}
@@ -3834,7 +3837,7 @@ def _codex_marketplace_duplicates(list_output: str) -> list[str]:
         name, root = parts[0], parts[1]
         if name.upper() == "MARKETPLACE":  # header row
             continue
-        if "footnote" in f"{name} {root}".lower():
+        if name == "fno" or "footnote" in f"{name} {root}".lower():
             names.append(name)
     return names if len(names) > 1 else []
 
@@ -3877,6 +3880,7 @@ def _harness_surface_report() -> dict[str, Any]:
     plugin_state_exists = (
         (codex_home / "footnote" / "plugin-channel.json").is_file()
         or (codex_home / "footnote" / "rollback-failure.json").is_file()
+        or (codex_home / "plugins" / "cache" / "fno").exists()
         or (codex_home / "plugins" / "cache" / "footnote").exists()
         or (codex_home / "plugins" / "cache" / "footnote-dev").exists()
     )

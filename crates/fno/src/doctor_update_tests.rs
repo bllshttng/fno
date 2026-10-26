@@ -443,6 +443,16 @@ fn a_second_update_joins_only_an_update_holder() {
     assert_eq!(update_holder_pid("fno-update-pid4242"), Some(4242));
     assert_eq!(update_holder_pid("target-session:abc"), None);
     assert_eq!(update_holder_pid("fno-update-pidX"), None);
+    // The claim lives exactly as long as the update process: its own pid,
+    // stamped holder-process, never the session that launched it.
+    let args = update_claim_acquire_args(4242);
+    let flag = |name: &str| {
+        let i = args.iter().position(|a| a == name).expect(name);
+        args[i + 1].clone()
+    };
+    assert_eq!(update_holder_pid(&flag("--holder")), Some(4242));
+    assert_eq!(flag("--pid"), "4242");
+    assert_eq!(flag("--pid-provenance"), "holder-process");
 }
 
 #[test]

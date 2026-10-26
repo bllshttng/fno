@@ -97,6 +97,16 @@ fn run_leg(
         }
     };
     cmd.current_dir(cwd.unwrap_or(&repo_root()));
+    // A temp cwd's git walk stops at its parent, so "not a git repository"
+    // reads the same whether or not the runner mounts /tmp separately.
+    if let Some(parent) = cwd.and_then(|c| {
+        std::fs::canonicalize(c)
+            .ok()?
+            .parent()
+            .map(Path::to_path_buf)
+    }) {
+        cmd.env("GIT_CEILING_DIRECTORIES", parent);
+    }
     // The pin is the test hook both legs would otherwise inherit from the
     // ambient shell; a test run must resolve the repo the way the caller's
     // cwd says.
@@ -447,11 +457,23 @@ fn diff_base_fix_combination_refused() {
 #[test]
 fn diff_base_bad_ref_refuses() {
     let dir = tempfile::TempDir::new().unwrap();
+    // The wrap carries git's own not-a-repo text, which differs by git
+    // version and by whether the parent search crosses a mount boundary, so
+    // both known forms normalize away and the frozen golden holds only the
+    // tool's wrap.
+    let mut volatile = vec![dir.path().display().to_string()];
+    volatile.extend(
+        [
+            "fatal: not a git repository (or any parent up to mount point /)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).",
+            "fatal: not a git repository (or any of the parent directories): .git",
+        ]
+        .map(str::to_string),
+    );
     assert_case_volatile(
         Some(dir.path()),
         &["--surface", "markdown", "--diff-base", "no-such-ref"],
         None,
-        &[dir.path().display().to_string()],
+        &volatile,
         "bad diff-base refuses",
     );
 }

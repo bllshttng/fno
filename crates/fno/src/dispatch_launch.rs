@@ -374,7 +374,12 @@ pub(crate) fn note_spawn_refused(argv: &[&str], exit_code: i32, stdout: &str, st
         },
     });
     let path = crate::pane_send_audit::pane_send_audit_events_path();
-    let _ = crate::pane_send_audit::append_agents_event(&path, &row);
+    if let Err(e) = crate::pane_send_audit::append_agents_event(&path, &row) {
+        eprintln!(
+            "fno mux: agent_spawn_refused emit failed at {}: {e}",
+            path.display()
+        );
+    }
 }
 
 /// The door's own error line: the gate's verdict line when one is present,

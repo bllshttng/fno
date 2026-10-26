@@ -1392,10 +1392,6 @@ def briefs_dir() -> Path:
     return state_dir() / "briefs"
 
 
-def lead_faqs_dir() -> Path:
-    return briefs_dir() / "lead-faqs"
-
-
 def sidecar_dir() -> Path:
     """Per-item footnote-owned sidecar directory (``~/.fno/sidecar/``).
 

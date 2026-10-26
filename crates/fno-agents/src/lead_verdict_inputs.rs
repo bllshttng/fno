@@ -245,7 +245,7 @@ fn generation_start(
 /// canonical project, so the manifest path and the graph compile select what
 /// the team actually wrote at `<space>/leads/<canonical>.md`. Canonical
 /// members map to themselves, so a registry-derived scope is unchanged.
-fn canonical_members_with_aliases(scope: &str, cwd: &Path) -> String {
+pub(crate) fn canonical_members_with_aliases(scope: &str, cwd: &Path) -> String {
     let map = crate::org_board::scope::project_map(cwd).unwrap_or_default();
     let members: Vec<String> = scope
         .split(',')
