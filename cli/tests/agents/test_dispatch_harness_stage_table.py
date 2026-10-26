@@ -132,10 +132,10 @@ def test_dispatch_door_carries_the_stage_table_route() -> None:
     """The route rides the same stage-table row the harness does: a dispatch
     that forwards the harness but not the route sends a routed model to the
     default endpoint, where it dies on first inference. The tuple must carry
-    both, so a caller can forward both."""
+    both, so a caller can forward both. The row itself is golden-frozen on
+    the Rust side; this pins the tuple-carrying half of the contract."""
     out = resolve_dispatch(
-        settings=_settings(profile_provider="claude",
-                           profile_route="zai,glm-5.3-flash[1m]")
+        dispatch_cfg={"harness": "claude", "harness_note": "", "route": "zai,glm-5.3-flash[1m]"}
     )
     assert out["harness"] == "claude"
     assert out["route"] == "zai,glm-5.3-flash[1m]"
