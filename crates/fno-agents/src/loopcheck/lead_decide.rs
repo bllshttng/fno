@@ -462,6 +462,10 @@ pub(super) fn lead_decide(
         return terminate(b.reason, &b.message, board.actionable, b.fires, &stalled);
     }
 
+    // The blueprint-ceiling reading: the same ceiling the check-in reads,
+    // against the same claims source, so a row the beat skips at ceiling
+    // cannot hold this stop open. None keeps the ceiling leg inert.
+    let blueprint = crate::lead_checkin_blueprint::stop_check_reading(&parsed.cwd);
     match crate::lead_termination::capacity_gate(
         &board,
         &parsed.fno_bin,
@@ -469,6 +473,7 @@ pub(super) fn lead_decide(
         &session_id,
         dry,
         &emit,
+        blueprint.as_ref(),
     ) {
         Some(crate::lead_termination::CapacityGate::Saturated {
             message,

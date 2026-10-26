@@ -211,6 +211,11 @@ pub(crate) fn node_pr_refs(node: &Value) -> Vec<(i64, Option<String>)> {
         .into_iter()
         .flatten()
     {
+        // A reopen-demoted row is record-keeping, not a promised ship: the
+        // history mark keeps it out of the evidence set.
+        if extra.get("history").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
         let Some(num) = extra.get("number").and_then(Value::as_i64) else {
             continue;
         };

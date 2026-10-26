@@ -401,6 +401,53 @@ fn leading_command(text: &str) -> Option<&str> {
         .or_else(|| text.strip_prefix("$fno:"))
 }
 
+/// Does this claude session's transcript carry a real fno skill invocation
+/// (typed `<command-name>/fno:`, a leading `/fno:` call, or a Skill tool
+/// call)? The 2026-10-24 bg-adoption ruling: a claude bg row fno never
+/// stamped with an origin is still fno's own work when its transcript shows
+/// one, so the reaper may judge it like a spawn row.
+///
+/// `using-fno` never counts. The preamble is injected as context after the
+/// session already joined - a join needs a real fno skill or command - and
+/// [`invocation`] reads injected prose as a mention, not a call. `fno-me`
+/// counts like any other command.
+pub(crate) fn bg_fno_invocation(session_id: &str, account: Option<&str>) -> bool {
+    // An isolated-account row keeps its transcript under that account's
+    // config root, so the ambient scan alone would miss it.
+    let path = crate::claude_drive::find_transcript_for_account(session_id, account)
+        .or_else(|| crate::claude_drive::find_transcript(session_id));
+    let Some(path) = path else {
+        return false;
+    };
+    bg_fno_invocation_in(&path)
+}
+
+/// [`bg_fno_invocation`] against an explicit transcript file, so the scan
+/// is testable without a session on disk.
+pub(crate) fn bg_fno_invocation_in(path: &std::path::Path) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        // Every invocation form carries `fno:` - `/fno:` on a typed or
+        // leading call, `"skill":"fno:` on a Skill tool call - and a sweep
+        // rescans negative rows each pass, so most lines must skip the
+        // serde parse, not pay it.
+        if !line.contains("fno:") {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if let Some((command, _)) = invocation(&event) {
+            if command != "using-fno" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn command_token(rest: &str) -> &str {
     let end = rest
         .find(|c: char| !(c.is_ascii_lowercase() || c == '-'))
@@ -495,6 +542,40 @@ mod tests {
         assert_eq!(invocation(&skill), Some(("think", "x-2".to_string())));
         assert_eq!(invocation(&mention), None);
         assert_eq!(invocation(&injected), None);
+    }
+
+    #[test]
+    fn the_using_fno_preamble_never_reads_as_an_invocation() {
+        // The injected preamble names commands in prose and wraps them in
+        // harness framing; neither form invokes anything. A real
+        // /fno:using-fno typed call reads as the command it is, and the
+        // adoption scan excludes it by name.
+        let preamble = json!({"type": "user", "message": {"content": "<EXTREMELY_IMPORTANT>\nBelow is the full content of the 'using-fno' skill - Claude/opencode use /fno:command, codex uses $fno:command.\n</EXTREMELY_IMPORTANT>"}});
+        let command_frame = json!({"type": "user", "message": {"content": "<command-message>using-fno</command-message>\n<command-name>/fno:using-fno</command-name>"}});
+        let fno_me = json!({"type": "user", "message": {"content": "<command-message>fno-me</command-message>\n<command-name>/fno:fno-me</command-name>"}});
+        assert_eq!(invocation(&preamble), None);
+        assert_eq!(
+            invocation(&command_frame),
+            Some(("using-fno", "".to_string()))
+        );
+        assert_eq!(invocation(&fno_me), Some(("fno-me", "".to_string())));
+    }
+
+    #[test]
+    fn the_scan_reads_a_skill_call_line_and_skips_preamble_only_files() {
+        let dir = std::env::temp_dir().join("fno-bg-scan-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A Skill tool call stores `fno:think` with no slash: the scan's
+        // cheap token filter must still admit the line.
+        let skill_call = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"fno:think","args":"x-2"}}]}}"#;
+        let path = dir.join("skill-call.jsonl");
+        std::fs::write(&path, format!("{skill_call}\n")).unwrap();
+        assert!(bg_fno_invocation_in(&path));
+        // The injected preamble alone is never an invocation.
+        let preamble_only = r#"{"type":"user","message":{"content":"<EXTREMELY_IMPORTANT>using-fno: run /fno:target or $fno:review</EXTREMELY_IMPORTANT>"}}"#;
+        let path = dir.join("preamble.jsonl");
+        std::fs::write(&path, format!("{preamble_only}\n")).unwrap();
+        assert!(!bg_fno_invocation_in(&path));
     }
 
     #[test]

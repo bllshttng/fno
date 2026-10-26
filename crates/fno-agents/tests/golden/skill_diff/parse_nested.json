@@ -1,0 +1,13 @@
+{
+ "expected": {
+  "files": [
+   "a",
+   "b"
+  ],
+  "justification": "j",
+  "verdict": "propose_pr"
+ },
+ "input": {
+  "text": "{\"verdict\":\"propose_pr\",\"hunks\":[{\"file\":\"a\",\"new_text\":\"x\",\"cited_finding_ids\":[\"s1\"]},{\"file\":\"b\",\"new_text\":\"y\",\"cited_finding_ids\":[\"s2\"]}],\"justification\":\"j\"}"
+ }
+}

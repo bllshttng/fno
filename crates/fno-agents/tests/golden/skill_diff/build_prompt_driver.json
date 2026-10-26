@@ -1,0 +1,34 @@
+{
+ "expected": "You improve a Claude skill by editing its files in response to OBSERVED failures.\n\nSkill: fno:blueprint\nFailure ranking (dimension=fail_count): collision_free=2\n\nThis is a DRIVER skill: your diff must not introduce a self-containment CI violation - no ${REPO_ROOT}/scripts/ refs, no ../../ path escapes.\n\nCited failure evidence (bounded, one line each):\n- [collision_free/fail] finding_id=c1: evevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevev\n\nPrior proposals for this skill (do not re-propose what already did not help):\n- run r0: +4/-1 cited ['s0']\n\nCurrent skill file contents:\n### FILE: skills/blueprint/SKILL.md\n# Blueprint\nbody\n\nRULES:\n- Prefer EDITS and DELETIONS over pure additions. A diff that only adds text is\n  suspect: if you must add more than 15 net new lines with zero\n  removals, you MUST fill \"justification\".\n- Every hunk MUST cite at least one finding_id from the evidence above. An\n  uncited hunk will be dropped before the PR opens.\n- old_text must match the current file content EXACTLY (it is applied by literal\n  replacement). Use \"\" for a pure addition appended to the file.\n- If no edit will help - the failure is architectural, not a wording problem -\n  return verdict \"no_diff_helps\" with a \"no_diff_reason\".\n\nReturn ONLY a JSON object:\n{\"verdict\":\"propose_pr\"|\"no_diff_helps\",\"hunks\":[{\"file\",\"old_text\",\"new_text\",\"cited_finding_ids\",\"rationale\"}],\"justification\":null,\"no_diff_reason\":null}\n",
+ "input": {
+  "additive_threshold": 15,
+  "findings": [
+   {
+    "corpus_item_id": "c1",
+    "dimension": "collision_free",
+    "evidence": "evevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevevev",
+    "verdict": "fail"
+   }
+  ],
+  "history": [
+   {
+    "added_lines": 4,
+    "cited_finding_ids": [
+     "s0"
+    ],
+    "removed_lines": 1,
+    "run_id": "r0"
+   }
+  ],
+  "ranking": [
+   {
+    "dimension": "collision_free",
+    "fail_count": 2
+   }
+  ],
+  "skill_files": {
+   "skills/blueprint/SKILL.md": "# Blueprint\nbody"
+  },
+  "skill_id": "fno:blueprint"
+ }
+}

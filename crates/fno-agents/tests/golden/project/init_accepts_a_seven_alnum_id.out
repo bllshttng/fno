@@ -1,0 +1,10 @@
+project abcdefg: isolated
+  state_dir  ~/.fno/projects/abcdefg   (graph, ledger, briefs, agent registry, mail bus)
+  The only fno file left in the checkout is .fno/config.toml; session
+  state lives in the repo's space.
+  NOT isolated: the claude daemon namespace and any codex app-server.
+  Those are machine-global and fno does not own them. A session started here
+  shares them with your real fleet, so an ambient identity marker crosses this
+  boundary as if it were not there.
+  mail: this environment has its OWN bus. Your real sessions cannot reach a
+  worker here, and a worker here cannot reach them.

@@ -964,8 +964,9 @@ fn bind_worktree(
             if mnode != node {
                 return Err(refuse(format!(
                     "fno do target start: {} belongs to node {mnode}, not {node}; \
-                     refusing to run in place under another node's session. Cancel \
-                     it (fno do target cancel) or isolate a worktree.",
+                     refusing to run in place under another node's session. End that \
+                     session from its own harness (touch .fno/.target-cancelled in its \
+                     worktree) or isolate a worktree.",
                     manifest.display()
                 )));
             }
@@ -979,8 +980,9 @@ fn bind_worktree(
         if find_node(mnode, None).is_none() {
             return Err(refuse(format!(
                 "fno do target start: node {mnode} is not in the backlog graph \
-                 (superseded or removed); refusing to re-acquire its claim. Cancel \
-                 the stale session (fno do target cancel) or pick a live node."
+                 (superseded or removed); refusing to re-acquire its claim. End the \
+                 stale session (touch .fno/.target-cancelled in its worktree) or pick \
+                 a live node."
             )));
         }
     }
@@ -1197,8 +1199,8 @@ fn warn_steps_dropped(manifest: &Path) {
     eprintln!(
         "WARNING: --steps did NOT take - the manifest at {} is write-once and \
          does not carry turn_mode: steps. The stop gate keeps its normal \
-         looping posture for this session. To run steps mode, cancel this \
-         session (fno do target cancel) and re-start the node with --steps.",
+         looping posture for this session. To run steps mode, end this \
+         session (touch .fno/.target-cancelled) and re-start the node with --steps.",
         manifest.display()
     );
 }

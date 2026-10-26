@@ -34,6 +34,7 @@ pub(super) struct FleetArms {
     // The periodic arms: each module owns its cadence, gate and memory.
     machine_watch: crate::machine_watch::Arm,
     merge_close: crate::merge_close::Arm,
+    symptom_recheck: crate::symptom_recheck::Arm,
     team_ledger: crate::rundown::Arm,
     lead_eval: crate::lead_eval::Arm,
     fleet_page: crate::fleet_page::Arm,
@@ -123,6 +124,7 @@ impl FleetArms {
             last_tool_scan: Instant::now(),
             machine_watch: crate::machine_watch::Arm::default(),
             merge_close: crate::merge_close::Arm::default(),
+            symptom_recheck: crate::symptom_recheck::Arm::default(),
             team_ledger: crate::rundown::Arm::default(),
             lead_eval: crate::lead_eval::Arm::default(),
             fleet_page: crate::fleet_page::Arm::new(opts.agents_config_cwd.clone()),
@@ -322,6 +324,7 @@ impl FleetArms {
         );
         crate::machine_watch::maybe_tick(&self.machine_watch, ctx.home.clone());
         crate::merge_close::maybe_tick(&self.merge_close, ctx.home.clone());
+        crate::symptom_recheck::maybe_tick(&self.symptom_recheck, ctx.home.clone());
         // The board render: graph.md plus every configured board target,
         // once per moved version, off every caller's write path.
         crate::board_render_arm::maybe_tick(&self.board_render, ctx.home.clone());

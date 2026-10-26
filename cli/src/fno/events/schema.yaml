@@ -7946,9 +7946,9 @@ event_types:
   # The `decision` and `state` enums below are ADVISORY at the validator layer,
   # matching the `outcome` crumb further down: both validators check required
   # fields and envelope shape, not per-type data enums, unless a type opts into a
-  # hardcoded check. Real enforcement is at the only emitter -- fno.approvals'
-  # DecisionKind and EffectState are typed enums, so an out-of-vocabulary value
-  # cannot be constructed. Promote to a hardcoded check in BOTH validators (and
+  # hardcoded check. Real enforcement is at the emitter -- the Rust effect gate
+  # and approvals module write only the vocabulary below, so an out-of-vocabulary
+  # value cannot be produced. Promote to a hardcoded check in BOTH validators (and
   # add invalid corpus fixtures) if a second, untyped emitter ever appears.
 
   - name: approval_requested

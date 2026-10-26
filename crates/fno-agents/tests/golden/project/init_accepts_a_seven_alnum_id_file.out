@@ -1,0 +1,4 @@
+state_dir = "~/.fno/projects/abcdefg"
+
+[backlog]
+id_prefix = "abcdefg"
