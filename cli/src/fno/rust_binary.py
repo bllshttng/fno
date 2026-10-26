@@ -473,8 +473,8 @@ def notify_operator(title: str, body: str, pointer: str = "") -> tuple[int, str]
     """One operator notice through the native front door: ``(code, err)``.
 
     The dispatch (mux clients, OS toast, sink lane) answers in-process in the
-    Rust verb; this Python seam only carries the argv, so the notify decision
-    table has one owner. ``err`` is the verb's one-line degrade message when
+    Rust command; this Python seam only carries the argv, so the notify decision
+    table has one owner. ``err`` is the command's one-line degrade message when
     the code is non-zero, else empty.
     """
     import subprocess

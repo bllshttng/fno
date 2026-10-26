@@ -1,4 +1,4 @@
-//! `fno inbox notify TITLE MESSAGE [--pointer P]`: the operator-notice verb,
+//! `fno inbox notify TITLE MESSAGE [--pointer P]`: the operator-notice command,
 //! ported from the deleted Python leg `cli/src/fno/notify/_impl.py`. The
 //! dispatch runs in-process at the front door: the journal row commits through
 //! the generated [`crate::event_store`] (the same SQL transaction the Python
@@ -38,7 +38,7 @@ const NOTICE_CAP: usize = 2000;
 /// load-bearing.
 const TOAST_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// `["inbox", "notify", ...rest]` claims the verb. The front door execs the
+/// `["inbox", "notify", ...rest]` claims the command. The front door execs the
 /// tail in-process; the Python wheel's app for this spelling is deleted.
 pub fn classify_inbox_notify(args: &[OsString]) -> Option<Vec<OsString>> {
     let a0 = args.first()?.to_str()?;

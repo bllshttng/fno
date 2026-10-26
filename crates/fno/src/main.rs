@@ -384,7 +384,7 @@ enum Role {
     /// is the `fno-agents day` argv.
     InboxDay(Vec<OsString>),
     /// `fno inbox notify TITLE MESSAGE [--pointer P]`: the operator-notice
-    /// verb, answered in-process by `notify_dispatch` (the Python wheel's app
+    /// command, answered in-process by `notify_dispatch` (the Python wheel's app
     /// for this spelling is deleted). Also serves `fno notify` after the
     /// deprecated-move line.
     InboxNotify(Vec<OsString>),
