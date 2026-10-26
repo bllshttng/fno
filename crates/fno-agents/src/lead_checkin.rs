@@ -26,7 +26,6 @@
 use crate::lead_history::LEAD_CHECKIN;
 use crate::org_board::{read_board, BoardOpts};
 use crate::org_fold::org_fold;
-use crate::provenance::TranscriptSource;
 use crate::scrape::fno_bin;
 use serde_json::{json, Map, Value};
 use std::io::Write;
@@ -893,47 +892,32 @@ pub(crate) fn own_transcript() -> Result<OwnTranscript, String> {
     let harness = harness
         .as_deref()
         .ok_or_else(|| "no harness resolved from the ambient environment".to_string())?;
-    match harness {
-        "claude" => {
-            let path = crate::claude_drive::find_transcript(&session_id)
-                .ok_or_else(|| format!("no transcript found for session {session_id}"))?;
+    // pi and agy renders carry no tool results, so the check-in readers keep
+    // them unmeasured even though the shared resolver can find their stores.
+    let harness: &'static str = match harness {
+        "claude" => "claude",
+        "codex" => "codex",
+        "opencode" => "opencode",
+        other => {
+            return Ok(OwnTranscript::Unmeasured {
+                reason: format!("no transcript store reader for harness {other}"),
+            })
+        }
+    };
+    match crate::session_receipt::locate(harness, &session_id)? {
+        crate::session_receipt::Store::File(path) => {
             let text = std::fs::read_to_string(&path)
                 .map_err(|e| format!("transcript unreadable: {e}"))?;
             Ok(OwnTranscript::Text {
-                harness: "claude",
+                harness,
                 text,
                 path: Some(path),
             })
         }
-        "codex" => {
-            let path = crate::lead_history::hygiene_transcript_for_holder("codex", &session_id)
-                .ok_or_else(|| format!("no codex rollout for session {session_id}"))?;
-            let text = std::fs::read_to_string(&path)
-                .map_err(|e| format!("transcript unreadable: {e}"))?;
-            Ok(OwnTranscript::Text {
-                harness: "codex",
-                text,
-                path: Some(path),
-            })
-        }
-        "opencode" => {
-            let source = crate::opencode_transcript::OpencodeSource {
-                dbs: crate::opencode_transcript::opencode_stores(),
-                roots: None,
-            };
-            let file = source
-                .sessions(30)
-                .into_iter()
-                .find(|file| file.session_id == session_id)
-                .ok_or_else(|| format!("no opencode session {session_id} in its stores"))?;
-            Ok(OwnTranscript::Text {
-                harness: "opencode",
-                text: source.read(&file),
-                path: None,
-            })
-        }
-        other => Ok(OwnTranscript::Unmeasured {
-            reason: format!("no transcript store reader for harness {other}"),
+        crate::session_receipt::Store::Rendered(text) => Ok(OwnTranscript::Text {
+            harness,
+            text,
+            path: None,
         }),
     }
 }

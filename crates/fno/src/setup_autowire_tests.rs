@@ -101,7 +101,7 @@ fn auto_wire_pure_contracts_hold() {
     );
     assert_eq!(
         parse_codex_receipt("not json"),
-        Outcome::Failed("unreadable receipt from the fno-py engine".into())
+        Outcome::Failed("unreadable receipt from the codex arm".into())
     );
 
     // The opencode receipt decides by status, note rendered either way.

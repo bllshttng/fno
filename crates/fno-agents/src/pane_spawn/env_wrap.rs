@@ -10,7 +10,7 @@
 //! ported: the spawn guard exports it and the pairs carry it. The route overlay IS: the claude arm (row 8, PR B) hands
 //! its resolved route env to this wrapper through the `overlay` param, which
 //! the pairs append after the claude extras and the unsets answer with the
-//! account_env.py scrub floor when the harness is claude.
+//! `accounts::credentials` scrub floor when the harness is claude.
 
 use base64::Engine as _;
 
@@ -62,23 +62,9 @@ pub const SEED_PROVENANCE_KEYS: [&str; 6] = [
     "FNO_SEED_PROV_HARNESS",
 ];
 
-/// account_env.py's `SCRUB_AUTH_VARS` (account_env.py:72-87): the inherited
-/// auth vars a routed claude worker must never keep. The tier-alias remaps
-/// (`MODEL_ENV_KEYS`' tail) ride along because endpoint, auth and model are
-/// ONE provider route; the tuple order is the Python tuple's order - the
-/// goldens pin it byte-equal.
-pub const SCRUB_AUTH_VARS: [&str; 10] = [
-    "ANTHROPIC_API_KEY",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-    "ANTHROPIC_AUTH_TOKEN",
-    "FNO_ROUTE_PROVIDER",
-    "ANTHROPIC_MODEL",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL",
-];
+/// The inherited auth vars a routed claude worker must never keep; the
+/// order is the list's order, and the goldens pin it byte-equal.
+pub use crate::accounts::credentials::SCRUB_AUTH_VARS;
 
 /// `_mesh_env_pairs` for the shapes an arm answers: no role and no account
 /// overlay (seam-carved), so the pairs reduce to identity, substrate, the
@@ -140,7 +126,7 @@ pub fn mesh_env_pairs(
         "-u".to_string(),
         crate::spawn_route::ROUTE_PROVIDER_ENV.to_string(),
     ]);
-    // The account_env.py scrub floor, riding with an overlay the way the
+    // The credentials scrub floor, riding with an overlay the way the
     // account/route block rides in Python (mux_spawn.py:1228-1242): claude
     // only, and only when the caller carries an overlay to apply, so a plain
     // pane's unset list stays the golden's. `env -u` on an unset var is a

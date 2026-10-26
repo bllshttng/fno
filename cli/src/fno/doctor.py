@@ -3801,17 +3801,17 @@ def _harness_surface_report() -> dict[str, Any]:
         or (codex_home / "plugins" / "cache" / "footnote-dev").exists()
     )
     if shutil.which("codex") is not None or plugin_state_exists:
-        try:
-            from fno.setup.codex_plugin import inspect_freshness
+        from fno.rust_binary import call_binary_json
 
-            report["codex_plugin"] = inspect_freshness()
-        except Exception as exc:  # noqa: BLE001 - doctor remains advisory
-            report["codex_plugin"] = {
-                "status": "unknown",
-                "issue": "inspection-failed",
-                "detail": str(exc)[-500:],
-                "remedy": "fno config plugin install codex --force",
-            }
+        args = ["--status", "--json", "codex"]
+        error, verdict = call_binary_json("plugin-install", args, timeout=300)
+        ok = error is None and isinstance(verdict, dict)
+        report["codex_plugin"] = verdict if ok else {
+            "status": "unknown",
+            "issue": "inspection-failed",
+            "detail": str(error)[-500:],
+            "remedy": "fno config plugin install codex --force",
+        }
 
     # Surface codex hooks dual-representation in the MAIN run too, not only the
     # opt-in `--codex-hooks` mode: a plain `fno doctor` should point at the heal.
@@ -4334,10 +4334,17 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
     result["archive_id_collisions"] = _archive_id_collisions()
     result["post_merge_sync"] = _post_merge_sync_health()
     try:
-        from fno.evals.report import evals_health_summary
+        from fno.config import load_settings
         from fno.paths import evals_history
+        from fno.rust_binary import command_call
 
-        result["evals"] = evals_health_summary(evals_history())
+        stale_days = int(getattr(load_settings().evals, "stale_days", 7) or 7)
+        # The native health projection (evals-trend op health): one
+        # denominator authority; Python never re-folds.
+        result["evals"] = command_call(
+            "evals-trend",
+            {"op": "health", "history": str(evals_history()), "stale_days": stale_days},
+        )
     except Exception:  # noqa: BLE001 - an alarm that crashes doctor helps nobody
         result["evals"] = None
     result["source_checkout_sync"] = _source_checkout_sync(src)

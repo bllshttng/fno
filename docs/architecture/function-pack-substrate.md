@@ -14,9 +14,9 @@ scenarios in one manifest; verify the pack before it is installed; and activate
 it so its roles become resolvable through the existing role resolver.
 
 The substrate grants nothing. A pack declares effects and capabilities; it never
-grants them. Activation projects packaged roles into the `RoleLayer.PLUGIN`
-directory the role registry already walks, and that is the whole integration:
-`cli/src/fno/roles/registry.py` and `cli/src/fno/roles/resolver.py` are unchanged
+grants them. Activation projects packaged roles into the plugin layer directory
+the role registry already walks, and that is the whole integration: the role
+registry and resolver (now `crates/fno-agents/src/roles/`) are unchanged
 by this work, which is what makes "activation changed no resolution behavior" a
 provable claim rather than an assertion.
 
