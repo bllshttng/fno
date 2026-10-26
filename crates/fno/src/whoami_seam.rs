@@ -20,11 +20,16 @@ const RECEIPT_BOUND: Duration = Duration::from_secs(1);
 /// The argv the seam claims: `whoami` with only its own flags, or
 /// `whoami status`. Help and every other leaf keep the plain forward.
 pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
-    if std::env::var_os(CHILD_ENV).is_some() || args.first()?.to_str()? != "whoami" {
+    // The root JSON flag may lead (`fno -J whoami`); the child keeps it.
+    let start = args
+        .iter()
+        .position(|a| a != "-J" && a != "--json")
+        .unwrap_or(args.len());
+    if std::env::var_os(CHILD_ENV).is_some() || args.get(start)?.to_str()? != "whoami" {
         return None;
     }
     let mut leaf: Option<&str> = None;
-    let mut i = 1;
+    let mut i = start + 1;
     while i < args.len() {
         let a = args[i].to_str()?;
         match a {
@@ -163,6 +168,7 @@ mod tests {
             &["whoami", "--json"],
             &["whoami", "status", "-J"],
             &["whoami", "--state-file", "x.md", "status"],
+            &["-J", "whoami"],
         ] {
             assert!(classify(&os(claimed)).is_some(), "{claimed:?}");
         }

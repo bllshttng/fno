@@ -244,8 +244,18 @@ fn result_classes(rows: &[Value]) -> Vec<Option<&'static str>> {
                 p.get("type").and_then(Value::as_str),
                 Some("function_call_output" | "custom_tool_call_output")
             ) {
-                let failed = codex_output_is_error(&codex_output_text(p));
-                out.push(failed.then_some("command_failed"));
+                // A failed output that names a refusal lands in its class;
+                // any other failed output is a failed command. A successful
+                // output is never classed: its text may quote refusal words.
+                let text = codex_output_text(p);
+                out.push(codex_output_is_error(&text).then(|| {
+                    let class = error_class(&text);
+                    if DENIAL_CLASSES.contains(&class) {
+                        class
+                    } else {
+                        "command_failed"
+                    }
+                }));
             }
             continue;
         }
@@ -331,30 +341,33 @@ pub(crate) fn from_text(
                 let saw_tokens = fold.saw_tokens();
                 let act = fold.finish();
                 // A codex token_count row is a running total; the turn's
-                // spend is the delta from the last total before it.
+                // spend is the delta from the last total before it. A tail
+                // cut before that total cannot place the baseline.
                 let tokens = if harness == "codex" {
-                    let base = rows[..=b]
-                        .iter()
-                        .rev()
-                        .find_map(codex_token_total)
-                        .unwrap_or_default();
-                    if saw_tokens {
-                        act.tokens.since(base)
-                    } else {
-                        Tokens::default()
+                    let base = rows[..=b].iter().rev().find_map(codex_token_total);
+                    match (saw_tokens, base) {
+                        (false, _) => Ok(Tokens::default()),
+                        (true, Some(base)) => Ok(act.tokens.since(base)),
+                        (true, None) if !truncated => Ok(act.tokens),
+                        (true, None) => {
+                            Err("unmeasured: the tail holds no token total before the turn"
+                                .to_string())
+                        }
                     }
                 } else {
-                    act.tokens
+                    Ok(act.tokens)
                 };
-                let rates = match (book, act.model.as_deref()) {
-                    (None, _) => Err("unmeasured: no models-dev price catalog".to_string()),
-                    (_, None) => Err("unmeasured: the turn names no model".to_string()),
-                    (Some(book), Some(m)) => book
+                let rates = match (&tokens, book, act.model.as_deref()) {
+                    (Err(why), _, _) => Err(why.clone()),
+                    (_, None, _) => Err("unmeasured: no models-dev price catalog".to_string()),
+                    (_, _, None) => Err("unmeasured: the turn names no model".to_string()),
+                    (_, Some(book), Some(m)) => book
                         .rates(m, None)
                         .ok_or_else(|| format!("unmeasured: no rate for {m}")),
                 };
                 let (cost_usd, cost_basis) = match rates {
-                    Ok(r) => match crate::model_price::cost(tokens, &r) {
+                    Ok(r) => match crate::model_price::cost(tokens.clone().unwrap_or_default(), &r)
+                    {
                         Some(c) => (Some((c * 100.0).round() / 100.0), "models-dev".to_string()),
                         None => (None, "unmeasured: a token kind has no rate".to_string()),
                     },
@@ -366,7 +379,10 @@ pub(crate) fn from_text(
                     "lines_removed": act.lines_removed,
                 });
                 out["errors"] = json!(act.tool_errors);
-                out["tokens"] = json!(tokens);
+                out["tokens"] = match &tokens {
+                    Ok(t) => json!(t),
+                    Err(why) => json!({ "unmeasured": why.trim_start_matches("unmeasured: ") }),
+                };
                 out["cost_usd"] = json!(cost_usd);
                 out["cost_basis"] = json!(cost_basis);
                 out["in_progress"] = json!(!turn.iter().any(ends_turn));
