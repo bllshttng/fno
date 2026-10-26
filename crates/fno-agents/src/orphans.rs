@@ -647,7 +647,7 @@ pub fn filter_new(result: &ScanResult, seen_path: &Path) -> bool {
         seen_path,
         keys.iter().cloned().collect::<Vec<_>>().join("\n"),
     );
-    !keys.is_subset(&seen)
+    !keys.iter().all(|k| seen.contains(k))
 }
 
 /// The same content as the text render, for the machine reader.
