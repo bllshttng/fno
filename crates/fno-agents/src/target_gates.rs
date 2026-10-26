@@ -67,12 +67,12 @@ pub(crate) fn resolve_repo_root() -> PathBuf {
         }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut dir = Some(cwd.as_path());
-    while let Some(dir) = dir {
+    let mut dir = cwd.as_path();
+    while let Some(parent) = dir.parent() {
         if dir.join(".git").exists() {
             return dir.to_path_buf();
         }
-        dir = dir.parent();
+        dir = parent;
     }
     cwd
 }
@@ -174,7 +174,7 @@ fn descriptors_payload(review: &toml::Value) -> serde_json::Value {
             "kind": "local-attestation",
             "requires": requires,
             "invocation": invocation,
-            "asserts": if *self_cert { "self-cert" } else { "review-evidence" },
+            "asserts": if self_cert { "self-cert" } else { "review-evidence" },
         });
         if !per_harness.is_empty() {
             let mut invocations = serde_json::Map::new();
@@ -352,7 +352,7 @@ fn input_may_name_a_node(text: Option<&str>) -> bool {
     let Some(text) = text else {
         return false;
     };
-    text.split().any(|tok| {
+    text.split_whitespace().any(|tok| {
         node_token_re().is_match(tok) || bare_hex_re().is_match(tok) || kebab_re().is_match(tok)
     })
 }
@@ -407,7 +407,7 @@ fn resolve_dispatch_node(
 ) -> Option<serde_json::Value> {
     let node_tokens: HashSet<String> = input
         .into_iter()
-        .flat_map(|t| t.split())
+        .flat_map(|t| t.split_whitespace())
         .filter(|tok| node_token_re().is_match(tok))
         .map(|tok| tok.to_ascii_lowercase())
         .collect();
@@ -678,7 +678,7 @@ fn resolve_owned_identity_run(args: &[String]) -> i32 {
     println!("DISPOSITION={}", disposition_word(owned.disposition));
     println!(
         "COLLISION={}",
-        rejected.map(|r| r.owner.clone()).unwrap_or_default()
+        rejected.and_then(|r| r.owner.clone()).unwrap_or_default()
     );
     println!(
         "COLLISION_ID={}",
@@ -1064,8 +1064,6 @@ impl SelfReviewCtx {
 }
 
 /// `fno-agents target-gates request-self-review [--pr-number N]`: the Python
-
-/// `fno-agents target-gates request-self-review [--pr-number N]`: the Python
 /// verb composed four native doors over subprocesses; this op composes the
 /// same four. One JSON receipt on stdout, exit 2 on refused or unconfirmed -
 /// the contract the two request-self-review goldens pin.
@@ -1073,7 +1071,7 @@ pub fn run_request_self_review(args: &[String]) -> i32 {
     let mut pr_number: Option<i64> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
-        match arg.as_str() + '\0' {
+        match arg.as_str() {
             "--pr-number" | "--pr" => pr_number = it.next().and_then(|v| v.parse().ok()),
             other => {
                 eprintln!("fno do target request-self-review: unknown flag {other}");

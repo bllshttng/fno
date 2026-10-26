@@ -103,10 +103,15 @@ fn load(path: &Path) -> Result<serde_json::Value, LoadError> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(LoadError::Absent),
-        Err(e) => return Err(LoadError::Malformed(format!("{path}: unreadable ({e})"))),
+        Err(e) => {
+            return Err(LoadError::Malformed(format!(
+                "{}: unreadable ({e})",
+                path.display()
+            )))
+        }
     };
     serde_json::from_str(&text)
-        .map_err(|e| LoadError::Malformed(format!("{path}: unreadable ({e})")))
+        .map_err(|e| LoadError::Malformed(format!("{}: unreadable ({e})", path.display())))
         .and_then(|data| validate(&data).map(|_| data).map_err(LoadError::Malformed))
 }
 
@@ -162,7 +167,9 @@ fn run_contract_test(cmd: &str, root: &str) -> (bool, String) {
     };
     let output = match output {
         Some(out) => out,
-        Err(e) => return (false, format!("contract-test did not complete: {e}")),
+        // The child was reaped by try_wait; wait_with_output only fails on a
+        // stdin/stdout race this one-shot pipe setup cannot produce.
+        None => return (false, "contract-test did not complete".to_string()),
     };
     let code = output.status.code().unwrap_or(-1);
     let raw = if output.stderr.is_empty() {
@@ -266,9 +273,9 @@ fn mark_reconciled(node: &str, root: &str) -> Result<PathBuf, LoadError> {
     }
     validate(&manifest).map_err(LoadError::Malformed)?;
     let written = serde_json::to_string_pretty(&manifest)
-        .map_err(|e| LoadError::Malformed(format!("{path}: unreadable ({e})")))?;
+        .map_err(|e| LoadError::Malformed(format!("{}: unreadable ({e})", path.display())))?;
     std::fs::write(&path, written + "\n")
-        .map_err(|e| LoadError::Malformed(format!("{path}: unreadable ({e})")))?;
+        .map_err(|e| LoadError::Malformed(format!("{}: unreadable ({e})", path.display())))?;
     Ok(path)
 }
 
@@ -430,7 +437,7 @@ fn run_reconcile_finalize(args: &[String]) -> i32 {
             eprintln!("stub-manifest: cannot finalize a broken manifest: {detail}");
             1
         }
-        Ok(path) => {
+        Ok(_) => {
             let receipt = serde_json::json!({
                 "node": node,
                 "reconciled": true,
