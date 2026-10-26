@@ -147,7 +147,7 @@ LAYERS = (
             # writer that stamps a node's session rows - opposite sides of the
             # runtime boundary, which is what makes it a platform leaf.
             # The MODULE, not the fno.provenance package: its siblings
-            # (spawn_think, cli, autobrief) are orchestration that legitimately
+            # (autobrief, runtime_attempts) are orchestration that legitimately
             # reaches up, and declaring the package would map them too. Its one
             # sibling import, provenance.resolver, stays unmapped and reaches
             # fno.agents.discover only on the opencode branch, which

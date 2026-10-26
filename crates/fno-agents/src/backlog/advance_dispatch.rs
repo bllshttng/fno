@@ -416,8 +416,7 @@ pub fn launch_resolved(
         obj.insert("territory".to_string(), territory.unwrap_or(Value::Null));
         obj.insert("leadless".to_string(), leadless.unwrap_or(Value::Null));
     }
-    let mut argv = vec!["agents".to_string(), "spawn".to_string()];
-    argv.extend(node_spawn_argv(&args, args.node_cwd.as_deref(), &[]));
+    let argv = node_spawn_argv(&args, args.node_cwd.as_deref(), &[]);
     // The caller's dispatch reservation and the spawn door's own family-2
     // guard collide - the door acquires the SAME key, sees a foreign holder
     // it must never clear, and refuses. Hand the reservation over: release
@@ -426,16 +425,9 @@ pub fn launch_resolved(
     if let Some((key, holder)) = dispatch_reservation {
         super::advance::safe_release(key, holder);
     }
-    let exe = crate::scrape::fno_bin();
-    let mut cmd = std::process::Command::new(&exe);
-    cmd.args(&argv);
     // The resolver's env is AUTHORITATIVE: a stale inherited TARGET_NO_MERGE
     // never survives into a successor the resolver just granted allow-merge.
-    cmd.env_clear();
-    for (k, v) in &args.env {
-        cmd.env(k, v);
-    }
-    let out = match crate::bounded_cmd::output_with_timeout_result(cmd, 600) {
+    let out = match exec_agents_spawn(&argv, &args.env, true) {
         Ok(out) => out,
         Err(e) => {
             return Err(SpawnOutcome::Failed(SpawnFailure::general(format!(
@@ -559,6 +551,28 @@ pub fn launch_resolved(
     }
     let short = finish_spawn(&row, events_path, None, &notes);
     Ok((short, row))
+}
+
+/// Exec `fno agents spawn <args>` under the 600-second bound: the launch
+/// the node dispatch, the think dispatch and the keep-going build arm share.
+/// With `clear_env` the given env is the child's whole environment; without
+/// it the env layers over the inherited one.
+pub(crate) fn exec_agents_spawn(
+    args: &[String],
+    env: &std::collections::BTreeMap<String, String>,
+    clear_env: bool,
+) -> std::io::Result<std::process::Output> {
+    let exe = crate::scrape::fno_bin();
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(["agents", "spawn"]);
+    cmd.args(args);
+    if clear_env {
+        cmd.env_clear();
+    }
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    crate::bounded_cmd::output_with_timeout_result(cmd, 600)
 }
 
 /// The spawn-seam failure vocabulary shared with the Python owner.

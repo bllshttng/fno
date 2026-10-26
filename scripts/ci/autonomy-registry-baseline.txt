@@ -15,7 +15,6 @@
 cli/src/fno/cli.py::  # NOT a spawn site: LAZY_SUBCOMMANDS declares "agents" as a command group
 cli/src/fno/observer/cli.py::_default_spawn  # NOT autonomous: explicit `fno doctor observer judge/replay` operator command
 cli/src/fno/pr_watch/_dispatch.py::fire_skill  # pr_watch headless PR poll (config.pr_watch.enabled)
-cli/src/fno/provenance/spawn_think.py::_spawn_think_worker  # spawn_think (config.think_spawn.enabled)
 cli/src/fno/recovery.py::_redispatch  # recovery sweep (config.recovery.enabled)
 cli/src/fno/recovery.py::_respawn_bg_resume  # recovery sweep (config.recovery.enabled)
 hooks/context-nudge.sh::  # NOT a call site: quotes `fno agents spawn` inside an operator-facing nudge message
