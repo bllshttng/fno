@@ -612,7 +612,10 @@ fn arm_row(
 /// conversation clock is live: a follow-up the harness queues during a long
 /// answer fires UserPromptSubmit only after the turn ends, often minutes
 /// after its Enter, and without the wide look-back it would not restart the
-/// grace. Silent on every path, never panics.
+/// grace. A lapsed conversation clock widens the window to its own arm
+/// instant: the follow-up behind that clock was witnessed inside the window
+/// the clock covered, and the harness submits it only after the turn ends,
+/// which can sit well past the lapse. Silent on every path, never panics.
 pub(crate) fn conversation_prompt(session_id: &str, prompt: &str) {
     if !is_real_message(prompt) {
         return;
@@ -623,11 +626,13 @@ pub(crate) fn conversation_prompt(session_id: &str, prompt: &str) {
     let handle = identity_key(&matched);
     let now = chrono::Utc::now();
     let now_ms = now.timestamp_millis();
-    let live = read_clock(&handle).map(|c| c.live(now)).unwrap_or(false);
+    let clock = read_clock(&handle);
+    let live = clock.as_ref().map(|c| c.live(now)).unwrap_or(false);
     let since_ms = if live {
         now_ms - answer_backstop_s() * 1000
     } else {
-        now_ms - crate::operator_witness::SUBMIT_WINDOW_AFTER_MS
+        lapsed_arm_ms(&clock, now)
+            .unwrap_or(now_ms - crate::operator_witness::SUBMIT_WINDOW_AFTER_MS)
     };
     let journal = crate::paths::AgentsHome::from_env().events_jsonl();
     if crate::operator_witness::submitted_since(&journal, session_id, since_ms, now_ms) {
@@ -635,6 +640,20 @@ pub(crate) fn conversation_prompt(session_id: &str, prompt: &str) {
         // of looking it up a second time.
         arm_row(&matched, policy, session_id);
     }
+}
+
+/// The look-back floor for a lapsed conversation clock: its arm instant
+/// (`until` minus the window it was written with), so a follow-up witnessed
+/// inside that window still re-arms after the clock lapses. None for a
+/// missing, live, or foreign-source clock, which keeps the plain 30 s
+/// submit look-back.
+fn lapsed_arm_ms(clock: &Option<Clock>, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
+    let clock = clock.as_ref()?;
+    if clock.live(now) || clock.source.as_deref() != Some(CONVERSATION_SOURCE) {
+        return None;
+    }
+    let until = clock.until?;
+    Some((until - chrono::Duration::seconds(clock.window_s)).timestamp_millis())
 }
 
 /// The Stop side (C3, C6): a live conversation clock is shortened to
@@ -1864,6 +1883,53 @@ pub(crate) mod tests {
             arm_conversation(SID);
             let row = clock(dir, SID);
             assert_eq!(row["window_s"], 180);
+        });
+    }
+
+    /// A follow-up queued during a long answer carries a witness inside the
+    /// answering window the lapsed clock covered, so it re-arms even though
+    /// the prompt fires well past the lapse. With no clock the plain 30 s
+    /// look-back stands and the same old witness arms nothing.
+    #[test]
+    fn a_followup_submitted_after_the_clock_lapses_still_re_arms() {
+        with_hold_env(|dir| {
+            write_registry(
+                dir,
+                serde_json::json!([
+                    registry_row("worker", SID),
+                    registry_row("idle", "dddddddd-1111-2222-3333-444455556666")
+                ]),
+            );
+            let now = chrono::Utc::now();
+            // The previous answering window: armed 700 s ago, lapsed 100 s ago.
+            write_clock(
+                &identity_key(SID),
+                Some(now - chrono::Duration::seconds(100)),
+                600,
+                "wall",
+                None,
+                Some(CONVERSATION_SOURCE),
+            )
+            .unwrap();
+            let old_witness_ms = (now - chrono::Duration::seconds(690)).timestamp_millis();
+            witness_row(SID, old_witness_ms);
+            witness_row("dddddddd-1111-2222-3333-444455556666", old_witness_ms);
+            conversation_prompt(SID, "follow up");
+            let row = clock(dir, SID);
+            assert_eq!(row["source"], "conversation");
+            let until = chrono::DateTime::parse_from_rfc3339(row["until"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            assert!(
+                until > now,
+                "the lapsed clock is re-armed live for the next answer"
+            );
+            // The clock-less session keeps the 30 s look-back: no arm.
+            conversation_prompt("dddddddd-1111-2222-3333-444455556666", "follow up");
+            assert!(
+                !clock_path(dir, "dddddddd-1111-2222-3333-444455556666").exists(),
+                "an old witness with no clock never arms"
+            );
         });
     }
 
