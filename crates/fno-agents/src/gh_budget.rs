@@ -382,18 +382,10 @@ pub(crate) struct FileLock {
 }
 
 impl FileLock {
-    /// The panicking form, kept for the callers that own their own store and
-    /// have no degrade. The budget consult does NOT use this one; it takes
-    /// try_acquire.
-    pub(crate) fn acquire(path: &Path) -> FileLock {
-        FileLock::try_acquire(path)
-            .unwrap_or_else(|e| panic!("gh-budget: cannot open lock {}: {e}", path.display()))
-    }
-
-    /// The fallible twin: None when the lock file cannot be created or
-    /// flocked (a read-only or uncreatable state directory). The budget
-    /// consult degrades to a lock-free read instead of aborting the process
-    /// on every gh call - the module's fail-open rule.
+    /// The only way to take the lock: Err when the lock file cannot be
+    /// created or flocked (a read-only state directory, or a holder that
+    /// keeps it past the retry bound). Each caller names its own degrade,
+    /// and none aborts the process - the module's fail-open rule.
     ///
     /// The flock is LOCK_NB with a short retry, never a blocking LOCK_EX: a
     /// blocking wait queued every gh shim call behind the lock holder, and
