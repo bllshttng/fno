@@ -64,26 +64,6 @@ pub struct ScrapeTarget {
     pub last: Option<ScreenStateReport>,
 }
 
-/// True when the harness's session-state wiring names no blocked producer
-/// (`blocked = "none"`): its hook lane can report working/done but has no
-/// event that states blocked, so the screen manifest owns that rung for the
-/// harness's rows. An unknown harness, an audit-only row and an unwired job
-/// are NOT "no producer" - they are never hook-reported at all and stay on
-/// today's whole-row rule. Parse failure reads false (fail closed, the sweep
-/// keeps the old behavior).
-fn wiring_declares_no_blocked_producer(harness: &str) -> bool {
-    let Ok(contract) = crate::harness_capabilities::HarnessContract::packaged() else {
-        return false;
-    };
-    let Some(job) = contract.hook_job(harness, "session_state") else {
-        return false;
-    };
-    if job.state != "supported" {
-        return false;
-    }
-    job.wiring.as_ref().is_some_and(|w| w.blocked == "none")
-}
-
 /// The eligibility filter (per-capability arbitration). Pure over a loaded
 /// registry so the gate is unit-testable without a daemon or a mux.
 pub fn scrape_targets(reg: &Registry) -> Vec<ScrapeTarget> {
@@ -101,7 +81,10 @@ pub fn scrape_targets(reg: &Registry) -> Vec<ScrapeTarget> {
             // (failed reachability probe) and Failed (panicked task)
             // already say the backend is not live, so scraping their last
             // screen would badge a dead pane (codex P2).
-            (e.inside_leg.is_none() || wiring_declares_no_blocked_producer(e.harness_name()))
+            (e.inside_leg.is_none()
+                || crate::harness_capabilities::session_state_names_no_blocked_producer(
+                    e.harness_name(),
+                ))
                 && !matches!(
                     e.status,
                     AgentStatus::Exited
@@ -426,7 +409,9 @@ enum WriteDisposition {
 /// Decide the locked-write disposition for one row. Pure so the arbitration
 /// re-checks (hook flip, mux-ref match) are unit-testable without a daemon.
 fn write_disposition(e: &state::RegistryEntry, expect_ref: &(String, u64)) -> WriteDisposition {
-    if e.inside_leg.is_some() && !wiring_declares_no_blocked_producer(e.harness_name()) {
+    if e.inside_leg.is_some()
+        && !crate::harness_capabilities::session_state_names_no_blocked_producer(e.harness_name())
+    {
         return WriteDisposition::HookFlip;
     }
     let cur_ref = e.mux.as_ref().map(|m| (m.session.clone(), m.pane_id));
