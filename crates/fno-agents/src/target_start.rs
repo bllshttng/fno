@@ -2415,9 +2415,10 @@ mod start_progress_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("long.txt");
         let long = "begin: step-name-that-keeps-going".repeat(6);
-        std::fs::write(&path, "done: a\n".to_string() + &long).unwrap();
+        std::fs::write(&path, "done: a\n".to_string() + &long + "\n").unwrap();
         let got = last_progress_line(&path).unwrap();
-        assert!(got.starts_with("done: a"));
+        assert!(got.starts_with("begin: step-name"));
+        assert!(got.ends_with("..."));
         assert_eq!(got.chars().count(), 123);
     }
 }
