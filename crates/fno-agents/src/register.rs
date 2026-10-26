@@ -124,80 +124,97 @@ session '{session_id}'; use the full session id directly"
         }
     }
 
-    let outcome = update_registry(&crate::paths::AgentsHome::shared_registry_json(), |registry| {
-        let existing = registry.entries.iter_mut().find(|e| {
-            e.harness.as_deref() == Some(harness.as_str())
-                && e.harness_session_id.as_deref() == Some(session_id.as_str())
-        });
-        if let Some(row) = existing {
-            // The verb passes no explicit status, so the refresh is
-            // unconditional: a hand-started session is never live-transport.
-            row.status = crate::AgentStatus::Idle;
-            row.cwd = cwd.clone();
-            // Origin is WRITE-ONCE: a refresh fills an empty origin and may
-            // upgrade `adopted` to `operator` (the one transition with no
-            // downside); it never touches `spawn`.
-            let upgradeable = row.origin.is_none() || row.origin.as_deref() == Some("adopted");
-            if upgradeable {
-                row.origin = origin_request.clone();
+    let outcome = update_registry(
+        &crate::paths::AgentsHome::shared_registry_json(),
+        |registry| {
+            let existing = registry.entries.iter_mut().find(|e| {
+                e.harness.as_deref() == Some(harness.as_str())
+                    && e.harness_session_id.as_deref() == Some(session_id.as_str())
+            });
+            if let Some(row) = existing {
+                // The verb passes no explicit status, so the refresh is
+                // unconditional: a hand-started session is never live-transport.
+                row.status = crate::AgentStatus::Idle;
+                row.cwd = cwd.clone();
+                // Origin is WRITE-ONCE: a refresh fills an empty origin and may
+                // upgrade `adopted` to `operator` (the one transition with no
+                // downside); it never touches `spawn`.
+                let upgradeable = row.origin.is_none() || row.origin.as_deref() == Some("adopted");
+                if upgradeable {
+                    row.origin = origin_request.clone();
+                }
+                if let Some(policy) = &delivery_policy {
+                    row.delivery_policy = if policy == "off" {
+                        None
+                    } else {
+                        Some(policy.clone())
+                    };
+                }
+                apply_manifest_role(row, manifest_role.as_ref());
+                let policy_after = row.delivery_policy.clone();
+                return (
+                    row.name.clone(),
+                    harness.clone(),
+                    policy_after,
+                    row.origin.clone(),
+                );
             }
-            if let Some(policy) = &delivery_policy {
-                row.delivery_policy = if policy == "off" {
-                    None
-                } else {
-                    Some(policy.clone())
-                };
+            let mut name = base.clone();
+            let mut suffix = 2;
+            while address_taken(&registry.entries, &name, false) {
+                name = format!("{base}-{suffix}");
+                suffix += 1;
             }
-            apply_manifest_role(row, manifest_role.as_ref());
-            let policy_after = row.delivery_policy.clone();
-            return (row.name.clone(), harness.clone(), policy_after);
-        }
-        let mut name = base.clone();
-        let mut suffix = 2;
-        while address_taken(&registry.entries, &name, false) {
-            name = format!("{base}-{suffix}");
-            suffix += 1;
-        }
-        let mut fresh = RegistryEntry::new(
-            Some(session_id.clone()),
-            crate::state::Lineage::unproven(
-                "operator register: self-registration carries no parent edge",
-            ),
-        );
-        fresh.name = name.clone();
-        fresh.harness = Some(harness.clone());
-        fresh.cwd = cwd.clone();
-        fresh.status = crate::AgentStatus::Idle;
-        fresh.origin = origin_request.clone();
-        fresh.delivery_policy = match &delivery_policy {
-            None => None,
-            Some(p) if p == "off" => None,
-            Some(p) => Some(p.clone()),
-        };
-        if harness == "claude" {
-            // The derived 8-hex attach key, skipped (not raised) when it
-            // collides with an existing address: the full id still resolves.
-            let derived = canonical_handle(&session_id);
-            let hex_guarded = derived.chars().count() == 8
-                && derived
-                    .chars()
-                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
-            if hex_guarded && !address_taken(&registry.entries, &derived, false) {
-                fresh.short_id = derived;
+            let mut fresh = RegistryEntry::new(
+                Some(session_id.clone()),
+                crate::state::Lineage::unproven(
+                    "operator register: self-registration carries no parent edge",
+                ),
+            );
+            fresh.name = name.clone();
+            fresh.harness = Some(harness.clone());
+            fresh.cwd = cwd.clone();
+            fresh.status = crate::AgentStatus::Idle;
+            fresh.origin = origin_request.clone();
+            fresh.delivery_policy = match &delivery_policy {
+                None => None,
+                Some(p) if p == "off" => None,
+                Some(p) => Some(p.clone()),
+            };
+            if harness == "claude" {
+                // The derived 8-hex attach key, skipped (not raised) when it
+                // collides with an existing address: the full id still resolves.
+                let derived = canonical_handle(&session_id);
+                let hex_guarded = derived.chars().count() == 8
+                    && derived
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
+                if hex_guarded && !address_taken(&registry.entries, &derived, false) {
+                    fresh.short_id = derived;
+                }
             }
-        }
-        apply_manifest_role(&mut fresh, manifest_role.as_ref());
-        let policy_after = fresh.delivery_policy.clone();
-        registry.entries.push(fresh);
-        (name, harness.clone(), policy_after)
-    });
-    let (name, harness, policy_after) = match outcome {
+            apply_manifest_role(&mut fresh, manifest_role.as_ref());
+            let policy_after = fresh.delivery_policy.clone();
+            registry.entries.push(fresh);
+            (name, harness.clone(), policy_after, origin_request.clone())
+        },
+    );
+    let (name, harness, policy_after, origin_after) = match outcome {
         Ok(found) => found,
         Err(exc) => {
             eprintln!("register failed: registry write failed: {exc}");
             return 1;
         }
     };
+    // Origin is a birth fact: when the refresh preserved a non-operator
+    // origin, say so instead of letting the success read as attended.
+    if origin_after.as_deref().is_some_and(|o| o != "operator") {
+        eprintln!(
+            "note: origin stays '{o}'; it records what created this row and is \
+written once. Mail escalation reads it, so this session is still treated as '{o}'.",
+            o = origin_after.as_deref().unwrap_or_default()
+        );
+    }
 
     // The delivery-policy clock: the identity key clears any standing clock,
     // and the flip to an injectable policy also drops a pre-migration
@@ -354,7 +371,10 @@ fn apply_manifest_role(row: &mut RegistryEntry, role: Option<&ManifestRole>) {
 /// The ambiguity refusal, ported from `identity_ambiguity_message`: the
 /// opening names what blocked (a live-row-owned id vs mixed families), the
 /// marker list names what was seen, the resolve hint names where to look,
-/// and the strip section names the self-rescue.
+/// and the strip section names the self-rescue. A single-family ambiguous
+/// disposition (two ids of one harness, or a contradicted only marker) has
+/// no foreign family to strip, so the section is omitted entirely rather
+/// than printing a header with no command under it.
 fn ambiguity_message(ident: &crate::spawn_context::OwnedIdentity) -> String {
     let markers = ident
         .markers_present
@@ -377,8 +397,119 @@ fn ambiguity_message(ident: &crate::spawn_context::OwnedIdentity) -> String {
 (inherited env?)"
             .to_string(),
     };
+    let get = |name: &str| std::env::var(name).ok();
+    let mut families: Vec<&str> = Vec::new();
+    for (_m, harness, _v) in &ident.markers_present {
+        if !families.contains(&harness.as_str()) {
+            families.push(harness.as_str());
+        }
+    }
+    let mut strip_lines = String::new();
+    for family in &families {
+        let flags = ambient_identity_strip_flags(family, &get);
+        if !flags.is_empty() {
+            strip_lines.push_str(&format!(
+                "  if this is a {family} session: env {} <command>\n",
+                flags.join(" ")
+            ));
+        }
+    }
+    // A single-family ambiguity has no foreign family to strip, so the
+    // section is omitted entirely rather than printing a header with no
+    // command under it.
+    let mut strip_section = String::new();
+    if !strip_lines.is_empty() {
+        strip_section = format!(
+            "or strip the foreign family's markers and retry:\n{strip_lines}\
+keeping your own harness's markers; each harness re-mints its own for a child\n"
+        );
+    }
     format!(
         "{opening}\nmarkers: {markers}\nresolve with: find ~/.codex/sessions \
-~/.claude/projects -name '*{lookup_id}*'"
+~/.claude/projects -name '*{lookup_id}*'\n{strip_section}"
     )
+    .trim_end_matches('\n')
+    .to_string()
+}
+
+/// Ambient identity names with their harness family, in the Python
+/// `AMBIENT_IDENTITY_ENV` order: the one list the strip remedy walks, so a
+/// name without a classified family is never suggested for deletion.
+const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
+    ("FNO_HARNESS_NAME", "fno"),
+    ("FNO_HARNESS_SESSION_ID", "fno"),
+    ("CODEX_THREAD_ID", "codex"),
+    ("CLAUDE_CODE_SESSION_ID", "claude"),
+    ("CODEX_SESSION_ID", "codex"),
+    ("GEMINI_SESSION_ID", "gemini"),
+    ("OPENCODE_SESSION_ID", "opencode"),
+    ("CLAUDE_SESSION_ID", "claude"),
+    ("CLAUDECODE", "claude"),
+    ("CLAUDECODE_SESSION_ID", "claude"),
+    ("HERMES_SESSION_ID", "hermes"),
+    ("TARGET_SESSION_ID", "fno"),
+    ("CODEX_CI", "codex"),
+    ("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "codex"),
+    ("CODEX_SHELL", "codex"),
+    ("CODEX_COMPANION_SESSION_ID", "codex"),
+    ("CODEX_COMPANION_TRANSCRIPT_PATH", "codex"),
+    ("FNO_AGENT_SUBSTRATE", "fno"),
+    ("FNO_NODE_REASON", "fno"),
+];
+
+/// The `env -u` flag pairs for identity names present in the environment
+/// that belong to a foreign harness family (mirror of Python
+/// `ambient_identity_strip_flags`): the self-rescue an ambiguous session
+/// can run to restore self-resolution. A foreign-family value naming the
+/// keep-family session is a companion pointer at this session, not lineage
+/// from a foreign one, so it stays; a resolver session marker stays
+/// removable even when self-referential, because equal values across
+/// families still leave the resolver ambiguous.
+fn ambient_identity_strip_flags(
+    keep_family: &str,
+    get: &impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let table: &[(&str, &str)] = &[
+        ("CODEX_THREAD_ID", "codex"),
+        ("CLAUDE_CODE_SESSION_ID", "claude"),
+        ("CODEX_SESSION_ID", "codex"),
+        ("GEMINI_SESSION_ID", "gemini"),
+        ("OPENCODE_SESSION_ID", "opencode"),
+    ];
+    let legacy: &[(&str, &str)] = &[("CLAUDE_SESSION_ID", "claude")];
+    let mut keep_session_id: Option<String> = None;
+    for (marker, family) in table.iter().chain(legacy.iter()) {
+        if *family != keep_family {
+            continue;
+        }
+        if let Some(v) = get(marker)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        {
+            keep_session_id = Some(v);
+            break;
+        }
+    }
+    let mut flags: Vec<String> = Vec::new();
+    for (name, family) in AMBIENT_IDENTITY_FAMILIES {
+        if *family == keep_family || *family == "fno" || *family == "hermes" {
+            continue;
+        }
+        let Some(value) = get(name)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        else {
+            continue;
+        };
+        let self_referential = keep_session_id
+            .as_deref()
+            .is_some_and(|sid| *sid == value || value.contains(sid));
+        let resolver_marker = table.iter().chain(legacy.iter()).any(|(m, _)| *m == *name);
+        if self_referential && !resolver_marker {
+            continue;
+        }
+        flags.push("-u".to_string());
+        flags.push((*name).to_string());
+    }
+    flags
 }
