@@ -480,7 +480,7 @@ def graph_entries(path: Optional[Path] = None) -> list:
     15 MB store is read once per tick, not once per phase."""
     from fno.graph.api import wire_rows
     from fno.paths import graph_json
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     try:
         if active_backend_name() != "graph":

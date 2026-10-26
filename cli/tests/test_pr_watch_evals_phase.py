@@ -33,7 +33,10 @@ def evals_world(monkeypatch, tmp_path):
     """A deterministic world: tmp history + summary, no real reads."""
     history = tmp_path / "history.jsonl"
     history.write_text("", encoding="utf-8")
-    monkeypatch.setattr("fno.evals.report.evals_health_summary", lambda p, **kw: {"age_days": 9.0})
+    monkeypatch.setattr(
+        "fno.rust_binary.command_call",
+        lambda _cmd, payload, *a, **kw: {"age_days": 9.0} if payload.get("op") == "health" else {},
+    )
     monkeypatch.setattr("fno.paths.evals_history", lambda: history)
     return history
 

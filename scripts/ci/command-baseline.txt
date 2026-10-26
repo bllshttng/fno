@@ -114,7 +114,6 @@ whoami cost
 whoami ledger
 whoami scoreboard
 whoami status
-worker
 workspace reap
 workspace register-worker
 workspace worktree archive

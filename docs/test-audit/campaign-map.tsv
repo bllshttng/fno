@@ -623,7 +623,6 @@ K4	crates/fno-agents/tests/opencode_serve_journey.rs	rs	1
 K4	crates/fno-agents/tests/pi_session_identity.rs	rs	8
 K4	crates/fno-agents/tests/provider_cap_transcript_resolution.rs	rs	1
 K4	crates/fno-agents/tests/provider_contract.rs	rs	7
-K5	cli/src/fno/executor/test_locked.py	py	16
 K5	cli/src/fno/plan/test_reconcile.py	py	8
 K5	cli/tests/graph/test_backlog_search_fts.py	py	3
 K5	cli/tests/graph/test_batched_member_selection.py	py	9

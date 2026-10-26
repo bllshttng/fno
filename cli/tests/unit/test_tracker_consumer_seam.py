@@ -18,15 +18,12 @@ import pytest
 
 @pytest.fixture
 def external_store(tmp_path, monkeypatch):
-    """External mode with per-id sidecar files; returns the sidecar dir."""
+    """External backend selection; the sidecar scan itself is the native
+    door now (characterized by the sidecar_all goldens), so this fixture
+    pins only the guard side of the seam."""
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
     sidecars = tmp_path / "sidecars"
     sidecars.mkdir()
-    import fno.tracker.sidecar as sidecar_store
-
-    monkeypatch.setattr(
-        sidecar_store, "sidecar_path", lambda i: sidecars / f"{i}.json"
-    )
     return sidecars
 
 
@@ -54,42 +51,18 @@ def contradictory_graph(tmp_path, monkeypatch):
     return g
 
 
-def _write_sidecar(sidecars: Path, id: str, **fields) -> None:
-    payload = {"id": id}
-    payload.update(fields)
-    (sidecars / f"{id}.json").write_text(json.dumps(payload), encoding="utf-8")
-
-
-def test_pr_scan_class_reads_sidecar_not_graph(external_store, contradictory_graph):
-    """Reader class: scan-by-PR (mail job addressing, pr merge node resolve)."""
-    _write_sidecar(external_store, "n-000001", pr_number=7,
-                   pr_url="https://ext/7", cwd="/ext-cwd")
-    _write_sidecar(external_store, "n-000002",
-                   additional_prs=[{"number": 7, "url": "https://ext/7b"}])
-    _write_sidecar(external_store, "N-3", pr_number=None)
-
-    from fno.tracker import sidecar as sidecar_store
-
-    ids = [nid for nid, sc in sidecar_store.load_all().items() if sc.carries_pr(7)]
-    # Both PR-bearing sidecars found (primary + additional); the graph's 999s
-    # are invisible, and a PR the store does not carry resolves to nothing.
-    assert set(ids) == {"n-000001", "n-000002"}
-    assert [nid for nid, sc in sidecar_store.load_all().items() if sc.carries_pr(999)] == []
-
-
 def test_metadata_class_guards_external(external_store, contradictory_graph):
     """Reader class: footnote-minted metadata (slug / type / project /
     mission_active / session pins) raises under an external backend and every
     caller keeps its missing-data path - never a stale graph row."""
-    from fno.tracker import metadata
-
     from fno.agents.role import _graph_index
+    from fno.graph.api import read_entries
 
     def _active_missions():
         # The fail-safe shape every mission reader keeps: a guarded read that
         # raised under the external backend reads as no missions.
         try:
-            rows = metadata.read_entries("active_backlog")
+            rows = read_entries("active_backlog")
         except Exception:  # noqa: BLE001 - the guard IS the behavior under test
             return []
         return [
@@ -102,10 +75,11 @@ def test_metadata_class_guards_external(external_store, contradictory_graph):
     assert _graph_index() is None
 
 
-def test_graph_mode_scans_project_from_the_store(tmp_path, monkeypatch):
-    """Graph-mode parity for the scan class: the sidecar projection reads the
-    footnote-owned fields out of the graph entry, so the same callers keep
-    finding what they found before the migration."""
+def test_graph_mode_scans_read_the_store_not_the_package(tmp_path, monkeypatch):
+    """Graph-mode parity for the read class: the guarded metadata read (the
+    relocated read_entries) answers the store's rows on the default backend,
+    so its callers keep finding what they found before the tracker package
+    was deleted."""
     monkeypatch.delenv("FNO_TRACKER_BACKEND", raising=False)
     g = tmp_path / "graph.json"
     seed_graph(g, json.dumps({"entries": [
@@ -117,13 +91,9 @@ def test_graph_mode_scans_project_from_the_store(tmp_path, monkeypatch):
     ]}))
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
 
-    from fno.tracker import sidecar as sidecar_store
+    from fno.graph.api import read_entries
 
-    ids = [nid for nid, sc in sidecar_store.load_all().items() if sc.carries_pr(42)]
-    assert ids == ["ab-00000001"]
-    all_loaded = sidecar_store.load_all()
-    assert all_loaded["ab-00000001"].cwd == "/repo"
-    # The size pin is footnote-minted metadata, NOT a sidecar field: the
-    # projection must not carry it even though the entry does.
-    assert "size" not in type(all_loaded["ab-00000001"]).model_fields
-    assert all_loaded["ab-00000002"].pr_number is None
+    by_id = {e.get("id"): e for e in read_entries("consumer-seam")}
+    assert by_id["ab-00000001"]["pr_number"] == 42
+    assert by_id["ab-00000001"]["cwd"] == "/repo"
+    assert by_id["ab-00000002"]["pr_number"] is None

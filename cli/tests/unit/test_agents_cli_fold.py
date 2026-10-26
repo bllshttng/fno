@@ -22,15 +22,17 @@ def _commands(app) -> set[str]:
 
 def test_agents_registers_the_folded_roots() -> None:
     # One launch command, and it is spawn. `restart` answers at the Rust front
-    # door, so it is no folded root. mcp and lead left the fold: both families
-    # are native and the front door answers them.
+    # door, so it is no folded root. The worker family port retired `worker`;
+    # its answers live at `fno do pr`, `fno backlog reconcile`, and spawn.
+    # mcp and lead left the fold: both families are native and the front
+    # door answers them. The roles port moved its last callers onto the
+    # native door.
     from fno.agents.cli import agents_app
 
     assert {
         "autonomy",
         "claim",
         "mail",
-        "worker",
     } <= _commands(agents_app)
 
 
@@ -40,7 +42,6 @@ def test_importing_agents_cli_does_not_import_folded_subgroups() -> None:
         "fno.claims.cli",
         "fno.dispatch",
         "fno.mail.cli",
-        "fno.worker.cli",
     }
     script = (
         "import json, sys; import fno.agents.cli; "
