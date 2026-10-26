@@ -63,6 +63,11 @@ pub(crate) fn run_scoreboard(args: &[String]) -> i32 {
         if let Some(rows) = scoped_rows {
             inputs.rows = rows.clone();
         }
+        // The folds saw the scoped entries too (out-of-project nodes never
+        // joined an outcome on the Python leg).
+        if let Some(entries) = scoped.get("entries").filter(|e| e.is_array()) {
+            inputs.graph_nodes = entries.clone();
+        }
         scope = inputs
             .classified
             .pointer("/coverage/project_scope")
