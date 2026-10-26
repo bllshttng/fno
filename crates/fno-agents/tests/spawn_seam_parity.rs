@@ -1,10 +1,11 @@
-//! parity-stage: characterization
-//! parity-oracle: fno.agents.spawn_defaults
+//! parity-stage: differential
+//! parity-oracle: fno.agents.spawn_defaults._scan_projection
 //!
 //! Characterization parity for `spawn_admission`: the scan projection the
 //! compose transport sent, the argv normalization it ran first, and the three
 //! pre-route seed refusals. Each `tests/golden/spawn_seam/*.json` case holds
-//! what the Python leg answered, captured by `spawn_seam_golden_driver.py`.
+//! what the live Python leg answered, captured by `spawn_seam_golden_driver.py`.
+//! The stage flips to characterization when the seam delete removes that leg.
 //! The inputs below mirror that driver's case table.
 //!
 //! A minted name is a wall-clock draw, not parity: a mint case asserts the
