@@ -93,7 +93,7 @@ pub struct SinkConfig {
     pub name: String,
     pub kind: String,
     pub events: Vec<String>,
-    pub match_keys: BTreeMap<String, String>,
+    pub match_keys: BTreeMap<String, Value>,
     pub url: Option<String>,
     pub url_env: Option<String>,
     pub template: Option<String>,
@@ -221,7 +221,9 @@ fn parse_sink(row: &Value) -> Result<SinkConfig, String> {
     let mut match_keys = BTreeMap::new();
     if let Some(map) = obj.get("match").and_then(|v| v.as_object()) {
         for (k, v) in map {
-            match_keys.insert(k.clone(), value_str(v));
+            // JSON-deep values: the Python leg compared `event.get(k) == v`,
+            // so a string-configured '1' never matched a numeric field.
+            match_keys.insert(k.clone(), v.clone());
         }
     }
     Ok(SinkConfig {
@@ -251,14 +253,6 @@ fn parse_sink(row: &Value) -> Result<SinkConfig, String> {
             .unwrap_or(false),
         enabled: obj.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
     })
-}
-
-fn value_str(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        Value::Null => String::new(),
-        other => other.to_string(),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -608,14 +602,11 @@ fn matches(sink: &SinkConfig, event: &Value) -> bool {
     if !sink.events.iter().any(|e| e == kind) {
         return false;
     }
-    sink.match_keys.iter().all(|(k, v)| {
-        let got = match event.get(k) {
-            Some(Value::String(s)) => s.clone(),
-            Some(Value::Null) | None => String::new(),
-            Some(other) => other.to_string(),
-        };
-        got == *v
-    })
+    // JSON-deep equality on both sides, the Python `event.get(k) == v`: a
+    // missing key and a null key both miss a non-null matcher.
+    sink.match_keys
+        .iter()
+        .all(|(k, v)| event.get(k).is_some_and(|got| got == v))
 }
 
 /// One fanout pass. `post` is the HTTP seam; the production caller hands
