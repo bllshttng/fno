@@ -1,6 +1,7 @@
 //! Shell-harness discovery for the smoke runner: the owned trees, shebang
 //! gating, the reverse source-reference map, and the small helpers (fnmatch,
 //! weights, prereqs). Ported from test_cmd.py's discovery half.
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use regex::Regex;
@@ -96,7 +97,7 @@ pub fn discovered_steps_with(
 }
 
 pub fn is_deferred(rel: &str) -> bool {
-    reg::DISCOVERY_DEFERRED.iter().any(|d| d == rel)
+    reg::DISCOVERY_DEFERRED.iter().any(|d| *d == rel)
 }
 
 /// Auto-discover owned shell harnesses; return repo-relative paths.
@@ -208,10 +209,9 @@ pub fn referenced_sh_files(steps: &[Step]) -> std::collections::BTreeSet<String>
 /// harness; running it directly produces a spurious failure) and backward by
 /// changed-selection (a touched helper must select its owning harnesses).
 pub fn source_edges(root: &Path) -> BTreeMap<String, Vec<String>> {
-    let re = Regex::new(
-        r#"(?:^|[\s;|&(])(?:source|\.)\s+["']?((?:\$\([^)]*\)|[\w./@{}$+-])*\.sh)"#,
-    )
-    .expect("static regex");
+    let re =
+        Regex::new(r#"(?:^|[\s;|&(])(?:source|\.)\s+["']?((?:\$\([^)]*\)|[\w./@{}$+-])*\.sh)"#)
+            .expect("static regex");
     let mut edges: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for dir in ["tests", "scripts/tests", "skills"] {
         for rel in walk_glob_any(root, dir) {
@@ -225,9 +225,7 @@ pub fn source_edges(root: &Path) -> BTreeMap<String, Vec<String>> {
                 }
                 for m in re.captures_iter(line) {
                     let target = m.get(1).map(|g| g.as_str()).unwrap_or("");
-                    if let Some(resolved) =
-                        resolve_source_ref(&rel, target, Some(root))
-                    {
+                    if let Some(resolved) = resolve_source_ref(&rel, target, Some(root)) {
                         if resolved != rel {
                             edges.entry(resolved).or_default().push(rel.clone());
                         }
@@ -285,11 +283,7 @@ pub fn sourced_helpers(
 /// `$REPO_ROOT/scripts/lib/x.sh`). A leading variable is ambiguous, so both
 /// readings are built, `..` is normalized away, and the one that exists on
 /// disk wins.
-pub fn resolve_source_ref(
-    sourcer_rel: &str,
-    target: &str,
-    root: Option<&Path>,
-) -> Option<String> {
+pub fn resolve_source_ref(sourcer_rel: &str, target: &str, root: Option<&Path>) -> Option<String> {
     let t = target.trim().trim_matches(|c| c == '\'' || c == '"');
     if !t.ends_with(".sh") {
         return None;
@@ -313,16 +307,14 @@ pub fn resolve_source_ref(
     if t.contains('$') {
         // Drop the leading variable / command-substitution component; what
         // follows is the path, read either way.
-        let rest = t.split_once('/').map(|x| x.1).unwrap_or_else(|| {
-            t.rsplit('/').next().unwrap_or(t)
-        });
-        let cands: Vec<String> = [
-            norm(&format!("{base}/{rest}")),
-            norm(rest),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+        let rest = t
+            .split_once('/')
+            .map(|x| x.1)
+            .unwrap_or_else(|| t.rsplit('/').next().unwrap_or(t));
+        let cands: Vec<String> = [norm(&format!("{base}/{rest}")), norm(rest)]
+            .into_iter()
+            .flatten()
+            .collect();
         if cands.is_empty() {
             return None;
         }
@@ -339,7 +331,11 @@ pub fn resolve_source_ref(
     if t.starts_with('/') {
         return None;
     }
-    norm(&format!("{}/{}", if base.is_empty() { "" } else { base }, t))
+    norm(&format!(
+        "{}/{}",
+        if base.is_empty() { "" } else { base },
+        t
+    ))
 }
 
 /// Measured seconds per step from scripts/ci/smoke-step-seconds.tsv.
@@ -365,14 +361,14 @@ pub fn smoke_step_weights(root: &Path) -> BTreeMap<String, f64> {
 pub fn smoke_prereqs(selected_cmds: &[&str]) -> Option<String> {
     let blob = selected_cmds.join("\n");
     if blob.contains("uv ") || blob.ends_with("uv") || blob.contains("\nuv") {
-        if which("uv").is_none() {
+        if !which("uv") {
             return Some("uv (install from https://docs.astral.sh/uv)".into());
         }
     }
-    if blob.contains("python3") && which("python3").is_none() {
+    if blob.contains("python3") && !which("python3") {
         return Some("python3 (install Python 3)".into());
     }
-    if blob.contains("cargo") && which("cargo").is_none() {
+    if blob.contains("cargo") && !which("cargo") {
         return Some("cargo (install the Rust toolchain)".into());
     }
     None
@@ -383,8 +379,6 @@ fn which(program: &str) -> bool {
         return Path::new(program).exists();
     }
     std::env::var_os("PATH")
-        .map(|p| {
-            std::env::split_paths(&p).any(|dir| dir.join(program).exists())
-        })
+        .map(|p| std::env::split_paths(&p).any(|dir| dir.join(program).exists()))
         .unwrap_or(false)
 }

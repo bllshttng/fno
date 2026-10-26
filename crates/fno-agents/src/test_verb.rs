@@ -28,7 +28,8 @@ use std::sync::OnceLock;
 
 use crate::test_env;
 
-pub const SCOPE_STATEMENT: &str = "fno doctor test runs tests only and does NOT type-check; ruff + mypy \
+pub const SCOPE_STATEMENT: &str =
+    "fno doctor test runs tests only and does NOT type-check; ruff + mypy \
 run separately: bash scripts/ci/check-python-static.sh (CI job \
 main-python-static runs the same script).";
 const TAIL_LINES: usize = 40;
@@ -64,11 +65,17 @@ impl SandboxGuard {
 
     /// The sandbox path for this process: one per invocation, reaped at exit.
     pub fn shared() -> Result<&'static Path, String> {
-        static SANDBOX: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-        let path = SANDBOX
-            .get_or_init(|| SandboxGuard::create().map(|g| g.0))
-            .clone()?;
-        Ok(Box::leak(Box::new(path)))
+        static SANDBOX: OnceLock<Result<&'static Path, String>> = OnceLock::new();
+        match SANDBOX.get_or_init(|| match SandboxGuard::create() {
+            // Leak the guard on purpose: Drop would delete the very sandbox
+            // this path hands out. The process-exit reap the Python leg had
+            // (atexit) becomes the OS reclaiming one leaked allocation.
+            Ok(g) => Ok(Box::leak(Box::new(g)).path()),
+            Err(e) => Err(e),
+        }) {
+            Ok(p) => Ok(*p),
+            Err(e) => Err(e.clone()),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -190,7 +197,12 @@ pub fn build_child_env(
     sandbox: &Path,
 ) -> Result<ChildEnv, String> {
     let mut parent: BTreeMap<String, String> = std::env::vars_os()
-        .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v.to_string_lossy().to_string())))
+        .filter_map(|(k, v)| {
+            Some((
+                k.to_string_lossy().to_string(),
+                v.to_string_lossy().to_string(),
+            ))
+        })
         .collect();
     let poisoned = if ambient == AmbientMode::Dirty {
         let fixtures = root
@@ -266,7 +278,9 @@ fn run_bounded(
 ) -> Result<i32, String> {
     let program = cmd.first().ok_or("internal: empty command")?;
     if which(program).is_none() {
-        return Err(format!("fno doctor test: failed to run {program}: command not found"));
+        return Err(format!(
+            "fno doctor test: failed to run {program}: command not found"
+        ));
     }
     let mut argv: Vec<String> = vec![
         "--timeout".into(),
@@ -315,12 +329,7 @@ fn shell_quote(arg: &str) -> String {
 /// The header prints BEFORE the run so a watcher can `tail -f` the log. The
 /// log's last line is always `EXIT=<rc>`: a reader recovers the real code even
 /// where an outer tee or harness flattens this process's exit.
-pub fn run_captured(
-    cmds: &[Vec<String>],
-    child: &ChildEnv,
-    log: &Path,
-    timeout: u64,
-) -> i32 {
+pub fn run_captured(cmds: &[Vec<String>], child: &ChildEnv, log: &Path, timeout: u64) -> i32 {
     let mut rc = 0;
     let mut fh = match std::fs::File::create(log) {
         Ok(f) => f,
@@ -361,7 +370,10 @@ pub fn run_captured(
             .filter(|l| !l.trim().is_empty() && !l.starts_with("EXIT="))
             .map(|l| l.trim_end().to_string())
             .collect();
-        let summary = lines.last().cloned().unwrap_or_else(|| "(no output)".into());
+        let summary = lines
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "(no output)".into());
         println!("PASS | {summary}");
     } else {
         println!(
@@ -382,10 +394,7 @@ fn tail(path: &Path, n: usize) -> Vec<String> {
     };
     let lines: Vec<&str> = text.lines().collect();
     let start = lines.len().saturating_sub(n);
-    lines[start..]
-        .iter()
-        .map(|l| format!("{l}\n"))
-        .collect()
+    lines[start..].iter().map(|l| format!("{l}\n")).collect()
 }
 
 /// Resolve interpreter + env, run pytest, return its real exit code.
@@ -553,7 +562,10 @@ fn lanes_threads() -> (Option<i64>, String) {
     match (slots, effective, headroom) {
         (Some(_), Some(_), Some(h)) => {
             let mut note = format!("{h} more fit (fno doctor lanes)");
-            if let Some(extra) = answer.get("headroom_note").and_then(serde_json::Value::as_str) {
+            if let Some(extra) = answer
+                .get("headroom_note")
+                .and_then(serde_json::Value::as_str)
+            {
                 note.push_str("; ");
                 note.push_str(extra);
             }
@@ -588,7 +600,12 @@ fn lanes_threads() -> (Option<i64>, String) {
 /// build parallelism, unrelated to test concurrency) is bounded to the same
 /// ceiling independently. The reading (and what it did) prints so a slow run
 /// explains itself.
-pub fn run_rust(args: &[String], stream: bool, log_override: Option<&Path>, ambient: AmbientMode) -> i32 {
+pub fn run_rust(
+    args: &[String],
+    stream: bool,
+    log_override: Option<&Path>,
+    ambient: AmbientMode,
+) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let root = repo_root(&cwd).unwrap_or_else(|| cwd.clone());
     let mut cargo_args: Vec<String> = args.to_vec();
@@ -623,7 +640,9 @@ pub fn run_rust(args: &[String], stream: bool, log_override: Option<&Path>, ambi
         let (requested, effective) =
             clamp_flag(&mut cargo_args, hit, "--test-threads", "", ceiling);
         if effective != requested {
-            notes.push(format!("explicit --test-threads {requested} capped at {effective}"));
+            notes.push(format!(
+                "explicit --test-threads {requested} capped at {effective}"
+            ));
         } else {
             notes.push(format!("explicit --test-threads {requested} kept"));
         }
@@ -682,10 +701,7 @@ pub fn run_rust(args: &[String], stream: bool, log_override: Option<&Path>, ambi
             .map(|m| {
                 [
                     base.clone(),
-                    vec![
-                        "--manifest-path".into(),
-                        m.to_string_lossy().to_string(),
-                    ],
+                    vec!["--manifest-path".into(), m.to_string_lossy().to_string()],
                     cargo_args.clone(),
                 ]
                 .concat()
@@ -784,27 +800,41 @@ pub fn run_test(args: &[String]) -> i32 {
     // machine contract, not a run verdict: `smoke --list` is verbatim-stable
     // (one name per line) and the census emits parsed rows.
     let machine_output = !rest.is_empty()
-        && (rest[0] == "--census-deferred" || (rest[0] == "smoke" && rest.iter().any(|a| a == "--list")));
+        && (rest[0] == "--census-deferred"
+            || (rest[0] == "smoke" && rest.iter().any(|a| a == "--list")));
     if !machine_output {
         println!("{}", SCOPE_STATEMENT);
     }
-    if flags.log.is_some() && (flags.stream || (!rest.is_empty() && (rest[0] == "smoke" || rest[0] == "--census-deferred"))) {
+    if flags.log.is_some()
+        && (flags.stream
+            || (!rest.is_empty() && (rest[0] == "smoke" || rest[0] == "--census-deferred")))
+    {
         eprintln!("--log supports the python and rust suites; drop --log or the conflicting flag");
         return 2;
     }
     if rest.is_empty() {
-        return run_pytest(&[], flags.stream, flags.log.as_deref(), AmbientMode::Clean);
+        return run_pytest(
+            &[],
+            flags.stream,
+            flags.log.as_deref().map(Path::new),
+            AmbientMode::Clean,
+        );
     }
     match rest[0].as_str() {
         "rust" => run_rust(
             &rest[1..],
             flags.stream,
-            flags.log.as_deref(),
+            flags.log.as_deref().map(Path::new),
             AmbientMode::Clean,
         ),
         "smoke" => crate::test_smoke::run(&rest[1..], flags.stream),
         "--census-deferred" => crate::test_census::run(&rest[1..]),
-        _ => run_pytest(&rest, flags.stream, flags.log.as_deref(), AmbientMode::Clean),
+        _ => run_pytest(
+            &rest,
+            flags.stream,
+            flags.log.as_deref().map(Path::new),
+            AmbientMode::Clean,
+        ),
     }
 }
 
@@ -826,10 +856,7 @@ mod tests {
 
     #[test]
     fn flag_values_past_a_separator_are_ignored_for_build_jobs() {
-        let args: Vec<String> = ["--", "-j", "8"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let args: Vec<String> = ["--", "-j", "8"].iter().map(|s| s.to_string()).collect();
         let limit = args.iter().position(|a| a == "--");
         assert!(last_flag_value(&args, "--jobs", "-j", limit).is_none());
     }

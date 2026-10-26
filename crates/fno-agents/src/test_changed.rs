@@ -325,14 +325,14 @@ pub fn test_reach_index(root: &Path) -> Vec<(String, String, BTreeSet<String>)> 
 /// exact-match alone leaves them unmapped.
 pub fn conventional_tests(root: &Path, stem: &str) -> Vec<String> {
     let tests = root.join("cli/tests");
-    let mut hits: BTreeSet<String> = walk_py(&tests, root)
+    let hits: BTreeSet<String> = walk_py(&tests, root)
         .into_iter()
         .filter(|rel| {
             let name = rel.rsplit('/').next().unwrap_or("");
             name == &format!("test_{stem}.py") || name.starts_with(&format!("test_{stem}_"))
         })
         .collect();
-    let mut list: Vec<String> = hits.drain().collect();
+    let mut list: Vec<String> = hits.into_iter().collect();
     list.sort();
     list
 }
@@ -516,7 +516,14 @@ pub fn select_changed(root: &Path, paths: &[String]) -> (Vec<Selection>, Vec<Str
             let fam = rust_family(rel);
             if !fam.is_empty() {
                 for name in fam {
-                    add("rust-family", rel, "step", name, &mut selections, &mut seen);
+                    add(
+                        "rust-family",
+                        rel,
+                        "step",
+                        name.to_string(),
+                        &mut selections,
+                        &mut seen,
+                    );
                 }
                 continue;
             }
@@ -691,7 +698,7 @@ pub fn changed_steps(root: &Path, selections: &[Selection], shard: &str) -> Vec<
         .collect();
     let build_selected = reg::STRUCTURAL_STEPS
         .iter()
-        .any(|(n, _, _)| n == reg::RUST_BUILD_STEP)
+        .any(|(n, _, _)| *n == reg::RUST_BUILD_STEP)
         && (selections
             .iter()
             .any(|s| s.kind == "step" && s.target == reg::RUST_BUILD_STEP)
@@ -699,7 +706,7 @@ pub fn changed_steps(root: &Path, selections: &[Selection], shard: &str) -> Vec<
     let mut steps: Vec<disc::Step> = Vec::new();
     let build_step = reg::STRUCTURAL_STEPS
         .iter()
-        .find(|(n, _, _)| n == reg::RUST_BUILD_STEP)
+        .find(|(n, _, _)| *n == reg::RUST_BUILD_STEP)
         .map(|(n, c, m)| (n.to_string(), c.to_string(), m.to_string()));
     if !pytest_targets.is_empty() && build_selected {
         if let Some(b) = &build_step {
@@ -749,7 +756,7 @@ pub fn changed_steps(root: &Path, selections: &[Selection], shard: &str) -> Vec<
         .map(|s| s.target.as_str())
         .collect();
     for name in &step_targets {
-        if name == reg::RUST_BUILD_STEP {
+        if *name == reg::RUST_BUILD_STEP {
             continue;
         }
         let Some(step) = by_name.get(name) else {

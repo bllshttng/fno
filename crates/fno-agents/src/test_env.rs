@@ -69,9 +69,7 @@ pub(crate) fn vocab_lists() -> Vec<Vec<String>> {
 /// someone deciding here whether a test may see the developer's value.
 pub fn classify(name: &str) -> &'static str {
     let v = vocab();
-    if v.runner_passthrough.iter().any(|n| n == name)
-        || v.environment.iter().any(|n| n == name)
-    {
+    if v.runner_passthrough.iter().any(|n| n == name) || v.environment.iter().any(|n| n == name) {
         return "environment";
     }
     if is_ambient(name) {
@@ -84,14 +82,10 @@ pub fn classify(name: &str) -> &'static str {
 /// name the runner genuinely needs can be exempted in one place.
 pub fn is_ambient(name: &str) -> bool {
     let v = vocab();
-    if v.runner_passthrough.iter().any(|n| n == name)
-        || v.environment.iter().any(|n| n == name)
-    {
+    if v.runner_passthrough.iter().any(|n| n == name) || v.environment.iter().any(|n| n == name) {
         return false;
     }
-    if v.ambient_names.iter().any(|n| n == name)
-        || v.identity_markers.iter().any(|n| n == name)
-    {
+    if v.ambient_names.iter().any(|n| n == name) || v.identity_markers.iter().any(|n| n == name) {
         return true;
     }
     v.prefixes.iter().any(|p| name.starts_with(p.as_str()))
@@ -248,10 +242,11 @@ pub fn neutralise(
         home.to_string_lossy().to_string(),
     ];
     let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
-    for candidate in [tmpdir.clone(), std::fs::canonicalize(&tmpdir)]
-        .iter()
-        .filter_map(|c| c.as_ref().ok().map(|p| p.to_string_lossy().to_string()))
-    {
+    let mut tmp_candidates: Vec<String> = vec![tmpdir.clone()];
+    if let Ok(canon) = std::fs::canonicalize(&tmpdir) {
+        tmp_candidates.push(canon.to_string_lossy().to_string());
+    }
+    for candidate in tmp_candidates {
         if !ceiling.contains(&candidate) {
             ceiling.push(candidate);
         }
@@ -315,7 +310,7 @@ pub fn poison(
     out.insert("FNO_CONFIG".into(), fx("config.toml"));
     out.insert("FNO_GLOBAL_SETTINGS_PATH".into(), fx("settings.yaml"));
     out.remove("FNO_CONFIG_SEARCH_ROOT"); // unbounded, as a real dev box is
-    // Specimen 3: the real state ledger.
+                                          // Specimen 3: the real state ledger.
     out.insert("HOME".into(), fx("home"));
     out.insert("USERPROFILE".into(), fx("home"));
     out.insert("FNO_REPO_ROOT".into(), fx("repo"));
@@ -356,7 +351,8 @@ fn env_to_json(env: &BTreeMap<String, String>) -> Value {
 /// read the boundary the native verb itself uses, so a harness never
 /// re-implements the env assembly.
 pub fn run_test_env(args: &[String]) -> i32 {
-    let payload: Value = match serde_json::from_str(args.first().map(String::as_str).unwrap_or("")) {
+    let payload: Value = match serde_json::from_str(args.first().map(String::as_str).unwrap_or(""))
+    {
         Ok(v) => v,
         Err(e) => {
             eprintln!("test-env: payload is not JSON: {e}");
@@ -446,7 +442,10 @@ mod tests {
         assert_eq!(out.get("HOME").unwrap(), home.to_string_lossy());
         assert_eq!(
             out.get("CARGO_BUILD_BUILD_DIR").unwrap(),
-            format!("{}/.fno/cargo-build/{{workspace-path-hash}}", home.to_string_lossy())
+            format!(
+                "{}/.fno/cargo-build/{{workspace-path-hash}}",
+                home.to_string_lossy()
+            )
         );
         assert_eq!(out.get("FNO_TEST_HERMETIC").unwrap(), "1");
         assert_eq!(out.get("FNO_THINK_SPAWN").unwrap(), "0");

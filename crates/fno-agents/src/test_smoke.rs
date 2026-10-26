@@ -1,10 +1,11 @@
 //! `fno doctor test smoke` - the one authoritative Python + shell smoke
 //! entry, native. Ported from test_cmd.py's smoke half.
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::test_smoke_discovery as disc;
 use crate::test_smoke_registry as reg;
-use crate::test_verb::AmbientMode;
+use crate::test_verb::{AmbientMode, SandboxGuard};
 
 #[derive(Debug, Default)]
 pub struct SmokeOpts {
@@ -71,7 +72,8 @@ pub fn parse_smoke_args(args: &[String]) -> Result<SmokeOpts, String> {
     if let Some(key) = pending {
         return Err(format!("smoke: --{} needs a value", key.replace('_', "-")));
     }
-    validate(&opts)
+    validate(&opts)?;
+    Ok(opts)
 }
 
 fn valued_flag(a: &str) -> Option<&'static str> {
@@ -100,7 +102,7 @@ fn set_valued(opts: &mut SmokeOpts, key: &'static str, value: &str) {
     }
 }
 
-fn validate(opts: &SmokeOpts) -> Result<SmokeOpts, String> {
+fn validate(opts: &SmokeOpts) -> Result<(), String> {
     // Four subset modes with no defined precedence: refuse rather than let
     // one silently win and mislabel the evidence.
     let mut subsets: Vec<String> = Vec::new();
@@ -147,7 +149,7 @@ fn validate(opts: &SmokeOpts) -> Result<SmokeOpts, String> {
             STATE_MODES.join("/")
         ));
     }
-    Ok(opts)
+    Ok(())
 }
 
 /// `--shard must be I/N with 1 <= I <= N`.
@@ -422,18 +424,18 @@ fn failure_record_path(root: &Path, ambient: &str) -> String {
     if ambient == "clean" {
         return base;
     }
-    match base.rpartition('.') {
+    match base.rpartition(".") {
         Some((b, dot, ext)) if dot == "." => format!("{b}-{ambient}.{ext}"),
         _ => format!("{base}-{ambient}"),
     }
 }
 
 trait Partition {
-    fn rpartition(&self, sep: &str) -> Option<(&str, &str, &str)>;
+    fn rpartition<'a>(&self, sep: &'a str) -> Option<(&str, &'a str, &str)>;
 }
 
 impl Partition for str {
-    fn rpartition(&self, sep: &str) -> Option<(&str, &str, &str)> {
+    fn rpartition<'a>(&self, sep: &'a str) -> Option<(&str, &'a str, &str)> {
         match self.rfind(sep) {
             Some(i) => Some((&self[..i], sep, &self[i + sep.len()..])),
             None => None,
@@ -517,6 +519,7 @@ fn set_exec_bit(path: &Path) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let mut perm = std::fs::metadata(path)?.permissions();
         perm.set_mode(perm.mode() | 0o755);
+        std::fs::set_permissions(path, perm)
     }
     #[cfg(not(unix))]
     {
@@ -593,7 +596,12 @@ add its channel to the ambient-vocabulary table."
 A test DEPENDS on ambient state being present."
         );
     }
-    clean_rc | dirty_rc == 0 as i32
+    // The Python leg's `clean_rc or dirty_rc`: the first nonzero verdict wins.
+    if clean_rc != 0 {
+        clean_rc
+    } else {
+        dirty_rc
+    }
 }
 
 /// Strip one lane flag (`--ambient`/`--state`) and its value from args, so a
@@ -711,7 +719,7 @@ pub(crate) fn smoke_env(
 /// execution, and the failure record.
 fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_default();
-    let root = crate::test_verb::repo_root(&cwd).unwrap_or_else(|| root.clone());
+    let root = crate::test_verb::repo_root(&cwd).unwrap_or_else(|| root.to_path_buf());
     let sandbox = match crate::test_verb::SandboxGuard::shared() {
         Ok(s) => s,
         Err(msg) => {
@@ -753,15 +761,22 @@ fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
         );
     }
     if opts.changed {
-        return crate::test_changed::run_changed(root, opts, &env, sandbox);
+        return crate::test_changed::run_changed(&root, opts, &env, sandbox);
     }
     let mut steps: Vec<disc::Step> = match std::env::var("SMOKE_REGISTRY_FILE") {
-        Ok(file) => read_registry_seam(Path::new(&file))?,
+        Ok(file) => match read_registry_seam(Path::new(&file)) {
+            Ok(s) => s,
+            Err(msg) => {
+                eprintln!("{msg}");
+                return 2;
+            }
+        },
         Err(_) => disc::smoke_steps(&root),
     };
-    if args_have_state_flag(args) {
+    if lane.state_flag {
         steps = state_steps(&steps, &lane.state);
     }
+
     let total = steps.len();
     let names: std::collections::BTreeSet<String> = steps.iter().map(|s| s.0.clone()).collect();
 
@@ -866,7 +881,14 @@ fn run_single_lane(root: &Path, opts: &SmokeOpts, lane: &LaneShape) -> i32 {
     let kg = if opts.keep_going { " keep-going" } else { "" };
     let mut shard_header = String::new();
     if shard_total > 1 {
-        let pytest_in = steps.iter().any(|s| selected.contains_step_marker);
+        let pytest_marker = if selected
+            .iter()
+            .any(|i| steps[*i].0 == "Pytest (unit + integration)")
+        {
+            " pytest=split"
+        } else {
+            ""
+        };
         shard_header = format!(" shard={shard_index}/{shard_total}{pytest_marker}");
     }
     println!(
@@ -1063,11 +1085,8 @@ fn populate_state_profile(sandbox: &Path) -> Result<(), String> {
     fs::create_dir_all(state_dir.join("claims")).map_err(|e| e.to_string())?;
     fs::create_dir_all(&profile).map_err(|e| e.to_string())?;
     // The fixture README rides along when the checkout carries it.
-    if let Ok(canon_root) = std::fs::canonicalize(sandbox) {
-        let _ = canon_root; // keep the shape: fixtures resolve through the repo root
-    }
     let readme = repo_fixture_dir().map(|d| d.join("README.md"));
-    if let Some(Some(readme)) = readme.map(|p| p.filter(|p| p.is_file())) {
+    if let Some(readme) = readme.filter(|p| p.is_file()) {
         let _ = fs::copy(&readme, profile.join("README.md"));
     }
     fs::write(

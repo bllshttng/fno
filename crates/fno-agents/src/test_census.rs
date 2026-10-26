@@ -3,6 +3,7 @@
 //! surfaces, so this runs every entry bounded, and fails the moment one
 //! passes inside the tranche bound. It reads the set and reports; it never
 //! edits it. Ported from test_cmd.py's census half.
+use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -150,13 +151,21 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("census: deferred set is empty or unparseable");
         return 2;
     }
-    let env = match crate::test_smoke::smoke_env(&root) {
-        Ok(e) => e,
+    let sandbox = match crate::test_verb::SandboxGuard::shared() {
+        Ok(s) => s,
         Err(msg) => {
             eprintln!("{msg}");
             return 2;
         }
     };
+    let env =
+        match crate::test_smoke::smoke_env(&root, crate::test_verb::AmbientMode::Clean, sandbox) {
+            Ok(e) => e,
+            Err(msg) => {
+                eprintln!("{msg}");
+                return 2;
+            }
+        };
     let mut green: Vec<(String, f64)> = Vec::new();
     println!(
         "census: {} deferred entries, tranche={}s kill={}s",
