@@ -114,6 +114,27 @@ pub fn classify_inbox_outstanding(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(rest.to_vec())
 }
 
+/// Classify `fno inbox approvals ls|show|decide ...`: the argv tail for
+/// `fno-agents compaction approvals`. Any `--help` forwards to the Python
+/// group, which only lists the commands; the runtime owns every other argument.
+pub fn classify_inbox_approvals(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3 || args[0].to_str()? != "inbox" || args[1].to_str()? != "approvals" {
+        return None;
+    }
+    if !matches!(args[2].to_str()?, "ls" | "show" | "decide") {
+        return None;
+    }
+    if args[3..]
+        .iter()
+        .any(|a| matches!(a.to_str(), Some("--help" | "-h")))
+    {
+        return None;
+    }
+    let mut argv = vec![OsString::from("approvals")];
+    argv.extend_from_slice(&args[2..]);
+    Some(argv)
+}
+
 /// Classify `fno inbox day start|end`: the argv for `fno-agents day --kind
 /// <k> --commit`. Only the two boundary words claim; anything else forwards,
 /// where Python answers a group it no longer mounts with its own usage
@@ -227,5 +248,20 @@ mod tests {
         assert!(classify_inbox_day(&mk(&["inbox", "day"])).is_none());
         assert!(classify_inbox_day(&mk(&["inbox", "day", "nope"])).is_none());
         assert!(classify_inbox_day(&mk(&["inbox", "day", "start", "--json"])).is_none());
+    }
+
+    #[test]
+    fn approvals_commands_run_native_and_help_forwards() {
+        assert_eq!(
+            classify_inbox_approvals(&mk(&["inbox", "approvals", "ls", "--pending", "-J"])),
+            Some(mk(&["approvals", "ls", "--pending", "-J"]))
+        );
+        assert_eq!(
+            classify_inbox_approvals(&mk(&["inbox", "approvals", "decide", "d", "--as", "p"])),
+            Some(mk(&["approvals", "decide", "d", "--as", "p"]))
+        );
+        assert!(classify_inbox_approvals(&mk(&["inbox", "approvals", "ls", "--help"])).is_none());
+        assert!(classify_inbox_approvals(&mk(&["inbox", "approvals"])).is_none());
+        assert!(classify_inbox_approvals(&mk(&["inbox", "approvals", "nope"])).is_none());
     }
 }

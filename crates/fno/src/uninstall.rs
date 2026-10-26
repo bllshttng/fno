@@ -18,6 +18,11 @@ use crate::process_admission::{std_command, std_spawn};
 /// `fno uninstall`'s flags.
 #[derive(Args, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Opts {
+    /// Print this help
+    // A field, not clap's help flag: a clap help request reaches the front
+    // door as a parse error and exits 2.
+    #[arg(short = 'h', long)]
+    pub help: bool,
     /// Remove without asking (required when stdin is not a terminal)
     #[arg(long)]
     pub yes: bool,
@@ -38,6 +43,7 @@ pub(crate) const CODEX_BLOCK_MARK: &str = "# Added by `fno config setup cli-hook
 const PURGE_WORD: &str = "purge";
 /// The uv tool name the wheel installs under (a directory in `uv tool dir`).
 const UV_TOOL: &str = "fno";
+const UV_INSTALLED_MARKER: &str = "uv-installed-by-fno";
 /// The crontab block `scripts/install-autocorrect-cron.sh` writes on Linux.
 const CRON_BEGIN: &str = "# BEGIN autocorrect-managed";
 const CRON_END: &str = "# END autocorrect-managed";
@@ -100,6 +106,17 @@ fn on_path(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|dir| dir.join(name))
         .find(|p| p.is_file())
+}
+
+/// Where Astral's installer put uv: `$XDG_BIN_HOME`, else `~/.local/bin`.
+/// Never a PATH lookup: the first `uv` on PATH can be the user's own copy.
+fn uv_install_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_BIN_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .into_iter()
+        .chain([home().join(".local/bin")])
+        .find(|dir| dir.join("uv").is_file())
 }
 
 fn read(path: &Path) -> String {
@@ -534,6 +551,21 @@ fn discover() -> Vec<Item> {
             );
         }
     }
+    if crate::bootstrap::sentinel_dir()
+        .join(UV_INSTALLED_MARKER)
+        .is_file()
+    {
+        // uv has no self-uninstall; its documented removal deletes the two
+        // binaries its installer wrote.
+        if let Some(dir) = uv_install_dir() {
+            for bin in ["uv", "uvx"].into_iter().filter(|b| dir.join(b).is_file()) {
+                add(
+                    format!("{bin} installed by fno"),
+                    Action::RemovePath(dir.join(bin)),
+                );
+            }
+        }
+    }
     let brewed = on_path("brew").is_some()
         && run(&argv(&["brew", "list", "--versions", "fno"])).is_ok_and(|v| !v.trim().is_empty());
     if brewed {
@@ -724,12 +756,44 @@ fn residue() -> Vec<String> {
             "agy plugin {AGY_PLUGIN}: agy plugin uninstall {AGY_PLUGIN}"
         ));
     }
+    for cache in [
+        env_dir("CLAUDE_CONFIG_DIR", ".claude").join("plugins/cache/footnote"),
+        env_dir("CODEX_HOME", ".codex").join("plugins/cache/footnote"),
+    ] {
+        if cache.exists() {
+            left.push(format!("plugin cache remains: {}", cache.display()));
+        }
+    }
     if let Ok(Some(text)) = crontab_list() {
         if strip_crontab(&text).is_some() {
             left.push(format!("crontab: {} block still present", CRON_BEGIN));
         }
     }
     left
+}
+
+/// The PATH lines `uv tool update-shell` writes (fno.sh runs it). Other uv
+/// tools share them, so uninstall names them for the user and never strips
+/// them; they are not residue and do not change the exit.
+fn shared_path_lines() -> Vec<String> {
+    let mut lines = Vec::new();
+    for rc in [
+        ".zshrc",
+        ".zprofile",
+        ".zshenv",
+        ".bashrc",
+        ".bash_profile",
+        ".profile",
+    ] {
+        let path = home().join(rc);
+        let text = read(&path);
+        for (n, line) in text.lines().enumerate() {
+            if line.contains(".local/bin") && !line.trim_start().starts_with('#') {
+                lines.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+            }
+        }
+    }
+    lines
 }
 
 fn ask(prompt: &str) -> String {
@@ -741,6 +805,10 @@ fn ask(prompt: &str) -> String {
 }
 
 pub fn run_uninstall(opts: Opts) -> i32 {
+    if opts.help {
+        print!("{}", crate::cli_args::render_path_help(&["uninstall"]));
+        return 0;
+    }
     // Every path below hangs off HOME. A relative one would point --purge at
     // the .fno dir of whatever project the user stands in.
     if !home().is_absolute() {
@@ -841,6 +909,13 @@ pub fn run_uninstall(opts: Opts) -> i32 {
     } else {
         println!("fno uninstall: still present (not removed by a known installer):");
         for line in &left {
+            println!("  - {line}");
+        }
+    }
+    let shared = shared_path_lines();
+    if !shared.is_empty() {
+        println!("fno uninstall: kept, shared with other uv tools (remove by hand if unused):");
+        for line in &shared {
             println!("  - {line}");
         }
     }
