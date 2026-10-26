@@ -164,7 +164,9 @@ pub fn claude_wire(home: &Path, run: Run) -> Outcome {
     // lacks the `plugin` subcommand entirely; route to skills-dir.
     if run(&["claude", "plugin", "--help"]).is_ok()
         && run(&["claude", "plugin", "marketplace", "add", MARKETPLACE]).is_ok()
-        && run(&["claude", "plugin", "install", "fno@footnote"]).is_ok()
+        // fno@footnote: a stable branch cut before the marketplace rename.
+        && (run(&["claude", "plugin", "install", "fno@fno"]).is_ok()
+            || run(&["claude", "plugin", "install", "fno@footnote"]).is_ok())
     {
         return Outcome::Installed(String::new());
     }

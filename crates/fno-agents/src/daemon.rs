@@ -4429,13 +4429,6 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
         Some(n) => n.to_string(),
         None => return Response::err(req.id, ErrorCode::InvalidParams, "missing `name`"),
     };
-    // stop shares rm's cross-project grant: its store heal resolves through
-    // the same confinement refusal that names --cross-project.
-    let cross_project = req
-        .params
-        .get("cross_project")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let registry = match load_registry_offloaded(ctx.home.registry_json()).await {
         Ok(r) => r,
         Err(e) => return registry_read_failed(req.id, e),
@@ -4444,7 +4437,6 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
         &registry,
         &requested_name,
         &ctx.home.registry_json(),
-        cross_project,
         true,
     )
     .await
@@ -5117,37 +5109,24 @@ async fn handle_rm_with(
         .get("force")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    // rm is the one lifecycle command whose caller can name a session whose cwd
-    // resolves outside this project (the store heal's refusal prescribes
-    // --cross-project for exactly that case); forward the grant to resolution.
-    let cross_project = req
-        .params
-        .get("cross_project")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let registry = match load_registry_offloaded(ctx.home.registry_json()).await {
         Ok(r) => r,
         Err(e) => return registry_read_failed(req.id, e),
     };
-    let entry = match entry_for_lifecycle(
-        &registry,
-        &requested_name,
-        &ctx.home.registry_json(),
-        cross_project,
-        false,
-    )
-    .await
-    {
-        Ok(Some(entry)) => entry,
-        Ok(None) => {
-            return Response::err(
-                req.id,
-                ErrorCode::AgentNotFound,
-                format!("agent {requested_name} not found"),
-            )
-        }
-        Err(message) => return Response::err(req.id, ErrorCode::InvalidParams, message),
-    };
+    let entry =
+        match entry_for_lifecycle(&registry, &requested_name, &ctx.home.registry_json(), false)
+            .await
+        {
+            Ok(Some(entry)) => entry,
+            Ok(None) => {
+                return Response::err(
+                    req.id,
+                    ErrorCode::AgentNotFound,
+                    format!("agent {requested_name} not found"),
+                )
+            }
+            Err(message) => return Response::err(req.id, ErrorCode::InvalidParams, message),
+        };
     let name = entry.name.clone();
     let audit = RemovalAuditContext::from_request(req, &entry);
     // Computed once (self-review finding): every other reference in this

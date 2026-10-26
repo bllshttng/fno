@@ -334,10 +334,9 @@ enum Role {
     /// paths commands still forward to Python (one command per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
-    /// `fno agents org` history, verdict, faq, `chart shape`, `chart
-    /// manifest-path`, and `fno inbox board`: the lead read commands, exec'd as
+    /// The `fno agents org` lead commands and `fno inbox board`, exec'd as
     /// arguments of existing fno-agents actions. Their Python legs are gone.
-    LeadRead(fno::lead_reads_route::Claim),
+    Lead(fno::lead_route::Claim),
     /// `fno agents mcp send ...` and the deprecated root `fno mcp send ...`:
     /// the ported MCP channel family's send command, exec'd through the
     /// worker's --mcp-exec lane with the tail byte-verbatim. The bool is the
@@ -881,8 +880,8 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::paths_route::classify(args) {
         return Role::PathsCli(rest);
     }
-    if let Some(claim) = fno::lead_reads_route::classify(args) {
-        return Role::LeadRead(claim);
+    if let Some(claim) = fno::lead_route::classify(args) {
+        return Role::Lead(claim);
     }
     if let Some((root_alias, rest)) = fno::agents_mcp_route::classify(args) {
         return Role::AgentsMcpRoot(root_alias, rest);
@@ -1349,7 +1348,7 @@ fn main() {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
-        Role::LeadRead(claim) => std::process::exit(fno::lead_reads_route::run(&claim)),
+        Role::Lead(claim) => std::process::exit(fno::lead_route::run(&claim)),
         Role::AgentsMcpRoot(root_alias, rest) => {
             std::process::exit(fno::agents_mcp_route::run(root_alias, &rest))
         }
@@ -1759,7 +1758,7 @@ mod tests {
             Role::AgentsLeadRefreshCanon(os(&["--extra"]))
         );
         assert_eq!(
-            decide_role(&os(&["agents", "lead", "checkin"]), false),
+            decide_role(&os(&["agents", "lead", "done"]), false),
             Role::Forward
         );
         // The mail reader claims its command and refuses the renamed one by
