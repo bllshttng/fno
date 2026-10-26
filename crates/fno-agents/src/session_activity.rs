@@ -224,8 +224,18 @@ pub(crate) fn mode_model(votes: &BTreeMap<String, u64>) -> Option<String> {
         .map(|(m, _)| m.clone())
 }
 
+/// A claude `api-request-blob` row: a copy of request content the transcript
+/// already holds as user and assistant rows. Folding it counts the same
+/// tool calls and results twice.
+pub(crate) fn is_request_echo(row: &Value) -> bool {
+    row.get("type").and_then(Value::as_str) == Some("api-request-blob")
+}
+
 impl ActivityFold {
     pub(crate) fn row(&mut self, row: &Value) {
+        if is_request_echo(row) {
+            return;
+        }
         if row.get("payload").is_some_and(|p| p.is_object()) {
             self.codex_row(row);
             return;
@@ -561,10 +571,12 @@ mod tests {
                            "input": {"file_path": "a/b.RS", "content": "one\ntwo\nthree"}});
         let fragment = json!({"type": "tool_use", "name": "Write",
                               "input": {"file_path": "y.rs (x)", "content": "body"}});
-        let raw = claude_lines(
-            &[json!({"type": "assistant", "message": {"role": "assistant",
-                    "content": [edit("x.rs"), multiedit, write, fragment]}})],
-        );
+        let content = json!([edit("x.rs"), multiedit, write, fragment]);
+        // The api-request-blob row repeats the same calls; it counts nothing.
+        let raw = claude_lines(&[
+            json!({"type": "assistant", "message": {"role": "assistant", "content": content}}),
+            json!({"type": "api-request-blob", "message": {"role": "assistant", "content": content}}),
+        ]);
         let act = claude_activity(&raw);
         // The fragment's body line still counts as a line; it never
         // counts as a language.

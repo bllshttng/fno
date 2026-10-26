@@ -288,7 +288,7 @@ pub(crate) fn from_text(
     let rows: Vec<Value> = text
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|r| !is_sidechain(r))
+        .filter(|r| !is_sidechain(r) && !crate::session_activity::is_request_echo(r))
         .collect();
     let full = matches!(harness, "claude" | "codex");
     let bounds: Vec<usize> = (0..rows.len())
