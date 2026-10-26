@@ -134,14 +134,13 @@ fn pin_env(state: &std::path::Path, case: &Value) {
     // The door reads the store through the same resolver the Python side
     // pins with FNO_STATE_DIR; FNO_HOME would point it at another root.
     std::env::remove_var("FNO_HOME");
-    match case.get("env").and_then(Value::as_object) {
-        Some(env) => {
-            for (k, v) in env {
-                std::env::set_var(k, v.as_str().unwrap_or_default());
-            }
-        }
-        None => {
-            std::env::remove_var("FNO_TRACKER_BACKEND");
+    // The backend override never survives a case: an empty `env` dict means
+    // "no override" the same way an absent one does, and a previous case's
+    // github would otherwise leak into a graph case's door call.
+    std::env::remove_var("FNO_TRACKER_BACKEND");
+    if let Some(env) = case.get("env").and_then(Value::as_object) {
+        for (k, v) in env {
+            std::env::set_var(k, v.as_str().unwrap_or_default());
         }
     }
 }
@@ -192,41 +191,6 @@ fn run_case(key: &str, case: &Value) -> Value {
         }
         "sidecar_all" => {
             let out = fno_agents::tracker::run_door(&json!({"tracker": "sidecar-all"}));
-            // Diagnostics for the divergence the first CI run of this test
-            // found: what the store itself answers beside what the door did.
-            if let Ok(state) = std::env::var("FNO_STATE_DIR") {
-                let root = std::path::Path::new(&state);
-                let graph = root.join("db").join("graph.json");
-                // The door's own resolution chain, spelled out: where the
-                // layout lands the anchor, which db twin it opens, and
-                // whether a fallback store was created at the legacy spot.
-                eprintln!(
-                    "parity-probe: anchor={:?} dbpath={:?}",
-                    fno_agents::backlog::anchor_path(&graph),
-                    fno_agents::backlog::database_path(&graph),
-                );
-                eprintln!(
-                    "parity-probe: exists db/json={} db/db={} root/json={} root/db={}",
-                    graph.exists(),
-                    root.join("db").join("graph.db").exists(),
-                    root.join("graph.json").exists(),
-                    root.join("graph.db").exists(),
-                );
-                match fno_agents::graph_store::read_rows_where(
-                    &graph,
-                    &fno_agents::backlog::RowQuery::default(),
-                ) {
-                    Ok(rows) => eprintln!(
-                        "parity-probe: db={} rows={:?}",
-                        graph.display(),
-                        rows.iter()
-                            .filter_map(|r| r.get("id").and_then(Value::as_str))
-                            .collect::<Vec<_>>()
-                    ),
-                    Err(e) => eprintln!("parity-probe: db={} read err {e}", graph.display()),
-                }
-            }
-            eprintln!("parity-probe: door={out}");
             json!({"sidecars": out.get("sidecars").cloned().unwrap_or(Value::Null)})
         }
         "sidecar_set_merge" => {
