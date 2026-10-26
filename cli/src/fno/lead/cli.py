@@ -316,7 +316,7 @@ def escalate_cmd(
     """Escalate to the presiding role or operator with work pending (AC4-HP).
 
     A user-only decision files straight on the question board with
-    `fno inbox outstanding ask` (law d-fdab1af2). Under the default
+    `fno inbox outstanding ask`, the board the user reads. Under the default
     `questions.route=direct` no relay mail copy goes out; set
     `questions.route=triage` in .fno/config.toml for a triage lead.
     """
