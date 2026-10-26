@@ -21,6 +21,9 @@ from fno.company.contracts import (
 )
 from fno.rust_binary import find_dev_binary
 
+# The spawn-overlay helpers live once, in the growth-pack journey module.
+from test_growth_studio_pack import _discover_rows, _spawn_overlay
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACK = REPO_ROOT / "plugins" / "company-conformance" / "plugin.yaml"
 NOW = dt.datetime(2026, 8, 4, 12, 0, tzinfo=dt.UTC)
@@ -55,21 +58,6 @@ def _plugins(root: Path, *args: str) -> tuple[int, dict]:
         text=True,
     )
     return proc.returncode, json.loads(proc.stdout)
-
-
-def _spawn_overlay(payload: dict) -> dict:
-    proc = subprocess.run(
-        [str(find_dev_binary()), "spawn-overlay"],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-    )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    return json.loads(proc.stdout)
-
-
-def _discover_rows(root: Path) -> list[dict]:
-    return _spawn_overlay({"kind": "roles-discover", "root": str(root)})["rows"]
 
 
 # Defaults the retired pydantic models filled when the pack YAML omits a key.
