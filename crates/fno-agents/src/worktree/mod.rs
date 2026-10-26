@@ -33,6 +33,7 @@ pub fn client_dispatch(args: &[String]) -> Option<i32> {
         "worktree-overlap-record" => overlaps::record_client(rest),
         "worktree-overlaps" => overlaps::report_client(rest),
         "workspace-register-worker" => registry_worker::run_client(rest),
+        "worktree-dispatch-pin" => policy::dispatch_pin_client(rest),
         "worktree-reapable" => crate::worktree_reapable::run_client(rest),
         _ => return None,
     };
