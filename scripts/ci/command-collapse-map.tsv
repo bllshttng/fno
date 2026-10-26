@@ -233,7 +233,6 @@ config route	T1	config route	16
 config routing	T1	config routing	6
 config schema	T1	config schema	10
 config set	KEEP	config set	43	deliberate readability slack for a high-traffic distinct operation
-config setup	T1	config setup	38
 config status-sinks	T1	config status-sinks	2
 config unset	T1	config unset	5
 context	KEEP	context	15	single-leaf group
@@ -421,8 +420,6 @@ resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2
 roles ls	T1	roles ls	1
 scoreboard	KEEP	scoreboard	13	single-leaf group
-setup cli-hooks	T1	setup cli-hooks	8
-setup cli-hooks-codex	T1	setup cli-hooks-codex	4
 config plugin	T1	config plugin	0
 doctor reclaim	T1	doctor reclaim	0
 state archive	T1	state archive	1
