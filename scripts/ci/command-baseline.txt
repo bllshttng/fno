@@ -103,7 +103,6 @@ mux
 notify
 observer
 paths
-phase kill-check
 plan
 pr-watch
 research
@@ -112,11 +111,8 @@ roles
 route
 scoreboard
 setup
-state
 status
 status-fanout tick
-stub-manifest
-target
 test
 think
 uninstall
