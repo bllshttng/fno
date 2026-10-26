@@ -1,1 +1,0 @@
-target status: fno-agents target-status exited 2: fno-agents: unknown command: target-status (expected --emit-schema|active-backlog-receipt|adopt|announce|canonical-check|ask|attach|authorized-merge|bash-census|board|claim|codex-assign-project|compac

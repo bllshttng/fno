@@ -292,11 +292,18 @@ CASES: list[dict] = [
     dict(label="stub manifest write malformed", argv=["do", "pr", "stub-manifest", "write", "--node", "x-1234",
          "--contract-version", "1", "--contract-ref", "ref", "--contract-test", "true",
          "--stubs-json", "[{\"stub_id\": \"x\"}]"]),
-    dict(label="stub manifest reconcile validate unreconciled", argv=["do", "pr", "stub-manifest", "reconcile-validate"],
-         preset_stub=True),
-    dict(label="stub manifest reconcile validate absent", argv=["do", "pr", "stub-manifest", "reconcile-validate"]),
-    dict(label="stub manifest reconcile finalize", argv=["do", "pr", "stub-manifest", "reconcile-finalize"],
-         preset_stub=True),
+    dict(label="stub manifest write missing contract test", argv=["do", "pr", "stub-manifest", "write", "--node", "x-1234",
+         "--stubs-json", "[]"]),
+    dict(label="stub manifest reconcile validate authorize", argv=["do", "pr", "stub-manifest", "reconcile-validate",
+         "--node", "x-1234"], preset_stub=True),
+    dict(label="stub manifest reconcile validate drift", argv=["do", "pr", "stub-manifest", "reconcile-validate",
+         "--node", "x-1234"], preset_stub_drift=True),
+    dict(label="stub manifest reconcile validate missing manifest", argv=["do", "pr", "stub-manifest", "reconcile-validate",
+         "--node", "x-9999"]),
+    dict(label="stub manifest reconcile finalize valid", argv=["do", "pr", "stub-manifest", "reconcile-finalize",
+         "--node", "x-1234"], preset_stub=True),
+    dict(label="stub manifest reconcile finalize missing", argv=["do", "pr", "stub-manifest", "reconcile-finalize",
+         "--node", "x-9999"]),
     # -- module call --
     dict(label="handoff prepare absent claim", module=True),
 ]
@@ -354,12 +361,14 @@ def run_case(case: dict, bindir: Path) -> None:
                 ["fno", "backlog", "update", node, "plan_path=plans/hold.md"],
                 env=env, cwd=root, capture_output=True, text=True, timeout=120,
             )
-        if case.get("preset_stub"):
+        if case.get("preset_stub") or case.get("preset_stub_drift"):
             mf = root / ".fno"
             mf.mkdir(parents=True, exist_ok=True)
             doc = dict(STUB_MANIFEST)
             doc["node"] = node
-            (mf / "stub-manifest.x-1234.json").write_text(json.dumps(doc, indent=2))
+            if case.get("preset_stub_drift"):
+                doc["contract_test"] = "false"
+            (mf / "stub-manifest-x-1234.json").write_text(json.dumps(doc, indent=2))
         if case.get("node_arg"):
             argv = [*case["argv"], node]
         else:

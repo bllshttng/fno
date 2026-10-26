@@ -1,4 +1,0 @@
-Usage: fno do pr stub-manifest reconcile-validate [OPTIONS]
-Try 'fno do pr stub-manifest reconcile-validate --help' for help.
-
-Error: Missing option '--node'.
