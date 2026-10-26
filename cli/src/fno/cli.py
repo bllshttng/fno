@@ -235,7 +235,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "doctor": set(),
     "evals": set(),
     "event": {"emit"},
-    "loops": {"resume-all"},
     "mail": {"send"},
     "observer": set(),
     "paths": set(),
