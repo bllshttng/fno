@@ -1,4 +1,4 @@
-//! Characterization replay for the target-family port (x-9516). Every
+//! Characterization replay for the target-family port. Every
 //! `tests/golden/target_family/` case plays against the native doors through
 //! the same hermetic fixture the capture driver built, with the same
 //! normalization tokens, and compares byte-for-byte against the frozen
@@ -751,5 +751,45 @@ fn target_family_replays_the_goldens() {
         blocks.len(),
         table.len(),
         blocks.join("\n\n")
+    );
+}
+
+/// The state-io atomicity contract, re-hosted from the deleted test_state_io:
+/// eight parallel force-writers on one manifest leave it parseable, never
+/// torn - the lock-then-replace writer holds the file together under
+/// contention.
+#[test]
+fn state_force_writes_stay_atomic_under_parallel_writers() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let env = base_env(root);
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let env = &env;
+            let root = root;
+            scope.spawn(move || {
+                let args = vec![
+                    "state-verbs".to_string(),
+                    "init".to_string(),
+                    "--allow-stub".to_string(),
+                    "--force".to_string(),
+                ];
+                let out = spawn_op(root, env, &args);
+                assert!(
+                    out.status.success(),
+                    "parallel init failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            });
+        }
+    });
+    let manifest = std::fs::read_to_string(root.join(".fno/target-state.md")).unwrap();
+    assert!(
+        manifest.matches("---").count() >= 2,
+        "torn write: frontmatter fences lost:\n{manifest}"
+    );
+    assert!(
+        manifest.contains("harness:"),
+        "torn write lost the frontmatter body:\n{manifest}"
     );
 }

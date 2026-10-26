@@ -61,12 +61,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Delivery work: plans, targets, reviews, PRs, state, and supporting operations.",
         {"hidden": True},
     ),
-    "state": ("fno.state.cli:cli", "manage fno do state files", {"hidden": True}),
-    "target": (
-        "fno.target_cli:target_app",
-        "Target sessions: status, resolve-model, and check gates",
-        {"hidden": True},
-    ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
     "autonomy": (
         "fno.autonomy_cli:autonomy_app",
@@ -115,11 +109,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     ),
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
-    "stub-manifest": (
-        "fno.stub_manifest:stub_manifest_app",
-        "Stub-manifest for contract-tier dependents (emit/validate/check-pr).",
-        {"hidden": True},
-    ),
     "status-fanout": (
         "fno.status_fanout:status_fanout_app",
         "Sweep events.jsonl and route status events to configured sinks (tick).",
@@ -146,11 +135,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "think": (
         "fno.provenance.cli:think_app",
         "Think inspection and explicit conversational dispatch.",
-        {"hidden": True},
-    ),
-    "phase": (
-        "fno.phase:phase_app",
-        "Phase utilities (kill-check via the fno-agents binary)",
         {"hidden": True},
     ),
     "roles": (

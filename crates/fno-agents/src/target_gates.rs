@@ -1,5 +1,5 @@
 //! The `fno do target` gate verbs, ported from `cli/src/fno/target_cli.py`
-//! (x-9516): `check-review-gate`, `check-contained`, `check-dispatch-hold`,
+//!: `check-review-gate`, `check-contained`, `check-dispatch-hold`,
 //! `resolve-owned-identity`, `resolve-model`, `denominator-ratio`, and the
 //! `target_handoff prepare` module call. One op per verb, each composing the
 //! same machinery the Python composed over subprocess doors - in-process

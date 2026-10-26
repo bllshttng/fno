@@ -1,5 +1,5 @@
 //! The `fno do state` verb bodies, ported from `cli/src/fno/state/cli.py`
-//! (x-9516). One op per subcommand: `show`, `set`, `init`, `archive`, served
+//!. One op per subcommand: `show`, `set`, `init`, `archive`, served
 //! through the front door's lexical claim with the same argv shape.
 //!
 //! Contract notes, pinned by `tests/golden/target_family/`:

@@ -118,7 +118,7 @@ def _utc_now_iso() -> str:
 
 def _read_manifest_keys(state_path: Path) -> dict[str, str]:
     """The ``---``-fenced ``key: value`` scan read_frontmatter served for the
-    session-id lookup, inlined (x-9516): the state module dies with the
+    session-id lookup, inlined: the state module dies with the
     family port. Plain scalars only; this reader needs no more."""
     try:
         text = state_path.read_text(encoding="utf-8")

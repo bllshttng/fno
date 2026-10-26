@@ -36,7 +36,7 @@ _IDENTITY_FIELDS = (
 
 
 def _read_target_manifest(project_root: Path) -> Optional[dict[str, Any]]:
-    """The session-manifest read target.manifest served, inlined (x-9516):
+    """The session-manifest read target.manifest served, inlined:
     the target package dies with the family port. Reads the manifest at the
     project space (or the legacy path) as ``key: value`` scalars,
     frontmatter-first, first value wins; never raises."""
@@ -63,7 +63,7 @@ def _read_target_manifest(project_root: Path) -> Optional[dict[str, Any]]:
 
 def _manifest_identity(raw: Optional[dict[str, Any]]) -> Optional[dict[str, str]]:
     """The minimal identity tuple a resume-bind needs, or None when any
-    field is missing. Inlined from target.manifest (x-9516)."""
+    field is missing. Inlined from target.manifest."""
     if not raw:
         return None
     ident: dict[str, str] = {}

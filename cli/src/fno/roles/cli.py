@@ -36,7 +36,7 @@ def _roles_callback(
         help="Also inspect a source using layer=path (repeatable).",
     ),
 ) -> None:
-    # merge_json_flag's 3-line merge, inlined (x-9516): the handoff module
+    # merge_json_flag's 3-line merge, inlined: the handoff module
     # dies with the family port and this caller survives it.
     ctx.ensure_object(dict)
     if json_output:

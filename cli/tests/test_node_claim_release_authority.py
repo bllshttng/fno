@@ -9,9 +9,9 @@ constructs the ``target-session:<sid>`` holder and releases the node claim, or
 an exit handler that unlinks it).
 
 The target self-handoff shell must not release a ``node:<id>`` claim directly.
-It delegates archive plus exact-holder release to
-``fno.state.target_handoff.prepare_manifest_and_release`` so shell and target
-handoffs share one recoverable custody operation.
+It delegates archive plus exact-holder release to the native
+target-handoff-prepare op so shell and target handoffs share one recoverable
+custody operation.
 
 A "node-release site" is a ``claim release`` invocation whose released KEY
 resolves to a ``node:`` prefix (a literal, or a local variable / ``format!``

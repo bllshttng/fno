@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Golden capture driver for the target-family port (x-9516).
+"""Golden capture driver for the target-family port.
 
 Plays the case tables against the live Python leg (`fno do state|phase|target`
 subcommands, `do pr stub-manifest`, and `python -m fno.state.target_handoff`)

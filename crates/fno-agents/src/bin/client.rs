@@ -139,7 +139,7 @@ fn main() {
         std::process::exit(fno_agents::backlog::cli::run(&args[1..]));
     }
     // cli/src/fno/target_cli.py + state/cli.py + stub_manifest.py serve their
-    // family verbs HERE (x-9516): hidden daemon-free leaves in the graph-get
+    // family verbs HERE: hidden daemon-free leaves in the graph-get
     // mold, dispatch by `==` on the first token and never registered
     // ALL_CLIENT_ACTIONS tokens (the shrink law allows no added token).
     if args.first().map(String::as_str) == Some("target-gates") {

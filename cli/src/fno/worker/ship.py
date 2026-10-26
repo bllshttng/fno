@@ -22,7 +22,7 @@ import yaml
 
 def _atomic_write(path: Path, content: str) -> None:
     """The lock-then-tempfile-then-os.replace write, inlined from the
-    state-io helper at the family port (x-9516): that module dies with the
+    state-io helper at the family port: that module dies with the
     port. The lock prevents interleaved writers; os.replace is atomic on
     POSIX."""
     import tempfile

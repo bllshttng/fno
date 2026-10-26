@@ -1,5 +1,5 @@
 //! The stub-manifest surface, ported from `cli/src/fno/stub_manifest.py`
-//! (x-9516): `fno do pr stub-manifest write|reconcile-validate|reconcile-finalize`.
+//!: `fno do pr stub-manifest write|reconcile-validate|reconcile-finalize`.
 //!
 //! The manifest is the durable artifact a `contract`-tier dependent's first
 //! pass emits so a later merge-triggered reconciliation can de-stub from it.
