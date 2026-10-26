@@ -16,12 +16,13 @@
 # --dead`: no skill, doc, script, hook, or cli/src argv named any of them.
 # Confirmed by a second whole-repo walk sharing no code with that tool.
 # The implementation packages stay where live code imports them
-# (`fno.company.contracts` and `fno.wake.signal` have many importers); what
-# is gone is the invocable surface.
+# (`fno.company.contracts` still is); what is gone is the invocable
+# surface. The wake signal reader later left with its family's Rust port,
+# so the wake entry below names where its one live read went.
 "company" = "nothing - the company campaign commands had no caller anywhere. `fno.company.contracts` is still imported by the graph, plan, and delivery code; only the CLI surface was removed"
 "log" = "`fno doctor event emit` - the per-worktree progress log had no reader and no caller outside its own test"
 "reality-check" = "nothing - the external-reality probes had no caller. The `gh` probe's job is done by `fno do pr status <n>`"
-"wake" = "nothing - the wake-signal ADMIN commands had no caller. Wake signals themselves are still written and read by `fno.wake.signal`, which the inbox drain and mail paths use"
+"wake" = "nothing - the wake-signal ADMIN commands had no caller. The read survives as the fno-agents binary's hidden `wake-signals` op (scripts/lib/wake-signals.sh reads kind=question signals through it); nothing writes wake signals anymore, so the write path is gone with the port"
 "backlog inbox" = "`fno backlog capture` - the same command. `inbox` was a second registration of the identical Typer app, so every one of its nine subcommands was a duplicate of a `capture` subcommand"
 
 # --- Leaves with zero callers anywhere a contributor reads, confirmed by a

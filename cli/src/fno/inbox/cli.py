@@ -23,7 +23,6 @@ import typer
 from fno.approvals_cli import approvals_app
 from fno.inbox.operator_turns import operator_app
 from fno.lead.cli import board_cmd
-from fno.notify.cli import notify_app
 
 inbox_app = typer.Typer(
     name="inbox",
@@ -34,7 +33,7 @@ inbox_app = typer.Typer(
 )
 
 inbox_app.add_typer(approvals_app, name="approvals")
-inbox_app.add_typer(notify_app, name="notify")
+# `fno inbox notify` is the Rust front's nested verb; no Python mount.
 # `fno inbox law` is the Rust front's nested group; no Python mount.
 # The queue command is `user`; the pre-rename spelling stays as a hidden
 # alias so existing scripts keep working.

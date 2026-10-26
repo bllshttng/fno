@@ -120,11 +120,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Stub-manifest for contract-tier dependents (emit/validate/check-pr).",
         {"hidden": True},
     ),
-    "status-fanout": (
-        "fno.status_fanout:status_fanout_app",
-        "Sweep events.jsonl and route status events to configured sinks (tick).",
-        {"hidden": True},
-    ),
     "bundle": ("fno.bundle:bundle_app", "Skill bundle build + lint.", {"hidden": True}),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
     "claim": ("fno.claims.cli:cli", "Work-claim coordination primitive", {"hidden": True}),
@@ -159,11 +154,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "config": ("fno.config_cli:app", "Configuration management"),
-    "notify": (
-        "fno.notify:notify_app",
-        "OS notification helper (in-package; macOS osascript / Linux notify-send)",
-        {"hidden": True},
-    ),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
     "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
     "worktree": ("fno.worktree_cli:app", "Worktree management", {"hidden": True}),

@@ -59,6 +59,7 @@ pub fn classify_root_notify(args: &[OsString]) -> Option<Vec<OsString>> {
 pub fn run(args: &[OsString]) -> i32 {
     let mut pointer: Option<String> = None;
     let mut positionals: Vec<String> = Vec::new();
+    let mut fenced = false;
     let mut it = args.iter();
     while let Some(tok) = it.next() {
         let tok = match tok.to_str() {
@@ -66,18 +67,19 @@ pub fn run(args: &[OsString]) -> i32 {
             None => continue,
         };
         match tok {
-            "--pointer" => match it.next().and_then(|v| v.to_str()) {
+            "--" if !fenced => fenced = true,
+            "--pointer" if !fenced => match it.next().and_then(|v| v.to_str()) {
                 Some(p) => pointer = Some(p.to_string()),
                 None => return usage_error("requires an argument", "--pointer"),
             },
-            _ if tok.starts_with("--pointer=") => {
+            _ if tok.starts_with("--pointer=") && !fenced => {
                 pointer = Some(tok["--pointer=".len()..].to_string());
             }
-            "-h" | "--help" => {
+            "-h" | "--help" if !fenced => {
                 print_help();
                 return 0;
             }
-            _ if tok.starts_with('-') && tok.len() > 1 => {
+            _ if !fenced && tok.starts_with('-') && tok.len() > 1 => {
                 return usage_error(&format!("unknown option: \"{tok}\""), "");
             }
             _ => positionals.push(tok.to_string()),

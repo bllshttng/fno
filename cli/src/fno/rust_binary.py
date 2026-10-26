@@ -467,3 +467,29 @@ def call_front_json(payload: dict, *, timeout: Optional[float] = None) -> dict:
     if done.returncode != 0:
         raise CommandUnavailable(f"fno inbox law match exited {done.returncode}: {done.stderr.strip()}")
     return json.loads(done.stdout)
+
+
+def notify_operator(title: str, body: str, pointer: str = "") -> tuple[int, str]:
+    """One operator notice through the native front door: ``(code, err)``.
+
+    The dispatch (mux clients, OS toast, sink lane) answers in-process in the
+    Rust verb; this Python seam only carries the argv, so the notify decision
+    table has one owner. ``err`` is the verb's one-line degrade message when
+    the code is non-zero, else empty.
+    """
+    import subprocess
+
+    binary = resolve_front_binary()
+    if binary is None:
+        return 1, "fno inbox notify: the native fno binary was not found"
+    argv = [str(binary), "inbox", "notify"]
+    if pointer:
+        argv += ["--pointer", pointer]
+    argv += ["--", title, body]
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=15.0)
+    except subprocess.TimeoutExpired:
+        return 1, "fno inbox notify: no answer in 15s"
+    except OSError as exc:
+        return 1, str(exc)[:200]
+    return done.returncode, (done.stderr or "").strip()

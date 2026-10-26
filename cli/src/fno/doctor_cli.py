@@ -22,7 +22,6 @@ from fno.lint_cli import lint
 from fno.observer.cli import observer_app
 from fno.route_cli import inventory_cmd
 from fno.scratch_cli import scratch_app
-from fno.status_fanout import status_fanout_app
 from fno.test_cmd import test_command
 
 
@@ -44,7 +43,8 @@ doctor_app = typer.Typer(
 doctor_app.callback(invoke_without_command=True)(doctor_command)
 
 # Add fanout to a copy of the event registrations. The compatibility event app
-# keeps its original shape while the new path gains the nested action.
+# keeps its original shape; the fanout action answers at the Rust front door
+# (`fno doctor event fanout tick`) and through the fno-agents binary.
 doctor_event_app = typer.Typer(
     name="event",
     help=event_app.info.help,
@@ -53,7 +53,6 @@ doctor_event_app = typer.Typer(
 doctor_event_app.registered_callback = event_app.registered_callback
 doctor_event_app.registered_commands.extend(event_app.registered_commands)
 doctor_event_app.registered_groups.extend(event_app.registered_groups)
-doctor_event_app.add_typer(status_fanout_app, name="fanout")
 
 doctor_app.add_typer(bundle_app, name="bundle")
 doctor_app.add_typer(codemap_app, name="codemap")
