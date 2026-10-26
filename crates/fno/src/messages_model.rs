@@ -137,7 +137,7 @@ impl MessagesSnapshot {
 
 /// Gather the projection: `fno-agents mail-threads --format json` with
 /// org_model's 30s bound and fail-open shape. mail-threads has no public
-/// `fno` verb, so this calls the internal door on the paired fno-agents.
+/// `fno` command, so this calls the internal door on the paired fno-agents.
 pub async fn gather() -> Result<Value, String> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),

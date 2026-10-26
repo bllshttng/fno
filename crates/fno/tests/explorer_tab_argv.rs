@@ -1,6 +1,6 @@
-//! The Explorer tabs exec the public `fno` verbs in `org_model`. This runs
+//! The Explorer tabs exec the public `fno` commands in `org_model`. This runs
 //! that exact argv through the real front binary and reads the argv a stub
-//! fno-agents leaf receives, so a verb rename on either side fails here
+//! fno-agents leaf receives, so a command rename on either side fails here
 //! instead of on the tab ("fleet not read: unknown flag --machines").
 //!
 //! The front runs as a subprocess with `env_clear`, like

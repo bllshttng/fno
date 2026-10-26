@@ -4,8 +4,8 @@ use crate::{
 };
 use serde_json::Value;
 
-/// The public `fno` verbs the Explorer tabs read. The `fno` front owns their
-/// routing, so moving an internal fno-agents verb cannot break a tab.
+/// The public `fno` commands the Explorer tabs read. The `fno` front owns
+/// their routing, so moving an internal fno-agents command cannot break a tab.
 pub const ORG_FOLD_ARGV: &[&str] = &["agents", "org", "chart", "fold"];
 pub const FLEET_TOP_ARGV: &[&str] = &["agents", "fleet", "top", "--machines", "--json"];
 
