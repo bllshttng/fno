@@ -19,16 +19,6 @@ from fno.company.contracts import (
     ObservationRef,
     WorkOrderRef,
 )
-from fno.roles.models import (
-    ApprovalFloor,
-    CapabilityFact,
-    ContextBundleBounds,
-    ResolvedRole,
-    RoleLayer,
-    RoleManifest,
-)
-from fno.roles.registry import discover_role_definitions
-from fno.roles.resolver import resolve_role
 from fno.rust_binary import find_dev_binary
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -47,11 +37,11 @@ OBSERVATION_CADENCE = {
 
 
 def _manifest(path: Path):
-    # The pack schema is native; the journey reads the roles through the
-    # Python role models it asserts against.
+    # The pack schema is native; the journey reads the roles as the raw
+    # documents the pack ships and the native schema validates.
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     return SimpleNamespace(
-        roles=tuple(RoleManifest.model_validate(role) for role in raw.get("roles", ())),
+        roles=tuple(raw.get("roles", ())),
         skills=tuple(raw.get("skills", ())),
         agents=tuple(raw.get("agents", ())),
     )
@@ -65,6 +55,30 @@ def _plugins(root: Path, *args: str) -> tuple[int, dict]:
         text=True,
     )
     return proc.returncode, json.loads(proc.stdout)
+
+
+def _spawn_overlay(payload: dict) -> dict:
+    """One native spawn-overlay round-trip: JSON payload in, answer out."""
+    proc = subprocess.run(
+        [str(find_dev_binary()), "spawn-overlay"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads(proc.stdout)
+
+
+def _discover_rows(root: Path) -> list[dict]:
+    """The full discovery rows (raw_definition, definition included) the
+    retired Python `discover_role_definitions` door parsed."""
+    return _spawn_overlay({"kind": "roles-discover", "root": str(root)})["rows"]
+
+
+# The defaults the retired pydantic models filled in when the pack YAML omits
+# a key; the resolution answer carries them either way.
+_REVIEW_POLICY_DEFAULTS = {"required": False, "minimum_reviewers": 0, "required_review_kinds": []}
+_DELIVERY_POLICY_DEFAULTS = {"required_evidence": [], "require_all_deliverables": True}
 
 
 def _delivery_eval(
@@ -143,7 +157,7 @@ CONFORMANCE = _manifest(PACK)
 
 
 def _role_manifest(role_id: str):
-    return next(role for role in CONFORMANCE.roles if role.role.id == role_id)
+    return next(role for role in CONFORMANCE.roles if role["role"]["id"] == role_id)
 
 
 def _subject_kind(evidence_id: str) -> EvidenceSubjectKind:
@@ -174,7 +188,7 @@ def _company_work(role_id: str, *, attempt_id: str = "attempt-current") -> Compa
             subject_id=evidence_id,
             result=EvidenceResult.PASSED,
         )
-        for evidence_id in role.delivery_policy.required_evidence
+        for evidence_id in role["delivery_policy"]["required_evidence"]
     )
     effect = ()
     effect_id = None
@@ -204,13 +218,13 @@ def _company_work(role_id: str, *, attempt_id: str = "attempt-current") -> Compa
             ),
         )
     return CompanyWorkRefs(
-        function=role.function,
-        role=role.role,
+        function=role["function"],
+        role=role["role"],
         work_order=work_order,
         deliverables=(
             DeliverableRef(
                 id=deliverable_id,
-                kind=role.deliverable_kinds[0],
+                kind=role["deliverable_kinds"][0],
                 work_order_id=work_order.node_id,
                 attempt_id=attempt_id,
                 required_evidence_ids=tuple(item.id for item in evidence),
@@ -273,60 +287,85 @@ def test_pack_verification_runs_but_the_journey_carries_conformance(tmp_path: Pa
 
 
 def _assert_resolved_roles_match_every_declared_policy_axis(role_root: Path) -> None:
-    records = discover_role_definitions(root=role_root)
+    rows = _discover_rows(role_root)
     for declared in CONFORMANCE.roles:
-        definitions = tuple(
-            record.definition
-            for record in records
-            if record.definition is not None and record.role == declared.role
+        definitions = [
+            record["definition"]
+            for record in rows
+            if record["definition"] is not None and record["role"] == declared["role"]
+        ]
+        revision = definitions[0]["snapshot_revision"]
+        work_order = {
+            "node_id": f"wo-{declared['role']['id']}",
+            "attempt_id": "attempt-current",
+            "principal_id": None,
+            "role_id": declared["role"]["id"],
+        }
+        facts = [
+            {
+                "capability": capability,
+                "available": True,
+                "source_id": "journey-fixture",
+                "snapshot_revision": revision,
+                "work_order_scope": work_order,
+            }
+            for capability in declared["required_capabilities"]
+        ]
+        resolved = _spawn_overlay(
+            {
+                "kind": "roles-resolve",
+                "role": declared["role"],
+                "definitions": definitions,
+                "capability_facts": facts,
+                "context_catalog": [],
+                "work_order": work_order,
+                "clock": NOW.isoformat(),
+                "snapshot_revision": revision,
+                "bundle_bounds": {
+                    "max_references": 8,
+                    "max_bytes": 1024,
+                    "max_sensitivity": "sensitive",
+                    "max_combinations": 4096,
+                },
+                "unchecked_definitions": [
+                    {
+                        "layer": record["layer"],
+                        "source": record["source"],
+                        "status": record["status"],
+                        "role": record["role"],
+                        "has_definition": record["definition"] is not None,
+                        "error": record["error"],
+                    }
+                    for record in rows
+                ],
+            }
         )
-        revision = definitions[0].snapshot_revision
-        work_order = WorkOrderRef(
-            node_id=f"wo-{declared.role.id}",
-            attempt_id="attempt-current",
-            role_id=declared.role.id,
-        )
-        facts = tuple(
-            CapabilityFact(
-                capability=capability,
-                available=True,
-                source_id="journey-fixture",
-                snapshot_revision=revision,
-                work_order_scope=work_order,
-            )
-            for capability in declared.required_capabilities
-        )
-        resolved = resolve_role(
-            role=declared.role,
-            definitions=definitions,
-            capability_facts=facts,
-            context_catalog=(),
-            work_order=work_order,
-            clock=NOW,
-            snapshot_revision=revision,
-            bundle_bounds=ContextBundleBounds(max_references=8, max_bytes=1024),
-            unchecked_definitions=records,
-        )
-        assert isinstance(resolved, ResolvedRole), (declared.role.id, resolved)
-        assert resolved.authority_ceiling is declared.authority_ceiling
-        assert resolved.approval_floor is declared.approval_floor
-        assert resolved.review_policy == declared.review_policy
-        assert resolved.delivery_policy == declared.delivery_policy
-        assert resolved.manifest.default_topology == declared.default_topology
-        assert resolved.required_capabilities == declared.required_capabilities
-        assert all(source.layer is RoleLayer.PLUGIN for source in resolved.source_chain)
+        assert "reason" not in resolved, (declared["role"]["id"], resolved.get("reason"))
+        assert resolved["authority_ceiling"] == declared["authority_ceiling"]
+        assert resolved["approval_floor"] == declared.get("approval_floor", "none")
+        assert resolved["review_policy"] == {
+            **_REVIEW_POLICY_DEFAULTS,
+            **declared.get("review_policy", {}),
+        }
+        assert resolved["delivery_policy"] == {
+            **_DELIVERY_POLICY_DEFAULTS,
+            **declared.get("delivery_policy", {}),
+        }
+        assert resolved["manifest"]["default_topology"] == declared["default_topology"]
+        assert resolved["required_capabilities"] == declared.get("required_capabilities", [])
+        assert all(source["layer"] == "plugin" for source in resolved["source_chain"])
 
     signatures = {
         (
-            role.approval_floor,
-            role.default_topology,
-            role.review_policy.required_review_kinds,
-            role.delivery_policy.required_evidence,
+            role.get("approval_floor", "none"),
+            role["default_topology"],
+            tuple(role.get("review_policy", {}).get("required_review_kinds", ())),
+            tuple(role.get("delivery_policy", {}).get("required_evidence", ())),
         )
         for role in CONFORMANCE.roles
     }
     assert len(signatures) == len(ROLE_IDS)
-    assert any(role.approval_floor is ApprovalFloor.NONE for role in CONFORMANCE.roles)
+    assert any(role.get("approval_floor", "none") == "none" for role in CONFORMANCE.roles)
     assert CONFORMANCE.skills == () and CONFORMANCE.agents == ()
 
 
@@ -356,7 +395,7 @@ def test_sales_outreach_scenario(role_root: Path) -> None:
 # One missing requirement per role: every row exercises the same refusal
 # branch, so further requirements of the same role add no distinct case.
 MISSING_CASES = tuple(
-    (role.role.id, role.delivery_policy.required_evidence[0])
+    (role["role"]["id"], role["delivery_policy"]["required_evidence"][0])
     for role in CONFORMANCE.roles
 )
 

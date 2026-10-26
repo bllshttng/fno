@@ -11,18 +11,7 @@ import pytest
 from fno import rust_binary
 from fno.agents import model_routing as mr
 from fno.agents import spawn_overlay_client as soc
-from fno.company.contracts import FunctionRef, RoleRef
 from fno.config import ConfigBlock, ModelRoutingBlock, SettingsModel
-from fno.roles import (
-    AuthorityCeiling,
-    DeliveryPolicy,
-    ReviewPolicy,
-    RoleDefinitionSource,
-    RoleLayer,
-    RoleManifest,
-    RoleResolutionReason,
-    RoutingHint,
-)
 
 requires_rust = pytest.mark.dev_build
 
@@ -95,31 +84,47 @@ OPENAI_PROVIDER = {
 
 
 def _write_business_role(root: Path, *, provider: str | None, model: str | None) -> Path:
-    role = RoleRef(id="publisher", function_id="communications")
-    source = RoleDefinitionSource(
-        layer=RoleLayer.COMPANY,
-        source_id="company/publisher.json",
-        snapshot_revision="snapshot-1",
-        role=role,
-        manifest=RoleManifest(
-            role=role,
-            function=FunctionRef(id=role.function_id),
-            mission="Publish one bounded artifact.",
-            deliverable_kinds=("brief",),
-            authority_ceiling=AuthorityCeiling.INTERNAL,
-            review_policy=ReviewPolicy(required=True, minimum_reviewers=1),
-            delivery_policy=DeliveryPolicy(required_evidence=("artifact",)),
-            default_topology="direct",
-            routing_hint=(
-                RoutingHint(provider=provider, model=model)
+    """Write one valid definition document, the literal the retired pydantic
+    model dumped (the native schema in crates/fno-agents/src/roles validates
+    the same bytes)."""
+    role = {"id": "publisher", "function_id": "communications"}
+    source = {
+        "layer": "company",
+        "source_id": "company/publisher.json",
+        "snapshot_revision": "snapshot-1",
+        "role": role,
+        "manifest": {
+            "role": role,
+            "function": {"id": "communications"},
+            "mission": "Publish one bounded artifact.",
+            "deliverable_kinds": ["brief"],
+            "delegation_targets": [],
+            "required_capabilities": [],
+            "authority_ceiling": "internal",
+            "context_selectors": [],
+            "review_policy": {
+                "required": True,
+                "minimum_reviewers": 1,
+                "required_review_kinds": [],
+            },
+            "delivery_policy": {
+                "required_evidence": ["artifact"],
+                "require_all_deliverables": True,
+            },
+            "default_topology": "direct",
+            "approval_floor": "none",
+            "routing_hint": (
+                {"provider": provider, "model": model}
                 if provider is not None or model is not None
                 else None
             ),
-        ),
-    )
+        },
+        "status": "valid",
+        "error": None,
+    }
     path = root / "company" / "publisher.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(source.model_dump(mode="json")), encoding="utf-8")
+    path.write_text(json.dumps(source), encoding="utf-8")
     return path
 
 
@@ -205,8 +210,8 @@ def test_disabled_routing_invalid_manifest_still_fails_closed(
     with pytest.raises(mr.BusinessRoleResolutionBlockedError) as caught:
         _call_resolver(resolver, "publisher", settings=_settings(enabled=False))
 
-    assert caught.value.result.reason is RoleResolutionReason.INVALID_MANIFEST
-    assert caught.value.result.source_id == "company/roles.toml"
+    assert caught.value.result["reason"] == "invalid_manifest"
+    assert caught.value.result["source_id"] == "company/roles.toml"
 
 
 def test_protected_business_names_validate_manifest_but_keep_primary_route(

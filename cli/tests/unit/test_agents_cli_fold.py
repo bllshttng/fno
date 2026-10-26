@@ -31,7 +31,6 @@ def test_agents_registers_the_seven_folded_roots() -> None:
         "lead",
         "mail",
         "mcp",
-        "roles",
         "worker",
     } <= _commands(agents_app)
 
@@ -52,7 +51,6 @@ def test_importing_agents_cli_does_not_import_folded_subgroups() -> None:
         "fno.lead.cli",
         "fno.mail.cli",
         "fno.mcp.cli",
-        "fno.roles.cli",
         "fno.worker.cli",
     }
     script = (
