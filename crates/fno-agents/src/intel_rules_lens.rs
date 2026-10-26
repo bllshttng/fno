@@ -2,13 +2,16 @@
 //! often it fires wrongly. Each rule is a guess about a failure, and each
 //! fire is a `decision_span` row carrying `rule`, so the counts are a journal
 //! read. A judge marks sampled fires in a labels file, and the lens reads the
-//! file back as a false-fire rate.
+//! file back as a false-fire rate. Where fnod scored a fire (`fnod_is_ask`),
+//! the yes and no columns split the fires by its advisory answer.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde_json::Value;
 
 const DAY_MS: i64 = 86_400_000;
+/// fnod's is_ask probability at or above this reads as yes.
+const FNOD_YES: f64 = 0.5;
 
 pub struct Fire {
     pub span_id: String,
@@ -17,6 +20,8 @@ pub struct Fire {
     /// What a judge reads: a block's reply tail, else the matched event (a
     /// question id, a span id, or the `stop:<session>:<turn>` key).
     pub evidence: Option<String>,
+    /// fnod's advisory is_ask probability, when the fire was scored.
+    pub fnod: Option<f64>,
 }
 
 pub struct RuleRow {
@@ -27,6 +32,8 @@ pub struct RuleRow {
     pub last_7d: usize,
     pub labeled: usize,
     pub false_fires: usize,
+    pub fnod_yes: usize,
+    pub fnod_no: usize,
     /// Unlabeled fires first, newest first, so each labeling pass moves on.
     pub sample: Vec<Fire>,
 }
@@ -83,6 +90,7 @@ pub fn fold(
                 .as_str()
                 .or(data["matched_event"].as_str())
                 .map(str::to_string),
+            fnod: data["fnod_is_ask"].as_f64(),
         };
         let key = (rule.to_string(), text(&data["span_kind"]));
         by_rule.entry(key).or_default().push((*ts_ms, fire));
@@ -100,6 +108,14 @@ pub fn fold(
                 .iter()
                 .filter(|(ts, _)| now_ms - ts <= 7 * DAY_MS)
                 .count();
+            let fnod_yes = fires
+                .iter()
+                .filter(|(_, f)| f.fnod.is_some_and(|p| p >= FNOD_YES))
+                .count();
+            let fnod_no = fires
+                .iter()
+                .filter(|(_, f)| f.fnod.is_some_and(|p| p < FNOD_YES))
+                .count();
             fires.sort_by_key(|(ts, f)| (labels.contains_key(&f.span_id), -ts));
             let total = fires.len();
             RuleRow {
@@ -110,6 +126,8 @@ pub fn fold(
                 last_7d,
                 labeled: verdicts.len(),
                 false_fires: verdicts.iter().filter(|v| !**v).count(),
+                fnod_yes,
+                fnod_no,
                 sample: fires
                     .into_iter()
                     .take(sample.unwrap_or(total))
@@ -164,8 +182,8 @@ pub(crate) fn run_lens(
     let report = fold(&rows, &labels, now_ms, sample);
     println!("rule lens (days {days}): {} rule(s)", report.len());
     println!(
-        "  {:<26} {:<7} {:>6} {:>8} {:>6} {:>7} {:>6}",
-        "rule", "kind", "fires", "sessions", "last7d", "labeled", "false"
+        "  {:<26} {:<7} {:>6} {:>8} {:>6} {:>7} {:>6} {:>8} {:>7}",
+        "rule", "kind", "fires", "sessions", "last7d", "labeled", "false", "fnod_yes", "fnod_no"
     );
     for r in &report {
         let rate = match r.labeled {
@@ -173,8 +191,16 @@ pub(crate) fn run_lens(
             n => format!(" ({}%)", r.false_fires * 100 / n),
         };
         println!(
-            "  {:<26} {:<7} {:>6} {:>8} {:>6} {:>7} {:>6}{rate}",
-            r.rule, r.kind, r.fires, r.sessions, r.last_7d, r.labeled, r.false_fires
+            "  {:<26} {:<7} {:>6} {:>8} {:>6} {:>7} {:>6} {:>8} {:>7}{rate}",
+            r.rule,
+            r.kind,
+            r.fires,
+            r.sessions,
+            r.last_7d,
+            r.labeled,
+            r.false_fires,
+            r.fnod_yes,
+            r.fnod_no
         );
     }
     for r in report.iter().filter(|r| !r.sample.is_empty()) {
@@ -182,7 +208,8 @@ pub(crate) fn run_lens(
         for f in &r.sample {
             let evidence = f.evidence.as_deref().unwrap_or("(no evidence)");
             let evidence = evidence.replace('\n', " / ");
-            println!("  {} {} {}: {evidence}", f.span_id, f.ts, f.session);
+            let fnod = f.fnod.map(|p| format!(" fnod {p:.2}")).unwrap_or_default();
+            println!("  {} {} {}{fnod}: {evidence}", f.span_id, f.ts, f.session);
         }
     }
     println!("label: append {{\"span_id\":\"s-...\",\"verdict\":\"true\"|\"false\"}} lines to a file, then pass --labels <file>");
@@ -200,8 +227,14 @@ mod tests {
         session: &str,
         excerpt: Option<&str>,
     ) -> (i64, String) {
-        let data = serde_json::json!({"span_kind": "block", "rule": rule, "excerpt": excerpt,
+        let mut data = serde_json::json!({"span_kind": "block", "rule": rule, "excerpt": excerpt,
             "trace": {"span_id": id, "actor_session": session}});
+        // Fires s-1 and s-3 carry fnod's advisory score; s-2 was unscored.
+        match id {
+            "s-1" => data["fnod_is_ask"] = serde_json::json!(0.9),
+            "s-3" => data["fnod_is_ask"] = serde_json::json!(0.1),
+            _ => {}
+        }
         (
             30 * DAY_MS - days_ago * DAY_MS,
             serde_json::json!({"type": "decision_span", "data": data}).to_string(),
@@ -231,6 +264,7 @@ mod tests {
         assert_eq!(chat.rule, "chat_ask_unfiled");
         assert_eq!((chat.fires, chat.sessions, chat.last_7d), (3, 2, 2));
         assert_eq!((chat.labeled, chat.false_fires), (2, 1));
+        assert_eq!((chat.fnod_yes, chat.fnod_no), (1, 1));
         // The unlabeled fire leads the sample so the next pass labels it.
         let ids: Vec<&str> = chat.sample.iter().map(|f| f.span_id.as_str()).collect();
         assert_eq!(ids, vec!["s-2", "s-1"]);

@@ -354,6 +354,12 @@ pub(crate) fn vault_root(anchor: &Path) -> Result<String, String> {
 /// The stable project-folder name: `project.id` -> git-remote slug ->
 /// checkout basename, rejecting anything that could escape its subtree.
 pub(crate) fn project_name(project_root: Option<&Path>) -> Result<String, String> {
+    project_folder(project_root, true)
+}
+
+/// [`project_name`], warning on an unset `project.id` only when `warn` (Python
+/// warns for vault placements alone).
+pub(crate) fn project_folder(project_root: Option<&Path>, warn: bool) -> Result<String, String> {
     let root = project_root.unwrap_or(Path::new("."));
     let pid = config_lookup(root, &["project", "id"])
         .and_then(|v| v.as_str().map(str::to_owned))
@@ -367,7 +373,7 @@ pub(crate) fn project_name(project_root: Option<&Path>) -> Result<String, String
     if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
         return Err(format!("unsafe project name for internal/ path: {name:?}"));
     }
-    if pid.is_none() {
+    if warn && pid.is_none() {
         static WARNED: std::sync::Once = std::sync::Once::new();
         WARNED.call_once(|| {
             eprintln!(
