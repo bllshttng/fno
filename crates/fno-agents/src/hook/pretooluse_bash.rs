@@ -159,6 +159,9 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
     if launches.is_empty() {
         return None;
     }
+    if let Some(reason) = crate::launch_record::claude_bg_refusal(&launches, claude_session_runs) {
+        return Some(reason);
+    }
     let home = crate::paths::AgentsHome::from_env();
     let caller_session = payload
         .get("session_id")
@@ -209,7 +212,25 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
     None
 }
 
-/// The host word a natively launched session reports as. `claude --bg` is
+/// A live process holds `id`: its argv names it, or claude's own listing
+/// shows a hosted process for it. A daemon-hosted `--bg` session carries no
+/// id in its argv, so the listing is the half that sees it.
+fn claude_session_runs(id: &str) -> bool {
+    if crate::census::live_claude_holds_session(id) {
+        return true;
+    }
+    let snapshot = crate::claude_roster::read_all_agents_union();
+    let carries_pids = snapshot.carries_pids();
+    let rows = match &snapshot {
+        crate::claude_roster::ClaudeAgentsSnapshot::Known { rows, .. }
+        | crate::claude_roster::ClaudeAgentsSnapshot::Unknown { rows, .. } => rows,
+    };
+    rows.iter().any(|row| {
+        (row.session_id.as_deref() == Some(id) || row.short_id == id)
+            && row.has_live_process(carries_pids)
+    })
+}
+
 /// Not a guard. An allowed command that starts a harness session leaves a
 /// launch record, which the child claims at SessionStart: a `claude --bg`
 /// child cannot see its launcher any other way (see launch_record.rs).
