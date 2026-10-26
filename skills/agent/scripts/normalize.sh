@@ -463,8 +463,10 @@ fi
 # Resolver is test-injectable via PROJECT_ROOT_RESOLVER (mirrors the provider and
 # slug resolvers): a command taking the project name and printing ONE line in the
 # protocol `ok\t<canonical>\t<abspath>` | `notfound\t<csv of known names>` |
-# `error\t<message>`. Default = the shipped fno python (resolve_project_name folds
-# short_name -> canonical; project_root_from_settings maps canonical -> abs path).
+# `error\t<message>`. Default = the shipped fno python driving the native
+# resolver (the project-family port: `spawn-overlay project resolve` folds short_name ->
+# canonical; `project_root_from_settings` maps canonical -> abs path and stays
+# in Python with the graph).
 PROJECT_CANON=""
 RESOLVED_CWD=""
 
@@ -504,23 +506,30 @@ resolve_project() {
   local py_cmd=()
   read -r -a py_cmd <<< "$shebang"
   { [[ -x "${py_cmd[0]}" ]] || command -v "${py_cmd[0]}" >/dev/null 2>&1; } || { printf 'error\tproject resolver interpreter not executable\n'; return 0; }
-  "${py_cmd[@]}" -c 'import sys
+  "${py_cmd[@]}" -c 'import sys, subprocess
 proj = sys.argv[1]
 try:
-    from fno.projects.resolve import resolve_project_name, ProjectNotFound, _get_cache
-    from fno.graph._intake import project_root_from_settings
+    from fno.rust_binary import resolve_binary
 except Exception as e:
     print("error\tproject resolver import failed: %s" % e); sys.exit(0)
+binary = resolve_binary()
+if binary is None:
+    print("error\tfno-agents binary not found; cannot resolve project"); sys.exit(0)
+proc = subprocess.run([str(binary), "spawn-overlay", "project", "resolve", proj],
+                      capture_output=True, text=True)
+if proc.returncode != 0:
+    err = proc.stderr.strip()
+    if "known canonical names" in err:
+        known = err.rsplit("[", 1)[1].rsplit("]", 1)[0].replace("'\''", "").replace(" ", "")
+        print("notfound\t" + known)
+    else:
+        print("error\t%s" % (err or "resolve exited %d" % proc.returncode))
+    sys.exit(0)
+canon = proc.stdout.strip()
 try:
-    canon = resolve_project_name(proj)
-except ProjectNotFound:
-    try:
-        known = sorted({v for v in _get_cache().values()})
-    except Exception:
-        known = []
-    print("notfound\t" + ",".join(known)); sys.exit(0)
+    from fno.graph._intake import project_root_from_settings
 except Exception as e:
-    print("error\t%s" % e); sys.exit(0)
+    print("error\tproject root resolver import failed: %s" % e); sys.exit(0)
 path = project_root_from_settings(canon)
 if not path:
     print("error\tproject %r resolved to no path in settings" % canon); sys.exit(0)

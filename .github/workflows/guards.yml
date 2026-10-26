@@ -69,7 +69,7 @@ permissions:
 
 jobs:
   plugin-tree:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +86,7 @@ jobs:
   # regression that breaks either arm must fail CI rather than surface on a
   # user's upgraded OpenCode.
   extension-suites:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -117,7 +117,7 @@ jobs:
 
   main-python-static:
     name: Python static correctness (495 sources)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -238,7 +238,7 @@ jobs:
   # event. Sourced from: control-plane-doc-colocation.yml, oos-tracked.yml.
   guards-pr:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -310,7 +310,7 @@ jobs:
   # matches (closure-trailer signature) is unchanged.
   check-pr-node-closure:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
@@ -357,7 +357,7 @@ jobs:
   # review-invocation-single-source.yml, skill-local-evals.yml,
   # tracker-partition.yml, uv-install-bytecode.yml.
   guards:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read

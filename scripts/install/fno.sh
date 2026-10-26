@@ -168,6 +168,12 @@ ensure_uv() {
 	if ! find_uv; then
 		die "uv was installed but is not resolvable; add \$HOME/.local/bin to PATH and re-run, or install uv from https://docs.astral.sh/uv/."
 	fi
+	# The marker lets `fno uninstall` offer `uv self uninstall`; a uv found on
+	# PATH above is the user's own and gets no marker.
+	_uv_marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/fno-bootstrap"
+	if ! { mkdir -p "$_uv_marker_dir" && : >"$_uv_marker_dir/uv-installed-by-fno"; }; then
+		say "warning: could not record that fno installed uv; 'fno uninstall' will not offer to remove it."
+	fi
 	say "installed uv ($FNO_UV)"
 }
 

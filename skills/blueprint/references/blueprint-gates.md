@@ -575,6 +575,17 @@ close_probes:
 
 It resolves the node's merged PR and merge commit, then reads the newest completed verdict for that exact workflow on main. When that verdict is `success` on a head containing the merge commit, the proof exits 0. Any other answer exits nonzero with one named word: `red`, `pending`, `absent`, `stale`, `ambiguous`, or `unreadable`. The close commands keep the node open, quoting that word in the refusal. A workflow renamed between the fix landing and the proof reads `absent`, which fails closed until the plan's probe is edited. Nothing is inferred from prose: a plan that declares no probe closes exactly as before.
 
+### recheck_probes: the symptom stays fixed
+
+A close probe proves the fix at close time. It can read a window (`--since 24h`) or a surface that retires later. A plan that fixes a lasting symptom also declares `recheck_probes:`. That is a promise that the probe holds forever. The daemon re-runs it on every done node every 6 hours. A probe that fails twice in one pass files a bug node with `source_node_id` set to the original node.
+
+```yaml
+recheck_probes:
+  - "fno agents reap --dry-run --json | grep -o '\"kept_open_pr\"'"   # the open-PR keep still fires
+```
+
+Write no window into a recheck probe, and name no file that a later port deletes. The same shape rules apply: at most 3 probes, a 60 s timeout each, and only a FAIL verdict counts. Doc: `docs/architecture/plan-completion-stamp.md`, section "Re-checking after close".
+
 ## Join posture (step 3, every plan carrying an `## Execution Strategy`)
 
 Ask the author who hands out the plan's remaining waves. Record the answer as one frontmatter key:

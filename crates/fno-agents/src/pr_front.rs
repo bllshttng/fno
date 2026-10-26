@@ -23,7 +23,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("attestation retract <args>...", "Revoke a passing review_attestation by naming the pair that passed (--reviewer, --attester, --head, --reason/-R); refused when no matching pass exists."),
     ("merge <pr_number> [flags]", "Merge a PR with the fno-canonical guards. Emits a JSON line {pr, outcome, reason, strategy[, cleanup]}; exit 0 merged, 1 failed, 2 skipped|held, 3 merge-landed-cleanup-failed, 127 gh-missing."),
     ("verify --kind merged|reviews --pr-number <n> --state-file <f>", "Verify an external PR gate: merged audits GitHub merge state (one bounded remediation); reviews flips the external-review gate when a reviewer has no qualifying reply. Exit 0 clean/degrade, 1 blocked/flipped, 2 substrate failure."),
-    ("status <pr> [--refresh]", "One authoritative CI verdict from statusCheckRollup; prints a JSON line {pr, verdict, settled, green, checks}. exit 0 green, 1 red, 2 pending, 3 unknown, 4 read failed, 127 gh-missing. --refresh bypasses the coalescing cache for one live read (manual use only)."),
+    ("status <pr>|main [--refresh]", "One authoritative CI verdict from statusCheckRollup; prints a JSON line {pr, verdict, settled, green, checks}. exit 0 green, 1 red, 2 pending, 3 unknown, 4 read failed, 127 gh-missing. `main` reads every workflow run at main's head sha instead: red if any one failed, pending while any one runs. --refresh bypasses the coalescing cache for one live read (manual use only)."),
     ("wait <pr> [--until settled|red|green|review] [--timeout 15m] [--interval 60]", "The sanctioned watcher through the coalescing cache; exits the status command's own code. Red cancels the head's runs; a red made only of cancelled runs, or left by the attempt before a rerun, waits for the rerun; CONFLICTING exits 5 with a rebase receipt."),
     ("coverage-publish <pr> [--head H] [--repo R]", "Publish the review-coverage verdict for a PR head as the commit status fno/review-coverage. Never recomputes. exit 0 posted, 1 not posted."),
     ("info [<pr>] [--repo R]", "Read PR state, URL, head SHA, refs, and mergeability; the read runs in the Rust op door. Prints JSON; exit 4 when the read cannot answer."),
@@ -221,6 +221,10 @@ fn dispatch(sub: &str, tail: &[String]) -> i32 {
             crate::authorized_merge::run_authorized_merge(&bound_tail(sub, tail))
         }
         "verify" => crate::pr_verify::run(tail),
+        "status" if tail.iter().any(|a| a == "main") => crate::main_ci::run_status_main(
+            &PathBuf::from(current_cwd_string()),
+            tail.iter().any(|a| a == "--refresh" || a == "--no-cache"),
+        ),
         "status" => {
             let payload = json!({
                 "op": "status-read",

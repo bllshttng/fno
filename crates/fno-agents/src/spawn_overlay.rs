@@ -106,6 +106,11 @@ pub fn run_spawn_overlay(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("plugins") {
         return crate::plugins::cli::run(&args[1..]);
     }
+    // The `fno config project` commands nest here the same way
+    // (crate::project::run).
+    if args.first().map(String::as_str) == Some("project") {
+        return crate::project::run(&args[1..]);
+    }
     let mut payload = String::new();
     let read = if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--payload-file=")) {
         std::fs::read_to_string(path)
