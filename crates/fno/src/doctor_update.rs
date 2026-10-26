@@ -1978,14 +1978,14 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
         );
         failed.push("post-install groom agent refresh".into());
     }
-    restage_plugin(resolved, &fno_py, failed);
+    restage_plugin(resolved, failed);
 }
 
 /// The plugin-stage restage, plus the codex refresh when its channel marker
 /// says dev. The stage holds skills, hooks and scripts, none of them
 /// compiled, so it also rides a Python hold: a skill fix never waits on a
 /// Rust tarball.
-fn restage_plugin(resolved: &Path, fno_py: &Path, failed: &mut Vec<String>) {
+fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) {
     if let Some(agents_bin) = cargo_installed_bin() {
         let args: Vec<String> = [
             "plugin-install".into(),
@@ -2005,16 +2005,14 @@ fn restage_plugin(resolved: &Path, fno_py: &Path, failed: &mut Vec<String>) {
         // forced converge, so the dev-channel marker gates the refresh.
         if codex_channel_is_dev() {
             let args: Vec<String> = [
-                "config".into(),
-                "plugin".into(),
-                "install".into(),
+                "plugin-install".into(),
                 "codex".into(),
                 "--force".into(),
                 "--source".into(),
                 resolved.to_string_lossy().into_owned(),
             ]
             .to_vec();
-            let code = run_inherit(fno_py, &args);
+            let code = run_inherit(&agents_bin, &args);
             if code != 0 {
                 eprintln!(
                     "fno doctor update: WARNING: post-install codex refresh exited {code}; continuing"
@@ -2600,7 +2598,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     } else if held.is_none() {
         failed.push("uv install".into());
     } else {
-        restage_plugin(&resolved, &resolve_fno_py(), &mut failed);
+        restage_plugin(&resolved, &mut failed);
     }
 
     release_update_claim();

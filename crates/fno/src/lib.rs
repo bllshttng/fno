@@ -115,6 +115,7 @@ pub mod setup_profile;
 pub mod setup_run;
 pub mod setup_services;
 pub mod share;
+pub mod shim_check;
 pub mod sideline_color;
 pub mod spawn_floor;
 pub mod spawn_journal;
@@ -151,3 +152,4 @@ pub mod yard_overlay;
 
 pub mod doctor_cost;
 pub mod otel_read;
+pub mod whoami_seam;

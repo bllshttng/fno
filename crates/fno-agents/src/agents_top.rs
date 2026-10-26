@@ -426,6 +426,62 @@ fn worker_rows(
     out
 }
 
+/// Each worker's `denied` and `last_turn` from its own transcript tail, one
+/// thread per worker. A row with no session id reads unmeasured, never a
+/// missing key.
+fn attach_receipts(workers: &mut [Value], read: &(dyn Fn(&str, &str) -> Value + Sync)) {
+    let readings: Vec<Value> = std::thread::scope(|scope| {
+        let handles: Vec<_> = workers
+            .iter()
+            .map(|r| {
+                let sid = r["session_id"].as_str().map(str::to_string);
+                let harness = r["harness"].as_str().unwrap_or("").to_string();
+                scope.spawn(move || match sid {
+                    Some(sid) => read(&harness, &sid),
+                    None => json!({"basis": "unmeasured: no session id on the row"}),
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| json!({"basis": "unmeasured: the receipt read panicked"}))
+            })
+            .collect()
+    });
+    for (row, reading) in workers.iter_mut().zip(readings) {
+        let (denied, last_turn) = crate::session_receipt::top_fields(&reading);
+        row["denied"] = denied;
+        row["last_turn"] = last_turn;
+    }
+}
+
+/// The DENIED cell: trailing classifier plus user refusals, `-` unmeasured.
+fn denied_cell(d: &Value) -> String {
+    let t = &d["trailing"];
+    match (t["permission_denied"].as_u64(), t["user_rejected"].as_u64()) {
+        (Some(a), Some(b)) => (a + b).to_string(),
+        _ => "-".into(),
+    }
+}
+
+/// The LAST TURN cell: `<age> <who woke it> <calls>c`, `-` unmeasured.
+fn last_turn_cell(t: &Value) -> String {
+    let Some(prov) = t["provenance"].as_str() else {
+        return "-".into();
+    };
+    let age = t["age_s"]
+        .as_i64()
+        .map(crate::claims::fmt_age_s)
+        .unwrap_or_else(|| "?".into());
+    let mut cell = format!("{age} {}", crate::session_receipt::wake_word(prov));
+    if let Some(calls) = t["tool_calls"].as_u64() {
+        cell.push_str(&format!(" {calls}c"));
+    }
+    cell
+}
+
 fn truth_handle(w: &Worker, entry: Option<&RegistryEntry>) -> String {
     match entry {
         Some(e) => crate::daemon::list_rows::registry_truth_handle(e),
@@ -770,7 +826,8 @@ pub fn payload(include_subagents: bool, include_pane_stats: bool) -> Value {
         .collect();
     let (table, _) = crate::census::process_table_ps();
     let rss = crate::session_cost::tree_rss(&table, &roots);
-    let workers = worker_rows(&c, &rows, &truth, outcome, &sessions, &rss);
+    let mut workers = worker_rows(&c, &rows, &truth, outcome, &sessions, &rss);
+    attach_receipts(&mut workers, &crate::session_receipt::receipt);
 
     let slot_claims = crate::spawn_gate::live_worker_slot_claims(&mut warnings)
         .into_iter()
@@ -881,7 +938,7 @@ pub fn render(p: &Value) -> String {
         out.push(String::new());
     }
     out.push(format!(
-        "{:<7} {:<24} {:<9} {:<10} {:<9} {:>7} {:>7} {:<8} {:<17} {:<11} STATUS",
+        "{:<7} {:<24} {:<9} {:<10} {:<9} {:>7} {:>7} {:<8} {:<17} {:<11} {:>6} {:<16} STATUS",
         "SOURCE",
         "NAME",
         "HARNESS",
@@ -891,7 +948,9 @@ pub fn render(p: &Value) -> String {
         "RSS_MB",
         "NODE",
         "PROGRESS",
-        "REACH"
+        "REACH",
+        "DENIED",
+        "LAST TURN"
     ));
     let workers = list("workers");
     if workers.is_empty() {
@@ -913,7 +972,7 @@ pub fn render(p: &Value) -> String {
             activity.push_str(&format!(" ({basis})"));
         }
         out.push(format!(
-            "{:<7} {:<24} {:<9} {:<10} {:<9} {:>7} {:>7} {:<8} {:<17} {:<11} {activity}",
+            "{:<7} {:<24} {:<9} {:<10} {:<9} {:>7} {:>7} {:<8} {:<17} {:<11} {:>6} {:<16} {activity}",
             cell(&r["source"]),
             name,
             cell(&r["harness"]),
@@ -924,6 +983,8 @@ pub fn render(p: &Value) -> String {
             cell(&r["node"]),
             cell(&r["progress"]),
             cell(&r["reach"]),
+            denied_cell(&r["denied"]),
+            last_turn_cell(&r["last_turn"]),
         ));
     }
     if let Some(n) = p["slot_claims"].as_u64().filter(|n| *n > 0) {
@@ -931,7 +992,10 @@ pub fn render(p: &Value) -> String {
     }
     out.push(format!(
         "census: {PREDICATE}. PID/RSS are the process at scan time; REACH reads the \
-         transcript (fno agents truth for the full evidence); NODE reads the graph"
+         transcript (fno agents truth for the full evidence); NODE reads the graph; \
+         DENIED (classifier plus user refusals over the last 50 tool results) and LAST TURN \
+         (age, who woke it, tool calls) read the worker's transcript tail \
+         (fno-agents intel --receipt --session <id>)"
     ));
     if let Some(rows) = p["subagents"].as_array() {
         out.push(String::new());

@@ -136,12 +136,12 @@ impl MessagesSnapshot {
 }
 
 /// Gather the projection: `fno-agents mail-threads --format json` with
-/// org_model's 30s bound and fail-open shape. The command path rides PATH
-/// like org_model::gather's team-fold call.
+/// org_model's 30s bound and fail-open shape. mail-threads has no public
+/// `fno` command, so this calls the internal door on the paired fno-agents.
 pub async fn gather() -> Result<Value, String> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        tokio::process::Command::new("fno-agents")
+        tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())
             .args(["mail-threads", "--format", "json"])
             .kill_on_drop(true)
             .output(),
