@@ -1266,7 +1266,13 @@ fn render_list_rows() {
     // Without a codex probe the key is absent, not null.
     assert!(parsed.get("codex_loaded").is_none());
 
-    let table = fno_agents::list_render::render_list_table(&agents, &discovered, Some(3), Some(3), &Value::Null);
+    let table = fno_agents::list_render::render_list_table(
+        &agents,
+        &discovered,
+        Some(3),
+        Some(3),
+        &Value::Null,
+    );
     assert!(table.contains("DISCOVERED LIVE SESSIONS (1, host-local)"));
     // ADDRESS leads and the alias is demoted to LABEL. The alias led this
     // table for its whole life, so it was the leftmost thing a reader
@@ -1349,7 +1355,8 @@ fn render_list_rows() {
             "pr_basis": "no-node",
         }
     ]);
-    let table = fno_agents::list_render::render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
     let lines: Vec<&str> = table.lines().collect();
     assert_eq!(
         lines[0].split_whitespace().collect::<Vec<_>>().join(" "),
@@ -1401,7 +1408,8 @@ fn render_list_rows() {
             "pr_basis": "graph-unreadable",
         }
     ]);
-    let table = fno_agents::list_render::render_list_table(&agents, &[], Some(2), Some(2), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(2), Some(2), &Value::Null);
     let sub = table.lines().find(|l| l.contains("sub-worker")).unwrap();
     assert!(
         sub.contains("claude-opus-5 (observed; requested glm-5.3-flash[1m])"),
@@ -1445,7 +1453,8 @@ fn render_list_rows() {
             "log_path": null
         }
     ]);
-    let table = fno_agents::list_render::render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
     let lines: Vec<&str> = table.lines().collect();
 
     assert!(
@@ -1488,7 +1497,8 @@ fn render_list_rows() {
             "log_path": null
         }
     ]);
-    let table = fno_agents::list_render::render_list_table(&agents, &[], Some(43), Some(0), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(43), Some(0), &Value::Null);
     assert!(
         table.contains("truth probe failed: 0 of 43 rows answered"),
         "outage must be named, got: {table}"
@@ -1498,7 +1508,8 @@ fn render_list_rows() {
         "the statuses must be disclaimed: {table}"
     );
 
-    let healthy = fno_agents::list_render::render_list_table(&agents, &[], Some(43), Some(43), &Value::Null);
+    let healthy =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(43), Some(43), &Value::Null);
     assert!(
         !healthy.contains("truth probe failed"),
         "a healthy page carries no outage line: {healthy}"
