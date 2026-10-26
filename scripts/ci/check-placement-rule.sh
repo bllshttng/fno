@@ -336,8 +336,6 @@ crates/fno-agents/src/backlog/maintenance_tests.rs
 crates/fno-agents/src/review_capability.rs
 cli/src/fno/backlog/batch.py
 cli/src/fno/claims/session_pid.py
-cli/src/fno/cost/_register.py
-cli/src/fno/cost/_session_cost.py
 cli/src/fno/context_audit.py
 cli/src/fno/doctor.py
 cli/src/fno/graph/cli.py
@@ -362,7 +360,6 @@ cli/src/fno/target_cli.py
 cli/src/fno/test_dispatch_target.py
 cli/src/fno/test_worktree_paths.py
 cli/src/fno/wake/detect.py
-cli/src/fno/worker/review.py
 cli/src/fno/worktree_cli/cli.py
 cli/src/fno/worktree_paths.py
 cli/src/fno/worktree.py
@@ -373,6 +370,9 @@ crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/claude_drive.rs
 crates/fno-agents/src/claude_roster.rs
 crates/fno-agents/src/plans_path.rs
+# plan_carry.rs tests build a per-project Claude settings fixture (the same
+# Claude's-own-config class as plans_path.rs); footnote state never lands there.
+crates/fno-agents/src/plan_carry.rs
 crates/fno-agents/src/law_match.rs
 crates/fno-agents/src/mail_cli/send/resolve.rs
 crates/fno-agents/src/client_commands.rs

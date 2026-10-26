@@ -13,7 +13,8 @@ skill revisions, but the section heading is the contract.
 
 The `waves` mode routes tasks through a three-tier resolver
 (`task.executor` → `plan.executor` → surface inference). The surface matcher
-lives in the in-package module `fno.executor._surface` and is locked by
+lives in the native executor-route door
+`crates/fno-agents/src/executor_route.rs` and is locked by
 PR #196's plan.
 But the design phase, where the surface decision is actually made, has no
 hook for capturing intent. Plan authors who understand the resolver can set
@@ -141,7 +142,7 @@ When the suffix is present, `/blueprint` writes it through so the source of the 
 
 When the result is `mixed`, the entry must explicitly list which file
 patterns map to `impeccable` so `/blueprint` can emit per-task overrides. The
-patterns echo `fno.executor._surface`'s locked list:
+patterns echo the executor-route door's locked list:
 
 ```
 **/*.tsx, **/*.jsx, components/**, routes/**, src/styles/**
@@ -151,6 +152,6 @@ patterns echo `fno.executor._surface`'s locked list:
 
 ## What this skill does NOT do
 
-- It does not modify `fno.executor._surface`. The runtime inference list is locked by PR #196's plan and stays as-is.
+- It does not modify the executor-route door. The runtime inference list is locked by PR #196's plan and stays as-is.
 - It does not pick `/impeccable` subcommands. The choice is `tdd | impeccable | mixed`. The agent decides which subcommands to run inside `impeccable` (today: `craft` + `critique`).
 - It does not retro-stamp existing plans. Only plans authored via the new `/think → /blueprint` flow get the lock. Older plans rely on surface inference at runtime, which already handles them correctly.

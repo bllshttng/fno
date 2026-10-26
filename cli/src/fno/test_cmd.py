@@ -662,8 +662,6 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
      "bash tests/lib/test_resolve_plan_executor.sh"),
     ("config global-precedence harness", ".", "bash tests/lib/test_config_global_precedence.sh\n"
      "bash tests/lib/test_config_plans_chain.sh"),
-    ("cost-accuracy harness", ".",
-     "uv run --project cli python cli/tests/unit/test_session_cost_dedup.py"),
     ("loop-check shim + immutable manifest harness", ".",
      "bash tests/hooks/test_loop_check_shim.sh\n"
      "bash tests/hooks/test_manifest_immutable.sh\n"

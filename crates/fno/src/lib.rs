@@ -152,3 +152,4 @@ pub mod yard_overlay;
 
 pub mod doctor_cost;
 pub mod otel_read;
+pub mod whoami_seam;
