@@ -930,13 +930,10 @@ fn argv_of(answer: &Value) -> Option<Vec<String>> {
 }
 
 /// The node seed rewrite: the same decide the spawn-axes door answers, in
-/// process. Returns the (possibly rewritten) argv and the profile verb a
+/// process. Returns the (possibly rewritten) argv and the profile command a
 /// `profile` answer names. A payload-named node's refusals name the
 /// payload, not `--node`.
-fn node_seed_rewrite(
-    args: &[String],
-    stderr: &mut Vec<String>,
-) -> Result<(Vec<String>, Option<String>), String> {
+fn node_seed_rewrite(args: &[String]) -> Result<(Vec<String>, Option<String>), String> {
     let family = json!(["/target", "/blueprint"]);
     let mut args = args.to_vec();
     let mut node = flag_value(&args[1..], &["--node"])
@@ -949,31 +946,26 @@ fn node_seed_rewrite(
             "resume": resume_bearing(&args),
             "argv": args,
         }));
-        match answer.get("action").and_then(Value::as_str) {
-            Some("compose") => {
-                if let Some(rewritten) = argv_of(&answer) {
-                    args = rewritten;
-                }
-                node = flag_value(&args[1..], &["--node"])
-                    .map(|n| n.trim().to_string())
-                    .unwrap_or_default();
-                if answer.get("source").and_then(Value::as_str) == Some("payload") {
-                    node_source = json!("payload");
-                }
-                if node.is_empty() {
-                    if let Some(reason) = flag_value(&args[1..], &["--node-reason"]) {
-                        std::env::set_var("FNO_NODE_REASON", reason);
-                        if let Some(at) = args.iter().position(|t| t == "--node-reason") {
-                            args.drain(at..(at + 2).min(args.len()));
-                        }
+        // A `refuse` was the Python transport's stale-binary note; the decide
+        // is in-process, so anything but `compose` reads as nodeless.
+        if answer.get("action").and_then(Value::as_str) == Some("compose") {
+            if let Some(rewritten) = argv_of(&answer) {
+                args = rewritten;
+            }
+            node = flag_value(&args[1..], &["--node"])
+                .map(|n| n.trim().to_string())
+                .unwrap_or_default();
+            if answer.get("source").and_then(Value::as_str) == Some("payload") {
+                node_source = json!("payload");
+            }
+            if node.is_empty() {
+                if let Some(reason) = flag_value(&args[1..], &["--node-reason"]) {
+                    std::env::set_var("FNO_NODE_REASON", reason);
+                    if let Some(at) = args.iter().position(|t| t == "--node-reason") {
+                        args.drain(at..(at + 2).min(args.len()));
                     }
                 }
             }
-            Some("refuse") => stderr.push(
-                "fno agents spawn: binary predates seed-node derivation; spawning nodeless"
-                    .to_string(),
-            ),
-            _ => {}
         }
     }
     if node.is_empty() {
@@ -1018,13 +1010,13 @@ fn node_seed_rewrite(
             .to_string()),
         Some("compose") => Ok((argv_of(&answer).unwrap_or(args), None)),
         Some("profile") => {
-            let verb = answer
-                .get("verb")
+            let command = answer
+                .get("verb") // verb-wording: allow (the decide's answer key)
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
                 .map(str::to_string);
-            Ok((args, verb))
+            Ok((args, command))
         }
         _ => Ok((args, None)),
     }
@@ -1058,9 +1050,9 @@ pub fn admit(args: &[String], cwd: &Path, existing_names: &HashSet<String>) -> A
         return Admission::refused(stderr, text);
     }
 
-    // 2. The node seed rewrite. A `profile` answer names the verb the compose
+    // 2. The node seed rewrite. A `profile` answer names the command the compose
     //    reads as the node's command.
-    let (args, node_command) = match node_seed_rewrite(args, &mut stderr) {
+    let (args, node_command) = match node_seed_rewrite(args) {
         Ok(rewritten) => rewritten,
         Err(text) => return Admission::refused(stderr, text),
     };
