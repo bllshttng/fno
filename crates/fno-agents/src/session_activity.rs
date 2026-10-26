@@ -47,10 +47,16 @@ pub(crate) struct Activity {
 /// The error class of an `is_error` tool result, from its leading text.
 /// Classes come from the 2026-09-21 sample of 3,313 real errors; `other` is
 /// reported, so a new dominant shape surfaces as a large `other` bucket.
+/// `permission_denied` is the auto-mode classifier's verdict: 24 of them sat
+/// in `other` over 60 transcripts (2026-10-25).
 pub(crate) fn error_class(text: &str) -> &'static str {
     let t = text.trim_start();
     if t.starts_with("Exit code") {
         "command_failed"
+    } else if t.starts_with("Permission for this action was denied")
+        || t.contains("denied by the Claude Code auto mode classifier")
+    {
+        "permission_denied"
     } else if t.contains("doesn't want to proceed") {
         "user_rejected"
     } else if t.contains("hook error")
@@ -138,7 +144,7 @@ pub(crate) fn assistant_message_id(row: &Value) -> Option<&str> {
         .and_then(|v| v.as_str())
 }
 
-fn block_text(content: &Value) -> String {
+pub(crate) fn block_text(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
         Value::Array(blocks) => blocks
@@ -150,7 +156,7 @@ fn block_text(content: &Value) -> String {
     }
 }
 
-fn content_blocks(row: &Value) -> &[Value] {
+pub(crate) fn content_blocks(row: &Value) -> &[Value] {
     row.get("message")
         .and_then(|m| m.get("content"))
         .and_then(|c| c.as_array())
@@ -218,8 +224,18 @@ pub(crate) fn mode_model(votes: &BTreeMap<String, u64>) -> Option<String> {
         .map(|(m, _)| m.clone())
 }
 
+/// A claude `api-request-blob` row: a copy of request content the transcript
+/// already holds as user and assistant rows. Folding it counts the same
+/// tool calls and results twice.
+pub(crate) fn is_request_echo(row: &Value) -> bool {
+    row.get("type").and_then(Value::as_str) == Some("api-request-blob")
+}
+
 impl ActivityFold {
     pub(crate) fn row(&mut self, row: &Value) {
+        if is_request_echo(row) {
+            return;
+        }
         if row.get("payload").is_some_and(|p| p.is_object()) {
             self.codex_row(row);
             return;
@@ -555,10 +571,12 @@ mod tests {
                            "input": {"file_path": "a/b.RS", "content": "one\ntwo\nthree"}});
         let fragment = json!({"type": "tool_use", "name": "Write",
                               "input": {"file_path": "y.rs (x)", "content": "body"}});
-        let raw = claude_lines(
-            &[json!({"type": "assistant", "message": {"role": "assistant",
-                    "content": [edit("x.rs"), multiedit, write, fragment]}})],
-        );
+        let content = json!([edit("x.rs"), multiedit, write, fragment]);
+        // The api-request-blob row repeats the same calls; it counts nothing.
+        let raw = claude_lines(&[
+            json!({"type": "assistant", "message": {"role": "assistant", "content": content}}),
+            json!({"type": "api-request-blob", "message": {"role": "assistant", "content": content}}),
+        ]);
         let act = claude_activity(&raw);
         // The fragment's body line still counts as a line; it never
         // counts as a language.
@@ -570,11 +588,15 @@ mod tests {
     }
 
     #[test]
-    fn the_five_error_classes_sort_one_each() {
+    fn the_six_error_classes_sort_one_each() {
         // AC3-HP: one text per measured class.
         let texts = [
             ("Exit code 1", "command_failed"),
-            ("The user doesn't want to proceed", "user_rejected"),
+            (
+                "Permission for this action was denied by the Claude Code auto mode classifier. Reason: [External System Writes].",
+                "permission_denied",
+            ),
+            ("The user doesn't want to proceed with this tool use.", "user_rejected"),
             ("PreToolUse:Bash hook error: refused", "hook_blocked"),
             ("[fno backlog] node locked", "hook_blocked"),
             (

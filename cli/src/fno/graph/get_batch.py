@@ -19,7 +19,7 @@ def resolve_or_dispatch(ids: List[str], *, field: object, grouped: bool, strict:
         argv.append("--grouped")
     if strict:
         argv.append("--strict")
-    from fno.tracker import active_backend_name
+    from fno.graph.api import active_backend_name
 
     if active_backend_name() == "graph":
         _exec(argv)

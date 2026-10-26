@@ -2,7 +2,7 @@
 # fno hook: UserPromptSubmit - born with why offer inject
 # hooks/born-with-why-offer-inject.sh -- surface a pending born-with-why offer.
 #
-# UserPromptSubmit hook. The attended born-with-why path (spawn_think.py) emits a
+# UserPromptSubmit hook. The attended born-with-why path (backlog/birth.rs) emits a
 # `think_offered` event to .fno/events.jsonl, but its only surfacing to the agent
 # is a stderr line that can be misread or dropped. This hook re-surfaces an
 # unconsumed offer ONCE as a <system-reminder> the harness owns, so the operator
@@ -181,7 +181,7 @@ if len(raw) != expected:
 # bare `for line in sys.stdin` would raise OUTSIDE the per-line try below and
 # take every offer in the slice down with it. A mangled line instead fails
 # json.loads inside the try and is skipped, as the file header already claims.
-# The reminder wrapper is hook-owned; offer_line is free text (spawn_think
+# The reminder wrapper is hook-owned; offer_line is free text (the birth hook
 # interpolates a filesystem path into it), so it gets the same defang the
 # enrichment parse applies to title/details or it could close the wrapper early.
 _TAG = re.compile(r"<\s*(/?)\s*system-reminder\s*>", re.IGNORECASE)

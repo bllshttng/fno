@@ -213,7 +213,7 @@ The full line reads `kept {id} (open do row: {node}: {detail})`. Every node the 
 
 Two paths produce the line. The classify pass fires on the stale graph row (`gc_sweep.rs` `run_with_release`). The apply pass re-checks at stage and commit. Fresh work can arrive between decision and stop, and a stop then kills live work (`gc_sweep.rs` `commit_retirements`). When the re-check finds the node not done, the detail reads `node status {status}: a session on unmerged work never retires`.
 
-The real run carries its own cure. The settle pass fills stale open do rows on done and merged nodes before the row pass reads the graph (`gc.rs` `gc_sweep`, `gc_sweep.rs` `settle_stale_do_rows`). A dry run prints the cure as `would settle {id} (stale open do row filled on done+merged node: {node})`.
+The real run carries its own cure. The settle pass fills stale open do rows on done nodes before the row pass reads the graph (`gc.rs` `gc_sweep`, `gc_sweep.rs` `settle_stale_do_rows`). The node's merge question is answered two ways. The node recorded `merged`. Or it never recorded a PR at all. A dry run prints the cure as `would settle {id} (stale open do row filled on done node: {node})`. A done node that recorded a PR with no recorded outcome still holds until the stamp pass resolves it.
 
 An additional PR settles by record, never by guess. One of three facts settles an extra. Its own stamp reads `merged` or `closed`. It is the primary of a node whose merge status reads `merged`. Another node carries it as its primary, and that node's worker holds the PR. The sweep reads GitHub once per pass for any extra that no fact settles. When the entry carries no url, the read resolves in the node's `cwd`. A merged or closed answer is stamped onto the entry. The stamp settles the row on the same pass. A refused stamp or an unreadable read keeps the hold.
 
@@ -359,7 +359,7 @@ Every top-level key of `fno agents registry reap --json`, one row each. The dry 
 | `retired` | `retired {id} ({basis})` and the count line | [In what order](#in-what-order) |
 | `pruned` | `pruned {id} (clean and merged: {path})` | [The row retired and its tree stayed](#the-row-retired-and-its-tree-stayed) |
 | `prune_failed` | `prune failed {id} ({reason})` | [The sweep tried and did not finish](#the-sweep-tried-and-did-not-finish) |
-| `settled_do_rows` | `settled {id} (stale open do row filled on done+merged node: {node})` | [open do row](#open-do-row) |
+| `settled_do_rows` | `settled {id} (stale open do row filled on done node: {node})` | [open do row](#open-do-row) |
 | `settle_refused` | `settle refused {node} ({reason})` | [open do row](#open-do-row) |
 | `kept_operator` | `kept {id} (operator row)` | [Rows no sweep can take](#rows-no-sweep-can-take) |
 | `kept_promoted` | `kept {id} (promoted)` | [Rows no sweep can take](#rows-no-sweep-can-take) |

@@ -3082,6 +3082,21 @@
       "default": false,
       "title": "Share Backlog",
       "type": "boolean"
+     },
+     "ssh_peers": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Ssh Peers"
      }
     },
     "title": "StoreBlock",
@@ -3206,7 +3221,7 @@
     "type": "object"
    },
    "ThinkSpawnBlock": {
-    "description": "Context-carrying /think spawn settings (nested under 'config.think_spawn').\n\nThe opt-in for node : when enabled, the node-birth path (``fno backlog\nidea``) OFFERS a context-carrying ``/think`` thread for a generated organic\nnode (a birth trigger never auto-spawns -), handing it the *resolved*\norigin transcript pointer (not a paraphrase) so a later pickup starts from\nground truth. A real spawn still happens for the explicit conversational\ncommand, an armed lifecycle trigger (``on_work_start``), or a\nconsented decompose fan-out.\n\nDefault ``False`` (Locked Decision 2): shipping this changes nothing until\nthe operator arms it; an absent key reads as off. The fail-safe posture\nmirrors ``config.auto_continue``: a malformed block degrades to disabled\nrather than failing the whole settings load - false-enabled (a background\n``/think`` dispatched against the operator's intent) is the dangerous\ndirection. The enable + presence + spawn logic lives in\n:mod:`fno.provenance.spawn_think`.\n\n``max_per_run`` is the per-node-generation-run blast-radius cap (AC4-EDGE):\na bulk run exceeding it skips the remainder and logs the truncation.\n``idle_threshold_s`` is the discretionary activity-recency refinement\n(Claude's Discretion 1); ``0`` (default) disables it so the primary\nattended-vs-headless signal stands alone.\n\nActual context-think launches use the shared ``config.dispatch`` profile;\nthis block controls when to offer or launch them, not their harness or\nsubstrate.",
+    "description": "Context-carrying /think spawn settings (nested under 'config.think_spawn').\n\nThe opt-in for node : when enabled, the node-birth path (``fno backlog\nidea``) OFFERS a context-carrying ``/think`` thread for a generated organic\nnode (a birth trigger never auto-spawns -), handing it the *resolved*\norigin transcript pointer (not a paraphrase) so a later pickup starts from\nground truth. A real spawn still happens for the explicit conversational\ncommand, an armed lifecycle trigger (``on_work_start``), or a\nconsented decompose fan-out.\n\nDefault ``False`` (Locked Decision 2): shipping this changes nothing until\nthe operator arms it; an absent key reads as off. The fail-safe posture\nmirrors ``config.auto_continue``: a malformed block degrades to disabled\nrather than failing the whole settings load - false-enabled (a background\n``/think`` dispatched against the operator's intent) is the dangerous\ndirection. The enable + presence + spawn logic lives in\n``crates/fno-agents/src/think_dispatch.rs`` and ``backlog/birth.rs``.\n\n``max_per_run`` is the per-node-generation-run blast-radius cap (AC4-EDGE):\na bulk run exceeding it skips the remainder and logs the truncation.\n``idle_threshold_s`` is the discretionary activity-recency refinement\n(Claude's Discretion 1); ``0`` (default) disables it so the primary\nattended-vs-headless signal stands alone.\n\nActual context-think launches use the shared ``config.dispatch`` profile;\nthis block controls when to offer or launch them, not their harness or\nsubstrate.",
     "properties": {
      "enabled": {
       "default": false,
@@ -4736,6 +4751,15 @@
    "question": "",
    "default_source": "",
    "doc": "true moves the backlog itself to the primary named by store.remote_url; both keys must be set. Default false."
+  },
+  {
+   "path": "store.ssh_peers",
+   "type": "dict[str, str] (optional)",
+   "default": null,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Optional plan rescue: a map of host key to ssh destination, e.g. store.ssh_peers.\"macbook\" = \"macbook.lan\". When this host cannot place a plan file from the shared store, the plan carrier asks that peer over ssh (BatchMode, 5s connect timeout). A key is the pushing host's name, a host in the fno_plan_seen ledger, or the store host in store.remote_url. Off by default: the shared store stays the only required transport. Read from the global config only. Default unset."
   },
   {
    "path": "agents.single_flight_ttl_seconds",

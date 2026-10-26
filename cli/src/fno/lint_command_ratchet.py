@@ -109,6 +109,9 @@ NATIVE_SERVED_LEAVES = {
     "do review post-dispositions",
     "do review classify",
     "do review invocations",
+    "do research",
+    "do think dispatch",
+    "do think inspect",
     # The pr spellings answer through the native front door now; the wheel's
     # pr group keeps only the watch and stub-manifest mounts, whose leaves the
     # enumerator still reads from the live typer tree.

@@ -33,11 +33,42 @@ use crate::state::{load_registry, update_registry};
 /// change is this one line.
 pub(crate) const GRACE_S: i64 = 120;
 
+/// The answering-phase backstop default, in minutes: a conversation hold
+/// armed on the user's last real message ends this long after it,
+/// whichever comes first with the Stop grace (C3). Overridable through
+/// `mail.hold.answer_minutes` in the global config, or
+/// `$FNO_AGENTS_ANSWER_MINUTES`. A value below 1 minute coerces to this
+/// default; one above a day clamps to a day, so a typo can never arm a
+/// hold the reader cannot outlive.
+pub(crate) const DEFAULT_ANSWER_MINUTES: i64 = 10;
+
+/// The clamp ceiling for the answer minutes: one day.
+const MAX_ANSWER_MINUTES: i64 = 24 * 60;
+
 /// The answering-phase backstop (C2), in seconds: the answering clock is
 /// written this far out, so a crash or an interrupt (Esc fires no Stop)
-/// cannot hold mail forever. Not the C5 cap. The user may change this
-/// value; the change is this one line.
-pub(crate) const ANSWER_BACKSTOP_S: i64 = 3600;
+/// cannot hold mail forever. Not the C5 cap.
+pub(crate) fn answer_backstop_s() -> i64 {
+    answer_minutes().saturating_mul(60)
+}
+
+/// The minutes behind [`answer_backstop_s`]: `$FNO_AGENTS_ANSWER_MINUTES`
+/// wins, then the global config's `mail.hold.answer_minutes`, then the
+/// default. An unparseable or non-positive value falls through like an
+/// absence, and the result clamps to [`MAX_ANSWER_MINUTES`].
+fn answer_minutes() -> i64 {
+    let env = std::env::var("FNO_AGENTS_ANSWER_MINUTES")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i64>().ok());
+    let configured = env.or_else(|| {
+        crate::agents_config::config_lookup_global(&["mail", "hold", "answer_minutes"])
+            .and_then(|v| v.as_integer())
+    });
+    configured
+        .filter(|minutes| *minutes > 0)
+        .unwrap_or(DEFAULT_ANSWER_MINUTES)
+        .min(MAX_ANSWER_MINUTES)
+}
 
 /// The `source` mark on a clock the conversation rules wrote. A manual hold
 /// carries no source, which is how the two are told apart.
@@ -455,10 +486,11 @@ fn ensure_clock(handle: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
     if read_clock(handle).is_some() {
         return true;
     }
+    let backstop = answer_backstop_s();
     write_clock(
         handle,
-        Some(now + chrono::Duration::seconds(ANSWER_BACKSTOP_S)),
-        ANSWER_BACKSTOP_S,
+        Some(now + chrono::Duration::seconds(backstop)),
+        backstop,
         "wall",
         None,
         Some(CONVERSATION_SOURCE),
@@ -508,8 +540,8 @@ impl ArmOutcome {
     }
 }
 
-/// The conversation arm (C2): write the answering clock (`wall`,
-/// `ANSWER_BACKSTOP_S` out, `source: conversation`) and stamp the row
+/// The conversation arm (C2): write the answering clock (`wall`, the
+/// answer backstop out, `source: conversation`) and stamp the row
 /// `bus-only`, clock before stamp as today. A row stamped `bus-only` whose
 /// clock is absent, has `until: null`, or is live without
 /// `source: conversation` carries a hold the user set on purpose; the
@@ -544,10 +576,11 @@ fn arm_row(
         return (ArmOutcome::StoodAside, Some(handle));
     }
     let prior_live_conversation = live_conversation;
+    let backstop = answer_backstop_s();
     if write_clock(
         &handle,
-        Some(now + chrono::Duration::seconds(ANSWER_BACKSTOP_S)),
-        ANSWER_BACKSTOP_S,
+        Some(now + chrono::Duration::seconds(backstop)),
+        backstop,
         "wall",
         None,
         Some(CONVERSATION_SOURCE),
@@ -579,7 +612,10 @@ fn arm_row(
 /// conversation clock is live: a follow-up the harness queues during a long
 /// answer fires UserPromptSubmit only after the turn ends, often minutes
 /// after its Enter, and without the wide look-back it would not restart the
-/// grace. Silent on every path, never panics.
+/// grace. A lapsed conversation clock widens the window to its own arm
+/// instant: the follow-up behind that clock was witnessed inside the window
+/// the clock covered, and the harness submits it only after the turn ends,
+/// which can sit well past the lapse. Silent on every path, never panics.
 pub(crate) fn conversation_prompt(session_id: &str, prompt: &str) {
     if !is_real_message(prompt) {
         return;
@@ -590,11 +626,13 @@ pub(crate) fn conversation_prompt(session_id: &str, prompt: &str) {
     let handle = identity_key(&matched);
     let now = chrono::Utc::now();
     let now_ms = now.timestamp_millis();
-    let live = read_clock(&handle).map(|c| c.live(now)).unwrap_or(false);
+    let clock = read_clock(&handle);
+    let live = clock.as_ref().map(|c| c.live(now)).unwrap_or(false);
     let since_ms = if live {
-        now_ms - ANSWER_BACKSTOP_S * 1000
+        now_ms - answer_backstop_s() * 1000
     } else {
-        now_ms - crate::operator_witness::SUBMIT_WINDOW_AFTER_MS
+        lapsed_arm_ms(&clock, now)
+            .unwrap_or(now_ms - crate::operator_witness::SUBMIT_WINDOW_AFTER_MS)
     };
     let journal = crate::paths::AgentsHome::from_env().events_jsonl();
     if crate::operator_witness::submitted_since(&journal, session_id, since_ms, now_ms) {
@@ -602,6 +640,26 @@ pub(crate) fn conversation_prompt(session_id: &str, prompt: &str) {
         // of looking it up a second time.
         arm_row(&matched, policy, session_id);
     }
+}
+
+/// The look-back floor for a lapsed conversation clock: its arm instant
+/// (`until` minus the window it was written with), so a follow-up witnessed
+/// inside that window still re-arms after the clock lapses. None for a
+/// missing, live, or foreign-source clock, which keeps the plain 30 s
+/// submit look-back.
+fn lapsed_arm_ms(clock: &Option<Clock>, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
+    let clock = clock.as_ref()?;
+    if clock.live(now) || clock.source.as_deref() != Some(CONVERSATION_SOURCE) {
+        return None;
+    }
+    let until = clock.until?;
+    // Saturating, not Duration::seconds: a clock file is machine-writable
+    // state, and an extreme window_s must not panic the hook path.
+    Some(
+        until
+            .timestamp_millis()
+            .saturating_sub(clock.window_s.saturating_mul(1000)),
+    )
 }
 
 /// The Stop side (C3, C6): a live conversation clock is shortened to
@@ -1220,10 +1278,12 @@ pub(crate) fn tidy_lapsed_holds(home: &AgentsHome, now: chrono::DateTime<chrono:
 /// How old a row must be before a clock-less `bus-only` stamp on it counts
 /// as an orphan: the conversation backstop, so no live answering window can
 /// still own it.
-const ORPHAN_STAMP_AGE_S: i64 = ANSWER_BACKSTOP_S;
+fn orphan_stamp_age_s() -> i64 {
+    answer_backstop_s()
+}
 
 /// The (name, session id) of every non-operator row stamped `bus-only` with
-/// no clock file, older than [`ORPHAN_STAMP_AGE_S`]. An `origin ==
+/// no clock file, older than [`orphan_stamp_age_s`]. An `origin ==
 /// "operator"` row never qualifies: `fno agents register --delivery-policy
 /// bus-only` is the one door that stamps with no clock on purpose, and it
 /// writes `operator` over an adopted or unmarked origin. Spawned, adopted
@@ -1246,7 +1306,7 @@ pub(crate) fn orphan_stamp_rows(
             let sid = e.harness_session_id.as_deref()?;
             let old = chrono::DateTime::parse_from_rfc3339(&e.created_at).map_or(true, |born| {
                 now - born.with_timezone(&chrono::Utc)
-                    > chrono::Duration::seconds(ORPHAN_STAMP_AGE_S)
+                    > chrono::Duration::seconds(orphan_stamp_age_s())
             });
             let clockless = gate_clock_addresses(sid, sid)
                 .iter()
@@ -1612,21 +1672,36 @@ pub(crate) mod tests {
     /// and FNO_STATE_DIR (chats store) to one tempdir for `f`, under the
     /// crate-wide env lock (claim_commands idiom). FNO_PY points at `true` so
     /// a parked-payload drain spawn is a no-op the test never waits on.
+    /// The global config read is pinned away too: FNO_GLOBAL_SETTINGS_PATH
+    /// names a file that does not exist, so `mail.hold.answer_minutes` on
+    /// the developer's machine cannot reach a hold test, and
+    /// FNO_AGENTS_ANSWER_MINUTES is cleared so the override cannot either.
     /// Prior values are restored, so an ambient FNO_HOME survives the test.
     pub(crate) fn with_hold_env(f: impl FnOnce(&std::path::Path)) {
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let prior: Vec<(String, Option<std::ffi::OsString>)> =
-            ["FNO_AGENTS_HOME", "FNO_HOME", "FNO_PY", "FNO_STATE_DIR"]
-                .iter()
-                .map(|k| (k.to_string(), std::env::var_os(k)))
-                .collect();
+        let prior: Vec<(String, Option<std::ffi::OsString>)> = [
+            "FNO_AGENTS_HOME",
+            "FNO_HOME",
+            "FNO_PY",
+            "FNO_STATE_DIR",
+            "FNO_GLOBAL_SETTINGS_PATH",
+            "FNO_AGENTS_ANSWER_MINUTES",
+        ]
+        .iter()
+        .map(|k| (k.to_string(), std::env::var_os(k)))
+        .collect();
         let td = tempfile::TempDir::new().unwrap();
         std::env::set_var("FNO_AGENTS_HOME", td.path());
         std::env::set_var("FNO_HOME", td.path());
         std::env::set_var("FNO_PY", "true");
         std::env::set_var("FNO_STATE_DIR", td.path());
+        std::env::set_var(
+            "FNO_GLOBAL_SETTINGS_PATH",
+            td.path().join("no-global-settings.toml"),
+        );
+        std::env::remove_var("FNO_AGENTS_ANSWER_MINUTES");
         f(td.path());
         for (key, value) in prior {
             match value {
@@ -1728,7 +1803,7 @@ pub(crate) mod tests {
             );
             let row = clock(dir, SID);
             assert_eq!(row["clock_kind"], "wall");
-            assert_eq!(row["window_s"], ANSWER_BACKSTOP_S);
+            assert_eq!(row["window_s"], answer_backstop_s());
             assert!(row["ceiling"].is_null());
             assert_eq!(row["source"], "conversation");
             let until = row["until"].as_str().unwrap();
@@ -1737,8 +1812,8 @@ pub(crate) mod tests {
                 .with_timezone(&chrono::Utc);
             let left = (until - chrono::Utc::now()).num_seconds();
             assert!(
-                (3550..=3600).contains(&left),
-                "the answering clock sits about 60 minutes out, got {left}s"
+                (answer_backstop_s() - 50..=answer_backstop_s()).contains(&left),
+                "the answering clock sits about the answer backstop out, got {left}s"
             );
             let status = self_status(SID).unwrap();
             assert_eq!(status["clock_live"], true);
@@ -1773,6 +1848,94 @@ pub(crate) mod tests {
             assert!(status["clock_until"].is_null());
             assert_eq!(status["delivery_policy"], "bus-only");
             assert_eq!(status["conversation"], false);
+        });
+    }
+
+    /// The `$FNO_AGENTS_ANSWER_MINUTES` override moves the clock the arm
+    /// writes, and a non-positive value falls through to the default the
+    /// way an absence does.
+    #[test]
+    fn answer_backstop_honors_the_env_override() {
+        with_hold_env(|dir| {
+            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
+            std::env::set_var("FNO_AGENTS_ANSWER_MINUTES", "2");
+            arm_conversation(SID);
+            let row = clock(dir, SID);
+            assert_eq!(row["window_s"], 120);
+
+            std::env::set_var("FNO_AGENTS_ANSWER_MINUTES", "0");
+            arm_conversation(SID);
+            let row = clock(dir, SID);
+            assert_eq!(row["window_s"], answer_backstop_s());
+            assert_eq!(row["window_s"], 600);
+        });
+    }
+
+    /// `mail.hold.answer_minutes` in the global config moves the clock too:
+    /// the arm reads it through the settings path the env override does not
+    /// shadow when unset.
+    #[test]
+    fn answer_backstop_reads_the_global_config_key() {
+        with_hold_env(|dir| {
+            write_registry(dir, serde_json::json!([registry_row("worker", SID)]));
+            let global = dir.join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            std::fs::write(
+                global.join("config.toml"),
+                "[mail.hold]\nanswer_minutes = 3\n",
+            )
+            .unwrap();
+            std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", global.join("settings.toml"));
+            arm_conversation(SID);
+            let row = clock(dir, SID);
+            assert_eq!(row["window_s"], 180);
+        });
+    }
+
+    /// A follow-up queued during a long answer carries a witness inside the
+    /// answering window the lapsed clock covered, so it re-arms even though
+    /// the prompt fires well past the lapse. With no clock the plain 30 s
+    /// look-back stands and the same old witness arms nothing.
+    #[test]
+    fn a_followup_submitted_after_the_clock_lapses_still_re_arms() {
+        with_hold_env(|dir| {
+            write_registry(
+                dir,
+                serde_json::json!([
+                    registry_row("worker", SID),
+                    registry_row("idle", "dddddddd-1111-2222-3333-444455556666")
+                ]),
+            );
+            let now = chrono::Utc::now();
+            // The previous answering window: armed 700 s ago, lapsed 100 s ago.
+            write_clock(
+                &identity_key(SID),
+                Some(now - chrono::Duration::seconds(100)),
+                600,
+                "wall",
+                None,
+                Some(CONVERSATION_SOURCE),
+            )
+            .unwrap();
+            let old_witness_ms = (now - chrono::Duration::seconds(690)).timestamp_millis();
+            witness_row(SID, old_witness_ms);
+            witness_row("dddddddd-1111-2222-3333-444455556666", old_witness_ms);
+            conversation_prompt(SID, "follow up");
+            let row = clock(dir, SID);
+            assert_eq!(row["source"], "conversation");
+            let until = chrono::DateTime::parse_from_rfc3339(row["until"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            assert!(
+                until > now,
+                "the lapsed clock is re-armed live for the next answer"
+            );
+            // The clock-less session keeps the 30 s look-back: no arm.
+            conversation_prompt("dddddddd-1111-2222-3333-444455556666", "follow up");
+            assert!(
+                !clock_path(dir, "dddddddd-1111-2222-3333-444455556666").exists(),
+                "an old witness with no clock never arms"
+            );
         });
     }
 
@@ -1919,7 +2082,11 @@ pub(crate) mod tests {
                 "the clock now sits at most one grace out, got {left}s"
             );
             assert_eq!(row["source"], "conversation", "the source mark stays");
-            assert_eq!(row["window_s"], ANSWER_BACKSTOP_S, "every other field kept");
+            assert_eq!(
+                row["window_s"],
+                answer_backstop_s(),
+                "every other field kept"
+            );
             // Never extends: a second Stop during the grace cannot push the
             // deadline back out.
             std::thread::sleep(std::time::Duration::from_millis(1_100));
@@ -2273,7 +2440,7 @@ pub(crate) mod tests {
     fn orphan_sweep_picks_old_clockless_non_operator_stamps() {
         with_hold_env(|dir| {
             let now = chrono::Utc::now();
-            let old = (now - chrono::Duration::seconds(ORPHAN_STAMP_AGE_S + 60))
+            let old = (now - chrono::Duration::seconds(orphan_stamp_age_s() + 60))
                 .format("%Y-%m-%dT%H:%M:%SZ")
                 .to_string();
             let young = (now - chrono::Duration::seconds(60))
