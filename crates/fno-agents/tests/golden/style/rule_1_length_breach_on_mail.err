@@ -3,6 +3,22 @@ message blocked by the style rules.
 
 rule 1 (length): sentence 1 is 26 words. The cap is 25. "one two three four five six seven eight nine ten eleven twelve ..."
 
+rule 9 (glue): the token "twentyone" joins "twenty" and "one". Write them apart. "twentyone"
+
+rule 9 (glue): the token "twentytwo" joins "twenty" and "two". Write them apart. "twentytwo"
+
+rule 9 (glue): the token "twentythree" joins "twenty" and "three". Write them apart. "twentythree"
+
+rule 9 (glue): the token "twentyfour" joins "twenty" and "four". Write them apart. "twentyfour"
+
+rule 9 (glue): the token "twentyfive" joins "twenty" and "five". Write them apart. "twentyfive"
+
+rule 9 (glue): the token "twentysix" joins "twenty" and "six". Write them apart. "twentysix"
+
+Split the glued tokens into their words.
+
+When the cap is the pressure, put the detail in a node note and link the node.
+
 add a style-exception line with a reason, or pass --style-exception.
 
 run "fno doctor lint style --stdin --surface pr-body" to check a rewrite first.

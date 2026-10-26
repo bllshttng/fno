@@ -65,7 +65,7 @@ def resume_handle_notice(name: str, harness: str, handle: str) -> str:
         f"WARN: removing the {harness} session record for {name} ({handle}).\n"
         "      The transcript stays on disk.\n"
         + recovery_line
-        + f"      Reverse it with: {ADOPT_COMMAND} {handle} --cross-project\n"
+        + f"      Reverse it with: {ADOPT_COMMAND} {handle}\n"
     )
 
 

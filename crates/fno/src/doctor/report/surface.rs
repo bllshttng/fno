@@ -64,6 +64,7 @@ fn home_dir_x() -> PathBuf {
 fn codex_plugin_state_exists(home: &std::path::Path) -> bool {
     home.join("footnote/plugin-channel.json").is_file()
         || home.join("footnote/rollback-failure.json").is_file()
+        || home.join("plugins/cache/fno").exists()
         || home.join("plugins/cache/footnote").exists()
         || home.join("plugins/cache/footnote-dev").exists()
 }

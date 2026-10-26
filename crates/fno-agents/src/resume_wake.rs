@@ -1162,7 +1162,6 @@ pub(crate) fn claude_live_route(
     message_already_queued: bool,
     from_name: Option<&str>,
     reentry_plan: Option<&crate::reentry::ReentryPlan>,
-    cross_project: bool,
     home: &AgentsHome,
 ) -> i32 {
     claude_live_route_with(
@@ -1174,7 +1173,6 @@ pub(crate) fn claude_live_route(
         message_already_queued,
         from_name,
         reentry_plan,
-        cross_project,
         home,
         None,
         crate::claude_roster::read_all_agents_in,
@@ -1206,7 +1204,6 @@ fn claude_live_route_with<F, I, M>(
     message_already_queued: bool,
     from_name: Option<&str>,
     reentry_plan: Option<&crate::reentry::ReentryPlan>,
-    _cross_project: bool,
     home: &AgentsHome,
     claims_root: Option<&Path>,
     read_roster: F,
@@ -2633,7 +2630,6 @@ mod tests {
             message_already_queued,
             from_name,
             plan,
-            false,
             home,
             Some(claims_root),
             |config_dir| {

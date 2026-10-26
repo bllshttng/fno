@@ -265,7 +265,7 @@ pub(crate) fn silent_switch_report(plugin_cache: &Value, armed: &BTreeMap<String
                     when_raw.as_str()
                 };
                 finding["cause"] = Value::String(format!(
-                    "deployed plugin cache is stale ({sha}, {when}); likely predates the auto_merge_source writer. Fix: claude plugin update fno@footnote (not fno doctor update), then restart"
+                    "deployed plugin cache is stale ({sha}, {when}); likely predates the auto_merge_source writer. Fix: claude plugin update fno@fno (or fno@footnote; not fno doctor update), then restart"
                 ));
             }
         }

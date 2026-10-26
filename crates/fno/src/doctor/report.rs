@@ -422,12 +422,19 @@ pub(crate) fn plugin_file_report(active_raw: &str) -> Value {
         "source_digest": source_digest,
     });
     if stale && is_claude_plugin_cache(&active_path) {
+        // A cache under the pre-rename "footnote" marketplace updates by its old id.
+        let posix = active_path.to_string_lossy();
+        let plugin_id = if posix.contains("/.claude/plugins/cache/footnote/") {
+            "fno@footnote"
+        } else {
+            "fno@fno"
+        };
         if let Value::Object(map) = &mut rep {
             map.insert(
                 "detail".into(),
-                Value::String(
-                    "active Claude plugin bytes are stale; run `claude plugin update fno@footnote`, then restart the session; `fno doctor update` does NOT refresh this artifact".into(),
-                ),
+                Value::String(format!(
+                    "active Claude plugin bytes are stale; run `claude plugin update {plugin_id}`, then restart the session; `fno doctor update` does NOT refresh this artifact"
+                )),
             );
         }
     }
