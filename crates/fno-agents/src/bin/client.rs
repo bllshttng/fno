@@ -3958,11 +3958,8 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
                 params.insert("force".into(), Value::Bool(true));
             }
             "--cross-project" if command == "rm" || command == "stop" => {
-                // The lifecycle commands' store heal resolves through the same
-                // project-confinement refusal resume/adopt answer with this
-                // flag; accept it so the refusal's taught remedy is a form
-                // these commands take.
-                params.insert("cross_project".into(), Value::Bool(true));
+                // Retired (d-460ea8c7): the store heal is machine-wide;
+                // accepted as a silent no-op for one release.
             }
             "--no-wait" => {
                 // Spawn-gate escape: fail immediately at max_live

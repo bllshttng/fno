@@ -252,6 +252,12 @@ NAME_ALLOWLIST=(
     # WHY: one row per tracked docs/*.md path, and one existing path carries a
     # barred term in its file name. The row proposes retiring that page.
     docs/docs-map.tsv
+    # WHY: the rule-9 glue wordlists are English dictionaries (google-10000-english
+    # plus a supplement, and a dwyl protection tier); they carry common words and
+    # given names that merely collide with barred terms. The lists are data, not
+    # a reference.
+    crates/fno-agents/src/backlog/style_words.txt
+    crates/fno-agents/src/backlog/style_protect.txt
 )
 
 competitor_terms=$(printf '%s' "$COMPETITOR_TERMS_B64" | base64 -d 2>/dev/null)

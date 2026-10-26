@@ -1129,7 +1129,7 @@ def _run_journey(root: Path) -> Path:
     if marketplace.returncode:
         raise RuntimeError(f"private plugin marketplace refused: {marketplace.stderr.strip() or marketplace.stdout.strip()}")
     install = _run(
-        [codex, "plugin", "add", "fno@footnote", "--json"],
+        [codex, "plugin", "add", "fno@fno", "--json"],
         env=env,
         cwd=repo,
         timeout=180,

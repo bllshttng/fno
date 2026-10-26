@@ -1,6 +1,6 @@
 # Buddy: a companion beside your status line
 
-Buddy is a small terminal companion. It stands at the right end of your status line, moves a little, and says one line after each turn. It is a Claude Code mod, claude-mod-buddy, in its own plugin, `buddy`, in the footnote marketplace. You do not need fno to use it. `/buddy` and `/bbb` (bring back buddy) are the same command.
+Buddy is a small terminal companion. It stands at the right end of your status line, moves a little, and says one line after each turn. It is a Claude Code mod, claude-mod-buddy, in its own plugin, `buddy`, in the `fno` marketplace. You do not need fno to use it. `/buddy` and `/bbb` (bring back buddy) are the same command.
 
 It needs Claude Code 2.1.287 or later. That is the first version that loads mods.
 
@@ -12,7 +12,7 @@ A mod is the right way to do this. A mod runs inside Claude Code, with no fork a
 
 ## Start
 
-1. Install the plugin: `/plugin install buddy@footnote`. The buddy hatches at the next session start.
+1. Install the plugin: `/plugin install buddy@fno`. The buddy hatches at the next session start.
 2. Type `/buddy` to see its card. The first time, you watch it hatch from an egg. In a wide fullscreen terminal, and in Desktop, the card opens in a pane on the right. Press any key to close it. In other terminals, Claude Code would put that pane above the prompt, so the card shows in the transcript instead.
 3. Type `/buddy statusline` to put it beside your status line. This is the best place for the buddy.
 4. If you want the buddy in a side pane, type `/buddy pane`.
@@ -108,4 +108,4 @@ The plugin is `plugins/buddy/` in the footnote repo. `plugins/buddy/hooks/hooks.
 
 ## If you used the buddy inside fno
 
-Before this change, the fno plugin loaded the buddy. Now fno does not load it. Install `buddy@footnote` to get it back. The soul and the reroll bank are in the mod store, so the same buddy comes back.
+Before this change, the fno plugin loaded the buddy. Now fno does not load it. Install `buddy@fno` to get it back. The soul and the reroll bank are in the mod store, so the same buddy comes back.

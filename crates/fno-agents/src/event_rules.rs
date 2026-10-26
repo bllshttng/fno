@@ -21,6 +21,10 @@ const TABLE: &str = include_str!("event_rules.toml");
 /// and the fire's span carries `cap_reached`.
 pub(crate) const BLOCK_CAP: usize = 3;
 
+/// The reply tail a Stop block keeps on its span, so `intel --lens rules`
+/// can show a judge what the rule fired on. The tail is where asks sit.
+const EXCERPT_CHARS: usize = 600;
+
 /// The four classes only the user decides; `class_user_only` reads them off
 /// a question's escalate route span.
 const USER_CLASSES: &[&str] = &[
@@ -322,6 +326,20 @@ fn stop_block(
     let mut attrs = Map::new();
     if prior + 1 >= BLOCK_CAP {
         attrs.insert("cap_reached".to_string(), json!(true));
+    }
+    let skip = ctx
+        .last_message
+        .chars()
+        .count()
+        .saturating_sub(EXCERPT_CHARS);
+    let excerpt: String = ctx.last_message.chars().skip(skip).collect();
+    attrs.insert("excerpt".to_string(), json!(excerpt));
+    // fnod scores the same message beside the keyword verdict. Advice only:
+    // the keyword answer already fired this block, and the span carries both
+    // so `intel --lens rules` can compare them.
+    if row.when.iter().any(|p| p == "last_message_decision_ask") {
+        attrs.insert("keyword_ask".to_string(), json!(true));
+        attrs.extend(crate::fnod::is_ask(ctx.cwd, &ctx.last_message));
     }
     write_fire_span(
         journal,
@@ -1028,9 +1046,20 @@ mod tests {
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         let rig = Rig::new(true);
         let ask = "1. merge 2. hold. Your call?";
+        let (url, fnod) = crate::fnod::tests::serve_once(
+            r#"{"answers":{"is_ask":{"type":"noul","noul":0.12}}}"#,
+            std::time::Duration::ZERO,
+        );
+        std::fs::create_dir_all(rig.cwd.join(".fno")).unwrap();
+        std::fs::write(
+            rig.cwd.join(".fno/config.toml"),
+            format!("[fnod]\nurl = \"{url}\"\ntimeout_ms = 2000\n"),
+        )
+        .unwrap();
 
         // AC3: the block names the rule and the ask command, and the journal
-        // holds one block span.
+        // holds one block span. The span carries the keyword verdict and
+        // fnod's score side by side, and fnod's low score changes nothing.
         let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload(ask));
         let block = fires
             .iter()
@@ -1041,7 +1070,11 @@ mod tests {
         let spans = rig.spans();
         assert_eq!(spans.len(), 1, "one block span for one fire");
         assert_eq!(spans[0]["data"]["span_kind"], "block");
+        assert_eq!(spans[0]["data"]["excerpt"], ask);
         assert_eq!(spans[0]["data"]["rule"], "chat_ask_unfiled");
+        assert_eq!(spans[0]["data"]["keyword_ask"], true);
+        assert_eq!(spans[0]["data"]["fnod_is_ask"], 0.12);
+        fnod.join().unwrap();
 
         // AC4: the same ask with a question filed this turn allows.
         rig.question("q-rig01", None);
@@ -1134,6 +1167,12 @@ mod tests {
         assert!(!decision_ask(
             "Done:\n1. merged\n2. reconciled\nLet me know if it grows."
         ));
+        // A lead fire judged false on 2026-10-23 (intel --lens rules): an ask
+        // marker inside a numbered step is a step, not an ask over options.
+        let approve = "After you approve stable:\n1. Lift the freeze\n\
+                       2. I mail the workers. One PR still needs your visual approval.\n\
+                       3. I hand off to a fresh lead.";
+        assert!(!decision_ask(approve));
     }
 
     fn r1_unpromoted_and_cap_legs() {
