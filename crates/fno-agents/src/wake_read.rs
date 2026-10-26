@@ -11,7 +11,7 @@
 //! Python-default JSON (insertion order, ensure_ascii, ", "/": " spacing),
 //! so the shell's `json.load` and the goldens read the same bytes.
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::path::PathBuf;
 
 /// `read_signals`: sorted `wake-*.json` under `<space>/wake-signals/`, parse
@@ -164,6 +164,7 @@ fn py_json_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Map};
     use std::fs;
 
     #[test]

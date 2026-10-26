@@ -1661,7 +1661,7 @@ mod tests {
             url: &str,
             content_type: &str,
             body: &str,
-            timeout_secs: u64,
+            _timeout_secs: u64,
         ) -> HttpResult {
             self.bodies
                 .borrow_mut()
