@@ -30,7 +30,6 @@ def test_doctor_lists_direct_actions() -> None:
         "observer",
         "plugin-file",
         "reclaim",
-        "route",
         "scratch",
         "stalls",
         "test",

@@ -127,19 +127,17 @@ class TestExplicitIntentWins:
         assert ar.launch_is_pinned(**kwargs) is True
 
     def test_stage_table_harness_pins(self, monkeypatch) -> None:
-        # The stage table is the home for the harness axis, so a launch routed
-        # by agents.profiles.<command>.provider pins exactly like the legacy key
-        # does - quota policy must not silently replace either.
-        import fno.config as cfg
+        # The configured-harness rung answers through the route-slot door now
+        # (the stage table with the legacy key folded beneath it, both native),
+        # so a launch routed by agents.profiles.<command>.provider pins when
+        # the door names a harness - quota policy must not silently replace it.
+        import fno.rust_binary as rb
 
-        agents = SimpleNamespace(
-            profiles={"target": SimpleNamespace(provider="codex")}
-        )
-        monkeypatch.setattr(
-            cfg,
-            "load_settings",
-            lambda *a, **k: SimpleNamespace(agents=agents, dispatch=None),
-        )
+        def _door(command, payload, unavailable=None, *, timeout=30):
+            assert command == "route-slot" and payload["mode"] == "configured"
+            return {"harness": "codex", "source": "agents.profiles.target"}
+
+        monkeypatch.setattr(rb, "command_call", _door)
         assert ar.launch_is_pinned({}) is True
 
 

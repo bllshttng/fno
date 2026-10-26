@@ -42,6 +42,101 @@ fn assert_capture(label: &str, result: &Output, case: &Value) {
     );
 }
 
+fn seed_overlay(root: &std::path::Path) -> std::path::PathBuf {
+    let dir = root.join("state/route-settings");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("seeded.json");
+    std::fs::write(
+        &path,
+        json!({"env": {
+            "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": "tok-golden",
+            "ANTHROPIC_MODEL": "glm-5.3",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.6",
+            "FNO_ROUTE_PROVIDER": "zai",
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(20 * 86400))
+        .unwrap();
+    path
+}
+
+fn run_settings_ls(root: &std::path::Path, argv: &[&str]) -> Output {
+    let input = root.join("payload.json");
+    std::fs::write(
+        &input,
+        json!({"mode": "config-route", "argv": argv}).to_string(),
+    )
+    .unwrap();
+    command(root)
+        .arg("route-slot")
+        .arg(&input)
+        .output()
+        .unwrap()
+}
+
+/// --prune deletes an unreferenced old overlay and prints its name; a fresh
+/// registry (SQLite creates an empty one on first open) references nothing,
+/// so the old file goes and only it.
+#[test]
+fn settings_prune_removes_only_the_unreferenced_old_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    for dir in ["global", "home", ".git", "agents-home"] {
+        std::fs::create_dir_all(root.join(dir)).unwrap();
+    }
+    std::fs::write(root.join("config.toml"), "").unwrap();
+    let seeded = seed_overlay(root);
+
+    let result = run_settings_ls(root, &["settings", "ls", "--prune", "--age-days", "14"]);
+
+    let out = String::from_utf8_lossy(&result.stdout);
+    assert!(result.status.success(), "{}", out);
+    assert!(
+        !seeded.exists(),
+        "the unreferenced old overlay must be pruned"
+    );
+    assert!(
+        out.contains(&format!("pruned {}", seeded.display())),
+        "{out}"
+    );
+    assert!(out.contains("1 file(s) pruned"), "{out}");
+}
+
+/// Fail closed: with the registry unreadable, "no row references it" is a
+/// guess, and deleting on a guess is the exact defect class this command
+/// exists to refuse. The unknown-reference column discloses "?" and prunes
+/// nothing.
+#[test]
+fn settings_prune_keeps_every_file_when_the_registry_is_unreadable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    for dir in ["global", "home", ".git", "agents-home"] {
+        std::fs::create_dir_all(root.join(dir)).unwrap();
+    }
+    std::fs::write(root.join("config.toml"), "").unwrap();
+    // A registry.json full of non-SQLite bytes makes the read error out.
+    std::fs::write(root.join("agents-home/registry.json"), b"not a database").unwrap();
+    let seeded = seed_overlay(root);
+
+    let result = run_settings_ls(root, &["settings", "ls", "--prune", "--age-days", "14"]);
+
+    let out = String::from_utf8_lossy(&result.stdout);
+    assert!(result.status.success(), "{}", out);
+    assert!(
+        seeded.exists(),
+        "nothing is pruned on an unreadable registry"
+    );
+    assert!(
+        out.contains('?'),
+        "the ? reference column must be disclosed: {out}"
+    );
+    assert!(out.contains("0 file(s) pruned"), "{out}");
+}
+
 #[test]
 fn config_route_goldens_replay_reads_and_write_plans() {
     let golden: Value =
