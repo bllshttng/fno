@@ -1866,7 +1866,7 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
         plan_path: Option<String>,
         reopened_at: Option<String>,
         completed_at: Option<String>,
-        created_at: Option<String>,
+        joined_at: Option<String>,
         has_any_pr: bool,
     }
     let claims = node_claims_by_id()?;
@@ -1888,7 +1888,7 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                     n.plan_path,
                     n.reopened_at,
                     n.completed_at,
-                    n.created_at
+                    COALESCE(json_extract(n.extras, '$.parented_at'), n.created_at)
              FROM nodes n",
         )
         .map_err(|error| error.to_string())?;
@@ -1914,7 +1914,7 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                 plan_path: row.get(10)?,
                 reopened_at: row.get(11)?,
                 completed_at: row.get(12)?,
-                created_at: row.get(13)?,
+                joined_at: row.get(13)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -2049,13 +2049,13 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
             .collect();
         // The same holds the whole-graph pass reads: own plan work (the
         // has_own_plan_work typed twin; any PR row is evidence, an
-        // additional-PR list included) and a deliberate reopen no child filed
-        // before it has closed after (reopen_holds_epic).
+        // additional-PR list included) and a deliberate reopen no child that
+        // joined before it has closed after (reopen_holds_epic).
         let holds = {
             let kid_stamps: Vec<(Option<&str>, Option<&str>)> = rows
                 .iter()
                 .filter(|row| row.parent.as_deref() == Some(pid.as_str()))
-                .map(|row| (row.created_at.as_deref(), row.completed_at.as_deref()))
+                .map(|row| (row.joined_at.as_deref(), row.completed_at.as_deref()))
                 .collect();
             matches!(rows[pidx].status.as_str(), "in_review" | "in_progress")
                 || (rows[pidx]

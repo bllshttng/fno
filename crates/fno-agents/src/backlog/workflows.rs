@@ -300,14 +300,14 @@ pub(crate) fn reopen_outranks_child_closes(parent: &Value, kids: &[&Value]) -> b
     )
 }
 
-/// The epic close paths' reopen guard: only a child filed at or before the
-/// reopen can expire it (graph_store::reopen_holds_epic).
+/// The epic close paths' reopen guard: only a child that joined at or before
+/// the reopen can expire it (graph_store::reopen_holds_epic).
 pub(crate) fn reopen_holds_epic_children(parent: &Value, kids: &[&Value]) -> bool {
     reopen_holds_epic(
         text_at(parent, "reopened_at"),
         &kids
             .iter()
-            .map(|k| (text_at(k, "created_at"), text_at(k, "completed_at")))
+            .map(|k| (graph_store::joined_parent_at(k), text_at(k, "completed_at")))
             .collect::<Vec<_>>(),
     )
 }

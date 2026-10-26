@@ -88,12 +88,16 @@ def test_cascade_positive_control_same_fixture_closes_without_the_reopen():
 def test_a_child_filed_after_the_reopen_never_re_arms_the_epic_close():
     """The epic was reopened with every filed child done. A child filed after
     the reopen proves nothing about the owed leaves, so its close holds no
-    vote. The same child filed before the reopen expires it."""
-    for filed, closed in ((AFTER_CLOSE, []), (BEFORE_CLOSE, ["p"])):
+    vote. The same child filed before the reopen expires it, unless the store
+    stamped its move under the epic after the reopen."""
+    cases = ((AFTER_CLOSE, None, []), (BEFORE_CLOSE, None, ["p"]), (BEFORE_CLOSE, AFTER_CLOSE, []))
+    for filed, parented, closed in cases:
         parent, old = _pair(reopened_at=BEFORE_CLOSE)
         old["created_at"] = "2026-09-01T00:00:00+00:00"
         old["completed_at"] = "2026-09-02T00:00:00+00:00"
         new = {"id": "n", "parent": "p", "created_at": filed, "completed_at": AFTER_CLOSE}
+        if parented:
+            new["parented_at"] = parented
         assert _cascade_close_parents([parent, old, new], "n") == closed
 
 

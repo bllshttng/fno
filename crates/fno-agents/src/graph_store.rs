@@ -1765,12 +1765,13 @@ pub fn reopen_outranks_stamps(reopened: Option<&str>, kid_completed: &[Option<&s
     true
 }
 
-/// The epic form of the reopen guard. `kids` pairs each child's filing stamp
-/// with its completion stamp. Only a child filed at or before the reopen can
-/// expire it: its close is evidence the reopened work finished. A child filed
-/// after the reopen proves nothing about the unfiled work the reopen named,
-/// so its close never re-arms the auto-close. An unreadable filing stamp
-/// counts as filed after: ambiguity favours the human.
+/// The epic form of the reopen guard. `kids` pairs each child's join stamp
+/// ([`joined_parent_at`]) with its completion stamp. Only a child that joined
+/// at or before the reopen can expire it: its close is evidence the reopened
+/// work finished. A child that joined after the reopen proves nothing about
+/// the unfiled work the reopen named, so its close never re-arms the
+/// auto-close. An unreadable join stamp counts as after: ambiguity favours
+/// the human.
 pub fn reopen_holds_epic(reopened: Option<&str>, kids: &[(Option<&str>, Option<&str>)]) -> bool {
     let cutoff = reopened.and_then(parse_rfc3339_stamp);
     let prior: Vec<Option<&str>> = kids
@@ -1784,6 +1785,46 @@ pub fn reopen_holds_epic(reopened: Option<&str>, kids: &[(Option<&str>, Option<&
         .map(|(_, done)| *done)
         .collect();
     reopen_outranks_stamps(reopened, &prior)
+}
+
+/// When a row joined its current parent: the `parented_at` stamp both write
+/// seams set under the store lock, else `created_at` for a row written
+/// before that stamp existed.
+pub fn joined_parent_at(row: &Value) -> Option<&str> {
+    row.get("parented_at")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| row.get("created_at").and_then(Value::as_str))
+}
+
+/// Stamp `parented_at` on every row this write gives a parent or moves to a
+/// new one. Both write seams call it under the store lock, so the stamp
+/// orders a child's arrival against a reopen the same lock serialized.
+/// `created_at` cannot do that: a creator stamps it before taking the lock,
+/// and a reparent never touches it.
+pub fn stamp_parent_edges(before: &[Value], after: &mut [Value], now: &str) {
+    let prior: std::collections::HashMap<&str, Option<&str>> = before
+        .iter()
+        .filter_map(|e| entry_id(e).map(|id| (id, e.get("parent").and_then(Value::as_str))))
+        .collect();
+    for row in after.iter_mut() {
+        let Some(parent) = row
+            .get("parent")
+            .and_then(Value::as_str)
+            .filter(|p| !p.trim().is_empty())
+        else {
+            continue;
+        };
+        let moved = match entry_id(row).and_then(|id| prior.get(id)) {
+            Some(old) => *old != Some(parent),
+            None => true,
+        };
+        if moved {
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert("parented_at".to_string(), Value::String(now.to_string()));
+            }
+        }
+    }
 }
 
 /// Stamp parser for the guard comparisons: None on blank or unreadable.
@@ -2099,7 +2140,7 @@ pub fn recompute_statuses_with_plan_rungs(
                 .filter_map(|ci| entries.get(*ci))
                 .map(|k| {
                     (
-                        k.get("created_at").and_then(Value::as_str),
+                        joined_parent_at(k),
                         k.get("completed_at").and_then(Value::as_str),
                     )
                 })
@@ -2809,6 +2850,7 @@ pub fn locked_mutate_with_hook(
     // Status stays the row's own: the pre-image carries the recomputed
     // status, not the readiness overlay the defaults pass applies.
     let now_iso = now_isoformat();
+    stamp_parent_edges(&raw, &mut entries, &now_iso);
     let mut defaulted = entries.clone();
     apply_defaults(&mut defaulted, true);
     for (e, view) in entries.iter_mut().zip(defaulted.iter_mut()) {

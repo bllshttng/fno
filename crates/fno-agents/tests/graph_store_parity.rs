@@ -48,7 +48,9 @@ fn normalize_volatile(v: &Value) -> Value {
         Value::Object(map) => {
             let mut out = serde_json::Map::new();
             for (k, val) in map {
-                if (k == "touched_at" || k == "deferred_at") && val.is_string() {
+                if (k == "touched_at" || k == "deferred_at" || k == "parented_at")
+                    && val.is_string()
+                {
                     out.insert(k.clone(), Value::String("<TS>".into()));
                 } else {
                     out.insert(k.clone(), normalize_volatile(val));
