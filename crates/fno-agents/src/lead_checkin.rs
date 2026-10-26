@@ -26,7 +26,6 @@
 use crate::lead_history::LEAD_CHECKIN;
 use crate::org_board::{read_board, BoardOpts};
 use crate::org_fold::org_fold;
-use crate::provenance::TranscriptSource;
 use crate::scrape::fno_bin;
 use serde_json::{json, Map, Value};
 use std::io::Write;
@@ -893,47 +892,32 @@ pub(crate) fn own_transcript() -> Result<OwnTranscript, String> {
     let harness = harness
         .as_deref()
         .ok_or_else(|| "no harness resolved from the ambient environment".to_string())?;
-    match harness {
-        "claude" => {
-            let path = crate::claude_drive::find_transcript(&session_id)
-                .ok_or_else(|| format!("no transcript found for session {session_id}"))?;
+    // pi and agy renders carry no tool results, so the check-in readers keep
+    // them unmeasured even though the shared resolver can find their stores.
+    let harness: &'static str = match harness {
+        "claude" => "claude",
+        "codex" => "codex",
+        "opencode" => "opencode",
+        other => {
+            return Ok(OwnTranscript::Unmeasured {
+                reason: format!("no transcript store reader for harness {other}"),
+            })
+        }
+    };
+    match crate::session_receipt::locate(harness, &session_id)? {
+        crate::session_receipt::Store::File(path) => {
             let text = std::fs::read_to_string(&path)
                 .map_err(|e| format!("transcript unreadable: {e}"))?;
             Ok(OwnTranscript::Text {
-                harness: "claude",
+                harness,
                 text,
                 path: Some(path),
             })
         }
-        "codex" => {
-            let path = crate::lead_history::hygiene_transcript_for_holder("codex", &session_id)
-                .ok_or_else(|| format!("no codex rollout for session {session_id}"))?;
-            let text = std::fs::read_to_string(&path)
-                .map_err(|e| format!("transcript unreadable: {e}"))?;
-            Ok(OwnTranscript::Text {
-                harness: "codex",
-                text,
-                path: Some(path),
-            })
-        }
-        "opencode" => {
-            let source = crate::opencode_transcript::OpencodeSource {
-                dbs: crate::opencode_transcript::opencode_stores(),
-                roots: None,
-            };
-            let file = source
-                .sessions(30)
-                .into_iter()
-                .find(|file| file.session_id == session_id)
-                .ok_or_else(|| format!("no opencode session {session_id} in its stores"))?;
-            Ok(OwnTranscript::Text {
-                harness: "opencode",
-                text: source.read(&file),
-                path: None,
-            })
-        }
-        other => Ok(OwnTranscript::Unmeasured {
-            reason: format!("no transcript store reader for harness {other}"),
+        crate::session_receipt::Store::Rendered(text) => Ok(OwnTranscript::Text {
+            harness,
+            text,
+            path: None,
         }),
     }
 }
@@ -2645,12 +2629,16 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     let mut theme: Option<String> = None;
     let mut keep_name_from: Option<String> = None;
     let mut queue_arg: Option<String> = None;
+    let mut user_command = false;
     let mut i = 0;
     while i < args.len() {
         let flag = |name: &str| args[i] == name && i + 1 < args.len();
         if flag("--scope") {
             ctx.scope = args[i + 1].clone();
             i += 2;
+        } else if args[i] == "--user-command" {
+            user_command = true;
+            i += 1;
         } else if flag("--change") {
             model_change = Some(args[i + 1].clone());
             i += 2;
@@ -2704,9 +2692,33 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
                  [--faqs-dir PATH] [--board-state PATH] [--emit-path PATH] \
                  [--change TEXT] [--name NAME] [--theme THEME] \
                  [--keep-name-from OLD-SCOPE] [--queue IDS] \
-                 [--no-emit] [--json]"
+                 [--no-emit] [--json] [--user-command]"
             );
             return 2;
+        }
+    }
+    if user_command {
+        // `fno agents org checkin`: the paths the retired Python shell passed,
+        // resolved here for any the caller left out.
+        if ctx.events_paths.is_empty() {
+            ctx.events_paths = crate::lead_history::default_journals(&ctx.cwd);
+        }
+        if ctx.graph.as_os_str().is_empty() {
+            ctx.graph = crate::paths_cli::graph_json(&ctx.cwd);
+        }
+        if ctx.handoffs_dir.as_os_str().is_empty() {
+            ctx.handoffs_dir = crate::paths_cli::handoffs_dir(&ctx.cwd);
+        }
+        if ctx.faqs_dir.is_none() {
+            ctx.faqs_dir = crate::backlog::autobrief::briefs_dir().map(|d| d.join("lead-faqs"));
+        }
+        if ctx.emit_path.is_none() {
+            ctx.emit_path = Some(
+                std::env::var_os("FNO_EVENTS_PATH")
+                    .filter(|p| !p.is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| crate::paths::events_path(&ctx.cwd)),
+            );
         }
     }
     if ctx.events_paths.is_empty()

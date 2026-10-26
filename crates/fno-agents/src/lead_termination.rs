@@ -107,6 +107,12 @@ pub(crate) fn stand_down_gate(
     transcript: &Path,
     cwd: &Path,
 ) -> Option<StandDownGate> {
+    // Same spent-line refusal the board takes: past the reserve line the
+    // transcript scan would spend the drain's slice, and the gate already
+    // fails open (None) on anything it cannot measure.
+    if crate::loopcheck::stopgate_pre_drain_spent() {
+        return None;
+    }
     let session = manifest
         .harness_session_id
         .as_deref()

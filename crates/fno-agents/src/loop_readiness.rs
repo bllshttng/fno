@@ -171,7 +171,9 @@ fn leg_json(leg: &ReadinessLeg) -> Value {
 }
 
 const READINESS_EVENT_TYPES: &[&str] = &["context_snapshot", "stop_decision"];
-const CODEX_PLUGIN_ID: &str = "fno@footnote";
+const CODEX_PLUGIN_ID: &str = "fno@fno";
+// An install made before the marketplace rename still loads fno.
+const CODEX_LEGACY_PLUGIN_ID: &str = "fno@footnote";
 const CODEX_PLUGIN_REPAIR: &str = "fno config plugin install codex";
 const CODEX_PLUGIN_LIST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -183,9 +185,13 @@ fn codex_machine_leg_from_plugin_list(raw: &str) -> ReadinessLeg {
     let Some(installed) = value.get("installed").and_then(Value::as_array) else {
         return ReadinessLeg::unreadable("codex plugin list has no installed array");
     };
-    let plugin = installed
+    let plugin = [CODEX_PLUGIN_ID, CODEX_LEGACY_PLUGIN_ID]
         .iter()
-        .find(|row| row.get("pluginId").and_then(Value::as_str) == Some(CODEX_PLUGIN_ID));
+        .find_map(|id| {
+            installed
+                .iter()
+                .find(|row| row.get("pluginId").and_then(Value::as_str) == Some(*id))
+        });
     let Some(plugin) = plugin else {
         return ReadinessLeg::blocked(format!(
             "plugin-missing: {CODEX_PLUGIN_ID} is not enabled; run `{CODEX_PLUGIN_REPAIR}`"
@@ -527,9 +533,13 @@ mod tests {
     #[test]
     fn codex_machine_leg_requires_the_enabled_footnote_plugin() {
         let enabled = codex_machine_leg_from_plugin_list(
-            r#"{"installed":[{"pluginId":"fno@footnote","installed":true,"enabled":true}]}"#,
+            r#"{"installed":[{"pluginId":"fno@fno","installed":true,"enabled":true}]}"#,
         );
         assert!(enabled.state.is_ready());
+        let legacy = codex_machine_leg_from_plugin_list(
+            r#"{"installed":[{"pluginId":"fno@footnote","installed":true,"enabled":true}]}"#,
+        );
+        assert!(legacy.state.is_ready());
 
         let missing = codex_machine_leg_from_plugin_list(r#"{"installed":[]}"#);
         assert_eq!(missing.state, LegState::Blocked);

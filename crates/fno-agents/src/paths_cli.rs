@@ -538,7 +538,7 @@ fn live_lookup(cwd: &Path, keys: &[&str]) -> Option<Result<toml::Value, ()>> {
     crate::agents_config::config_lookup(cwd, keys).map(Ok)
 }
 
-fn cfg_str(cwd: &Path, keys: &[&str]) -> Option<String> {
+pub(crate) fn cfg_str(cwd: &Path, keys: &[&str]) -> Option<String> {
     live_lookup(cwd, keys)
         .and_then(|r| r.ok())
         .and_then(|v| v.as_str().map(str::to_string))
@@ -561,11 +561,48 @@ fn state_dir_resolved(cwd: &Path) -> Result<PathBuf, String> {
 /// to the default state root. No `paths.ledger_json` override is consulted:
 /// the journals stopped anchoring on the ledger's folder.
 pub fn global_events_json(cwd: &Path) -> PathBuf {
+    state_root(cwd).join("events.jsonl")
+}
+
+/// The resolved state root, or the default one when `state_dir` is relative
+/// or unresolvable.
+fn state_root(cwd: &Path) -> PathBuf {
     state_dir_resolved(cwd)
         .ok()
         .filter(|d| d.is_absolute())
         .unwrap_or_else(|| crate::decision_index::default_state_path(""))
-        .join("events.jsonl")
+}
+
+/// Python `paths.graph_json()`: the graph anchor under the state root,
+/// templates in `state_dir` resolved.
+pub(crate) fn graph_json(cwd: &Path) -> PathBuf {
+    crate::state_layout::graph_anchor(&state_root(cwd))
+}
+
+/// Python `paths.handoffs_dir()`: the `paths.handoffs_dir` override, else
+/// `<vault>/internal/<project>/handoffs` with obsidian on, else
+/// `<state root>/handoffs/<project>`.
+pub(crate) fn handoffs_dir(cwd: &Path) -> PathBuf {
+    if let Some(raw) = cfg_str(cwd, &["paths", "handoffs_dir"]) {
+        if let Ok(path) = resolve_override_path(&raw) {
+            return path;
+        }
+    }
+    let repo = crate::paths::worktree_repo_root(cwd);
+    let vault = vault_root(cwd).ok();
+    let project =
+        crate::plans_path::project_folder(Some(&repo), vault.is_some()).unwrap_or_else(|_| {
+            repo.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+    match vault {
+        Some(v) => Path::new(&v)
+            .join("internal")
+            .join(project)
+            .join("handoffs"),
+        None => state_root(cwd).join("handoffs").join(project),
+    }
 }
 
 /// Python `paths.ledger_json()`: the cross-project ledger, one row per

@@ -304,7 +304,7 @@ event_types:
           type: integer
         detail:
           type: string
-    consumers: [scripts/ci/preflight.sh, fno do pr, fno agents worker ship, fno-agents verify-evidence]
+    consumers: [scripts/ci/preflight.sh, fno do pr, fno-agents verify-evidence]
 
   - name: review_attestation
     retention: gate
@@ -8574,6 +8574,14 @@ event_types:
     description: "The daemon nudged an ended Codex worker turn on an open node. The session and last activity timestamp identify one quiet episode."
     sources: [daemon]
     data: {required: [session_id, node, last_activity_ms, via]}
+  - name: pr_push_landed
+    description: "fno do pr push landed a commit. The ci_cadence arm checks the PR's CI at 1, 15, 30 and 55 minutes from this row."
+    sources: [daemon, rust]
+    data: {required: [branch, sha, cwd]}
+  - name: ci_cadence_check
+    description: "The ci_cadence arm read a pushed head's CI at one offset. outcome names what it did: pending, green, superseded, flake_wait, flake_rerun, stale_red, woke, red_no_session or unreadable."
+    sources: [daemon]
+    data: {required: [branch, sha, offset_s, outcome]}
   - name: mcp_channel_demoted_to_socket
     description: "Legacy agents-family telemetry kind, envelope-mapped by the shared emitter."
     sources: [daemon, agents]

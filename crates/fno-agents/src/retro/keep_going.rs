@@ -9,7 +9,6 @@
 //! queue nodes for a human ack, which auto-dispatch would bypass.
 
 use std::path::Path;
-use std::time::Duration;
 
 use serde_json::Value;
 
@@ -24,8 +23,6 @@ pub const OUTCOME_DISPATCHED: &str = "dispatched";
 pub const OUTCOME_FILED: &str = "filed";
 pub const OUTCOME_CAPPED: &str = "capped";
 pub const OUTCOME_FAILED: &str = "failed";
-
-const SPAWN_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn truthy_word(s: &str) -> bool {
     matches!(
@@ -79,37 +76,36 @@ pub fn classify_followup(candidate: &Candidate) -> &'static str {
     }
 }
 
-fn fno_command(cwd: Option<&str>) -> std::process::Command {
-    let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+/// `fno do think dispatch <node> --json` as a child of this binary, run in
+/// the node's cwd so the graph, work map and config it reads are that
+/// project's. It bumps the shared counter itself on a real spawn, so only a
+/// `spawned` decision counts as a dispatch: exit 0 also covers `noop` and
+/// `skipped`, which bump nothing.
+fn dispatch_think(node_id: &str, cwd: Option<&str>) -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["think-dispatch", "--json", "--", node_id]);
     if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
         cmd.current_dir(dir);
     }
-    cmd
-}
-
-/// `fno do think dispatch <node> --json`. It bumps the shared counter
-/// itself on a real spawn, so only a `spawned` decision counts as a
-/// dispatch: exit 0 also covers `offered` and `noop`, which bump nothing.
-fn dispatch_think(node_id: &str, cwd: Option<&str>) -> bool {
-    let mut cmd = fno_command(cwd);
-    cmd.args(["do", "think", "dispatch", node_id, "--json"]);
-    let Ok(out) = crate::bounded_cmd::output_with_timeout_result(cmd, SPAWN_TIMEOUT.as_secs())
-    else {
+    let Ok(out) = crate::bounded_cmd::output_with_timeout_result(cmd, THINK_TIMEOUT_SECS) else {
         return false;
     };
-    if !out.status.success() {
-        return false;
-    }
-    serde_json::from_slice::<Value>(&out.stdout)
-        .ok()
-        .and_then(|v| {
-            v.get("decision")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .as_deref()
-        == Some("spawned")
+    out.status.success()
+        && serde_json::from_slice::<Value>(&out.stdout)
+            .ok()
+            .and_then(|v| {
+                v.get("decision")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .as_deref()
+            == Some("spawned")
 }
+
+const THINK_TIMEOUT_SECS: u64 = 600;
 
 /// A detached `/target --no-merge <node>` worker. The env carrier backs the
 /// flag, so a worker that loses it after compaction still folds the
@@ -130,16 +126,18 @@ fn spawn_target_worker(node_id: &str, cwd: Option<&str>) -> bool {
             return false;
         }
     };
-    let mut cmd = fno_command(None);
-    cmd.args(["agents", "spawn", "--harness", "claude"]);
+    let mut args = vec!["--harness".to_string(), "claude".to_string()];
     match cwd.filter(|d| !d.is_empty()) {
-        Some(dir) => cmd.args(["--cwd", dir]),
-        None => cmd.arg("--fresh"),
-    };
-    cmd.args(["--name", &name, &format!("/target --no-merge {node_id}")]);
-    cmd.env("TARGET_NO_MERGE", "1");
-    let Ok(out) = crate::bounded_cmd::output_with_timeout_result(cmd, SPAWN_TIMEOUT.as_secs())
-    else {
+        Some(dir) => args.extend(["--cwd".to_string(), dir.to_string()]),
+        None => args.push("--fresh".to_string()),
+    }
+    args.extend([
+        "--name".to_string(),
+        name,
+        format!("/target --no-merge {node_id}"),
+    ]);
+    let env = std::collections::BTreeMap::from([("TARGET_NO_MERGE".to_string(), "1".to_string())]);
+    let Ok(out) = crate::backlog::advance_dispatch::exec_agents_spawn(&args, &env, false) else {
         return false;
     };
     out.status.success()

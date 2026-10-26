@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Capture driver for the `accounts_env` goldens.
 
-The Python legs (`fno.adapters.providers.dispatch.dispatch_env` and
-`fno.agents.account_env.resolve_account_overlay`, with `staging.verify_staged`
-and `dispatch.resolve_env_value` under them) are the parity oracle until the
-adapters package is deleted. Each case lays down an accounts config, staged
+The Python leg (`fno.adapters.providers.dispatch.dispatch_env`, with
+`staging.verify_staged` and `dispatch.resolve_env_value` under it) is the
+parity oracle until the adapters package is deleted. The `overlay_*` goldens
+are frozen: their Python leg is deleted, so this driver rewrites only the
+`launch_*` cases. Each case lays down an accounts config, staged
 links, credential files, store principals, Keychain items and a slot stamp,
 runs one leg against a fake `security` and a fake profile endpoint, and
 freezes the answer in `tests/golden/accounts_env/<case>.json`.
@@ -59,8 +60,8 @@ def key(rid: str, harness: str = "openclaw", **env) -> str:
     return rec(rid, harness=harness, auth="api_key", env=env)
 
 
-# name -> case fields. `op` is `launch_env` (dispatch_env) or `overlay`
-# (resolve_account_overlay); `id` is the account asked about.
+# name -> case fields. `op` is `launch_env` (dispatch_env); `id` is the
+# account asked about.
 CASES = {
     "launch_claude_oauth_staged": dict(
         op="launch_env", id="o1", config=OAUTH, dirs=["creds"],
@@ -130,59 +131,6 @@ CASES = {
     "launch_keyless_route_refuses": dict(
         op="launch_env", id="z", config=rec("z", auth="api_key", route="zai/glm-5.3"),
     ),
-    "overlay_unknown_lists_the_claude_ids": dict(
-        op="overlay", id="ghost", config=TWO + CODEX,
-    ),
-    "overlay_unknown_with_no_claude_ids": dict(op="overlay", id="ghost", config=CODEX),
-    "overlay_codex_record_refuses": dict(op="overlay", id="cx", config=CODEX),
-    "overlay_missing_config_dir_refuses": dict(op="overlay", id="alt", config=ALT),
-    "overlay_config_dir_without_a_login_refuses": dict(
-        op="overlay", id="alt", config=ALT, dirs=["alt"],
-    ),
-    "overlay_config_dir_with_a_credentials_file": dict(
-        op="overlay", id="alt", config=ALT, dirs=["alt"],
-        files={"alt/.credentials.json": "{}"},
-    ),
-    "overlay_config_dir_with_a_scoped_keychain_login": dict(
-        op="overlay", id="alt", config=ALT, dirs=["alt"],
-        keychain={"scoped:alt": blob("t-makers")},
-    ),
-    "overlay_config_dir_serving_another_account_refuses": dict(
-        op="overlay", id="alt", config=ALT, dirs=["alt"],
-        files={"alt/.credentials.json": blob("t-ready")},
-        profiles={"t-ready": READY}, meta={"alt": MAKERS},
-    ),
-    "overlay_staged_dir_without_a_login_refuses": dict(
-        op="overlay", id="o1", config=OAUTH, dirs=["creds"],
-        links={"state/providers/o1/.claude": "creds"},
-    ),
-    "overlay_staged_dir_with_a_login": dict(
-        op="overlay", id="o1", config=OAUTH, dirs=["creds"],
-        files={"creds/.credentials.json": "{}"},
-        links={"state/providers/o1/.claude": "creds"},
-    ),
-    "overlay_unstaged_oauth_refuses": dict(
-        op="overlay", id="o1", config=OAUTH, dirs=["creds"],
-    ),
-    "overlay_managed_active_pins_the_shared_slot": dict(
-        op="overlay", id="makers", config=TWO, stamp="makers",
-    ),
-    "overlay_managed_active_serving_another_account_refuses": dict(
-        op="overlay", id="makers", config=TWO, stamp="makers",
-        keychain={"unscoped": blob("t-ready")}, profiles={"t-ready": READY},
-        meta={"makers": MAKERS, "ready": READY},
-    ),
-    "overlay_managed_not_active_refuses": dict(
-        op="overlay", id="makers", config=TWO, stamp="ready",
-    ),
-    "overlay_managed_with_no_stamp_refuses": dict(op="overlay", id="makers", config=TWO),
-    "overlay_api_key_resolves_its_env": dict(
-        op="overlay", id="k", config=key("k", "claude", ANTHROPIC_AUTH_TOKEN="${ENV:MY_TOKEN}"),
-        env={"MY_TOKEN": "env-token"},
-    ),
-    "overlay_api_key_unresolvable_refuses": dict(
-        op="overlay", id="k", config=key("k", "claude", ANTHROPIC_AUTH_TOKEN="${ENV:MISSING_TOKEN}"),
-    ),
 }
 
 
@@ -216,8 +164,6 @@ def run_case(case: dict, tmp: Path) -> dict:
         ProviderNotFoundError,
         ProviderUnavailableError,
     )
-    from fno.agents import account_env
-
     store, dirs = lay_down(case, tmp)
     for k in [k for k in os.environ if k.startswith(("FNO_", "CLAUDE_", "ZAI_"))]:
         del os.environ[k]
@@ -266,22 +212,16 @@ def run_case(case: dict, tmp: Path) -> dict:
     sys.platform = "darwin"
     os.chdir(tmp)
 
-    if case["op"] == "launch_env":
-        try:
-            return {"env": dispatch.dispatch_env(case["id"], root=store)}
-        except (ProviderConfigError, ProviderNotFoundError, ProviderUnavailableError) as exc:
-            # args[0]: str() of a KeyError subclass wraps the text in quotes.
-            return {"error": type(exc).__name__, "message": exc.args[0]}
     try:
-        got = account_env.resolve_account_overlay(case["id"], providers_root=store)
-    except account_env.AccountResolutionError as exc:
-        return {"error": str(exc)}
-    return {"overlay": {"account_id": got.account_id, "env": got.env, "lane": got.lane}}
+        return {"env": dispatch.dispatch_env(case["id"], root=store)}
+    except (ProviderConfigError, ProviderNotFoundError, ProviderUnavailableError) as exc:
+        # args[0]: str() of a KeyError subclass wraps the text in quotes.
+        return {"error": type(exc).__name__, "message": exc.args[0]}
 
 
 def main() -> int:
     GOLDEN.mkdir(parents=True, exist_ok=True)
-    for stale in GOLDEN.glob("*.json"):
+    for stale in GOLDEN.glob("launch_*.json"):
         stale.unlink()
     for name, case in CASES.items():
         tmp = Path(os.path.realpath(tempfile.mkdtemp(prefix="acct-env-")))

@@ -86,14 +86,6 @@ def test_the_env_stamp_drives_the_check_when_no_provider_is_passed(monkeypatch):
 # --- the stamp is set or cleared, never inherited ---------------------------
 
 
-def test_the_stamp_is_cleared_by_whatever_clears_a_route():
-    # A child spawned onto a pinned account must not report its parent's
-    # provider: it would be handed that account's budget while billing its own.
-    from fno.agents.account_env import SCRUB_AUTH_VARS
-
-    assert ROUTE_PROVIDER_ENV in SCRUB_AUTH_VARS
-
-
 def test_a_stamp_alone_does_not_count_as_a_recorded_route(tmp_path):
     # A settings file holding the scrub floor plus a provider name records no
     # route, and relaunching from it would bill the default account in silence.

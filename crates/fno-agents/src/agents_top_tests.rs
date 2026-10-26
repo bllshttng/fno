@@ -224,3 +224,29 @@ fn worker_rows_carry_seat_facts_and_null_when_unread() {
     }
     assert!(serde_json::to_string(stray).is_ok());
 }
+
+/// AC7-HP and AC8-ERR: a read worker shows its trailing refusals and its
+/// last turn; a worker with no reading carries unmeasured keys, renders `-`,
+/// and shifts no other column.
+#[test]
+fn receipt_columns_render_and_unmeasured_reads_dash() {
+    let mut workers = vec![
+        json!({"name": "sorrel", "harness": "claude", "session_id": "s1", "status": "busy"}),
+        json!({"name": "stray", "harness": "kiro", "session_id": null, "status": "busy"}),
+    ];
+    let read = |_: &str, _: &str| {
+        json!({"basis": "transcript",
+               "denied": {"last_turn": {}, "trailing": {"window": 50,
+                   "permission_denied": 2, "user_rejected": 1, "hook_blocked": 4}},
+               "last_turn": {"age_s": 240, "provenance": "relay_fno_mail", "tool_calls": 12}})
+    };
+    attach_receipts(&mut workers, &read);
+    assert!(workers[1]["denied"]["unmeasured"].is_string());
+    assert!(workers[1]["last_turn"]["unmeasured"].is_string());
+    let text = render(&json!({"workers": workers}));
+    let line = |name: &str| text.lines().find(|l| l.contains(name)).unwrap().to_string();
+    let (read_line, stray_line) = (line("sorrel"), line("stray"));
+    assert!(read_line.contains("     3 4m relay 12c"), "{read_line}");
+    assert!(stray_line.contains("     - -"), "{stray_line}");
+    assert_eq!(read_line.find("busy"), stray_line.find("busy"));
+}
