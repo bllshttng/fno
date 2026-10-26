@@ -171,15 +171,15 @@ def _catchup_roots() -> list[Path]:
     every id), never ``list_open()`` plus a per-id ``load()`` loop.
     """
     try:
-        from fno.tracker import sidecar as sidecar_store
+        from fno import rust_binary
 
-        sidecars = sidecar_store.load_all()
+        sidecars = rust_binary.sidecar_all()
     except Exception as exc:  # noqa: BLE001 - no sidecar store means nothing to sweep
         log.warning("pr-watch: could not read sidecars for catch-up roots: %s", exc)
         return []
     roots: dict[str, Path] = {}
     for sc in sidecars.values():
-        cwd = sc.cwd
+        cwd = sc.get("cwd")
         if cwd and str(cwd) not in roots:
             roots[str(cwd)] = Path(cwd)
     return [p for p in roots.values() if p.is_dir()]

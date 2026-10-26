@@ -196,7 +196,7 @@ def _repo_has_fno_activity(repo_root: Path, project_id: Optional[str]) -> bool:
             StoreUnavailable,
             read_graph_strict,
         )
-        from fno.tracker import active_backend_name
+        from fno.graph.api import active_backend_name
 
         if active_backend_name() != "graph":
             return False  # an external backend has no local graph: dormant
