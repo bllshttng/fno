@@ -31,7 +31,6 @@ def test_agents_registers_the_six_folded_roots() -> None:
         "claim",
         "lead",
         "mail",
-        "roles",
         "worker",
     } <= _commands(agents_app)
 
@@ -51,7 +50,6 @@ def test_importing_agents_cli_does_not_import_folded_subgroups() -> None:
         "fno.dispatch",
         "fno.lead.cli",
         "fno.mail.cli",
-        "fno.roles.cli",
         "fno.worker.cli",
     }
     script = (
