@@ -245,6 +245,10 @@ def score_blueprint_item(item: dict, *, plan_text: Optional[str]) -> dict[str, O
 
 _PR_URL_REPO_RE = re.compile(r"github\.com/([^/]+/[^/]+)/pull/")
 
+# Moved from the deleted scoreboard fold with the block at the file tail;
+# defined here because _NO_PR_TERMINALS below unions it at import time.
+_WEDGE_REASONS = frozenset({"NoProgress", "Budget", "Aborted"})
+
 # no-PR class terminals: a run that reached one of these STOPPED without shipping
 # anything (the churny / abandoned / crash-terminated attempts the 84%-green stat
 # silently dropped). The discriminator is the terminal reason, NOT the phase set:
@@ -655,8 +659,6 @@ def build_run_summary(
 # Moved verbatim from the deleted scoreboard fold when the family went
 # native (`fno whoami scoreboard` answers in Rust); these remain the Python
 # implementations the observer serves. One implementation of each.
-
-_WEDGE_REASONS = frozenset({"NoProgress", "Budget", "Aborted"})
 
 # Survival follow-up window: a fix-node created within this many days of a
 # node's ship counts against that node's survival.

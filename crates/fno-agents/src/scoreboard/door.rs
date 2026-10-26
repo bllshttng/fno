@@ -13,7 +13,7 @@ fn refuse(message: &str) -> i32 {
     2
 }
 
-pub(crate) fn run_scoreboard(args: &[String]) -> i32 {
+pub fn run_scoreboard(args: &[String]) -> i32 {
     let parsed = match parse(args) {
         Ok(p) => p,
         Err(ArgError::SinceBelowOne) => return refuse("--since must be at least 1 (days)."),
@@ -75,7 +75,7 @@ pub(crate) fn run_scoreboard(args: &[String]) -> i32 {
         }
         // The folds saw the scoped entries too (out-of-project nodes never
         // joined an outcome on the Python leg).
-        if let Some(entries) = scoped.get("entries").filter(|e| e.is_array()) {
+        if let Some(entries) = scoped.get("entries").and_then(Value::as_array) {
             inputs.graph_nodes = entries.clone();
         }
         scope = inputs
@@ -301,7 +301,7 @@ pub(crate) fn run_scoreboard(args: &[String]) -> i32 {
             .filter(|e| e.get("type").and_then(Value::as_str) == Some("loop_check"))
             .cloned()
             .collect();
-        let mut pf = super::views::build_plan_fidelity(
+        let mut pf = super::plan_join::build_plan_fidelity(
             &inputs,
             parsed.since_days,
             chrono::Local::now(),

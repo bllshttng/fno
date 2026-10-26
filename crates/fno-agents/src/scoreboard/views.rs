@@ -11,11 +11,9 @@
 //! part of the contract. The Rust fold emits it key-sorted; the parity test
 //! sorts that one object on both sides before comparing.
 
-use super::readers::{
-    canonical_signature, event_data, event_kind, num, num_opt, parse_ts, pct, read_graph_nodes,
-};
+use super::readers::{event_data, num, num_opt, parse_ts, pct, read_graph_nodes};
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// `_WEDGE_REASONS`: the stuck-terminal set. Everything else outside the
 /// delivered vocabulary lands in `other`, so the spend split always
@@ -160,7 +158,7 @@ pub(crate) fn load_run(project: Option<&str>) -> Result<RunInputs, String> {
 pub(crate) fn node_outcome(
     nid: &str,
     shipped_at: Option<chrono::DateTime<chrono::Local>>,
-    by_id: &BTreeMap<String, &Map<String, Value>>,
+    by_id: &BTreeMap<String, &Value>,
     fixes: &HashMap<String, Vec<Value>>,
 ) -> &'static str {
     if by_id
@@ -191,13 +189,13 @@ pub(crate) fn node_outcome(
 }
 
 /// The `by_id` + `fixes` maps every outcome-deriving view builds.
-pub(crate) struct NodeMaps {
-    pub by_id: BTreeMap<String, &Map<String, Value>>,
+pub(crate) struct NodeMaps<'a> {
+    pub by_id: BTreeMap<String, &'a Value>,
     pub fixes: HashMap<String, Vec<Value>>,
     pub w4_available: bool,
 }
 
-pub(crate) fn node_maps(graph_nodes: &[Value]) -> NodeMaps {
+pub(crate) fn node_maps(graph_nodes: &[Value]) -> NodeMaps<'_> {
     let mut by_id = BTreeMap::new();
     for node in graph_nodes {
         let Some(obj) = node.as_object() else {
@@ -206,7 +204,7 @@ pub(crate) fn node_maps(graph_nodes: &[Value]) -> NodeMaps {
         let Some(id) = obj.get("id").and_then(Value::as_str) else {
             continue;
         };
-        by_id.insert(id.to_string(), obj);
+        by_id.insert(id.to_string(), node);
     }
     let mut fixes: HashMap<String, Vec<Value>> = HashMap::new();
     for node in graph_nodes {
@@ -316,7 +314,8 @@ pub(crate) fn build_scoreboard(
     for r in &windowed {
         if let Some(tr) = r.get("termination_reason").and_then(Value::as_str) {
             if !tr.is_empty() {
-                *stop_cause.entry(tr.to_string()).or_insert(json!(0)) += 1;
+                let counter = stop_cause.entry(tr.to_string()).or_insert(json!(0));
+                *counter = json!(counter.as_i64().unwrap_or(0) + 1);
             }
         }
     }
@@ -344,7 +343,7 @@ pub(crate) fn build_scoreboard(
             let counter = delivery_classes
                 .entry(class.to_string())
                 .or_insert(json!(0));
-            *counter += 1;
+            *counter = json!(counter.as_i64().unwrap_or(0) + 1);
         }
     }
     let delivery_classes = sort_object(delivery_classes);
@@ -487,7 +486,8 @@ pub(crate) fn build_calibration(
     let mut excluded = Map::new();
     for (_, v) in &final_verdict {
         if !COUNTABLE_VERDICTS.contains(v) {
-            *excluded.entry(v.to_string()).or_insert(json!(0)) += 1;
+            let counter = excluded.entry(v.to_string()).or_insert(json!(0));
+            *counter = json!(counter.as_i64().unwrap_or(0) + 1);
         }
     }
     let counted: Vec<(String, &str)> = final_verdict
@@ -536,11 +536,11 @@ pub(crate) fn build_calibration(
             &node_maps.by_id,
             &node_maps.fixes,
         );
-        *table
+        let cell = table
             .get_mut(*v)
             .and_then(|row| row.get_mut(outcome))
-            .and_then(Value::as_i64_mut)
-            .unwrap_or_else(|| panic!("calibration table cell missing {v}/{outcome}")) += 1;
+            .unwrap_or_else(|| panic!("calibration table cell missing {v}/{outcome}"));
+        *cell = json!(cell.as_i64().unwrap_or(0) + 1);
     }
     let untimed = counted
         .iter()
@@ -694,7 +694,7 @@ pub(crate) fn skill_commit_history(
         if out.status.success() {
             let text = String::from_utf8_lossy(&out.stdout);
             for line in text.lines() {
-                let (h, _, iso) = line.partition(" ");
+                let (h, iso) = line.split_once(' ').unwrap_or((line, ""));
                 let value = Value::String(iso.to_string());
                 if let (false, Some(dt)) = (h.is_empty(), parse_ts(Some(&value))) {
                     history.push((dt, h));
@@ -784,7 +784,7 @@ pub(crate) fn extract_skill_runs(row: &Value) -> (Vec<String>, &'static str) {
             .filter_map(|p| {
                 PHASE_TO_SKILL
                     .iter()
-                    .find(|(phase, _)| phase == p)
+                    .find(|(phase, _)| *phase == p)
                     .map(|(_, skill)| skill.to_string())
             })
             .collect();
@@ -979,9 +979,15 @@ fn count_touches_by_node(
         let nid = e
             .get("graph_node_id")
             .and_then(Value::as_str)
-            .or_else(|| event_data(e).get("graph_node_id").and_then(Value::as_str));
+            .map(String::from)
+            .or_else(|| {
+                event_data(e)
+                    .get("graph_node_id")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+            });
         if let Some(nid) = nid.filter(|s| !s.is_empty()) {
-            *touches.entry(nid.to_string()).or_default() += 1;
+            *touches.entry(nid).or_default() += 1;
         }
     }
     touches
@@ -1131,7 +1137,8 @@ pub(crate) fn build_lanes(
 
     let mut rate_limited = 0i64;
     for event in rate_limit_events {
-        let raw = event.get("ts").or_else(|| event_data(event).get("ts"));
+        let data = event_data(event);
+        let raw = event.get("ts").or_else(|| data.get("ts"));
         match parse_ts(raw) {
             None => rate_limited += 1,
             Some(dt) => {

@@ -2,8 +2,8 @@
 //! (`build_context_outcome_trace` and its helpers). Joins canonical
 //! observations without persisting a second authority.
 
-use super::readers::{canonical_signature, event_data, event_kind, parse_ts};
-use serde_json::{json, Map, Value};
+use super::readers::{canonical_signature, event_data, event_kind, num_opt, parse_ts};
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
 /// `CONTEXT_TRACE_EVENT_KINDS`: the kinds the trace reads from the journals.
@@ -203,7 +203,7 @@ pub(crate) fn event_matches(delivery: &Value, event: &Value, commit: Option<&str
 /// keyed exactly as the golden froze (harness, entry_state, bytes,
 /// estimated_tokens, context_hash, source_hashes, measurement_complete,
 /// measurement_errors).
-pub(crate) fn context_snapshot_rows(events: &[Value]) -> Option<Value> {
+pub(crate) fn context_snapshot_rows(events: &[&Value]) -> Option<Value> {
     for event in events.iter().rev() {
         if event_kind(event) != Some("context_snapshot") {
             continue;
@@ -248,7 +248,8 @@ pub(crate) fn context_snapshot_rows(events: &[Value]) -> Option<Value> {
         let mut estimated = data
             .get("estimated_tokens")
             .filter(|v| !v.is_null())
-            .or_else(|| packet.get("estimated_tokens").filter(|v| !v.is_null()));
+            .or_else(|| packet.get("estimated_tokens").filter(|v| !v.is_null()))
+            .cloned();
         if estimated.is_none() {
             if let Some(cb) = context_bytes.and_then(Value::as_f64) {
                 estimated = Some(json!(((cb as i64) + 3) / 4));
@@ -307,7 +308,7 @@ pub(crate) fn context_snapshot_rows(events: &[Value]) -> Option<Value> {
 }
 
 /// `_commit_from_loop_check`: the latest loop_check's fingerprint prefix.
-pub(crate) fn commit_from_loop_check(events: &[Value]) -> Option<String> {
+pub(crate) fn commit_from_loop_check(events: &[&Value]) -> Option<String> {
     for event in events.iter().rev() {
         if event_kind(event) != Some("loop_check") {
             continue;
@@ -352,7 +353,7 @@ pub(crate) fn build_context_outcome_trace(
         .iter()
         .find_map(|key| str_field(delivery, key))
         .map(str::to_string)
-        .or_else(|| commit_from_loop_check(&identity_matching.iter().copied().collect::<Vec<_>>()));
+        .or_else(|| commit_from_loop_check(&identity_matching));
     let matching: Vec<&Value> = normalized
         .iter()
         .filter(|e| event_matches(delivery, e, delivered_commit.as_deref()))
@@ -382,13 +383,14 @@ pub(crate) fn build_context_outcome_trace(
         .copied()
         .collect();
     let latest_loop = loop_checks.last();
-    let loop_data = latest_loop.map(event_data).unwrap_or_default();
+    let loop_data = latest_loop.copied().map(event_data).unwrap_or_default();
     let ci_state = loop_data.get("ci").cloned().unwrap_or(Value::Null);
-    let ci_observed = !matches!(
-        ci_state,
-        Value::Null
-            | Value::String(ref s) if s.is_empty() || s == "none" || s == "unknown"
-    );
+    // Python: `ci_state not in (None, "", "none", "unknown")`.
+    let ci_observed = !match ci_state {
+        Value::Null => true,
+        Value::String(ref s) => s.is_empty() || s == "none" || s == "unknown",
+        _ => false,
+    };
     let attestations = matching
         .iter()
         .filter(|e| event_kind(e) == Some("review_attestation"))
@@ -570,12 +572,12 @@ pub(crate) fn build_context_outcome_trace(
             "merge": {
                 "observed": merge_observed,
                 "state": merge_state,
-                "merged": if merge_observed { merged } else { None },
+                "merged": if merge_observed { json!(merged) } else { Value::Null },
                 "at": merged_at,
             },
             "revert": {
                 "observed": revert_observed,
-                "reverted": if revert_observed { reverted } else { None },
+                "reverted": if revert_observed { json!(reverted) } else { Value::Null },
                 "at": reverted_at,
             },
             "recovery": recovery,

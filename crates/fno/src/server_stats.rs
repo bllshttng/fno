@@ -33,7 +33,7 @@ pub fn answer(touch_emit_failures: u64, started_at: &str) -> ServerMsg {
 /// `fno` spawn). None when no live server answers; the door then reports
 /// Unknown, never zero.
 pub fn snapshot_for_scoreboard() -> Option<String> {
-    let session = resolve_session(None, env_server().as_deref()).ok()?;
+    let session = resolve_session(None, env_server().as_deref());
     let sock = proto::socket_path(&session).ok()?;
     match control_roundtrip(&sock, &session, ControlCommand::ServerStats) {
         Ok(ServerMsg::ServerStats {

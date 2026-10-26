@@ -6,7 +6,7 @@
 //! corrupt line rather than crash the command. The store beside a journal
 //! answers first (SQL authority); only a store-less path reads the raw file.
 
-use chrono::{DateTime, Datelike, Local, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, Local, TimeZone};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -109,9 +109,9 @@ pub(crate) fn canonical_signature(value: &Value) -> String {
     fn sorted(value: &Value) -> Value {
         match value {
             Value::Object(map) => {
-                let sorted: BTreeMap<&String, &Value> = map.iter().collect();
+                let by_key: BTreeMap<&String, &Value> = map.iter().collect();
                 let mut out = serde_json::Map::new();
-                for (key, inner) in sorted {
+                for (key, inner) in by_key {
                     out.insert(key.clone(), sorted(inner));
                 }
                 Value::Object(out)
@@ -437,10 +437,6 @@ pub(crate) fn graph_db_path() -> PathBuf {
 /// The state-root files the fold reads beside the ledger: the live journal
 /// and its ephemeral sibling (`events.jsonl` + `.ephemeral`).
 pub(crate) fn events_paths(ledger_path: &Path) -> Vec<PathBuf> {
-
-/// The state-root files the fold reads beside the ledger: the live journal
-/// and its ephemeral sibling (`events.jsonl` + `.ephemeral`).
-pub(crate) fn events_paths(ledger_path: &Path) -> Vec<PathBuf> {
     let parent = ledger_path
         .parent()
         .map(Path::to_path_buf)
@@ -505,7 +501,7 @@ pub(crate) fn ts_or_min(raw: Option<&Value>) -> DateTime<Local> {
     parse_ts(raw).unwrap_or_else(datetime_min)
 }
 
-/// The `Timelike`/`Datelike` imports stay used through the date helpers the
+/// The `Datelike` import stays used through the date helpers the
 /// views module pulls from here; keep one canonical week-start anchor.
 pub(crate) fn iso_date(dt: DateTime<Local>) -> String {
     format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day())

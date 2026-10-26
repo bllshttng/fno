@@ -5,12 +5,10 @@
 //! the Python gate (`fno.plan.fidelity`, which calls through the keeper op
 //! `scoreboard_plan_fidelity` with `unmeasurable: refuse`).
 
-use super::readers::{event_data, event_kind, num_opt, parse_ts, pct};
-use super::views::{
-    classify_deliveries, is_planned_row, node_maps, node_outcome, row_shipped, NodeMaps, RunInputs,
-};
+use super::readers::{event_data, event_kind, parse_ts, pct};
+use super::views::{is_planned_row, node_maps, node_outcome, row_shipped, RunInputs};
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// `_AC_ID_RE`: `AC`, one or more digits, `-`, one or more ASCII capitals.
 pub(crate) fn parse_ac_ids(doc: &str) -> BTreeSet<String> {
@@ -310,12 +308,16 @@ pub(crate) fn declared_probes(plan_doc: Option<&str>) -> Vec<String> {
     let Ok(fm) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(body) else {
         return Vec::new();
     };
-    let probes = fm.get("done_probes")?;
-    let list = probes.as_sequence()?;
+    let Some(probes) = fm.get("done_probes") else {
+        return Vec::new();
+    };
+    let Some(list) = probes.as_sequence() else {
+        return Vec::new();
+    };
     list.iter()
         .map(|p| match p {
             serde_yaml_ng::Value::String(s) => s.clone(),
-            other => serde_yaml_ng::Value::to_string(other)
+            other => serde_yaml_ng::to_string(other)
                 .map(|s| s.trim().to_string())
                 .unwrap_or_default(),
         })
@@ -416,7 +418,10 @@ pub(crate) fn evaluate_context_comparison(
     if cohorts.is_none() || window.is_none() || exclusions.is_none() || budgets.is_none() {
         return rejected("comparison_contract_invalid");
     }
-    let budgets_map = budgets.and_then(Value::as_object).unwrap_or_default();
+    // `budgets` was filtered to an object above, so the empty fallback is
+    // unreachable; `&Map` has no Default to unwrap into.
+    let empty_budgets = Map::new();
+    let budgets_map = budgets.and_then(Value::as_object).unwrap_or(&empty_budgets);
     if budgets_map.is_empty() {
         return rejected("comparison_contract_invalid");
     }
@@ -549,7 +554,7 @@ pub(crate) fn evaluate_context_comparison(
         t.get("context")
             .filter(|c| c.is_object())
             .and_then(|c| c.get("measurement_complete"))
-            .map(Value::as_bool)
+            .map(|v| v.as_bool() == Some(true))
             .unwrap_or(true)
     });
     if !complete_context {
@@ -577,7 +582,10 @@ pub(crate) fn evaluate_context_comparison(
         if !total.is_finite() {
             return rejected("comparison_budget_measurement_missing");
         }
-        budget_observations.insert("max_candidate_spend_usd".to_string(), json!(round2(total)));
+        budget_observations.insert(
+            "max_candidate_spend_usd".to_string(),
+            json!(super::views::round2(total)),
+        );
         if total > limit.as_f64().unwrap_or(f64::INFINITY) {
             budget_satisfied = false;
         }
@@ -783,8 +791,8 @@ pub(crate) fn build_plan_fidelity(
                 }
             }
         }
-        let key = plan_key(plan_path.as_ref(), project.as_ref());
-        let path_key = plan_key(plan_path.as_ref(), None);
+        let key = plan_key(Some(&plan_path), Some(&project));
+        let path_key = plan_key(Some(&plan_path), None);
         let candidates: BTreeSet<String> = path_key
             .as_ref()
             .and_then(|pk| planned_keys_by_path.get(pk))
@@ -854,7 +862,7 @@ pub(crate) fn build_plan_fidelity(
             .filter(|s| !s.is_empty());
         let trace = super::context_trace::build_context_outcome_trace(
             d,
-            nid.and_then(|n| maps.by_id.get(n)).copied(),
+            nid.and_then(|n| maps.by_id.get(n).map(|node| *node)),
             trace_events,
         );
         context_traces.push(trace.clone());
@@ -883,7 +891,7 @@ pub(crate) fn build_plan_fidelity(
             entry.insert("probes".to_string(), probes);
             entry.insert("context_outcome_trace".to_string(), trace);
             for (k, v) in score.as_object().map(|o| o.clone()).unwrap_or_default() {
-                entry.insert(k, { v });
+                entry.insert(k, v);
             }
             Value::Object(entry)
         });
@@ -931,7 +939,7 @@ pub(crate) fn build_plan_fidelity(
             json!({
                 "disposition": "refuse",
                 "planned": planned_total,
-                "delivered": planned_total - unjoined_rows.len(),
+                "delivered": planned_total - unjoined_rows.len() as i64,
                 "unjoined_count": unjoined_rows.len(),
                 "unjoined": unjoined_rows.iter().map(|r| json!({
                     "session_id": r.get("session_id"),
@@ -959,10 +967,10 @@ fn finite_nonneg_number(value: &Value) -> bool {
 
 /// `_median_metric`: the values at a path through each trace; one missing
 /// value rejects the whole metric.
-fn median_metric(traces: &[Value], path: &[&str]) -> Option<f64> {
+fn median_metric(traces: &[&Value], path: &[&str]) -> Option<f64> {
     let mut values = Vec::new();
     for trace in traces {
-        let mut current = trace;
+        let mut current = *trace;
         for key in path {
             current = match current.get(key) {
                 Some(v) => v,
@@ -1012,7 +1020,7 @@ pub(crate) fn plan_fidelity_op(params: &Value) -> Result<Value, String> {
         .and_then(Value::as_i64)
         .unwrap_or(180);
     let now = match params.get("now").and_then(Value::as_str) {
-        Some(iso) => super::readers::parse_ts(&Value::String(iso.to_string()))
+        Some(iso) => super::readers::parse_ts(Some(&Value::String(iso.to_string())))
             .unwrap_or_else(chrono::Local::now),
         None => chrono::Local::now(),
     };
