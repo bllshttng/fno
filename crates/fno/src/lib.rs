@@ -10,6 +10,7 @@
 
 pub mod accounts_route;
 pub mod agents_history;
+pub mod agents_mcp_route;
 pub mod agents_menu;
 pub mod agents_view;
 pub mod argv_witness;
@@ -114,6 +115,7 @@ pub mod setup_profile;
 pub mod setup_run;
 pub mod setup_services;
 pub mod share;
+pub mod shim_check;
 pub mod sideline_color;
 pub mod spawn_floor;
 pub mod spawn_journal;

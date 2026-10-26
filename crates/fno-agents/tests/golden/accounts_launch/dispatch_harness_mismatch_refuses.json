@@ -1,0 +1,1 @@
+{"config": "[[accounts.records]]\nid = \"cx\"\nname = \"cx\"\nharness = \"codex\"\nauth = \"api_key\"\n[accounts.records.env]\nOPENAI_API_KEY = \"cx-key\"\n", "expect": {"refusal": "refusing --dispatch-account 'cx': record is a codex account but the spawn resolves claude; no worker launched"}, "harness": "claude", "id": "cx", "op": "dispatch"}

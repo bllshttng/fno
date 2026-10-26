@@ -169,13 +169,13 @@ def test_ac3_err_unresolvable_recorded_account_refuses_launching_nothing(
     _home(tmp_path, monkeypatch)
     _seed_row("wk-lineage", LINEAGE_UUID, requested_model="claude-opus-5")
     _stamp_account("wk-lineage", "makers")
-    from fno.agents.account_env import AccountResolutionError
     from fno.agents.fork_lineage import ResumeUnpinned
+    from fno.agents.spawn_overlay_client import AccountRefused
 
     def _dead(account_id, **kwargs):
-        raise AccountResolutionError("no login for makers")
+        raise AccountRefused("no login for makers")
 
-    monkeypatch.setattr("fno.agents.account_env.resolve_account_overlay", _dead)
+    monkeypatch.setattr("fno.agents.spawn_overlay_client.account_overlay", _dead)
     monkeypatch.setattr(
         "fno.agents.harnesses.claude.bg_create",
         lambda **kwargs: (_ for _ in ()).throw(AssertionError("spawned past refusal")),

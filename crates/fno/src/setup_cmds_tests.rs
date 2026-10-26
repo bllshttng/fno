@@ -23,6 +23,10 @@ fn the_claim_and_the_plan_filter() {
         classify(&oss(&["config", "setup", "cli-hooks", "--repair-only"])),
         Some(Cmd::CliHooks(oss(&["--repair-only"])))
     );
+    assert_eq!(
+        classify(&oss(&["config", "setup", "shim-check", "--repair"])),
+        Some(Cmd::ShimCheck(oss(&["--repair"])))
+    );
     assert_eq!(classify(&oss(&["config", "setup"])), Some(Cmd::Help));
     assert_eq!(
         classify(&oss(&["setup", "run"])),
