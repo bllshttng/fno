@@ -70,6 +70,8 @@ cli/tests/unit/test_blueprint_batching_rule.py::test_behavioral_dispatch_plan_ba
 cli/tests/unit/test_claim_rebind.py::test_rebind_live_different_pid_refuses_concurrent_writer::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::TestSessionWitnessVerdicts.test_status_live_session_never_reads_stale::marker.requires_rust  # on main before this ratchet
+cli/tests/unit/test_dispatch_undeclared_repo.py::<module>::mark.skipif  # the module's requires_rust detector: the seam test drives the compiled fno-agents binary, which the smoke-pytest shard deletes by design
+cli/tests/unit/test_dispatch_undeclared_repo.py::test_rust_seam_returns_pin_for_foreign_cwd::marker.requires_rust  # the dispatch-pin decision itself is characterized in Rust by the dispatch_pin goldens; the Python test covers the real binary end-to-end where a build exists
 cli/tests/unit/test_evals_bank.py::test_seed_bank_loads::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_events_schema.py::_require_schema_loaded::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_hooks_json_validity.py::test_every_manifest_hook_is_wired_and_pretooluse_launches::pytest.skip  # on main before this ratchet
