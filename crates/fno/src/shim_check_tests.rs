@@ -5,6 +5,9 @@
 use super::*;
 use std::os::unix::fs::{symlink, PermissionsExt};
 
+/// The front-door shim, named through the contract it checks.
+const FNO: &str = REQUIRED_SHIMS[0];
+
 struct Scratch {
     _dir: tempfile::TempDir,
     roots: Roots,
@@ -38,11 +41,11 @@ fn exe(path: &Path) {
 fn dangling_and_temp_links_relink_to_the_durable_copy() {
     let s = scratch();
     let r = &s.roots;
-    exe(&r.self_bin.as_ref().unwrap().join("fno"));
+    exe(&r.self_bin.as_ref().unwrap().join(FNO));
     exe(&r.uv_bin.join("fno-py"));
     exe(&r.cargo_bin.join("fno-gh-proxy"));
     exe(&r.temp_root.join("old/fno-py"));
-    symlink(r.temp_root.join("gone/fno"), r.bin_dir.join("fno")).unwrap();
+    symlink(r.temp_root.join("gone/fno"), r.bin_dir.join(FNO)).unwrap();
     symlink(r.temp_root.join("old/fno-py"), r.bin_dir.join("fno-py")).unwrap();
     // Not ours: a broken third-party link is no finding.
     symlink(r.temp_root.join("gone/gh"), r.bin_dir.join("gh")).unwrap();
@@ -66,7 +69,7 @@ fn dangling_and_temp_links_relink_to_the_durable_copy() {
     assert_eq!(run_roots(r, false), 1, "a scan alone reports and fails");
     assert_eq!(run_roots(r, true), 0, "the repair leaves a clean re-scan");
     let link = |n: &str| std::fs::read_link(r.bin_dir.join(n)).unwrap();
-    assert_eq!(link("fno"), r.self_bin.as_ref().unwrap().join("fno"));
+    assert_eq!(link("fno"), r.self_bin.as_ref().unwrap().join(FNO));
     assert_eq!(link("fno-py"), r.uv_bin.join("fno-py"));
     assert_eq!(link("fno-gh-proxy"), r.cargo_bin.join("fno-gh-proxy"));
     assert_eq!(link("gh"), r.temp_root.join("gone/gh"));
@@ -88,7 +91,7 @@ fn an_absence_counts_only_with_a_linkable_durable_copy() {
         temp_root: r.temp_root.clone(),
         cargo_bin: r.cargo_bin.clone(),
     };
-    exe(&in_temp.uv_bin.join("fno"));
+    exe(&in_temp.uv_bin.join(FNO));
     assert!(scan(&in_temp).is_empty());
 
     // An unrepairable defect survives the repair and names itself.
