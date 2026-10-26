@@ -22,6 +22,8 @@
 # Exit: 0 clean, 1 a contract violation, 2 the gate cannot be trusted here
 #       (selftest refused, CLI missing).
 
+# No set -e: run_row captures every command's rc itself, and a failing row
+# must downgrade to WAIVED or FAIL, never kill the run.
 set -uo pipefail
 
 SELFTEST=0
@@ -63,12 +65,15 @@ export FNO_CONFIG="$TMP/config.toml"
 export FNO_GLOBAL_SETTINGS_PATH=/dev/null
 : > "$FNO_CONFIG"
 
-# run_row <expect> <args...>: run one verb row and print PASS, WAIVED (a
-# baseline row matched), or FAIL with the checker's reason.
+# run_row <expect> <row-id> <cmd...>: run one verb row and print PASS, WAIVED
+# (a baseline row matched), or FAIL with the checker's reason. The row id is
+# the verb argv without the CLI launcher, so a baseline author writes the verb
+# they are waiving, not the resolved launcher.
 run_row() {
     local expect="$1"
     shift
-    local row_id="$*"
+    local row_id="$1"
+    shift
     local out rc verdict reason
     out="$("$@" 2>/dev/null)"
     rc=$?
@@ -96,24 +101,24 @@ if [[ "$SELFTEST" == 1 ]]; then
     # one, or nothing it says on the real table can be trusted. Exit 2 on any
     # miss.
     status=0
-    v="$(run_row doc bash -c 'printf "chatter\n{}\n"')"
+    v="$(run_row doc 'stub: noisy stdout' bash -c 'printf "chatter\n{}\n"')"
     [[ "$v" == FAIL* ]] || {
         echo "selftest refused: noisy stdout was not failed" >&2
         status=1
     }
-    v="$(run_row doc bash -c 'printf "{}\n"')"
+    v="$(run_row doc 'stub: clean document' bash -c 'printf "{}\n"')"
     [[ "$v" == PASS* ]] || {
         echo "selftest refused: a clean document was not passed" >&2
         status=1
     }
-    v="$(run_row doc bash -c 'exit 1')"
+    v="$(run_row doc 'stub: silent rc-1' bash -c 'exit 1')"
     [[ "$v" == FAIL* ]] || {
         echo "selftest refused: a silent rc-1 verb was not failed" >&2
         status=1
     }
-    v="$(run_row error-doc bash -c 'printf "{\"ok\": false, \"error\": \"x\"}\n"; exit 1')"
+    v="$(run_row error-doc 'stub: error document rc-1' bash -c 'printf "{\"ok\": false, \"error\": \"x\"}\n"; exit 1')"
     [[ "$v" == PASS* ]] || {
-        { echo "selftest refused: an error document with rc 1 was not passed" >&2; } || true
+        echo "selftest refused: an error document with rc 1 was not passed" >&2
         status=1
     }
     if [[ "$status" == 0 ]]; then
@@ -123,6 +128,6 @@ if [[ "$SELFTEST" == 1 ]]; then
 fi
 
 status=0
-run_row doc "${CLI[@]}" doctor lint registry -J || status=1
-run_row error-doc "${CLI[@]}" backlog -J get x-zzzz9999nope || status=1
+run_row doc "doctor lint registry -J" "${CLI[@]}" doctor lint registry -J || status=1
+run_row error-doc "backlog -J get <miss>" "${CLI[@]}" backlog -J get x-zzzz9999nope || status=1
 exit "$status"
