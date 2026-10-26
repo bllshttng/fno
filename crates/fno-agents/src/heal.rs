@@ -1499,11 +1499,9 @@ fn behind_numbers(out: &str) -> (String, String) {
     (grab("behind-before="), grab("behind-after="))
 }
 
-/// The push command's conflict exit: the integrate leg refused because the branch
-/// is not safely rebasable (needs_resolver, refused, or a merge the command
-/// aborted). The command's other exit-3 refusals (protected branch, dirty tree) are NOT conflicts.
-fn is_rebase_conflict(stderr: &str) -> bool {
-    stderr.contains("not safely rebasable")
+/// The push command's conflict exit: the fold merge conflicted and the door left it in progress for the caller. The command's other exit-3 refusals (protected branch, dirty tree, a merge that refused to start) are NOT conflicts.
+fn is_fold_conflict(stderr: &str) -> bool {
+    stderr.contains("not safely mergeable")
 }
 
 /// The conflicting file list out of the push command's conflict stderr
@@ -2619,7 +2617,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     if let Err(e) = crate::fleet_task::close(
                         &questions_store(a),
                         "heal",
-                        &format!("PR {pr} rebase conflict"),
+                        &format!("PR {pr} fold conflict"),
                         a.cwd.to_string_lossy().as_ref(),
                         "rebased",
                         "heal",
@@ -2630,7 +2628,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     // would classify a dead run.
                     continue;
                 }
-                Ok((false, _, err)) if is_rebase_conflict(&err) => {
+                Ok((false, _, err)) if is_fold_conflict(&err) => {
                     // A conflict spends the per-run budget, never the 24h
                     // cap: the owner may resolve and need the retry this
                     // tick, and the journal cannot tell a resolved tree
@@ -2638,11 +2636,11 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     rebased_this_run += 1;
                     let files = conflict_files(&err);
                     println!(
-                        "skip rebase_conflict: PR {pr} conflicts rebasing onto origin/main; the owner decides"
+                        "skip fold_conflict: PR {pr} conflicts folding origin/main by merge; the owner decides"
                     );
-                    bump(&mut counts, "skip_rebase_conflict");
-                    receipt(&pr, "skip_rebase_conflict", &files);
-                    let key = format!("PR {pr} rebase conflict");
+                    bump(&mut counts, "skip_fold_conflict");
+                    receipt(&pr, "skip_fold_conflict", &files);
+                    let key = format!("PR {pr} fold conflict");
                     let at = (!files.is_empty())
                         .then(|| format!(" in: {files}"))
                         .unwrap_or_default();
@@ -2650,13 +2648,9 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     let seg = err.split("). ").nth(1);
                     let door = seg.unwrap_or("resolve by hand, then re-run `fno do pr push`");
                     let text = format!("heal: {key} onto origin/main{at}. {door}");
-                    let run = if err.contains("already merges origin/main") {
-                        format!("fno do pr push --pr {pr}")
-                    } else {
-                        format!("fno do pr rebase {pr}")
-                    };
+                    let run = format!("fno do pr push --pr {pr}");
                     if file_task(a, &key, &text, &run, &head_ref) {
-                        println!("escalated: PR {pr} rebase conflict is now a fleet task");
+                        println!("escalated: PR {pr} fold conflict is now a fleet task");
                     }
                     continue;
                 }
