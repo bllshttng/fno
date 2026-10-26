@@ -35,15 +35,14 @@ struct Case {
 }
 
 const STATE_PIN: &[(&str, &str)] = &[("FNO_STATE_DIR", "<FIXTURE>/state")];
-const AGENTS_PIN: &[(&str, &str)] = &[("FNO_AGENTS_HOME", "<FIXTURE>/fake_home/.fno/agents")];
-const EVENTS_PIN: &[(&str, &str)] = &[("FNO_EVENTS_PATH", "<FIXTURE>/state/events.jsonl")];
+const STATE_AGENTS_EVENTS: &[(&str, &str)] = &[
+    ("FNO_STATE_DIR", "<FIXTURE>/state"),
+    ("FNO_AGENTS_HOME", "<FIXTURE>/fake_home/.fno/agents"),
+    ("FNO_EVENTS_PATH", "<FIXTURE>/state/events.jsonl"),
+];
 const FAKE_BIN: &[(&str, &str)] = &[("FNO_AGENTS_BIN", "<FIXTURE>/fake_bin/fno-agents")];
 const NO_BIN: &[(&str, &str)] = &[("FNO_AGENTS_BIN", "/nonexistent/fno-agents")];
 const ZAI_STAMP: &[(&str, &str)] = &[("FNO_ROUTE_PROVIDER", "zai")];
-
-fn pin(pins: &[&[(&str, &str)]]) -> Vec<(&'static str, &'static str)> {
-    pins.iter().flat_map(|pin| pin.iter().copied()).collect()
-}
 
 fn cases() -> Vec<Case> {
     vec![
@@ -134,25 +133,25 @@ fn cases() -> Vec<Case> {
         Case {
             name: "history_empty",
             argv: &["config", "history"],
-            env: &pin(&[STATE_PIN, AGENTS_PIN, EVENTS_PIN]),
+            env: STATE_AGENTS_EVENTS,
             fixture: "empty_project",
         },
         Case {
             name: "history_rows",
             argv: &["config", "history"],
-            env: &pin(&[STATE_PIN, AGENTS_PIN, EVENTS_PIN]),
+            env: STATE_AGENTS_EVENTS,
             fixture: "history",
         },
         Case {
             name: "history_json",
             argv: &["config", "history", "--json"],
-            env: &pin(&[STATE_PIN, AGENTS_PIN, EVENTS_PIN]),
+            env: STATE_AGENTS_EVENTS,
             fixture: "history",
         },
         Case {
             name: "history_filter",
             argv: &["config", "history", "review.max_rounds"],
-            env: &pin(&[STATE_PIN, AGENTS_PIN, EVENTS_PIN]),
+            env: STATE_AGENTS_EVENTS,
             fixture: "history",
         },
         Case {
