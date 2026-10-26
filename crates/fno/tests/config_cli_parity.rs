@@ -9,9 +9,11 @@
 //! normalized (stdout, stderr, exit) triple against the committed golden.
 //! Folds: the fixture root path (in resolved, raw, and macOS `/private`
 //! spellings) - the one divergence the whoami port also folded, since the
-//! host owns it. The YAML fold lives in the reader, not here: every fixture
-//! is config.toml, because the loader migrates a legacy settings.yaml away on
-//! its own first read.
+//! host owns it. The fixtures are all config.toml: the case table predates
+//! the reader's yaml leg, and a yaml golden still needs one capture run of
+//! the committed oracle. The cold-settings.yaml path is covered end-to-end
+//! by the worktree-manager smoke tests, whose `wt_config` reader goes
+//! through `fno config get` against a fresh HOME.
 //!
 //! With `FNO_CAPTURE_GOLDEN=1` the test re-freezes every golden from the
 //! oracle (`--case` mode, which loads the base-commit leg from git) instead

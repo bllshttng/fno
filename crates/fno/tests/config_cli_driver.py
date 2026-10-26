@@ -15,10 +15,10 @@ Two modes:
                     can only be captured while the leg runs.
 
 The case table below is the single source both legs share; the Rust parity
-test rebuilds the same fixtures and folds only the fixture path. The YAML
-fold: the native reader parses TOML only, so every fixture is config.toml;
-a legacy settings.yaml fixture would fold a parser detail the loader
-migrates away on its own first read.
+test rebuilds the same fixtures and folds only the fixture path. Every
+fixture is config.toml: the case table predates the reader's yaml leg (a
+settings.yaml golden needs a capture run), and the cold-settings.yaml path
+is covered by the worktree-manager smoke tests through `wt_config`.
 """
 from __future__ import annotations
 

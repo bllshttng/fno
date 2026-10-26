@@ -11,11 +11,12 @@
 //! The reader replays the Python loader's merge: candidate chain, per-layer
 //! legacy alias, deep merge, worktree-local allowlist, then the schema table
 //! (`config_schema.json`, generated from the pydantic model) for defaults and
-//! field order. Deliberately no YAML parser and no migrate-on-read: the
-//! loader converts a legacy `settings.yaml` to flat `config.toml` on its own
-//! first read, so a healthy install never serves YAML through this chain; a
-//! YAML file that survived migration (malformed, or `FNO_CONFIG`-pinned)
-//! contributes nothing here, and the parity test folds that case by name.
+//! field order. TOML and YAML both parse here: a fresh HOME serves a legacy
+//! `settings.yaml` cold, and the worktree hook reads it through
+//! `fno config get` before any loader run could migrate it to flat
+//! `config.toml`, so folding yaml would empty the global layer on exactly
+//! the machines this door serves first. An unparseable file contributes
+//! nothing, and the parity test folds that case by name.
 
 pub mod get;
 pub mod history;
@@ -276,15 +277,21 @@ pub fn candidate_paths(repo_root: &Path) -> Vec<PathBuf> {
     prefer_toml(settings_yaml_locations(repo_root))
 }
 
-/// `_read_settings_doc` for the Rust chain: TOML by suffix, everything else
-/// contributes nothing (the YAML fold named in the module doc).
+/// `_read_settings_doc` for the Rust chain: TOML and YAML by suffix,
+/// everything else contributes nothing.
 pub fn parse_config_file(path: &Path) -> Option<Value> {
-    if path.extension().and_then(|e| e.to_str()) != Some("toml") {
-        return None;
-    }
     let text = std::fs::read_to_string(path).ok()?;
-    let parsed: toml::Value = toml::from_str(&text).ok()?;
-    Some(toml_to_json(parsed))
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("toml") => {
+            let parsed: toml::Value = toml::from_str(&text).ok()?;
+            Some(toml_to_json(parsed))
+        }
+        Some("yaml") | Some("yml") => {
+            let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).ok()?;
+            Some(yaml_to_json(parsed))
+        }
+        _ => None,
+    }
 }
 
 /// TOML parse tree to the JSON-shaped tree every walker here reads.
@@ -305,6 +312,52 @@ pub fn toml_to_json(value: toml::Value) -> Value {
             }
             Value::Object(map)
         }
+    }
+}
+
+/// YAML parse tree to the JSON-shaped tree, mirroring [`toml_to_json`].
+/// Mapping keys stringify the way `json.dumps` stringifies non-string dict
+/// keys; document order survives (`serde_json` preserve_order).
+pub fn yaml_to_json(value: serde_yaml_ng::Value) -> Value {
+    use serde_yaml_ng::Value as Y;
+    match value {
+        Y::Null => Value::Null,
+        Y::Bool(b) => Value::Bool(b),
+        Y::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::from(i)
+            } else if let Some(u) = n.as_u64() {
+                Value::from(u)
+            } else {
+                n.as_f64()
+                    .and_then(serde_json::Number::from_f64)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
+            }
+        }
+        Y::String(s) => Value::String(s),
+        Y::Sequence(items) => Value::Array(items.into_iter().map(yaml_to_json).collect()),
+        Y::Mapping(map) => {
+            let mut out = Map::new();
+            for (key, value) in map {
+                out.insert(yaml_scalar_key(&key), yaml_to_json(value));
+            }
+            Value::Object(out)
+        }
+        Y::Tagged(tagged) => yaml_to_json(tagged.value),
+    }
+}
+
+fn yaml_scalar_key(key: &serde_yaml_ng::Value) -> String {
+    match key {
+        serde_yaml_ng::Value::String(s) => s.clone(),
+        serde_yaml_ng::Value::Bool(b) => b.to_string(),
+        serde_yaml_ng::Value::Null => "null".to_string(),
+        serde_yaml_ng::Value::Number(n) => n.to_string(),
+        _ => serde_yaml_ng::to_string(key)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
     }
 }
 
@@ -538,8 +591,8 @@ pub fn alias_legacy_keys(raw: &mut Value) {
 }
 
 /// `_aliased_layers`: `(resolved path, alias-applied raw parse)` per existing
-/// parseable candidate, highest precedence first. YAML candidates contribute
-/// nothing (the fold in the module doc). Honors a `FNO_CONFIG` pin.
+/// parseable candidate, highest precedence first. An unparseable candidate
+/// contributes nothing. Honors a `FNO_CONFIG` pin.
 pub fn aliased_layers(repo_root: &Path) -> Vec<(PathBuf, Value)> {
     let mut layers = Vec::new();
     for candidate in candidate_paths(repo_root) {
