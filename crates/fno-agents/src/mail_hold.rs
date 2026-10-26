@@ -653,7 +653,13 @@ fn lapsed_arm_ms(clock: &Option<Clock>, now: chrono::DateTime<chrono::Utc>) -> O
         return None;
     }
     let until = clock.until?;
-    Some((until - chrono::Duration::seconds(clock.window_s)).timestamp_millis())
+    // Saturating, not Duration::seconds: a clock file is machine-writable
+    // state, and an extreme window_s must not panic the hook path.
+    Some(
+        until
+            .timestamp_millis()
+            .saturating_sub(clock.window_s.saturating_mul(1000)),
+    )
 }
 
 /// The Stop side (C3, C6): a live conversation clock is shortened to
