@@ -6,7 +6,6 @@ agents (python compat)	101	the flat agents registrations the menu forwards to; d
 agents mail (python compat)	17	the flat mail registrations behind mail and mail admin; goes with the compat leg
 backlog	54	retire the legacy flat spellings once their window ends; split the admin junk drawer
 config	17	nest under typed groups
-(root)	13	the deprecated bare stub-manifest spelling rides the native front door; the root row retires when its muscle-memory window closes
 do pr	31	nest the pr commands under typed groups
 doctor	19	nest under typed groups
 fno-agents	137	nest the binary commands under typed groups (spawn-remote joins mail-remote/org-remote)
