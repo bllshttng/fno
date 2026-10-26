@@ -1,7 +1,7 @@
 //! The `fno config setup` commands, claimed before clap like `setup_run`:
-//! `plan`, `post-merge`, the two `cli-hooks` commands (in `cli_hooks`), the
-//! bare listing, and a refusal for an unknown name. `run` and `auto-wire`
-//! belong to their own modules. Every root `fno setup <command>` spelling is
+//! `plan`, `post-merge`, the two `cli-hooks` commands (in `cli_hooks`),
+//! `shim-check` (in `shim_check`), the bare listing, and a refusal for an
+//! unknown name. `run` and `auto-wire` belong to their own modules. Every root `fno setup <command>` spelling is
 //! claimed too: the deprecated root group lives nowhere else now.
 //!
 //! `plan` prints the wizard question plan, rendered from the committed schema
@@ -31,6 +31,7 @@ pub enum Cmd {
     PostMerge(Vec<OsString>),
     CliHooks(Vec<OsString>),
     CliHooksCodex(Vec<OsString>),
+    ShimCheck(Vec<OsString>),
     /// A bare `config setup`, or its `--help`.
     Help,
     /// A root `fno setup run|auto-wire`: those live under `config setup` only.
@@ -58,6 +59,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "Wire footnote's user-level CLI hooks (Codex, Gemini, Claude).",
     ),
     ("cli-hooks-codex", "Wire only the Codex SessionStart hook."),
+    (
+        "shim-check",
+        "Find missing or broken fno shims in the tool bin (--repair relinks).",
+    ),
 ];
 
 /// Claim every `config setup` command except `run` and `auto-wire`, which
@@ -80,6 +85,7 @@ pub fn classify(args: &[OsString]) -> Option<Cmd> {
         Some("post-merge") => Cmd::PostMerge(rest()),
         Some("cli-hooks") => Cmd::CliHooks(rest()),
         Some("cli-hooks-codex") => Cmd::CliHooksCodex(rest()),
+        Some("shim-check") => Cmd::ShimCheck(rest()),
         Some(w @ ("run" | "auto-wire")) if root => Cmd::Moved(w.to_string()),
         Some("run" | "auto-wire") => return None,
         Some(w) => Cmd::Unknown(w.to_string()),
@@ -100,6 +106,7 @@ pub fn run(cmd: Cmd) -> i32 {
         Cmd::PostMerge(rest) => run_post_merge(&rest),
         Cmd::CliHooks(rest) => crate::cli_hooks::run(&rest, false),
         Cmd::CliHooksCodex(rest) => crate::cli_hooks::run(&rest, true),
+        Cmd::ShimCheck(rest) => crate::shim_check::run(&rest),
         Cmd::Help => {
             print!("{}", listing());
             0

@@ -224,11 +224,11 @@ def env_marks_unattended(env: "Mapping[str, str]") -> bool:
     ``TARGET_UNATTENDED`` for the manifest writer, `init-target-state.sh` ORs
     that with ``config.unattended.enabled``, and the native capability door
     (`fno-agents review-level capability`) re-derives it in-process, and
-    ``provenance/spawn_think`` asks the same question about the session filing
+    the Rust think dispatch asks the same question about the session filing
     an idea. They agreed before only by repeating one expression in four
     places.
 
-    Dependency-free on purpose: spawn_think's presence classifier is a locked
+    Dependency-free on purpose: the think presence classifier is a locked
     decision to stay off config and off tty probes, so this reads env and
     nothing else.
 
