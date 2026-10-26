@@ -696,7 +696,7 @@ ARCHIVED_STATE="$PLAN_ARTIFACTS_DIR/target-state-${SESSION_ID}.md"
 
 _PREPARE_RC=0
 _HANDOFF_PREPARE_LOG="$(mktemp "${TMPDIR:-/tmp}/fno-handoff-prepare.XXXXXX")"
-# (x-9516) The prepare module is native now: the target-handoff-prepare op
+# The prepare module is native now: the target-handoff-prepare op
 # under the fno-agents binary serves the same contract and exits (0/10/12).
 FNO_CLAIMS_ROOT="$HOME" fno-agents target-gates target-handoff-prepare \
   --state "$STATE_FILE" \
