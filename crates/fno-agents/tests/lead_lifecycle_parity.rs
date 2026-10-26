@@ -6,6 +6,8 @@
 //! from the Python commands over the fixtures in
 //! tests/fixtures/lead_lifecycle/, before the Python legs were deleted.
 //! Capture mode refuses: a golden can only be captured while the old leg runs.
+//! The check-in's board lines are the exception: the capture host refused the
+//! board's GraphQL read, so those lines follow this world's `gh` stub instead.
 //!
 //! The temp root folds to `<ROOT>` (raw and canonical spellings) and its slug
 //! to `<ROOTSLUG>`. The check-in's control-plane rows name the host's service
