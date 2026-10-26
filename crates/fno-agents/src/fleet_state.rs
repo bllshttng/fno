@@ -73,9 +73,10 @@ fn fleet_state_path() -> PathBuf {
     new
 }
 
-/// The machine state root, mirroring `paths.state_dir` for the keys a
+/// The machine state root, mirroring `config.state_dir` for the keys a
 /// daemon-free door can read without the Python settings stack: the env pin
-/// first, then the global config's `[paths] state_dir`, else `$HOME/.fno`.
+/// first, then the global config's TOP-LEVEL `state_dir` (the canonical key;
+/// `[paths]` holds per-file overrides only), else `$HOME/.fno`.
 fn state_root() -> PathBuf {
     if let Some(root) = std::env::var_os("FNO_STATE_DIR").filter(|v| !v.is_empty()) {
         return PathBuf::from(root);
@@ -90,8 +91,7 @@ fn state_root() -> PathBuf {
         return ambient;
     };
     let Some(configured) = doc
-        .get("paths")
-        .and_then(|p| p.get("state_dir"))
+        .get("state_dir")
         .and_then(|v| v.as_str())
         .map(str::to_string)
     else {
@@ -178,7 +178,7 @@ impl SidecarLock {
         if let Some(parent) = lock_path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        let Ok(mut file) = std::fs::OpenOptions::new()
+        let Ok(file) = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
@@ -290,7 +290,8 @@ fn op_links(params: &Params) -> Result<Value, String> {
     let walk = payload
         .get("chains")
         .and_then(Value::as_object)
-        .and_then(|chains| stored_walk(chains.get(&node), now));
+        .map(|chains| stored_walk(chains.get(&node), now))
+        .unwrap_or_default();
     Ok(json!(walk))
 }
 
@@ -330,13 +331,10 @@ fn op_record(params: &Params) -> Result<Value, String> {
         .rev()
         .cloned()
         .collect();
-    chains_map.insert(node, json!({"links": kept, "at": stamp}));
+    chains_map.insert(node, json!({"links": &kept, "at": stamp}));
+    let answer = json!(kept);
     write_payload(&path, &payload).map_err(|e| format!("write failed: {e}"))?;
-    Ok(json!(chains_map
-        .get(&node)
-        .and_then(|e| e.get("links"))
-        .cloned()
-        .unwrap_or_else(|| json!([]))))
+    Ok(answer)
 }
 
 fn op_clear(params: &Params) -> Result<Value, String> {

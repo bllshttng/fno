@@ -79,7 +79,7 @@ pub fn run(args: &[String]) -> i32 {
         println!("no loops configured");
         return 0;
     }
-    let mut names: Vec<String> = if args.is_empty() { all } else { args.clone() };
+    let mut names: Vec<String> = if args.is_empty() { all } else { args.to_vec() };
     names.sort();
     let events_path = events_path_from_cwd();
     for name in &names {
@@ -93,15 +93,16 @@ pub fn run(args: &[String]) -> i32 {
     0
 }
 
-/// `fno-agents loops level <name>`: one level, one line. The door the
-/// observer harness rides instead of importing the deleted Python helper.
+/// `fno-agents loops level <name>`: one level, one line, JSON-encoded - the
+/// observer harness crosses through `command_call`, which JSON-decodes the
+/// stdout, so a bare `assisted` would raise and fall back to "report".
 pub fn run_level(args: &[String]) -> i32 {
     let Some(name) = args.first() else {
         eprintln!("usage: fno-agents loops level <name>");
         return 2;
     };
     let settings = load_merged(None);
-    println!("{}", loop_level(&settings, name));
+    println!("{}", serde_json::json!(loop_level(&settings, name)));
     0
 }
 

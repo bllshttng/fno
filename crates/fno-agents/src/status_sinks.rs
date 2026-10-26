@@ -20,7 +20,21 @@ use crate::backlog::advance_settings::{load_merged, settings_candidates};
 /// project -> path, from the workspace map, nearest-file-wins per name.
 fn workspace_paths() -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = Vec::new();
-    for path in settings_candidates(None) {
+    // Outside any checkout the repo walk answers empty before its global
+    // leg; the Python resolver this fold replaces always read the global
+    // files, so the supervisor (started at an agents-home anchor, not a
+    // repo) keeps its configured workspaces.
+    let mut candidates = settings_candidates(None);
+    if candidates.is_empty() {
+        if let Some(gp) = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH").filter(|v| !v.is_empty()) {
+            candidates.push(PathBuf::from(gp));
+        } else if let Some(home) = std::env::var_os("HOME") {
+            let home = PathBuf::from(home);
+            candidates.push(home.join(".fno").join("config.toml"));
+            candidates.push(home.join(".fno").join("settings.yaml"));
+        }
+    }
+    for path in candidates {
         let Ok(text) = settings_bytes(&path) else {
             continue;
         };
@@ -73,7 +87,7 @@ fn collect_work_block(work: &serde_json::Map<String, Value>, out: &mut Vec<(Stri
                 continue;
             };
             for proj in projects {
-                let (Some(name), Some(raw)) = (
+                if let (Some(name), Some(raw)) = (
                     proj.get("name").and_then(Value::as_str),
                     proj.get("path").and_then(Value::as_str),
                 ) {
@@ -121,7 +135,7 @@ fn resolve_fanout_targets() -> Vec<FanoutTarget> {
             .is_some_and(|sinks| {
                 sinks
                     .iter()
-                    .any(|s| s.get("enabled").and_then(Value::as_bool).unwrap_or(false))
+                    .any(|s| s.get("enabled").and_then(Value::as_bool).unwrap_or(true))
             });
         if !has_enabled_sink {
             continue;
@@ -163,13 +177,16 @@ pub fn run(args: &[String]) -> i32 {
             .iter()
             .map(|t| {
                 json!({
-                    "project": t.project,
-                    "cwd": t.cwd.display().to_string(),
-                    "interval_seconds": t.interval_seconds,
-                    })
+                "project": t.project,
+                "cwd": t.cwd.display().to_string(),
+                "interval_seconds": t.interval_seconds,
+                })
             })
             .collect();
-        println!("{}", serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into()));
+        println!(
+            "{}",
+            serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
+        );
         return 0;
     }
     if targets.is_empty() {
@@ -194,7 +211,10 @@ mod tests {
     #[test]
     fn expand_tilde_expands_only_the_home_prefix() {
         std::env::set_var("HOME", "/Users/test");
-        assert_eq!(expand_tilde("~/code/x"), PathBuf::from("/Users/test/code/x"));
+        assert_eq!(
+            expand_tilde("~/code/x"),
+            PathBuf::from("/Users/test/code/x")
+        );
         assert_eq!(expand_tilde("/abs/x"), PathBuf::from("/abs/x"));
         assert_eq!(expand_tilde("a~b"), PathBuf::from("a~b"));
     }
@@ -210,7 +230,11 @@ mod tests {
         .unwrap();
         let mut out = Vec::new();
         collect_work_block(&work, &mut out);
-        assert_eq!(out.len(), 2, "multi-workspace entries only from the list shape");
+        assert_eq!(
+            out.len(),
+            2,
+            "multi-workspace entries only from the list shape"
+        );
         assert_eq!(out[0].0, "a");
         let flat: serde_json::Map<String, Value> = serde_json::from_value(json!({
             "projects": {"flat-proj": {"path": "/flat"}}
