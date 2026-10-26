@@ -69,7 +69,6 @@ agents mail triage	T1	agents mail triage	8
 agents mail unread	T1	agents mail unread	16
 agents mail show	T1	agents mail show	2
 agents mail withdraw	T1	agents mail withdraw	2
-agents mcp send	T1	agents mcp send	10
 agents name	T1	agents name	5
 agents needs	KEEP	agents needs	11	ruled KEEP: fno-agents needs is coupled to needs_overlay
 agents orphans	T1	agents orphans	10
@@ -385,7 +384,6 @@ mail triage	T1	mail triage	8
 mail unread	T1	mail unread	16
 mail show	T1	mail show	2
 mail withdraw	T1	mail withdraw	2
-mcp send	KEEP	mcp send	10	single-leaf group
 notify	KEEP	notify	18	single-leaf group
 observer replay	T1	observer replay	1
 observer sweep	T1	observer sweep	4

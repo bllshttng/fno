@@ -106,13 +106,8 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     # the entries between this comment and `agents` below whose names
-    # sit in COMMAND_MOVES are one-release shims kept reachable for muscle
-    # memory; their canonical homes are the move destinations.
-    "mcp": (
-        "fno.mcp.cli:mcp_app",
-        "MCP sidecar client commands (send an envelope to a channel).",
-        {"hidden": True},
-    ),
+    # sit in COMMAND_MOVES are one-release shims in their canonical homes;
+    # their move rows stay in command_moves.py.
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
     "stub-manifest": (

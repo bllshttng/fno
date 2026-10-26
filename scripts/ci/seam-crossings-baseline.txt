@@ -135,6 +135,8 @@ resolver	crates/fno-agents/src/loopcheck.rs	pub(crate) fn loopcheck_fno_bin() ->
 resolver	crates/fno-agents/src/loopcheck.rs	fn best_effort_notify(title: &str, body: &str) {
 resolver	crates/fno-agents/src/loops_pause.rs	fn fno_cli_binary() -> PathBuf {
 resolver	crates/fno-agents/src/mail_cli/pane_prepare.rs	fn run_mux_captured(args: &[String], timeout_s: u64) -> Result<Output, String> {
+resolver	crates/fno-agents/src/mcp/client.rs	fn state_log_path() -> PathBuf {
+resolver	crates/fno-agents/src/mcp/sidecar.rs	pub fn socket_path() -> PathBuf {
 resolver	crates/fno-agents/src/opencode_install.rs	fn resolve_source(cwd: &Path) -> Result<PathBuf, String> {
 resolver	crates/fno-agents/src/operator_notice.rs	pub fn notify_operator(title: &str, body: &str, pointer: Option<&str>) -> bool {
 resolver	crates/fno-agents/src/operator_notice.rs	pub fn notify_operator_confirmed(title: &str, body: &str, pointer: Option<&str>) -> bool {
