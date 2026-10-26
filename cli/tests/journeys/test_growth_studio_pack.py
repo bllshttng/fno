@@ -44,8 +44,7 @@ def _spawn_overlay(payload: dict) -> dict:
 
 
 def _discover_rows(root: Path) -> list[dict]:
-    """The full discovery rows (raw_definition, definition included) the
-    retired Python `discover_role_definitions` door parsed."""
+    """The full discovery rows the retired Python discovery door parsed."""
     return _spawn_overlay({"kind": "roles-discover", "root": str(root)})["rows"]
 
 

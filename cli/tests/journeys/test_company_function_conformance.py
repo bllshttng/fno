@@ -70,13 +70,11 @@ def _spawn_overlay(payload: dict) -> dict:
 
 
 def _discover_rows(root: Path) -> list[dict]:
-    """The full discovery rows (raw_definition, definition included) the
-    retired Python `discover_role_definitions` door parsed."""
+    """The full discovery rows the retired Python discovery door parsed."""
     return _spawn_overlay({"kind": "roles-discover", "root": str(root)})["rows"]
 
 
-# The defaults the retired pydantic models filled in when the pack YAML omits
-# a key; the resolution answer carries them either way.
+# Defaults the retired pydantic models filled when the pack YAML omits a key.
 _REVIEW_POLICY_DEFAULTS = {"required": False, "minimum_reviewers": 0, "required_review_kinds": []}
 _DELIVERY_POLICY_DEFAULTS = {"required_evidence": [], "require_all_deliverables": True}
 
@@ -323,9 +321,9 @@ def _assert_resolved_roles_match_every_declared_policy_axis(role_root: Path) -> 
                 },
                 "unchecked_definitions": [
                     {
-                        "layer": record["layer"], "source": record["source"], "status": record["status"],
-                        "role": record["role"], "has_definition": record["definition"] is not None,
-                        "error": record["error"],
+                        "layer": record["layer"], "source": record["source"],
+                        "status": record["status"], "role": record["role"],
+                        "has_definition": record["definition"] is not None, "error": record["error"],
                     }
                     for record in rows
                 ],
