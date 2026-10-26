@@ -900,7 +900,7 @@ mod tests {
         let root_b = home_b.path().join("vault/fno/plans");
         std::fs::create_dir_all(&root_a).unwrap();
         std::fs::create_dir_all(&root_b).unwrap();
-        let plan = root_a.join("20261021-x-9e22-plans-sync.md");
+        let plan = root_a.join("20261021-portable-plans-row.md");
         write_atomic(&plan, "v1").unwrap();
         // The writer's node row carries its absolute path; the carrier stores
         // the plans-root-relative form.
@@ -923,7 +923,7 @@ mod tests {
             .0
             .plan_path
             .clone();
-        assert_eq!(stored, "20261021-x-9e22-plans-sync.md");
+        assert_eq!(stored, "20261021-portable-plans-row.md");
         assert!(!stored.contains(home_a.path().to_str().unwrap()));
         // A reader whose home differs places the body under its own root,
         // even though its node row still names the writer's absolute path.
@@ -939,7 +939,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.pulled, vec!["x-1"]);
-        let placed = root_b.join("20261021-x-9e22-plans-sync.md");
+        let placed = root_b.join("20261021-portable-plans-row.md");
         assert_eq!(sha(&std::fs::read_to_string(&placed).unwrap()), sha("v1"));
         // The second pass is quiet even though B's node row still names the
         // writer's path: the placed file already holds the row's hash.
