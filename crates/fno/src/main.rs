@@ -354,7 +354,7 @@ enum Role {
     /// worker's --mcp-exec lane with the tail byte-verbatim. The bool is the
     /// root spelling, whose move notice prints before the same exec.
     AgentsMcpRoot(bool, Vec<OsString>),
-    /// The fleet family's claimed verb spellings (`fno do loops`, `fno
+    /// The fleet family's claimed command spellings (`fno do loops`, `fno
     /// agents yard`, `fno agents autonomy`, and their deprecated root
     /// forms): the ported fleet doors, exec'd with the tail byte-verbatim.
     /// The struct carries the door, the root-alias flag, and the tail.

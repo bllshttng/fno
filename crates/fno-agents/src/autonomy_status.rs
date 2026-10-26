@@ -1,7 +1,7 @@
 //! `fno agents autonomy status`: one table listing every path that can start
 //! a session without an operator asking - its trigger, its gate key, its
 //! resolved value, and the precedence rank that supplied it. The Rust owner,
-//! ported from the deleted `cli/src/fno/autonomy_cli.py` (x-cd91).
+//! ported from the deleted `cli/src/fno/autonomy_cli.py`.
 //!
 //! The deliverable an operator actually asked for: "what can spawn without
 //! me" answerable in one command. Each spawner is resolved THROUGH ITS REAL

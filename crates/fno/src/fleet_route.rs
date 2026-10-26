@@ -1,8 +1,8 @@
-//! The fleet family's verb spellings, claimed at the front door: `fno do
+//! The fleet family's command spellings, claimed at the front door: `fno do
 //! loops` (and the deprecated root `fno loops`), `fno agents yard` (root
 //! `fno yard`), `fno agents autonomy` (root `fno autonomy`). Each execs its
 //! `fno-agents` door through an existing action's argv-op lane with the tail
-//! byte-verbatim; nothing routes through the deleted Python folds (x-cd91).
+//! byte-verbatim; nothing routes through the deleted Python folds.
 //! The agents-scoped spellings arrive here already rewritten by the agents
 //! menu (`agents audit yard` -> `agents yard`, `agents admit autonomy` ->
 //! `agents autonomy`, `agents loop control` -> `agents loops`).
@@ -13,7 +13,7 @@
 use std::ffi::OsString;
 use std::process::Command;
 
-/// Which fleet verb the argv names, and whether it arrived on a deprecated
+/// Which fleet command the argv names, and whether it arrived on a deprecated
 /// root spelling (its move notice prints before the same exec).
 #[derive(Debug, PartialEq, Eq)]
 pub struct FleetClaim {
@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(claim.door, FleetDoor::Autonomy);
         let claim = classify(&oss(&["autonomy", "status"])).unwrap();
         assert!(claim.root_alias);
-        // Not ours: other verbs forward.
+        // Not ours: other commands forward.
         assert!(classify(&oss(&["agents", "top"])).is_none());
         assert!(classify(&oss(&["do", "loops-fake"])).is_none());
         assert!(classify(&oss(&["agents", "yards"])).is_none());

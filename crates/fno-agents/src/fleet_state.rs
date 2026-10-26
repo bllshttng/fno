@@ -1,7 +1,7 @@
 //! The fleet-sweep watermark: is the failover host alive, and where is each
 //! node in its fallback chain. The Rust owner of
 //! `~/.fno/state/fleet-sweep-state.json`, ported from the deleted
-//! `cli/src/fno/fleet_state.py` (x-cd91).
+//! `cli/src/fno/fleet_state.py`.
 //!
 //! One file, written as the fleet leg's last act on every daemon tick. A
 //! status line is not evidence: a freshness check against this file's mtime

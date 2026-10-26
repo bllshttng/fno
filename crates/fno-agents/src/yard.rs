@@ -1,6 +1,6 @@
 //! The yard identity fold: species, rarity, first-sighting for the fleet -
 //! the Rust owner behind `fno agents yard`, ported from the deleted
-//! `cli/src/fno/yard.py` (x-cd91).
+//! `cli/src/fno/yard.py`.
 //!
 //! Read-only over two files that already exist - the agent registry and the
 //! graph archive - and nothing else. The mux's yard overlay shells

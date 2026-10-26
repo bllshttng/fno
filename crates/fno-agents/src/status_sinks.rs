@@ -1,6 +1,6 @@
 //! The status-fanout target resolver behind `fno config status-sinks`:
 //! which projects the status-fanout supervisor should tick. The Rust owner,
-//! ported from the deleted half of `cli/src/fno/active_backlog.py` (x-cd91).
+//! ported from the deleted half of `cli/src/fno/active_backlog.py`.
 //!
 //! A project is a target when it has >=1 enabled `status_sinks` entry -
 //! independent of active_backlog drain enablement. Read-only and
