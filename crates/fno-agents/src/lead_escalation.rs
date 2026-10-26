@@ -17,7 +17,7 @@ const MAX_LISTED_IDS: usize = 20;
 
 const MARKER: &str = "lead-escalation";
 
-/// The `questions.route` decision (x-e1d2): who else learns of an escalated
+/// The `questions.route` decision: who else learns of an escalated
 /// question beyond the board row. `direct`, the unset default, keeps the
 /// question on the board alone - the crowned relay hop the user retired is
 /// the mail copy. `via_crown` is a team's opt-in to a triage crown. Anything
@@ -68,18 +68,11 @@ fn route_candidates(cwd: Option<&Path>, agents_home: Option<&Path>) -> Vec<PathB
 /// Tolerant scan: the first candidate that sets `questions.route` wins.
 fn route_from_configs(candidates: &[PathBuf]) -> Option<String> {
     for candidate in candidates {
-        let Ok(text) = std::fs::read_to_string(candidate) else {
+        let Some(table) = crate::finalize::load_config_toml(candidate) else {
             continue;
         };
-        let Ok(table) = text.parse::<toml::Table>() else {
-            continue;
-        };
-        if let Some(route) = table
-            .get("questions")
-            .and_then(|q| q.get("route"))
-            .and_then(|r| r.as_str())
-        {
-            return Some(route.to_string());
+        if let Some(route) = crate::finalize::toml_string_at(&table, &["questions", "route"]) {
+            return Some(route);
         }
     }
     None
@@ -483,7 +476,7 @@ mod tests {
         }
     }
 
-    // --- the questions.route decision (x-e1d2) ---
+    // --- the questions.route decision ---
 
     #[test]
     fn direct_route_skips_the_crown_mail_and_teaches_the_board() {

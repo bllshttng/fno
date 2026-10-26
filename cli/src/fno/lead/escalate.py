@@ -61,8 +61,8 @@ def escalate(stalled_ids: "list[str]", reason: str, root: Path, session_id: "str
 
     Returns ``(outcome, question_id, mail_crown, nudge)``; raises rather than
     failing quiet. ``mail_crown`` is the renderer's ``questions.route``
-    verdict (x-e1d2): False under direct, the default, so the caller skips
-    the presiding crown's mail copy. The board row still records.
+    verdict: False under direct, the default, so the caller skips the
+    presiding crown's mail copy. The board row still records.
     """
     from fno.agents.stale_escalate import dedupe_key, reconcile_channel
     from fno.harness_identity import canonical_handle

@@ -1583,12 +1583,12 @@ struct ObsidianBlock {
 }
 
 /// Parse a config.toml file into a table; None on a missing or unparseable file.
-fn load_config_toml(path: &Path) -> Option<toml::Table> {
+pub(crate) fn load_config_toml(path: &Path) -> Option<toml::Table> {
     fs::read_to_string(path).ok()?.parse::<toml::Table>().ok()
 }
 
 /// A dotted string value from a config.toml table (e.g. `["paths","handoffs_dir"]`).
-fn toml_string_at(t: &toml::Table, path: &[&str]) -> Option<String> {
+pub(crate) fn toml_string_at(t: &toml::Table, path: &[&str]) -> Option<String> {
     let mut cur = t.get(*path.first()?)?;
     for k in &path[1..] {
         cur = cur.as_table()?.get(*k)?;
