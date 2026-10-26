@@ -29,7 +29,7 @@ pub struct Resolved {
 fn parse_doc(path: &Path) -> Result<Map<String, Value>, ()> {
     let text = std::fs::read_to_string(path).map_err(|_| ())?;
     let value: Value = if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
-        serde_yaml::from_str(&text).map_err(|_| ())?
+        serde_yaml_ng::from_str(&text).map_err(|_| ())?
     } else {
         toml::from_str(&text).map_err(|_| ())?
     };
@@ -275,13 +275,15 @@ fn conductor_base() -> PathBuf {
 }
 
 fn conductor_canonical(merged: &Map<String, Value>) -> bool {
-    matches!(
-        merged
-            .get("worktree")
-            .and_then(Value::as_object)
-            .and_then(|wt| wt.get("use_conductor_canonical")),
-        Some(Value::Bool(true)) | Some(Value::String(s)) if s == "true"
-    )
+    let value = merged
+        .get("worktree")
+        .and_then(Value::as_object)
+        .and_then(|wt| wt.get("use_conductor_canonical"));
+    match value {
+        Some(Value::Bool(true)) => true,
+        Some(Value::String(s)) => s == "true",
+        _ => false,
+    }
 }
 
 fn match_project_entry(

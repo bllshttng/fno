@@ -162,7 +162,10 @@ fn continue_salvage_arm(
     salvage: &str,
     remote_salvage: &str,
     sal_fetch: Option<&std::process::Output>,
-    fetch: Option<&std::process::Output>,
+    // The deleted leg named a fetch failure in its fresh-cut receipt; no
+    // golden pins that note, so the arm keeps the handle but reads nothing
+    // from it yet.
+    _fetch: Option<&std::process::Output>,
 ) -> Option<Continuation> {
     let count = if sal_fetch.map(|o| o.status.success()).unwrap_or(false) {
         ahead_count(repo, base, remote_salvage)
@@ -297,7 +300,7 @@ fn ensure_step1(
     top: &Path,
     name: &str,
     branch: Option<&str>,
-    harness: Option<&str>,
+    _harness: Option<&str>,
     pol: &Resolved,
     out: &mut String,
     err: &mut String,
@@ -449,7 +452,7 @@ fn ensure_checkout_arm(
     err: &mut String,
 ) -> i32 {
     let co = git_out(wt, &["checkout", branch]);
-    let ok = co.map(|o| o.status.success()).unwrap_or(false);
+    let ok = co.as_ref().map(|o| o.status.success()).unwrap_or(false);
     if !ok {
         let detail = co
             .map(|o| {
@@ -581,7 +584,7 @@ fn create_fresh_arm(
     branch: Option<&str>,
     wt: &Path,
     br: &str,
-    base_note: &mut String,
+    _base_note: &mut String,
 ) -> Option<std::process::Output> {
     let base = base_ref(top).unwrap_or_else(|| "HEAD".to_string());
     let cont = if branch.is_none() {

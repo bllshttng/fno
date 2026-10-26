@@ -6,6 +6,7 @@
 use super::sorted_json;
 use chrono::Utc;
 use serde_json::{json, Value};
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 
 /// Append one started row to the workers JSONL under an exclusive lock.

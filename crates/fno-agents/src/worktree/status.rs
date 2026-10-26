@@ -29,7 +29,7 @@ fn registry_path() -> PathBuf {
             return resolve_lenient(Path::new(&home)).join("registry.json");
         }
     }
-    state_root().join("agents").join("registry.json")
+    super::state_root().join("agents").join("registry.json")
 }
 
 /// The porcelain listing via the shared parser.

@@ -4,7 +4,7 @@
 //! the machine-global journal. Characterized by the `overlap_record_*`,
 //! `overlap_report_*` and `fold_*` goldens.
 
-use super::{resolve_lenient, sorted_json};
+use super::resolve_lenient;
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -40,7 +40,10 @@ pub fn read_overlap_events(
             return Err(coverage);
         }
     };
-    let (events, mut coverage) = read_overlap_events_from(&text, missing);
+    let (events, mut coverage) = match read_overlap_events_from(&text, missing) {
+        Ok(pair) => pair,
+        Err(coverage) => return Err(coverage),
+    };
     coverage.insert(
         "path".to_string(),
         Value::String(journal.to_string_lossy().into_owned()),
@@ -102,8 +105,7 @@ pub fn fold_overlap_events(
             peer_count: data
                 .get("peer_session_ids")
                 .and_then(Value::as_array)
-                .map(|a| a.len() as i64)
-                .unwrap_or(0),
+                .map(|a| a.len() as i64),
             first_ts: None,
             latest_ts: ts,
         });
@@ -134,7 +136,7 @@ fn fold_window(
     now: DateTime<Utc>,
     cutoff: DateTime<Utc>,
 ) -> Result<Value, String> {
-    let mut in_window: Vec<&ObsSlot> = by_id
+    let in_window: Vec<&ObsSlot> = by_id
         .values()
         .filter(|o| {
             o.latest_ts
@@ -168,7 +170,7 @@ fn fold_window(
         }
     }
     fold_render(
-        distinct, worktrees, observers, first_ts, latest_ts, by_id, since_days, cutoff,
+        distinct, worktrees, observers, first_ts, latest_ts, by_id, since_days, now, cutoff,
     )
 }
 
@@ -181,6 +183,7 @@ fn fold_render(
     latest_ts: Option<DateTime<Utc>>,
     by_id: std::collections::HashMap<String, ObsSlot>,
     since_days: i64,
+    now: DateTime<Utc>,
     cutoff: DateTime<Utc>,
 ) -> Result<Value, String> {
     let in_window: Vec<(&ObsSlot, Option<DateTime<Utc>>)> = by_id
@@ -223,7 +226,7 @@ fn fold_render(
         "per_worktree": per_worktree,
         "recurrence_threshold": RECURRENCE_THRESHOLD,
         "window_days": since_days,
-        "recurrence_threshold_met": distinct >= RECURRENCE_THRESHOLD,
+        "recurrence_threshold_met": distinct >= RECURRENCE_THRESHOLD as i64,
         "observations": observations,
     }))
 }
@@ -329,7 +332,8 @@ fn effective_now() -> DateTime<Utc> {
 /// read 0/1, numeric strings parse, everything else is the coercion error
 /// the record reason carries verbatim.
 fn coerce_live_window(raw: Option<&Value>) -> Result<i64, String> {
-    let raw = raw.unwrap_or(&Value::Number(serde_json::Number::from(120)));
+    let fallback = Value::Number(serde_json::Number::from(120));
+    let raw = raw.unwrap_or(&fallback);
     match raw {
         Value::Number(n) => Ok(n.as_f64().map(|f| f as i64).unwrap_or(i64::MAX)),
         Value::Bool(b) => Ok(i64::from(*b)),
@@ -601,7 +605,9 @@ pub fn render_overlaps_text(report: &Value) -> String {
                         .unwrap_or(RECURRENCE_THRESHOLD as i64),
                 ));
             }
-            lines.push("  report: fno agents workspace worktree overlaps --since 28 --json");
+            lines.push(
+                "  report: fno agents workspace worktree overlaps --since 28 --json".to_string(),
+            );
         }
     }
     lines.join("\n")

@@ -125,35 +125,59 @@ pub(crate) fn git_bounded(dir: &Path, args: &[&str], secs: u64) -> Option<std::p
     run_bounded(cmd, secs)
 }
 
-/// Bound one child with a thread-side wait, like the Python legs' `timeout=`.
+/// Bound one child like the Python legs' `timeout=`: the child stays owned
+/// here so a timeout can kill it, worker threads drain the pipes so a full
+/// pipe cannot deadlock the wait, and the wait itself polls `try_wait` on a
+/// short tick until the deadline.
 pub(crate) fn run_bounded(
     mut cmd: std::process::Command,
     secs: u64,
 ) -> Option<std::process::Output> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let _ = tx.clone();
-    match cmd
+    let mut child = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-    {
-        Ok(mut child) => {
-            let handle = std::thread::spawn(move || {
-                let out = child.wait_with_output();
-                let _ = tx.send(());
-                out.ok()
-            });
-            match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
-                Ok(()) => handle.join().ok().flatten(),
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    None
-                }
+        .ok()?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    fn drain<R: std::io::Read + Send + 'static>(
+        pipe: Option<R>,
+    ) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
             }
-        }
-        Err(_) => None,
+            buf
+        })
     }
+    let out_handle = drain(stdout);
+    let err_handle = drain(stderr);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(_) => break None,
+        }
+    };
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
+    let out = out_handle.join().ok()?;
+    let err = err_handle.join().ok()?;
+    Some(std::process::Output {
+        status: status.unwrap_or_default(),
+        stdout: out,
+        stderr: err,
+    })
 }
 
 /// Print one canonical envelope piece: sorted-key compact JSON + newline, the

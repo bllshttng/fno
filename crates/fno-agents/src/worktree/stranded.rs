@@ -4,10 +4,7 @@
 //! acts. Characterized by the `stranded_classify_*`, `resolve_node_*`,
 //! `sweep_*` and `apply_*` goldens.
 
-use super::{
-    git_bounded, git_out, parse_porcelain_rows, resolve_lenient, sorted_json, state_root,
-    OWNERSHIP_LIVE_STATUSES,
-};
+use super::{git_bounded, git_out, sorted_json, OWNERSHIP_LIVE_STATUSES};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -317,7 +314,25 @@ fn sweep_over(
         let (unpushed, unpushed_ok) = wt_unpushed_count(&path);
         let remote = has_remote(branch.as_deref(), &path);
         let age = commit_age(&path);
-        let (node_id, node_entry) = resolve_node_id(&path, branch.as_deref(), &entries);
+        let Some((node_id, node_entry)) = resolve_node_id(&path, branch.as_deref(), &entries)
+        else {
+            let registry_status = join_map.get(&path).map(|(_, s)| s.clone());
+            let row = classify(
+                &path,
+                branch.as_deref(),
+                unpushed,
+                unpushed_ok,
+                None,
+                None,
+                graph_ok,
+                registry_status.as_deref(),
+                registry_ok,
+                &age,
+                remote,
+            );
+            rows.push(row);
+            continue;
+        };
         let registry_status = join_map.get(&path).map(|(_, s)| s.clone());
         let row = classify(
             &path,
