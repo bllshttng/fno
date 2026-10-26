@@ -2841,6 +2841,11 @@ pub fn locked_mutate_with_hook(
 
     // Slug assignment on EVERY persisted mutation.
     ensure_slugs(&mut entries);
+    // The join stamp lands before the status recompute: a write that moves a
+    // done child under a reopened epic must derive the epic's status from the
+    // late join, not the child's older created_at.
+    let now_iso = now_isoformat();
+    stamp_parent_edges(&raw, &mut entries, &now_iso);
     recompute_statuses_with_plan_rungs(&mut entries, input.plan_rungs.as_ref());
 
     // touched_at stamp: a curation-field change vs the pre-image. The
@@ -2849,8 +2854,6 @@ pub fn locked_mutate_with_hook(
     // export) would otherwise re-stamp every row missing a defaulted field.
     // Status stays the row's own: the pre-image carries the recomputed
     // status, not the readiness overlay the defaults pass applies.
-    let now_iso = now_isoformat();
-    stamp_parent_edges(&raw, &mut entries, &now_iso);
     let mut defaulted = entries.clone();
     apply_defaults(&mut defaulted, true);
     for (e, view) in entries.iter_mut().zip(defaulted.iter_mut()) {
@@ -3368,6 +3371,43 @@ mod tests {
         };
         locked_mutate(&graph, input, std::time::Duration::from_secs(5))
             .expect("an unrelated update on a stored leaky title must pass");
+    }
+
+    #[test]
+    fn a_whole_graph_reparent_under_a_reopened_epic_leaves_it_open() {
+        // The same publish moves an old done child under a reopened epic and
+        // derives the epic's status. The join stamp must land first, or the
+        // child's older created_at closes the epic inside the very write.
+        let root = tempfile::tempdir().unwrap();
+        let graph = root.path().join("graph.json");
+        let epic = json!({
+            "id": "ab-epic0001", "slug": "epic", "title": "Epic", "type": "feature",
+            "status": "idea", "priority": "p2", "created_at": "2025-01-01T00:00:00+00:00",
+            "reopened_at": "2026-01-01T00:00:00+00:00",
+        });
+        let mut kid = json!({
+            "id": "ab-kid00001", "slug": "kid", "title": "Kid", "type": "feature",
+            "status": "done", "priority": "p2", "created_at": "2025-06-01T00:00:00+00:00",
+            "completed_at": "2026-06-01T00:00:00+00:00", "completion_note": "shipped",
+        });
+        seed_rows(&graph, &[epic.clone(), kid.clone()]).unwrap();
+        kid["parent"] = json!("ab-epic0001");
+        let input = MutateInput {
+            entries: vec![epic, kid],
+            canonical_path: None,
+            base_version: crate::backlog::version(&graph).unwrap(),
+            plan_rungs: None,
+        };
+        let outcome = locked_mutate(&graph, input, std::time::Duration::from_secs(5)).unwrap();
+        let row = |id: &str| {
+            outcome
+                .entries
+                .iter()
+                .find(|e| entry_id(e) == Some(id))
+                .unwrap()
+        };
+        assert!(row("ab-kid00001")["parented_at"].is_string());
+        assert_eq!(row("ab-epic0001")["status"], "idea");
     }
 
     fn count_prefixed(dir: &Path, prefix: &str) -> usize {
