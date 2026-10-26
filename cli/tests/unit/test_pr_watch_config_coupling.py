@@ -42,7 +42,7 @@ def _stub_coupling(monkeypatch, activate_outcome="activated"):
 
 def test_enable_triggers_activation(tmp_home, monkeypatch):
     calls = _stub_coupling(monkeypatch)
-    from fno.config_cli import app
+    from fno.config.write_cli import app
 
     r = CliRunner().invoke(app, ["set", "config.pr_watch.enabled", "true"])
     assert r.exit_code == 0, r.output
@@ -52,7 +52,7 @@ def test_enable_triggers_activation(tmp_home, monkeypatch):
 
 def test_disable_triggers_unload(tmp_home, monkeypatch):
     calls = _stub_coupling(monkeypatch)
-    from fno.config_cli import app
+    from fno.config.write_cli import app
 
     r = CliRunner().invoke(app, ["set", "config.pr_watch.enabled", "false"])
     assert r.exit_code == 0, r.output
@@ -81,7 +81,7 @@ def _stub_grant_coupling(monkeypatch):
 
 def test_armed_dispatch_grant_activates_the_watcher(tmp_home, monkeypatch):
     calls = _stub_grant_coupling(monkeypatch)
-    from fno.config_cli import app
+    from fno.config.write_cli import app
 
     runner = CliRunner()
     r = runner.invoke(app, ["set", "config.auto_merge.enabled", "true"])
@@ -99,7 +99,7 @@ def test_panic_switch_blocks_grant_activation(tmp_home, monkeypatch):
     """Subordinate to autonomy.enabled: with the panic switch off, arming the
     grant must not bring an autonomous merger to life behind its back."""
     calls = _stub_grant_coupling(monkeypatch)
-    from fno.config_cli import app
+    from fno.config.write_cli import app
 
     runner = CliRunner()
     runner.invoke(app, ["set", "config.autonomy.enabled", "false"])
@@ -112,7 +112,7 @@ def test_panic_switch_blocks_grant_activation(tmp_home, monkeypatch):
 def test_activation_failure_is_loud_and_keeps_config(tmp_home, monkeypatch):
     """AC1-ERR: a launchctl failure warns loudly; the enable still stuck."""
     _stub_coupling(monkeypatch, activate_outcome="load-failed")
-    from fno.config_cli import app
+    from fno.config.write_cli import app
 
     r = CliRunner().invoke(app, ["set", "config.pr_watch.enabled", "true"])
     assert r.exit_code == 0, r.output

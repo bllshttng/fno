@@ -92,7 +92,7 @@ def test_the_wrong_section_pair_names_the_key_the_operator_meant(tmp_path: Path)
 def test_cross_model_enabled_with_no_dispatchable_peer_is_named(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fno import config_readback as doctor_mod
+    from fno.config import _readback as doctor_mod
 
     f = _write(tmp_path / "config.toml", "schema_version = 1\n[review.cross_model]\nenabled = true\n")
     monkeypatch.setenv("FNO_CONFIG", str(f))
@@ -233,7 +233,7 @@ def test_honored_legacy_spelling_is_not_unknown(tmp_path: Path, monkeypatch: pyt
     load-time warning that fires on a working key is cried wolf. A key the
     repo has retired (the deleted mail_to leaf, per retired-config-leaves.txt)
     is the opposite: dead means dead, and the walker must say so."""
-    from fno.config_readback import check_unknown_keys
+    from fno.config._readback import check_unknown_keys
 
     honored = _write(tmp_path / "honored.toml", 'schema_version = 1\n[recovery]\nretire_grace_s = 60\n')
     monkeypatch.setenv("FNO_CONFIG", str(honored))

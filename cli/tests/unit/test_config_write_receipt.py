@@ -6,7 +6,7 @@ import json
 from typer.testing import CliRunner
 
 import fno.events as events
-from fno.config_cli import app
+from fno.config.write_cli import app
 from fno.config.writer import (
     _emit_write_receipts,
     set_config_value,

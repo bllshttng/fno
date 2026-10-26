@@ -68,7 +68,7 @@ defer_dispatchh = true
     # The unknown-key leg moved to the model-driven walker: check_accounts kept
     # a hand-copied frozenset of accounts field names, and nothing forced it to
     # match SettingsModel. The finding now names the file too.
-    from fno.config_readback import check_unknown_keys
+    from fno.config._readback import check_unknown_keys
 
     problems = check_unknown_keys()
     assert any("accounts.quota.defer_dispatchh" in p and str(cfg) in p for p in problems), problems

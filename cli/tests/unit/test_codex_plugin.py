@@ -1241,10 +1241,10 @@ def test_public_cli_reports_verified_release_and_restart_posture(
 ) -> None:
     # The `setup codex-plugin` door retired; the public door is
     # `fno config plugin install codex`.
-    from fno.plugin_install_cli import plugin_app
+    from fno.setup.plugin_install_cli import plugin_app
 
     monkeypatch.setattr(
-        "fno.plugin_install_cli.subprocess.run",
+        "fno.setup.plugin_install_cli.subprocess.run",
         lambda argv, **_kw: _FakeStageRun(argv),
     )
     monkeypatch.setattr(
@@ -1259,13 +1259,13 @@ def test_public_cli_reports_verified_release_and_restart_posture(
 def test_public_cli_exits_nonzero_without_success_on_stage_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from fno.plugin_install_cli import plugin_app
+    from fno.setup.plugin_install_cli import plugin_app
 
     def fail(**_kwargs: object) -> ConvergenceResult:
         raise CodexPluginError("plugin-add", "network unavailable")
 
     monkeypatch.setattr(
-        "fno.plugin_install_cli.subprocess.run",
+        "fno.setup.plugin_install_cli.subprocess.run",
         lambda argv, **_kw: _FakeStageRun(argv),
     )
     monkeypatch.setattr("fno.setup.codex_plugin.converge", fail)
@@ -1400,7 +1400,7 @@ def test_door_forwards_extra_args_to_fno_agents(monkeypatch) -> None:
     """The plugin-install door forwards unknown flags to the Rust command
     byte-exact: the opencode arm's --yes/--dry-run live in Rust, and the
     Typer door must accept them without declaring them."""
-    from fno.plugin_install_cli import plugin_app
+    from fno.setup.plugin_install_cli import plugin_app
 
     class _Proc:
         returncode = 0
@@ -1413,7 +1413,7 @@ def test_door_forwards_extra_args_to_fno_agents(monkeypatch) -> None:
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(
-        "fno.plugin_install_cli._binary", lambda: Path("/bin/true")
+        "fno.setup.plugin_install_cli._binary", lambda: Path("/bin/true")
     )
     result = CliRunner().invoke(
         plugin_app, ["install", "opencode", "--dry-run", "--yes"]
