@@ -51,11 +51,11 @@ fn sandbox_argv(sandbox: &str, approval: &str, roots: Vec<String>) -> Vec<String
 }
 
 /// The roots the probe grants: the same grant the worker gets - state dirs
-/// (fno's own writable set) plus the repo's git common dir, the identical
+/// (fno's own writable set) plus the repo's git write roots, the identical
 /// resolver the exec lane grants with.
 fn probe_roots(cwd: &Path, state_dirs: &[String]) -> Vec<String> {
     let mut roots = state_dirs.to_vec();
-    if let Some(git_dir) = crate::provider::git_common_dir(cwd) {
+    for git_dir in crate::provider::git_write_roots(cwd) {
         if !roots.iter().any(|root| root == &git_dir) {
             roots.push(git_dir);
         }

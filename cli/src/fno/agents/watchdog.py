@@ -268,10 +268,8 @@ def _recovery_transcript_readback(candidate: Any) -> tuple[Optional[dict], Optio
 def apply_recoverable(
     scan: Any,
     *,
-    scope_cwd: Path,
     registry_path: Optional[Path] = None,
     adopt_fn: Optional[Callable] = None,
-    confine_fn: Optional[Callable] = None,
     load_registry_fn: Optional[Callable] = None,
     update_registry_fn: Optional[Callable] = None,
     should_apply: Optional[Callable[[], bool]] = None,
@@ -289,7 +287,6 @@ def apply_recoverable(
     from fno.agents.registry import load_registry, update_registry
 
     adopt = adopt_fn or store_fallback.adopt_store_hit
-    confine = confine_fn or store_fallback.confine_store_hits
     load = load_registry_fn or load_registry
     update = update_registry_fn or update_registry
     results: list[dict] = []
@@ -319,14 +316,6 @@ def apply_recoverable(
         try:
             from fno import paths
 
-            hits = confine(
-                session_id,
-                [store_fallback.StoreHit("codex", session_id, candidate.cwd)],
-                scope_cwd=str(scope_cwd),
-                cross_project=False,
-            )
-            if len(hits) != 1:
-                raise ValueError("project confinement did not return one verified hit")
             # The follow-up path rides the adoption write itself: patching it
             # in a second update afterward left a window where a failed patch
             # refused the batch while the row - missing its resume path -
@@ -335,7 +324,7 @@ def apply_recoverable(
                 paths.state_dir() / "agents" / session_id / "output.jsonl"
             )
             adopt(
-                hits[0],
+                store_fallback.StoreHit("codex", session_id, candidate.cwd),
                 registry_path=registry_path,
                 token=session_id,
                 log_path=str(recovery_log_path),

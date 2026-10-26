@@ -2,14 +2,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
-
-from fno.cli import app
 
 from tests.unit._front_dev import front_dev_binary
 
 
-runner = CliRunner()
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -41,6 +37,13 @@ def test_unmeasured_refusal_names_only_remedies_the_commands_support():
     for option in ("--read", "--question-id"):
         assert option in helped.stdout, f"fno inbox decide must expose {option}"
 
-    clear = runner.invoke(app, ["inbox", "outstanding", "clear", "--help"])
-    assert clear.exit_code == 0, clear.output
-    assert "--read" not in clear.output, "fno inbox outstanding clear does not take --read"
+    # The clear surface answers through the native front door now; the
+    # Python mount is gone with the port, so the probe rides the same
+    # binary the user does.
+    clear = subprocess.run(
+        [str(front), "inbox", "outstanding", "clear", "--help"],
+        capture_output=True,
+        text=True,
+    )
+    assert clear.returncode == 0, clear.stderr
+    assert "--read" not in clear.stdout, "fno inbox outstanding clear does not take --read"

@@ -1,0 +1,3 @@
+declined by founder
+  authority   config.approvals.authorized_principals
+  effect      terminal - a declined request never executes

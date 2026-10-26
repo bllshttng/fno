@@ -24,12 +24,26 @@ def test_project_scope_compiles_to_the_project_union():
 
 @pytest.fixture
 def _no_projects(tmp_path, monkeypatch):
-    import fno.projects.resolve as proj_resolve
+    """No projects configured: the native resolve door refuses every name.
+    Non-project spawn-overlay shapes exec the real binary (the ladder door
+    rides the same env pin)."""
+    from fno.rust_binary import find_dev_binary, resolve_binary
 
-    cfg = tmp_path / "config.toml"
-    cfg.write_text("[work.workspaces.ws1]\nprojects = []\n", encoding="utf-8")
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", cfg)
-    proj_resolve._clear_cache()
+    real = find_dev_binary() or resolve_binary()
+    fallback = f'exec "{real}" "$@"\n' if real else "exit 1\n"
+    stub = tmp_path / "agents-stub"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = "project" ]; then\n'
+        '  if [ "$3" = "map" ]; then\n'
+        "    echo '{}'; exit 0\n"
+        "  fi\n"
+        "  exit 1\n"
+        "fi\n" + fallback,
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(stub))
 
 
 def test_an_epic_set_compiles_without_a_second_graph_read(_no_projects, monkeypatch):
@@ -104,37 +118,3 @@ def test_drain_refuses_graph_scope_reads_under_an_external_tracker(
 
     assert result.exit_code == 1, result.output
     assert "unavailable under an external tracker backend" in result.output
-
-
-# --- the human board renderer ------------------------------------------------
-
-
-def _queue(**overrides):
-    q = {
-        "name": "undispatched",
-        "source": "fno backlog undispatched --json",
-        "status": "ok",
-        "error": "",
-        "count": 4,
-        "actionable": True,
-        "note": "one worker per node",
-        "verb": "/fno:target",
-    }
-    q.update(overrides)
-    return q
-
-
-def test_render_names_an_over_budget_queue_not_a_count(capsys):
-    from fno.lead.cli import _render
-
-    q = _queue(
-        status="over_budget",
-        error="fno backlog undispatched --json: killed at its 4.6s slice of the board budget; the source did not fail",
-        rows=[],
-    )
-    board = {"actionable": 0, "warnings": [], "queues": [q]}
-    _render(board, 25)
-    out = capsys.readouterr().out
-    assert "NOT READ" in out
-    assert "killed at its 4.6s slice" in out
-    assert "None" not in out

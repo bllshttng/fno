@@ -7,7 +7,9 @@ use super::*;
 
 /// Cancel sentinel present (mtime >= created_at) -> Interrupted, and the
 /// fired sentinel is consumed: a cancel terminates one run, not every later
-/// stop of a session that recovers.
+/// stop of a session that recovers. The gh here refuses every read as a
+/// spent budget and logs each call: the cancel must be honored before any
+/// PR read, or a budget hold keeps a cancelled run blocking forever.
 #[test]
 fn cancel_sentinel_interrupted() {
     let tmp = TempDir::new().unwrap();
@@ -28,6 +30,15 @@ fn cancel_sentinel_interrupted() {
     fs::write(&sentinel_path, "").unwrap(); // mtime = now, after created_at
 
     let mock = MockBins::green();
+    let gh_log = cwd.join("gh-calls.log");
+    let refusing_gh = make_script(
+        cwd,
+        "gh",
+        &format!(
+            "echo \"$*\" >> '{}'\necho 'budget_refused: API rate limit exceeded' >&2\nexit 1",
+            gh_log.display()
+        ),
+    );
 
     let (code, d) = fire(&[
         "loop-check",
@@ -39,7 +50,7 @@ fn cancel_sentinel_interrupted() {
         cwd.to_str().unwrap(),
         "--now",
         "2026-06-05T01:00:00Z",
-        &format!("--gh-bin={}", mock.gh.display()),
+        &format!("--gh-bin={}", refusing_gh.display()),
         &format!("--git-bin={}", mock.git.display()),
     ]);
 
@@ -49,6 +60,13 @@ fn cancel_sentinel_interrupted() {
     assert!(
         !sentinel_path.exists(),
         "a fired sentinel must be consumed, not left to re-fire on every later stop"
+    );
+    let calls = fs::read_to_string(&gh_log).unwrap_or_default();
+    assert!(
+        !calls
+            .lines()
+            .any(|l| l.starts_with("pr ") || l.starts_with("api ")),
+        "the cancel must be honored before any gh read, got: {calls}"
     );
 }
 

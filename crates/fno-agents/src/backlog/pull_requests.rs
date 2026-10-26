@@ -72,31 +72,31 @@ pub(crate) fn migrate_add_extras(connection: &Connection) -> Result<(), String> 
     Ok(())
 }
 
-/// Write one node's PR rows: an upsert per list position that leaves an
-/// unchanged row untouched, then a delete of the positions past the list's
-/// end. The caller owns the transaction; a save touches only this node's
-/// rows.
+/// Write one node's PR rows at explicit seq positions, replacing the node's
+/// whole row set: seq 0 is the primary slot and stays EMPTY when the row
+/// carries no primary, so a demoted extra can never sit in the slot a
+/// primary-reading derivation (`nodes::recompute_status`) would count. The
+/// caller owns the transaction; a save touches only this node's rows.
 pub fn save(
     connection: &Connection,
     node_id: &str,
-    pull_requests: &[PullRequest],
+    pull_requests: &[(i64, PullRequest)],
 ) -> Result<(), String> {
-    for (seq, pr) in pull_requests.iter().enumerate() {
+    connection
+        .execute(
+            "DELETE FROM pull_requests WHERE node_id = ?1",
+            params![node_id],
+        )
+        .map_err(|error| error.to_string())?;
+    for (seq, pr) in pull_requests {
         let extras = serde_json::to_string(&pr.extras).map_err(|error| error.to_string())?;
         connection
             .execute(
                 "INSERT INTO pull_requests (node_id, seq, number, url, merge_status, note, extras)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(node_id, seq) DO UPDATE SET number = excluded.number,
-                     url = excluded.url, merge_status = excluded.merge_status,
-                     note = excluded.note, extras = excluded.extras
-                 WHERE (pull_requests.number, pull_requests.url, pull_requests.merge_status,
-                        pull_requests.note, pull_requests.extras)
-                   IS NOT (excluded.number, excluded.url, excluded.merge_status,
-                           excluded.note, excluded.extras)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     node_id,
-                    seq as i64,
+                    seq,
                     pr.number,
                     pr.url,
                     pr.merge_status,
@@ -106,12 +106,6 @@ pub fn save(
             )
             .map_err(|error| error.to_string())?;
     }
-    connection
-        .execute(
-            "DELETE FROM pull_requests WHERE node_id = ?1 AND seq >= ?2",
-            params![node_id, pull_requests.len() as i64],
-        )
-        .map_err(|error| error.to_string())?;
     Ok(())
 }
 

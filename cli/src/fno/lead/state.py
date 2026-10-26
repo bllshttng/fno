@@ -62,57 +62,6 @@ def lead_manifest_path(scope: str, *, state_root: Optional[Path] = None) -> Path
     return Path(root) / "leads" / f"{scope}.md"
 
 
-def resolve_lead_manifest_path(
-    harness_session_id: str,
-    harness: Optional[str],
-    *,
-    state_root: Optional[Path] = None,
-    registry=None,
-) -> tuple[Optional[Path], str]:
-    """This live session's promoted manifest, and why there is none.
-
-    The row, not file presence, proves authority; any unreadable or terminal
-    reading returns None. The second element names WHICH reading, because
-    seven branches used to answer with one silence.
-    """
-    if not harness_session_id:
-        return None, "no harness session id was given"
-    try:
-        from fno.agents.registry import TERMINAL_STATUSES, load_registry
-        from fno.agents.whoami import _find_by_session
-
-        rows = load_registry() if registry is None else registry
-        row = _find_by_session(rows, harness_session_id, harness or None)
-    except Exception as exc:  # noqa: BLE001 - an unproved role has no authority
-        return None, f"the agent registry could not be read: {exc}"
-    if row is None:
-        return None, (
-            f"no registry row names session {harness_session_id}"
-            + (f" under harness {harness}" if harness else "")
-        )
-    status = getattr(row, "status", None)
-    if status in TERMINAL_STATUSES:
-        return None, f"the registry row for {harness_session_id} is {status}, a terminal state"
-    scope = getattr(row, "role_scope", None)
-    if not isinstance(scope, str) or not scope.strip():
-        return None, (
-            f"the registry row for {harness_session_id} carries no role_scope: "
-            "the row is unstamped, so no role proves this session's authority"
-        )
-    try:
-        # The read keys on the role row's cwd, the same key the writer arms under.
-        root = state_root or _owner_state_root(getattr(row, "cwd", None))
-        path = lead_manifest_path(scope, state_root=root)
-    except ValueError as exc:
-        return None, str(exc)
-    if not path.is_file():
-        reason = f"role scope {scope} is stamped but no manifest exists at {path}."
-        if state_root is not None:
-            reason += " Manifests live under the space dir; omit --state-root to take it."
-        return None, reason
-    return path, ""
-
-
 def arm_lead_manifest(
     scope: str,
     harness_session_id: str,

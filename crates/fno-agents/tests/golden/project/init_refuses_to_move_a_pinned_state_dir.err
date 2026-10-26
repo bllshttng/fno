@@ -1,0 +1,4 @@
+refusing: <ROOT>/.fno/config.toml already sets
+  state_dir = '~/.fno/elsewhere'
+and this would change it to '~/.fno/projects/other'. Nothing was written.
+Edit that key yourself if the move is what you want.

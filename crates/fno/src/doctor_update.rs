@@ -2134,17 +2134,7 @@ fn has_shipped_pyc(td: &Path) -> bool {
 /// marker reads this run's rev) or is under way, so it JOINS that run and
 /// exits with its result. It never starts a second install.
 fn acquire_update_claim(rev: Option<&str>) -> Result<(), i32> {
-    let holder = format!("fno-update-pid{}", std::process::id());
-    let args: Vec<String> = [
-        "claim".into(),
-        "acquire".into(),
-        UPDATE_CLAIM_KEY.into(),
-        "--holder".into(),
-        holder,
-        "--reason".into(),
-        "machine-global install guard (tool env + cargo bins)".into(),
-    ]
-    .to_vec();
+    let args = update_claim_acquire_args(std::process::id());
     match run_bounded(&fno_agents_bin(), &args, Duration::from_secs(60), None) {
         Ok((0, _, _)) => Ok(()),
         Ok((1, out, _err)) => {
@@ -2177,6 +2167,29 @@ fn acquire_update_claim(rev: Option<&str>) -> Result<(), i32> {
             Err(1)
         }
     }
+}
+
+/// The acquire argv for the update claim held by process `pid`. The claim's
+/// liveness pid is the update itself, stamped `holder-process`: left unset,
+/// acquire anchors it to the calling harness session, and a killed or
+/// finished update then held the claim for as long as that session lived.
+pub(crate) fn update_claim_acquire_args(pid: u32) -> Vec<String> {
+    [
+        "claim",
+        "acquire",
+        UPDATE_CLAIM_KEY,
+        "--holder",
+        &format!("fno-update-pid{pid}"),
+        "--pid",
+        &pid.to_string(),
+        "--pid-provenance",
+        "holder-process",
+        "--reason",
+        "machine-global install guard (tool env + cargo bins)",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 /// The pid in an update claim holder (`fno-update-pid<N>`), or None for any

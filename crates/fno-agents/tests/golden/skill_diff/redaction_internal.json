@@ -1,0 +1,11 @@
+{
+ "expected": [
+  "internal/",
+  "~/.fno",
+  "/.fno/"
+ ],
+ "input": {
+  "project_names": [],
+  "text": "cites internal/fno/plan.md and ~/.fno/graph.json and /.fno/ state"
+ }
+}
