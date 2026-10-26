@@ -607,7 +607,10 @@ fn quarantine_cache(home: &Path, marketplace: &str) -> Res<Option<Quarantine>> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
-    let quarantine = owned_dir(home).join(format!(".{marketplace}.{}.{nanos}", std::process::id()));
+    // 32 lowercase hex digits: the shape reclaim's codex_cache_quarantines
+    // lane sweeps, so a quarantine a crash leaves behind is not kept forever.
+    let token = nanos ^ (u128::from(std::process::id()) << 96);
+    let quarantine = owned_dir(home).join(format!(".{marketplace}.{token:032x}"));
     fs::rename(&cache, &quarantine).map_err(|e| ConvergeError::new(STAGE, e.to_string()))?;
     Ok(Some(Quarantine {
         original: cache,

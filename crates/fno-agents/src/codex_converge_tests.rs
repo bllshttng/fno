@@ -369,6 +369,24 @@ fn a_failed_rollback_is_persisted_and_named_first() {
         (Some("error"), Some("rollback-failure"))
     );
     assert_eq!(verdict["remedy"], remedy("release"));
+    // The stranded quarantine carries the 32-hex suffix reclaim sweeps.
+    let stranded: Vec<String> = fs::read_dir(owned_dir(&fake.live))
+        .unwrap()
+        .flatten()
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()?
+                .strip_prefix(".fno.")
+                .map(str::to_string)
+        })
+        .collect();
+    assert_eq!(stranded.len(), 1, "{stranded:?}");
+    assert!(
+        stranded[0].len() == 32
+            && stranded[0]
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    );
 
     // The failed rollback left no plugin. The next converge clears the
     // receipt and installs the release channel.
