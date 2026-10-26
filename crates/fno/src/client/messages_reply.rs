@@ -301,7 +301,7 @@ pub(super) async fn keys(
 
 async fn journal_reply(to: &str, sid: &str, msg: &str, body: &str) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
-    let mut child = tokio::process::Command::new("fno-agents")
+    let mut child = tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())
         .args([
             "mail-threads",
             "journal-reply",
