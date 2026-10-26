@@ -102,7 +102,6 @@ paths
 phase kill-check
 plan
 pr-watch
-research
 resume
 route
 scoreboard
@@ -112,7 +111,6 @@ status-fanout tick
 stub-manifest
 target
 test
-think
 uninstall
 update
 version

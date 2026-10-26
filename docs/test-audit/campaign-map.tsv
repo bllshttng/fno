@@ -289,9 +289,7 @@ K2	cli/tests/unit/test_spawn_defaults.py	py	14
 K2	cli/tests/unit/test_spawn_headroom.py	py	21
 K2	cli/tests/unit/test_spawn_phase.py	py	5
 K2	cli/tests/unit/test_spawn_sandbox_settings.py	py	7
-K2	cli/tests/unit/test_spawn_think.py	py	103
 K2	cli/tests/unit/test_spawn_worker_axis.py	py	26
-K2	cli/tests/unit/test_think_dispatch_cli.py	py	14
 K2	cli/tests/unit/test_thread_identity_from_spawn_record.py	py	22
 K2	crates/fno-agents/src/agy_launch.rs	rs	6
 K2	crates/fno-agents/src/bounded_spawn.rs	rs	5
@@ -1199,9 +1197,6 @@ K7	cli/tests/unit/test_plan_schema.py	py	17
 K7	cli/tests/unit/test_product_qualification_manifest.py	py	12
 K7	cli/tests/unit/test_product_qualification_report.py	py	2
 K7	cli/tests/unit/test_provenance_resolver.py	py	23
-K7	cli/tests/unit/test_research_cli.py	py	7
-K7	cli/tests/unit/test_research_core.py	py	26
-K7	cli/tests/unit/test_research_deliverable.py	py	17
 K7	cli/tests/unit/test_research_grade.py	py	10
 K7	cli/tests/unit/test_resolve_executor_emit.py	py	5
 K7	cli/tests/unit/test_target_cli.py	py	73
@@ -1211,8 +1206,6 @@ K7	cli/tests/unit/test_target_start_denominator_flag.py	py	1
 K7	cli/tests/unit/test_target_start_receipt.py	py	3
 K7	cli/tests/unit/test_term_skill_links.py	py	1
 K7	cli/tests/unit/test_think_closure_probe.py	py	10
-K7	cli/tests/unit/test_think_inspect.py	py	18
-K7	cli/tests/unit/test_think_inspect_decisions.py	py	8
 K7	cli/tests/unit/test_validate_plan_consolidation.py	py	30
 K7	cli/tests/unit/test_validate_plan_decisions_acknowledged.py	py	14
 K7	cli/tests/unit/test_validate_plan_project_warning.py	py	2
@@ -1674,7 +1667,6 @@ K10	cli/tests/unit/test_context_audit.py	py	20
 K10	cli/tests/unit/test_context_nudge_prescribed_commands.py	py	2
 K10	cli/tests/unit/test_context_probe.py	py	5
 K10	cli/tests/unit/test_db_schema_grounding.py	py	19
-K10	cli/tests/unit/test_decisive_fields.py	py	3
 K10	cli/tests/unit/test_demotion_wrappers.py	py	11
 K10	cli/tests/unit/test_denominator_ratio.py	py	6
 K10	cli/tests/unit/test_descendants.py	py	9

@@ -87,7 +87,8 @@ COMMAND_MOVES: dict[str, Move] = {
         permanent_leaves=frozenset({"status", "merge", "rebase"}),
     ),
     "pr-watch": Move(kind="deprecated", to="do pr watch"),
-    "research": Move(kind="deprecated", to="do research"),
+    # Served natively now, like retro: the old spelling fails loud with the new one.
+    "research": Move(kind="leaf-alias", to="do research"),
     # restart stays a permanent alias (2026-09-30 operator ruling): it is the
     # muscle-memory spelling, so it forwards silently, no move notice.
     "restart": Move(kind="alias", to="agents restart"),
@@ -106,7 +107,7 @@ COMMAND_MOVES: dict[str, Move] = {
     "skill-diff": Move(kind="deprecated", to="doctor skill-diff"),
     "target": Move(kind="deprecated", to="do target"),
     "test": Move(kind="deprecated", to="doctor test"),
-    "think": Move(kind="deprecated", to="do think"),
+    "think": Move(kind="leaf-alias", to="do think"),
     "workspace": Move(kind="deprecated", to="agents workspace"),
     "worktree": Move(kind="deprecated", to="agents workspace worktree"),
     "yard": Move(kind="deprecated", to="agents yard"),
