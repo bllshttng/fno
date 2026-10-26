@@ -357,7 +357,6 @@ crates/fno/src/setup_autowire_tests.rs
 cli/src/fno/target_cli.py
 cli/src/fno/test_dispatch_target.py
 cli/src/fno/wake/detect.py
-cli/src/fno/worker/review.py
 crates/fno-agents/src/claude_adopt.rs
 crates/fno-agents/src/claude_ask.rs
 crates/fno-agents/src/claude_config_tmp.rs
