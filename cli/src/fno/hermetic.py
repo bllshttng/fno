@@ -279,7 +279,6 @@ _RUNNER_PASSTHROUGH = (
     "FNO_AGENTS_WORKER",
     "FNO_BIN",  # the event store client pins the checkout's fno front door
     "FNO_AGENTS_FRONT",  # .github/actions/smoke-setup/action.yml
-    "FNO_REAL_CODEX_PLUGIN_TEST",  # .github/workflows/cli-ci.yml
     "FNO_RUST_FRONT",  # .github/workflows/cli-ci.yml, via $GITHUB_ENV
     # The smoke workflow sets this on the pytest step so each matrix leg keeps
     # its own collected test slice instead of silently running the full suite.

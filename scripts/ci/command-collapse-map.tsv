@@ -69,7 +69,6 @@ agents mail triage	T1	agents mail triage	8
 agents mail unread	T1	agents mail unread	16
 agents mail show	T1	agents mail show	2
 agents mail withdraw	T1	agents mail withdraw	2
-agents mcp send	T1	agents mcp send	10
 agents name	T1	agents name	5
 agents needs	KEEP	agents needs	11	ruled KEEP: fno-agents needs is coupled to needs_overlay
 agents orphans	T1	agents orphans	10
@@ -96,7 +95,6 @@ agents attest	T1	agents attest	0
 agents sandbox-probe	T1	agents sandbox-probe	0
 agents rm	KEEP	agents rm	56	deliberate readability slack for a high-traffic distinct operation
 agents roles ls	T1	agents roles ls	1
-agents roles	T1	agents roles	43
 agents session-start-bytes	T1	agents session-start-bytes	0
 agents spawn	KEEP	agents spawn	256	deliberate readability slack for a high-traffic distinct operation
 agents spawn-guard	T1	agents spawn-guard	5
@@ -385,7 +383,6 @@ mail triage	T1	mail triage	8
 mail unread	T1	mail unread	16
 mail show	T1	mail show	2
 mail withdraw	T1	mail withdraw	2
-mcp send	KEEP	mcp send	10	single-leaf group
 notify	KEEP	notify	18	single-leaf group
 observer replay	T1	observer replay	1
 observer sweep	T1	observer sweep	4
@@ -415,7 +412,6 @@ research	KEEP	research	18	single-leaf group
 resume receipt show	T1	resume receipt show	1
 resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2
-roles ls	T1	roles ls	1
 route env	T1	route env	4
 route init	T1	route init	0
 route inventory	T1	route inventory	0

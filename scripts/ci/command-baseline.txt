@@ -95,7 +95,6 @@ loops
 loops resume-all
 mail
 mail send !--origin !--provider
-mcp send
 mux
 notify
 observer
@@ -105,7 +104,6 @@ plan
 pr-watch
 research
 resume
-roles
 route
 scoreboard
 state

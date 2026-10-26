@@ -1022,11 +1022,7 @@ retry could hold it.
 Four close paths read a reopen; the deliberate command (``cmd_done``, with its
 own ``--force`` plus ``--reason`` ladder) does not:
 
-- ``_cascade_close_parents`` and ``_sweep_close_done_epics`` key on the
-  CHILDREN's closes (``_reopen_outranks_child_closes``). That guard still
-  reads child ``completed_at`` alone: a superseded child carries no
-  ``completed_at``, so it adds no close evidence there, and
-  ``children_all_closed`` does not change it.
+- ``_cascade_close_parents`` and ``_sweep_close_done_epics`` key on the CHILDREN's closes (``_reopen_holds_epic``). A superseded child carries no ``completed_at``, so it adds no close evidence there, and ``children_all_closed`` does not change it. Only a child that joined the epic at or before the reopen can expire the hold. An epic is usually reopened because its owed leaves are not filed yet. A leaf that joins after the reopen is one of those leaves, so its close says nothing about the rest. One epic auto-closed twice this way while its other leaves were still unfiled. The join stamp is ``parented_at``. Both write seams set it under the store lock: ``locked_mutate_with_hook`` and ``mutate_single_row``. A write stamps every row it gives a parent or moves. ``created_at`` cannot serve. A creator stamps it before the lock, so a create racing a reopen reads as earlier. A reparent never changes it. A row written before the stamp existed falls back to ``created_at``. A child with an unreadable stamp counts as after. The Rust twin is ``reopen_holds_epic`` in ``crates/fno-agents/src/graph_store.rs``. The epic stays open until a human closes it. An older child that closes after the reopen also ends the hold.
 - reconcile's PR-merged close leg keys on the MERGE
   (``_reopen_outranks_merge``): it reads no children, so the child-keyed
   guard never reached it.

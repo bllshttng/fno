@@ -95,7 +95,6 @@ COMMAND_MOVES: dict[str, Move] = {
     # longer mounts retro, so the old spelling fails loud with the new one.
     "retro": Move(kind="leaf-alias", to="backlog retro"),
     "review": Move(kind="deprecated", to="do review"),
-    "roles": Move(kind="deprecated", to="agents roles"),
     "route": Move(kind="deprecated", to="config route"),
     "scoreboard": Move(kind="deprecated", to="whoami scoreboard"),
     "setup": Move(kind="deprecated", to="config setup"),

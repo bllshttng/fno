@@ -44,6 +44,21 @@ def test_codex_successor_uses_bounded_dispatch_without_claude_route(
         )
 
     monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_bounded)
+    # An account-bearing pane rides the Python lane, so the dispatch-account
+    # transport runs here; the pane test stubs its answer instead of the
+    # store it would read.
+    from fno.agents import spawn_overlay_client
+
+    def answer(payload, **_kw):
+        if payload.get("kind") == "dispatch-account":
+            return {
+                "env": {},
+                "credential_source": "record:work",
+                "credential_env_keys": [],
+            }
+        return {"exit": 0}
+
+    monkeypatch.setattr(spawn_overlay_client, "spawn_overlay_call", answer)
     monkeypatch.setattr(
         provider_loader,
         "load_providers",
