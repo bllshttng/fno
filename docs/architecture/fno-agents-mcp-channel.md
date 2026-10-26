@@ -25,10 +25,10 @@ Parent: [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.m
                                                        +---------------+
 ```
 
-Both the per-user sidecar daemon and the per-session channel-server child ship in `cli/src/fno/mcp/`, but they have **different lifecycle owners**:
+Both the per-user sidecar daemon and the per-session channel-server child ship in `crates/fno-agents/src/mcp/`, but they have **different lifecycle owners**:
 
-- **Sidecar (`sidecar.py`)** is fno-owned. Lazy-start / lazy-exit. The bind path resolves to `$XDG_RUNTIME_DIR/fno/sidecar.sock` if set, else `paths.state_dir() / "sidecar.sock"`. Single-leader via socket-bind exclusivity. Idle-exits after 30 minutes with zero registered channels.
-- **Channel server (`channel_server.py`)** is CC-owned. CC reads the footnote plugin's `.mcp.json` at session start and spawns the child as a stdio subprocess. fno has no `start`/`stop` for it.
+- **Sidecar (`mcp/sidecar.rs`)** is fno-owned. Lazy-start / lazy-exit. The bind path resolves to `$XDG_RUNTIME_DIR/fno/sidecar.sock` if set, else the state dir's `sidecar.sock` (`$FNO_SIDECAR_SOCKET` overrides both). Single-leader via socket-bind exclusivity. Idle-exits after 30 minutes with zero registered channels.
+- **Channel server (`mcp/server.rs`)** is CC-owned. CC spawns the child as a stdio subprocess from an MCP config entry naming the fno-agents-worker binary (`fno-agents-worker --mcp-exec serve --session-id <id> --channel-name <name>`). fno has no `start`/`stop` for it. The plugin tree itself carries no `.mcp.json` today: an operator wiring the channel adds that config entry by hand.
 
 The sidecar exists because CC spawns one channel server per session and they don't share pipes. Without a per-user rendezvous, external `fno agents mail ask` pokes from sibling processes cannot reach the right channel server. The sidecar holds an in-memory `session_id -> writer` map and routes pokes to the registered child.
 
@@ -55,38 +55,24 @@ The `backend` field on `agent_followup_done` (`"mcp"`, `"socket"`, or `"socket_a
 ## Modules and their boundaries
 
 ```
-cli/src/fno/mcp/
-├── __init__.py        # exports: ENVELOPE_VERSION, MCP_CHANNEL_METHOD,
-│                      # META_KEY_RE, MCPChannelEnvelopeError,
-│                      # build_channel_notification, validate_envelope
-├── channel.py         # WIRE FORMAT — single source of truth.
-│                      # build + validate + drift-diff. Pinned by
-│                      # cli/tests/fixtures/mcp_channel_envelope.json
-│                      # and self-tested by validate-mcp-channel.sh.
-├── channel_server.py  # stdio MCP child. Declares experimental
+crates/fno-agents/src/mcp/
+├── mod.rs             # the worker's --mcp-exec door: send | status |
+│                      # serve | sidecar sub-ops
+├── channel.rs         # WIRE FORMAT - single source of truth.
+│                      # build + validate + drift-diff, pinned by the
+│                      # characterization tests in this module.
+├── server.rs          # stdio MCP child. Declares experimental
 │                      # claude/channel capability. Forwards inbound
 │                      # pokes (received from sidecar) as
 │                      # notifications/claude/channel on stdout.
-├── sidecar.py         # Unix-socket daemon. Single-leader. Holds
-│                      # session_id -> channel-server-writer map.
-│                      # stale-socket recovery via
-│                      # _prepare_socket_path + retry-once around
-│                      # start_unix_server.
-└── client.py          # Thin SOCK_STREAM client fno CLI uses to talk
-                       # to the sidecar. Lazy-starts the sidecar
-                       # daemon if missing.
-```
-
-Provider + dispatch surface:
-
-```
-cli/src/fno/agents/
-├── harnesses/claude.py    # +MCPChannelSendError, +ask_followup_via_mcp,
-│                          #  +mcp_channel_reachable (tri-state).
-├── dispatch.py            # +route-selection in _followup helper
-│                          # +reconcile MCP probe slot
-├── registry.py            # AgentEntry gains optional mcp_channel_id field.
-└── events.py              # MCP channel KIND_* constants block.
+├── sidecar.rs         # Unix-socket daemon. Single-leader. Holds
+│                      # session_id -> channel-writer map.
+│                      # stale-socket recovery bounded to two
+│                      # attempts around the bind.
+└── client.rs          # sync Unix-socket client. Lazy-starts the
+                       # sidecar (`--mcp-exec sidecar`) if missing.
+                       # The daemon's push_to_channel delivery leg
+                       # answers through it in-process.
 ```
 
 ## Wire format pin
@@ -104,9 +90,9 @@ The `notifications/claude/channel` envelope shape comes from Claude Code's chann
 }
 ```
 
-`meta` keys must match `^[A-Za-z0-9_]+$` because CC silently drops non-identifier keys (hyphens, dots, spaces). The builder (`build_channel_notification`) refuses to emit them so the operator sees a loud `MCPChannelEnvelopeError` instead of a silently-stripped attribute.
+`meta` keys must match `^[A-Za-z0-9_]+$` because CC silently drops non-identifier keys (hyphens, dots, spaces). The builder (`build_channel_notification`) refuses to emit them so the operator sees a loud build error instead of a silently-stripped attribute.
 
-The smoke script (`cli/scripts/smoke/validate-mcp-channel.sh`, gated behind `MCP_SMOKE=1`) compares the builder's output to the pinned fixture so a CC research-preview API drift FAILS LOUDLY in dev before reaching production callers.
+The pin lives in the characterization tests in `crates/fno-agents/src/mcp/channel.rs` (goldens captured from the Python leg before deletion): build shape, every validate reason string, and the drift diff. A CC research-preview API drift FAILS LOUDLY in CI before reaching production callers. The old `MCP_SMOKE=1` smoke script and its fixture died with the Python leg.
 
 ## mcp_channel_id
 
@@ -114,7 +100,7 @@ The smoke script (`cli/scripts/smoke/validate-mcp-channel.sh`, gated behind `MCP
 
 ## Operational notes
 
-- Sidecar logs land under `$XDG_STATE_HOME/fno/sidecar.log` (default `~/.local/state/fno/sidecar.log`).
+- Sidecar logs land under `$XDG_STATE_HOME/fno/sidecar.log` (default `~/.local/state/fno/sidecar.log`). The lazy-start appends there.
 - The sidecar state file (`sidecar-state.json`) is flushed on SIGTERM but not on SIGKILL. Channel servers re-register on next session boot; the registry's `mcp_channel_id` is the persistent source of truth.
 - macOS AF_UNIX path limit is 104 chars. Long `$HOME` values are rare in practice, but the operator-visible error (`AF_UNIX path too long`) is transparent.
-- The smoke script is gated behind `MCP_SMOKE=1` so CI without the footnote CLI venv skips it. Run it manually after bumping the channels-reference doc or upgrading Claude Code.
+- The send command answers natively: `fno agents mcp send --session-id <id>` (envelope on stdin, exit 0/1/2) execs the worker's `--mcp-exec send` lane. The reachability probe rides `--mcp-exec status`. Run the sidecar by hand with `fno-agents-worker --mcp-exec sidecar`.

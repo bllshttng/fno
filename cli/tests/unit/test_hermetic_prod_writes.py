@@ -13,10 +13,10 @@ The cause was a private path builder: ``spawn_think._events_path`` composed
 ``.fno/events.jsonl`` is a symlink to the canonical journal, so a worker
 running the suite inside a worktree reached the operator's file.
 
-These tests pin the fix at both altitudes: the caller that had the bug, and the
-shared seam that stops the next hand-built path instead of letting it land in
-production. The notification pair covers the same class on the other
-surface a test can reach the operator through.
+The caller that had the bug is now Rust, whose events path reads the journal
+pin first. These tests pin the shared seam that stops the next hand-built path
+instead of letting it land in production. The notification pair covers the
+same class on the other surface a test can reach the operator through.
 """
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from pathlib import Path
 import pytest
 
 from fno.events import HermeticEscapeError, _build, append_event
-from fno.provenance import spawn_think as st
 
 _DATA = {
     "node_id": "x-2222aaaa",
@@ -39,24 +38,6 @@ _DATA = {
 
 def _event() -> dict:
     return _build("think_offered", "backlog", dict(_DATA))
-
-
-# ---------------------------------------------------------------------------
-# The caller that had the bug
-# ---------------------------------------------------------------------------
-
-
-def test_unpathed_events_path_ignores_the_process_cwd(monkeypatch, tmp_path):
-    """The specific regression: chdir must not steer the journal."""
-    from fno.paths import project_events_json
-
-    pinned = tmp_path / "sandbox" / "events.jsonl"
-    monkeypatch.setenv("FNO_EVENTS_PATH", str(pinned))
-    decoy = tmp_path / "decoy"
-    decoy.mkdir()
-    monkeypatch.chdir(decoy)
-    assert st._events_path(None) != decoy / ".fno" / "events.jsonl"
-    assert st._events_path(None) == project_events_json()
 
 
 # ---------------------------------------------------------------------------

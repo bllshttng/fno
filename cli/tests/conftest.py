@@ -490,15 +490,10 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
     """
     # Real-provider smoke tests (@pytest.mark.smoke, run nightly by
     # provider-smoke.yml) intentionally exec the real binary; never guard
-    # those (codex P2 review). Per-PR CI excludes `-m smoke`. Same for the
-    # real-codex boundary job, whose FNO_REAL_CODEX_PLUGIN_TEST=1 env is the
-    # test file's own explicit real-provider opt-in. The launchctl check
-    # below applies regardless: a smoke test may exec a real provider but
-    # still must not touch the operator's launchd domain.
-    guard_providers = not (
-        request.node.get_closest_marker("smoke")
-        or os.environ.get("FNO_REAL_CODEX_PLUGIN_TEST") == "1"
-    )
+    # those (codex P2 review). Per-PR CI excludes `-m smoke`. The launchctl
+    # check below applies regardless: a smoke test may exec a real provider
+    # but still must not touch the operator's launchd domain.
+    guard_providers = not request.node.get_closest_marker("smoke")
 
     import shutil
     import subprocess

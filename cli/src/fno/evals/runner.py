@@ -23,7 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from fno.agents import account_env as _account_env
+from fno.adapters.providers import loader as _loader
+from fno.agents import spawn_overlay_client as _overlay
 from fno.agents.naming import mint_or_none
 from fno.evals import history as _history
 from fno.evals.bank import TaskSpec
@@ -140,12 +141,12 @@ def _lane_account(lane: Optional[Any]) -> tuple[Optional[str], str, str]:
     if not account:
         return None, "", ""
     try:
-        if account not in _account_env.load_providers().by_id:
+        if account not in _loader.load_providers().by_id:
             if str(getattr(lane, "route", "") or "").strip():
                 print(f"lane account {account!r} is not registered; the routed lane rides its own route credential (the seat-spawn form)", file=sys.stderr)
                 return None, "", f"lane account {account!r} dropped; routed lane rides its route credential"
             return None, f"lane account {account!r} is not registered and the lane names no route; refusing the spawn (fail closed)", ""
-        _account_env.resolve_account_overlay(account)
+        _overlay.account_overlay(account)
     except Exception as exc:  # noqa: BLE001 - any resolver refusal fails the spawn closed, never re-seats it
         return None, f"lane account {account!r} refused: {exc}", ""
     return account, "", ""
@@ -230,7 +231,7 @@ def _forget_trial_transcripts(workdir: Path, lane: Optional[Any]) -> None:
     roots = {_claude_projects_dir(os.environ)}
     if account := getattr(lane, "account", None):
         try:
-            roots.add(_claude_projects_dir(_account_env.resolve_account_overlay(account).env))
+            roots.add(_claude_projects_dir(_overlay.account_overlay(account)["env"]))
         except Exception:  # noqa: BLE001 - an unresolvable account wrote nothing there
             pass
     for root in roots:
