@@ -1171,8 +1171,12 @@ mod tests {
     fn build_entry_minimal_run_reads_done_and_unresolved_sessions() {
         let _env = EntryEnv::clean();
         let dir = TempDir::new().unwrap();
-        let state = minimal_state();
-        let entry = build_entry(dir.path(), &state, "transcript-uuid", None, None);
+        // The truly minimal run: no manifest identity and no transcript id,
+        // so sessions degrades to the unresolved marker instead of listing
+        // the empties (the Python leg stores [transcript_uuid, target_sid]
+        // when they are present, and only the all-empty case reads
+        // unresolved).
+        let entry = build_entry(dir.path(), &Map::new(), "", None, None);
         assert_eq!(entry["type"], "execution");
         assert_eq!(entry["status"], "done");
         assert_eq!(entry["title"], "Untitled");
