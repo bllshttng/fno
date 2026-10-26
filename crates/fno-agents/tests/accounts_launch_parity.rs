@@ -265,15 +265,19 @@ fn the_spawn_seam_applies_refuses_and_clears() {
     let stamp_left = std::env::var("FNO_LAUNCH_ACCOUNT").ok();
 
     // A routed account spawn is the route arm's to bounce, env untouched: a
-    // vendor may read its key from a var the scrub would strip.
+    // vendor may read its key from a var the scrub would strip. The stamp
+    // still dies at entry; the bounce re-execs Python, whose cmd_spawn
+    // re-stamps after it resolves.
+    std::env::set_var("FNO_LAUNCH_ACCOUNT", "parent-acct");
     std::env::set_var("ANTHROPIC_AUTH_TOKEN", "route-key");
     let routed = json!({ "account": "alt", "route": "zai,glm-5.2", "cwd": cwd });
     let routed_code = launch::seam_exit(&routed, "claude");
     let route_key = std::env::var("ANTHROPIC_AUTH_TOKEN").ok();
+    let routed_stamp = std::env::var("FNO_LAUNCH_ACCOUNT").ok();
     restore(saved);
     assert_eq!(
-        (routed_code, route_key.as_deref()),
-        (None, Some("route-key"))
+        (routed_code, route_key.as_deref(), routed_stamp.as_deref()),
+        (None, Some("route-key"), None)
     );
 
     assert_eq!(code, None);

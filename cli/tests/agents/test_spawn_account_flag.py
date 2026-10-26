@@ -82,6 +82,12 @@ def test_proven_credential_carrier_overrides_record_derivation(monkeypatch, runn
     assert received["account_env"] == {
         "CLAUDE_CONFIG_DIR": "/proved/account", "AUTH_PROVEN": "1",
     }
+    # The Python lane stamps the row's launch account the way the Rust
+    # client's arm does: the worker's env carries the id for the row mint.
+    import os as _os
+
+    assert _os.environ.get("FNO_LAUNCH_ACCOUNT") == "makers"
+    del _os.environ["FNO_LAUNCH_ACCOUNT"]
     # The carrier travels to the Rust owner verbatim, against the spawn's harness.
     assert asked[0]["kind"] == "dispatch-account"
     assert (asked[0]["account"], asked[0]["harness"], asked[0]["carrier"]) == (

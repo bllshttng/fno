@@ -225,6 +225,10 @@ pub fn seam(
 /// carrier is claimed whatever the flags say, so it never reaches a child.
 /// A routed spawn is left whole to the route arm.
 pub fn seam_exit(params: &Value, provider: &str) -> Option<i32> {
+    // The stamp dies at entry, before anything: an inherited id is the
+    // PARENT's account, and every path below either re-stamps it (Apply) or
+    // hands the spawn to Python, whose cmd_spawn re-stamps after it resolves.
+    std::env::remove_var(crate::state::LAUNCH_ACCOUNT_ENV_KEY);
     // A route with either account flag composes in the Python CLI, which the
     // route arm re-execs. Scrubbing here first would strip a vendor key the
     // route reads from a scrubbed var (ANTHROPIC_AUTH_TOKEN as api_key_env).
@@ -246,12 +250,7 @@ pub fn seam_exit(params: &Value, provider: &str) -> Option<i32> {
         &cwd,
         &src,
     ) {
-        Seam::None => {
-            // An inherited stamp names the PARENT's account; the row would
-            // record it for a worker that launched on none.
-            std::env::remove_var(crate::state::LAUNCH_ACCOUNT_ENV_KEY);
-            None
-        }
+        Seam::None => None,
         Seam::Refuse(line) => {
             eprintln!("{line}");
             Some(2)
