@@ -572,7 +572,7 @@ fn check_dispatch_hold_run(args: &[String]) -> i32 {
                 eprintln!(
                     "fno do target check-dispatch-hold: dispatch-hold-invalid: \
                      backlog graph is unreadable; refusing to assume unheld. \
-                     Nothing was claimed. Fix or restore graph.json and retry."
+                     Nothing was claimed. Fix or restore the backlog graph and retry."
                 );
                 return REVIEW_GATE_REFUSED;
             }

@@ -21,6 +21,7 @@ use std::io::IsTerminal;
 
 // The client-side `ask` provider hooks live beside the entrypoint for the
 // file budget; `use` keeps every call site below unchanged.
+#[path = "asks/client_asks.rs"]
 mod client_asks;
 use client_asks::{
     maybe_run_agy_ask, maybe_run_claude_ask, maybe_run_codex_ask, maybe_run_gemini_ask,
