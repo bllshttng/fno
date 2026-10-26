@@ -134,14 +134,15 @@ fn runs_at_sha(cwd: &Path, sha: &str) -> Result<Vec<Value>, String> {
         .unwrap_or_default())
 }
 
-/// The verdict at one fold: (verdict, green, checks rows). Per workflow the
-/// newest run decides while in flight; the newest completed run decides once
-/// it lands, through the shared bucket vocabulary that never reads an
-/// unknown conclusion green. No rows reads pending, never green: a sha with
-/// no CI must never answer a green watcher.
-pub(crate) fn verdict_from_folds(
-    folds: &[(&str, &Value, Option<&Value>)],
-) -> (String, bool, Vec<Value>) {
+/// The verdict at one sha's run page: (verdict, green, checks rows), from
+/// one fold per workflow name. Per workflow the newest run decides while in
+/// flight; the newest completed run decides once it lands, through the
+/// shared bucket vocabulary that never reads an unknown conclusion green.
+/// No rows reads pending, never green: a sha with no CI must never answer a
+/// green watcher.
+pub(crate) fn verdict_from_runs(runs: &[Value]) -> (String, bool, Vec<Value>) {
+    let mut folds: Vec<(&str, &Value, Option<&Value>)> = Vec::new();
+    crate::main_ci::fold_page(&mut folds, runs.iter());
     let mut red = false;
     let mut pending = false;
     let mut checks = Vec::new();
@@ -185,13 +186,6 @@ pub(crate) fn verdict_from_folds(
         "green"
     };
     (verdict.to_string(), verdict == "green", checks)
-}
-
-/// Fold one page of runs per workflow name and read the verdict off it.
-pub(crate) fn verdict_from_runs(runs: &[Value]) -> (String, bool, Vec<Value>) {
-    let mut folds: Vec<(&str, &Value, Option<&Value>)> = Vec::new();
-    crate::main_ci::fold_page(&mut folds, runs.iter());
-    verdict_from_folds(&folds)
 }
 
 /// One dispatch of `do ci status [tail...]`, with `args = argv[2..]`.
