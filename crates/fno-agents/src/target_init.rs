@@ -892,7 +892,7 @@ fn resolve_plan_pointer_stage(
     args: &Args,
     node: Option<&serde_json::Value>,
     cwd: &Path,
-    fetch: &dyn Fn(&str) -> Result<Option<String>, String>,
+    fetch: &dyn Fn(&str, &str) -> Result<Option<String>, String>,
 ) -> Result<Option<String>, Fail> {
     if let Some(explicit) = &args.plan_path {
         if !explicit.is_empty() {
@@ -919,7 +919,7 @@ fn resolve_plan_pointer_stage(
         .trim()
         .to_string();
     let node_id = node_str(Some(node), "id");
-    let carried = || match fetch(&node_id) {
+    let carried = || match fetch(&node_id, &bound_plan) {
         Ok(path) => (path.and_then(|p| resolve_plan_pointer(&p, cwd)), None),
         Err(why) => (None, Some(why)),
     };
@@ -1080,7 +1080,7 @@ mod plan_carry_miss_tests {
         let dir = tempfile::tempdir().unwrap();
         let plan = dir.path().join("p.md");
         let plan_s = plan.to_str().unwrap().to_string();
-        let fetch_writes = |_: &str| -> Result<Option<String>, String> {
+        let fetch_writes = |_: &str, _: &str| -> Result<Option<String>, String> {
             std::fs::write(&plan, "---\nstatus: ready\n---\n").unwrap();
             Ok(Some(plan_s.clone()))
         };
@@ -1096,7 +1096,7 @@ mod plan_carry_miss_tests {
         // No copy anywhere: the refusal says so.
         std::fs::remove_file(&plan).unwrap();
         let node = serde_json::json!({"id": "x-1", "plan_path": plan_s});
-        let none = |_: &str| -> Result<Option<String>, String> {
+        let none = |_: &str, _: &str| -> Result<Option<String>, String> {
             Err("no host pushed a plan for it".to_string())
         };
         let Err(fail) = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &none) else {
