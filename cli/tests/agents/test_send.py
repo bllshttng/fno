@@ -1006,33 +1006,31 @@ def test_cmd_send_real_bus_lock_timeout_has_no_success_receipt(
 ) -> None:
     """A locked bus door must not mint a success receipt.
 
-    The lock lives in the Rust door now (announce.rs pins the wording, the
-    send guide pins the receipt), so the contention is injected at the door
-    call in that same shape: the stage demotes to the durable floor, whose
-    own failure is the exit-12 refusal under test.
+    `mail send` execs the native leaf, so only a real lock reaches it: the
+    test holds the door's own sidecar flock and shortens the door's wait.
     """
     use_tmpdir(monkeypatch, tmp_path)
     _register_claude_peer()
 
-    from fno import rust_binary
     from fno.agents import dispatch as dispatch_mod
     from fno.mail.cli import mail_app
     from tests.fixtures.bus_rows import bus_log_path
 
     monkeypatch.setattr(dispatch_mod, "_deliver_live", lambda *_args, **_kwargs: False)
-
-    def _locked(*_args, **_kwargs):
-        raise rust_binary.CommandUnavailable(
-            "fno-agents chats bus-append exited 1: bus lock timeout after 5s"
-            " at messages.jsonl.lock"
-        )
-
-    monkeypatch.setattr(rust_binary, "chats_command", _locked)
-    result = runner.invoke(mail_app, ["send", "red", "hello", "--from-name", "lead"])
+    monkeypatch.setenv("FNO_BUS_LOCK_TIMEOUT_SECS", "0.05")
+    lock_path = bus_log_path().with_name("messages.jsonl.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    holder = open(lock_path, "w")
+    fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+    try:
+        result = runner.invoke(mail_app, ["send", "red", "hello", "--from-name", "lead"])
+    finally:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+        holder.close()
 
     assert result.exit_code == 12
     output = result.stdout + (result.stderr or "")
-    assert "bus lock timeout after 5s" in output
+    assert "bus lock timeout" in output
     assert "no durable envelope was written" in output
     assert "delivered" not in result.stdout
     assert "queued (durable)" not in result.stdout
