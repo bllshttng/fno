@@ -497,3 +497,21 @@ pub fn run(args: &[String]) -> i32 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_manifest_reads_as_missing() {
+        // The Python leg pinned this (a partial manifest refuses rather than
+        // crashes); the parity replay can only preset whole manifests, so the
+        // malformed branch pins here.
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join(".fno");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("stub-manifest-x-1.json"), "{bad").unwrap();
+        let verdict = reconcile_verdict("x-1", root.path().to_str().unwrap(), false);
+        assert_eq!(verdict["outcome"], "manifest-missing");
+    }
+}

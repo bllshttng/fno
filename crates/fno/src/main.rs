@@ -231,7 +231,7 @@ enum Role {
     /// `fno do target|state|phase <command>` and `fno do pr
     /// stub-manifest <op>`: the target-family commands. The door names the op
     /// argv under the fno-agents binary; the tail rides byte-verbatim.
-    TargetFamily(&'static [&'static str], Vec<OsString>),
+    TargetFamily(&'static [&'static str], Vec<OsString>, Option<&'static str>),
     /// `fno do research <topic> ...`: exec'd through the sibling fno-agents
     /// `research` door. No Python leg remains.
     DoResearch(Vec<OsString>),
@@ -723,13 +723,26 @@ fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
 /// `-J`/`--json` before the group peels and re-enters the tail only for the
 /// doors that parse it (status, denominator-ratio); the rest read the same
 /// accept-and-ignore the global Python flag kept.
-fn classify_target_family(args: &[OsString]) -> Option<(&'static [&'static str], Vec<OsString>)> {
+fn classify_target_family(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
     let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
     let args = if root_json { &args[1..] } else { args };
-    if args.len() < 3 || args[0].to_str()? != "do" || args[1].to_str()? != "target" {
+    // The grouped form and the deprecated bare spelling both claim; the bare
+    // one announces its move once, the way the retired Python shim did.
+    let leaf_at = if args.len() >= 3 && args[0].to_str()? == "do" && args[1].to_str()? == "target" {
+        2
+    } else if args.len() >= 2 && args[0].to_str()? == "target" {
+        1
+    } else {
         return None;
-    }
-    let door: &'static [&'static str] = match args[2].to_str()? {
+    };
+    let notice = if leaf_at == 1 {
+        Some("fno target is now fno do target")
+    } else {
+        None
+    };
+    let door: &'static [&'static str] = match args[leaf_at].to_str()? {
         "status" => &["target-status"],
         "resolve-model" => &["target-gates", "resolve-model"],
         "request-self-review" => &["target-gates", "request-self-review"],
@@ -744,46 +757,76 @@ fn classify_target_family(args: &[OsString]) -> Option<(&'static [&'static str],
     // A root `-J`/`--json` re-enters the tail only for the doors that parse
     // it: status (the argv mode) and denominator-ratio. The rest read the
     // same accept-and-ignore the global Python flag kept, so the flag drops.
-    if root_json && matches!(args[2].to_str()?, "status" | "denominator-ratio") {
-        let mut tail: Vec<OsString> = Vec::with_capacity(args.len() - 2);
+    if root_json && matches!(args[leaf_at].to_str()?, "status" | "denominator-ratio") {
+        let mut tail: Vec<OsString> = Vec::with_capacity(args.len() - leaf_at - 1);
         tail.push(OsString::from("--json"));
-        tail.extend(args[3..].iter().cloned());
-        return Some((door, tail));
+        tail.extend(args[leaf_at + 1..].iter().cloned());
+        return Some((door, tail, notice));
     }
-    Some((door, args[3..].to_vec()))
+    Some((door, args[leaf_at + 1..].to_vec(), notice))
 }
 
-/// `fno do state <anything>`: the whole group claims; the tail
-/// rides to the state-cli door. A root `-J`/`--json` peels and re-enters
-/// the tail, which every command parses.
-fn classify_state_family(args: &[OsString]) -> Option<(&'static [&'static str], Vec<OsString>)> {
+/// `fno do state <anything>` and the deprecated bare `fno state <anything>`:
+/// the whole group claims; the tail rides to the state-cli door. The bare
+/// spelling announces its move once, the way the retired Python shim did. A
+/// root `-J`/`--json` peels and re-enters the tail, which every command parses.
+fn classify_state_family(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
     let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
     let args = if root_json { &args[1..] } else { args };
-    if args.first().and_then(|a| a.to_str()) != Some("do")
-        || args.get(1).and_then(|a| a.to_str()) != Some("state")
+    let alias = args.first().and_then(|a| a.to_str()) == Some("state");
+    if !alias
+        && (args.first().and_then(|a| a.to_str()) != Some("do")
+            || args.get(1).and_then(|a| a.to_str()) != Some("state"))
     {
         return None;
     }
-    let mut tail: Vec<OsString> = args[2..].to_vec();
+    let mut tail: Vec<OsString> = if alias {
+        args[1..].to_vec()
+    } else {
+        args[2..].to_vec()
+    };
     if root_json {
         tail.insert(0, OsString::from("--json"));
     }
-    Some((&["state-cli"], tail))
+    let notice = if alias {
+        Some("fno state is now fno do state")
+    } else {
+        None
+    };
+    Some((&["state-cli"], tail, notice))
 }
 
-/// `fno do phase <anything>`: the whole group claims (kill-check is
-/// the group's one command, and it strips its own name from the tail). A root
-/// `-J`/`--json` peels and drops: kill-check parses no JSON flag, and the
-/// global Python flag it accepted was inert.
-fn classify_phase_family(args: &[OsString]) -> Option<(&'static [&'static str], Vec<OsString>)> {
+/// `fno do phase <anything>` and the deprecated bare `fno phase <anything>`:
+/// the whole group claims (kill-check is the group's one command, and it
+/// strips its own name from the tail), so the bare spelling's leaf sits one
+/// word earlier and its tail starts there. A root `-J`/`--json` peels and
+/// drops: kill-check parses no JSON flag, and the global Python flag it
+/// accepted was inert.
+fn classify_phase_family(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
     let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
     let args = if root_json { &args[1..] } else { args };
-    if args.first().and_then(|a| a.to_str()) != Some("do")
-        || args.get(1).and_then(|a| a.to_str()) != Some("phase")
+    let alias = args.first().and_then(|a| a.to_str()) == Some("phase");
+    if !alias
+        && (args.first().and_then(|a| a.to_str()) != Some("do")
+            || args.get(1).and_then(|a| a.to_str()) != Some("phase"))
     {
         return None;
     }
-    Some((&["kill-check"], args[2..].to_vec()))
+    let tail = if alias {
+        args[1..].to_vec()
+    } else {
+        args[2..].to_vec()
+    };
+    let notice = if alias {
+        Some("fno phase is now fno do phase")
+    } else {
+        None
+    };
+    Some((&["kill-check"], tail, notice))
 }
 
 /// `fno do pr stub-manifest <op> ...` and the bare `fno pr stub-manifest
@@ -794,7 +837,7 @@ fn classify_phase_family(args: &[OsString]) -> Option<(&'static [&'static str], 
 /// default and ignored the global flag).
 fn classify_pr_stub_manifest(
     args: &[OsString],
-) -> Option<(&'static [&'static str], Vec<OsString>)> {
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
     let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
     let args = if root_json { &args[1..] } else { args };
     let first = args.first()?.to_str()?;
@@ -803,7 +846,7 @@ fn classify_pr_stub_manifest(
         ("pr", "stub-manifest", _) => &args[2..],
         _ => return None,
     };
-    Some((&["stub-manifest"], tail.to_vec()))
+    Some((&["stub-manifest"], tail.to_vec(), None))
 }
 
 /// The deprecated bare `fno stub-manifest <op> ...` spelling: the
@@ -811,13 +854,13 @@ fn classify_pr_stub_manifest(
 /// Move row dies with the wheel, so the front door re-claims the spelling.
 fn classify_bare_stub_manifest(
     args: &[OsString],
-) -> Option<(&'static [&'static str], Vec<OsString>)> {
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
     let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
     let args = if root_json { &args[1..] } else { args };
     if args.first().and_then(|a| a.to_str()) != Some("stub-manifest") {
         return None;
     }
-    Some((&["stub-manifest"], args[1..].to_vec()))
+    Some((&["stub-manifest"], args[1..].to_vec(), None))
 }
 
 /// `fno do research <tail>`: the whole leaf is native.
@@ -1071,13 +1114,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     // The target-family claims: the nine `do target` commands, the
     // whole `do state` and `do phase` groups, and `do pr stub-manifest`,
     // before the do-pr lexical claim whose handback narrows to watch only.
-    if let Some((door, rest)) = classify_target_family(args)
+    if let Some((door, rest, notice)) = classify_target_family(args)
         .or_else(|| classify_state_family(args))
         .or_else(|| classify_phase_family(args))
         .or_else(|| classify_pr_stub_manifest(args))
         .or_else(|| classify_bare_stub_manifest(args))
     {
-        return Role::TargetFamily(door, rest);
+        return Role::TargetFamily(door, rest, notice);
     }
     if let Some(rest) = classify_do_research(args) {
         return Role::DoResearch(rest);
@@ -1663,7 +1706,10 @@ fn main() {
             &["target-blast-check"],
             &rest,
         )),
-        Role::TargetFamily(door, rest) => {
+        Role::TargetFamily(door, rest, notice) => {
+            if let Some(line) = notice {
+                eprintln!("{line}");
+            }
             std::process::exit(fno_agents_exec("fno do target family", door, &rest))
         }
         Role::DoResearch(rest) => {
@@ -1925,7 +1971,34 @@ mod tests {
         );
         assert!(matches!(
             decide_role(&os(&["--json", "do", "state", "show"]), false),
-            Role::TargetFamily(_, _)
+            Role::TargetFamily(_, _, _)
+        ));
+        // The bare family spellings the retired Python shims announced: each
+        // re-claims with its one-line move notice, then rides the same native
+        // doors. The bare leaf sits one word earlier, so the tail follows it.
+        assert_eq!(
+            decide_role(&os(&["target", "status"]), false),
+            Role::TargetFamily(
+                &["target-status"],
+                os(&[]),
+                Some("fno target is now fno do target")
+            )
+        );
+        assert!(matches!(
+            decide_role(&os(&["state", "show", "--path", "/x"]), false),
+            Role::TargetFamily(_, _, Some(_))
+        ));
+        assert!(matches!(
+            decide_role(&os(&["phase", "kill-check", "/p"]), false),
+            Role::TargetFamily(_, _, Some(_))
+        ));
+        assert!(matches!(
+            decide_role(&os(&["do", "phase", "kill-check", "/p"]), false),
+            Role::TargetFamily(_, _, None)
+        ));
+        assert!(matches!(
+            decide_role(&os(&["phase", "kill-check", "/p"]), false),
+            Role::TargetFamily(_, _, Some(_))
         ));
         // A non-pr `do` tree stays with its owners.
         assert_ne!(
