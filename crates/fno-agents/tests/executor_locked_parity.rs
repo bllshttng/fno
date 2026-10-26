@@ -94,10 +94,10 @@ fn the_locked_door_matches_the_captured_leg_on_every_golden() {
 
 #[test]
 fn the_locked_door_answers_usage_on_a_missing_or_unknown_mode() {
-    let missing = run_door_raw(&[]);
+    let missing = run_door_raw(&["executor-route"]);
     assert_eq!(missing.0, 2, "no mode is a usage error");
     assert!(missing.2.contains("usage: fno-agents executor-route"));
-    let unknown = run_door_raw(&["bogus"]);
+    let unknown = run_door_raw(&["executor-route", "bogus"]);
     assert_eq!(unknown.0, 2, "an unknown mode is a usage error");
 }
 
