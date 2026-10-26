@@ -25,7 +25,9 @@ fn wiring_names_no_blocked_producer(harness: Option<&str>) -> bool {
     let Some(row) = resolved_rows().get(h) else {
         return false;
     };
-    let job = row.get("hooks").and_then(|h| h.get("session_state"))?;
+    let Some(job) = row.get("hooks").and_then(|h| h.get("session_state")) else {
+        return false;
+    };
     if job.get("state").and_then(|v| v.as_str()) != Some("supported") {
         return false;
     }
