@@ -102,7 +102,6 @@ paths
 phase kill-check
 plan
 pr-watch
-research
 resume
 route
 scoreboard
