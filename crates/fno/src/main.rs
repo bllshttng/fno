@@ -72,7 +72,7 @@ enum Role {
     /// The native read-side `config` doors (get, history, build-dir,
     /// assert-subagent-budget, status-sinks, active-backlog, plugin install).
     /// One classify, bodies in `config_cli::`; the writer stays with the
-    /// config hub's write surface and the doctor verb beside the setup
+    /// config hub's write surface and the doctor command beside the setup
     /// family's engine.
     ConfigCli(fno::config_cli::Door),
     /// `fno config setup run`: the one run-once setup over the one step

@@ -4,7 +4,7 @@
 Two modes:
 
   --case NAME ROOT  build case NAME's fixture under ROOT, run the Python
-                    config verbs there through the real top-level app, and
+                    config commands there through the real top-level app, and
                     relay (stdout, stderr, exit code) byte-verbatim. The
                     parity test invokes this under FNO_CAPTURE_GOLDEN=1 to
                     freeze goldens from the old leg on the same fixture the
@@ -293,7 +293,7 @@ def load_oracle_modules() -> None:
         # module through sys.modules while the body runs.
         sys.modules[module_name] = module
         exec(compile(source, f"<git-show:{repo_path}>", "exec"), module.__dict__)
-    # The live verb table points `config` at the moved shell; capture answers
+    # The live command table points `config` at the moved shell; capture answers
     # from the base-commit leg, so the oracle module aliases under the name
     # the lazy import resolves.
     sys.modules["fno.config.write_cli"] = sys.modules["fno.config_cli"]

@@ -2,10 +2,10 @@
 //!
 //! One classify, one dispatch line in `main.rs`, bodies beside this module:
 //! [`get`], [`history`], [`leaves`] and [`plugin_install`]. The write side
-//! (`set`, `unset`, `rm`) and the doctor verb stay Python for now: the writer
+//! (`set`, `unset`, `rm`) and the doctor command stay Python for now: the writer
 //! belongs to the config-writer port, and the bare doctor engine
 //! (`run_doctor` in `cli/src/fno/setup/doctor.py`) is the setup family's
-//! file, so the verb moves with its engine rather than forking a second
+//! file, so the command moves with its engine rather than forking a second
 //! doctor leg.
 //!
 //! The reader replays the Python loader's merge: candidate chain, per-layer
@@ -42,7 +42,7 @@ pub enum Door {
 
 /// Claim the read-side `config` leaves lexically, before clap, the way
 /// `config_defaults::classify` does. `None` forwards to the Python shell
-/// untouched: the writer verbs, the doctor verb, the lazy mounts (accounts,
+/// untouched: the writer commands, the doctor command, the lazy mounts (accounts,
 /// paths, route, routing) and the codex arm of `plugin install`.
 pub fn classify(args: &[OsString]) -> Option<Door> {
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();

@@ -1,7 +1,7 @@
-"""`fno config doctor`: the verb, its reporters and the post-merge oracle.
+"""`fno config doctor`: the command, its reporters and the post-merge oracle.
 
-The verb lives beside its engine: `run_doctor` from fno.setup.doctor is the
-setup family's file, so the verb moves with it. The post-merge oracle and
+The command lives beside its engine: `run_doctor` from fno.setup.doctor is the
+setup family's file, so the command moves with it. The post-merge oracle and
 the review-capability reporter ride the same surface. Callers that held
 fno.config_cli.post_merge_readiness import from here now.
 """

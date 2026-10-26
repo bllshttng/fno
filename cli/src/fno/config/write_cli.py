@@ -1,10 +1,10 @@
-"""The `fno config` verb shell: the typer app, its lazy mounts, the writer
+"""The `fno config` command shell: the typer app, its lazy mounts, the writer
 commands, and the doctor leaf.
 
-The family port moved the read-side verbs (get, history, build-dir,
+The family port moved the read-side commands (get, history, build-dir,
 assert-subagent-budget, status-sinks, active-backlog, the non-codex arms of
 plugin install) native to the `fno` front door; the writer stays Python until
-the config-writer port, and the doctor verb answers through
+the config-writer port, and the doctor command answers through
 fno.setup.config_doctor, the library beside its engine. This module carries
 the moved remainder of cli/src/fno/config_cli.py; it deletes when the hub
 does.
@@ -14,11 +14,15 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Literal, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import typer
 
 from fno._lazy_group import make_lazy_group_cls
+
+if TYPE_CHECKING:
+    from fno.config.writer import SetResult
 
 # Mounted as ``fno config accounts``: accounts ARE config
 # (``config.accounts.records``), so the command path mirrors the config path. This
@@ -127,7 +131,10 @@ def doctor(
     # Every report is advisory: one that fails never crashes the diagnostic.
     # The post-merge line runs first so bare doctor shows the gap without the
     # flag (Open Question 1). One wrapper, so the next report is a name here.
-    for report in (
+    # Typed as a list, not a bare tuple: mypy's join over the mixed lambda +
+    # imported helpers collapsed to an untyped callable and strict mode read
+    # the call itself as untyped.
+    reports: list[Callable[[], None]] = [
         lambda: typer.echo(post_merge_readiness(_repo_root()).summary_line()),
         _report_gates,
         _report_state_roots,
@@ -136,7 +143,8 @@ def doctor(
         _report_deprecated_active_backlog_mission,
         _report_band_routing,
         _report_harness_overlays,
-    ):
+    ]
+    for report in reports:
         try:
             report()
         except Exception:  # noqa: BLE001 - a report, not the diagnostic itself
@@ -271,7 +279,7 @@ def set_cmd(
             break
 
 
-def _check_overridden_writes(results: list) -> None:
+def _check_overridden_writes(results: list[SetResult]) -> None:
     """Warn on stderr when a write succeeded on disk but a higher-precedence
     configuration layer overrides it.
 
@@ -437,7 +445,7 @@ app.command("rm")(unset_cmd)
 
 
 # ---------------------------------------------------------------------------
-# Native leaves. The read-side verbs answer through the `fno` front door
+# Native leaves. The read-side commands answer through the `fno` front door
 # (crates/fno/src/config_cli/); these registrations keep the command surface
 # byte-identical - the group help page lists the same commands with the same
 # descriptions, and `fno help config --all` still finds them. A leaf body

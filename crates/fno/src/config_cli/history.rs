@@ -160,7 +160,7 @@ fn display_value(data: &Value, field: &str, presence: &str) -> String {
     }
 }
 
-/// The journal rows the verb answers: newest first, `limit`-bounded per
+/// The journal rows the command answers: newest first, `limit`-bounded per
 /// journal, `type == config_write` rows only, scope- and key-filtered.
 fn read_rows(key: Option<&str>, limit: i64, scope: &str) -> Vec<Value> {
     let mut rows: Vec<Value> = Vec::new();

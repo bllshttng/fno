@@ -5,7 +5,6 @@ absence has three explanations and only one of them is the outcome.
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Generator
 
@@ -170,40 +169,28 @@ def test_a_dict_keyed_block_is_not_read_as_a_typo(tmp_path: Path) -> None:
     assert unknown == [], unknown
 
 
-def test_a_json_read_stays_parseable_with_an_unknown_key(
+def test_the_load_warns_on_stderr_for_an_unknown_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """--json is a machine surface and a reader may capture stderr with
-    stdout, so the load warning stays off it entirely (x-dddb). argv carries
-    the command's own flag in a real process, so it is pinned here. Paired
-    negative: without --json the warning prints."""
-    import json as _json
+    """The loader names unmodeled keys on stderr. The --json machine read's
+    clean stderr is pinned byte-level by the native parity goldens; this
+    pins the loud half against the loader itself, no command shell in the path."""
+    import contextlib
+    import io
 
     f = _write(
         tmp_path / "config.toml",
         'schema_version = 1\nstate_dir = "%s"\n'
         "[nosuchblock]\nleaf = 1\n" % (tmp_path / ".fno"),
     )
-    env = {**_ENV, "FNO_CONFIG": str(f)}
-    monkeypatch.setattr(
-        sys, "argv", ["fno", "config", "get", "backlog.max_open_ideas", "--json"]
-    )
-    quiet = runner.invoke(
-        app, ["config", "get", "backlog.max_open_ideas", "--json"], env=env
-    )
-    assert quiet.exit_code == 0, quiet.output
-    assert _json.loads(quiet.output)["value"] == 25
-    assert "fno config:" not in quiet.output
+    monkeypatch.setenv("FNO_CONFIG", str(f))
+    from fno.config import load_settings
 
-    # A new fingerprint, so the loud half recomputes the load the cache
-    # would otherwise reuse from the quiet half.
-    f.write_text(f.read_text() + "\n# recompute\n", encoding="utf-8")
-    monkeypatch.setattr(sys, "argv", ["fno", "config", "get", "backlog.max_open_ideas"])
-    loud = runner.invoke(
-        app, ["config", "get", "backlog.max_open_ideas"], env=env
-    )
-    assert loud.exit_code == 0, loud.output
-    assert "fno config:" in loud.output
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        load_settings()
+    assert "fno config:" in err.getvalue()
+    assert "nosuchblock.leaf" in err.getvalue()
 
 
 # --- an out-of-enum value refuses by name -----------------------------------
