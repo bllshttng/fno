@@ -18,16 +18,17 @@ use super::codex_home;
 /// a bounded connect probe, never the file's existence.
 pub(crate) fn codex_app_server_report() -> Value {
     let socket_path = codex_home().join("app-server-control/app-server-control.sock");
-    let present = std::os::unix::net::SocketAddr::from_pathname(&socket_path)
-        .ok()
-        .and_then(|addr| {
-            std::os::unix::net::UnixStream::connect_timeout(
-                &addr,
-                std::time::Duration::from_secs(1),
-            )
-            .ok()
-        })
-        .is_some();
+    // Bounded connect probe on a worker thread: recv_timeout supplies the one
+    // second the socket-level connect timeout used to, and a hung connect
+    // strands at most this probe's thread until the process exits.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let probe_path = socket_path.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(std::os::unix::net::UnixStream::connect(probe_path).is_ok());
+    });
+    let present = rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap_or(false);
     json!({
         "present": present,
         "socket_path": socket_path.to_string_lossy(),

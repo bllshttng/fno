@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::super::{read_json_object, resolve_source};
+use super::{read_json_object, resolve_source};
 
 fn plugin_hooks_json() -> Option<PathBuf> {
     if let Some(root) = std::env::var_os("CLAUDE_PLUGIN_ROOT") {

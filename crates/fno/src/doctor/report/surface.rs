@@ -20,7 +20,7 @@ pub(crate) fn harness_surface_report() -> Value {
     if dual.0 {
         report["codex_hooks_dual"] = Value::Bool(true);
     }
-    if !dual.1.is_empty() {
+    if dual.1.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
         report["codex_hooks_foreign_json"] = dual.1;
     }
     report["codex_app_server"] = super::codex_app_server_report();

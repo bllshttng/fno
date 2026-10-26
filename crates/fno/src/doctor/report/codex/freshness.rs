@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::super::super::resolve_source;
 use super::super::codex_home;
+use super::super::resolve_source;
 
 const MARKETPLACE: &str = "footnote";
 const PLUGIN_ID: &str = "fno@footnote";
@@ -168,7 +168,7 @@ fn parse_plugin_rows(plugins_json: &str) -> Result<Vec<PluginRow>, String> {
 
 fn run_codex(parts: &[&str], stage: &str) -> Result<(i32, String, String), String> {
     let owned: Vec<String> = parts.iter().map(|s| s.to_string()).collect();
-    super::super::super::bounded_command_for(&owned, 120)
+    super::super::bounded_command_for(&owned, 120)
         .ok_or_else(|| format!("{stage}: failed to run codex CLI"))
 }
 
@@ -302,7 +302,7 @@ fn marker_gate(
         "enabled_plugin_ids": enabled_ids,
         "remedy": remedy(channel),
     });
-    base_gate(&base, &channel, enabled, marketplaces, home, &marker)
+    base_gate(base, &channel, enabled, marketplaces, home, &marker)
 }
 
 fn base_gate(
@@ -355,7 +355,7 @@ fn base_gate(
             json!({"status": "stale", "issue": "wrong-marketplace-source"}),
         );
     }
-    payload_gate(&base, channel, enabled, marketplace, home)
+    payload_gate(base, channel, enabled, marketplace, home)
 }
 
 fn merge(base: Value, extra: Value) -> Value {
@@ -545,7 +545,7 @@ fn payload_gate(
 fn canonical_source_root(marketplace: Option<&MarketplaceRow>, channel: &str) -> Option<PathBuf> {
     if channel == "release" {
         if let Some(root) = marketplace
-            .and_then(|m| m.root.as_str())
+            .map(|m| m.root.as_str())
             .filter(|r| !r.is_empty())
         {
             return Some(PathBuf::from(root));
@@ -639,6 +639,6 @@ fn walk_digest_candidates(dir: &Path, read: std::fs::ReadDir, out: &mut Vec<Path
         if matches!(path.extension(), Some(ext) if ext == "pyc" || ext == "pyo") {
             continue;
         }
-        candidates.push(path);
+        out.push(path);
     }
 }

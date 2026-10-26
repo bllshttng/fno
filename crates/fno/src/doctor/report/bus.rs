@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::super::state_dir;
+use super::state_dir;
 
 pub(crate) fn bus_dir() -> PathBuf {
     state_dir().join("bus")
@@ -155,7 +155,7 @@ pub(crate) fn scan_unread(handle: &str) -> Vec<Value> {
 
 fn read_bus_cursor(handle: &str) -> Option<String> {
     let path = bus_dir().join("cursors").join(format!("{handle}.json"));
-    let map = super::super::read_json_object(&path)?;
+    let map = super::read_json_object(&path)?;
     map.get("last_seen_id")
         .and_then(Value::as_str)
         .map(str::to_string)

@@ -25,18 +25,20 @@ fn session_start_records(
     let Some(obj) = data.as_object() else {
         return Err(format!("{source} root is not an object"));
     };
+    let empty_object = json!({});
     let hooks = obj.get("hooks");
     let Some(hooks) = hooks
         .filter(|h| !h.is_null())
-        .unwrap_or(&json!({}))
+        .unwrap_or(&empty_object)
         .as_object()
     else {
         return Err(format!("{source} `hooks` is not an object"));
     };
+    let empty_array = Value::Array(Vec::new());
     let groups = hooks.get("SessionStart");
     let Some(groups) = groups
         .filter(|g| !g.is_null())
-        .unwrap_or(&json!([]))
+        .unwrap_or(&empty_array)
         .as_array()
     else {
         return Err(format!("{source} `hooks.SessionStart` is not an array"));
@@ -46,10 +48,11 @@ fn session_start_records(
         let Some(group) = group.as_object() else {
             return Err(format!("{source} SessionStart group is not an object"));
         };
+        let empty_array = Value::Array(Vec::new());
         let entries = group.get("hooks");
         let Some(entries) = entries
             .filter(|e| !e.is_null())
-            .unwrap_or(&json!([]))
+            .unwrap_or(&empty_array)
             .as_array()
         else {
             return Err(format!("{source} SessionStart `hooks` is not an array"));
@@ -78,10 +81,11 @@ fn all_hook_commands(data: &Value, source: &str) -> Result<Vec<String>, String> 
     let Some(obj) = data.as_object() else {
         return Err(format!("{source} root is not an object"));
     };
+    let empty_object = json!({});
     let hooks = obj.get("hooks");
     let Some(hooks) = hooks
         .filter(|h| !h.is_null())
-        .unwrap_or(&json!({}))
+        .unwrap_or(&empty_object)
         .as_object()
     else {
         return Err(format!("{source} `hooks` is not an object"));
@@ -98,10 +102,11 @@ fn all_hook_commands(data: &Value, source: &str) -> Result<Vec<String>, String> 
             let Some(group) = group.as_object() else {
                 return Err(format!("{source} {event} group is not an object"));
             };
+            let empty_array = Value::Array(Vec::new());
             let entries = group.get("hooks");
             let Some(entries) = entries
                 .filter(|e| !e.is_null())
-                .unwrap_or(&json!([]))
+                .unwrap_or(&empty_array)
                 .as_array()
             else {
                 return Err(format!("{source} {event} `hooks` is not an array"));

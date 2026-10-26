@@ -53,11 +53,12 @@ fn forward(command: &str, extra: &[String]) -> i32 {
 a bare `pip install fno` does not ship - there is no skills/ tree to bundle.\n\
 Install the plugin and run from its checkout:\n  clone the footnote repo, then run \
 `claude --plugin-dir /path/to/footnote`\nOr set FNO_REPO_ROOT to an existing plugin \
-checkout. (resolved, not on disk: {script})"
+checkout. (resolved, not on disk: {})",
+            script.display()
         );
         return 2;
     }
-    let script = script.as_posix().to_string();
+    let script = script.to_string_lossy().into_owned();
     let mut argv = vec!["bash".to_string(), script];
     argv.extend(extra.iter().cloned());
     match std::process::Command::new(&argv[0])

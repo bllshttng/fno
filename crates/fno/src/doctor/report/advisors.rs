@@ -2,13 +2,14 @@
 //! surface, the config-key readers, evals, and the cost-check +
 //! transcript ops, ported from the deleted `cli/src/fno/doctor.py`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
 use super::{
-    call_binary_json, codex_home, command_call, home_dir, resolve_binary, s, which, Probes, Report,
+    call_binary_json, codex_home, command_call, home_dir, read_json_object, resolve_binary,
+    resolve_source, s, state_dir, which, Probes, Report,
 };
 
 // ---------------------------------------------------------------------------
@@ -86,7 +87,7 @@ fn config_candidates() -> Vec<PathBuf> {
 /// Backlog entries carrying `mission_active`, from the store's nodes table
 /// extras (the canonical fail-safe reader: a torn graph reads as 0).
 fn mission_active_count() -> i64 {
-    let path = super::super::graph_store_path();
+    let path = super::graph_store_path();
     if !path.exists() {
         return 0;
     }
@@ -99,7 +100,7 @@ fn mission_active_count() -> i64 {
         return 0;
     };
     let Ok(rows) = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0), row.get::<_, String>(1)))
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     }) else {
         return 0;
     };
@@ -118,8 +119,8 @@ fn mission_active_count() -> i64 {
 /// (harness-native) and `<base>/<repo>/<name>/.fno/target-state.md`
 /// (fno-managed); deduped by canonical path.
 pub(crate) fn auto_merge_armed_manifests() -> BTreeMap<String, i64> {
-    let mut bases: Vec<PathBuf> = vec![super::super::state_dir().join("worktrees")];
-    let repo = super::super::resolve_source(None);
+    let mut bases: Vec<PathBuf> = vec![super::state_dir().join("worktrees")];
+    let repo = super::resolve_source(None);
     if let Some(repo) = repo {
         bases.push(repo.join(".claude/worktrees"));
     }
@@ -181,8 +182,8 @@ fn count_manifest(path: &PathBuf, counts: &mut BTreeMap<String, i64>) {
 }
 
 fn read_posture_stamp() -> Value {
-    let path = super::super::state_dir().join("posture.json");
-    match super::super::read_json_object(&path) {
+    let path = super::state_dir().join("posture.json");
+    match super::read_json_object(&path) {
         Some(map) => Value::Object(map),
         None => Value::Null,
     }

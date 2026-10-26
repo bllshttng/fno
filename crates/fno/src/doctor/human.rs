@@ -177,7 +177,7 @@ fn emit_status(rep: &Value, src: Option<&Path>, err: bool) {
     if status == "fresh" {
         emit(err, &format!(
             "fno doctor: installed fno is up to date with source at {} (rev {}). Unmerged work in another branch or worktree is not included, and `fno` forwards to this installed build from anywhere. To exercise another checkout run: cd <checkout>/cli && uv run fno-py <command>",
-            src.map(|p| p.to_string_lossy()).unwrap_or("the resolved source checkout").into_owned(),
+            src.map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "the resolved source checkout".to_string()),
             rep.get("source_rev").and_then(Value::as_str).unwrap_or("unknown")
         ));
         return;
@@ -618,7 +618,10 @@ fn emit_fd_limit(rep: &Value, err: bool) {
     if fd.get("verdict").and_then(Value::as_str) != Some("low") {
         return;
     }
-    let soft = fd.get("soft");
+    let soft = fd
+        .get("soft")
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "null".into());
     let floor = fd.get("threshold").and_then(Value::as_i64).unwrap_or(1024);
     let launchd = fd.get("launchd_soft");
     if launchd.is_none() {
@@ -1242,6 +1245,170 @@ fn emit_codex_app_server(rep: &Value, err: bool) {
         emit(
             err,
             "fno doctor: codex app-server daemon not running (no daemon listening on its control socket); live mail to codex sessions demotes to durable. Start it BEFORE the codex TUI: `codex app-server daemon start` (or `codex app-server daemon bootstrap` for durable SSH-driven use). A session launched before the daemon cannot receive live mail without a restart."
+        );
+    }
+}
+
+/// The `--codex-hooks` arm's human render (doctor.py `_emit_codex_hooks_report`):
+/// one summary line, then the actionable diagnostics.
+pub(crate) fn emit_codex_hooks_report(result: &Value, err: bool) {
+    let status = result.get("status").and_then(Value::as_str).unwrap_or("");
+    let wired = result
+        .get("footnote_toml_wired")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let trust_map: Vec<(String, String)> = result
+        .get("footnote_toml_trust")
+        .and_then(Value::as_object)
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let trust_states: Vec<&str> = trust_map.iter().map(|(_, v)| v.as_str()).collect();
+    let verified = result
+        .get("footnote_toml_trust_verified")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let trust = if verified {
+        "verified"
+    } else if trust_states.contains(&"recorded-unverified") {
+        "recorded-unverified"
+    } else if wired {
+        "missing"
+    } else {
+        "n/a"
+    };
+    let state = result.get("state").and_then(Value::as_str).unwrap_or("");
+    emit(
+        err,
+        &format!(
+            "fno doctor: codex hooks: {status} preferred=config.toml; footnote SessionStart={}; trust={trust}; layers={state}.",
+            if wired { "wired" } else { "missing" }
+        ),
+    );
+    for error in result
+        .get("errors")
+        .and_then(Value::as_array)
+        .map(|a| a.as_slice())
+        .unwrap_or(&[])
+    {
+        emit(
+            err,
+            &format!(
+                "fno doctor: codex hooks: parse error: {}",
+                error.as_str().unwrap_or("")
+            ),
+        );
+    }
+    for (key, state) in &trust_map {
+        emit(
+            err,
+            &format!("fno doctor: codex hooks: trust state {state}: {key}"),
+        );
+    }
+    if wired && trust != "verified" {
+        if trust_states.contains(&"recorded-unverified") {
+            emit(
+                err,
+                "fno doctor: codex hooks: approval record found, but its trusted_hash was not locally verified; confirm it in Codex.",
+            );
+        } else {
+            emit(
+                err,
+                "fno doctor: codex hooks: approve the footnote SessionStart hook in Codex.",
+            );
+        }
+    }
+    if result.get("duplicate_layers").and_then(Value::as_bool) == Some(true) {
+        let hooks_path = result
+            .get("hooks_json_path")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let config_path = result
+            .get("config_path")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        emit(
+            err,
+            &format!(
+                "fno doctor: codex hooks: loading hooks from both {hooks_path} and {config_path}; config.toml is preferred."
+            ),
+        );
+    }
+    let json_hooks: Vec<&str> = result
+        .get("footnote_json_hooks")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if !json_hooks.is_empty() {
+        emit(
+            err,
+            "fno doctor: codex hooks: run `fno config setup cli-hooks-codex --migrate-legacy-hooks-json` to remove only footnote-owned legacy JSON hooks.",
+        );
+    }
+    let foreign: Vec<&str> = result
+        .get("foreign_json_hooks")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let config_path = result
+        .get("config_path")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    for command in foreign {
+        emit(
+            err,
+            &format!(
+                "fno doctor: codex hooks: foreign legacy JSON hook preserved: {command}; manually consolidate it into {config_path} if desired."
+            ),
+        );
+    }
+    if !wired
+        && result
+            .get("errors")
+            .and_then(Value::as_array)
+            .map(|a| a.is_empty())
+            .unwrap_or(true)
+    {
+        let mut command = "fno config setup cli-hooks-codex".to_string();
+        if !json_hooks.is_empty() {
+            command += " --migrate-legacy-hooks-json";
+        }
+        emit(
+            err,
+            &format!("fno doctor: codex hooks: run `{command}` to wire the preferred TOML hook."),
+        );
+    }
+}
+
+/// The `--codex-bind` arm's human render (doctor.py `_emit_codex_bind_report`).
+pub(crate) fn emit_codex_bind_report(result: &Value) {
+    let bound = result
+        .get("bound")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let version = result
+        .get("codex_version")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if bound {
+        let session = result
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let oracle = result.get("oracle").and_then(Value::as_str).unwrap_or("");
+        let elapsed = result.get("elapsed_s").and_then(Value::as_i64).unwrap_or(0);
+        emit(
+            false,
+            &format!("fno doctor: codex bind: ok, session={session} oracle={oracle} elapsed={elapsed}s codex={version}"),
+        );
+    } else {
+        let error = result.get("error").and_then(Value::as_str).unwrap_or("");
+        emit(
+            false,
+            &format!("fno doctor: codex bind: FAILED codex={version}: {error}"),
         );
     }
 }

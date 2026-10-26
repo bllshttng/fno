@@ -3,8 +3,8 @@
 
 use serde_json::{json, Value};
 
-use super::super::state_dir;
 use super::command_call;
+use super::state_dir;
 
 const BLOCK_VERSION: i64 = 1;
 

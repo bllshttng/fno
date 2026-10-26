@@ -12,6 +12,9 @@ use super::super::{bounded_command, echo_stderr};
 use super::{
     call_binary_json, codex_home, command_call, home_dir, resolve_binary, s, which, Probes,
 };
+// The sibling collectors: report re-exports every submodule, so one glob
+// covers verdict (report's own) and the surface/dead-letter/advisory fns.
+use super::*;
 
 // ---------------------------------------------------------------------------
 // The assembled report
@@ -567,14 +570,12 @@ fn daemon_drift_warning() -> Value {
     if payload.get("drift").and_then(Value::as_str) != Some("drifted") {
         return Value::Null;
     }
-    let warning = String::from_utf8_lossy(&out.stderr)
-        .lines()
-        .map(str::trim)
-        .find(|line| {
-            line.starts_with("fno agents: ")
-                && line.contains(" is an older build than the installed binary; ")
-                && line.split("; ").count() == 2
-        });
+    let stderr_text = String::from_utf8_lossy(&out.stderr);
+    let warning = stderr_text.lines().map(str::trim).find(|line| {
+        line.starts_with("fno agents: ")
+            && line.contains(" is an older build than the installed binary; ")
+            && line.split("; ").count() == 2
+    });
     let Some(warning) = warning else {
         return Value::Null;
     };

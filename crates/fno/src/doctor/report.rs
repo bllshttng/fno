@@ -22,8 +22,16 @@ use serde_json::{json, Map, Value};
 
 use super::{bounded_command, echo_stderr};
 
+pub(crate) use advisors::*;
+pub(crate) use bus::*;
 pub(crate) use codex::*;
 pub(crate) use collectors::*;
+pub(crate) use dl_bus::*;
+pub(crate) use dl_hooks::*;
+pub(crate) use dl_report::*;
+pub(crate) use hooks_probe::*;
+pub(crate) use ops::*;
+pub(crate) use surface::*;
 
 // ---------------------------------------------------------------------------
 // Transports
@@ -508,7 +516,7 @@ pub(crate) fn cargo_bin_present() -> bool {
 /// The `_verdict` decision matrix (doctor.py:1921-2041), pure over its
 /// inputs. Returns the insertion-ordered head of the report dict.
 #[allow(clippy::too_many_arguments)]
-fn verdict(
+pub(crate) fn verdict(
     source_resolved: bool,
     source_rev: Option<&str>,
     marker: Option<&str>,

@@ -1,10 +1,11 @@
 //! The plugin-hook launch probe (doctor.py:3850-4200).
 
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use super::super::resolve_source;
+use super::resolve_source;
 
 fn manifest_specs() -> Vec<(String, String, String)> {
     let mut specs: Vec<(String, String, String)> = Vec::new();
@@ -362,7 +363,7 @@ pub(crate) fn pre_push_hook_report() -> Value {
         script.to_string_lossy().into_owned(),
         "--check".to_string(),
     ];
-    match super::super::bounded_command(&argv) {
+    match super::bounded_command(&argv) {
         Some((_code, stdout, stderr)) => {
             let out = format!("{stdout}{stderr}");
             if out.contains("legacy") {

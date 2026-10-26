@@ -121,7 +121,8 @@ fn launch_pane(session: &str, cwd: &Path, codex_home: &Path) -> Option<(i32, Str
         "--".into(),
         prompt.into(),
     ];
-    run_mux(&args, 30)
+    let (code, out, _err) = run_mux(&args, 30)?;
+    Some((code, out))
 }
 
 fn lookup_child_pid(session: &str, pane_id: i64) -> Option<i64> {

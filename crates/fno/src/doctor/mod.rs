@@ -22,7 +22,7 @@ use std::io::Write;
 use serde_json::Value;
 
 pub use bundle::run_bundle;
-pub use report::{find_transcript_op, Blockers, Report};
+pub(crate) use report::{find_transcript_op, Blockers, Report};
 
 /// What the front door should do with a `doctor ...` argv.
 pub enum Claim {
@@ -493,8 +493,9 @@ fn run_home(args: &[String]) -> i32 {
     }
 
     let rep = Report::build(source.as_deref());
-    let blockers = Blockers::of(&rep);
+    let blockers = Blockers::of(&rep.value);
     let source_blocked = rep
+        .value
         .get("source_checkout_sync")
         .and_then(|s| s.get("status"))
         .and_then(Value::as_str)
@@ -503,25 +504,27 @@ fn run_home(args: &[String]) -> i32 {
     let cargo_present = report::cargo_bin_present();
 
     if blockers_only {
-        human::emit_blockers(&blockers, false);
-        return if blockers.is_empty() { 0 } else { 1 };
+        human::emit_blockers(&blockers.0, false);
+        return if blockers.0.is_empty() { 0 } else { 1 };
     }
 
     if json {
         print_json(&rep.value);
-        if !blockers.is_empty() {
-            human::emit_blockers(&blockers, true);
+        if !blockers.0.is_empty() {
+            human::emit_blockers(&blockers.0, true);
             echo_stderr("fno doctor: advisory findings follow.");
         }
-        human::emit_human(&rep, src.as_deref(), true, cargo_present);
+        human::emit_human(&rep.value, src.as_deref(), true, cargo_present);
     } else {
-        if !blockers.is_empty() {
-            human::emit_blockers(&blockers, false);
+        if !blockers.0.is_empty() {
+            human::emit_blockers(&blockers.0, false);
             echo_stdout("fno doctor: advisory findings follow.");
         }
-        human::emit_human(&rep, src.as_deref(), false, cargo_present);
+        human::emit_human(&rep.value, src.as_deref(), false, cargo_present);
         if !fix {
-            if let Some(line) = report::preamble_budget_line(src.as_deref()) {
+            if let Some(line) =
+                report::preamble_budget_line(src.as_ref().and_then(std::path::Path::to_str))
+            {
                 echo_stdout(&line);
                 if let Some(line) = report::session_start_bytes_line(&line) {
                     echo_stdout(&line);
@@ -531,6 +534,7 @@ fn run_home(args: &[String]) -> i32 {
     }
 
     let dead_agents = rep
+        .value
         .get("launch_agents")
         .map(|a| {
             a.get("dead")
@@ -539,6 +543,7 @@ fn run_home(args: &[String]) -> i32 {
         })
         .unwrap_or(false);
     let stage_stale = rep
+        .value
         .get("plugin_cache")
         .map(|pc| {
             pc.get("kind").and_then(Value::as_str) == Some("stage")
@@ -556,6 +561,7 @@ fn run_home(args: &[String]) -> i32 {
         // Heal a dead/wedged pr-watch first; the stale --fix path below
         // execs `fno doctor update` and never returns (doctor.py:4526+).
         let pw_verdict = rep
+            .value
             .get("pr_watch")
             .and_then(|pw| pw.get("verdict"))
             .and_then(Value::as_str)
@@ -602,7 +608,7 @@ fn run_home(args: &[String]) -> i32 {
             };
             echo_stderr(&format!("fno doctor: --fix pr-watch {cure}: {said}"));
         }
-        let gr = rep.get("groom").cloned().unwrap_or(Value::Null);
+        let gr = rep.value.get("groom").cloned().unwrap_or(Value::Null);
         let gr_stale = gr.get("stale").and_then(Value::as_bool).unwrap_or(false);
         let gr_agent = gr
             .get("agent_installed")
@@ -626,10 +632,12 @@ fn run_home(args: &[String]) -> i32 {
             );
         } else {
             let python_stale = rep
+                .value
                 .get("python_stale")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let rust_stale = rep
+                .value
                 .get("rust_stale")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
@@ -664,7 +672,7 @@ fn run_home(args: &[String]) -> i32 {
         }
     }
 
-    if rep.get("status").and_then(Value::as_str) == Some("stale")
+    if rep.value.get("status").and_then(Value::as_str) == Some("stale")
         || source_blocked
         || dead_agents
         || stage_stale
