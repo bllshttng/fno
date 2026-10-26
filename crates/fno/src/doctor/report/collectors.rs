@@ -8,10 +8,8 @@ use std::process::Command;
 
 use serde_json::{json, Map, Value};
 
-use super::super::{bounded_command, echo_stderr};
-use super::{
-    call_binary_json, codex_home, command_call, home_dir, resolve_binary, s, which, Probes,
-};
+use super::super::bounded_command;
+use super::{command_call, home_dir, resolve_binary, s, which, Probes};
 // The sibling collectors: report re-exports every submodule, so one glob
 // covers verdict (report's own) and the surface/dead-letter/advisory fns.
 use super::*;
@@ -107,7 +105,7 @@ impl Report {
             map.insert("managed_block".into(), managed_block_report());
             map.insert("harness_surface".into(), harness_surface_report());
             map.insert("plugin_hooks".into(), plugin_hooks_launch_report());
-            map.insert("pre_push_hook".into(), pre_push_hook_report(src.as_deref()));
+            map.insert("pre_push_hook".into(), pre_push_hook_report());
             map.insert("groom".into(), groom_health());
             map.insert("archive_id_collisions".into(), archive_id_collisions());
             map.insert("post_merge_sync".into(), post_merge_sync_health());

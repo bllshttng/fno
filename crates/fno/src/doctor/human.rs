@@ -449,7 +449,7 @@ fn emit_mux_front_door(rep: &Value, err: bool) {
 }
 
 fn emit_stale_servers(rep: &Value, err: bool) {
-    for sess in rep
+    for _sess in rep
         .get("mux_server_stale")
         .and_then(Value::as_array)
         .map(|a| a.to_vec())

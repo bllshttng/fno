@@ -7,10 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::{
-    call_binary_json, codex_home, command_call, home_dir, read_json_object, resolve_binary,
-    resolve_source, s, state_dir, which, Probes, Report,
-};
+use super::{command_call, home_dir, read_json_object, resolve_binary, resolve_source, state_dir};
 
 // ---------------------------------------------------------------------------
 // Config reading (the silent-switch inputs)
@@ -293,4 +290,268 @@ fn breakdown_line(armed: &BTreeMap<String, i64>) -> String {
 pub(crate) fn standing_dispatch_grant() -> bool {
     let cfg = load_doctor_config();
     cfg.auto_merge == Some(true) && cfg.grant.as_deref() == Some("dispatch")
+}
+
+// ---------------------------------------------------------------------------
+// auto-merge review gap + merge-gating opt-out residue (doctor.py:1660-1788)
+// ---------------------------------------------------------------------------
+
+/// The invoking repo's root, resolved as the review predicate resolves it
+/// (cwd -> toplevel); outside a repo this degrades to cwd (doctor.py:1660).
+fn cwd_repo_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    match std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(&cwd)
+        .output()
+    {
+        Ok(out) if out.status.code() == Some(0) => {
+            let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if top.is_empty() {
+                cwd
+            } else {
+                PathBuf::from(top)
+            }
+        }
+        _ => cwd,
+    }
+}
+
+/// Python truthiness over a JSON value (`if lane:` on the door's answer).
+fn lane_truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(_) => true,
+    }
+}
+
+/// Python list repr with single quotes (`['a', 'b']`), for the keys lines.
+fn py_list(items: &[String]) -> String {
+    let inner = items
+        .iter()
+        .map(|i| format!("'{i}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{inner}]")
+}
+
+/// The invoking repo's review config: global layer, then the repo's own
+/// layer; later wins. Loader defaults where a layer leaves a key unset
+/// (`load_settings_for_repo(root).review` in the deleted leg).
+fn read_review_keys(root: &Path) -> Vec<String> {
+    let mut self_review_required = true;
+    let mut required_bots: Vec<String> = Vec::new();
+    let mut reviewers: Vec<String> = Vec::new();
+    let mut peer_identity: Option<String> = None;
+    let mut layers: Vec<PathBuf> = vec![home_dir().join(".fno/config.toml")];
+    layers.push(root.join(".fno/config.toml"));
+    for path in layers {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(doc) = toml::from_str::<toml::Value>(&text) else {
+            continue;
+        };
+        let review = doc.get("review");
+        if let Some(v) = review
+            .and_then(|r| r.get("self_review_required"))
+            .and_then(|v| v.as_bool())
+        {
+            self_review_required = v;
+        }
+        if let Some(rows) = review
+            .and_then(|r| r.get("required_bots"))
+            .and_then(|v| v.as_array())
+        {
+            required_bots = rows
+                .iter()
+                .filter_map(|r| r.as_str().map(str::to_string))
+                .collect();
+        }
+        if let Some(rows) = review
+            .and_then(|r| r.get("reviewers"))
+            .and_then(|v| v.as_array())
+        {
+            reviewers = rows
+                .iter()
+                .filter_map(|r| r.as_str().map(str::to_string))
+                .collect();
+        }
+        if let Some(v) = review
+            .and_then(|r| r.get("peer_identity"))
+            .and_then(|v| v.as_str())
+        {
+            peer_identity = Some(v.to_string());
+        }
+    }
+    let mut keys = vec![
+        format!(
+            "review.self_review_required={}",
+            bool_py(self_review_required)
+        ),
+        format!("review.required_bots={}", py_list(&required_bots)),
+        format!("review.reviewers={}", py_list(&reviewers)),
+        "no identity-free review.peers".to_string(),
+    ];
+    if let Some(pid) = &peer_identity {
+        keys.push(format!("review.peer_identity={pid}"));
+    }
+    keys
+}
+
+/// Python `bool(...)` spelling for the keys lines.
+fn bool_py(b: bool) -> &'static str {
+    if b {
+        "True"
+    } else {
+        "False"
+    }
+}
+
+/// The pair check: auto_merge armed while the merge gate's own lane predicate
+/// requires no review for a code payload (doctor.py:1678-1749). The lane
+/// verdict comes from the native lane door, never a doctor-side recount; a
+/// config the predicate cannot read fail-closes inside it, and every read
+/// failure here degrades to no report.
+pub(crate) fn auto_merge_review_gap(armed: &BTreeMap<String, i64>) -> Value {
+    if load_doctor_config().auto_merge != Some(true) {
+        return Value::Null;
+    }
+    let root = cwd_repo_root();
+    let lane = command_call(
+        &["review-coverage", "op"],
+        json!({"op": "lane", "cwd": root.to_string_lossy(), "code_payload": true}),
+        30,
+    )
+    .ok()
+    .and_then(|p| p.get("lane").cloned());
+    match lane {
+        // Named lanes: the operator's policy, no gap.
+        Some(l) if lane_truthy(&l) => return Value::Null,
+        // Door failure: the deleted leg's except read no gap either.
+        None => return Value::Null,
+        Some(_) => {}
+    }
+    json!({
+        "keys": read_review_keys(&root),
+        "manifests": armed.values().sum::<i64>(),
+        "breakdown": breakdown_line(armed),
+        "remedy": "fno config set review.self_review_required true (or name a lane via review.required_bots / review.reviewers)",
+    })
+}
+
+/// One merge-gating opt-out key with the value that reads as opted out.
+struct OptoutKey {
+    key: &'static str,
+    /// The opt-out value as JSON (false, or the empty list for optional_apps).
+    optout: Value,
+    is_list: bool,
+}
+
+const MERGE_GATING_OPTOUTS: [OptoutKey; 3] = [
+    OptoutKey {
+        key: "review.self_review_required",
+        optout: Value::Bool(false),
+        is_list: false,
+    },
+    OptoutKey {
+        key: "review.optional_apps",
+        optout: Value::Array(Vec::new()),
+        is_list: true,
+    },
+    OptoutKey {
+        key: "auto_merge.require_checks_pass",
+        optout: Value::Bool(false),
+        is_list: false,
+    },
+];
+
+/// The release command a holder runs to hand the opt-out back
+/// (`optout_release_command` in the deleted leg).
+fn optout_release_command(key: &str) -> String {
+    if key == "review.optional_apps" {
+        format!("fno config unset {key}")
+    } else {
+        format!("fno config set {key} true")
+    }
+}
+
+/// Read the opt-out instrument, distinguishing unreadable from absent; an
+/// unreadable instrument is NOT live, so it revokes the opt-out
+/// (`_claim_state` in optout_lease.py).
+fn optout_claim_state(key: &str) -> String {
+    let Some(binary) = resolve_binary() else {
+        return "unreadable".to_string();
+    };
+    let argv: Vec<String> = vec![
+        binary,
+        "claims".into(),
+        "status".into(),
+        format!("config-optout:{key}"),
+        "--json".into(),
+    ];
+    let Some((code, out, _err)) = super::super::bounded_command_for(&argv, 10) else {
+        return "unreadable".to_string();
+    };
+    if code != 0 {
+        return "unreadable".to_string();
+    }
+    serde_json::from_str::<Value>(&out)
+        .ok()
+        .and_then(|v| v.get("state").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_else(|| "unreadable".to_string())
+}
+
+/// Report opt-out values left in files without a live claim
+/// (doctor.py:1751-1788). Explicit presence matters for optional_apps:
+/// absent means the built-in list, while [] is the actual opt-out.
+pub(crate) fn merge_gating_optout_report() -> Value {
+    let mut residue: Vec<Value> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for path in config_candidates() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(raw) = toml::from_str::<toml::Value>(&text) else {
+            continue;
+        };
+        for entry in MERGE_GATING_OPTOUTS.iter() {
+            // _raw_leaf: walk the dotted path; absent or a non-matching
+            // value is not an opt-out.
+            let mut node = &raw;
+            let mut present = true;
+            for part in entry.key.split('.') {
+                match node.get(part) {
+                    Some(child) => node = child,
+                    None => {
+                        present = false;
+                        break;
+                    }
+                }
+            }
+            let is_optout = if entry.is_list {
+                node.as_array().map(|a| a.is_empty()) == Some(true)
+            } else {
+                node.as_bool() == entry.optout.as_bool()
+            };
+            if !present || !is_optout {
+                continue;
+            }
+            let state = optout_claim_state(entry.key);
+            let marker = format!("{}\x1f{}", path.display(), entry.key);
+            if state != "live" && seen.insert(marker) {
+                residue.push(json!({
+                    "key": entry.key,
+                    "path": path.display().to_string(),
+                    "claim_state": state,
+                    "command": optout_release_command(entry.key),
+                }));
+            }
+        }
+    }
+    json!({ "residue": residue })
 }

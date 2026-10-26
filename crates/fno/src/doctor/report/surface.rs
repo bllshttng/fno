@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use super::{call_binary_json, codex_home, command_call, resolve_binary, which, Probes, Report};
+use super::{call_binary_json, codex_home, which};
 
 pub(crate) fn harness_surface_report() -> Value {
     let mut report = json!({});

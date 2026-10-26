@@ -100,7 +100,7 @@ fn stop_daemon(codex_home: &Path) {
 
 fn launch_pane(session: &str, cwd: &Path, codex_home: &Path) -> Option<(i32, String)> {
     let prompt = "fno codex bind canary: reply READY and take no other action.";
-    let mut args: Vec<String> = vec![
+    let args: Vec<String> = vec![
         "mux".into(),
         "pane".into(),
         "run".into(),
@@ -179,7 +179,7 @@ fn pane_alive(session: &str, pane_id: i64) -> Option<bool> {
     match run_mux(&args, PROBE_TIMEOUT_S) {
         Some((12, _, _)) => Some(false),
         Some((0, _, _)) | Some((11, _, _)) => Some(true),
-        Some((code, _, _)) => {
+        Some((_, _, _)) => {
             let absent = pane_absent_from_listing(session, pane_id);
             absent.map(|a| !a)
         }
@@ -332,27 +332,11 @@ fn daemon_session_ids(cwd: &Path, codex_home: &Path) -> Option<Vec<String>> {
     Some(ids)
 }
 
-fn daemon_candidate(
-    cwd: &Path,
-    baseline: &[String],
-    codex_home: &Path,
-    condition: &mut String,
-) -> Option<String> {
-    let Some(loaded) = daemon_session_ids(cwd, codex_home) else {
-        *condition = "daemon: app-server unreachable".to_string();
-        return None;
-    };
+fn daemon_candidate(cwd: &Path, baseline: &[String], codex_home: &Path) -> Option<String> {
+    let loaded = daemon_session_ids(cwd, codex_home)?;
     let new_ids: Vec<&String> = loaded.iter().filter(|id| !baseline.contains(id)).collect();
     if new_ids.len() == 1 {
         return Some(new_ids[0].clone());
-    }
-    if new_ids.is_empty() {
-        *condition = "daemon: no new codex session for this cwd".to_string();
-    } else {
-        *condition = format!(
-            "daemon: {} new codex sessions for this cwd, ambiguous",
-            new_ids.len()
-        );
     }
     None
 }
@@ -381,7 +365,6 @@ fn await_binding(
     let mut last_daemon_probe: Option<Instant> = None;
     let mut prev_candidate: Option<String> = None;
     let mut modal_answered = false;
-    let mut condition = String::new();
     let mut oracle: Option<String> = None;
     loop {
         let mut sid: Option<String> = None;
@@ -389,28 +372,21 @@ fn await_binding(
             oracle = Some("rollout-fd".into());
             sid = Some(id);
         } else {
-            condition = format!("fd: no codex rollout on pane child pid {child_pid}");
             let now = Instant::now();
             let rate_ok = last_daemon_probe.map_or(true, |t| {
                 now.duration_since(t).as_millis() as u64 >= DAEMON_INTERVAL_MS
             });
             if rate_ok {
                 last_daemon_probe = Some(now);
-                match daemon_candidate(cwd, baseline, codex_home, &mut condition) {
-                    Some(cand) => {
-                        if prev_candidate.as_deref() == Some(cand.as_str()) {
-                            if pane_alive(session, pane_id) != Some(false) {
-                                oracle = Some("daemon".into());
-                                sid = Some(cand);
-                            } else {
-                                condition = "daemon: candidate dropped, pane already gone".into();
-                            }
-                        } else {
-                            condition = format!("daemon: candidate {cand} awaiting a repeat probe");
-                            prev_candidate = Some(cand);
-                        }
+                if let Some(cand) = daemon_candidate(cwd, baseline, codex_home) {
+                    if prev_candidate.as_deref() == Some(cand.as_str())
+                        && pane_alive(session, pane_id) != Some(false)
+                    {
+                        oracle = Some("daemon".into());
+                        sid = Some(cand);
+                    } else if prev_candidate.as_deref() != Some(cand.as_str()) {
+                        prev_candidate = Some(cand);
                     }
-                    None => {}
                 }
             }
         }
@@ -447,11 +423,10 @@ fn await_binding(
         if Instant::now() >= deadline {
             return expired(&started, alive);
         }
+        last_alive = alive;
         if !modal_answered && tail.to_lowercase().contains("hooks need review") {
             modal_answered = true;
             send_modal_answer(session, pane_id);
-            condition =
-                "hooks-review modal answered once (option 3, continue without trusting)".into();
         }
         std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
     }

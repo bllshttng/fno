@@ -236,12 +236,6 @@ pub(crate) fn codex_hooks_report() -> Value {
         .filter(|c| is_footnote_codex_command(c))
         .cloned()
         .collect();
-    let toml_foreign: Vec<Value> = toml_commands
-        .iter()
-        .filter(|c| !toml_footnote.contains(c))
-        .cloned()
-        .map(Value::String)
-        .collect();
     let json_foreign: Vec<Value> = json_commands
         .iter()
         .filter(|c| !json_footnote.contains(c))

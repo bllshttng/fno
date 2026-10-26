@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 use super::command_call;
 use super::state_dir;
+use super::{resolve_source, Probes};
 
 const BLOCK_VERSION: i64 = 1;
 
@@ -76,4 +77,61 @@ pub(crate) fn evals_summary() -> Value {
             "never_ran": p.get("never_ran").cloned().unwrap_or(Value::Bool(false)),
         }),
     }
+}
+
+/// Root freshness, folded natively by the Rust command; transport only
+/// (doctor.py:828-855). The verdict comes from the cargo-installed binary's
+/// own stage check, not from whichever binary auto-resolves.
+pub(crate) fn plugin_cache_report(probes: &Probes) -> Value {
+    fn unknown(detail: &str) -> Value {
+        json!({
+            "status": "unknown",
+            "sha": null,
+            "installed_at": null,
+            "detail": detail,
+            "kind": "stage",
+            "stage": null,
+            "roots": [],
+        })
+    }
+    let binary = probes.str_field("cargo_bin_path");
+    let src = resolve_source(None);
+    let have_binary = binary.is_some();
+    let (Some(binary), Some(src)) = (binary, src) else {
+        return unknown(if !have_binary {
+            "no cargo fno-agents binary to run the stage check"
+        } else {
+            "no source checkout to compare against"
+        });
+    };
+    let argv: Vec<String> = vec![
+        binary,
+        "plugin-install".into(),
+        "--check".into(),
+        "--json".into(),
+        "--source".into(),
+        src.to_string_lossy().into_owned(),
+    ];
+    let Some((code, out, err)) = super::super::bounded_command_for(&argv, 30) else {
+        return unknown("plugin-install --check exited -1: transport failure");
+    };
+    if !matches!(code, 0 | 3 | 4) {
+        let tail = if err.trim().is_empty() {
+            out.trim()
+        } else {
+            err.trim()
+        };
+        return unknown(&format!("plugin-install --check exited {code}: {tail}"));
+    }
+    let verdict: Option<Value> = serde_json::from_str(&out).ok();
+    let named_root = verdict.as_ref().is_some_and(|v| {
+        v.is_object()
+            && v.get("roots")
+                .and_then(Value::as_array)
+                .is_some_and(|r| !r.is_empty())
+    });
+    if !named_root {
+        return unknown("plugin-install --check named no readable plugin root");
+    }
+    verdict.unwrap()
 }

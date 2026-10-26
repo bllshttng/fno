@@ -168,7 +168,7 @@ fn parse_plugin_rows(plugins_json: &str) -> Result<Vec<PluginRow>, String> {
 
 fn run_codex(parts: &[&str], stage: &str) -> Result<(i32, String, String), String> {
     let owned: Vec<String> = parts.iter().map(|s| s.to_string()).collect();
-    super::super::bounded_command_for(&owned, 120)
+    super::super::super::bounded_command_for(&owned, 120)
         .ok_or_else(|| format!("{stage}: failed to run codex CLI"))
 }
 
@@ -182,7 +182,7 @@ fn tail_chars(s: &str, n: usize) -> String {
     s[start..].to_string()
 }
 
-fn stage_err(stage: &str, stderr: &str, stdout: &str, code: i32) -> String {
+fn stage_err(stage: &str, stderr: &str, stdout: &str) -> String {
     let mut detail = if stderr.trim().is_empty() {
         stdout
     } else {
@@ -200,11 +200,11 @@ fn collect_state() -> Result<(Vec<MarketplaceRow>, Vec<PluginRow>), String> {
         "marketplace-list",
     )?;
     if first.0 != 0 {
-        return Err(stage_err("marketplace-list", &first.2, &first.1, first.0));
+        return Err(stage_err("marketplace-list", &first.2, &first.1));
     }
     let second = run_codex(&["codex", "plugin", "list", "--json"], "plugin-list")?;
     if second.0 != 0 {
-        return Err(stage_err("plugin-list", &second.2, &second.1, second.0));
+        return Err(stage_err("plugin-list", &second.2, &second.1));
     }
     parse_state(&first.1, &second.1)
 }
@@ -597,7 +597,7 @@ fn payload_digest(root: &Path) -> Result<String, ()> {
         let Ok(read) = std::fs::read_dir(&base) else {
             continue;
         };
-        walk_digest_candidates(&base, read, &mut candidates);
+        walk_digest_candidates(read, &mut candidates);
     }
     candidates.retain(|p| p.is_file());
     candidates.sort_by_key(|p| {
@@ -620,12 +620,12 @@ fn payload_digest(root: &Path) -> Result<String, ()> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn walk_digest_candidates(dir: &Path, read: std::fs::ReadDir, out: &mut Vec<PathBuf>) {
+fn walk_digest_candidates(read: std::fs::ReadDir, out: &mut Vec<PathBuf>) {
     for entry in read.flatten() {
         let path = entry.path();
         if path.is_dir() {
             if let Ok(inner) = std::fs::read_dir(&path) {
-                walk_digest_candidates(&path, inner, out);
+                walk_digest_candidates(inner, out);
             }
             continue;
         }

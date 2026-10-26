@@ -335,7 +335,6 @@ fn run_plugin_file(args: &[String]) -> i32 {
                 return usage_error(&format!("Got unexpected extra argument ({w})"))
             }
             w => positional.push(w),
-            _ => {}
         }
         i += 1;
     }
@@ -447,16 +446,9 @@ fn run_home(args: &[String]) -> i32 {
         return 0;
     }
     if let Some(session_id) = find_transcript {
-        let mut out = serde_json::Map::new();
-        out.insert(
-            "path".to_string(),
-            match find_transcript_op(&session_id) {
-                Some(p) => Value::String(p),
-                None => Value::Null,
-            },
-        );
-        print_json(&Value::Object(out));
-        return 0;
+        // The op door already prints {"path": ...} in the parity format; the
+        // flag and the Python importers share one impl.
+        return find_transcript_op(&session_id);
     }
 
     if codex_hooks {
@@ -522,8 +514,7 @@ fn run_home(args: &[String]) -> i32 {
         }
         human::emit_human(&rep.value, src.as_deref(), false, cargo_present);
         if !fix {
-            if let Some(line) =
-                report::preamble_budget_line(src.as_ref().and_then(std::path::Path::to_str))
+            if let Some(line) = report::preamble_budget_line(src.as_ref().and_then(|p| p.to_str()))
             {
                 echo_stdout(&line);
                 if let Some(line) = report::session_start_bytes_line(&line) {
