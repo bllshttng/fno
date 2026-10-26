@@ -20,7 +20,6 @@ from typer.testing import CliRunner
 
 import fno.graph._constants as gc
 import fno.graph.store as gs
-import fno.provenance.spawn_think as st
 from fno.cli import app
 
 runner = CliRunner()
@@ -45,18 +44,6 @@ def _route_graph(g: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
 
 
-@pytest.fixture
-def capture_born(monkeypatch: pytest.MonkeyPatch):
-    """Patch on_node_born; return the list of (node_id, run_state) it observed."""
-    seen: list = []
-
-    def fake(node, *, run_state=None, **k):
-        seen.append(((node or {}).get("id"), run_state))
-
-    monkeypatch.setattr(st, "on_node_born", fake)
-    return seen
-
-
 # -- decompose child mint: deliberately NOT a birth-hook path --
 
 _EPIC = {
@@ -71,7 +58,7 @@ _GROUPS = json.dumps([
 ])
 
 
-def test_decompose_never_fires_birth_hook(tmp_path, monkeypatch, capture_born):
+def test_decompose_never_fires_birth_hook(tmp_path, monkeypatch):
     """An unflagged decompose child reaches no spawn seam, on any pass.
 
     The epic doc is a group child's design authority (the blueprint session
@@ -114,4 +101,3 @@ def test_decompose_never_fires_birth_hook(tmp_path, monkeypatch, capture_born):
     payload2 = json.loads(r2.stdout)
     assert [row["action"] for row in payload2["groups"]] == ["updated", "updated"]
     assert payload2["fanout"] == []
-    assert capture_born == []

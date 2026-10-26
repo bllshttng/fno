@@ -1,0 +1,5851 @@
+{
+  "cases": [
+    {
+      "fn": "node_summary",
+      "input": {
+        "entry": {
+          "id": "x-948e",
+          "status": "ready",
+          "superseded_by": "x-579e"
+        },
+        "archived": false
+      },
+      "output": {
+        "id": "x-948e",
+        "status": "ready",
+        "superseded_by": "x-579e"
+      }
+    },
+    {
+      "fn": "node_summary",
+      "input": {
+        "entry": {
+          "id": "x-948e",
+          "status": "ready",
+          "superseded_by": null
+        },
+        "archived": false
+      },
+      "output": {
+        "id": "x-948e",
+        "status": "ready"
+      }
+    },
+    {
+      "fn": "node_summary",
+      "input": {
+        "entry": {
+          "id": "a",
+          "slug": "s",
+          "title": "T",
+          "status": "done",
+          "superseded_by": "b",
+          "deferred_kind": "expired",
+          "domain": "code",
+          "project": "p",
+          "parent": "e",
+          "plan_path": "/p.md",
+          "pr_number": 7,
+          "pr_url": "https://x/7",
+          "additional_prs": [
+            {
+              "number": 8
+            }
+          ],
+          "merge_status": "merged",
+          "details": "dropped",
+          "type": "epic"
+        },
+        "archived": false
+      },
+      "output": {
+        "id": "a",
+        "slug": "s",
+        "title": "T",
+        "status": "done",
+        "superseded_by": "b",
+        "deferred_kind": "expired",
+        "domain": "code",
+        "project": "p",
+        "parent": "e",
+        "plan_path": "/p.md",
+        "pr_number": 7,
+        "pr_url": "https://x/7",
+        "additional_prs": [
+          {
+            "number": 8
+          }
+        ],
+        "merge_status": "merged"
+      }
+    },
+    {
+      "fn": "node_summary",
+      "input": {
+        "entry": {
+          "merge_status": "open",
+          "pr_number": 0,
+          "title": "",
+          "id": "z"
+        },
+        "archived": true
+      },
+      "output": {
+        "id": "z",
+        "title": "",
+        "pr_number": 0,
+        "merge_status": "open",
+        "archived": true
+      }
+    },
+    {
+      "fn": "node_summary",
+      "input": {
+        "entry": {},
+        "archived": false
+      },
+      "output": {}
+    },
+    {
+      "fn": "node_summary",
+      "input": {
+        "entry": {},
+        "archived": true
+      },
+      "output": {
+        "archived": true
+      }
+    },
+    {
+      "fn": "node_summary",
+      "input": {
+        "entry": {
+          "id": "q",
+          "additional_prs": [],
+          "pr_url": null,
+          "domain": false
+        },
+        "archived": false
+      },
+      "output": {
+        "id": "q",
+        "domain": false,
+        "additional_prs": []
+      }
+    },
+    {
+      "fn": "repository",
+      "input": {
+        "branch": [
+          "feature/x\n",
+          null
+        ],
+        "head": [
+          "abc123\n",
+          null
+        ],
+        "status": [
+          " M skills/think/SKILL.md\n?? new.txt\nR  old.py -> new.py\n",
+          null
+        ],
+        "log": [
+          "abc123\tPrior change\ndef456\tSecond\tTabbed\n",
+          null
+        ],
+        "root": "/r"
+      },
+      "output": {
+        "root": "/r",
+        "status": "ok",
+        "branch": "feature/x",
+        "head": "abc123",
+        "dirty_paths": [
+          "skills/think/SKILL.md",
+          "new.txt",
+          "new.py"
+        ],
+        "recent_commits": [
+          {
+            "sha": "abc123",
+            "subject": "Prior change"
+          },
+          {
+            "sha": "def456",
+            "subject": "Second\tTabbed"
+          }
+        ],
+        "detail": null
+      }
+    },
+    {
+      "fn": "repository",
+      "input": {
+        "branch": [
+          null,
+          "not a git repo"
+        ],
+        "head": [
+          null,
+          "not a git repo"
+        ],
+        "status": [
+          null,
+          "not a git repo"
+        ],
+        "log": [
+          null,
+          "fatal: bad"
+        ],
+        "root": "/r"
+      },
+      "output": {
+        "root": "/r",
+        "status": "error",
+        "branch": null,
+        "head": null,
+        "dirty_paths": [],
+        "recent_commits": [],
+        "detail": "not a git repo; fatal: bad"
+      }
+    },
+    {
+      "fn": "repository",
+      "input": {
+        "branch": [
+          "  \n",
+          null
+        ],
+        "head": [
+          "",
+          null
+        ],
+        "status": [
+          "",
+          null
+        ],
+        "log": [
+          "",
+          null
+        ],
+        "root": "/r"
+      },
+      "output": {
+        "root": "/r",
+        "status": "ok",
+        "branch": null,
+        "head": null,
+        "dirty_paths": [],
+        "recent_commits": [],
+        "detail": null
+      }
+    },
+    {
+      "fn": "repository",
+      "input": {
+        "branch": [
+          "main",
+          null
+        ],
+        "head": [
+          null,
+          ""
+        ],
+        "status": [
+          "M a\r\n x\rab\n",
+          null
+        ],
+        "log": [
+          "nosubject\n\n\tonlysubject\n",
+          null
+        ],
+        "root": "/r"
+      },
+      "output": {
+        "root": "/r",
+        "status": "ok",
+        "branch": "main",
+        "head": null,
+        "dirty_paths": [
+          "M a",
+          "x",
+          "ab"
+        ],
+        "recent_commits": [
+          {
+            "sha": "nosubject",
+            "subject": ""
+          }
+        ],
+        "detail": null
+      }
+    },
+    {
+      "fn": "repository",
+      "input": {
+        "branch": [
+          null,
+          "git not found"
+        ],
+        "head": [
+          null,
+          "git timed out"
+        ],
+        "status": [
+          null,
+          "git not found"
+        ],
+        "log": [
+          null,
+          "git timed out"
+        ],
+        "root": "/r"
+      },
+      "output": {
+        "root": "/r",
+        "status": "error",
+        "branch": null,
+        "head": null,
+        "dirty_paths": [],
+        "recent_commits": [],
+        "detail": "git not found; git timed out"
+      }
+    },
+    {
+      "fn": "pull_requests",
+      "input": {
+        "stdout": "[{\"number\": 608, \"title\": \"Lean\", \"state\": \"MERGED\", \"url\": \"u\"}]",
+        "error": null
+      },
+      "output": {
+        "status": "ok",
+        "matches": [
+          {
+            "number": 608,
+            "title": "Lean",
+            "state": "MERGED",
+            "url": "u"
+          }
+        ],
+        "detail": null
+      }
+    },
+    {
+      "fn": "pull_requests",
+      "input": {
+        "stdout": null,
+        "error": "gh not found"
+      },
+      "output": {
+        "status": "unavailable",
+        "matches": [],
+        "detail": "gh not found"
+      }
+    },
+    {
+      "fn": "pull_requests",
+      "input": {
+        "stdout": null,
+        "error": "HTTP 502"
+      },
+      "output": {
+        "status": "unavailable",
+        "matches": [],
+        "detail": "HTTP 502"
+      }
+    },
+    {
+      "fn": "pull_requests",
+      "input": {
+        "stdout": "",
+        "error": null
+      },
+      "output": {
+        "status": "ok",
+        "matches": [],
+        "detail": null
+      }
+    },
+    {
+      "fn": "pull_requests",
+      "input": {
+        "stdout": null,
+        "error": ""
+      },
+      "output": {
+        "status": "ok",
+        "matches": [],
+        "detail": null
+      }
+    },
+    {
+      "fn": "pull_requests",
+      "input": {
+        "stdout": "{\"number\": 1}",
+        "error": null
+      },
+      "output": {
+        "status": "error",
+        "matches": [],
+        "detail": "gh returned a non-list payload"
+      }
+    },
+    {
+      "fn": "pull_requests",
+      "input": {
+        "stdout": "[]\n",
+        "error": null
+      },
+      "output": {
+        "status": "ok",
+        "matches": [],
+        "detail": null
+      }
+    },
+    {
+      "fn": "pull_requests",
+      "input": {
+        "stdout": "[1, \"two\", null, {\"a\": 0.5}]",
+        "error": null
+      },
+      "output": {
+        "status": "ok",
+        "matches": [
+          1,
+          "two",
+          null,
+          {
+            "a": 0.5
+          }
+        ],
+        "detail": null
+      }
+    },
+    {
+      "fn": "pull_requests",
+      "input": {
+        "stdout": "  [ ]  ",
+        "error": null
+      },
+      "output": {
+        "status": "ok",
+        "matches": [],
+        "detail": null
+      }
+    },
+    {
+      "fn": "pitfall_headings",
+      "input": {
+        "files": {
+          "AGENTS.md": "# Agents\n\n## Pitfalls corpus (capped)\n\n### Guards can lie\n\nTrap.\n\n- added: 2026-07-25\n\n## Repository\n\n### Not a pitfall\n"
+        }
+      },
+      "output": [
+        "AGENTS.md",
+        [
+          "Guards can lie"
+        ]
+      ]
+    },
+    {
+      "fn": "pitfall_headings",
+      "input": {
+        "files": {
+          "AGENTS.md": "# Agents\n\nNo corpus here.\n",
+          "CLAUDE.md": "## Pitfalls corpus (capped)\n### One  \n###   Two words\n#### Deep\n"
+        }
+      },
+      "output": [
+        "CLAUDE.md",
+        [
+          "One",
+          "Two words"
+        ]
+      ]
+    },
+    {
+      "fn": "pitfall_headings",
+      "input": {
+        "files": {}
+      },
+      "output": [
+        "missing",
+        []
+      ]
+    },
+    {
+      "fn": "pitfall_headings",
+      "input": {
+        "files": {
+          "AGENTS.md": "## Pitfalls corpus (capped)\n\nNo entries today.\n"
+        }
+      },
+      "output": [
+        "AGENTS.md",
+        []
+      ]
+    },
+    {
+      "fn": "pitfall_headings",
+      "input": {
+        "files": {
+          "AGENTS.md": "## Pitfalls corpus (capped)\n### First\n## #hashed heading\n### Still in\n## Next\n### Out\n"
+        }
+      },
+      "output": [
+        "AGENTS.md",
+        [
+          "First",
+          "Still in"
+        ]
+      ]
+    },
+    {
+      "fn": "pitfall_headings",
+      "input": {
+        "files": {
+          "AGENTS.md": "## Pitfalls corpus (capped)\r\n### Windows line\r\n## End\r\n### Out\r\n"
+        }
+      },
+      "output": [
+        "AGENTS.md",
+        [
+          "Windows line"
+        ]
+      ]
+    },
+    {
+      "fn": "pitfall_headings",
+      "input": {
+        "files": {
+          "CLAUDE.md": "## Pitfalls corpus (capped)\n###\nWrapped heading\n### Tail"
+        }
+      },
+      "output": [
+        "CLAUDE.md",
+        [
+          "Wrapped heading",
+          "Tail"
+        ]
+      ]
+    },
+    {
+      "fn": "pitfall_headings",
+      "input": {
+        "files": {
+          "AGENTS.md": "intro\n## Pitfalls corpus (capped)### Inline\n### Real\n## \n### After bare\n"
+        }
+      },
+      "output": [
+        "AGENTS.md",
+        [
+          "Inline",
+          "Real"
+        ]
+      ]
+    },
+    {
+      "fn": "database",
+      "input": {
+        "files": {
+          "prisma/schema.prisma": "model User {}\n"
+        },
+        "artifact": "# Map\n\n## Database Schema\n",
+        "mtimes": {}
+      },
+      "output": {
+        "detected": true,
+        "signals": [
+          "prisma/schema.prisma"
+        ],
+        "schema_artifact": "codemap.md",
+        "schema_status": "grounded"
+      }
+    },
+    {
+      "fn": "database",
+      "input": {
+        "files": {
+          "drizzle.config.ts": "export default {}\n"
+        },
+        "artifact": null,
+        "mtimes": {}
+      },
+      "output": {
+        "detected": true,
+        "signals": [
+          "drizzle.config.ts"
+        ],
+        "schema_artifact": null,
+        "schema_status": "missing"
+      }
+    },
+    {
+      "fn": "database",
+      "input": {
+        "files": {},
+        "artifact": null,
+        "mtimes": {}
+      },
+      "output": {
+        "detected": false,
+        "signals": [],
+        "schema_artifact": null,
+        "schema_status": "not-applicable"
+      }
+    },
+    {
+      "fn": "database",
+      "input": {
+        "files": {},
+        "artifact": "# Map only\n",
+        "mtimes": {}
+      },
+      "output": {
+        "detected": false,
+        "signals": [],
+        "schema_artifact": "codemap.md",
+        "schema_status": "not-applicable"
+      }
+    },
+    {
+      "fn": "database",
+      "input": {
+        "files": {},
+        "artifact": "## Database Schema\n",
+        "mtimes": {}
+      },
+      "output": {
+        "detected": true,
+        "signals": [],
+        "schema_artifact": "codemap.md",
+        "schema_status": "grounded"
+      }
+    },
+    {
+      "fn": "database",
+      "input": {
+        "files": {
+          ".env": "DATABASE_URL=postgres://x\n  DIRECT_URL = y\nOTHER=1\n",
+          ".env.local": "# POSTGRES_URL=commented\nSUPABASE_DB_URL=z\nDATABASE_URL=again\n",
+          ".env.test": "NOTHING=here\n"
+        },
+        "artifact": null,
+        "mtimes": {}
+      },
+      "output": {
+        "detected": true,
+        "signals": [
+          ".env.local:DATABASE_URL",
+          ".env.local:SUPABASE_DB_URL",
+          ".env:DATABASE_URL",
+          ".env:DIRECT_URL"
+        ],
+        "schema_artifact": null,
+        "schema_status": "missing"
+      }
+    },
+    {
+      "fn": "database",
+      "input": {
+        "files": {
+          "supabase/migrations/001.sql": "create table t();\n",
+          "drizzle/meta/_journal.json": "{}"
+        },
+        "artifact": "## Database Schema\n",
+        "mtimes": {
+          "supabase/migrations/001.sql": 2000000000,
+          "drizzle/meta/_journal.json": 1000,
+          "@artifact": 1500000000
+        }
+      },
+      "output": {
+        "detected": true,
+        "signals": [
+          "drizzle",
+          "supabase/migrations"
+        ],
+        "schema_artifact": "codemap.md",
+        "schema_status": "stale"
+      }
+    },
+    {
+      "fn": "database",
+      "input": {
+        "files": {
+          "prisma/schema.prisma": "model A {}\n"
+        },
+        "artifact": "## Database Schema\n",
+        "mtimes": {
+          "prisma/schema.prisma": 1000,
+          "@artifact": 2000
+        }
+      },
+      "output": {
+        "detected": true,
+        "signals": [
+          "prisma/schema.prisma"
+        ],
+        "schema_artifact": "codemap.md",
+        "schema_status": "grounded"
+      }
+    },
+    {
+      "fn": "database",
+      "input": {
+        "files": {
+          ".env.development": "DATABASE_URL=a\n"
+        },
+        "artifact": "x\n## Database Schema\n",
+        "mtimes": {
+          ".env.development": 3000,
+          "@artifact": 2000
+        }
+      },
+      "output": {
+        "detected": true,
+        "signals": [
+          ".env.development:DATABASE_URL"
+        ],
+        "schema_artifact": "codemap.md",
+        "schema_status": "stale"
+      }
+    },
+    {
+      "fn": "database",
+      "input": {
+        "files": {
+          "drizzle.config.mjs": "",
+          "drizzle.config.cjs": "",
+          "drizzle.config.js": ""
+        },
+        "artifact": null,
+        "mtimes": {}
+      },
+      "output": {
+        "detected": true,
+        "signals": [
+          "drizzle.config.cjs",
+          "drizzle.config.js",
+          "drizzle.config.mjs"
+        ],
+        "schema_artifact": null,
+        "schema_status": "missing"
+      }
+    },
+    {
+      "fn": "pitfalls",
+      "input": {
+        "files": {
+          "AGENTS.md": "## Pitfalls corpus (capped)\n### Guards can lie\n"
+        },
+        "plans": [
+          "20260725-retro-synthesis-x-abcd.md",
+          "plain.md"
+        ],
+        "lessons": "{}\n{}\n"
+      },
+      "output": {
+        "source": "AGENTS.md",
+        "entries": [
+          "Guards can lie"
+        ],
+        "retro_syntheses": [
+          "<TMP>/plans/20260725-retro-synthesis-x-abcd.md"
+        ],
+        "lesson_candidates": 2
+      }
+    },
+    {
+      "fn": "pitfalls",
+      "input": {
+        "files": {},
+        "plans": null,
+        "lessons": null
+      },
+      "output": {
+        "source": "missing",
+        "entries": [],
+        "retro_syntheses": [],
+        "lesson_candidates": 0
+      }
+    },
+    {
+      "fn": "pitfalls",
+      "input": {
+        "files": {},
+        "plans": [],
+        "lessons": "\n  \n{}\n"
+      },
+      "output": {
+        "source": "missing",
+        "entries": [],
+        "retro_syntheses": [],
+        "lesson_candidates": 1
+      }
+    },
+    {
+      "fn": "pitfalls",
+      "input": {
+        "files": {},
+        "plans": [
+          "20260101-retro-synthesis-a.md",
+          "20260201-retro-synthesis-b.md",
+          "20260301-retro-synthesis-c.md",
+          "20260401-retro-synthesis-d.md",
+          "20260501-retro-synthesis-e.md",
+          "20260601-retro-synthesis-f.md",
+          "retro-synthesis.md",
+          "retro-synthesis.txt",
+          "my-retro-synthesis-notes.md"
+        ],
+        "lessons": "{}\r\n{}\r\n\r\n"
+      },
+      "output": {
+        "source": "missing",
+        "entries": [],
+        "retro_syntheses": [
+          "<TMP>/plans/retro-synthesis.md",
+          "<TMP>/plans/my-retro-synthesis-notes.md",
+          "<TMP>/plans/20260601-retro-synthesis-f.md",
+          "<TMP>/plans/20260501-retro-synthesis-e.md",
+          "<TMP>/plans/20260401-retro-synthesis-d.md"
+        ],
+        "lesson_candidates": 2
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-4007",
+        "entries": [
+          {
+            "id": "x-4007",
+            "slug": "lean-think",
+            "title": "Lean think discovery receipt",
+            "details": "deterministic discovery for think",
+            "status": "in_progress",
+            "domain": "code",
+            "parent": "x-7a93"
+          },
+          {
+            "id": "x-1111",
+            "slug": "think-discovery",
+            "title": "Think deterministic discovery",
+            "details": "receipt for think discovery",
+            "status": "done",
+            "domain": "code"
+          },
+          {
+            "id": "x-7a93",
+            "slug": "context-evolution",
+            "title": "Lean think graph evolution",
+            "details": "context and graph evolution epic",
+            "status": "ready",
+            "domain": "code",
+            "type": "epic"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "x-4007",
+          "slug": "lean-think",
+          "title": "Lean think discovery receipt",
+          "status": "in_progress",
+          "domain": "code",
+          "parent": "x-7a93"
+        },
+        "parent": {
+          "id": "x-7a93",
+          "slug": "context-evolution",
+          "title": "Lean think graph evolution",
+          "status": "ready",
+          "domain": "code"
+        },
+        "closure": {
+          "status": "in_progress",
+          "pr_number": null,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-1111",
+            "slug": "think-discovery",
+            "title": "Think deterministic discovery",
+            "status": "done",
+            "domain": "code",
+            "score": 0.9,
+            "reason": "4 shared terms (deterministic, discovery, receipt); shared domain 'code'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-7a93",
+            "slug": "context-evolution",
+            "title": "Lean think graph evolution",
+            "status": "ready",
+            "domain": "code",
+            "score": 0.3222,
+            "reason": "2 shared terms (lean, think); shared domain 'code'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 5,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "LEAN-THINK",
+        "entries": [
+          {
+            "id": "x-4007",
+            "slug": "lean-think",
+            "title": "Lean think discovery receipt",
+            "details": "deterministic discovery for think",
+            "status": "in_progress",
+            "domain": "code",
+            "parent": "x-7a93"
+          },
+          {
+            "id": "x-1111",
+            "slug": "think-discovery",
+            "title": "Think deterministic discovery",
+            "details": "receipt for think discovery",
+            "status": "done",
+            "domain": "code"
+          },
+          {
+            "id": "x-7a93",
+            "slug": "context-evolution",
+            "title": "Lean think graph evolution",
+            "details": "context and graph evolution epic",
+            "status": "ready",
+            "domain": "code",
+            "type": "epic"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "x-4007",
+          "slug": "lean-think",
+          "title": "Lean think discovery receipt",
+          "status": "in_progress",
+          "domain": "code",
+          "parent": "x-7a93"
+        },
+        "parent": {
+          "id": "x-7a93",
+          "slug": "context-evolution",
+          "title": "Lean think graph evolution",
+          "status": "ready",
+          "domain": "code"
+        },
+        "closure": {
+          "status": "in_progress",
+          "pr_number": null,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-1111",
+            "slug": "think-discovery",
+            "title": "Think deterministic discovery",
+            "status": "done",
+            "domain": "code",
+            "score": 0.9,
+            "reason": "4 shared terms (deterministic, discovery, receipt); shared domain 'code'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-7a93",
+            "slug": "context-evolution",
+            "title": "Lean think graph evolution",
+            "status": "ready",
+            "domain": "code",
+            "score": 0.3222,
+            "reason": "2 shared terms (lean, think); shared domain 'code'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 5,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "  x-4007  ",
+        "entries": [
+          {
+            "id": "x-4007",
+            "slug": "lean-think",
+            "title": "Lean think discovery receipt",
+            "details": "deterministic discovery for think",
+            "status": "in_progress",
+            "domain": "code",
+            "parent": "x-7a93"
+          },
+          {
+            "id": "x-1111",
+            "slug": "think-discovery",
+            "title": "Think deterministic discovery",
+            "details": "receipt for think discovery",
+            "status": "done",
+            "domain": "code"
+          },
+          {
+            "id": "x-7a93",
+            "slug": "context-evolution",
+            "title": "Lean think graph evolution",
+            "details": "context and graph evolution epic",
+            "status": "ready",
+            "domain": "code",
+            "type": "epic"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "x-4007",
+          "slug": "lean-think",
+          "title": "Lean think discovery receipt",
+          "status": "in_progress",
+          "domain": "code",
+          "parent": "x-7a93"
+        },
+        "parent": {
+          "id": "x-7a93",
+          "slug": "context-evolution",
+          "title": "Lean think graph evolution",
+          "status": "ready",
+          "domain": "code"
+        },
+        "closure": {
+          "status": "in_progress",
+          "pr_number": null,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-1111",
+            "slug": "think-discovery",
+            "title": "Think deterministic discovery",
+            "status": "done",
+            "domain": "code",
+            "score": 0.9,
+            "reason": "4 shared terms (deterministic, discovery, receipt); shared domain 'code'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-7a93",
+            "slug": "context-evolution",
+            "title": "Lean think graph evolution",
+            "status": "ready",
+            "domain": "code",
+            "score": 0.3222,
+            "reason": "2 shared terms (lean, think); shared domain 'code'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 5,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "Lean think discovery receipt",
+        "entries": [
+          {
+            "id": "x-4007",
+            "slug": "lean-think",
+            "title": "Lean think discovery receipt",
+            "details": "deterministic discovery for think",
+            "status": "in_progress",
+            "domain": "code",
+            "parent": "x-7a93"
+          },
+          {
+            "id": "x-1111",
+            "slug": "think-discovery",
+            "title": "Think deterministic discovery",
+            "details": "receipt for think discovery",
+            "status": "done",
+            "domain": "code"
+          },
+          {
+            "id": "x-7a93",
+            "slug": "context-evolution",
+            "title": "Lean think graph evolution",
+            "details": "context and graph evolution epic",
+            "status": "ready",
+            "domain": "code",
+            "type": "epic"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "ok",
+        "resolved": null,
+        "parent": null,
+        "closure": null,
+        "duplicates": [
+          {
+            "id": "x-4007",
+            "slug": "lean-think",
+            "title": "Lean think discovery receipt",
+            "status": "in_progress",
+            "domain": "code",
+            "score": 0.8,
+            "reason": "4 shared terms (discovery, lean, receipt)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-1111",
+            "slug": "think-discovery",
+            "title": "Think deterministic discovery",
+            "status": "done",
+            "domain": "code",
+            "score": 0.6,
+            "reason": "3 shared terms (discovery, receipt, think)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-7a93",
+            "slug": "context-evolution",
+            "title": "Lean think graph evolution",
+            "status": "ready",
+            "domain": "code",
+            "score": 0.25,
+            "reason": "2 shared terms (lean, think)",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-7a93",
+            "slug": "context-evolution",
+            "title": "Lean think graph evolution",
+            "status": "ready",
+            "domain": "code",
+            "score": 0.25,
+            "reason": "2 shared terms (lean, think)"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "seed",
+          "seed_tokens": 4,
+          "floor": 0.04999999999999999,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "-x-4007",
+        "entries": [
+          {
+            "id": "x-4007",
+            "slug": "lean-think",
+            "title": "Lean think discovery receipt",
+            "details": "deterministic discovery for think",
+            "status": "in_progress",
+            "domain": "code",
+            "parent": "x-7a93"
+          },
+          {
+            "id": "x-1111",
+            "slug": "think-discovery",
+            "title": "Think deterministic discovery",
+            "details": "receipt for think discovery",
+            "status": "done",
+            "domain": "code"
+          },
+          {
+            "id": "x-7a93",
+            "slug": "context-evolution",
+            "title": "Lean think graph evolution",
+            "details": "context and graph evolution epic",
+            "status": "ready",
+            "domain": "code",
+            "type": "epic"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "ok",
+        "resolved": null,
+        "parent": null,
+        "closure": null,
+        "duplicates": [],
+        "epic_candidates": [],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "seed",
+          "seed_tokens": 0,
+          "floor": 0.04999999999999999,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "",
+        "entries": [
+          {
+            "id": "x-4007",
+            "slug": "lean-think",
+            "title": "Lean think discovery receipt",
+            "details": "deterministic discovery for think",
+            "status": "in_progress",
+            "domain": "code",
+            "parent": "x-7a93"
+          },
+          {
+            "id": "x-1111",
+            "slug": "think-discovery",
+            "title": "Think deterministic discovery",
+            "details": "receipt for think discovery",
+            "status": "done",
+            "domain": "code"
+          },
+          {
+            "id": "x-7a93",
+            "slug": "context-evolution",
+            "title": "Lean think graph evolution",
+            "details": "context and graph evolution epic",
+            "status": "ready",
+            "domain": "code",
+            "type": "epic"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "ok",
+        "resolved": null,
+        "parent": null,
+        "closure": null,
+        "duplicates": [],
+        "epic_candidates": [],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "seed",
+          "seed_tokens": 0,
+          "floor": 0.04999999999999999,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-4007",
+        "entries": null,
+        "archive": [],
+        "error": "graph unreadable",
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "error",
+        "resolved": null,
+        "parent": null,
+        "closure": null,
+        "duplicates": [],
+        "epic_candidates": [],
+        "archive_status": "ok",
+        "detail": "graph unreadable",
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-4007",
+        "entries": null,
+        "archive": [],
+        "error": null,
+        "archive_error": "boom",
+        "decisions": []
+      },
+      "output": {
+        "status": "error",
+        "resolved": null,
+        "parent": null,
+        "closure": null,
+        "duplicates": [],
+        "epic_candidates": [],
+        "archive_status": "error",
+        "detail": "graph unavailable",
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-4007",
+        "entries": null,
+        "archive": [],
+        "error": "",
+        "archive_error": "",
+        "decisions": []
+      },
+      "output": {
+        "status": "error",
+        "resolved": null,
+        "parent": null,
+        "closure": null,
+        "duplicates": [],
+        "epic_candidates": [],
+        "archive_status": "ok",
+        "detail": "graph unavailable",
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "wombat burrow falcon heron ibex jaguar kraken lynx",
+        "entries": [
+          {
+            "id": "fam",
+            "slug": "fam",
+            "title": "wombat burrow falcon heron ibex jaguar kraken lynx filler001 filler002 filler003 filler004 filler005 filler006 filler007 filler008 filler009 filler010 filler011 filler012 filler013 filler014 filler015 filler016 filler017 filler018 filler019 filler020 filler021 filler022 filler023 filler024 filler025 filler026 filler027 filler028 filler029 filler030 filler031 filler032 filler033 filler034 filler035 filler036 filler037 filler038 filler039 filler040 filler041 filler042 filler043 filler044 filler045 filler046 filler047 filler048 filler049 filler050 filler051 filler052 filler053 filler054 filler055 filler056 filler057 filler058 filler059 filler060 filler061 filler062 filler063 filler064 filler065 filler066 filler067 filler068 filler069 filler070 filler071 filler072 filler073 filler074 filler075 filler076 filler077 filler078 filler079 filler080 filler081 filler082 filler083 filler084 filler085 filler086 filler087 filler088 filler089 filler090 filler091 filler092 filler093 filler094 filler095 filler096 filler097 filler098 filler099 filler100 filler101 filler102 filler103 filler104 filler105 filler106 filler107 filler108 filler109 filler110 filler111 filler112 filler113 filler114 filler115 filler116 filler117 filler118 filler119 filler120 filler121 filler122 filler123 filler124 filler125 filler126 filler127 filler128 filler129 filler130 filler131 filler132 filler133 filler134 filler135 filler136 filler137 filler138 filler139 filler140 filler141 filler142 filler143 filler144 filler145 filler146 filler147 filler148 filler149 filler150 filler151 filler152 filler153 filler154 filler155 filler156 filler157 filler158 filler159 filler160",
+            "status": "ready",
+            "domain": "code"
+          },
+          {
+            "id": "noise1",
+            "slug": "noise1",
+            "title": "wombat burrow falcon heron ibex noiseword1",
+            "status": "ready",
+            "domain": "code"
+          },
+          {
+            "id": "noise2",
+            "slug": "noise2",
+            "title": "burrow falcon heron ibex jaguar noiseword2",
+            "status": "ready",
+            "domain": "code"
+          },
+          {
+            "id": "noise3",
+            "slug": "noise3",
+            "title": "falcon heron ibex jaguar kraken noiseword3",
+            "status": "ready",
+            "domain": "code"
+          },
+          {
+            "id": "noise4",
+            "slug": "noise4",
+            "title": "heron ibex jaguar kraken lynx noiseword4",
+            "status": "ready",
+            "domain": "code"
+          },
+          {
+            "id": "noise5",
+            "slug": "noise5",
+            "title": "wombat burrow falcon heron ibex noiseword5",
+            "status": "ready",
+            "domain": "code"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "ok",
+        "resolved": null,
+        "parent": null,
+        "closure": null,
+        "duplicates": [
+          {
+            "id": "noise1",
+            "slug": "noise1",
+            "title": "wombat burrow falcon heron ibex noiseword1",
+            "status": "ready",
+            "domain": "code",
+            "score": 0.5,
+            "reason": "5 shared terms (burrow, falcon, heron)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "noise2",
+            "slug": "noise2",
+            "title": "burrow falcon heron ibex jaguar noiseword2",
+            "status": "ready",
+            "domain": "code",
+            "score": 0.5,
+            "reason": "5 shared terms (burrow, falcon, heron)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "noise3",
+            "slug": "noise3",
+            "title": "falcon heron ibex jaguar kraken noiseword3",
+            "status": "ready",
+            "domain": "code",
+            "score": 0.5,
+            "reason": "5 shared terms (falcon, heron, ibex)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "noise4",
+            "slug": "noise4",
+            "title": "heron ibex jaguar kraken lynx noiseword4",
+            "status": "ready",
+            "domain": "code",
+            "score": 0.5,
+            "reason": "5 shared terms (heron, ibex, jaguar)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "noise5",
+            "slug": "noise5",
+            "title": "wombat burrow falcon heron ibex noiseword5",
+            "status": "ready",
+            "domain": "code",
+            "score": 0.5,
+            "reason": "5 shared terms (burrow, falcon, heron)",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "seed",
+          "seed_tokens": 8,
+          "floor": 0.04999999999999999,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-aaaa",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          }
+        ],
+        "archive": [
+          {
+            "id": "x-0a0a",
+            "slug": "archived-deploy",
+            "title": "Deploy pipeline flake archived",
+            "details": "deploy pipeline flakes on retry",
+            "status": "done",
+            "domain": "infra",
+            "parent": "x-0b0b"
+          },
+          {
+            "id": "x-0b0b",
+            "slug": "archived-epic",
+            "title": "Archived deploy pipeline epic",
+            "details": "deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-aaaa",
+            "slug": "shadowed",
+            "title": "Shadowed archive copy",
+            "status": "done"
+          }
+        ],
+        "error": null,
+        "archive_error": null,
+        "decisions": [
+          {
+            "decision_id": "d-00000000",
+            "ts": "2026-09-01T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 0",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000001",
+            "ts": "2026-09-02T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 1",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000002",
+            "ts": "2026-09-03T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 2",
+            "lifecycle": "live",
+            "superseded_by": null
+          }
+        ]
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "x-aaaa",
+          "slug": "deploy-pipeline",
+          "title": "Deploy pipeline flake fix",
+          "status": "ready",
+          "domain": "infra",
+          "parent": "x-eeee",
+          "pr_number": 12,
+          "pr_url": "https://github.com/o/r/pull/12"
+        },
+        "parent": {
+          "id": "x-eeee",
+          "slug": "deploy-epic",
+          "title": "Deploy pipeline reliability",
+          "status": "ready",
+          "domain": "infra",
+          "parent": "x-ffff"
+        },
+        "closure": {
+          "status": "ready",
+          "pr_number": 12,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "status": "ready",
+            "domain": "infra",
+            "score": 1.1,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-0a0a",
+            "slug": "archived-deploy",
+            "title": "Deploy pipeline flake archived",
+            "status": "done",
+            "domain": "infra",
+            "archived": true,
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra",
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.5286,
+            "reason": "3 shared terms (deploy, flake, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.4333,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-0b0b",
+            "slug": "archived-epic",
+            "title": "Archived deploy pipeline epic",
+            "status": "ready",
+            "domain": "infra",
+            "archived": true,
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-ffff",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3222,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 5,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [
+          {
+            "decision_id": "d-00000000",
+            "ts": "2026-09-01T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 0",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000001",
+            "ts": "2026-09-02T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 1",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000002",
+            "ts": "2026-09-03T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 2",
+            "lifecycle": "live"
+          }
+        ],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "deploy-pipeline",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          }
+        ],
+        "archive": [
+          {
+            "id": "x-0a0a",
+            "slug": "archived-deploy",
+            "title": "Deploy pipeline flake archived",
+            "details": "deploy pipeline flakes on retry",
+            "status": "done",
+            "domain": "infra",
+            "parent": "x-0b0b"
+          },
+          {
+            "id": "x-0b0b",
+            "slug": "archived-epic",
+            "title": "Archived deploy pipeline epic",
+            "details": "deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-aaaa",
+            "slug": "shadowed",
+            "title": "Shadowed archive copy",
+            "status": "done"
+          }
+        ],
+        "error": null,
+        "archive_error": "archive corrupt",
+        "decisions": []
+      },
+      "output": {
+        "status": "partial",
+        "resolved": {
+          "id": "x-aaaa",
+          "slug": "deploy-pipeline",
+          "title": "Deploy pipeline flake fix",
+          "status": "ready",
+          "domain": "infra",
+          "parent": "x-eeee",
+          "pr_number": 12,
+          "pr_url": "https://github.com/o/r/pull/12"
+        },
+        "parent": {
+          "id": "x-eeee",
+          "slug": "deploy-epic",
+          "title": "Deploy pipeline reliability",
+          "status": "ready",
+          "domain": "infra",
+          "parent": "x-ffff"
+        },
+        "closure": {
+          "status": "ready",
+          "pr_number": 12,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "status": "ready",
+            "domain": "infra",
+            "score": 1.1,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-0a0a",
+            "slug": "archived-deploy",
+            "title": "Deploy pipeline flake archived",
+            "status": "done",
+            "domain": "infra",
+            "archived": true,
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra",
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.5286,
+            "reason": "3 shared terms (deploy, flake, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.4333,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-0b0b",
+            "slug": "archived-epic",
+            "title": "Archived deploy pipeline epic",
+            "status": "ready",
+            "domain": "infra",
+            "archived": true,
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-ffff",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3222,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          }
+        ],
+        "archive_status": "error",
+        "detail": "archive unreadable: archive corrupt",
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 5,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-0a0a",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          }
+        ],
+        "archive": [
+          {
+            "id": "x-0a0a",
+            "slug": "archived-deploy",
+            "title": "Deploy pipeline flake archived",
+            "details": "deploy pipeline flakes on retry",
+            "status": "done",
+            "domain": "infra",
+            "parent": "x-0b0b"
+          },
+          {
+            "id": "x-0b0b",
+            "slug": "archived-epic",
+            "title": "Archived deploy pipeline epic",
+            "details": "deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-aaaa",
+            "slug": "shadowed",
+            "title": "Shadowed archive copy",
+            "status": "done"
+          }
+        ],
+        "error": null,
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "x-0a0a",
+          "slug": "archived-deploy",
+          "title": "Deploy pipeline flake archived",
+          "status": "done",
+          "domain": "infra",
+          "parent": "x-0b0b",
+          "archived": true
+        },
+        "parent": {
+          "id": "x-0b0b",
+          "slug": "archived-epic",
+          "title": "Archived deploy pipeline epic",
+          "status": "ready",
+          "domain": "infra",
+          "archived": true
+        },
+        "closure": {
+          "status": "done",
+          "pr_number": null,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra",
+            "score": 0.8143,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.475,
+            "reason": "3 shared terms (deploy, flake, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-0b0b",
+            "slug": "archived-epic",
+            "title": "Archived deploy pipeline epic",
+            "status": "ready",
+            "domain": "infra",
+            "archived": true,
+            "score": 0.5286,
+            "reason": "3 shared terms (archived, deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-ffff",
+            "score": 0.35,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 6,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "1234abcd",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "ab-1234abcd",
+          "slug": "legacy",
+          "title": "Legacy deploy pipeline",
+          "status": "done",
+          "domain": "infra"
+        },
+        "parent": null,
+        "closure": {
+          "status": "done",
+          "pr_number": null,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.5,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.4333,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.4333,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.4333,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-ffff",
+            "score": 0.5,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 3,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "deploy pipeline flake retry",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          }
+        ],
+        "archive": [
+          {
+            "id": "x-0a0a",
+            "slug": "archived-deploy",
+            "title": "Deploy pipeline flake archived",
+            "details": "deploy pipeline flakes on retry",
+            "status": "done",
+            "domain": "infra",
+            "parent": "x-0b0b"
+          },
+          {
+            "id": "x-0b0b",
+            "slug": "archived-epic",
+            "title": "Archived deploy pipeline epic",
+            "details": "deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-aaaa",
+            "slug": "shadowed",
+            "title": "Shadowed archive copy",
+            "status": "done"
+          }
+        ],
+        "error": null,
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "ok",
+        "resolved": null,
+        "parent": null,
+        "closure": null,
+        "duplicates": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.8,
+            "reason": "4 shared terms (deploy, flake, pipeline)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.8,
+            "reason": "4 shared terms (deploy, flake, pipeline)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-0a0a",
+            "slug": "archived-deploy",
+            "title": "Deploy pipeline flake archived",
+            "status": "done",
+            "domain": "infra",
+            "archived": true,
+            "score": 0.6667,
+            "reason": "4 shared terms (deploy, flake, pipeline)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra",
+            "score": 0.6667,
+            "reason": "4 shared terms (deploy, flake, pipeline)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.5,
+            "reason": "3 shared terms (deploy, flake, pipeline)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.4,
+            "reason": "2 shared terms (deploy, pipeline)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-0b0b",
+            "slug": "archived-epic",
+            "title": "Archived deploy pipeline epic",
+            "status": "ready",
+            "domain": "infra",
+            "archived": true,
+            "score": 0.3333,
+            "reason": "2 shared terms (deploy, pipeline)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3333,
+            "reason": "2 shared terms (deploy, pipeline)",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.25,
+            "reason": "2 shared terms (deploy, pipeline)",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-0b0b",
+            "slug": "archived-epic",
+            "title": "Archived deploy pipeline epic",
+            "status": "ready",
+            "domain": "infra",
+            "archived": true,
+            "score": 0.3333,
+            "reason": "2 shared terms (deploy, pipeline)"
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-ffff",
+            "score": 0.3333,
+            "reason": "2 shared terms (deploy, pipeline)"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.25,
+            "reason": "2 shared terms (deploy, pipeline)"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "seed",
+          "seed_tokens": 4,
+          "floor": 0.04999999999999999,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "zzz unrelated words",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": []
+      },
+      "output": {
+        "status": "ok",
+        "resolved": null,
+        "parent": null,
+        "closure": null,
+        "duplicates": [],
+        "epic_candidates": [],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "seed",
+          "seed_tokens": 3,
+          "floor": 0.04999999999999999,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-bbbb",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          },
+          "junk",
+          3,
+          {
+            "slug": "no-id"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": {
+          "raise": "index corrupt"
+        }
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "x-bbbb",
+          "slug": "deploy-retry",
+          "title": "Deploy pipeline retry flake",
+          "status": "ready",
+          "domain": "infra"
+        },
+        "parent": null,
+        "closure": {
+          "status": "ready",
+          "pr_number": null,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "status": "ready",
+            "domain": "infra",
+            "score": 1.1,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra",
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.5286,
+            "reason": "3 shared terms (deploy, flake, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.4333,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-ffff",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3222,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 5,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [],
+        "decisions_status": "error",
+        "decisions_truncated": false,
+        "decisions_detail": "decision index unreadable: index corrupt"
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-bbbb",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": [
+          {
+            "decision_id": "d-00000000",
+            "ts": "2026-09-01T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 0",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000001",
+            "ts": "2026-09-02T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 1",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000002",
+            "ts": "2026-09-03T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 2",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000003",
+            "ts": "2026-09-04T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 3",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000004",
+            "ts": "2026-09-05T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 4",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000005",
+            "ts": "2026-09-06T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 5",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000006",
+            "ts": "2026-09-07T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 6",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000007",
+            "ts": "2026-09-08T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 7",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000008",
+            "ts": "2026-09-09T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 8",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000009",
+            "ts": "2026-09-10T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 9",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-0000000a",
+            "ts": "2026-09-11T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 10",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-0000000b",
+            "ts": "2026-09-12T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 11",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-0000000c",
+            "ts": "2026-09-13T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 12",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-0000000d",
+            "ts": "2026-09-14T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 13",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-0000000e",
+            "ts": "2026-09-15T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 14",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-0000000f",
+            "ts": "2026-09-16T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 15",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000010",
+            "ts": "2026-09-17T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 16",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000011",
+            "ts": "2026-09-18T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 17",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000012",
+            "ts": "2026-09-19T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 18",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000013",
+            "ts": "2026-09-20T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 19",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000014",
+            "ts": "2026-09-21T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 20",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000015",
+            "ts": "2026-09-22T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 21",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000016",
+            "ts": "2026-09-23T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 22",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000017",
+            "ts": "2026-09-24T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 23",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000018",
+            "ts": "2026-09-25T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 24",
+            "lifecycle": "live",
+            "superseded_by": null
+          }
+        ]
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "x-bbbb",
+          "slug": "deploy-retry",
+          "title": "Deploy pipeline retry flake",
+          "status": "ready",
+          "domain": "infra"
+        },
+        "parent": null,
+        "closure": {
+          "status": "ready",
+          "pr_number": null,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "status": "ready",
+            "domain": "infra",
+            "score": 1.1,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra",
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.5286,
+            "reason": "3 shared terms (deploy, flake, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.4333,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-ffff",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3222,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 5,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [
+          {
+            "decision_id": "d-00000000",
+            "ts": "2026-09-01T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 0",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000001",
+            "ts": "2026-09-02T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 1",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000002",
+            "ts": "2026-09-03T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 2",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000003",
+            "ts": "2026-09-04T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 3",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000004",
+            "ts": "2026-09-05T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 4",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000005",
+            "ts": "2026-09-06T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 5",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000006",
+            "ts": "2026-09-07T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 6",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000007",
+            "ts": "2026-09-08T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 7",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000008",
+            "ts": "2026-09-09T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 8",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000009",
+            "ts": "2026-09-10T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 9",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-0000000a",
+            "ts": "2026-09-11T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 10",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-0000000b",
+            "ts": "2026-09-12T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 11",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-0000000c",
+            "ts": "2026-09-13T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 12",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-0000000d",
+            "ts": "2026-09-14T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 13",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-0000000e",
+            "ts": "2026-09-15T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 14",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-0000000f",
+            "ts": "2026-09-16T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 15",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000010",
+            "ts": "2026-09-17T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 16",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000011",
+            "ts": "2026-09-18T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 17",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000012",
+            "ts": "2026-09-19T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 18",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000013",
+            "ts": "2026-09-20T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 19",
+            "lifecycle": "live"
+          }
+        ],
+        "decisions_status": "ok",
+        "decisions_truncated": true,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-bbbb",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": [
+          {
+            "decision_id": "d-00000000",
+            "ts": "2026-09-01T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 0",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000001",
+            "ts": "2026-09-02T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 1",
+            "lifecycle": "live",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-00000000",
+            "ts": "2026-09-01T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 0",
+            "lifecycle": "live",
+            "superseded_by": "d-ffffffff"
+          },
+          {
+            "decision_id": "d-00000001",
+            "ts": "2026-09-02T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "decision": "ruling 1",
+            "lifecycle": "live",
+            "superseded_by": "d-ffffffff"
+          }
+        ]
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "x-bbbb",
+          "slug": "deploy-retry",
+          "title": "Deploy pipeline retry flake",
+          "status": "ready",
+          "domain": "infra"
+        },
+        "parent": null,
+        "closure": {
+          "status": "ready",
+          "pr_number": null,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "status": "ready",
+            "domain": "infra",
+            "score": 1.1,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra",
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.5286,
+            "reason": "3 shared terms (deploy, flake, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.4333,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-ffff",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3222,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 5,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [
+          {
+            "decision_id": "d-00000000",
+            "ts": "2026-09-01T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 0",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-00000001",
+            "ts": "2026-09-02T00:00:00Z",
+            "lane": "law",
+            "subject": "x-aaaa",
+            "text": "ruling 1",
+            "lifecycle": "live"
+          }
+        ],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-bbbb",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": [
+          {
+            "decision_id": "d-62cd9d80",
+            "ts": "2026-08-22T12:27:04Z",
+            "lane": "coord",
+            "subject": "x-bbbb",
+            "decision": "CORRECTION, SUPERSEDES d-85352ee7. WITHDRAWN.",
+            "supersedes": "d-85352ee7",
+            "superseded_by": null
+          },
+          {
+            "decision_id": "d-85352ee7",
+            "ts": "2026-08-22T12:12:00Z",
+            "lane": "coord",
+            "subject": "x-bbbb",
+            "decision": "HYBRID",
+            "supersedes": null,
+            "superseded_by": "d-62cd9d80"
+          }
+        ]
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "x-bbbb",
+          "slug": "deploy-retry",
+          "title": "Deploy pipeline retry flake",
+          "status": "ready",
+          "domain": "infra"
+        },
+        "parent": null,
+        "closure": {
+          "status": "ready",
+          "pr_number": null,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "status": "ready",
+            "domain": "infra",
+            "score": 1.1,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra",
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.5286,
+            "reason": "3 shared terms (deploy, flake, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.4333,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-ffff",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3222,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 5,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [
+          {
+            "decision_id": "d-62cd9d80",
+            "ts": "2026-08-22T12:27:04Z",
+            "lane": "coord",
+            "subject": "x-bbbb",
+            "text": "CORRECTION, SUPERSEDES d-85352ee7. WITHDRAWN.",
+            "lifecycle": null
+          }
+        ],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-bbbb",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": [
+          {
+            "decision_id": "d-unknown",
+            "lane": "coord",
+            "subject": "x-bbbb",
+            "decision": "coord ruling",
+            "lifecycle": "unknown",
+            "lifecycle_reason": "the graph could not be read (database is locked)"
+          },
+          {
+            "decision_id": "d-unknown2",
+            "lane": "coord",
+            "subject": "x-bbbb",
+            "decision": null,
+            "lifecycle": "unknown"
+          }
+        ]
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "x-bbbb",
+          "slug": "deploy-retry",
+          "title": "Deploy pipeline retry flake",
+          "status": "ready",
+          "domain": "infra"
+        },
+        "parent": null,
+        "closure": {
+          "status": "ready",
+          "pr_number": null,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "status": "ready",
+            "domain": "infra",
+            "score": 1.1,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra",
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.5286,
+            "reason": "3 shared terms (deploy, flake, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.4333,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-ffff",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3222,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 5,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [
+          {
+            "decision_id": "d-unknown",
+            "ts": null,
+            "lane": "coord",
+            "subject": "x-bbbb",
+            "text": "coord ruling",
+            "lifecycle": "unknown"
+          },
+          {
+            "decision_id": "d-unknown2",
+            "ts": null,
+            "lane": "coord",
+            "subject": "x-bbbb",
+            "text": "",
+            "lifecycle": "unknown"
+          }
+        ],
+        "decisions_status": "error",
+        "decisions_truncated": false,
+        "decisions_detail": "the graph could not be read (database is locked); 2 coord ruling(s) listed with an unknown lifecycle"
+      }
+    },
+    {
+      "fn": "graph_section",
+      "input": {
+        "seed": "x-bbbb",
+        "entries": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "details": "the deploy pipeline flakes on retry",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-eeee",
+            "pr_number": 12,
+            "pr_url": "https://github.com/o/r/pull/12",
+            "superseded_by": null
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "details": "epic for deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic",
+            "parent": "x-ffff"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "details": "root of deploy pipeline",
+            "status": "ready",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "x-bbbb",
+            "slug": "deploy-retry",
+            "title": "Deploy pipeline retry flake",
+            "details": "pipeline flakes on retry deploy",
+            "status": "ready",
+            "domain": "infra"
+          },
+          {
+            "id": "x-cccc",
+            "slug": "deploy-old",
+            "title": "Deploy pipeline flake old",
+            "details": "deploy pipeline flake",
+            "status": "superseded",
+            "domain": "infra",
+            "superseded_by": "x-bbbb"
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "details": "deploy pipeline flakes on retry",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra"
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "details": "deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "type": "epic"
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra"
+          }
+        ],
+        "archive": [],
+        "error": null,
+        "archive_error": null,
+        "decisions": [
+          {
+            "decision_id": "d-long",
+            "decision": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-edge",
+            "decision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          },
+          {
+            "decision_id": "d-uni",
+            "decision": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééétail"
+          },
+          {
+            "decision_id": "d-num",
+            "decision": 42
+          }
+        ]
+      },
+      "output": {
+        "status": "ok",
+        "resolved": {
+          "id": "x-bbbb",
+          "slug": "deploy-retry",
+          "title": "Deploy pipeline retry flake",
+          "status": "ready",
+          "domain": "infra"
+        },
+        "parent": null,
+        "closure": {
+          "status": "ready",
+          "pr_number": null,
+          "superseded_by": null,
+          "deferred_kind": null
+        },
+        "duplicates": [
+          {
+            "id": "x-aaaa",
+            "slug": "deploy-pipeline",
+            "title": "Deploy pipeline flake fix",
+            "status": "ready",
+            "domain": "infra",
+            "score": 1.1,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-dddd",
+            "slug": "deploy-deferred",
+            "title": "Deploy pipeline flake deferred",
+            "status": "deferred",
+            "deferred_kind": "expired",
+            "domain": "infra",
+            "score": 0.9333,
+            "reason": "5 shared terms (deploy, flake, flakes); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-9999",
+            "slug": "retired-epic",
+            "title": "Deploy pipeline flake epic retired",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.5286,
+            "reason": "3 shared terms (deploy, flake, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "ab-1234abcd",
+            "slug": "legacy",
+            "title": "Legacy deploy pipeline",
+            "status": "done",
+            "domain": "infra",
+            "score": 0.4333,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          },
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'",
+            "lanes": [
+              "relatedness"
+            ]
+          }
+        ],
+        "epic_candidates": [
+          {
+            "id": "x-eeee",
+            "slug": "deploy-epic",
+            "title": "Deploy pipeline reliability",
+            "status": "ready",
+            "domain": "infra",
+            "parent": "x-ffff",
+            "score": 0.3857,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          },
+          {
+            "id": "x-ffff",
+            "slug": "root-epic",
+            "title": "Platform deploy pipeline roadmap",
+            "status": "ready",
+            "domain": "infra",
+            "score": 0.3222,
+            "reason": "2 shared terms (deploy, pipeline); shared domain 'infra'"
+          }
+        ],
+        "archive_status": "ok",
+        "detail": null,
+        "recall": {
+          "lane": "node",
+          "seed_tokens": 5,
+          "floor": 0.15,
+          "fts": "degraded",
+          "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+        },
+        "decisions": [
+          {
+            "decision_id": "d-long",
+            "ts": null,
+            "lane": null,
+            "subject": null,
+            "text": "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww…",
+            "lifecycle": "live"
+          },
+          {
+            "decision_id": "d-edge",
+            "ts": null,
+            "lane": null,
+            "subject": null,
+            "text": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "lifecycle": null
+          },
+          {
+            "decision_id": "d-uni",
+            "ts": null,
+            "lane": null,
+            "subject": null,
+            "text": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé…",
+            "lifecycle": null
+          },
+          {
+            "decision_id": "d-num",
+            "ts": null,
+            "lane": null,
+            "subject": null,
+            "text": "42",
+            "lifecycle": null
+          }
+        ],
+        "decisions_status": "ok",
+        "decisions_truncated": false,
+        "decisions_detail": null
+      }
+    },
+    {
+      "fn": "build_receipt",
+      "input": {
+        "seed": "x-4007",
+        "graph": {
+          "entries": [
+            {
+              "id": "x-4007",
+              "slug": "lean-think",
+              "title": "Lean think discovery receipt",
+              "details": "deterministic discovery for think",
+              "status": "in_progress",
+              "domain": "code",
+              "parent": "x-7a93"
+            },
+            {
+              "id": "x-1111",
+              "slug": "think-discovery",
+              "title": "Think deterministic discovery",
+              "details": "receipt for think discovery",
+              "status": "done",
+              "domain": "code"
+            },
+            {
+              "id": "x-7a93",
+              "slug": "context-evolution",
+              "title": "Lean think graph evolution",
+              "details": "context and graph evolution epic",
+              "status": "ready",
+              "domain": "code",
+              "type": "epic"
+            }
+          ],
+          "error": null
+        },
+        "archive": [],
+        "repo_files": {
+          "prisma/schema.prisma": "model User {}\n",
+          "AGENTS.md": "# Agents\n\n## Pitfalls corpus (capped)\n\n### Guards can lie\n\nTrap.\n\n## Repository\n\n### Not a pitfall\n"
+        },
+        "artifact": "# Map\n\n## Database Schema\n\n### public.users\n",
+        "plans": {
+          "20260725-retro-synthesis-x-abcd.md": "# Retro\n"
+        },
+        "lessons": "{}\n{}\n",
+        "commands": {
+          "git rev-parse --abbrev-ref": [
+            "feature/x-4007\n",
+            null
+          ],
+          "git rev-parse HEAD": [
+            "abc123def456\n",
+            null
+          ],
+          "git status --porcelain": [
+            " M skills/think/SKILL.md\n",
+            null
+          ],
+          "git log -5": [
+            "abc123\tPrior change\n",
+            null
+          ],
+          "gh pr list": [
+            "[{\"number\": 608, \"title\": \"Lean planning\", \"state\": \"MERGED\", \"url\": \"https://example.test/608\"}]",
+            null
+          ]
+        },
+        "decisions": []
+      },
+      "output": {
+        "receipt": {
+          "version": 1,
+          "seed": "x-4007",
+          "complete": false,
+          "repository": {
+            "root": "<TMP>/repo",
+            "status": "ok",
+            "branch": "feature/x-4007",
+            "head": "abc123def456",
+            "dirty_paths": [
+              "skills/think/SKILL.md"
+            ],
+            "recent_commits": [
+              {
+                "sha": "abc123",
+                "subject": "Prior change"
+              }
+            ],
+            "detail": null
+          },
+          "graph": {
+            "status": "ok",
+            "resolved": {
+              "id": "x-4007",
+              "slug": "lean-think",
+              "title": "Lean think discovery receipt",
+              "status": "in_progress",
+              "domain": "code",
+              "parent": "x-7a93"
+            },
+            "parent": {
+              "id": "x-7a93",
+              "slug": "context-evolution",
+              "title": "Lean think graph evolution",
+              "status": "ready",
+              "domain": "code"
+            },
+            "closure": {
+              "status": "in_progress",
+              "pr_number": null,
+              "superseded_by": null,
+              "deferred_kind": null
+            },
+            "duplicates": [
+              {
+                "id": "x-1111",
+                "slug": "think-discovery",
+                "title": "Think deterministic discovery",
+                "status": "done",
+                "domain": "code",
+                "score": 0.9,
+                "reason": "4 shared terms (deterministic, discovery, receipt); shared domain 'code'",
+                "lanes": [
+                  "relatedness"
+                ]
+              }
+            ],
+            "epic_candidates": [
+              {
+                "id": "x-7a93",
+                "slug": "context-evolution",
+                "title": "Lean think graph evolution",
+                "status": "ready",
+                "domain": "code",
+                "score": 0.3222,
+                "reason": "2 shared terms (lean, think); shared domain 'code'"
+              }
+            ],
+            "archive_status": "ok",
+            "detail": null,
+            "recall": {
+              "lane": "node",
+              "seed_tokens": 5,
+              "floor": 0.15,
+              "fts": "degraded",
+              "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+            },
+            "decisions": [],
+            "decisions_status": "ok",
+            "decisions_truncated": false,
+            "decisions_detail": null,
+            "plan_rulings": [],
+            "plan_rulings_status": "ok",
+            "plan_rulings_detail": null
+          },
+          "pull_requests": {
+            "status": "ok",
+            "matches": [
+              {
+                "number": 608,
+                "title": "Lean planning",
+                "state": "MERGED",
+                "url": "https://example.test/608"
+              }
+            ],
+            "detail": null
+          },
+          "database": {
+            "detected": true,
+            "signals": [
+              "prisma/schema.prisma"
+            ],
+            "schema_artifact": "codemap.md",
+            "schema_status": "grounded"
+          },
+          "pitfalls": {
+            "source": "AGENTS.md",
+            "entries": [
+              "Guards can lie"
+            ],
+            "retro_syntheses": [
+              "<TMP>/plans/20260725-retro-synthesis-x-abcd.md"
+            ],
+            "lesson_candidates": 2
+          },
+          "warnings": [
+            "duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+          ]
+        },
+        "gh_search": "Lean think discovery receipt",
+        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=node tokens=5 resolved=x-4007 candidates=1 (ranked, judge before trusting) epics=1\npull requests: ok matches=1\ndatabase: detected=true schema=grounded\npitfalls: source=AGENTS.md entries=1 syntheses=1 candidates=2\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+      }
+    },
+    {
+      "fn": "build_receipt",
+      "input": {
+        "seed": "new database feature",
+        "graph": {
+          "entries": null,
+          "error": "graph unreadable"
+        },
+        "archive": [],
+        "repo_files": {
+          "drizzle.config.ts": "export default {}\n"
+        },
+        "artifact": null,
+        "plans": null,
+        "lessons": null,
+        "commands": {
+          "git rev-parse --abbrev-ref": [
+            null,
+            "not a git repo"
+          ],
+          "git rev-parse HEAD": [
+            null,
+            "not a git repo"
+          ],
+          "git status --porcelain": [
+            null,
+            "not a git repo"
+          ],
+          "git log -5": [
+            null,
+            "not a git repo"
+          ],
+          "gh pr list": [
+            null,
+            "gh not found"
+          ]
+        },
+        "decisions": []
+      },
+      "output": {
+        "receipt": {
+          "version": 1,
+          "seed": "new database feature",
+          "complete": false,
+          "repository": {
+            "root": "<TMP>/repo",
+            "status": "error",
+            "branch": null,
+            "head": null,
+            "dirty_paths": [],
+            "recent_commits": [],
+            "detail": "not a git repo"
+          },
+          "graph": {
+            "status": "error",
+            "resolved": null,
+            "parent": null,
+            "closure": null,
+            "duplicates": [],
+            "epic_candidates": [],
+            "archive_status": "ok",
+            "detail": "graph unreadable",
+            "decisions": [],
+            "decisions_status": "ok",
+            "decisions_truncated": false,
+            "decisions_detail": null,
+            "plan_rulings": [],
+            "plan_rulings_status": "ok",
+            "plan_rulings_detail": null
+          },
+          "pull_requests": {
+            "status": "unavailable",
+            "matches": [],
+            "detail": "gh not found"
+          },
+          "database": {
+            "detected": true,
+            "signals": [
+              "drizzle.config.ts"
+            ],
+            "schema_artifact": null,
+            "schema_status": "missing"
+          },
+          "pitfalls": {
+            "source": "missing",
+            "entries": [],
+            "retro_syntheses": [],
+            "lesson_candidates": 0
+          },
+          "warnings": [
+            "repository evidence is incomplete",
+            "backlog graph evidence is unavailable",
+            "pull request evidence is unavailable",
+            "database schema evidence is missing"
+          ]
+        },
+        "gh_search": "new database feature",
+        "render": "think inspection: incomplete\nrepository: error branch=- head=- dirty=0\ngraph: error lane=- tokens=- resolved=- candidates=0 (ranked, judge before trusting) epics=0\npull requests: unavailable matches=0\ndatabase: detected=true schema=missing\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: repository evidence is incomplete\nwarning: backlog graph evidence is unavailable\nwarning: pull request evidence is unavailable\nwarning: database schema evidence is missing"
+      }
+    },
+    {
+      "fn": "build_receipt",
+      "input": {
+        "seed": "x-bbbb",
+        "graph": {
+          "entries": [
+            {
+              "id": "x-bbbb",
+              "slug": "ruled-out",
+              "title": "Ruled out node",
+              "details": "the node a sibling plan rejected",
+              "status": "ready",
+              "domain": "code"
+            }
+          ],
+          "error": null
+        },
+        "archive": [],
+        "repo_files": {},
+        "artifact": null,
+        "plans": {
+          "plan-x-aaaa.md": "---\nclaims: x-aaaa\ntitle: T\nconsolidation:\n  outcome: proceed_alone\n  rejected:\n    - id: x-bbbb\n      reason: R\n---\n\n# T\n",
+          "other.md": "---\ntitle: x-bbbb only\n---\n",
+          "broken.md": "---\nx-bbbb: [unclosed\n---\n"
+        },
+        "lessons": null,
+        "commands": {
+          "git rev-parse --abbrev-ref": [
+            "feature/x-4007\n",
+            null
+          ],
+          "git rev-parse HEAD": [
+            "abc123def456\n",
+            null
+          ],
+          "git status --porcelain": [
+            " M skills/think/SKILL.md\n",
+            null
+          ],
+          "git log -5": [
+            "abc123\tPrior change\n",
+            null
+          ],
+          "gh pr list": [
+            "[]",
+            null
+          ]
+        },
+        "decisions": [
+          {
+            "decision_id": "d-1",
+            "ts": "t",
+            "lane": "law",
+            "subject": "x-bbbb",
+            "decision": "keep",
+            "lifecycle": "live",
+            "superseded_by": null
+          }
+        ]
+      },
+      "output": {
+        "receipt": {
+          "version": 1,
+          "seed": "x-bbbb",
+          "complete": false,
+          "repository": {
+            "root": "<TMP>/repo",
+            "status": "ok",
+            "branch": "feature/x-4007",
+            "head": "abc123def456",
+            "dirty_paths": [
+              "skills/think/SKILL.md"
+            ],
+            "recent_commits": [
+              {
+                "sha": "abc123",
+                "subject": "Prior change"
+              }
+            ],
+            "detail": null
+          },
+          "graph": {
+            "status": "ok",
+            "resolved": {
+              "id": "x-bbbb",
+              "slug": "ruled-out",
+              "title": "Ruled out node",
+              "status": "ready",
+              "domain": "code"
+            },
+            "parent": null,
+            "closure": {
+              "status": "ready",
+              "pr_number": null,
+              "superseded_by": null,
+              "deferred_kind": null
+            },
+            "duplicates": [],
+            "epic_candidates": [],
+            "archive_status": "ok",
+            "detail": null,
+            "recall": {
+              "lane": "node",
+              "seed_tokens": 6,
+              "floor": 0.15,
+              "fts": "degraded",
+              "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+            },
+            "decisions": [
+              {
+                "decision_id": "d-1",
+                "ts": "t",
+                "lane": "law",
+                "subject": "x-bbbb",
+                "text": "keep",
+                "lifecycle": "live"
+              }
+            ],
+            "decisions_status": "ok",
+            "decisions_truncated": false,
+            "decisions_detail": null,
+            "plan_rulings": [
+              {
+                "node": "x-bbbb",
+                "by": [
+                  "x-aaaa"
+                ],
+                "plan_path": "<TMP>/plans/plan-x-aaaa.md",
+                "reason": "R"
+              }
+            ],
+            "plan_rulings_status": "ok",
+            "plan_rulings_detail": null
+          },
+          "pull_requests": {
+            "status": "ok",
+            "matches": [],
+            "detail": null
+          },
+          "database": {
+            "detected": false,
+            "signals": [],
+            "schema_artifact": null,
+            "schema_status": "not-applicable"
+          },
+          "pitfalls": {
+            "source": "missing",
+            "entries": [],
+            "retro_syntheses": [],
+            "lesson_candidates": 0
+          },
+          "warnings": [
+            "duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+          ]
+        },
+        "gh_search": "Ruled out node",
+        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=node tokens=6 resolved=x-bbbb candidates=0 (ranked, judge before trusting) epics=0\npull requests: ok matches=0\ndatabase: detected=false schema=not-applicable\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+      }
+    },
+    {
+      "fn": "build_receipt",
+      "input": {
+        "seed": "x-38d3",
+        "graph": {
+          "entries": [
+            {
+              "id": "x-38d3",
+              "slug": "spike-keep-fno-mail",
+              "title": "SPIKE",
+              "status": "done",
+              "domain": "code"
+            },
+            {
+              "id": "x-953b",
+              "slug": "no-decisions",
+              "title": "No decisions",
+              "status": "ready",
+              "domain": "code"
+            }
+          ],
+          "error": null
+        },
+        "archive": [],
+        "repo_files": {},
+        "artifact": null,
+        "plans": null,
+        "lessons": null,
+        "commands": {
+          "git rev-parse --abbrev-ref": [
+            null,
+            "not a git repo"
+          ],
+          "git rev-parse HEAD": [
+            null,
+            "not a git repo"
+          ],
+          "git status --porcelain": [
+            null,
+            "not a git repo"
+          ],
+          "git log -5": [
+            null,
+            "not a git repo"
+          ],
+          "gh pr list": [
+            null,
+            "unavailable"
+          ]
+        },
+        "decisions": {
+          "raise": "index corrupt"
+        }
+      },
+      "output": {
+        "receipt": {
+          "version": 1,
+          "seed": "x-38d3",
+          "complete": false,
+          "repository": {
+            "root": "<TMP>/repo",
+            "status": "error",
+            "branch": null,
+            "head": null,
+            "dirty_paths": [],
+            "recent_commits": [],
+            "detail": "not a git repo"
+          },
+          "graph": {
+            "status": "ok",
+            "resolved": {
+              "id": "x-38d3",
+              "slug": "spike-keep-fno-mail",
+              "title": "SPIKE",
+              "status": "done",
+              "domain": "code"
+            },
+            "parent": null,
+            "closure": {
+              "status": "done",
+              "pr_number": null,
+              "superseded_by": null,
+              "deferred_kind": null
+            },
+            "duplicates": [],
+            "epic_candidates": [],
+            "archive_status": "ok",
+            "detail": null,
+            "recall": {
+              "lane": "node",
+              "seed_tokens": 4,
+              "floor": 0.15,
+              "fts": "degraded",
+              "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+            },
+            "decisions": [],
+            "decisions_status": "error",
+            "decisions_truncated": false,
+            "decisions_detail": "decision index unreadable: index corrupt",
+            "plan_rulings": [],
+            "plan_rulings_status": "error",
+            "plan_rulings_detail": "plans dir unreadable: <TMP>/plans: directory does not exist"
+          },
+          "pull_requests": {
+            "status": "unavailable",
+            "matches": [],
+            "detail": "unavailable"
+          },
+          "database": {
+            "detected": false,
+            "signals": [],
+            "schema_artifact": null,
+            "schema_status": "not-applicable"
+          },
+          "pitfalls": {
+            "source": "missing",
+            "entries": [],
+            "retro_syntheses": [],
+            "lesson_candidates": 0
+          },
+          "warnings": [
+            "repository evidence is incomplete",
+            "pull request evidence is unavailable",
+            "duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+          ]
+        },
+        "gh_search": "SPIKE",
+        "render": "think inspection: incomplete\nrepository: error branch=- head=- dirty=0\ngraph: ok lane=node tokens=4 resolved=x-38d3 candidates=0 (ranked, judge before trusting) epics=0\npull requests: unavailable matches=0\ndatabase: detected=false schema=not-applicable\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: repository evidence is incomplete\nwarning: pull request evidence is unavailable\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+      }
+    },
+    {
+      "fn": "build_receipt",
+      "input": {
+        "seed": "wombat burrow falcon heron ibex jaguar kraken lynx",
+        "graph": {
+          "entries": [
+            {
+              "id": "fam",
+              "slug": "fam",
+              "title": "wombat burrow falcon heron ibex jaguar kraken lynx filler001 filler002 filler003 filler004 filler005 filler006 filler007 filler008 filler009 filler010 filler011 filler012 filler013 filler014 filler015 filler016 filler017 filler018 filler019 filler020 filler021 filler022 filler023 filler024 filler025 filler026 filler027 filler028 filler029 filler030 filler031 filler032 filler033 filler034 filler035 filler036 filler037 filler038 filler039 filler040 filler041 filler042 filler043 filler044 filler045 filler046 filler047 filler048 filler049 filler050 filler051 filler052 filler053 filler054 filler055 filler056 filler057 filler058 filler059 filler060 filler061 filler062 filler063 filler064 filler065 filler066 filler067 filler068 filler069 filler070 filler071 filler072 filler073 filler074 filler075 filler076 filler077 filler078 filler079 filler080 filler081 filler082 filler083 filler084 filler085 filler086 filler087 filler088 filler089 filler090 filler091 filler092 filler093 filler094 filler095 filler096 filler097 filler098 filler099 filler100 filler101 filler102 filler103 filler104 filler105 filler106 filler107 filler108 filler109 filler110 filler111 filler112 filler113 filler114 filler115 filler116 filler117 filler118 filler119 filler120 filler121 filler122 filler123 filler124 filler125 filler126 filler127 filler128 filler129 filler130 filler131 filler132 filler133 filler134 filler135 filler136 filler137 filler138 filler139 filler140 filler141 filler142 filler143 filler144 filler145 filler146 filler147 filler148 filler149 filler150 filler151 filler152 filler153 filler154 filler155 filler156 filler157 filler158 filler159 filler160",
+              "status": "ready",
+              "domain": "code"
+            },
+            {
+              "id": "noise1",
+              "slug": "noise1",
+              "title": "wombat burrow falcon heron ibex noiseword1",
+              "status": "ready",
+              "domain": "code"
+            },
+            {
+              "id": "noise2",
+              "slug": "noise2",
+              "title": "burrow falcon heron ibex jaguar noiseword2",
+              "status": "ready",
+              "domain": "code"
+            },
+            {
+              "id": "noise3",
+              "slug": "noise3",
+              "title": "falcon heron ibex jaguar kraken noiseword3",
+              "status": "ready",
+              "domain": "code"
+            },
+            {
+              "id": "noise4",
+              "slug": "noise4",
+              "title": "heron ibex jaguar kraken lynx noiseword4",
+              "status": "ready",
+              "domain": "code"
+            },
+            {
+              "id": "noise5",
+              "slug": "noise5",
+              "title": "wombat burrow falcon heron ibex noiseword5",
+              "status": "ready",
+              "domain": "code"
+            }
+          ],
+          "error": null
+        },
+        "archive": [],
+        "repo_files": {
+          "supabase/migrations/1.sql": "x"
+        },
+        "artifact": "## Database Schema\n",
+        "mtimes": {
+          "supabase/migrations/1.sql": 2000000000,
+          "@artifact": 1000
+        },
+        "plans": {},
+        "lessons": "",
+        "commands": {
+          "git rev-parse --abbrev-ref": [
+            "feature/x-4007\n",
+            null
+          ],
+          "git rev-parse HEAD": [
+            "abc123def456\n",
+            null
+          ],
+          "git status --porcelain": [
+            " M skills/think/SKILL.md\n",
+            null
+          ],
+          "git log -5": [
+            "abc123\tPrior change\n",
+            null
+          ],
+          "gh pr list": [
+            "{\"not\": \"a list\"}",
+            null
+          ]
+        },
+        "decisions": []
+      },
+      "output": {
+        "receipt": {
+          "version": 1,
+          "seed": "wombat burrow falcon heron ibex jaguar kraken lynx",
+          "complete": false,
+          "repository": {
+            "root": "<TMP>/repo",
+            "status": "ok",
+            "branch": "feature/x-4007",
+            "head": "abc123def456",
+            "dirty_paths": [
+              "skills/think/SKILL.md"
+            ],
+            "recent_commits": [
+              {
+                "sha": "abc123",
+                "subject": "Prior change"
+              }
+            ],
+            "detail": null
+          },
+          "graph": {
+            "status": "ok",
+            "resolved": null,
+            "parent": null,
+            "closure": null,
+            "duplicates": [
+              {
+                "id": "noise1",
+                "slug": "noise1",
+                "title": "wombat burrow falcon heron ibex noiseword1",
+                "status": "ready",
+                "domain": "code",
+                "score": 0.5,
+                "reason": "5 shared terms (burrow, falcon, heron)",
+                "lanes": [
+                  "relatedness"
+                ]
+              },
+              {
+                "id": "noise2",
+                "slug": "noise2",
+                "title": "burrow falcon heron ibex jaguar noiseword2",
+                "status": "ready",
+                "domain": "code",
+                "score": 0.5,
+                "reason": "5 shared terms (burrow, falcon, heron)",
+                "lanes": [
+                  "relatedness"
+                ]
+              },
+              {
+                "id": "noise3",
+                "slug": "noise3",
+                "title": "falcon heron ibex jaguar kraken noiseword3",
+                "status": "ready",
+                "domain": "code",
+                "score": 0.5,
+                "reason": "5 shared terms (falcon, heron, ibex)",
+                "lanes": [
+                  "relatedness"
+                ]
+              },
+              {
+                "id": "noise4",
+                "slug": "noise4",
+                "title": "heron ibex jaguar kraken lynx noiseword4",
+                "status": "ready",
+                "domain": "code",
+                "score": 0.5,
+                "reason": "5 shared terms (heron, ibex, jaguar)",
+                "lanes": [
+                  "relatedness"
+                ]
+              },
+              {
+                "id": "noise5",
+                "slug": "noise5",
+                "title": "wombat burrow falcon heron ibex noiseword5",
+                "status": "ready",
+                "domain": "code",
+                "score": 0.5,
+                "reason": "5 shared terms (burrow, falcon, heron)",
+                "lanes": [
+                  "relatedness"
+                ]
+              }
+            ],
+            "epic_candidates": [],
+            "archive_status": "ok",
+            "detail": null,
+            "recall": {
+              "lane": "seed",
+              "seed_tokens": 8,
+              "floor": 0.04999999999999999,
+              "fts": "degraded",
+              "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+            },
+            "decisions": [],
+            "decisions_status": "ok",
+            "decisions_truncated": false,
+            "decisions_detail": null,
+            "plan_rulings": [],
+            "plan_rulings_status": "ok",
+            "plan_rulings_detail": null
+          },
+          "pull_requests": {
+            "status": "error",
+            "matches": [],
+            "detail": "gh returned a non-list payload"
+          },
+          "database": {
+            "detected": true,
+            "signals": [
+              "supabase/migrations"
+            ],
+            "schema_artifact": "codemap.md",
+            "schema_status": "stale"
+          },
+          "pitfalls": {
+            "source": "missing",
+            "entries": [],
+            "retro_syntheses": [],
+            "lesson_candidates": 0
+          },
+          "warnings": [
+            "pull request evidence is unavailable",
+            "database schema evidence is stale",
+            "duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+          ]
+        },
+        "gh_search": "wombat burrow falcon heron ibex jaguar kraken lynx",
+        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=seed tokens=8 resolved=- candidates=5 (ranked, judge before trusting) epics=0\npull requests: error matches=0\ndatabase: detected=true schema=stale\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: pull request evidence is unavailable\nwarning: database schema evidence is stale\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+      }
+    },
+    {
+      "fn": "build_receipt",
+      "input": {
+        "seed": "zzz nothing matches",
+        "graph": {
+          "entries": [
+            {
+              "id": "x-4007",
+              "slug": "lean-think",
+              "title": "Lean think discovery receipt",
+              "details": "deterministic discovery for think",
+              "status": "in_progress",
+              "domain": "code",
+              "parent": "x-7a93"
+            },
+            {
+              "id": "x-1111",
+              "slug": "think-discovery",
+              "title": "Think deterministic discovery",
+              "details": "receipt for think discovery",
+              "status": "done",
+              "domain": "code"
+            },
+            {
+              "id": "x-7a93",
+              "slug": "context-evolution",
+              "title": "Lean think graph evolution",
+              "details": "context and graph evolution epic",
+              "status": "ready",
+              "domain": "code",
+              "type": "epic"
+            }
+          ],
+          "error": null
+        },
+        "archive": [],
+        "repo_files": {},
+        "artifact": null,
+        "plans": {},
+        "lessons": null,
+        "commands": {
+          "git rev-parse --abbrev-ref": [
+            "feature/x-4007\n",
+            null
+          ],
+          "git rev-parse HEAD": [
+            "abc123def456\n",
+            null
+          ],
+          "git status --porcelain": [
+            " M skills/think/SKILL.md\n",
+            null
+          ],
+          "git log -5": [
+            "abc123\tPrior change\n",
+            null
+          ],
+          "gh pr list": [
+            "[]",
+            null
+          ]
+        },
+        "decisions": []
+      },
+      "output": {
+        "receipt": {
+          "version": 1,
+          "seed": "zzz nothing matches",
+          "complete": false,
+          "repository": {
+            "root": "<TMP>/repo",
+            "status": "ok",
+            "branch": "feature/x-4007",
+            "head": "abc123def456",
+            "dirty_paths": [
+              "skills/think/SKILL.md"
+            ],
+            "recent_commits": [
+              {
+                "sha": "abc123",
+                "subject": "Prior change"
+              }
+            ],
+            "detail": null
+          },
+          "graph": {
+            "status": "ok",
+            "resolved": null,
+            "parent": null,
+            "closure": null,
+            "duplicates": [],
+            "epic_candidates": [],
+            "archive_status": "ok",
+            "detail": null,
+            "recall": {
+              "lane": "seed",
+              "seed_tokens": 3,
+              "floor": 0.04999999999999999,
+              "fts": "degraded",
+              "fts_warning": "graph entries were injected without the graph file; the fts lane is unavailable"
+            },
+            "decisions": [],
+            "decisions_status": "ok",
+            "decisions_truncated": false,
+            "decisions_detail": null,
+            "plan_rulings": [],
+            "plan_rulings_status": "ok",
+            "plan_rulings_detail": null
+          },
+          "pull_requests": {
+            "status": "ok",
+            "matches": [],
+            "detail": null
+          },
+          "database": {
+            "detected": false,
+            "signals": [],
+            "schema_artifact": null,
+            "schema_status": "not-applicable"
+          },
+          "pitfalls": {
+            "source": "missing",
+            "entries": [],
+            "retro_syntheses": [],
+            "lesson_candidates": 0
+          },
+          "warnings": [
+            "seed lane returned no candidates; this is not a measured absence. Widen the seed to the design body, or run: fno backlog find '<2-3 salient terms>'",
+            "duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+          ]
+        },
+        "gh_search": "zzz nothing matches",
+        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=seed tokens=3 resolved=- candidates=0 (ranked, judge before trusting) epics=0\npull requests: ok matches=0\ndatabase: detected=false schema=not-applicable\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: seed lane returned no candidates; this is not a measured absence. Widen the seed to the design body, or run: fno backlog find '<2-3 salient terms>'\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+      }
+    },
+    {
+      "fn": "render_receipt",
+      "input": {
+        "version": 1,
+        "seed": "s",
+        "complete": true,
+        "repository": {
+          "root": "/r",
+          "status": "ok",
+          "branch": "main",
+          "head": "abc",
+          "dirty_paths": [
+            "a",
+            "b"
+          ],
+          "recent_commits": [],
+          "detail": null
+        },
+        "graph": {
+          "status": "ok",
+          "resolved": {
+            "id": "x-1"
+          },
+          "duplicates": [
+            {}
+          ],
+          "epic_candidates": [],
+          "recall": {
+            "lane": "node",
+            "seed_tokens": 4
+          }
+        },
+        "pull_requests": {
+          "status": "ok",
+          "matches": [
+            {},
+            {},
+            {}
+          ],
+          "detail": null
+        },
+        "database": {
+          "detected": false,
+          "signals": [],
+          "schema_artifact": null,
+          "schema_status": "not-applicable"
+        },
+        "pitfalls": {
+          "source": "AGENTS.md",
+          "entries": [
+            "a"
+          ],
+          "retro_syntheses": [],
+          "lesson_candidates": 3
+        },
+        "warnings": []
+      },
+      "output": "think inspection: complete\nrepository: ok branch=main head=abc dirty=2\ngraph: ok lane=node tokens=4 resolved=x-1 candidates=1 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=false schema=not-applicable\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3"
+    },
+    {
+      "fn": "render_receipt",
+      "input": {
+        "version": 1,
+        "seed": "s",
+        "complete": false,
+        "repository": {
+          "root": "/r",
+          "status": "error",
+          "branch": null,
+          "head": "",
+          "dirty_paths": [
+            "a",
+            "b"
+          ],
+          "recent_commits": [],
+          "detail": null
+        },
+        "graph": {
+          "status": "error",
+          "resolved": null,
+          "duplicates": [],
+          "epic_candidates": []
+        },
+        "pull_requests": {
+          "status": "ok",
+          "matches": [
+            {},
+            {},
+            {}
+          ],
+          "detail": null
+        },
+        "database": {
+          "detected": true,
+          "signals": [],
+          "schema_artifact": null,
+          "schema_status": "missing"
+        },
+        "pitfalls": {
+          "source": "AGENTS.md",
+          "entries": [
+            "a"
+          ],
+          "retro_syntheses": [],
+          "lesson_candidates": 3
+        },
+        "warnings": [
+          "one",
+          "two"
+        ]
+      },
+      "output": "think inspection: incomplete\nrepository: error branch=- head=- dirty=2\ngraph: error lane=- tokens=- resolved=- candidates=0 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=true schema=missing\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3\nwarning: one\nwarning: two"
+    },
+    {
+      "fn": "render_receipt",
+      "input": {
+        "version": 1,
+        "seed": "s",
+        "complete": true,
+        "repository": {
+          "root": "/r",
+          "status": "ok",
+          "branch": "main",
+          "head": "abc",
+          "dirty_paths": [
+            "a",
+            "b"
+          ],
+          "recent_commits": [],
+          "detail": null
+        },
+        "graph": {
+          "status": "ok",
+          "resolved": {},
+          "duplicates": [
+            {}
+          ],
+          "epic_candidates": [],
+          "recall": {
+            "lane": "seed",
+            "seed_tokens": 0
+          }
+        },
+        "pull_requests": {
+          "status": "ok",
+          "matches": [
+            {},
+            {},
+            {}
+          ],
+          "detail": null
+        },
+        "database": {
+          "detected": false,
+          "signals": [],
+          "schema_artifact": null,
+          "schema_status": "not-applicable"
+        },
+        "pitfalls": {
+          "source": "AGENTS.md",
+          "entries": [
+            "a"
+          ],
+          "retro_syntheses": [],
+          "lesson_candidates": 3
+        },
+        "warnings": []
+      },
+      "output": "think inspection: complete\nrepository: ok branch=main head=abc dirty=2\ngraph: ok lane=seed tokens=0 resolved=- candidates=1 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=false schema=not-applicable\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3"
+    },
+    {
+      "fn": "render_receipt",
+      "input": {
+        "version": 1,
+        "seed": "s",
+        "complete": true,
+        "repository": {
+          "root": "/r",
+          "status": "ok",
+          "branch": "main",
+          "head": "abc",
+          "dirty_paths": [
+            "a",
+            "b"
+          ],
+          "recent_commits": [],
+          "detail": null
+        },
+        "graph": {
+          "status": "ok",
+          "resolved": {
+            "slug": "no-id"
+          },
+          "duplicates": [
+            {}
+          ],
+          "epic_candidates": [],
+          "recall": {
+            "lane": "node",
+            "seed_tokens": 4
+          }
+        },
+        "pull_requests": {
+          "status": "ok",
+          "matches": [
+            {},
+            {},
+            {}
+          ],
+          "detail": null
+        },
+        "database": {
+          "detected": false,
+          "signals": [],
+          "schema_artifact": null,
+          "schema_status": "not-applicable"
+        },
+        "pitfalls": {
+          "source": "AGENTS.md",
+          "entries": [
+            "a"
+          ],
+          "retro_syntheses": [],
+          "lesson_candidates": 3
+        },
+        "warnings": []
+      },
+      "output": "think inspection: complete\nrepository: ok branch=main head=abc dirty=2\ngraph: ok lane=node tokens=4 resolved=- candidates=1 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=false schema=not-applicable\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3"
+    },
+    {
+      "fn": "cli_missing_repo",
+      "input": {
+        "args": [
+          "idea",
+          "--repo",
+          "<TMP>/missing"
+        ]
+      },
+      "output": {
+        "exit": 2,
+        "stderr": "fno do think inspect: repository directory not found: <TMP>/missing"
+      }
+    }
+  ]
+}

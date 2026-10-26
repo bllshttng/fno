@@ -16,7 +16,7 @@ from fno.doctor_bash_census import bash_census_command
 from fno.doctor_footprint import footprint_command
 from fno.doctor_lanes import lanes_command
 from fno.doctor_reclaim import reclaim_command
-from fno.evals.cli import evals_app
+from fno.evals_cli import evals_app
 from fno.events.cli import cli as event_app
 from fno.lint_cli import lint
 from fno.observer.cli import observer_app

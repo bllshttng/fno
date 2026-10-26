@@ -102,7 +102,6 @@ paths
 phase kill-check
 plan
 pr-watch
-research
 resume
 route
 scoreboard
@@ -112,7 +111,6 @@ status-fanout tick
 stub-manifest
 target
 test
-think
 uninstall
 update
 version
@@ -121,7 +119,6 @@ whoami cost
 whoami ledger
 whoami scoreboard
 whoami status
-worker
 workspace reap
 workspace register-worker
 workspace worktree archive

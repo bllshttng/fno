@@ -81,10 +81,6 @@ no-flag: cli/src/fno/state/cli.py archive
 no-flag: cli/src/fno/stub_manifest.py cmd_reconcile_validate
 no-flag: cli/src/fno/stub_manifest.py cmd_reconcile_finalize
 no-flag: cli/src/fno/target_cli.py request_self_review_cmd
-no-flag: cli/src/fno/worker/cli.py blueprint
-no-flag: cli/src/fno/worker/cli.py ship
-no-flag: cli/src/fno/worker/cli.py external
-no-flag: cli/src/fno/worker/cli.py reconcile
 format: cli/src/fno/decide/cli.py list_cmd
 format: cli/src/fno/plan/cli.py brief
 format: cli/src/fno/decide/cli.py backlog_decisions (no command decorator, census skips it)

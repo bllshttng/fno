@@ -112,11 +112,6 @@ agents wait	T1	agents wait	10
 agents watch	T1	agents watch	5
 agents watchdog	T1	agents watchdog	4
 agents whoami	T1	agents whoami	9
-agents worker blueprint	T1	agents worker blueprint	0
-agents worker external	T1	agents worker external	0
-agents worker reconcile	T1	agents worker reconcile	0
-agents worker review	T1	agents worker review	0
-agents worker ship	T1	agents worker ship	2
 agents workspace register-worker	T1	agents workspace register-worker	1
 agents workspace reap	T1	agents workspace reap	0
 agents workspace worktree archive	T1	agents workspace worktree archive	4
@@ -408,7 +403,6 @@ pr-watch refresh	T1	pr-watch refresh	1
 pr-watch status	T1	pr-watch status	3
 pr-watch tick	T1	pr-watch tick	2
 pr-watch uninstall	T1	pr-watch uninstall	1
-research	KEEP	research	18	single-leaf group
 resume receipt show	T1	resume receipt show	1
 resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2
@@ -442,15 +436,8 @@ target resolve-owned-identity	T1	target resolve-owned-identity	3
 target review-invocation	T1	target review-invocation	4
 target status	T1	target status	8
 test	KEEP	test	108	single-leaf group
-think dispatch	T1	think dispatch	4
-think inspect	T1	think inspect	7
 update	KEEP	update	88	single-leaf group
 version	KEEP	version	15	single-leaf group
-worker blueprint	T1	worker blueprint	0
-worker external	T1	worker external	0
-worker reconcile	T1	worker reconcile	0
-worker review	T1	worker review	0
-worker ship	T1	worker ship	2
 worktree archive	T1	worktree archive	2
 worktree cleanup	T1	worktree cleanup	6
 worktree ensure	T1	worktree ensure	30

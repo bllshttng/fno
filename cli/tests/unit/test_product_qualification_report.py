@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from fno.evals.cli import evals_app
+from fno.evals_cli import evals_app
 
 runner = CliRunner()
 

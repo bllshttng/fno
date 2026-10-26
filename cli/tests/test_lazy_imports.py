@@ -39,7 +39,6 @@ def _run_py(code: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
 _FORBIDDEN_AFTER_HELP = [
     "fno.state.cli",
     "fno.adapters.providers.cli",
-    "fno.worker.cli",
     "fno.graph.cli",
     "fno.events.cli",
     "fno.mail.cli",

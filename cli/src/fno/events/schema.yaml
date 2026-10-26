@@ -304,7 +304,7 @@ event_types:
           type: integer
         detail:
           type: string
-    consumers: [scripts/ci/preflight.sh, fno do pr, fno agents worker ship, fno-agents verify-evidence]
+    consumers: [scripts/ci/preflight.sh, fno do pr, fno-agents verify-evidence]
 
   - name: review_attestation
     retention: gate

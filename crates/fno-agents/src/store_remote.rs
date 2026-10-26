@@ -194,6 +194,12 @@ impl Remote {
         &self.url
     }
 
+    /// The store host from `store.remote_url`: the ssh rescue's last-resort
+    /// peer key.
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
     pub fn execute(&self, sql: &str, args: &[SqlValue]) -> Result<Reply, String> {
         let mut replies = self.pipeline(vec![json!({
             "type": "execute",

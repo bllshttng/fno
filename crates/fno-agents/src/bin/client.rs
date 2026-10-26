@@ -154,6 +154,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("surface-check") {
         std::process::exit(fno_agents::surface_check::run_surface_check(&args[1..]));
     }
+    // executor-route: the parser door; body in executor_route.rs (registers no command).
+    if args.first().map(String::as_str) == Some("executor-route") {
+        std::process::exit(fno_agents::executor_route::run(&args[1..]));
+    }
     if args.first().map(String::as_str) == Some("wave") {
         std::process::exit(fno_agents::wave::run(&args[1..]));
     }
@@ -179,15 +183,11 @@ fn main() {
     if args.first().map(String::as_str) == Some("pr") {
         std::process::exit(fno_agents::pr_front::run(&args[1..]));
     }
-    // Permanent GitHub-fact rows (merged PRs, repo metadata); reconcile and
-    // base-lineage reach it through command_call; transport-only.
-    if args.first().map(String::as_str) == Some("gh-cache") {
-        std::process::exit(fno_agents::gh_cache::run());
-    }
-    // `target-status`: the orientation report door; Python's `fno do target
-    // status` reaches it through command_call, transport-only.
-    if args.first().map(String::as_str) == Some("target-status") {
-        std::process::exit(fno_agents::target_orient::run_status(&args[1..]));
+    // gh-cache, target-status: the early transport arms; client_transport.rs
+    // holds their bodies and comments. worktree-reapable and launch-workdir
+    // stay here: their own ports own the moves into their modules.
+    if let Some(code) = fno_agents::client_transport::transport_early_arms(&args) {
+        std::process::exit(code);
     }
     // `launch-workdir`: the spawn door's launch-cwd resolution (see
     // launch_workdir.rs doc). Transport-only: registers no client action; Python's
@@ -274,6 +274,10 @@ fn main() {
     // The Python evals phase reaches this arm through resolve_binary.
     if args.first().map(String::as_str) == Some("evals-arm") {
         std::process::exit(fno_agents::evals_arm::run_evals_arm(&args[1..]));
+    }
+    // `evals`: the leaf's family dispatch; the shrink law bars a new `run` arm (contract in evals.rs).
+    if args.first().map(String::as_str) == Some("evals") {
+        std::process::exit(fno_agents::evals::run(&args[1..]));
     }
     // `evals-trend` and `corrections-verify`: transport-only folds (the
     // shrink law allows no new `run` arm); their module docs carry the
@@ -946,13 +950,9 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::org_fold::run_org_fold(&args[1..]);
     }
 
-    // `lead-history`: the team-scope lead_checkin readback for
-    // `fno agents org history`, exec'd by the front door. Daemon-free
-    // read, `==` dispatch like org-fold: the caller's team scope and the
-    // live journals resolve natively when the argv names none.
-    // `--verdict` is the same journals read as a tenure verdict (law
-    // d-fe66560a: the verdict rides this action as an argument, never a
-    // new action).
+    // `lead-history`: the team-scope lead_checkin readback for `fno agents org history`, exec'd by the front door.
+    //
+    // Daemon-free `==` dispatch like org-fold: the caller's team scope and the live journals resolve natively when the argv names none. `--verdict` reads the same journals as a tenure verdict (law d-fe66560a).
     if command == "lead-history" {
         if args.iter().skip(1).any(|a| a == "--verdict") {
             return fno_agents::lead_history::run_lead_verdict(&args[1..]);

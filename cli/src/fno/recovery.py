@@ -718,7 +718,8 @@ def _node_is_done(node: str) -> bool:
         return False
 
 
-# (provenance/spawn_think.py). Only a birth pass is certified by ``plan_path``.
+# The think dispatch reasons (crates/fno-agents/src/think_dispatch.rs). Only a
+# birth pass is certified by ``plan_path``.
 _NON_BIRTH_THINK_REASONS = ("work-start", "retro", "conversational")
 
 
@@ -763,7 +764,7 @@ def mission_complete(candidate: "Candidate") -> Optional[bool]:
         if entry is None or entry.get("archived_at"):
             return None
         if kind == "think":
-            # Only a BIRTH pass is certified by the node's artifacts (spawn_think:
+            # Only a BIRTH pass is certified by the node's artifacts (think dispatch:
             # a design pass ending without a linked plan_path FAILED). A lifecycle
             # or conversational pass runs on a node that ALREADY carries the link,
             # and a retro fires only once the node is `done` - so those artifacts
