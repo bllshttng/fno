@@ -53,6 +53,24 @@ pub(crate) fn classify_target(raw: &str) -> Option<Target> {
 
 use crate::pr_front::option_value;
 
+/// Seconds for one flag: absent keeps `default`, a present value parses
+/// through the shared duration parser (plain digits are seconds). A present
+/// but unparsable or zero value is a usage error, never a silent default -
+/// the shared parser's own contract, and a mistyped --timeout must not
+/// silently watch for fifteen minutes.
+fn seconds_flag(tail: &[String], name: &str, default: u64) -> Result<u64, String> {
+    let Some(raw) = option_value(tail, name) else {
+        return Ok(default);
+    };
+    let secs = raw
+        .parse::<u64>()
+        .or_else(|_| crate::duration::parse_duration_secs(&raw).ok_or(()));
+    match secs {
+        Ok(secs) if secs > 0 => Ok(secs),
+        _ => Err(format!("{name} wants a positive duration, got {raw:?}")),
+    }
+}
+
 /// The one positional target word and its count: `status --interval 30 main`
 /// must read `main`, never the flag's own `30`, and two positionals refuse.
 fn positional_target(tail: &[String]) -> Option<(String, usize)> {
@@ -83,16 +101,36 @@ fn positional_target(tail: &[String]) -> Option<(String, usize)> {
 /// the argv was well formed to get here.
 fn resolve_sha(cwd: &Path, target: &Target) -> Result<(String, &'static str), String> {
     match target {
-        Target::Sha(sha) => Ok((sha.clone(), "sha")),
+        Target::Sha(sha) => {
+            // The Actions head_sha filter matches the stored full sha, so an
+            // abbreviation must expand first or it filters to an empty page.
+            if sha.len() == 40 {
+                return Ok((sha.clone(), "sha"));
+            }
+            let raw = crate::pr_push::gh_api(
+                "gh",
+                cwd,
+                &format!("repos/{{owner}}/{{repo}}/commits/{sha}"),
+                &[],
+            )?;
+            let parsed: Value = serde_json::from_str(&raw)
+                .map_err(|e| format!("commits/{sha} returned unparseable json: {e}"))?;
+            let full = parsed
+                .get("sha")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("commits/{sha} returned no sha"))?
+                .to_string();
+            Ok((full, "sha"))
+        }
         Target::Main => {
             let raw = crate::pr_push::gh_api("gh", cwd, "repos/{owner}/{repo}/branches/main", &[])?;
             let parsed: Value = serde_json::from_str(&raw)
                 .map_err(|e| format!("branches/main returned unparseable json: {e}"))?;
             let sha = parsed
-                .get("head")
-                .and_then(|h| h.get("sha"))
+                .get("commit")
+                .and_then(|c| c.get("sha"))
                 .and_then(Value::as_str)
-                .ok_or_else(|| "branches/main returned no head sha".to_string())?
+                .ok_or_else(|| "branches/main returned no commit sha".to_string())?
                 .to_string();
             Ok((sha, "branch"))
         }
@@ -228,14 +266,20 @@ pub fn run(args: &[String]) -> i32 {
         return 3;
     };
     let watch = tail.iter().any(|arg| arg == "--watch");
-    let interval = option_value(tail, "--interval")
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(60);
-    let timeout = option_value(tail, "--timeout")
-        .and_then(|v| crate::duration::parse_duration_secs(&v))
-        .filter(|n| *n > 0)
-        .unwrap_or(15 * 60);
+    let interval = match seconds_flag(tail, "--interval", 60) {
+        Ok(secs) => secs,
+        Err(error) => {
+            eprintln!("fno do ci status: {error}");
+            return 3;
+        }
+    };
+    let timeout = match seconds_flag(tail, "--timeout", 15 * 60) {
+        Ok(secs) => secs,
+        Err(error) => {
+            eprintln!("fno do ci status: {error}");
+            return 3;
+        }
+    };
 
     let cwd = PathBuf::from(
         std::env::current_dir()
@@ -356,6 +400,31 @@ mod tests {
             Some(2)
         );
         assert_eq!(positional_target(&vec_of(&["--watch"])), None);
+    }
+
+    #[test]
+    fn a_present_bad_flag_value_refuses_and_an_absent_one_defaults() {
+        assert_eq!(seconds_flag(&vec_of(&["main"]), "--interval", 60), Ok(60));
+        assert_eq!(
+            seconds_flag(&vec_of(&["--interval", "30"]), "--interval", 60),
+            Ok(30)
+        );
+        assert_eq!(
+            seconds_flag(&vec_of(&["--timeout", "5m"]), "--timeout", 900),
+            Ok(300)
+        );
+        assert_eq!(
+            seconds_flag(&vec_of(&["--timeout", "1x"]), "--timeout", 900)
+                .err()
+                .is_some(),
+            true
+        );
+        assert_eq!(
+            seconds_flag(&vec_of(&["--timeout", "0s"]), "--timeout", 900)
+                .err()
+                .is_some(),
+            true
+        );
     }
 
     #[test]
