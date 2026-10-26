@@ -135,8 +135,9 @@ fn delivery_journals_from_ledger(text: &str) -> Result<Vec<PathBuf>, String> {
         for field in ["root_path", "canonical_root_path"] {
             if let Some(value) = map.get(field) {
                 // An explicit null is the writer's own no-root shape
-                // (cost/_register.py writes `root_path or None`): only a
-                // present, non-null, non-string or empty string refuses.
+                // (the register leg in ledger_register.rs writes
+                // `root_path or None`): only a present, non-null, non-string
+                // or empty string refuses.
                 if value.is_null() {
                     continue;
                 }
