@@ -1351,15 +1351,20 @@ def _reopen_outranks_child_closes(parent: dict, kids: list[dict]) -> bool:
 
 
 def _reopen_holds_epic(parent: dict, kids: list[dict]) -> bool:
-    """The epic close paths' reopen guard. Only a child filed at or before the
-    reopen can expire it. A child filed after proves nothing about the unfiled
-    work the reopen named. An unreadable filing stamp counts as filed after.
-    Twin of ``reopen_holds_epic`` in ``crates/fno-agents/src/graph_store.rs``.
+    """The epic close paths' reopen guard. Only a child that joined at or before
+    the reopen can expire it. A child that joined after proves nothing about the
+    unfiled work the reopen named. The join stamp is ``parented_at``, which the
+    store sets under its lock, else ``created_at``. An unreadable stamp counts
+    as after. Twin of ``reopen_holds_epic`` in
+    ``crates/fno-agents/src/graph_store.rs``.
     """
     reopened = _parse_iso(parent.get("reopened_at"))
     if reopened is not None:
         kids = [
-            k for k in kids if (f := _parse_iso(k.get("created_at"))) is not None and f <= reopened
+            k
+            for k in kids
+            if (f := _parse_iso(k.get("parented_at") or k.get("created_at"))) is not None
+            and f <= reopened
         ]
     return _reopen_outranks_child_closes(parent, kids)
 
@@ -1412,7 +1417,7 @@ def cascade_close_should_stop(parent: dict, kids: list[dict], child: object) -> 
     if parent.get("completed_at"):
         return True
     if _reopen_holds_epic(parent, kids):
-        return True  # no child filed before the reopen closed after it -> the human call holds
+        return True  # no child that joined before the reopen closed after it -> the human call holds
     if parent.get("plan_path") and not (
         parent.get("pr_number") or parent.get("additional_prs")
     ):
