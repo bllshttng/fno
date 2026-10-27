@@ -360,8 +360,7 @@ pub struct Popup {
     /// The content width ceiling, [`WIDTH_CAP`] by default. The screen still
     /// caps it in [`Popup::render`].
     pub width_cap: usize,
-    /// Paint the selected row inverted ([`Role::BodyFocus`]) instead of the
-    /// `sel` band or the plain-body cursor band. The settings modal opts in.
+    /// Paint the selected row inverted ([`Role::BodyFocus`]); settings opts in.
     pub focus_invert: bool,
 }
 

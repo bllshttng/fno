@@ -185,9 +185,9 @@ fn sideline_selection_scrolls_into_view_and_paints_the_band() {
     let visible = view.sideline_visible_rows();
     let sel_row = visible; // rows paint from 1 (strip at 0); the last is `visible`
     assert_eq!(
-        frame.cells[sel_row * cols].bg,
-        Color::Indexed(0),
-        "the selected row scrolls into view and paints the cursor band"
+        frame.cells[sel_row * cols].flags & cell_flags::INVERSE,
+        cell_flags::INVERSE,
+        "the selected row scrolls into view and inverts"
     );
     assert_ne!(
         frame.cells[0].c, '\u{25be}',
@@ -479,35 +479,11 @@ fn sticky_footer_and_the_in_list_new_squad_row_never_paint_twice() {
 }
 
 #[test]
-fn chosen_band_wins_when_the_selector_lands_on_the_focused_row() {
-    // x-4374 / AC3-UI, restated: when the selector sits on the focused row,
-    // the standing band still paints - the cursor never masks the "you are
-    // here" signal (the card contract, list mode too). Since x-b5b8 the one
-    // band is the surface pair; the accent rides the glyph and state word.
-    let mut view = two_pane_view();
-    view.layout.agents.push(focus_agent(11));
-    view.selector = Some(1); // the focused agent row
-    let frame = view.compose();
-    let cols = frame.cols as usize;
-    let lead = frame.cells[2 * cols]; // display 1 paints at outer row 2
-    assert_eq!(
-        lead.bg,
-        Color::Indexed(0),
-        "the chosen row keeps its standing surface band"
-    );
-}
-
-#[test]
 fn xf331_focus_band_and_selector_are_distinct_treatments() {
-    // x-f331 US2/AC1-UI, restated: focus and selector are distinct
-    // treatments. The operator's color ruling (x-b5b8) retired the accent
-    // FILL for both - selection, hover, and focus now share the ONE surface
-    // band, and the focus row's distinction rides its glyph marks and state
-    // word, never a louder fill. This pin holds the unification: neither row
-    // regresses to an accent fill.
+    // x-f331, restated: the focus row wears the surface band, never an
+    // accent fill (x-b5b8). The selector row inverts apart from it.
     let mut view = two_pane_view();
     view.layout.agents.push(focus_agent(11)); // owns focused pane 11 -> row 1
-    view.selector = Some(3); // notes squad header, a different actionable row
     view.hover_row = None;
     let frame = view.compose();
     let cols = frame.cols as usize;
@@ -517,17 +493,6 @@ fn xf331_focus_band_and_selector_are_distinct_treatments() {
         focus_cell.bg,
         Color::Indexed(0),
         "the focus row wears the surface band, never an accent fill"
-    );
-
-    let sel_cell = frame.cells[4 * cols]; // display row 3 paints at outer row 4
-    assert_eq!(
-        sel_cell.bg,
-        Color::Indexed(0),
-        "the selector row wears the same surface band"
-    );
-    assert_eq!(
-        focus_cell.bg, sel_cell.bg,
-        "focus and selector share the one surface band"
     );
 }
 

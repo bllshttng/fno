@@ -1,12 +1,9 @@
-//! The reply dock: space on an agent row opens the peek docked under the
-//! sideline list with its reply input already focused, as Claude's agents
-//! view does. The dock is the peek itself in another place, so every peek
-//! key, the reply send path and the persisted draft stay one implementation.
+//! The reply dock: space on an agent row docks the peek under the list,
+//! reply focused. It is the peek in another place: one implementation.
 
 use super::*;
 
-/// The narrowest sideline the dock fits in. Below it the reply opens in
-/// the centered peek, focused the same way.
+/// The narrowest sideline the dock fits in; below it the peek centers.
 const MIN_DOCK_W: u16 = 40;
 
 /// Open the peek on `name` docked under the list, reply input focused.
@@ -44,14 +41,11 @@ impl View {
         // The last column is the sideline divider; the dock leaves it.
         // At most half the column, so the two seats never share a row.
         let dims = ((rows / 2).max(1), self.panel_w() as usize - 1);
-        // Follow the last line, so a long transcript windows to its tail:
-        // the newest message and the reply input stay in view.
+        // Follow the tail: the newest message and the reply stay in view.
         let follow = lines.len().checked_sub(1);
         let mut layout =
             layout_lines_overlay(origin, dims, chrome, lines, follow, OverlayAnchor::Center);
-        // Sit on the column's floor, flush left: docked, not floating. When
-        // the row being answered sits under that seat, the dock takes the
-        // top half instead, so it never hides its own row.
+        // Sit on the column's floor; over the answered row, take the top.
         let floor = (origin.0 + rows).saturating_sub(layout.framed.lines.len());
         let cursor_row = self.peek.as_ref().map_or(0, |p| {
             p.cursor.saturating_sub(self.sideline_offset()) + origin.0

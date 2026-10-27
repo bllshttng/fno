@@ -741,9 +741,7 @@ impl View {
                 // included: the chosen fill wins on hover.
                 highlit = true;
             }
-            // The selector's cursor row (a whole card in card layout)
-            // inverts from the theme: the row the user drives reads apart
-            // from hover and focus, and wins over the chosen fill.
+            // The selector's cursor row (or card) inverts and wins over the chosen fill.
             let head = match drow {
                 DisplayRow::CardDetail(..) => i.saturating_sub(1),
                 DisplayRow::CardMetrics(..) => i.saturating_sub(2),
@@ -1310,11 +1308,8 @@ impl View {
                 lattice_style(lattice, self.theme.needs_you, self.theme.ok).fg,
             )
         };
-        // The state glyph wears the state color, as the list's status cell
-        // does: a waiting ▲ and an unseen ✓ read at a glance in a card too.
+        // A resting card's state glyph wears the state color, as a list row's does.
         let glyph = status_glyph(lattice);
-        // A highlighted card keeps its band's own pair (the inverted cursor
-        // card above all), so only a resting card recolors its glyph.
         if let Some(cell) = line.iter_mut().find(|c| c.c == glyph).filter(|_| !highlit) {
             if status_fg != Color::Default {
                 cell.fg = status_fg;
