@@ -3865,6 +3865,7 @@ mod tests {
             disallowed_tools: Some("Bash"),
             passthrough: &[],
             route: None,
+            settings: None,
         };
         assert_eq!(
             build_argv("a", "hi", false, None, None, None, flags),
