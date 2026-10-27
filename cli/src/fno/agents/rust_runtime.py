@@ -1060,11 +1060,6 @@ def _gate_rm_at_seam(args: Sequence[str]) -> bool:
         return True
 
 
-def _is_promotion_bearing_spawn(command: str, args: Sequence[str]) -> bool:
-    """Keep grant-at-spawn on the Python path that owns promotion."""
-    return command == "spawn" and _has_flag(args, longs=("--promote",))
-
-
 def _is_account_bearing_pane(command: str, args: Sequence[str]) -> bool:
     """True for an explicit ``--as pane`` spawn carrying an account flag.
 
@@ -1227,41 +1222,6 @@ def _scrub_ambient_identity_at_exec(command: str) -> None:
     from fno.harness_identity import scrub_ambient_identity
 
     scrub_ambient_identity()
-
-
-#: The spawn axis flags retired at the door: each spelling routes the spawn to
-#: the Python parse, where the per-flag stub refuses naming the native form.
-#: The binary's own parser refuses the same set (cli_args.rs SpawnAxes::scan
-#: and the client loop arms), so a direct fno-agents call cannot carry one
-#: either. Only tokens before the --argv payload boundary count, so a fenced
-#: seed naming a flag is prompt text, never a routed spawn.
-_RETIRED_AXIS_LONGS = (
-    "--provider",
-    "--substrate",
-    "--yolo",
-    "--resume",
-    "--deny-tools",
-)
-
-
-def _is_retired_axis_spawn(command: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` carrying a retired axis flag in any spelling.
-
-    Each retired axis refuses at the Python door (``cmd_spawn``'s stub
-    callbacks name the native form), so a spawn that auto-routed to the binary
-    would either launch on the axis (the binary's legacy arms) or refuse with
-    another door's line. Routing the argv here keeps every refusal on one door
-    with one message shape. ``-r`` is deliberately absent: the short is the
-    standalone resume command's, never spawn's.
-    """
-    if command != "spawn":
-        return False
-    head = _args_before_argv(args)
-    return any(
-        a == flag or a.startswith(flag + "=")
-        for a in head
-        for flag in _RETIRED_AXIS_LONGS
-    )
 
 
 def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
@@ -1525,11 +1485,9 @@ def make_agents_group_cls() -> type:
                 mode = runtime_mode()
                 py_spawn = (
                     _is_role_bearing_spawn(command, args)
-                    or _is_promotion_bearing_spawn(command, args)
                     or (_is_route_bearing_spawn(command, args) and _spawn_flag_value(args, "--account", "--dispatch-account") is not None)
                     or _is_account_bearing_pane(command, args)
                     or _is_default_substrate_spawn(command, args)
-                    or _is_retired_axis_spawn(command, args)
                 )
                 if mode == "rust" and not py_spawn:
                     _pin = _worktree_policy_pin_at_seam(args)
