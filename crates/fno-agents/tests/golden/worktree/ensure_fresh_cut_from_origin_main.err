@@ -1,0 +1,1 @@
+worktree ensure: policy=harness-native (e1-origin); worktree at <ROOT>/e1/.claude/worktrees/zz-fixture-ensure-fresh base=fresh:origin/main created=true

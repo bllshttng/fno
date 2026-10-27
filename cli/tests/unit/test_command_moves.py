@@ -181,15 +181,17 @@ def test_every_moved_spelling_is_hidden():
         # root spelling (route, config route, config routing, doctor route)
         # and execs the slot resolver itself, so a python registration would
         # sit behind an intercept that never reaches it. `research` and `think`
-        # joined when the research family ported native. `observer` joined
-        # the same way: the front door claims both spellings and execs the
+        # joined when the research family ported native, and `workspace` and
+        # `worktree` when the worktree family did. `observer` joined the
+        # same way: the front door claims both spellings and execs the
         # native ops. Every OTHER moved
         # spelling keeps a one-release registration, and any registration
         # that exists must be hidden: an advertised moved name teaches a
         # doomed spelling.
         if name in (
             "decide", "yard", "review", "pr", "retro", "restart", "project", "skill-diff",
-            "mcp", "setup", "route", "research", "think", "observer",
+            "mcp", "setup", "route", "research", "think", "workspace", "worktree",
+            "observer",
         ):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue

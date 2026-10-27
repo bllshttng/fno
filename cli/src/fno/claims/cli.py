@@ -984,11 +984,16 @@ def _handover_pane_probe_blocked(claim) -> bool:
     absence.
     """
     try:
-        from fno.worktree_paths import resolve_worktree_policy
+        from fno.rust_binary import call_binary_json
 
         cwd = _claim_worktree_cwd(claim)
         repo_root = Path(cwd) if cwd else Path.cwd()
-        return resolve_worktree_policy(repo_root).policy == "never"
+        err, payload = call_binary_json(
+            "worktree-policy", ["--repo", str(repo_root), "--json"], timeout=30
+        )
+        if err is not None or not isinstance(payload, dict):
+            return True
+        return payload.get("policy") == "never"
     except Exception:  # noqa: BLE001 - an unreadable policy proves nothing
         return True
 

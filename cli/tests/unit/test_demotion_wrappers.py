@@ -1,10 +1,10 @@
 """Unit smoke tests for the fno wrappers introduced in the consolidation pass:
-fno doctor codemap, fno worktree.
+fno doctor codemap. (`fno worktree` is native now, served by the front door.)
 
 These verify only the wiring (subcommand registers, --help renders, the
 canonical scripts get located, missing-script paths fail loudly). The heavy
-behavior (AST/PageRank traversal, lifecycle git ops) lives in the canonical
-scripts under scripts/diagnostics/ and scripts/lib/, and (for codemap) in
+behavior (AST/PageRank traversal) lives in the canonical
+scripts under scripts/diagnostics/, and (for codemap) in
 the engine shipped beside fno.codemap_cli; each is exercised by its own
 callers. The former `fno tokens` wrapper was deleted by the command audit;
 `fno whoami context` / `fno whoami cost` cover the diagnosis.
@@ -29,14 +29,6 @@ def _run_fno(*args: str, extra_env: dict[str, str] | None = None) -> subprocess.
         text=True,
         env=env,
     )
-
-
-def test_fno_worktree_help_renders_subcommands() -> None:
-    result = _run_fno("worktree", "--help")
-    assert result.returncode == 0, result.stdout + result.stderr
-    out = result.stdout + result.stderr
-    for sub in ("status", "cleanup", "archive"):
-        assert sub in out, f"fno worktree --help missing '{sub}': {out[-500:]}"
 
 
 def test_fno_codemap_finds_its_engine_outside_the_footnote_checkout(tmp_path) -> None:

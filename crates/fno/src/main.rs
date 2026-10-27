@@ -1354,6 +1354,12 @@ fn main() {
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let env_session = mux_cli::env_server();
     let mut args = args;
+    // The worktree family's door claims before any forwarding: the Python
+    // mounts die with the family port, so these argv shapes must answer
+    // natively or not at all.
+    if let Some(launch) = fno::worktree_door::classify(&args) {
+        std::process::exit(launch.run());
+    }
     // The agents menu claims first: a nested spelling rewrites to the argv
     // that answers today, so every door below still sees the spelling it
     // owns. The cross-machine `org promote <name@host>` hand-off is left for

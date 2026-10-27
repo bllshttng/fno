@@ -150,15 +150,10 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     ),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
     "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
-    "worktree": ("fno.worktree_cli:app", "Worktree management", {"hidden": True}),
-    "workspace": (
-        "fno.workspace.cli:cli",
-        "Worktree lifecycle and worker registration (now `fno agents workspace`).",
-        {"hidden": True},
-    ),
     # `fno route` (the hidden root spelling of the provider route lanes)
     # answers natively: the front classifies it onto route-slot's
-    # config-route mode, so no Python mount remains.
+    # config-route mode, so no Python mount remains. The worktree family's
+    # root spellings joined the same way with its port.
     "evals": (
         "fno.evals_cli:evals_app",
         "Golden-task efficacy evals (run / report / diff)",
@@ -250,7 +245,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "state": set(),
     "stub-manifest": set(),
     "target": set(),
-    "worktree": set(),
 }
 
 for _group_name, _keep in COLLAPSE_KEEP.items():
