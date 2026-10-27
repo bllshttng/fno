@@ -8,7 +8,8 @@ re-registration the deleted group mounted, so the retired roots (``fno
 context`` -> ``whoami context``, ``fno cost`` -> ``whoami cost``) keep a
 registered destination and every spelling stays invocable one release out.
 The ``scoreboard`` views are native (`fno whoami scoreboard`); the retired
-root spelling keeps its one-release signpost in ``cli.py``.
+root spelling prints the ``command_moves`` notice at the front door and
+re-spells to the native command.
 """
 from __future__ import annotations
 
@@ -54,16 +55,3 @@ from fno.agents.history import history_command  # noqa: E402
 
 whoami_app.command("context", hidden=True)(context_command)
 whoami_app.command("ledger", hidden=True)(history_command)
-
-
-def _scoreboard_signpost() -> None:
-    """One-release signpost: the views are native (`fno whoami scoreboard`).
-
-    The native front door claims the whoami spelling, so the deprecated root
-    has no python leaf to reach; it names the native spelling and exits.
-    """
-    typer.echo(
-        "fno: the scoreboard views are native; use `fno whoami scoreboard`. "
-        "This spelling retires after one release."
-    )
-    raise typer.Exit(code=2)

@@ -530,7 +530,6 @@ pub(crate) fn build_context_outcome_trace(
     .iter()
     .find_map(|key| delivery.get(*key).filter(|v| !v.is_null()))
     .cloned()
-    .map(|v| v)
     .unwrap_or(Value::Null);
     let pr_number_raw = delivery.get("pr_number").cloned().unwrap_or(Value::Null);
     let pr_number = match pr_number_raw {

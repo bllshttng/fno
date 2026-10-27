@@ -96,6 +96,12 @@ pub(crate) fn num_opt(value: Option<&Value>) -> Option<f64> {
         None | Some(Value::Null) => None,
         Some(Value::Bool(_)) => None,
         Some(Value::String(s)) if s.trim().is_empty() => None,
+        // Python `float(v)` accepted numeric strings; junk strings parse
+        // fail and read None, the same gate the non-nullable `_num` applies.
+        Some(Value::String(s)) => match s.trim().parse::<f64>() {
+            Ok(f) if f.is_finite() && f >= 0.0 => Some(f),
+            _ => None,
+        },
         Some(v) => match v.as_f64() {
             Some(f) if f.is_finite() && f >= 0.0 => Some(f),
             _ => None,

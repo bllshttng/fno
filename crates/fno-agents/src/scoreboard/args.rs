@@ -1,7 +1,6 @@
 //! Argv parsing for `fno-agents scoreboard`, mirroring the Python leg's
-//! typer surface. The two refusals keep exit code 2; their stderr names the
-//! harness (the golden freezes typer's usage line), so the parity test
-//! checks those two cases on exit code alone.
+//! typer surface. The refusals keep exit code 2; their stderr is the door's
+//! own one-line refusal, and the parity goldens pin those bytes.
 
 /// The parsed view request: exactly one fold or the main scoreboard.
 #[derive(Debug, Default)]

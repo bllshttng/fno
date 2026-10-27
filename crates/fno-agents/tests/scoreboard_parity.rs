@@ -21,9 +21,10 @@
 //!   that one object before comparing. Every other object keeps the leg's
 //!   own order.
 //!
-//! The two typer-refusal cases (`since_zero`, `mutually_exclusive`) pin a
-//! stderr that names the harness (typer's usage line), so they compare exit
-//! code alone; the native refusals name the door instead.
+//! The two refusal cases (`since_zero`, `mutually_exclusive`) pin the door's
+//! own refusal bytes: the capture's stderr named the harness (typer's usage
+//! line), which was implementation noise, so those goldens hold the native
+//! one-line refusal and compare like any other case.
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -169,11 +170,6 @@ fn run_case(label: &str, argv: &[String]) -> (i32, String, String) {
     (code, stdout, stderr)
 }
 
-/// The two refusal cases compare exit code alone (the golden stderr names the
-/// harness's own usage line; the native door names the door). Everything else
-/// compares exit + normalized stdout against the golden.
-const EXIT_ONLY: &[&str] = &["since_zero", "mutually_exclusive"];
-
 #[test]
 fn scoreboard_golden_parity() {
     let cases_path =
@@ -203,14 +199,11 @@ fn scoreboard_golden_parity() {
         let (code, stdout, stderr) = run_case(label, &argv);
         let norm = sort_delivery_classes(&stdout);
         let expected_norm = sort_delivery_classes(&expected);
-        let exit_only = EXIT_ONLY.contains(&label.as_str());
         assert_eq!(code, expected_exit, "exit mismatch on {label}");
-        if !exit_only {
-            assert_eq!(
-                norm, expected_norm,
-                "stdout mismatch on {label}: got:\n{norm}\n-- expected:\n{expected_norm}"
-            );
-        }
+        assert_eq!(
+            norm, expected_norm,
+            "stdout mismatch on {label}: got:\n{norm}\n-- expected:\n{expected_norm}"
+        );
         let err_golden = golden_dir.join(format!("{key}.err"));
         if err_golden.exists() {
             let expected_err = std::fs::read_to_string(&err_golden).expect("read golden err");
