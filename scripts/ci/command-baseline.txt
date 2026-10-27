@@ -117,4 +117,3 @@ whoami context
 whoami cost
 whoami ledger
 whoami scoreboard
-worktree
