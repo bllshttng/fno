@@ -191,16 +191,12 @@ fn main() {
     if let Some(code) = fno_agents::client_transport::transport_early_arms(&args) {
         std::process::exit(code);
     }
-    // `launch-workdir`: the spawn door's launch-cwd resolution (see
-    // launch_workdir.rs doc). Transport-only: registers no client action; Python's
-    // ensure_launch_workdir reaches it through command_call, and a `hold`
-    // answer is a valid exit-0 answer the caller renders.
-    if args.first().map(String::as_str) == Some("launch-workdir") {
-        std::process::exit(fno_agents::launch_workdir::run_launch_workdir(&args[1..]));
+    // One dispatch site per family; the op tables live in the modules.
+    if let Some(code) = fno_agents::worktree::client_dispatch(&args) {
+        std::process::exit(code);
     }
-    // `worktree-reapable`: the worktree-removal gate; callers: worktree_gate.py, worktree-reapable.sh.
-    if args.first().map(String::as_str) == Some("worktree-reapable") {
-        std::process::exit(fno_agents::worktree_reapable::run_client(&args[1..]));
+    if let Some(code) = fno_agents::launch_workdir::client_dispatch(&args) {
+        std::process::exit(code);
     }
     // `harness-probe` / `harness-matrix` / `harness-beat`: capability reads, transport-only.
     if matches!(

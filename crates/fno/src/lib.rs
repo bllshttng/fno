@@ -150,6 +150,7 @@ pub mod web;
 pub mod wizard;
 pub mod wizard_term;
 pub mod wordmark;
+pub mod worktree_door;
 pub mod yard_overlay;
 
 pub mod doctor_cost;

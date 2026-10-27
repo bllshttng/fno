@@ -118,7 +118,7 @@ OUT="$(run_helper "$SIB")"
 # --- per-project `never` policy flips canonical-protected -> ok -------------
 # The verdict consults `fno agents workspace worktree policy`; a `never` project (working tree IS
 # the product) is legitimately worked on its canonical branch. Stub fno so the
-# case is hermetic and independent of the resolver (covered in test_worktree_ensure).
+# case is hermetic and independent of the resolver (covered in crates/fno-agents/tests/worktree_ensure.rs).
 echo ""
 echo "--- never policy flips protected -> ok ---"
 mk_fno_stub() { # <dir> <policy-line-or-'error'>
