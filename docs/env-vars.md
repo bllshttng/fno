@@ -26,7 +26,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_DIR_OVERRIDE` | rs | Redirects the Claude config root the corrections-verify reads the rule repo's git log from; mirrors the bash-side override in autocorrect-pack.sh. |
 | `CLAUDE_EFFORT` | rs | The effort level an encounter vote records, on claude only. |
 | `CLAUDE_JOB_DIR` | rs | Set by Claude Code in a `claude --bg` job. Its `state.json` names the job, and the SessionStart launch claim reads that name to match the launcher's record. The write gate also falls back to its tmp dir in a refusal when the payload carries no session id; the payload's session wins when present. |
-| `CLAUDE_PLUGIN_ROOT` | py+rs | unclear: cli/src/fno/doctor.py:3465 |
+| `CLAUDE_PLUGIN_ROOT` | rs | The plugin stage root the doctor's hook probes read. |
 | `CLAUDE_SESSION_ID` | rs | unclear: crates/fno-agents/src/claims.rs:3690 |
 | `CLI` | rs | unclear: crates/fno-agents/src/loop_dispatch.rs:198 |
 | `CODEX_COMPANION_SESSION_ID` | rs | The Codex session id used as the owner-session fallback when a lazy mux server starts from an agent shell. |
@@ -306,7 +306,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `MCP_CHANNEL_INBOUND_POKE` | py | unclear: cli/src/fno/agents/context.py:92 |
 | `NO_COLOR` | rs | unclear: crates/fno/src/pty.rs:1976 |
 | `OPENCODE_CONFIG` | rs | Points the plugin-array audit at one extra OpenCode config file; unset, the audit reads only the standard paths. |
-| `OPENCODE_CONFIG_DIR` | py+rs | Moves OpenCode's config dir; the installer, the doctor leg and the scratch-install tests read it. |
+| `OPENCODE_CONFIG_DIR` | rs | Moves OpenCode's config dir; the installer and the doctor's surface report read it. |
 | `OPENCODE_DB` | rs | Points the intel fold at one opencode store; unset, every `opencode*.db` in the data dir is read. |
 | `OPENROUTER_API_KEY` | rs | OpenRouter API key for `fno config accounts benchmarks refresh`; the refresh refuses without it, naming this var. |
 | `OUT_DIR` | rs | unclear: crates/fno-agents/build.rs:51 |
@@ -324,7 +324,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `SCCACHE_DIR` | rs | Where sccache keeps its compile cache; `fill_sccache_env` pins the fleet cache to `<fno build base>/sccache` when unset and sccache is installed, beside the build-dir shards the same lane sweeps. The footnote rustc wrapper sets the same default for an opted-in build. fno never exports it to a shell rc or harness env, so other Rust projects keep their own cache. |
 | `SCCACHE_DISABLE` | rs | Set to `1` to force bare rustc everywhere; the rustc wrapper reads it ahead of every opt-in, and the daemon's sccache server keep-alive reads it the same way, so a disabled machine runs no server even with `build.sccache = true` or `FNO_SCCACHE=1` set. |
 | `SCCACHE_IDLE_TIMEOUT` | rs | `fill_sccache_env` and the rustc wrapper default this to `0` (never stop on idle): a server that exits on idle mid-build fell compiles back to local rustc under fleet load. A shorter operator-set value survives both defaults. The daemon's `ensure_sccache_server` starts a replacement with `0` when it finds no live server on an opted-in machine. |
-| `SHELL` | py+rs | The user's login shell. |
+| `SHELL` | rs | The user's login shell. |
 | `SMOKE_CHANGED_RECEIPT` | rs | Overrides the changed-mode receipt path: crates/fno-agents/src/test_changed.rs |
 | `SMOKE_FAILURE_RECORD` | rs | Overrides the failure-record path: crates/fno-agents/src/test_smoke.rs |
 | `SMOKE_REGISTRY_FILE` | rs | Test seam naming a JSON registry ({"steps": [[name, cwd, cmd], ...]}): crates/fno-agents/src/test_smoke.rs |

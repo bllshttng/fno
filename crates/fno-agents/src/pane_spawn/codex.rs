@@ -296,8 +296,14 @@ pub(crate) fn build_wrapped(ctx: &PaneContext) -> ArmPlan {
     argv.extend(["-C".to_string(), ctx.cwd.to_string_lossy().into_owned()]);
     // The lane default posture ("the mode axis is retired; the lane default
     // is the only answer left", mux_spawn.py:952-956), routed through the
-    // Rust owner so pane and thread cannot disagree.
-    let posture = crate::codex_posture::permission_pane_tokens("codex", "workspace-write:never")
+    // Rust owner so pane and thread cannot disagree. A promoted spawn
+    // (a `--promote` scope or a complete role-level/scope pair) launches at
+    // the role-aware default instead: full access, because a lead must write
+    // the state root to spawn, claim and journal. An operator
+    // spelling never reaches this arm - the client door refuses
+    // --yolo/--permission-mode before the arm runs - so the role default
+    // is the only new answer here.
+    let posture = crate::codex_posture::codex_pane_default_tokens(ctx.promoted.then_some(1))
         .expect("the lane default posture is in the vocabulary");
     argv.extend(posture);
     argv.extend(crate::codex_ask::hook_trust_flag());
