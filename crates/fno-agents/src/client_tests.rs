@@ -814,20 +814,19 @@ fn parse_rows() {
 
 #[test]
 fn substrate_rows() {
-    // The pane-default harnesses get the interactive host_mode on an unflagged
-    // spawn; codex/gemini/agy never mint a session id (claude-only).
+    // A pane comes only from an explicit lane and gets the interactive
+    // host_mode; codex/gemini/agy never mint a session id (claude-only).
     for provider in ["gemini", "agy"] {
         let args = vec![
             "wk".to_string(),
             "--harness".to_string(),
             provider.to_string(),
+            "--substrate".to_string(),
+            "pane".to_string(),
         ];
         let (method, params) = build_request("spawn", &args).unwrap();
         assert_eq!(method, "agent.spawn");
-        assert_eq!(
-            params["substrate"], "pane",
-            "{provider} defaults to the pane"
-        );
+        assert_eq!(params["substrate"], "pane", "{provider} keeps the pane");
         assert_eq!(
             params["host_mode"], "interactive",
             "{provider} default-interactive"
@@ -835,10 +834,11 @@ fn substrate_rows() {
         assert!(params.get("session_id").is_none(), "{provider} never mints");
     }
 
-    // claude/codex seat a thread by default: the resolved lane rides params,
-    // so dispatch and the thread-only grant read one value, and a thread gets
-    // no host_mode and no mint.
-    for provider in ["claude", "codex"] {
+    // An unflagged spawn takes a thread for every harness, as `cmd_spawn`
+    // does; admission refuses a thread the harness cannot seat. The resolved
+    // lane rides params, so dispatch and the thread-only grant read one value,
+    // and a thread gets no host_mode and no mint.
+    for provider in ["claude", "codex", "gemini", "agy"] {
         let args = vec![
             "wk".to_string(),
             "--harness".to_string(),

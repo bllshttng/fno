@@ -56,17 +56,13 @@ pub fn take_flag(
 }
 
 /// The substrate an unflagged spawn takes: `--once` gives headless, else the
-/// thread where this client seats one (claude, codex, opencode), else the
-/// pane. The harness defaults to codex, as the daemon's `handle_spawn` does.
-/// `--once` beside `--as pane` runs headless, as `cmd_spawn` does.
+/// thread. `--once` beside `--as pane` runs headless, as `cmd_spawn` does.
 pub fn settle_substrate(params: &mut Map<String, Value>) {
     let once = params.get("once").and_then(Value::as_bool) == Some(true);
-    let harness = params.get("provider").and_then(Value::as_str);
     let substrate = params.get("substrate").and_then(Value::as_str);
     let settled = match substrate {
         None if once => "headless",
-        None if matches!(harness.unwrap_or("codex"), "claude" | "codex" | "opencode") => "thread",
-        None => "pane",
+        None => "thread",
         Some("pane") if once => "headless",
         Some(_) => return,
     };
@@ -619,9 +615,6 @@ mod tests {
         let mut p = Map::new();
         settle_substrate(&mut p);
         assert_eq!(p["substrate"], "thread");
-        let mut p = params(&[("provider", json!("gemini"))]);
-        settle_substrate(&mut p);
-        assert_eq!(p["substrate"], "pane");
         let mut p = params(&[("once", json!(true)), ("substrate", json!("pane"))]);
         settle_substrate(&mut p);
         assert_eq!(p["substrate"], "headless");
