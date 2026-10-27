@@ -143,11 +143,17 @@ fn agents_tab_space_toggles_a_settings_checkbox() {
         .unwrap();
     v.aux = Some(modal);
     assert_eq!(
-        settings_modal::space_toggle(&v, b" "),
+        settings_modal::space_toggle(&v),
         Some(AuxAction::ToggleSidelineLayout),
         "space on a checkbox row flips it"
     );
-    assert_eq!(settings_modal::space_toggle(&v, b"x"), None);
+    // A space coalesced with another key in one read still reaches the
+    // modal as its own token, where the toggle arm reads it.
+    let toks = fold_modal_keys(&mut Vec::new(), b" \x1b[B");
+    assert!(
+        matches!(toks.as_slice(), [ModalKey::Byte(b' '), ModalKey::Down]),
+        "{toks:?}"
+    );
 
     // A non-checkbox row keeps today's keys.
     v.settings_tab = SettingsTab::Theme;
@@ -158,5 +164,5 @@ fn agents_tab_space_toggles_a_settings_checkbox() {
         .position(|a| matches!(a, AuxAction::ApplyTheme(_)))
         .unwrap();
     v.aux = Some(modal);
-    assert_eq!(settings_modal::space_toggle(&v, b" "), None);
+    assert_eq!(settings_modal::space_toggle(&v), None);
 }

@@ -9415,6 +9415,10 @@ async fn aux_keys(
                     view.aux = None;
                 }
             }
+            // Space flips a settings checkbox in place, as Enter does.
+            ModalKey::Byte(b' ') if settings_modal::space_toggle(view).is_some() => {
+                aux_execute_selected(view, sock_w).await?;
+            }
             // Any other (unbound) key dismisses, per the shared popup contract.
             ModalKey::Byte(_) => {
                 theme_import_ui::reset(view);

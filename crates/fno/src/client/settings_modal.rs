@@ -263,13 +263,12 @@ pub(super) fn back(view: &mut View) -> bool {
     true
 }
 
-/// The checkbox row a lone space flips: the selected settings row when it
-/// is a toggle and no text field is open. Every other row keeps its keys.
-pub(super) fn space_toggle(view: &View, bytes: &[u8]) -> Option<AuxAction> {
-    let field_open = view.lane.custom_entry.is_some()
-        || view.lane.key_entry.is_some()
-        || matches!(view.theme_import, theme_import_ui::ThemeImportUi::Entry(_));
-    if bytes != b" " || field_open || !is_settings(view) {
+/// The checkbox row a space flips: the selected settings row when it is a
+/// toggle. An open text field takes its keys before the modal sees them
+/// (`field_keys`), so this reads only the selection. Every other row keeps
+/// its keys.
+pub(super) fn space_toggle(view: &View) -> Option<AuxAction> {
+    if !is_settings(view) {
         return None;
     }
     let m = view.aux.as_ref()?;
@@ -287,22 +286,14 @@ pub(super) fn space_toggle(view: &View, bytes: &[u8]) -> Option<AuxAction> {
 
 /// Feed one read to the open settings text field. `None` when none is open,
 /// so the caller runs its own keys. Every chunk ends with a rebuild, so the
-/// field row always paints the text so far. A lone space on a checkbox row
-/// flips it in place.
+/// field row always paints the text so far.
 pub(super) async fn field_keys(
     view: &mut View,
     bytes: &[u8],
-    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+    _sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<Option<StdinFlow>, String> {
     if !is_settings(view) {
         return Ok(None);
-    }
-    if let Some(action) = space_toggle(view, bytes) {
-        match action {
-            AuxAction::ToggleExperimental(flag) => super::experimental::toggle(view, flag),
-            other => run_action(view, other, sock_w).await?,
-        }
-        return Ok(Some(StdinFlow::Continue));
     }
     let events = if let Some(f) = view.lane.custom_entry.as_mut() {
         f.feed(bytes)
