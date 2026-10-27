@@ -96,7 +96,6 @@ loops resume-all
 mail
 mail send !--origin !--provider
 mux
-notify
 observer
 paths
 phase kill-check
@@ -107,7 +106,6 @@ route
 scoreboard
 state
 status
-status-fanout tick
 stub-manifest
 target
 test
