@@ -127,22 +127,6 @@ pub struct Subject<'a> {
 }
 
 impl Verdict {
-    /// True only for a genuine, readable stop. The one question every gate
-    /// asks, kept in one place so no gate re-derives it.
-    pub fn is_stopped(&self) -> bool {
-        matches!(self, Verdict::Stopped(_))
-    }
-
-    /// `(generation, reason)` when a record backs the verdict.
-    pub fn generation_reason(&self) -> (Option<u64>, Option<&str>) {
-        match self {
-            Verdict::Stopped(r) | Verdict::Clear(r) => {
-                (Some(r.generation), Some(r.reason.as_str()))
-            }
-            Verdict::Unavailable(_) => (None, None),
-        }
-    }
-
     /// How one scope's door reads this verdict: true when the door must
     /// refuse or wait. A stop that does not hold `scope` reads as no
     /// incident to that door; an unreadable record holds every scope, so no

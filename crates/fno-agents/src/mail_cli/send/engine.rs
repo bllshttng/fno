@@ -14,8 +14,6 @@ use super::*;
 /// and holds it, which misses the replace-mid-wait edge only.
 pub(super) struct AgentLock {
     file: std::fs::File,
-    #[allow(dead_code)]
-    path: PathBuf,
 }
 
 impl AgentLock {
@@ -45,7 +43,7 @@ impl AgentLock {
             match unsafe { libc::flock(handle.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } {
                 0 => {
                     let _ = std::fs::write(&path, holder_json());
-                    return Ok(AgentLock { file: handle, path });
+                    return Ok(AgentLock { file: handle });
                 }
                 _ => {
                     drop(handle);

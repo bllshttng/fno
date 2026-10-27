@@ -247,13 +247,6 @@ impl PaneContext {
                 .unwrap_or_default(),
         })
     }
-
-    /// The geometry directives an arm must own to answer this spawn itself.
-    /// Empty for the plain and bounded lanes; anything here is a shape the
-    /// row-7 arms decline back to Python.
-    pub fn has_geometry(&self) -> bool {
-        self.squad.is_some() || self.split.is_some() || self.tab.is_some() || self.at.is_some()
-    }
 }
 
 /// What an arm adds to the spine: the wrapped provider argv and the

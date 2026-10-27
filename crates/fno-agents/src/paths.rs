@@ -291,19 +291,6 @@ impl AgentsHome {
         self.root.join("team_names.json")
     }
 
-    /// The append-only name history (`name_history.json`), beside
-    /// `team_names.json`: every name ever drawn or bound on this host, so a
-    /// retired lead's name never comes back. See [`crate::team_names`].
-    pub fn name_history_json(&self) -> PathBuf {
-        self.root.join("name_history.json")
-    }
-
-    /// Per-provider injection gate record (`injection-gate.json`), stored next
-    /// to `registry.json` in the agents root.
-    pub fn injection_gate_json(&self) -> PathBuf {
-        self.root.join("injection-gate.json")
-    }
-
     /// Machine-wide fleet incident breaker (`fleet-stop.json`), next
     /// to `registry.json`. Written by `fleet-incident stop|clear`, read by
     /// every admission gate before its bypass branches; see
