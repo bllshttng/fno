@@ -49,7 +49,7 @@ pub(crate) fn render(report: &FleetReport, generated: &str, reload_s: i64) -> St
 }
 
 pub(crate) fn write_page(path: &Path, body: &str) -> Result<(), String> {
-    crate::rundown::write_atomic(&path.to_path_buf(), body)
+    crate::rundown::write_atomic(path, body)
 }
 
 fn run_page(config_cwd: &Path) -> Result<String, String> {

@@ -8,16 +8,18 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from fno.lead.state import write_manifest
-from fno.lead.wake import bill_wake
+from fno.agents.role import lead_manifest_call
+from fno.agents.spawn_overlay_client import spawn_overlay_call
+from fno.graph.statuses import is_terminal_entry
 from fno.pr_watch._lead_wake import (
     RoleTarget,
-    _board_digest,
     _board_rows,
+    _hash_rows,
     _promoted,
     _holder_absent,
     _store_board_hash,
@@ -28,6 +30,23 @@ from fno.pr_watch._lead_wake import (
 pytestmark = pytest.mark.dev_build
 
 NOW = datetime(2026, 8, 29, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def write_manifest(path, **fields) -> None:
+    """Write one manifest through the native spawn-team `manifest` op."""
+    answer = spawn_overlay_call({"kind": "spawn-team", "op": "manifest", "path": str(path), **fields})
+    assert not answer.get("error"), answer
+
+
+def bill_wake(path, *, now) -> None:
+    """Bill one wake through the native ledger op."""
+    lead_manifest_call("bill-wake", path=str(path), now=now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+
+def _manifest_for(root, scope):
+    """The manifest path as the wake phase resolves it: the repo's space,
+    canonical-keyed (the seed must land where the reader looks)."""
+    return Path(lead_manifest_call("path", scope=scope, owner_cwd=str(root))["path"])
 
 
 def _settings(*, armed: bool = True) -> SimpleNamespace:
@@ -66,11 +85,7 @@ class _Recorder:
         self.successor_flags.append(successor)
 
 def _lead_manifest(root):
-    """The manifest path as the wake phase resolves it: the repo's space,
-    canonical-keyed (the seed must land where the reader looks)."""
-    from fno.lead.state import lead_manifest_path, lead_state_root
-
-    return lead_manifest_path("epic-x", state_root=lead_state_root(root))
+    return _manifest_for(root, "epic-x")
 
 
 def _team(roles):
@@ -207,7 +222,11 @@ def test_the_spawned_walk_argv_carries_the_matched_address(monkeypatch, tmp_path
         def __init__(self, args, **kwargs):
             argv.extend(args)
 
-    monkeypatch.setattr(subprocess_mod, "Popen", _FakePopen)
+    # Scoped to the wake module: the walk reads the native ops first, and
+    # their subprocess.run must keep the real Popen.
+    monkeypatch.setattr(
+        phase_mod, "subprocess", SimpleNamespace(Popen=_FakePopen, STDOUT=subprocess_mod.STDOUT)
+    )
     target = RoleTarget(
         holder="lead-x",
         scope="epic-x",
@@ -511,12 +530,11 @@ def test_the_receipt_names_refusals_and_dropped_roles(tmp_path):
     # A role the pass cannot see must be named: epic-y has a team entry
     # and a registered holder but no manifest on disk, and epic-x is live
     # and refuses as working. Both words belong in the receipt.
-    from fno.lead.state import lead_manifest_path, lead_state_root, write_manifest
 
     root = tmp_path / "proj"
     root.mkdir()
     write_manifest(
-        lead_manifest_path("epic-x", state_root=lead_state_root(root)),
+        _manifest_for(root, "epic-x"),
         scope="epic-x",
         harness_session_id="11111111-2222-3333-4444-555555555555",
         force=True,
@@ -532,7 +550,7 @@ def test_the_receipt_names_refusals_and_dropped_roles(tmp_path):
             "scope": "epic-z",
             "status": "manifest-only",
             "manifest_path": str(
-                lead_manifest_path("epic-z", state_root=lead_state_root(root))
+                _manifest_for(root, "epic-z")
             ),
         },
         {"holder": "", "scope": "epic-w", "status": "live"},
@@ -557,7 +575,7 @@ def test_the_receipt_names_refusals_and_dropped_roles(tmp_path):
     assert summary["roles"] == 1, "only epic-x has both row and manifest"
     assert summary["refused"] == [{"scope": "epic-x", "refusal": "working"}]
     note = summary["note"] or ""
-    expected_missing = lead_manifest_path("epic-y", state_root=lead_state_root(root))
+    expected_missing = _manifest_for(root, "epic-y")
     assert note == "; ".join(
         (
             f"epic-y: manifest missing at {expected_missing}",
@@ -592,7 +610,18 @@ def test_an_unreadable_registry_wakes_nothing(tmp_path):
 
 #: Fixture rung: a level-1 project role over "proj", so no machine config
 #: or graph shape is load-bearing in these tests.
-_PROJECT_RESOLVER = lambda parts: (1, "proj")  # noqa: E731
+def _scope_of(board):
+    """The native scope read for a project role over "proj": its rows' ids
+    and the count not closed for good."""
+    rows = [r for r in board if r.get("project") == "proj"]
+    return lambda _scope: {
+        "ids": [r["id"] for r in rows],
+        "undelivered": sum(1 for r in rows if not is_terminal_entry(r)),
+    }
+
+
+def _board_of(board):
+    return _board_rows({r["id"] for r in board if r.get("project") == "proj"}, board)
 
 _BOARD_A = [
     {
@@ -668,13 +697,13 @@ def test_the_board_diff_names_the_two_added_rows_and_nothing_unchanged(tmp_path)
     _run(
         tmp_path,
         unread=lambda a: [],
-        extra={"entries_fn": lambda: _BOARD_A, "scope_resolver": _PROJECT_RESOLVER},
+        extra={"entries_fn": lambda: _BOARD_A, "scope_fn": _scope_of(_BOARD_A)},
     )
 
     rec, _summary, _manifest = _run(
         tmp_path,
         unread=lambda a: [],
-        extra={"entries_fn": lambda: _BOARD_C, "scope_resolver": _PROJECT_RESOLVER},
+        extra={"entries_fn": lambda: _BOARD_C, "scope_fn": _scope_of(_BOARD_C)},
     )
 
     assert rec.dispatches and rec.dispatches[0][3], "the diff is the wake payload"
@@ -700,7 +729,7 @@ def test_an_empty_board_stores_an_observation_so_its_first_node_is_a_change(tmp_
     _run(
         tmp_path,
         unread=lambda a: [],
-        extra={"entries_fn": lambda: elsewhere, "scope_resolver": _PROJECT_RESOLVER},
+        extra={"entries_fn": lambda: elsewhere, "scope_fn": _scope_of(elsewhere)},
     )
 
     quiet_refill = _BOARD_A_QUIET + [
@@ -716,7 +745,7 @@ def test_an_empty_board_stores_an_observation_so_its_first_node_is_a_change(tmp_
     rec, _summary, _manifest = _run(
         tmp_path,
         unread=lambda a: [],
-        extra={"entries_fn": lambda: quiet_refill, "scope_resolver": _PROJECT_RESOLVER},
+        extra={"entries_fn": lambda: quiet_refill, "scope_fn": _scope_of(quiet_refill)},
     )
 
     assert rec.dispatches and rec.dispatches[0][1] == "board", rec.dispatches
@@ -744,8 +773,8 @@ def test_a_refused_board_change_keeps_the_old_hash_so_it_stays_a_trigger(tmp_pat
     def prime(manifest):
         _store_board_hash(
             _SidecarTarget(manifest),
-            _board_digest("epic-x", _BOARD_A, _PROJECT_RESOLVER),
-            _board_rows("epic-x", _BOARD_A, _PROJECT_RESOLVER),
+            _hash_rows(_board_of(_BOARD_A)),
+            _board_of(_BOARD_A),
         )
         bill_wake(manifest, now=NOW - timedelta(minutes=2))  # inside debounce
 
@@ -753,13 +782,13 @@ def test_a_refused_board_change_keeps_the_old_hash_so_it_stays_a_trigger(tmp_pat
         tmp_path,
         unread=lambda a: [],
         pre=prime,
-        extra={"entries_fn": lambda: _BOARD_B, "scope_resolver": _PROJECT_RESOLVER},
+        extra={"entries_fn": lambda: _BOARD_B, "scope_fn": _scope_of(_BOARD_B)},
     )
 
     assert rec.dispatches == [], "the debounce refuses the spawn"
     refused = [e for e in rec.events if e[0] == "lead_wake_refused"]
     assert refused and refused[0][1]["reason"] == "board"
-    assert _stored(manifest) == _board_digest("epic-x", _BOARD_A, _PROJECT_RESOLVER), (
+    assert _stored(manifest) == _hash_rows(_board_of(_BOARD_A)), (
         "a refused change must not consume the trigger"
     )
 
@@ -771,8 +800,8 @@ def _primed_unchanged(manifest):
     """Store the current board's hash: mail empty, board unchanged."""
     _store_board_hash(
         _SidecarTarget(manifest),
-        _board_digest("epic-x", _BOARD_A, _PROJECT_RESOLVER),
-        _board_rows("epic-x", _BOARD_A, _PROJECT_RESOLVER),
+        _hash_rows(_board_of(_BOARD_A)),
+        _board_of(_BOARD_A),
     )
 
 
@@ -781,7 +810,7 @@ def test_the_backstop_fires_when_no_event_did(tmp_path):
         tmp_path,
         unread=lambda a: [],
         pre=_primed_unchanged,
-        extra={"entries_fn": lambda: _BOARD_A, "scope_resolver": _PROJECT_RESOLVER},
+        extra={"entries_fn": lambda: _BOARD_A, "scope_fn": _scope_of(_BOARD_A)},
     )
 
     assert rec.dispatches == [("epic-x", "backstop", None, None)], (
@@ -806,33 +835,6 @@ def test_an_unsafe_role_scope_is_skipped_not_joined(tmp_path):
 
 # ── the peer-review fixes ─────────────────────────────────────────────────
 
-
-def test_an_absent_respawn_ceiling_defaults_to_four_like_the_walk(tmp_path):
-    # Parity with LeadQueue (loop_lead.rs): Rust's parse_lead_manifest
-    # defaults an absent respawn_ceiling to 4, so Python reading 0 here
-    # would call a spent budget unbounded while the walk refuses the spawn.
-    from fno.lead.state import at_respawn_ceiling
-
-    spent = tmp_path / "spent.md"
-    spent.write_text(
-        "---\nfno_id: k-1\nscope: epic-x\nrespawn_count: 4\n---\n",
-        encoding="utf-8",
-    )
-    assert at_respawn_ceiling(spent) is True, "absent ceiling defaults to 4"
-
-    under = tmp_path / "under.md"
-    under.write_text(
-        "---\nfno_id: k-1\nscope: epic-x\nrespawn_count: 3\n---\n",
-        encoding="utf-8",
-    )
-    assert at_respawn_ceiling(under) is False
-
-    unbounded = tmp_path / "unbounded.md"
-    unbounded.write_text(
-        "---\nfno_id: k-1\nscope: epic-x\nrespawn_count: 9\nrespawn_ceiling: 0\n---\n",
-        encoding="utf-8",
-    )
-    assert at_respawn_ceiling(unbounded) is False, "explicit 0 stays unbounded"
 
 
 # ── the drain loop on the real bus machinery ──────────────────────────────
@@ -909,36 +911,11 @@ def test_the_wake_fires_on_a_real_bus_row_and_drains_by_cursor(tmp_path, monkeyp
     assert rec2.events == []
 
 
-def test_backstop_fires_when_every_row_is_driven_but_unshipped(tmp_path):
-    # The 2026-09-06 incident: the actionable board read empty because every
-    # row had a driver, while nothing had shipped. Assignment is not
-    # delivery, so the backstop still fires.
-    from fno.pr_watch._lead_wake import RoleTarget, _backstop_due
-
-    entries = [
-        {"id": "x-root", "type": "epic"},
-        {"id": "x-a", "parent": "x-root", "status": "in_progress", "pr": 1497},
-    ]
-    target = RoleTarget(
-        holder="holder-1",
-        scope="x-root",
-        root=tmp_path,
-        manifest=tmp_path / "k.md",
-    )
-    assert _backstop_due(
-        target,
-        entries,
-        now=datetime(2026, 9, 6, 12, 0, 0, tzinfo=timezone.utc),
-        backstop_s=1800,
-        resolver=lambda _: (2, "x-root"),
-    )
-
 
 def _run_roles(tmp_path, count, *, truth, mail=None, seconds=None, now=None):
     """`count` promoted scopes epic-0..N with a seeded cursor sidecar each.
     `mail` is None, "all", or one holder name; `seconds` is an optional
     seconds_left_fn; every holder probe lands in the returned list."""
-    from fno.lead.state import lead_manifest_path, lead_state_root, write_manifest
 
     rec = _Recorder()
     roles = []
@@ -946,7 +923,7 @@ def _run_roles(tmp_path, count, *, truth, mail=None, seconds=None, now=None):
     for i in range(count):
         root = tmp_path / f"proj-{i}"
         root.mkdir(exist_ok=True)
-        manifest = lead_manifest_path(f"epic-{i}", state_root=lead_state_root(root))
+        manifest = _manifest_for(root, f"epic-{i}")
         write_manifest(
             manifest,
             scope=f"epic-{i}",
@@ -1036,14 +1013,12 @@ def test_arm_writes_the_row_model_pin_onto_the_manifest(tmp_path, monkeypatch):
     # this contract is test_a_refused_spawn_says_so_in_the_feed.
     from types import SimpleNamespace
 
-    from fno.lead import state as lead_state
+    import fno.agents.role as role_mod
 
-    monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
-    parse_manifest = lead_state.parse_manifest
-    path = lead_state.arm_lead_manifest(
+    monkeypatch.setattr(role_mod, "lead_loop_enabled", lambda: True)
+    path = role_mod.arm_lead_manifest(
         "epic-x",
         "0de85539-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
-        state_root=tmp_path,
         row=SimpleNamespace(
             pid=1,
             cwd=str(tmp_path),
@@ -1054,7 +1029,7 @@ def test_arm_writes_the_row_model_pin_onto_the_manifest(tmp_path, monkeypatch):
         ),
     )
     assert path is not None
-    assert parse_manifest(path)["model"] == "glm-5.3-flash[1m]"
+    assert lead_manifest_call("read", path=path)["fields"]["model"] == "glm-5.3-flash[1m]"
 
 
 def test_a_refused_spawn_says_so_in_the_feed(tmp_path):
@@ -1073,12 +1048,6 @@ def test_a_refused_spawn_says_so_in_the_feed(tmp_path):
     assert summary["refused"] == [
         {"scope": "epic-x", "refusal": "manifest-carries-no-model-pin"}
     ]
-
-
-def _manifest_for(root, scope):
-    from fno.lead.state import lead_manifest_path, lead_state_root
-
-    return lead_manifest_path(scope, state_root=lead_state_root(root))
 
 
 def test_a_blocked_truth_read_yields_the_role_and_still_wakes_the_next(

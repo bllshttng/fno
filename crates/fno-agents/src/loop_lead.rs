@@ -523,7 +523,7 @@ pub(crate) fn territory_members(scope: &str, projects: &HashMap<String, String>)
 /// derives it: 2+ projects is a portfolio (0), one project is 1, and epics
 /// are 2. `None` marks a mixed scope no legal writer produces; the caller
 /// treats it as fail-closed.
-fn derived_scope_level(scope: &str, projects: &HashMap<String, String>) -> Option<u32> {
+pub(crate) fn derived_scope_level(scope: &str, projects: &HashMap<String, String>) -> Option<u32> {
     let members: Vec<String> = scope
         .split(',')
         .map(str::trim)
