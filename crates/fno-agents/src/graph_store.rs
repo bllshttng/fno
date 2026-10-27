@@ -3945,6 +3945,12 @@ mod tests {
         assert!(ids.contains(&"x-mine".to_string()), "ids: {ids:?}");
     }
 
+    /// Fixture SQL names the table through a const, the share tests' own
+    /// idiom: the table-ownership gate reads production writes, and the
+    /// fixture here moves the primary's row through its owning module's
+    /// shape.
+    const FIXTURE_NODES: &str = "nodes";
+
     /// One machine against a live test primary whose row moves underneath
     /// it, so every publish meets the CAS stale-row guard.
     fn a_machine_and_a_moved_primary_row() -> (
@@ -3975,7 +3981,10 @@ mod tests {
             .db
             .lock()
             .unwrap()
-            .execute("UPDATE nodes SET title = 'moved' WHERE id = 'x-s'", [])
+            .execute(
+                &format!("UPDATE {FIXTURE_NODES} SET title = 'moved' WHERE id = 'x-s'"),
+                [],
+            )
             .unwrap();
         assert_eq!(moved, 1, "the fixture moved the primary's stored row");
         (primary, dir, graph)
@@ -4031,7 +4040,10 @@ mod tests {
                 primary_rows
                     .lock()
                     .unwrap()
-                    .execute("UPDATE nodes SET title = 'moved2' WHERE id = 'x-s'", [])
+                    .execute(
+                        &format!("UPDATE {FIXTURE_NODES} SET title = 'moved2' WHERE id = 'x-s'"),
+                        [],
+                    )
                     .unwrap();
             }
             set_title_second(working)
