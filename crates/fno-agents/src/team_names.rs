@@ -761,7 +761,7 @@ pub fn name_team(
     name: &str,
 ) -> Result<String, String> {
     let canon = crate::territory::canonical_scope(scope);
-    let drawn;
+    let mut drawn = String::new();
     let name = if is_reserved_word(name) {
         drawn = crate::name_draw::draw_successor_name(
             store_path,
@@ -783,13 +783,10 @@ pub fn name_team(
     }
     let live = live_index(registry_path)?;
     let mut used = used_for_canon(store_path, registry_path, &canon, &live)?;
-    // The machine's draw over this scope is the name it offers this team,
-    // so checking in with it accepts the draw, not a reuse.
-    if let Some(pending) = pending_draw(store_path, &canon)? {
-        if pending.eq_ignore_ascii_case(name) {
-            used.remove(&pending.to_ascii_lowercase());
-        }
-    }
+    // The draw this call just took is fresh by construction; its own
+    // `drawn` row is the only history entry naming it. An older draw over
+    // the scope may since have been bound, so it earns no exemption.
+    used.remove(&drawn.to_ascii_lowercase());
     // A resumed lead lost its store record but not its identity: the names
     // its own session bound or carries are its own, not a reuse.
     if let Some(session) = live.get(&canon).and_then(|c| c.holder_session.as_deref()) {
