@@ -821,7 +821,7 @@ fn substrate_rows() {
             "wk".to_string(),
             "--harness".to_string(),
             provider.to_string(),
-            "--substrate".to_string(),
+            "--as".to_string(),
             "pane".to_string(),
         ];
         let (method, params) = build_request("spawn", &args).unwrap();
