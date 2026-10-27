@@ -281,7 +281,11 @@ fn constants_match_the_captured_json() {
                     .collect()
             })
             .collect();
-        assert_eq!(got.to_vec(), want_rows, "const {key} diverges");
+        let got_rows: Vec<Vec<String>> = got
+            .iter()
+            .map(|(label, script)| vec![label.to_string(), script.to_string()])
+            .collect();
+        assert_eq!(got_rows, want_rows, "const {key} diverges");
     }
     assert_eq!(
         reg::RUST_BUILD_STEP,

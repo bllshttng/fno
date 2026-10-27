@@ -8,8 +8,9 @@
 //! smoke-test files they replaced.
 use crate::test_smoke::{is_state_control, parse_smoke_args, run_state_canary, state_both_exit};
 use crate::test_smoke_discovery as disc;
+use crate::test_smoke_registry as reg;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -71,13 +72,20 @@ fn state_both_exit_green_only_when_control_fires_and_diff_is_canary_only() {
     let canary = "tests.unit.test_state_canary::test_state_canary_detects_populated_state";
     let other = "tests.unit.test_state::reads_live_graph";
     assert_eq!(
-        state_both_exit(0, &[canary], Some("passed"), Some("failed"), false, false),
+        state_both_exit(
+            0,
+            &[canary.to_string()],
+            Some("passed"),
+            Some("failed"),
+            false,
+            false
+        ),
         0
     );
     assert_eq!(
         state_both_exit(
             0,
-            &[canary, other],
+            &[canary.to_string(), other.to_string()],
             Some("passed"),
             Some("failed"),
             false,
@@ -86,11 +94,18 @@ fn state_both_exit_green_only_when_control_fires_and_diff_is_canary_only() {
         1
     );
     assert_eq!(
-        state_both_exit(0, &[canary], Some("passed"), Some("passed"), false, false),
+        state_both_exit(
+            0,
+            &[canary.to_string()],
+            Some("passed"),
+            Some("passed"),
+            false,
+            false
+        ),
         1
     );
     assert_eq!(
-        state_both_exit(0, &[canary], None, Some("failed"), false, false),
+        state_both_exit(0, &[canary.to_string()], None, Some("failed"), false, false),
         1
     );
     assert_eq!(
@@ -98,11 +113,25 @@ fn state_both_exit_green_only_when_control_fires_and_diff_is_canary_only() {
         1
     );
     assert_eq!(
-        state_both_exit(3, &[canary], Some("passed"), Some("failed"), false, false),
+        state_both_exit(
+            3,
+            &[canary.to_string()],
+            Some("passed"),
+            Some("failed"),
+            false,
+            false
+        ),
         3
     );
     assert_eq!(
-        state_both_exit(0, &[canary], Some("passed"), Some("failed"), true, false),
+        state_both_exit(
+            0,
+            &[canary.to_string()],
+            Some("passed"),
+            Some("failed"),
+            true,
+            false
+        ),
         1
     );
 }
@@ -111,15 +140,36 @@ fn state_both_exit_green_only_when_control_fires_and_diff_is_canary_only() {
 fn state_both_exit_is_red_when_a_lane_never_took_a_baseline() {
     let canary = "tests.unit.test_state_canary::test_state_canary_detects_populated_state";
     assert_eq!(
-        state_both_exit(0, &[canary], Some("passed"), Some("failed"), false, true),
+        state_both_exit(
+            0,
+            &[canary.to_string()],
+            Some("passed"),
+            Some("failed"),
+            false,
+            true
+        ),
         1
     );
     assert_eq!(
-        state_both_exit(0, &[canary], Some("passed"), Some("failed"), true, false),
+        state_both_exit(
+            0,
+            &[canary.to_string()],
+            Some("passed"),
+            Some("failed"),
+            true,
+            false
+        ),
         1
     );
     assert_eq!(
-        state_both_exit(0, &[canary], Some("passed"), Some("failed"), false, false),
+        state_both_exit(
+            0,
+            &[canary.to_string()],
+            Some("passed"),
+            Some("failed"),
+            false,
+            false
+        ),
         0
     );
 }
@@ -307,7 +357,8 @@ fn the_workflow_actually_shards_the_gate() {
 
 #[test]
 fn every_pr_affected_job_overrides_the_implicit_success_gate() {
-    let jobs = workflow().get("jobs").unwrap();
+    let doc = workflow();
+    let jobs = doc.get("jobs").unwrap();
     for (name, job) in jobs.as_mapping().unwrap() {
         let job_if = job.get("if").and_then(|v| v.as_str()).unwrap_or("");
         if !job_if.contains("needs.pr-affected") {

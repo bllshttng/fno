@@ -440,13 +440,14 @@ mod tests {
         assert!(!out.contains_key("ANTHROPIC_API_KEY"));
         assert_eq!(out.get("PATH").unwrap(), "/bin:/usr/bin");
         let home = sandbox.join("home");
-        assert_eq!(out.get("HOME").unwrap(), home.to_string_lossy());
+        assert_eq!(out.get("HOME").unwrap(), home.to_string_lossy().as_ref());
         assert_eq!(
             out.get("CARGO_BUILD_BUILD_DIR").unwrap(),
             format!(
                 "{}/.fno/cargo-build/{{workspace-path-hash}}",
                 home.to_string_lossy()
             )
+            .as_str()
         );
         assert_eq!(out.get("FNO_TEST_HERMETIC").unwrap(), "1");
         assert_eq!(out.get("FNO_THINK_SPAWN").unwrap(), "0");
@@ -469,8 +470,8 @@ mod tests {
         // The invariant the dirty lane rests on: a poisoned parent and a clean
         // parent produce the same result.
         let tmp = tempfile::tempdir().unwrap();
-        let fixtures = tmp.path.join("fx");
-        let sandbox = tmp.path.join("sb");
+        let fixtures = tmp.path().join("fx");
+        let sandbox = tmp.path().join("sb");
         let clean = env(&[("PATH", "/bin"), ("HOME", "/Users/someone")]);
         let poisoned = poison(&clean, &fixtures).unwrap();
         let a = neutralise(&clean, &sandbox).unwrap();
@@ -479,14 +480,14 @@ mod tests {
         let b_keys: Vec<_> = b.keys().collect();
         assert_eq!(a_keys, b_keys);
         for k in a_keys {
-            assert_eq!(a[&k], b[&k], "lane skew on {k}");
+            assert_eq!(a[k], b[k], "lane skew on {k}");
         }
     }
 
     #[test]
     fn poison_sets_the_specimen_profile() {
         let tmp = tempfile::tempdir().unwrap();
-        let fixtures = tmp.path.join("fx");
+        let fixtures = tmp.path().join("fx");
         let clean = env(&[("PATH", "/bin")]);
         let out = poison(&clean, &fixtures).unwrap();
         assert_eq!(
@@ -495,7 +496,10 @@ mod tests {
         );
         assert_eq!(
             out.get("CLAUDE_PLUGIN_ROOT").unwrap(),
-            fixtures.join("poison-plugin-root").to_string_lossy()
+            fixtures
+                .join("poison-plugin-root")
+                .to_string_lossy()
+                .as_ref()
         );
         assert_eq!(out.get("FNO_NODE").unwrap(), "x-poison");
         assert_eq!(
@@ -508,13 +512,13 @@ mod tests {
     #[test]
     fn cache_defaults_resolve_against_the_passwd_home_not_the_env_home() {
         let tmp = tempfile::tempdir().unwrap();
-        let sandbox = tmp.path.join("sb");
+        let sandbox = tmp.path().join("sb");
         let parent = env(&[("HOME", "/Users/someone")]);
         let out = neutralise(&parent, &sandbox).unwrap();
         let expected = passwd_home().unwrap().join(".rustup");
         assert_eq!(
             out.get("RUSTUP_HOME").unwrap(),
-            expected.to_string_lossy(),
+            expected.to_string_lossy().as_ref(),
             "an unset cache resolves from the passwd entry, never from $HOME"
         );
     }
