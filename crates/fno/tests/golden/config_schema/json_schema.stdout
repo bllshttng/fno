@@ -1198,7 +1198,7 @@
       "type": "object"
     },
     "LeadBlock": {
-      "description": "The lead loop (config.lead). Field detail is in registry.py's Meta\ntext, surfaced by `fno config schema`.\n\nThe wake arm runs inside the fno-agents daemon, so a machine without the\ndaemon has no waker; ``wake_enabled`` does not change that.",
+      "description": "The lead loop (config.lead). Field detail is in registry.py's Meta\ntext, surfaced by `fno config schema`.\n\n``RunAtLoad`` is false for the pr-watcher LaunchAgent by design, so a\nmachine that never ran ``launchctl load`` has no waker; ``wake_enabled``\ndoes not change that.",
       "properties": {
         "autonomous_merge": {
           "default": false,
