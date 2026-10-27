@@ -942,11 +942,47 @@ async fn agents_tab_ctrl_t_pins_like_dot() {
 fn agents_tab_selector_hint_names_pin_and_move() {
     let hint = crate::keys::selector_hint();
     for word in [
-        "space peek",
+        "space reply",
         ". or ctrl+t pin",
         "shift+up/down move",
         "r rename",
     ] {
         assert!(hint.contains(word), "missing {word}: {hint}");
     }
+}
+
+#[test]
+fn agents_tab_selector_row_inverts_from_the_theme() {
+    // The selector's cursor row takes the theme's text color as its ground
+    // and the base as its text, every cell of the row; a named theme's pair
+    // comes from its own fields, and settings' cursor row maps to the same.
+    let theme = crate::theme::theme_footnote_superscript();
+    assert_eq!(
+        crate::theme::focus_style(&theme),
+        (theme.base, theme.title, cell_flags::BOLD)
+    );
+    assert_eq!(
+        crate::theme::cell_style(crate::theme::Role::BodyFocus, &theme),
+        crate::theme::focus_style(&theme)
+    );
+    let mk = |name: &str, pane: u64| agent_row(name, pane, Some(AgentBadge::Working), false);
+    let mut v = wide_view(vec![mk("a", 4), mk("b", 5)]);
+    v.sideline_layout = sideline_color::SidelineLayout::List;
+    v.theme = theme.clone();
+    let at = v
+        .display_rows()
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == "b"))
+        .unwrap();
+    v.selector = Some(at);
+    let f = v.compose();
+    let cols = f.cols as usize;
+    let row = at - v.sideline_offset() + 1;
+    let text_w = (v.panel_w() - 1) as usize;
+    assert!(
+        f.cells[row * cols..row * cols + text_w]
+            .iter()
+            .all(|c| c.bg == theme.title && c.fg == theme.base),
+        "the whole cursor row inverts"
+    );
 }

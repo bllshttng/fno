@@ -360,6 +360,9 @@ pub struct Popup {
     /// The content width ceiling, [`WIDTH_CAP`] by default. The screen still
     /// caps it in [`Popup::render`].
     pub width_cap: usize,
+    /// Paint the selected row inverted ([`Role::BodyFocus`]) instead of the
+    /// `sel` band or the plain-body cursor band. The settings modal opts in.
+    pub focus_invert: bool,
 }
 
 /// One laid-out line ready to draw, plus its style and the selected sub-span
@@ -459,6 +462,7 @@ impl Popup {
             body_cap_pct: 0,
             label_first: false,
             width_cap: WIDTH_CAP,
+            focus_invert: false,
         }
     }
 
@@ -1124,7 +1128,17 @@ impl Popup {
                 disabled: false,
                 sel_span: None,
                 hits: fl.hits,
-                roles: fl.roles,
+                roles: if self.focus_invert {
+                    fl.roles
+                        .into_iter()
+                        .map(|r| match r {
+                            Role::BodySel | Role::BodyCursor => Role::BodyFocus,
+                            other => other,
+                        })
+                        .collect()
+                } else {
+                    fl.roles
+                },
                 segs: vec![],
                 pad_role: Role::PanelBody,
             })

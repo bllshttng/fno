@@ -89,6 +89,10 @@ pub enum Role {
     /// The selected row's cell - a cut-out under `terminal`, a `sel` highlight
     /// under a named theme.
     BodySel,
+    /// The focused row of the sideline selector and the settings modal: the
+    /// theme's text color becomes the ground and its base color the text,
+    /// checkbox included ([`focus_style`]).
+    BodyFocus,
     /// A plain-body popup's emphasis text (the key column, a section
     /// heading): the theme's brand accent, bold, on the plain ground - never
     /// a band. `brand` survives the `terminal` inherit branch (the field
@@ -231,6 +235,7 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         // The focused composer chip resolves above the theme split too: the
         // terminal's own pair, swapped, is the fill - visible under every
         // theme and every emulator ground.
+        Role::BodyFocus => return focus_style(t),
         Role::ChipFocus => {
             return (
                 Color::Default,
@@ -315,6 +320,22 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
         // The panel slots resolved above the theme split; unreachable keeps
         // a future role from silently inheriting a body style.
         _ => unreachable!("panel roles resolve above the theme split"),
+    }
+}
+
+/// `(fg, bg, flags)` for the focused row the user drives, inverted from the
+/// theme's own pair (the user's 2026-10-27 ruling): the text color is the
+/// ground and the base the text. A theme with no base of its own, `terminal`
+/// above all, inverts through the emulator's own pair instead.
+pub fn focus_style(t: &Theme) -> (Color, Color, u8) {
+    if t.inherit || t.base == Color::Default {
+        (
+            Color::Default,
+            Color::Default,
+            cell_flags::INVERSE | cell_flags::BOLD,
+        )
+    } else {
+        (t.base, t.title, cell_flags::BOLD)
     }
 }
 

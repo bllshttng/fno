@@ -741,7 +741,22 @@ impl View {
                 // included: the chosen fill wins on hover.
                 highlit = true;
             }
-            if highlit && card_chosen {
+            // The selector's cursor row (a whole card in card layout)
+            // inverts from the theme: the row the user drives reads apart
+            // from hover and focus, and wins over the chosen fill.
+            let head = match drow {
+                DisplayRow::CardDetail(..) => i.saturating_sub(1),
+                DisplayRow::CardMetrics(..) => i.saturating_sub(2),
+                _ => i,
+            };
+            let driven = self.list_selector().is_some_and(|s| {
+                if card_pair {
+                    (head..=head + 2).contains(&s)
+                } else {
+                    s == i
+                }
+            });
+            if highlit && card_chosen && !driven {
                 // The chosen card fills all 3 lines with the theme accent
                 // plus a left bar (the operator's 2026-10-04 sideline
                 // ruling): the fill wins on hover, and no lane accent rides
@@ -762,7 +777,11 @@ impl View {
                 // to contrast with it, never per-span inversion, so a span's
                 // own color cannot patch the highlight and the band reads the
                 // same on a dark and a light terminal.
-                let (fg, bg, flags) = crate::theme::band_style(&self.theme);
+                let (fg, bg, flags) = if driven {
+                    crate::theme::focus_style(&self.theme)
+                } else {
+                    crate::theme::band_style(&self.theme)
+                };
                 for cell in &mut cells[r * cols..r * cols + text_w] {
                     cell.bg = bg;
                     cell.fg = fg;
@@ -772,7 +791,8 @@ impl View {
                 // list's state word) only (the operator's color ruling); the
                 // band owns the remaining cells. A row with no colored state
                 // (Default) keeps the band's own explicit pair everywhere.
-                if let DisplayRow::Agent(a) = drow {
+                // The inverted cursor row keeps its one pair throughout.
+                if let (false, DisplayRow::Agent(a)) = (driven, drow) {
                     let lat = agent_lattice_state(a);
                     let style = lattice_style(lat, self.theme.needs_you, self.theme.ok);
                     let accent = if a.pane_id == Some(self.layout.focus) && a.exited {
