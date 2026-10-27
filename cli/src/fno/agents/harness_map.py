@@ -781,15 +781,13 @@ def spawn_seed_receipt_fragment(effective_message: Optional[str]) -> str:
 def _loop_gate_answer(harness: str, command: str) -> dict:
     try:
         from fno.rust_binary import call_binary_json
-        from fno.setup.integration import _pi_extension_src
     except ImportError:
         return {"refusal": (
             f"refused: the loop gate for harness {harness!r} could not be read "
             f"(its transport failed to import), so the looping command "
             f"{command!r} is not admitted."
         )}
-    args = ["--target-family", "--message", command, "--harness", harness,
-            "--extension-src", str(_pi_extension_src())]
+    args = ["--target-family", "--message", command, "--harness", harness]
     err, answer = call_binary_json("status", args, timeout=45)
     if err is not None or not isinstance(answer, dict):
         return {"refusal": (

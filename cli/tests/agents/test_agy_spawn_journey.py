@@ -290,15 +290,21 @@ def test_AC1_HP_the_spawn_seam_journey_on_a_real_agy_thread(
     # customization file (.agents/hooks.json in the cwd agy runs in), never
     # the global ~/.gemini/config/hooks.json: a live test must not mutate the
     # operator's machine.
-    from fno.setup import integration as I
+    from fno.paths import resolve_plugin_script_durable
+    from fno.rust_binary import call_binary_json
 
     journey_root = tmp_path / "journey"
     (journey_root / ".agents").mkdir(parents=True, exist_ok=True)
     workspace_hooks = journey_root / ".agents" / "hooks.json"
-    monkeypatch.setattr(I, "_agy_hooks_json", lambda: workspace_hooks)
     pre_hooks = workspace_hooks.read_text(encoding="utf-8") if workspace_hooks.exists() else None
-    install_res = I._agy_install()
-    assert install_res.ok, f"the agy Stop adapter install failed: {install_res.note}"
+    adapter = resolve_plugin_script_durable("hooks/footnote-agy-target-stop-hook.sh")
+    _err, install_res = call_binary_json(
+        "plugin-install",
+        ["agy", "--hooks", "--adapter", str(adapter), "--hooks-file", str(workspace_hooks), "--json"],
+    )
+    assert _err is None and isinstance(install_res, dict), (
+        f"the agy Stop adapter install failed: {_err}"
+    )
 
     # A keeper socket must fit AF_UNIX's 104-byte sun_path and the pytest
     # basetemp does not: the same short-state move the pi journey makes.

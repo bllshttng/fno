@@ -368,8 +368,6 @@ cli/src/fno/review/runners/agents_spawn_runner.py
 cli/src/fno/review/runners/claude_runner.py
 cli/src/fno/review/scorers/__init__.py
 cli/src/fno/scoreboard/fold.py
-cli/src/fno/setup/doctor.py
-cli/src/fno/setup/integration.py
 crates/fno/src/setup_autowire.rs
 crates/fno/src/setup_autowire_tests.rs
 cli/src/fno/target_cli.py

@@ -282,15 +282,17 @@ def test_AC1_HP_the_spawn_seam_journey_on_a_real_pi_thread(
     # restore exactly what was there; the door's own status receipt names
     # the destination.
     from fno.rust_binary import call_binary_json
-    from fno.setup import integration as I
 
     _err, status = call_binary_json("plugin-install", ["pi", "--status", "--json"])
     assert status and status.get("dest"), f"the pi status door named no dest: {_err}"
     dest = Path(status["dest"])
     pre_text = dest.read_text(encoding="utf-8") if dest.exists() else None
-    install_res = I._pi_install()
-    assert install_res.ok, f"the pi extension install failed: {install_res.note}"
-    assert I._pi_is_installed(), "the install must report installed when fresh"
+    _err, install_res = call_binary_json("plugin-install", ["pi", "--json"])
+    assert install_res and install_res.get("status") == "installed", (
+        f"the pi extension install failed: {_err or install_res}"
+    )
+    _err, fresh = call_binary_json("plugin-install", ["pi", "--status", "--json"])
+    assert fresh and fresh.get("installed"), "the install must report installed when fresh"
 
     # A keeper socket must fit AF_UNIX's 104-byte sun_path and the pytest
     # basetemp does not: same short-state move as the restart journey.
