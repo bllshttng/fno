@@ -377,7 +377,7 @@ mod tests {
         );
 
         // B closes it; the close publishes and A's copy follows.
-        let close = json!({"ts": "t", "type": "operator_question_closed",
+        let close = json!({"ts": "2026-10-27T00:01:00Z", "type": "operator_question_closed",
             "source": "test", "data": {"question_id": "q-1", "answer": "yes"}});
         crate::provider_cap::append_questions_row(&b.index(), &close).unwrap();
         assert_eq!(beat(remote, &b).unwrap().published, 1);
