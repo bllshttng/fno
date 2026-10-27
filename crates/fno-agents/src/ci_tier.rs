@@ -174,10 +174,10 @@ fn read_repo(root: &Path) -> Result<(Vec<(Rank, Head)>, usize), String> {
     Ok((ranked, gates.len()))
 }
 
-/// POST `verb` on each run; the journal records what gh refused.
-fn act(root: &Path, list: &[(u64, Vec<u64>)], verb: &str) -> Vec<Value> {
+/// POST `action` on each run; the journal records what gh refused.
+fn act(root: &Path, list: &[(u64, Vec<u64>)], action: &str) -> Vec<Value> {
     let post = |run: &u64| {
-        let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/{verb}");
+        let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/{action}");
         match crate::pr_push::gh_api("gh", root, &path, &["-X", "POST"]) {
             Ok(_) => json!({"run": run, "ok": true}),
             Err(e) => json!({"run": run, "ok": false, "error": e}),
@@ -188,13 +188,38 @@ fn act(root: &Path, list: &[(u64, Vec<u64>)], verb: &str) -> Vec<Value> {
         .collect()
 }
 
+/// The runs this tier cancelled in the last day, from its own rows: a run
+/// cancelled by hand or by other automation is never rerun.
+fn ours(path: &Path, slug: &str) -> Result<HashSet<u64>, String> {
+    let since = crate::ci_cadence::millis_now() - 24 * 3_600_000;
+    let query = crate::event_store::EventQuery {
+        since_ms: Some(since),
+        ..crate::event_store::EventQuery::of_types(&[PASS_EVENT])
+    };
+    let text = crate::event_store::journal_text_checked(path, &query)?;
+    let rows = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok());
+    let mine = rows.filter(|r| r.pointer("/data/slug").and_then(Value::as_str) == Some(slug));
+    let cancels = mine.flat_map(|r| r.pointer("/data/cancelled").cloned());
+    let runs = cancels.flat_map(|c| c.as_array().cloned().unwrap_or_default());
+    let posts = runs.flat_map(|pr| pr["runs"].as_array().cloned().unwrap_or_default());
+    let landed = posts.filter(|p| p["ok"] == json!(true));
+    Ok(landed.filter_map(|p| p["run"].as_u64()).collect())
+}
+
 fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
-    let (ranked, gates) = read_repo(root)?;
+    let (mut ranked, gates) = read_repo(root)?;
+    let ours = ours(path, slug)?;
+    for (_, head) in &mut ranked {
+        head.cancelled.retain(|run| ours.contains(run));
+    }
     // Each merge-queue-gate run in flight holds one slot.
     let slots = SIZE.saturating_sub(gates);
     let plan = plan(&ranked, slots);
     let cancelled = act(root, &plan.cancel, "cancel");
-    let rerun = act(root, &plan.rerun, "rerun-failed-jobs");
+    // A full rerun: a cancelled run has no failed job for rerun-failed-jobs.
+    let rerun = act(root, &plan.rerun, "rerun");
     if cancelled.is_empty() && rerun.is_empty() {
         return Ok(());
     }
