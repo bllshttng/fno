@@ -290,6 +290,7 @@ pub mod lead_history;
 pub mod lead_hygiene;
 pub mod lead_lifecycle;
 pub mod lead_mail;
+pub mod lead_ops;
 pub mod lead_pushback;
 pub mod lead_reads;
 pub mod lead_settle;
@@ -303,6 +304,7 @@ pub mod ledger_axes;
 pub(crate) mod ledger_register;
 pub(crate) mod ledger_workers;
 mod lifecycle_child;
+pub mod list_render;
 pub mod list_row;
 pub mod live_store_fence;
 pub mod liveness_cmd;
@@ -472,6 +474,7 @@ pub mod reclaim;
 pub mod reentry;
 pub mod refusal_rate;
 pub mod refusal_trend;
+pub mod register;
 pub mod registry_commit;
 pub mod registry_guard;
 pub mod registry_json;
@@ -1862,6 +1865,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // arm and `fno agents reap`). Python's attended `lead done` emits the
     // same kind through the shared emitter.
     "agent_team_vacated",
+    // The schema's canonical spelling of the same vacate (the alias pair in
+    // event_store::EVENT_TYPE_ALIASES): the native `org done` and the team
+    // spawn's succession write it.
+    "agent_role_vacated",
     // A succession reverted: the reap sweep restored the predecessor's
     // session after a successor died unbound past the window (team_reap.rs;
     // the daemon retire arm and `fno agents reap`).
@@ -2043,6 +2050,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // (observer/mod.rs: sweep and replay).
     "skill_eval_finding",
     "skill_eval_run_complete",
+    // The register command's join row (register.rs): one event per minted
+    // or refreshed roster row.
+    "session_registered",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

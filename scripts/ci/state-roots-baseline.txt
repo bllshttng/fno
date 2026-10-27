@@ -92,5 +92,7 @@ A	crates/fno-agents/src/observer/isolation.rs	events.jsonl	unowned	the detective
 A	crates/fno-agents/src/observer/isolation.rs	ledger.json	unowned	the detective scan must name the real state files it polices; a resolver here would make the scan read the state it is scanning.
 A	crates/fno-agents/src/observer/isolation.rs	target-state.md	unowned	the detective scan must name the real state files it polices; a resolver here would make the scan read the state it is scanning.
 A	crates/fno-agents/src/observer/mod.rs	ledger.json	unowned	read_scratch_cost reads the ISOLATED scratch ledger inside the throwaway replay worktree, not the ambient one.
+A	crates/fno/src/doctor/mod.rs	events.jsonl	unowned	the stalls fold's agents-home journal leg, the port of event_journals' live trio (same shape as advance.rs's row); drains when agents_home_dir ports.
+A	crates/fno/src/doctor/report/advisors.rs	target-state.md	unowned	the armed-manifest scan reads EVERY worktree's manifest, a directory shape the single-path resolver cannot serve; drains when target_state_path grows a walker.
 A	crates/fno-agents/src/whoami.rs	events.jsonl	unowned	the status tail reads the project journal its deleted Python twin read; no crate journal resolver exists yet; drains when one lands
 A	crates/fno-agents/src/whoami.rs	target-state.md	unowned	the manifest-identity read keeps its deleted Python twin's hand-built legacy path (no native target_state_path_or_legacy resolver exists); drains when that resolver lands

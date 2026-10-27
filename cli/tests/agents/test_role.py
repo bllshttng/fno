@@ -20,6 +20,21 @@ from typer.testing import CliRunner
 from fno.paths_testing import use_tmpdir
 
 
+def _read_manifest(path) -> dict:
+    """The manifest's fields through the native lead `read` op."""
+    from fno.agents.role import lead_manifest_call
+
+    return lead_manifest_call("read", path=str(path))["fields"]
+
+
+def _write_manifest(path, **fields) -> None:
+    """Write one manifest through the native spawn-team `manifest` op."""
+    from fno.agents.spawn_overlay_client import spawn_overlay_call
+
+    answer = spawn_overlay_call({"kind": "spawn-team", "op": "manifest", "path": str(path), **fields})
+    assert not answer.get("error"), answer
+
+
 # --- the stored scope encoding ----------------------------------------------
 #
 # There is no `--promote` spec parser any more. The flag takes scopes directly and
@@ -108,7 +123,7 @@ def test_role_stamped_grantor_is_the_spawning_session(
     tmp_path: Path, monkeypatch, native_backlog_door
 ) -> None:
     from fno.agents.registry import AgentEntry, load_registry, update_registry
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     use_tmpdir(monkeypatch, tmp_path)
     monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
@@ -146,7 +161,7 @@ def test_role_stamped_grantor_is_the_spawning_session(
     assert successor.role_grantor == "parent-sess-abc"
     assert successor.role_label == "L1 epic-x"
     manifest = _space_manifest(tmp_path, "epic-x")
-    assert lead_state.parse_manifest(manifest)["harness_session_id"] == successor.harness_session_id
+    assert _read_manifest(manifest)["harness_session_id"] == successor.harness_session_id
 
 
 def _role_row(name: str, *, status: str = "busy", scope="epic-x"):
@@ -386,7 +401,7 @@ def _invoke_role(*args: str):
 
 def test_attended_shell_roles_an_existing_live_session(tmp_path: Path, monkeypatch) -> None:
     from fno.agents.registry import load_registry
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     _prepare_role_cli(
         monkeypatch,
@@ -433,7 +448,7 @@ def test_attended_shell_roles_an_existing_live_session(tmp_path: Path, monkeypat
         "human",
     )
     # The manifest is the durable role record: the same triple lands there.
-    manifest = lead_state.parse_manifest(_space_manifest(tmp_path, "alpha"))
+    manifest = _read_manifest(_space_manifest(tmp_path, "alpha"))
     assert manifest["harness_session_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     assert (manifest["role_scope"], manifest["role_grantor"], int(manifest["role_level"])) == (
         "alpha",
@@ -445,7 +460,7 @@ def test_attended_shell_roles_an_existing_live_session(tmp_path: Path, monkeypat
 def test_in_place_role_aborts_before_registry_publish_when_manifest_write_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
     from fno.agents.role import RolePromotionError, promote_existing_session
     from fno.agents.registry import load_registry
 
@@ -644,7 +659,7 @@ def test_in_place_role_rescopes_an_already_promoted_target(
     tmp_path: Path, monkeypatch
 ) -> None:
     from fno.agents.registry import load_registry
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     _prepare_role_cli(
         monkeypatch,
@@ -662,7 +677,7 @@ def test_in_place_role_rescopes_an_already_promoted_target(
     )
     monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
     old_manifest = _space_manifest(tmp_path, "beta")
-    lead_state.write_manifest(
+    _write_manifest(
         old_manifest, scope="beta", harness_session_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     )
     from fno.agents import spawn_overlay_client
@@ -1405,7 +1420,7 @@ def _promoted_row(tmp_path, monkeypatch, name="successor", **kw):
 
 
 def _arm_enabled(monkeypatch):
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
 
@@ -1421,7 +1436,6 @@ def test_spawn_succession_arms_the_manifest_when_the_successor_identifies(
     tmp_path, monkeypatch
 ) -> None:
     from fno.agents.registry import record_session_observation
-    from fno.lead.state import parse_manifest
 
     _promoted_row(tmp_path, monkeypatch, harness_session_id="")
     _arm_enabled(monkeypatch)
@@ -1433,7 +1447,7 @@ def test_spawn_succession_arms_the_manifest_when_the_successor_identifies(
     assert outcome == "primary"
     manifest = _scope_manifest(tmp_path)
     assert manifest.exists(), "the successor's first id must arm the wake gate"
-    assert parse_manifest(manifest)["harness_session_id"] == SUCCESSOR_ID
+    assert _read_manifest(manifest)["harness_session_id"] == SUCCESSOR_ID
 
 
 def test_grantor_that_becomes_terminal_mid_grant_is_refused_under_the_lock(

@@ -25,7 +25,7 @@ crossing	crates/fno-agents/src/backlog/publish.rs	let mut child = Command::new(c
 crossing	crates/fno-agents/src/backlog/reconcile_cli.rs	let py = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/bin/client.rs	let out = std::process::Command::new(fno_agents::scrape::fno_bin())
 crossing	crates/fno-agents/src/bin/client.rs	let err = std::process::Command::new(fno_agents::scrape::fno_bin())
-crossing	crates/fno-agents/src/bin/client.rs	let mut cmd = Command::new(fno_agents::scrape::fno_bin());
+crossing	crates/fno-agents/src/list_render.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/blueprint_judge.rs	return match Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/blueprint_judge.rs	let child = Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/claim_cli/reap.rs	let bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
@@ -157,3 +157,5 @@ resolver	crates/fno/src/doctor_update.rs	fn read_source_wire(source: &Path) -> O
 resolver	crates/fno/src/mux_cli/pane_prepare.rs	pub(super) fn prepare_pane_bytes(
 resolver	crates/fno/src/server.rs	pub(crate) fn fno_bin() -> PathBuf {
 resolver	crates/fno/src/squad_store_tests.rs	fn build_tree_marker_detection_is_pure_over_path() {
+resolver	crates/fno/src/doctor/report.rs	pub(crate) fn front_door() -> Option<String> {
+resolver	crates/fno/src/doctor/report/codex/freshness.rs	fn payload_gate(

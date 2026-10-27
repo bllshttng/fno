@@ -62,11 +62,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
-    "lead": (
-        "fno.lead.cli:lead_app",
-        "The lead's board and its session manifest.",
-        {"hidden": True},
-    ),
     "event": ("fno.events.cli:cli", "emit and audit events", {"hidden": True}),
     "inbox": (
         "fno.inbox.cli:inbox_app",
@@ -103,8 +98,12 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Sweep events.jsonl and route status events to configured sinks (tick).",
         {"hidden": True},
     ),
-    "bundle": ("fno.bundle:bundle_app", "Skill bundle build + lint.", {"hidden": True}),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
+    "bundle": (
+        "fno.doctor_forward:bundle_signpost",
+        "Skill bundle build + lint; moved to `fno doctor bundle`.",
+        {"hidden": True},
+    ),
     "claim": ("fno.claims.cli:cli", "Work-claim coordination primitive", {"hidden": True}),
     "resume": (
         "fno.resume_receipt_cli:cli",
@@ -168,14 +167,15 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Cost + usage metrics from session transcripts and ledger.json.",
         {"hidden": True},
     ),
-    "doctor": (
-        "fno.doctor_cli:doctor_app",
-        "Diagnose installed-vs-source fno skew (network-free).",
-    ),
     "done": (
         "fno.done.cli:done_command",
         "Deprecated done shim; use `fno backlog done` (its flag surface is now identical).",
         {"hidden": True},
+    ),
+    "doctor": (
+        "fno.doctor_forward:doctor_app",
+        "Foreign doctor leaves (test, event, evals, lint, harness); the family's own surfaces are native.",
+        {},
     ),
     "scoreboard": (
         "fno.scoreboard.cli:scoreboard_command",
@@ -188,7 +188,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "update": (
-        "fno.doctor_cli:_update_signpost",
+        "fno.rust_binary:_update_signpost",
         "The updater is native: the Rust front door answers `update` and `doctor update`.",
         {"hidden": True},
     ),
@@ -203,7 +203,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "annotate": {"list"},
     "approvals": set(),
     "backlog": {"advance", "done", "get", "next", "queued"},
-    "bundle": set(),
     "carveout": set(),
     "claim": {"release"},
     "config": {"accounts", "get", "set"},

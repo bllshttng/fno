@@ -1794,7 +1794,7 @@ def _claude_create_path(
                 )
                 role_declined = True
         if entry.role_level is not None and entry.role_scope:
-            from fno.lead.state import arm_lead_manifest
+            from fno.agents.role import arm_lead_manifest
 
             try:
                 lead_loop_armed = arm_lead_manifest(
@@ -5215,19 +5215,18 @@ def _mux_recipient_transcript(entry: "AgentEntry") -> Optional[Path]:
     """Locate the mux recipient's OWN claude transcript by session uuid, the
     confirm target for :func:`_mux_pane_send`'s ``confirm`` mode (node).
 
-    Reuses the resolver `fno.doctor._find_transcript_for` already used for the
-    self-diagnostic surface rather than writing a second transcript-by-uuid
-    walk (the Rust control.sock lane's own mirror is `find_transcript` in
-    `crates/fno-agents/src/claude_drive.rs`). None when the entry carries no
-    resolvable full session uuid, or no matching transcript file exists --
-    both fail the confirm closed, never open.
+    Reads through :func:`fno.rust_binary.find_transcript`, the native doctor
+    op door (`fno doctor --find-transcript`), the same resolver the Rust
+    control.sock lane mirrors as `find_transcript` in claude_drive.rs. None
+    when the entry carries no resolvable full session uuid, or no matching
+    transcript file exists -- both fail the confirm closed, never open.
     """
-    from fno.doctor import _find_transcript_for
+    from fno.rust_binary import find_transcript
 
     session_id = entry.harness_session_id or entry.session_id
     if not session_id:
         return None
-    return _find_transcript_for(session_id)
+    return find_transcript(session_id)
 
 
 def _mux_content_confirm(
