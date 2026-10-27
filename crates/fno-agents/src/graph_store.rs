@@ -3957,8 +3957,10 @@ mod tests {
         let graph = dir.path().join("graph.json");
         seed_rows(
             &graph,
-            &[json!({"id": "x-s", "title": "first", "type": "feature",
-                     "status": "idea", "priority": "p2", "domain": "code"})],
+            &[
+                json!({"id": "x-s", "slug": "x-s", "title": "first", "type": "feature",
+                     "status": "idea", "priority": "p2", "domain": "code"}),
+            ],
         )
         .unwrap();
         crate::backlog_share::route_to_primary(Some((
@@ -3966,13 +3968,42 @@ mod tests {
             crate::backlog::database_path(&graph),
         )));
         crate::backlog_share::seed(&graph).unwrap();
-        primary
+        // The slugged row is typed, so both sides hold it in nodes and the
+        // write stays one table. The guard assert keeps a silent no-op from
+        // reading as a landed write.
+        let moved = primary
             .db
             .lock()
             .unwrap()
             .execute("UPDATE nodes SET title = 'moved' WHERE id = 'x-s'", [])
             .unwrap();
+        assert_eq!(moved, 1, "the fixture moved the primary's stored row");
         (primary, dir, graph)
+    }
+
+    #[test]
+    fn zz_fixture_probe() {
+        let (primary, _dir, graph) = a_machine_and_a_moved_primary_row();
+        let conn = crate::backlog::open(&graph).unwrap();
+        for table in ["nodes", "nodes_raw"] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap_or(-1);
+            eprintln!("PROBE local {table}: {count}");
+        }
+        let rows = crate::graph_store::read_rows_for_write(&graph).unwrap();
+        let ids: Vec<String> = rows
+            .iter()
+            .filter_map(|r| r.get("id").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        eprintln!("PROBE write-read ids: {ids:?}");
+        let pconn = primary.db.lock().unwrap();
+        for table in ["nodes", "nodes_raw"] {
+            let count: i64 = pconn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap_or(-1);
+            eprintln!("PROBE primary {table}: {count}");
+        }
     }
 
     fn set_title_second(working: &mut Vec<Value>) -> Result<bool, StoreError> {
