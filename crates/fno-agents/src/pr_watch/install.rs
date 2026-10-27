@@ -151,21 +151,6 @@ fn augment_path(install_path: &str) -> String {
     entries.join(":")
 }
 
-/// Write only when the bytes differ. Returns whether the file changed.
-/// Unused until the refresh wave lands: its only Rust caller is the refresh
-/// command, so this sits quiet rather than moving twice.
-#[allow(dead_code)]
-pub(crate) fn write_if_changed(plist_path: &Path, plist_text: &str) -> std::io::Result<bool> {
-    if plist_path.is_file() && std::fs::read_to_string(plist_path)? == plist_text {
-        return Ok(false);
-    }
-    if let Some(parent) = plist_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(plist_path, plist_text)?;
-    Ok(true)
-}
-
 /// Render the plist XML string. No filesystem writes.
 pub(crate) fn render_plist(
     launch_agents_dir: &Path,

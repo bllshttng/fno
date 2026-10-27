@@ -1319,10 +1319,6 @@ fn review_session_gate(input: &GateInput) -> Option<Refusal> {
     )
 }
 
-/// The held keys of a [`GateGuard`], taken out before the guard drops so a
-/// cross-process transport can hand them back to the caller.
-pub type GateKeys = (Option<(String, String)>, Option<(String, String)>);
-
 /// Run the full gate for a spawn. Returns a guard to keep alive across
 /// dispatch on pass, or `Err(Refusal)` on refusal/timeout. All human-facing
 /// output goes to stderr (LD10: the stdout receipt is byte-reserved for the
@@ -2352,11 +2348,6 @@ pub(crate) struct AdmissionPayload {
     pub(crate) capacity_cores: f64,
     #[serde(default)]
     pub(crate) ceiling: f64,
-    // read only through serde: kept so the admission payload still parses
-    // when the decider sends the gap the old verdict shape carried.
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub(crate) gap: Option<String>,
     /// The Python decider's short form of the fleet's largest program; absent
     /// on an older wheel and whenever no attributed row exists.
     #[serde(default)]
@@ -2407,25 +2398,12 @@ fn held_progress_line(admission: &AdmissionPayload, waited_secs: u64) -> String 
 
 #[derive(Debug, Default, Deserialize)]
 pub struct FootprintCausePayload {
-    /// Kept only so an older admission-less payload still parses; the verdict
-    /// comes from `admission` now, never from the gap's presence.
-    #[serde(default)]
-    #[allow(dead_code)] // read only through serde: older-payload parse tolerance
-    attribution_gap: Option<String>,
     /// The Claude Code background daemon's idle pre-warm pool, for the
     /// `fno agents status` machine line.
     #[serde(default)]
     spare_pool_process_count: u64,
     #[serde(default)]
     spare_pool_cpu_cores: f64,
-    /// 1-min load average, for the status line only. It decides nothing
-    /// anywhere (LD1).
-    #[serde(default)]
-    #[allow(dead_code)] // read only through serde: display context, decides nothing
-    load_1m: Option<f64>,
-    #[serde(default)]
-    #[allow(dead_code)] // read only through serde: context on the payload, unused by the gate
-    cpu_capacity_cores: f64,
     /// The `_emit_failure` shape: when footprint cannot measure at all it
     /// still answers, carrying this key and exit 4. Its words travel into
     /// the instrument refusal (keeps that contract).
@@ -2444,9 +2422,6 @@ pub struct FootprintCausePayload {
 /// One `top` row of the footprint payload.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TopConsumer {
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub(crate) cpu_percent: f64,
     #[serde(default)]
     pub(crate) command: String,
 }

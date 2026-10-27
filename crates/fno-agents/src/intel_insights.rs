@@ -427,8 +427,6 @@ pub(crate) fn response_gaps(operator_epochs: &[i64], assistant_ts: &[f64]) -> Ve
 
 #[derive(Deserialize)]
 pub(crate) struct FacetKey {
-    #[allow(dead_code)]
-    session: String,
     mtime: u64,
     size: u64,
 }
@@ -442,9 +440,6 @@ pub(crate) struct Facet {
 #[derive(Deserialize, Debug)]
 pub(crate) struct RunCategory {
     name: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    description: String,
     sessions: Vec<String>,
     #[serde(default)]
     subcategories: Vec<RunSubcategory>,
@@ -453,21 +448,12 @@ pub(crate) struct RunCategory {
 #[derive(Deserialize, Debug)]
 pub(crate) struct RunSubcategory {
     name: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    description: String,
     sessions: Vec<String>,
 }
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct Run {
     schema: u64,
-    #[serde(default)]
-    #[allow(dead_code)]
-    question: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    question_key: String,
     categories: Vec<RunCategory>,
     #[serde(default)]
     suggestions: Vec<SuggestionIn>,
