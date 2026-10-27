@@ -98,29 +98,6 @@ fn door_json(op: &str, args: &[&str], payload: &serde_json::Value) -> Option<ser
     serde_json::from_slice(&out.stdout).ok()
 }
 
-fn graph_get_row(input: &str) -> Option<serde_json::Value> {
-    // The owner lookup must read the SAME store the entries read:
-    // graph-get's own default answers FNO_STATE_DIR/graph.json while the
-    // entries read resolves the layout anchor (db twin), so a pinned
-    // FNO_STATE_DIR would split the two reads and every contained node
-    // would read as stale containment.
-    let graph = crate::graph_get::graph_path_for(
-        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-    );
-    let out = Command::new(self_exe())
-        .arg("graph-get")
-        .arg("--graph")
-        .arg(&graph)
-        .arg(input)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    rows.as_array()?.first().cloned()
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // check-review-gate
 // ─────────────────────────────────────────────────────────────────────────────
@@ -496,12 +473,12 @@ fn check_contained_run(args: &[String]) -> i32 {
         }
     };
     match resolve_dispatch_node(input.as_deref(), plan.as_deref(), &entries) {
-        Some(node) => redirect_if_contained(&node),
+        Some(node) => redirect_if_contained(&node, &entries),
         None => 0,
     }
 }
 
-fn redirect_if_contained(node: &serde_json::Value) -> i32 {
+fn redirect_if_contained(node: &serde_json::Value, entries: &[serde_json::Value]) -> i32 {
     let owner = node
         .get("contained_in")
         .and_then(|v| v.as_str())
@@ -513,7 +490,14 @@ fn redirect_if_contained(node: &serde_json::Value) -> i32 {
         .get("id")
         .and_then(|v| v.as_str())
         .unwrap_or("that node");
-    let Some(owner_node) = graph_get_row(owner) else {
+    // The owner lookup reads the rows ALREADY loaded: the python oracle's
+    // _find_node re-read the same file with the same reader, while a
+    // self-exec'd graph-get answers its own default path and a pinned
+    // FNO_STATE_DIR made every contained node read as stale containment.
+    let owner_node = entries
+        .iter()
+        .find(|e| e.get("id").and_then(|v| v.as_str()) == Some(owner));
+    let Some(owner_node) = owner_node else {
         eprintln!(
             "fno do target init: {nid} is marked as shipping inside {owner}, but no node \
              {owner} exists.\nThat containment is stale and nothing will clear it \
