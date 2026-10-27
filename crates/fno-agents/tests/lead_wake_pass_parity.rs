@@ -193,12 +193,12 @@ fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
 }
 
 type TruthStub =
-    Arc<dyn Fn(&[String], Option<Instant>) -> (HashMap<String, TruthAnswer>, bool)>;
+    Arc<dyn Fn(&[String], Option<Instant>) -> (HashMap<String, TruthAnswer>, bool) + Send + Sync>;
 
 fn truth_of(state: &str, reason: &str) -> TruthStub {
     let state = state.to_string();
     let reason = reason.to_string();
-    Arc::new(move |handles, _| {
+    Arc::new(move |handles: &[String], _: Option<Instant>| {
         let answers = handles
             .iter()
             .map(|h| {
@@ -221,7 +221,7 @@ fn truth_done() -> TruthStub {
 
 /// The fixture scope read: the rows whose `project` is `proj`, with the
 /// not-closed count over them (the Python tests' `_scope_of`).
-fn scope_of(board: &[Value]) -> Arc<dyn Fn(&str, &[Value]) -> ScopeRead> {
+fn scope_of(board: &[Value]) -> Arc<dyn Fn(&str, &[Value]) -> ScopeRead + Send + Sync> {
     let proj: Vec<Value> = board
         .iter()
         .filter(|r| r.get("project").and_then(Value::as_str) == Some("proj"))
@@ -255,12 +255,8 @@ struct Rec {
 
 impl Rec {
     fn push_event(&self, kind: &str, payload: Value) {
-        self.events
-            .lock()
-            .unwrap()
-            .push(json!([kind, payload]));
+        self.events.lock().unwrap().push(json!([kind, payload]));
     }
-
 
     fn events(&self) -> Vec<Value> {
         self.events.lock().unwrap().clone()
@@ -290,9 +286,9 @@ fn seams(
     rec: &Rec,
     truth: TruthStub,
     unread_hits: Vec<String>,
-    next_answer: Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String)>,
-    entries: Arc<dyn Fn() -> Result<Vec<Value>, String>>,
-    scope_read: Arc<dyn Fn(&str, &[Value]) -> ScopeRead>,
+    next_answer: Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String) + Send + Sync>,
+    entries: Arc<dyn Fn() -> Result<Vec<Value>, String> + Send + Sync>,
+    scope_read: Arc<dyn Fn(&str, &[Value]) -> ScopeRead + Send + Sync>,
 ) -> Seams {
     let unread_calls = Arc::clone(&rec.unread_calls);
     let hits: std::collections::HashSet<String> = unread_hits.into_iter().collect();
@@ -315,12 +311,10 @@ fn seams(
         scope_read,
         dispatch: Some(Box::new(
             move |target, reason, address, detail, successor_flag| {
-                dispatches.lock().unwrap().push(json!([
-                    target.scope,
-                    reason,
-                    address,
-                    detail,
-                ]));
+                dispatches
+                    .lock()
+                    .unwrap()
+                    .push(json!([target.scope, reason, address, detail,]));
                 successor.lock().unwrap().push(successor_flag);
                 true
             },
@@ -407,8 +401,7 @@ fn assert_run(label: &str, index: usize, mut mine: Value, root: &Path) {
     let golden: Value = serde_json::from_str(&text).unwrap();
     let want = &golden["runs"][index];
     assert_eq!(
-        &mine,
-        want,
+        &mine, want,
         "[{label}] run {index} differs\ngolden={want}\nmine={mine}"
     );
 }
@@ -431,16 +424,17 @@ fn board_c() -> Vec<Value> {
     vec![base_board("x-1"), base_board("x-2"), base_board("x-3")]
 }
 
-
-fn no_answers() -> Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String)> {
+fn no_answers() -> Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String) + Send + Sync>
+{
     Arc::new(|_addresses, _records, cursor| (None, cursor.to_string()))
 }
 
-fn answer_due() -> Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String)> {
+fn answer_due() -> Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String) + Send + Sync>
+{
     Arc::new(|_addresses, _records, _cursor| (Some(PROMPT.to_string()), ANSWER_CURSOR.to_string()))
 }
 
-fn static_entries(rows: Vec<Value>) -> Arc<dyn Fn() -> Result<Vec<Value>, String>> {
+fn static_entries(rows: Vec<Value>) -> Arc<dyn Fn() -> Result<Vec<Value>, String> + Send + Sync> {
     Arc::new(move || Ok(rows.clone()))
 }
 
@@ -517,7 +511,9 @@ fn armed() -> TriggerConfig {
 fn a_ceiling_refused_answer_keeps_the_cursor_so_it_stays_a_trigger() {
     let world = World::new();
     let rows = world.set_registry(json!([row("lead-x", &world.root(), "aa11bb22", "epic-x")]));
-    let stamps: Vec<String> = (0..32).map(|_| "2026-08-29T11:00:00Z".to_string()).collect();
+    let stamps: Vec<String> = (0..32)
+        .map(|_| "2026-08-29T11:00:00Z".to_string())
+        .collect();
     world.manifest("epic-x", &format!("wake_times: {}\n", stamps.join(",")));
     world.write_sidecar("epic-x", json!({"answered_cursor": CURSOR_SEED}));
     let rec = Rec::default();
@@ -628,8 +624,7 @@ fn present_holder_states_never_wake() {
     ];
     for (label, state, reason) in states {
         let world = World::new();
-        let rows =
-            world.set_registry(json!([row("lead-x", &world.root(), "aa11bb22", "epic-x")]));
+        let rows = world.set_registry(json!([row("lead-x", &world.root(), "aa11bb22", "epic-x")]));
         world.manifest("epic-x", "");
         let rec = Rec::default();
         let outcome = run_with(
@@ -1128,14 +1123,18 @@ fn the_pass_stops_under_its_floor_and_names_what_it_evaluated() {
         rows,
         &rec,
         truth_done(),
-        vec!["lead-0".into(), "lead-1".into(), "lead-2".into(), "lead-3".into(), "lead-4".into()],
+        vec![
+            "lead-0".into(),
+            "lead-1".into(),
+            "lead-2".into(),
+            "lead-3".into(),
+            "lead-4".into(),
+        ],
         no_answers(),
         static_entries(Vec::new()),
         scope_of(&[]),
     );
-    base.seconds_left = Some(Box::new(move || {
-        budget.lock().unwrap().pop()
-    }));
+    base.seconds_left = Some(Box::new(move || budget.lock().unwrap().pop()));
     let outcome = run_with(&armed(), base);
     assert_run(
         "the pass stops under its floor and names what it evaluated",
@@ -1245,7 +1244,7 @@ fn a_blocked_graph_read_degrades_and_mail_still_wakes() {
     world.manifest("epic-a1", "");
     world.manifest("epic-b1", "");
     let rec = Rec::default();
-    let entries: Arc<dyn Fn() -> Result<Vec<Value>, String>> = Arc::new(|| {
+    let entries: Arc<dyn Fn() -> Result<Vec<Value>, String> + Send + Sync> = Arc::new(|| {
         std::thread::sleep(std::time::Duration::from_millis(400));
         Ok(Vec::new())
     });
@@ -1271,8 +1270,7 @@ fn a_blocked_graph_read_degrades_and_mail_still_wakes() {
 
 #[test]
 fn the_spawned_walk_argv_carries_address_reason_holder_detail_model_and_successor() {
-    let label =
-        "the spawned walk argv carries address reason holder detail model and successor";
+    let label = "the spawned walk argv carries address reason holder detail model and successor";
     let key = common::slug(label);
     let text =
         fs::read_to_string(golden_dir("lead_wake_pass").join(format!("{key}.json"))).unwrap();

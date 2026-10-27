@@ -18,6 +18,7 @@
 //! as goldens.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -224,19 +225,22 @@ pub struct Seams {
     pub registry_rows: Vec<crate::state::RegistryEntry>,
     /// One bounded batch per role: handles to (state, reason), plus whether
     /// the instrument measured inside its deadline (false = timed out).
-    pub truth: Arc<dyn Fn(&[String], Option<Instant>) -> (HashMap<String, TruthAnswer>, bool)>,
+    pub truth: Arc<
+        dyn Fn(&[String], Option<Instant>) -> (HashMap<String, TruthAnswer>, bool) + Send + Sync,
+    >,
     /// Whether one address has undrained mail.
-    pub unread: Arc<dyn Fn(&str) -> bool>,
+    pub unread: Arc<dyn Fn(&str) -> bool + Send + Sync>,
     /// The answered-questions records, read once per pass.
-    pub answered: Arc<dyn Fn() -> Vec<Value>>,
+    pub answered: Arc<dyn Fn() -> Vec<Value> + Send + Sync>,
     /// The oldest unprocessed answer for `addresses` past `cursor`:
     /// `(prompt, cursor_to_store)`, prompt `None` when none is due.
-    pub next_answer: Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String)>,
+    pub next_answer:
+        Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String) + Send + Sync>,
     /// The graph rows, read once on their own thread at pass start.
-    pub entries: Arc<dyn Fn() -> Result<Vec<Value>, String>>,
+    pub entries: Arc<dyn Fn() -> Result<Vec<Value>, String> + Send + Sync>,
     /// One scope's board read over the in-hand graph rows; None ids is an
     /// uncompilable scope - no signal, never an empty board.
-    pub scope_read: Arc<dyn Fn(&str, &[Value]) -> ScopeRead>,
+    pub scope_read: Arc<dyn Fn(&str, &[Value]) -> ScopeRead + Send + Sync>,
     /// The dispatch seam: `None` uses the real detached walk spawn.
     pub dispatch: Option<Box<dyn FnMut(&Target, &str, Option<&str>, Option<&str>, bool) -> bool>>,
     /// The durable ceiling question, already deduped by the caller.
@@ -652,20 +656,21 @@ pub(crate) fn build_seams(
 ) -> Seams {
     let now = now_epoch();
     let questions_path = crate::provider_cap::questions_path(home);
-    let truth: Arc<dyn Fn(&[String], Option<Instant>) -> (HashMap<String, TruthAnswer>, bool)> =
-        Arc::new(|handles, deadline| {
-            let (probes, outcome) =
-                crate::truth_probe::family1_truth_probe_many_measured_within(handles, deadline);
-            let answers = probes
-                .iter()
-                .map(|(handle, probe)| (handle.clone(), TruthAnswer::from_probe(probe)))
-                .collect();
-            (
-                answers,
-                outcome == crate::truth_probe::BatchOutcome::Measured,
-            )
-        });
-    let unread: Arc<dyn Fn(&str) -> bool> = Arc::new(|address: &str| {
+    let truth: Arc<
+        dyn Fn(&[String], Option<Instant>) -> (HashMap<String, TruthAnswer>, bool) + Send + Sync,
+    > = Arc::new(|handles, deadline| {
+        let (probes, outcome) =
+            crate::truth_probe::family1_truth_probe_many_measured_within(handles, deadline);
+        let answers = probes
+            .iter()
+            .map(|(handle, probe)| (handle.clone(), TruthAnswer::from_probe(probe)))
+            .collect();
+        (
+            answers,
+            outcome == crate::truth_probe::BatchOutcome::Measured,
+        )
+    });
+    let unread: Arc<dyn Fn(&str) -> bool + Send + Sync> = Arc::new(|address: &str| {
         // An unreadable bus is no mail for this address, never an aborted
         // pass for every role. The segments reload per address, the same
         // per-address cost the retired Python door paid per shell.
@@ -681,15 +686,18 @@ pub(crate) fn build_seams(
             .collect();
         crate::mail_control_drain::unread_count(&bus_dir, &msgs, address) > 0
     });
-    let answered: Arc<dyn Fn() -> Vec<Value>> = {
+    let answered: Arc<dyn Fn() -> Vec<Value> + Send + Sync> = {
         let questions_path = questions_path.clone();
         Arc::new(move || {
             projection_rows(&questions_path, "--answered-questions", &json!({}))
+                .ok()
                 .and_then(|rows| serde_json::from_value::<Vec<Value>>(rows).ok())
                 .unwrap_or_default()
         })
     };
-    let next_answer: Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String)> = {
+    let next_answer: Arc<
+        dyn Fn(&[String], &[Value], &str) -> (Option<String>, String) + Send + Sync,
+    > = {
         let questions_path = questions_path.clone();
         Arc::new(move |addresses, records, cursor| {
             let query = json!({"addresses": addresses, "records": records, "cursor": cursor});
@@ -708,21 +716,22 @@ pub(crate) fn build_seams(
         })
     };
     let cwd = config_cwd.to_path_buf();
-    let entries: Arc<dyn Fn() -> Result<Vec<Value>, String>> =
+    let entries: Arc<dyn Fn() -> Result<Vec<Value>, String> + Send + Sync> =
         Arc::new(move || crate::lead_ops::scope_rows(&cwd));
     let scope_compile_cwd = cwd.clone();
-    let scope_read: Arc<dyn Fn(&str, &[Value]) -> ScopeRead> = Arc::new(move |scope, rows| {
-        match crate::lead_ops::scope_ids(scope, rows, &scope_compile_cwd) {
-            Ok(ids) => ScopeRead {
-                ids: Some(ids.into_iter().collect()),
-                undelivered: crate::lead_ops::undelivered_of(&ids, rows),
-            },
-            Err(_) => ScopeRead {
-                ids: None,
-                undelivered: 0,
-            },
-        }
-    });
+    let scope_read: Arc<dyn Fn(&str, &[Value]) -> ScopeRead + Send + Sync> =
+        Arc::new(move |scope, rows| {
+            match crate::lead_ops::scope_ids(scope, rows, &scope_compile_cwd) {
+                Ok(ids) => ScopeRead {
+                    ids: Some(ids.into_iter().collect()),
+                    undelivered: crate::lead_ops::undelivered_of(&ids, rows),
+                },
+                Err(_) => ScopeRead {
+                    ids: None,
+                    undelivered: 0,
+                },
+            }
+        });
     Seams {
         now,
         now_iso: iso_stamp(now),
@@ -830,10 +839,16 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
             "question_id": qid,
             "question": question,
             "cwd": target.root.display().to_string(),
-            "ask": ask,
+            "ask": ask.clone(),
         },
     });
     let req = crate::question_intake::IntakeRequest {
+        question: question.clone(),
+        template: false,
+        ask: Some(ask),
+        options: Vec::new(),
+        blocks: Vec::new(),
+        node: None,
         subject: None,
         session_id: None,
         cwd: Some(target.root.display().to_string()),
@@ -1216,15 +1231,8 @@ pub(crate) fn board_trigger(
 /// The timer backstop: an approximation of the polled triggers so a missed
 /// event cannot strand a scope; a billed wake inside the window suppresses
 /// it. `undelivered` is the goal's own count, done or superseded.
-pub(crate) fn backstop_due(
-    target: &Target,
-    undelivered: i64,
-    now: i64,
-    cwd: &Path,
-    backstop_s: i64,
-) -> bool {
+pub(crate) fn backstop_due(target: &Target, undelivered: i64, now: i64, backstop_s: i64) -> bool {
     let journal = crate::paths::space_dir(Path::new(&target.root)).join("events.jsonl");
-    let _ = cwd;
     if crate::lead_ops::last_run_is_fresh(&journal, backstop_s, now) {
         return false;
     }
@@ -1263,7 +1271,7 @@ pub(crate) fn mail_trigger(target: &Target, unread: &dyn Fn(&str) -> bool) -> Op
 /// holder's own question. Delivery mail addresses the full session id, so
 /// the address set adds the manifest's id and its canonical short form.
 fn escalation_trigger(
-    next_answer: &Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String)>,
+    next_answer: &Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String) + Send + Sync>,
     target: &Target,
     records: &[Value],
     cursor: &str,
@@ -1369,7 +1377,7 @@ fn update_sidecar_fields(target: &Target, fields: &[(&str, Value)]) {
 // Bounded reads and the budget
 // ---------------------------------------------------------------------------
 
-fn read_seconds_left(seconds_left: Option<&mut (dyn Fn() -> Option<f64> + '_)>) -> Option<f64> {
+fn read_seconds_left(mut seconds_left: Option<&mut (dyn Fn() -> Option<f64> + '_)>) -> Option<f64> {
     seconds_left.as_deref_mut().and_then(|f| f())
 }
 
@@ -1378,13 +1386,11 @@ fn budget_exhausted(seconds_left: Option<&mut (dyn Fn() -> Option<f64> + '_)>) -
 }
 
 fn budget_stop(mut summary: TriggerOutcome, step: &str) -> TriggerOutcome {
-    append_note(
-        &mut summary,
-        &format!(
-            "budget spent after {} of {} roles, before {step}",
-            summary.evaluated, summary.roles
-        ),
+    let note = format!(
+        "budget spent after {} of {} roles, before {step}",
+        summary.evaluated, summary.roles
     );
+    append_note(&mut summary, &note);
     summary.budget_spent = true;
     summary
 }
@@ -1424,7 +1430,7 @@ fn bounded<T: Send + 'static>(
 
 /// The graph read on its own thread, so a slow store delays no setup read.
 fn start_graph_read(
-    entries: &Arc<dyn Fn() -> Result<Vec<Value>, String> + '_>,
+    entries: &Arc<dyn Fn() -> Result<Vec<Value>, String> + Send + Sync>,
 ) -> (mpsc::Receiver<GraphOutcome>, bool) {
     let entries = Arc::clone(entries);
     let (tx, rx) = mpsc::channel();
