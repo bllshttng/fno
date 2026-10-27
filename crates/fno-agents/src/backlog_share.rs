@@ -31,7 +31,7 @@
 //! Unset, [`attach`] drops any guard a past share left, so an older build
 //! can write again, and opens no socket.
 
-use crate::store_remote::{Remote, SqlValue};
+use crate::store_remote::{Remote, Reply, SqlValue};
 use rusqlite::config::DbConfig;
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
@@ -1307,9 +1307,10 @@ fn catch_up(
         ..Receipt::default()
     };
     loop {
-        let page = remote.execute(
+        let (page, _) = read_page(
+            remote,
             "SELECT seq, ops FROM backlog_changes WHERE seq > ?1 ORDER BY seq LIMIT ?2",
-            &[SqlValue::Integer(cursor), SqlValue::Integer(PAGE)],
+            cursor,
         )?;
         if page.rows.is_empty() {
             return Ok(receipt);
@@ -1334,6 +1335,20 @@ fn catch_up(
         stamp_fresh(&transaction, &cursor.to_string())?;
         transaction.commit().map_err(|e| e.to_string())?;
         receipt.cursor = cursor;
+    }
+}
+
+/// Read one page of `sql`, whose `?1` is the key to read past and `?2` the
+/// row limit, and return it with the limit it took. sqld refuses a reply
+/// over its size limit, so a refused page halves until it fits. A single
+/// row over the limit still refuses.
+fn read_page(remote: &Remote, sql: &str, after: i64) -> Result<(Reply, i64), String> {
+    let mut limit = PAGE;
+    loop {
+        match remote.execute(sql, &[SqlValue::Integer(after), SqlValue::Integer(limit)]) {
+            Err(e) if limit > 1 && e.contains("Response is too large") => limit /= 2,
+            read => return read.map(|page| (page, limit)),
+        }
     }
 }
 
@@ -1505,14 +1520,15 @@ fn primary_rows(
         let mut rows = Vec::new();
         let mut after = 0;
         loop {
-            let page = remote.execute(
+            let (page, limit) = read_page(
+                remote,
                 &format!(
                     "SELECT rowid, {} FROM \"{table}\" WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
                     quoted(columns)
                 ),
-                &[SqlValue::Integer(after), SqlValue::Integer(PAGE)],
+                after,
             )?;
-            let full = page.rows.len() as i64 == PAGE;
+            let full = page.rows.len() as i64 == limit;
             for mut row in page.rows {
                 after = row[0].integer().unwrap_or(after);
                 row.remove(0);
@@ -1946,6 +1962,42 @@ mod tests {
                 [],
             )
             .unwrap();
+    }
+
+    #[test]
+    fn a_page_over_the_primary_reply_limit_halves_until_it_fits() {
+        // Six rows of about 1 KB each, under a 4 KB reply limit: a full
+        // page refuses, so both readers must page smaller to advance.
+        let primary = test_primary::start_capped(4_000);
+        let (a, b) = (machine(), machine());
+        let long = |word: &str| format!("{word} {}", "x".repeat(1_000));
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        for i in 0..6 {
+            add_node(&a, &format!("x-{i}"), &long("first"));
+            flush(&a.graph).unwrap();
+        }
+        on(&primary, &b);
+        assert!(sync(&b.graph).unwrap().snapshot);
+        assert_eq!(found(&b, "first"), 6, "the snapshot read every row");
+
+        on(&primary, &a);
+        for i in 0..6 {
+            retitle(&a, &format!("x-{i}"), &long("second"));
+            flush(&a.graph).unwrap();
+        }
+        on(&primary, &b);
+        let receipt = sync(&b.graph).unwrap();
+        assert!(!receipt.snapshot);
+        assert_eq!(found(&b, "second"), 6, "the catch-up read every change");
+        let top: i64 = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT MAX(seq) FROM backlog_changes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(receipt.cursor, top, "the cursor reached the log's end");
+        route_to_primary(None);
     }
 
     #[test]

@@ -592,6 +592,12 @@ pub(crate) mod test_primary {
     }
 
     pub(crate) fn start() -> Primary {
+        start_capped(usize::MAX)
+    }
+
+    /// A primary that refuses a statement reply over `cap` bytes, the way
+    /// sqld refuses one over its response size limit.
+    pub(crate) fn start_capped(cap: usize) -> Primary {
         let dir = tempfile::tempdir().unwrap();
         let connection = rusqlite::Connection::open(dir.path().join("primary.db")).unwrap();
         // The real primary enforces foreign keys.
@@ -604,7 +610,7 @@ pub(crate) mod test_primary {
         let served = Arc::clone(&db);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                serve(stream, &served);
+                serve(stream, &served, cap);
             }
         });
         Primary {
@@ -624,7 +630,7 @@ pub(crate) mod test_primary {
         Remote::parse(&format!("http://127.0.0.1:{port}"), None).unwrap()
     }
 
-    fn serve(stream: TcpStream, db: &Mutex<rusqlite::Connection>) {
+    fn serve(stream: TcpStream, db: &Mutex<rusqlite::Connection>, cap: usize) {
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut length = 0;
         loop {
@@ -645,7 +651,7 @@ pub(crate) mod test_primary {
             .as_array()
             .unwrap()
             .iter()
-            .map(|r| answer(&connection, r))
+            .map(|r| answer(&connection, r, cap))
             .collect();
         let reply = json!({"baton": null, "results": results}).to_string();
         let mut stream = stream;
@@ -741,7 +747,7 @@ pub(crate) mod test_primary {
         Ok(json!({"cols": cols, "rows": out, "affected_row_count": connection.changes()}))
     }
 
-    fn answer(connection: &rusqlite::Connection, request: &Value) -> Value {
+    fn answer(connection: &rusqlite::Connection, request: &Value, cap: usize) -> Value {
         let failed =
             |e: rusqlite::Error| json!({"type": "error", "error": {"message": e.to_string()}});
         match request["type"].as_str() {
@@ -751,6 +757,9 @@ pub(crate) mod test_primary {
                 Err(e) => failed(e),
             },
             Some("execute") => match statement(connection, &request["stmt"]) {
+                Ok(result) if result.to_string().len() > cap => {
+                    json!({"type": "error", "error": {"message": "Response is too large"}})
+                }
                 Ok(result) => {
                     json!({"type": "ok", "response": {"type": "execute", "result": result}})
                 }
