@@ -9,7 +9,9 @@ test -f cli/src/fno/cli.py
 # wedge (ab-d0337fbc); `claims` stands in as the structural probe.
 # `worker` removed: the worker-family port retired the package; the parser
 # answers from crates (`fno-agents executor-route`).
-for sub in state graph runtime events claims; do
+# `state` removed: the target-family port retired the package; the manifest
+# contract is replayed by `crates/fno-agents/tests/target_family_parity.rs`.
+for sub in graph runtime events claims; do
   test -f "cli/src/fno/${sub}/__init__.py"
 done
 echo "PASS: skeleton complete"
