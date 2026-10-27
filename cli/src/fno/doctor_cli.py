@@ -19,7 +19,6 @@ from fno.doctor_reclaim import reclaim_command
 from fno.evals_cli import evals_app
 from fno.events.cli import cli as event_app
 from fno.lint_cli import lint
-from fno.observer.cli import observer_app
 from fno.scratch_cli import scratch_app
 from fno.status_fanout import status_fanout_app
 from fno.test_cmd import test_command
@@ -146,8 +145,8 @@ def harness_matrix_command(
 doctor_app.command("plugin-file", hidden=True)(plugin_file_command)
 # `doctor route` (the declared-inventory reachability read) answers natively:
 # the front classifies the spelling onto route-slot's config-route mode, so
-# no Python mount remains here.
-doctor_app.add_typer(observer_app, name="observer")
+# no Python mount remains here. The same is true of `doctor observer` on
+# main: the front door claims the spelling and execs the native ops.
 # `doctor scratch` is the scratch-shape sweep; the Rust binary is
 # the only implementation and the leaf refuses without it.
 doctor_app.add_typer(scratch_app, name="scratch")
