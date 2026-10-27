@@ -115,11 +115,27 @@ fn runs_of(root: &Path, query: &str) -> Result<Vec<Value>, String> {
         .collect())
 }
 
-/// The node whose `pr_number` is this PR: its main-repair tag and
-/// priority; untagged p2 when none.
-fn node_rank(number: u64, entries: &[Value]) -> (bool, u8) {
-    let pr = |e: &&Value| e.get("pr_number").and_then(Value::as_u64) == Some(number);
-    let Some(node) = entries.iter().find(pr) else {
+/// The bound node's main-repair tag and priority; untagged p2 when none.
+/// The binding keys matter: the daemon's own revert PR names its repair
+/// node only by branch and `Fixes` trailer, never by `pr_number`.
+fn node_rank(pull: &Value, entries: &[Value]) -> (bool, u8) {
+    let number = pull.get("number").and_then(Value::as_i64).unwrap_or(0);
+    let body = pull.get("body").and_then(Value::as_str);
+    let url = pull.get("html_url").and_then(Value::as_str);
+    let keys =
+        crate::org_board::prs::pr_binding_keys(number, word(pull, "/head/ref"), url, body, entries);
+    let mut ids = keys
+        .branch
+        .iter()
+        .chain(&keys.backrefs)
+        .chain(&keys.trailer);
+    let bound = |nid: &String| {
+        let id = Some(nid.as_str());
+        entries
+            .iter()
+            .find(|e| crate::graph_store::entry_id(e) == id)
+    };
+    let Some(node) = ids.find_map(bound) else {
         return (false, 2);
     };
     let priority = word(node, "/priority").strip_prefix('p');
@@ -139,7 +155,7 @@ fn read_repo(root: &Path) -> Result<(Vec<(Rank, Head)>, usize), String> {
     for page in pages(root, "repos/{owner}/{repo}/pulls?state=open&per_page=100")? {
         for pull in page.as_array().into_iter().flatten() {
             let number = pull.get("number").and_then(Value::as_u64).unwrap_or(0);
-            let (repair, priority) = node_rank(number, &entries);
+            let (repair, priority) = node_rank(pull, &entries);
             let draft = pull.get("draft").and_then(Value::as_bool) == Some(true);
             let sha = word(pull, "/head/sha").to_string();
             prs.push(((!repair, draft, priority, number), sha));
