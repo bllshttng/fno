@@ -4,8 +4,8 @@ A test that starts a real provider binary can leave a live daemon behind it:
 the daemon calls setsid, detaches to ppid 1, and outlives the run (x-ec81
 measured three ``claude daemon run`` processes, each rooted in a deleted
 pytest garbage directory, pinned by its own bg-spare tree). Enumeration goes
-through ``fno.agents.orphans.iter_processes``, the one shared
-``psutil.process_iter`` site, so this census and the orphan sweep can never
+through ``fno.agents.keeper_lane.iter_processes``, the one shared
+``psutil.process_iter`` site, so this census and the keeper lane can never
 drift apart.
 
 # ponytail: only orphans (ppid in reaper_set) get a cwd read, so a leak
@@ -56,7 +56,7 @@ def reap_rooted(
     """
     import psutil
 
-    from fno.agents.orphans import iter_processes
+    from fno.agents.keeper_lane import iter_processes
 
     normalized = [os.path.abspath(str(r)) for r in roots]
     try:
@@ -135,7 +135,7 @@ def census_rooted(roots, *, reaper: int = 1) -> list[dict]:
     minus the signals, so a caller can wait out a self-exit bound and reap
     only what is genuinely stuck.
     """
-    from fno.agents.orphans import iter_processes
+    from fno.agents.keeper_lane import iter_processes
 
     normalized = [os.path.abspath(str(r)) for r in roots]
     return [

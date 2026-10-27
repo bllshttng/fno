@@ -440,7 +440,7 @@ pub(crate) fn process_argv(pid: u32) -> Option<Vec<String>> {
 /// Mirrors `fno::pane_argv::process_argv`; that crate is a dev-only link
 /// here, so the read lives beside its only production caller.
 #[cfg(target_os = "macos")]
-fn argv_of(pid: u32) -> Option<Vec<String>> {
+pub(crate) fn argv_of(pid: u32) -> Option<Vec<String>> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
     let mut size: libc::size_t = 0;
     if unsafe {
@@ -509,7 +509,7 @@ fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
 }
 
 #[cfg(target_os = "macos")]
-fn comm_string(comm: &[libc::c_char]) -> String {
+pub(crate) fn comm_string(comm: &[libc::c_char]) -> String {
     let bytes: Vec<u8> = comm
         .iter()
         .take_while(|&&c| c != 0)
@@ -1069,6 +1069,17 @@ pub async fn run_command(args: &[String]) -> i32 {
     // roster command's identity dimension.
     if args.first().map(String::as_str) == Some("yard") {
         return crate::yard::run(&args[1..]);
+    }
+    // `fno agents orphans`: the sweep rides the census action as an argument
+    // (law d-fe66560a allows no new client action); the sweep body lives in
+    // orphans.rs.
+    if args.iter().any(|arg| arg == "--orphans") {
+        let rest: Vec<String> = args
+            .iter()
+            .filter(|arg| *arg != "--orphans")
+            .cloned()
+            .collect();
+        return crate::orphans::run(&rest);
     }
     // `fno agents top`: the worker table, the census of live runs.
     if args.first().map(String::as_str) == Some("--workers") {

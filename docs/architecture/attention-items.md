@@ -28,6 +28,10 @@ A machine chore whose row names the command that clears it is a `fleet_task`, no
 
 The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields.
 
+## Who asks: direct, by default
+
+Whoever holds a user-only decision files it on the board itself, lead or worker: `fno inbox outstanding ask` (law d-fdab1af2). Nobody mails a decision up a lead to relay, because a relay hop is where asks get lost. The knob is `questions.route` in `.fno/config.toml`: `direct` (the default) or `triage` for a team that wants a triage lead. The knob routes the `fno agents org escalate` relay-mail leg. Under `direct` the question the command records stays on the board alone and the command prints the teaching line. `triage` keeps the lead's mail copy. The read lives in the fno-agents renderer (`crates/fno-agents/src/lead_escalation.rs`), so the default needs no config entry.
+
 ## Asking with context
 
 The fields ride a question file handed to `--question-file`:

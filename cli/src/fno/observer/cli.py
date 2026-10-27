@@ -51,6 +51,22 @@ def _observer_callback() -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _frontmatter(text: str) -> dict:
+    """YAML frontmatter of one markdown text: ``{}`` without delimiters or on
+    an unclosed fence (an unclosed fence carries no attribution keys);
+    raises ``yaml.YAMLError`` on invalid YAML so a malformed file skips."""
+    import yaml
+
+    if not text.startswith("---"):
+        return {}
+    rest = text[3:].lstrip("\n")
+    idx = rest.find("\n---")
+    if idx == -1:
+        return {}
+    parsed = yaml.safe_load(rest[:idx])
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _read_postmortems(postmortems_dir: Path) -> list[dict]:
     """Local frontmatter reader: ``{session_id, graph_node_id,
     blocked_reason_kind}`` per postmortem. ``harvest_postmortems`` returns
@@ -59,18 +75,14 @@ def _read_postmortems(postmortems_dir: Path) -> list[dict]:
     never fatal (mirrors ``harvest_postmortems``)."""
     import yaml
 
-    from fno.agent.state import _extract_frontmatter
-
     if not postmortems_dir.is_dir():
         return []
     out: list[dict] = []
     for path in sorted(postmortems_dir.glob("*.md")):
         try:
-            fm = _extract_frontmatter(path.read_text(encoding="utf-8"))
+            fm = _frontmatter(path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError):
             continue
-        except ValueError:
-            fm = {}  # an unclosed fence carries no attribution keys
         blocked = fm.get("blocked_reason")
         kind = str(blocked.get("kind")) if isinstance(blocked, dict) and blocked.get("kind") else None
         out.append(

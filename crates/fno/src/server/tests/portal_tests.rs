@@ -996,6 +996,7 @@ fn thread_pane_tier_rows() {
         vec![
             "fno".to_string(),
             "agents".into(),
+            "session".into(),
             "peek".into(),
             "codex-row".into(),
             "--follow".into()

@@ -7,8 +7,10 @@ use std::path::Path;
 
 /// Per-workflow verdict inputs: (name, newest run, newest completed run).
 /// Row position is never trusted - the branch listing has served stale rows
-/// first - `created_at` alone picks the newest of each.
-fn fold_page<'a>(
+/// first - `created_at` alone picks the newest of each. Made pub(crate) for
+/// ci_front's per-sha verdict, so one fold answers both surfaces and two
+/// folds never disagree.
+pub(crate) fn fold_page<'a>(
     acc: &mut Vec<(&'a str, &'a Value, Option<&'a Value>)>,
     runs: impl Iterator<Item = &'a Value>,
 ) {
