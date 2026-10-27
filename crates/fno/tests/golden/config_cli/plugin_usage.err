@@ -1,0 +1,1 @@
+usage: fno config plugin install <claude|codex|opencode|agy> [flags...]

@@ -1,0 +1,28 @@
+Usage: fno config get [OPTIONS] KEY
+
+  Print a single resolved config value. Read-only.
+
+  Traverses the loaded settings model by dotted path so a skill / LLM caller can
+  read one value (e.g. the decomposition ceiling fallback) without re-
+  implementing settings lookup. Scalars print bare; nested objects print as
+  JSON. Unknown keys exit non-zero.
+
+  The leading ``config.`` is optional: a bare ``review.required_bots`` is
+  retried as ``config.review.required_bots`` so a caller need not remember the
+  redundant prefix (E: the review gate defaults to
+  ``config.review.required_bots`` but the shorthand used to error).
+
+  Which FILE decided the value prints on STDERR : the silent home-vs-project
+  override is the defect this fixes, so the resolved value alone on stdout would
+  keep the confusion. stdout stays value-only because callers pipe it
+  (normalize.sh compares the whole stream); the source line, including an
+  ``overrides`` clause exactly when a lower-precedence file set a value the
+  merge discarded, is stderr-only. ``--json`` carries both streams' facts as one
+  object.
+
+Arguments:
+  KEY  Dotted config key, e.g. config.blueprint.max_prs_per_epic  [required]
+
+Options:
+  -J, --json  Emit {key, value, source, overrides} as one JSON object on stdout.
+  --help      Show this message and exit.

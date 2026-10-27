@@ -1,10 +1,6 @@
 # Agent subcommands folded under `fno agents` as lazy subcommands.
 # Each entry: import_path, short_help, typer options. Loaded by
 # rust_runtime.FOLDED_AGENT_SUBCOMMANDS.
-autonomy:
-  - fno.autonomy_cli:autonomy_app
-  - Inspect every path that can start a session without an operator asking.
-  - hidden: true
 claim:
   - fno.claims.cli:cli
   - Work-claim coordination primitive
@@ -12,11 +8,4 @@ claim:
 mail:
   - fno.mail.cli:mail_app
   - "Durable polled mailbox: send/unread/ack/reply/drain/status (canonical spelling; root `fno mail` is the shim)."
-  - hidden: true
-# (d-cf2d6fe1): worktree lifecycle folds under agents, which also
-# resolves the Python/Rust `workspace` collision - root `workspace` then
-# unambiguously means the mux one. Old spellings stay one-release shims.
-workspace:
-  - fno.workspace.cli:cli
-  - Worktree lifecycle and worker registration.
   - hidden: true

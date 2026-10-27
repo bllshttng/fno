@@ -25,12 +25,13 @@ def test_agents_registers_the_folded_roots() -> None:
     # door, so it is no folded root. The worker family port retired `worker`;
     # its answers live at `fno do pr`, `fno backlog reconcile`, and spawn.
     # mcp and lead left the fold: both families are native and the front
-    # door answers them. The roles port moved its last callers onto the
-    # native door.
+    # door answers them (the front's agents-mcp route answers the send
+    # command). The roles port moved its last callers onto the native door.
+    # The fleet family port retired `autonomy`: the front's fleet route
+    # claims the spelling and the native spawn-overlay door answers it.
     from fno.agents.cli import agents_app
 
     assert {
-        "autonomy",
         "claim",
         "mail",
     } <= _commands(agents_app)
@@ -38,7 +39,6 @@ def test_agents_registers_the_folded_roots() -> None:
 
 def test_importing_agents_cli_does_not_import_folded_subgroups() -> None:
     modules = {
-        "fno.autonomy_cli",
         "fno.claims.cli",
         "fno.dispatch",
         "fno.mail.cli",

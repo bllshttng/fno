@@ -84,6 +84,11 @@ serde = { version = "1", features = ["derive"] }
 # every key in the file on each flip. fno-agents enables it for the same
 # registry-interop reason.
 serde_json = { version = "1", features = ["preserve_order"] }
+# The config read doors parse a legacy `settings.yaml` too: a fresh HOME
+# (the worktree hooks, wt_config) serves yaml through `fno config get` cold,
+# before any loader run could migrate it to flat config.toml. Same pin and
+# same backend (pure-Rust unsafe-libyaml) the fno-agents crate resolves.
+serde_yaml_ng = "0.10"
 # Read the flat `config.toml` (stage 3): the interactive server reads
 # `config.mux.*` directly (digest_overlay Pattern B) instead of shelling `fno`.
 toml = "0.8"
