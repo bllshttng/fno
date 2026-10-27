@@ -452,6 +452,19 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
             .and_then(Value::as_str)
             .cmp(&b.get("last_ts").and_then(Value::as_str))
     });
+    // The You section rides the same projection: one row per registry-named
+    // claude session whose transcript carries typed turns (node x-cecf).
+    // Fail-open: without a resolvable home the section reads as absent.
+    let you = crate::paths::AgentsHome::from_env_opt()
+        .map(|home| {
+            crate::you_threads::project_you(&crate::you_threads::YouInputs {
+                registry,
+                projects_dir: crate::claude_drive::claude_projects_dir(),
+                home_root: home.root().to_path_buf(),
+                cache_path: home.root().join("intel").join("you-threads.json"),
+            })
+        })
+        .unwrap_or_default();
     json!({
         "participants": participants.values().cloned().collect::<Vec<_>>(),
         "threads": threads,
@@ -459,6 +472,7 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
         "channels": channels.into_iter().map(|(scope, rows)| json!({"scope": scope, "rows": rows})).collect::<Vec<_>>(),
         "announcements": announcements,
         "unreadable": unreadable,
+        "you": you,
     })
 }
 

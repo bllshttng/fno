@@ -26,7 +26,7 @@ use crate::provenance::{
     Provenance,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
@@ -431,6 +431,95 @@ fn read_range(path: &Path, start: u64, end: u64) -> Result<String, std::io::Erro
     let mut buf = Vec::with_capacity((end - start) as usize);
     file.take(end - start).read_to_end(&mut buf)?;
     String::from_utf8(buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// The freshness window: a session whose transcript mtime falls inside it
+/// gets a You thread in the projection. Settled 2026-10-27 from the measured
+/// cost ladder (2086 claude transcripts, 3.6 GB): the 2-day window held 19
+/// files and 255 MB; the 7-day window held 173 files and 556 MB, too heavy
+/// for a cold tab open.
+const WINDOW_SECS: u64 = 2 * 86_400;
+
+/// Everything the projection-facing walk needs, injectable so tests run
+/// against fixtures instead of a live home.
+pub(crate) struct YouInputs<'a> {
+    pub registry: &'a [Value],
+    pub projects_dir: PathBuf,
+    /// The fno home (`~/.fno`): the bus log and the You cache resolve
+    /// through it exactly as `journal_bus_path` builds them.
+    pub home_root: PathBuf,
+    pub cache_path: PathBuf,
+}
+
+/// One You row per registry-named claude session whose transcript carries
+/// typed turns inside the window, newest first. The caller embeds the rows
+/// as the projection's `you` section. Fail-open end to end: a missing bus,
+/// a contended cache lock, a missing transcript or a registry with no claude
+/// rows all read as fewer or empty rows, never an error.
+pub(crate) fn project_you(inputs: &YouInputs) -> Vec<Value> {
+    let dot_fno = inputs.home_root.parent().unwrap_or(&inputs.home_root);
+    let bus = BusIndex::load(&crate::intel::bus_log_path(dot_fno));
+    let lock =
+        crate::gh_budget::FileLock::try_acquire(&crate::gh_budget::lock_path(&inputs.cache_path));
+    let persist = lock.is_ok();
+    let mut store = YouStore::open(inputs.cache_path.clone(), persist);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut rows: Vec<Value> = Vec::new();
+    for reg in inputs.registry {
+        let harness = reg.get("harness").and_then(Value::as_str).unwrap_or("");
+        let Some(sid) = reg
+            .get("harness_session_id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        if harness != "claude" {
+            continue;
+        }
+        let cwd = reg.get("cwd").and_then(Value::as_str).unwrap_or("");
+        let slug = crate::claude_ask::claude_cwd_slug(Path::new(cwd));
+        let transcript = inputs.projects_dir.join(slug).join(format!("{sid}.jsonl"));
+        let Ok(meta) = std::fs::metadata(&transcript) else {
+            continue;
+        };
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if now.saturating_sub(mtime) > WINDOW_SECS {
+            continue;
+        }
+        let items = store.advance(&transcript, sid, &bus);
+        if items.is_empty() {
+            continue;
+        }
+        let name = reg
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| sid.get(..8).unwrap_or(sid));
+        rows.push(json!({
+            "session_id": sid,
+            "name": name,
+            "last_ts": items.last().map(|i| i.ts.clone()).unwrap_or_default(),
+            "items": items,
+        }));
+    }
+    if persist {
+        store.save();
+    }
+    rows.sort_by(|a, b| {
+        b.get("last_ts")
+            .and_then(Value::as_str)
+            .cmp(&a.get("last_ts").and_then(Value::as_str))
+    });
+    rows
 }
 
 #[cfg(test)]
