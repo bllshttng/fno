@@ -364,23 +364,14 @@ def test_derived_blueprint_ignores_the_operator_target_template():
 
 
 def test_stage_table_resolves_the_derived_command_profile():
-    # Locked Decision 4: the resolved command is the profile key, so a medium
-    # planless node reaches agents.profiles.blueprint.provider even though its
-    # stored command (or the default) says target.
-    import types
-
-    stub = types.SimpleNamespace(
-        agents=types.SimpleNamespace(
-            profiles={
-                "blueprint": types.SimpleNamespace(provider="codex"),
-            }
-        ),
-        dispatch=None,
-    )
+    # The profile->harness mapping answers natively on the route-slot door;
+    # this test pins the python seam that consumes the answer: a door-supplied
+    # codex harness renders the codex command spelling for a medium planless
+    # node's derived /blueprint command.
     out = resolve_dispatch(
         node_id="x-abcd",
         lifecycle=("/blueprint", "command=lifecycle(intake difficulty=medium -> /blueprint)"),
-        settings=stub,
+        dispatch_cfg={"harness": "codex"},
     )
     assert out["harness"] == "codex"
     assert out["command"] == "$fno:blueprint x-abcd"

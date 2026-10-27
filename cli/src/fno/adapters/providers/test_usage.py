@@ -1,10 +1,9 @@
-"""Tests for quota-aware dispatch: usage probe, snapshot storage, headroom.
+"""Tests for quota-aware dispatch: usage probe and snapshot storage.
 
 Run: cd cli && uv run pytest src/fno/adapters/providers/test_usage.py -v
 
-Quota-aware dispatch. Covers the probe fail-open contract, the
-additive snapshot storage carried through the shared lock, and the headroom
-predicate the routing/scheduling consumers act on.
+Quota-aware dispatch. Covers the probe fail-open contract and the
+additive snapshot storage carried through the shared lock.
 """
 from __future__ import annotations
 
@@ -15,11 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from fno.adapters.providers import loader
 from fno.adapters.providers.model import ProviderRecord
 from fno.adapters.providers.runtime_state import (
-    HeadroomState,
-    headroom,
     read_state,
     read_usage,
 )
@@ -431,111 +427,6 @@ class TestProbeUnknownReason:
         assert probe_usage(rec) is probe_usage_detail(rec)[0] is snap
 
 
-class TestRefreshObservation:
-    def test_refresh_passes_repo_root_to_probe(
-        self, state_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A cross-project refresh probes the route using its record's repository."""
-        from fno.adapters.providers import runtime_state as rs
-
-        repo_root = tmp_path / "foreign-repo"
-        repo_root.mkdir()
-        snap = _snap("p1", UsageWindow("5h", 12.0, 9000.0))
-        seen_roots: list[Path | None] = []
-        monkeypatch.setattr(
-            "fno.adapters.providers.loader.load_providers",
-            lambda *a, **k: type(
-                "C", (), {"by_id": {"p1": _claude_record(repo_root)}}
-            )(),
-        )
-
-        def fake_probe(record, now=None, repo_root=None):  # noqa: ANN001
-            seen_roots.append(repo_root)
-            return snap, None
-
-        monkeypatch.setattr("fno.adapters.providers.usage.probe_usage_detail", fake_probe)
-
-        obs = rs.refresh_usage_detailed(
-            "p1", ttl_seconds=0, now=2000.0, repo_root=repo_root
-        )
-
-        assert obs.snapshot is snap
-        assert seen_roots == [repo_root]
-
-    def test_a_probed_snapshot_survives_a_failed_cache_write(
-        self, state_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """AC2-FR: losing the write race is a cache outcome, not a probe outcome.
-
-        Failure Modes / Errors: "a cache lock timeout reports persistence
-        degradation without discarding a successful snapshot."
-        """
-        from fno.adapters.providers import runtime_state as rs
-
-        snap = _snap("p1", UsageWindow("5h", 12.0, 9000.0))
-        monkeypatch.setattr(rs, "write_usage_snapshot", lambda s, now=None, **k: False)
-        monkeypatch.setattr(
-            "fno.adapters.providers.loader.load_providers",
-            lambda *a, **k: type(
-                "C", (), {"by_id": {"p1": _claude_record(state_path.parent)}}
-            )(),
-        )
-        monkeypatch.setattr(
-            "fno.adapters.providers.usage.probe_usage_detail",
-            lambda record, now=None: (snap, None),
-        )
-
-        obs = rs.refresh_usage_detailed("p1", ttl_seconds=0, now=2000.0)
-        assert obs.snapshot is snap
-        assert obs.persisted is False
-        assert obs.reason is None
-        assert obs.known is True
-        # The compatibility wrapper still yields the same snapshot.
-        assert rs.refresh_usage("p1", ttl_seconds=0, now=2000.0) is snap
-
-    def test_missing_record_is_named(
-        self, state_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from fno.adapters.providers import runtime_state as rs
-
-        monkeypatch.setattr(
-            "fno.adapters.providers.loader.load_providers",
-            lambda *a, **k: type("C", (), {"by_id": {}})(),
-        )
-        obs = rs.refresh_usage_detailed("ghost", ttl_seconds=0, now=2000.0)
-        assert (obs.snapshot, obs.reason, obs.known) == (None, "record-missing", False)
-
-    def test_unreadable_config_is_named(
-        self, state_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from fno.adapters.providers import runtime_state as rs
-
-        def _boom(*a: object, **k: object) -> None:
-            raise OSError("config gone")
-
-        monkeypatch.setattr("fno.adapters.providers.loader.load_providers", _boom)
-        obs = rs.refresh_usage_detailed("p1", ttl_seconds=0, now=2000.0)
-        assert obs.reason == "config-unreadable"
-
-    def test_a_snapshot_with_no_windows_is_unknown_with_a_reason(
-        self, state_path: Path
-    ) -> None:
-        from fno.adapters.providers import runtime_state as rs
-
-        _seed_usage(_snap("p1", probed_at=1000.0), now=1000.0)
-        obs = rs.refresh_usage_detailed("p1", ttl_seconds=300, now=1100.0)
-        assert obs.snapshot is not None
-        assert (obs.reason, obs.known) == ("no-windows", False)
-
-    def test_a_cache_hit_attempts_no_write(self, state_path: Path) -> None:
-        from fno.adapters.providers import runtime_state as rs
-
-        _seed_usage(_snap("p1", UsageWindow("5h", 3.0, 9000.0), probed_at=1000.0))
-        obs = rs.refresh_usage_detailed("p1", ttl_seconds=300, now=1100.0)
-        assert obs.known is True
-        assert obs.persisted is None  # tri-state: no write was attempted
-
-
 class TestSnapshotStorage:
     def test_stale_snapshot_reads_as_absent(self, state_path: Path) -> None:
         _seed_usage(_snap("p1", UsageWindow("5h", 50.0, 9000.0), probed_at=1000.0))
@@ -565,127 +456,6 @@ class TestSnapshotStorage:
         # Read does not raise; the bad entry is gone.
         assert read_usage("bad", ttl_seconds=300, now=1000.0) is None
         assert read_state(now=1000.0).usage == {}
-
-
-# ---------------------------------------------------------------------------
-# Headroom predicate (AC1-EDGE + Locked Decision 9 ordering upstream)
-# ---------------------------------------------------------------------------
-
-
-class TestHeadroom:
-    def test_unknown_when_no_snapshot(self, state_path: Path) -> None:
-        assert headroom("p1", now=1000.0).state is HeadroomState.UNKNOWN
-
-    def test_empty_windows_is_unknown_not_ok(self, state_path: Path) -> None:
-        _seed_usage(_snap("p1", probed_at=1000.0), now=1000.0)
-        assert headroom("p1", now=1000.0).state is HeadroomState.UNKNOWN
-
-    def test_exhausted_future_window(self, state_path: Path) -> None:
-        _seed_usage(_snap("p1", UsageWindow("5h", 100.0, 5000.0), probed_at=1000.0), now=1000.0)
-        h = headroom("p1", now=1000.0)
-        assert h.state is HeadroomState.EXHAUSTED
-        assert h.resets_at == 5000.0
-
-    def test_low_at_threshold(self, state_path: Path) -> None:
-        _seed_usage(_snap("p1", UsageWindow("5h", 90.0, 5000.0), probed_at=1000.0), now=1000.0)
-        assert headroom("p1", now=1000.0, threshold_pct=90.0).state is HeadroomState.LOW
-
-    def test_ok_below_threshold(self, state_path: Path) -> None:
-        _seed_usage(_snap("p1", UsageWindow("5h", 40.0, 5000.0), probed_at=1000.0), now=1000.0)
-        assert headroom("p1", now=1000.0, threshold_pct=90.0).state is HeadroomState.OK
-
-    def test_stale_exhaustion_never_binds(self, state_path: Path) -> None:
-        # AC1-EDGE: a 100% window whose resets_at is in the past does not bind;
-        # the limit has reset, so dispatch proceeds (OK).
-        _seed_usage(_snap("p1", UsageWindow("5h", 100.0, 500.0), probed_at=1000.0), now=1000.0)
-        assert headroom("p1", now=1000.0).state is HeadroomState.OK
-
-    def test_provider_rate_limited_until_is_exhausted(self, state_path: Path) -> None:
-        # An active provider-level rate_limited_until reads EXHAUSTED even
-        # without a usage snapshot.
-        _seed_health("p1", backoff_level=0, rate_limited_until=1060.0, last_error_at=1000.0)
-        h = headroom("p1", now=1000.0)
-        assert h.state is HeadroomState.EXHAUSTED
-        assert h.resets_at is not None and h.resets_at > 1000.0
-
-
-# ---------------------------------------------------------------------------
-# evaluate_quota_signal: the dispatcher decision core (US3: AC2-HP, AC2-FR, LD)
-# ---------------------------------------------------------------------------
-
-
-class TestEvaluateQuotaDefer:
-    def _quota(self, monkeypatch, **kw) -> None:
-        from fno.adapters.providers.model import QuotaConfig
-
-        cfg = QuotaConfig(**kw)
-        monkeypatch.setattr(loader, "load_quota_config", lambda *a, **k: cfg)
-
-    def test_off_by_default_never_defers(self, state_path: Path, monkeypatch) -> None:
-        from fno.adapters.providers.runtime_state import evaluate_quota_signal
-
-        self._quota(monkeypatch, defer_dispatch=False)
-        _seed_usage(_snap("p1", UsageWindow("5h", 100.0, 9e18), probed_at=1000.0), now=1000.0)
-        assert not evaluate_quota_signal("p1", priority="p2", now=1000.0).defer
-
-    def test_p0_never_defers(self, state_path: Path, monkeypatch) -> None:
-        from fno.adapters.providers.runtime_state import evaluate_quota_signal
-
-        self._quota(monkeypatch, defer_dispatch=True)
-        _seed_usage(_snap("p1", UsageWindow("5h", 100.0, 9e18), probed_at=1000.0), now=1000.0)
-        assert not evaluate_quota_signal("p1", priority="p0", now=1000.0).defer
-
-    def test_exhausted_defers_with_retry_at(self, state_path: Path, monkeypatch) -> None:
-        # AC2-HP core: exhausted -> defer, resets_at == the window reset.
-        from fno.adapters.providers.runtime_state import HeadroomState, evaluate_quota_signal
-
-        self._quota(monkeypatch, defer_dispatch=True)
-        _seed_usage(_snap("p1", UsageWindow("5h", 100.0, 9e18), probed_at=1000.0), now=1000.0)
-        sig = evaluate_quota_signal("p1", priority="p2", now=1000.0)
-        assert sig.defer
-        assert sig.state is HeadroomState.EXHAUSTED
-        assert sig.resets_at == 9e18
-
-    def test_low_within_horizon_defers(self, state_path: Path, monkeypatch) -> None:
-        from fno.adapters.providers.runtime_state import evaluate_quota_signal
-
-        self._quota(monkeypatch, defer_dispatch=True, defer_horizon_minutes=60, defer_threshold_pct=90.0)
-        # reset in 30 min (< 60 horizon), 95% -> LOW -> defer.
-        _seed_usage(_snap("p1", UsageWindow("5h", 95.0, 1000.0 + 1800), probed_at=1000.0), now=1000.0)
-        assert evaluate_quota_signal("p1", priority="p2", now=1000.0).defer
-
-    def test_defer_wins_when_the_two_windows_overlap(self, state_path: Path, monkeypatch) -> None:
-        # AC3-EDGE: the cutover window and the defer horizon are independent
-        # knobs, so a cutover shorter than the horizon makes both predicates true
-        # for one reset. The caller tests cutover first, so without defer winning
-        # here a near reset would churn harnesses instead of waiting it out.
-        from fno.adapters.providers.runtime_state import evaluate_quota_signal
-
-        self._quota(monkeypatch, defer_dispatch=True, defer_horizon_minutes=60, defer_threshold_pct=90.0)
-        # reset in 45 min: inside the 60-min defer horizon AND past a 30-min cutover.
-        _seed_usage(_snap("p1", UsageWindow("5h", 95.0, 1000.0 + 2700), probed_at=1000.0), now=1000.0)
-        sig = evaluate_quota_signal("p1", priority="p2", cutover_low_after_minutes=30, now=1000.0)
-        assert sig.defer and not sig.cutover
-
-    def test_low_outside_horizon_proceeds(self, state_path: Path, monkeypatch) -> None:
-        from fno.adapters.providers.runtime_state import evaluate_quota_signal
-
-        self._quota(monkeypatch, defer_dispatch=True, defer_horizon_minutes=60)
-        # reset in 2h (> 60 horizon), 95% -> LOW but too far -> proceed.
-        _seed_usage(_snap("p1", UsageWindow("5h", 95.0, 1000.0 + 7200), probed_at=1000.0), now=1000.0)
-        assert not evaluate_quota_signal("p1", priority="p2", now=1000.0).defer
-
-    def test_unknown_never_strands(self, state_path: Path, monkeypatch) -> None:
-        # AC2-FR: a deferred node whose snapshot ages out degrades to UNKNOWN,
-        # which never defers -> the next tick dispatches (deferral cannot outlive
-        # the evidence). No fresh snapshot -> UNKNOWN. refresh_usage will try to
-        # probe; with no provider record it returns None, staying UNKNOWN.
-        from fno.adapters.providers.model import ProvidersConfig
-        from fno.adapters.providers.runtime_state import evaluate_quota_signal
-
-        self._quota(monkeypatch, defer_dispatch=True)
-        monkeypatch.setattr(loader, "load_providers", lambda *a, **k: ProvidersConfig(records=[]))
-        assert not evaluate_quota_signal("p1", priority="p2", now=1000.0).defer
 
 
 # ---------------------------------------------------------------------------
@@ -1171,54 +941,6 @@ class TestAmbiguousSlotIsNotAttributable:
         )
 
         assert probe_usage(rec, now=1000.0) is None
-
-
-def test_quota_probe_is_scoped_to_the_node_repository(state_path: Path, monkeypatch, tmp_path) -> None:
-    """Every read in the route decision resolves against the NODE's repo.
-
-    An unscoped probe judges the dispatcher's own project, and an absent record
-    there reads as UNKNOWN - which proceeds instead of cutting over.
-    """
-    from fno.adapters.providers.model import QuotaConfig
-    from fno.adapters.providers.runtime_state import evaluate_quota_signal
-
-    seen: dict = {}
-    monkeypatch.setattr(
-        loader, "load_quota_config", lambda *a, **k: seen.update(quota=k.get("repo_root")) or QuotaConfig(defer_dispatch=True)
-    )
-    import fno.adapters.providers.runtime_state as rs
-
-    def _probe(pid, **k):
-        seen.update(refresh=k.get("repo_root"))
-        return rs.UsageRefresh(None, "probe-failed")
-
-    monkeypatch.setattr(rs, "refresh_usage_detailed", _probe)
-    evaluate_quota_signal("p1", priority="p2", now=1000.0, repo_root=tmp_path)
-    assert seen["quota"] == tmp_path
-    assert seen["refresh"] == tmp_path
-
-
-def test_a_lost_persist_does_not_turn_exhausted_into_unknown(state_path: Path, monkeypatch) -> None:
-    """A probe that saw EXHAUSTED must not read back as UNKNOWN.
-
-    UNKNOWN proceeds, so a persist that lost a lock race would launch onto the
-    very provider the probe just observed as walled.
-    """
-    from fno.adapters.providers.model import QuotaConfig
-    from fno.adapters.providers.runtime_state import HeadroomState, evaluate_quota_signal
-    import fno.adapters.providers.runtime_state as rs
-
-    monkeypatch.setattr(loader, "load_quota_config", lambda *a, **k: QuotaConfig(defer_dispatch=True))
-    # The probe returns a walled snapshot; the disk keeps nothing.
-    def _probe(pid, **k):
-        return rs.UsageRefresh(_snap(pid, UsageWindow("5h", 100.0, 9e18), probed_at=1000.0))
-
-    monkeypatch.setattr(rs, "refresh_usage_detailed", _probe)
-    sig = evaluate_quota_signal("p1", priority="p2", now=1000.0)
-    assert sig.state is HeadroomState.EXHAUSTED
-    assert sig.defer and sig.cutover
-    assert sig.resets_at == 9e18
-
 
 def test_usage_cache_is_machine_wide_across_repositories(monkeypatch, tmp_path) -> None:
     """Quota follows the ACCOUNT, so one observation serves every repository.

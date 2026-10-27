@@ -376,13 +376,6 @@ pr-watch uninstall	T1	pr-watch uninstall	1
 resume receipt show	T1	resume receipt show	1
 resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2
-route env	T1	route env	4
-route init	T1	route init	0
-route inventory	T1	route inventory	0
-route ls	T1	route ls	3
-route set	T1	route set	4
-route settings ls	T1	route settings ls	1
-route unset	T1	route unset	1
 scoreboard	KEEP	scoreboard	13	single-leaf group
 config plugin	T1	config plugin	0
 doctor reclaim	T1	doctor reclaim	0

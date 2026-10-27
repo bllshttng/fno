@@ -92,7 +92,6 @@ phase kill-check
 plan
 pr-watch
 resume
-route
 scoreboard
 state
 stub-manifest
