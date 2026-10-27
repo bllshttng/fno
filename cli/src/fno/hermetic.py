@@ -55,7 +55,7 @@ AMBIENT_LEAK_CANARY = "AMBIENT_LEAK_CANARY"
 def _is_ambient(name: str) -> bool:
     v = _vocab()
     passthrough = set(v.get("runner_passthrough", [])) | set(v.get("environment", []))
-    ambient = set(v.get("ambient_names", []))
+    ambient = set(v.get("ambient_names", [])) | set(v.get("identity_markers", []))
     if name in passthrough:
         return False
     if name in ambient:
@@ -81,7 +81,7 @@ def classify(name: str) -> str:
     v = _vocab()
     environment = set(v.get("environment", []))
     passthrough = set(v.get("runner_passthrough", []))
-    ambient = set(v.get("ambient_names", []))
+    ambient = set(v.get("ambient_names", [])) | set(v.get("identity_markers", []))
     if name in environment or name in passthrough:
         return "environment"
     if name in ambient or any(name.startswith(p) for p in _AMBIENT_PREFIXES):

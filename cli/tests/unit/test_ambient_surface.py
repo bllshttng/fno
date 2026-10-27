@@ -99,15 +99,55 @@ def test_classify_agrees_with_the_scrub():
     A classification that says "ambient" while neutralise keeps the value would
     make the guard decorative: green, and wrong.
     """
+    import os
     import tempfile
 
     from fno.test_env_door import apply_env
 
     sandbox = Path(tempfile.mkdtemp())
     probes = {name: "ambient-value" for name in _env_reads()}
+    # The door resolves the binary from this very dict; keep a real
+    # FNO_AGENTS_BIN pin so the scrub is exercised at all. It is
+    # environment-class, so the loop below never asserted it.
+    real_bin = os.environ.get("FNO_AGENTS_BIN")
+    if real_bin:
+        probes["FNO_AGENTS_BIN"] = real_bin
     out = apply_env("neutralise", probes, sandbox=sandbox)
     for name in probes:
         if classify(name) == "ambient":
             assert out.get(name) != "ambient-value", (
                 f"{name} classifies as ambient but survived neutralise()"
             )
+
+
+def test_a_received_env_skips_the_door_and_never_needs_the_binary(monkeypatch):
+    """The fence receipt short-circuits the door.
+
+    The smoke pytest legs delete the dev build on purpose so the parity
+    suites skip, and the runner has already neutralised in-process - so the
+    env arrives carrying FNO_TEST_HERMETIC=1. Re-applying would refuse on
+    the missing binary and take every test in the shard down with it.
+    """
+    from fno import test_env_door
+
+    env = {"FNO_TEST_HERMETIC": "1", "HOME": "/anyone", "PATH": "/bin"}
+    monkeypatch.setattr(test_env_door.shutil, "which", lambda name: None)
+    out = test_env_door.apply_env("neutralise", env, sandbox=Path("/sb"))
+    assert out == env
+
+
+def test_an_unreceived_env_still_refuses_without_the_binary(monkeypatch):
+    """Positive control for the fence: no receipt, no binary, loud refusal.
+
+    A direct pytest in the source tree carries no receipt; skipping the door
+    there would run the suite on the live operator env, the exact failure
+    mode the hermetic fence exists to prevent.
+    """
+    import pytest as _pytest
+
+    from fno import test_env_door
+
+    monkeypatch.setattr(test_env_door.shutil, "which", lambda name: None)
+    with _pytest.raises(SystemExit) as excinfo:
+        test_env_door.apply_env("neutralise", {"HOME": "/anyone"}, sandbox=Path("/sb"))
+    assert excinfo.value.code == 3
