@@ -1144,7 +1144,11 @@ fn the_pass_stops_under_its_floor_and_names_what_it_evaluated() {
         static_entries(Vec::new()),
         scope_of(&[]),
     );
-    base.seconds_left = Some(Box::new(move || budget.lock().unwrap().pop()));
+    // Drain front first: four roomy reads, then the one under the floor.
+    base.seconds_left = Some(Box::new(move || {
+        let mut left = budget.lock().unwrap();
+        (!left.is_empty()).then(|| left.remove(0))
+    }));
     let outcome = run_with(&armed(), base);
     assert_run(
         "the pass stops under its floor and names what it evaluated",

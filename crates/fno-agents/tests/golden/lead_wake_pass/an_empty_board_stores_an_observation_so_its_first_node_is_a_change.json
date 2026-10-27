@@ -51,7 +51,7 @@
      "epic-x",
      "board",
      null,
-     "added: x-1 (done/ready/p2)\nadded: x-2 (done/done/p2)"
+     "added: x-1 (done/done/p2)\nadded: x-2 (done/done/p2)"
     ]
    ],
    "events": [
@@ -68,13 +68,13 @@
     ]
    ],
    "sidecar": {
-    "answered_cursor": "2026-08-28T12:00:00+00:00",
-    "board_hash": "af0e4f9d9b3e4309ebde6af9aea8a274afa1386a60e53163ef9f8bd29237fd46",
+    "answered_cursor": "2026-08-28T12:00:00Z",
+    "board_hash": "1f6f268638ece333db4fa5ac17d0112fe5ba0e5c9a2df6e211462e38924330da",
     "board_rows": [
      [
       "x-1",
       "done",
-      "ready",
+      "done",
       "p2"
      ],
      [
