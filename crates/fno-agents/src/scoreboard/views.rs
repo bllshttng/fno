@@ -123,7 +123,7 @@ pub(crate) struct RunInputs {
 }
 
 pub(crate) fn load_run(project: Option<&str>) -> Result<RunInputs, String> {
-    let ledger_path = super::readers::ledger_path();
+    let ledger_path = crate::paths_cli::ledger_json(&std::env::current_dir().unwrap_or_default());
     let rows = match super::readers::load_ledger_rows(&ledger_path) {
         Ok(rows) => rows,
         Err(broken) => return Err(format!("BROKEN_LEDGER\u{1}{}", broken.message())),
