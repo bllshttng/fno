@@ -88,6 +88,10 @@ pub enum ViewKind {
     /// The Messages board with column 2's System or Archive tab active.
     MessagesSystem,
     MessagesArchive,
+    /// The Messages board on the You tab: the operator's typed-turn threads.
+    MessagesYou,
+    /// The board on the newest You thread's detail, pairs right and left.
+    MessagesYouThread,
     /// The backlog board full screen in list view, details pane beside it.
     BacklogList,
     /// The backlog board full screen in kanban view, details pane beside it.
@@ -167,6 +171,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "messages-thread" => Some(ViewKind::MessagesThread),
         "messages-system" => Some(ViewKind::MessagesSystem),
         "messages-archive" => Some(ViewKind::MessagesArchive),
+        "messages-you" => Some(ViewKind::MessagesYou),
+        "messages-you-thread" => Some(ViewKind::MessagesYouThread),
         "backlog-list" => Some(ViewKind::BacklogList),
         "backlog-kanban" => Some(ViewKind::BacklogKanban),
         "navigator-pr" => Some(ViewKind::NavigatorPr),
@@ -251,7 +257,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -580,6 +586,8 @@ fn live_frame(
         Some(ViewKind::MessagesThread) => Some((Col::Thread, ChatTab::Chats)),
         Some(ViewKind::MessagesSystem) => Some((Col::Chats, ChatTab::System)),
         Some(ViewKind::MessagesArchive) => Some((Col::Chats, ChatTab::Archive)),
+        Some(ViewKind::MessagesYou) => Some((Col::Chats, ChatTab::You)),
+        Some(ViewKind::MessagesYouThread) => Some((Col::Thread, ChatTab::You)),
         _ => None,
     };
     let message = message.or(messages_shot.map(|_| DEMO_MESSAGE_ID));
@@ -600,8 +608,17 @@ fn live_frame(
             .and_then(|p| p.get("threads"))
             .and_then(Value::as_array)
             .is_none_or(|t| t.is_empty());
+        // The You views refuse the same way: a gather with no `you` rows
+        // paints "(no You threads)" and proves nothing (law d-9f18c4d5).
+        let you_empty = matches!(messages_shot, Some((_, ChatTab::You)))
+            && mail
+                .as_ref()
+                .ok()
+                .and_then(|p| p.get("you"))
+                .and_then(Value::as_array)
+                .is_none_or(|t| t.is_empty());
         crate::client::messages_view::apply_gather(&mut view, gen, mail, Err("no org tree".into()));
-        if board_empty {
+        if board_empty || you_empty {
             return Err(
                 "messages board rendered empty: mail-threads returned no threads; \
 shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds one)"
@@ -611,6 +628,19 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
         if let (Some((col, tab)), Some(b)) = (messages_shot, view.messages_board.as_mut()) {
             b.col = col;
             b.col2 = tab;
+        }
+        // The You detail opens on the newest thread: one shot shows the typed
+        // bubble right and the reply left.
+        if let (Some(ViewKind::MessagesYouThread), Some(b)) = (kind, view.messages_board.as_mut()) {
+            if let Some(sid) = b.active_chat_rows().into_iter().find_map(|row| match row {
+                crate::client::messages_view::ChatRow::YouThread { session_id, .. } => {
+                    Some(session_id)
+                }
+                _ => None,
+            }) {
+                b.sel_thread = Some(format!("you:{sid}"));
+                b.cursors[2] = b.you_items(&sid).len().saturating_sub(1);
+            }
         }
     }
     // The messages seam above is the shape: flip the client state the live
@@ -1081,6 +1111,8 @@ mod tests {
             ("messages-thread", ViewKind::MessagesThread),
             ("messages-system", ViewKind::MessagesSystem),
             ("messages-archive", ViewKind::MessagesArchive),
+            ("messages-you", ViewKind::MessagesYou),
+            ("messages-you-thread", ViewKind::MessagesYouThread),
             ("backlog-list", ViewKind::BacklogList),
             ("backlog-kanban", ViewKind::BacklogKanban),
             ("navigator-pr", ViewKind::NavigatorPr),
@@ -1103,7 +1135,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
             e.contains(
-                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections"
+                "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, composer, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, backlog-list, backlog-kanban, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail or connections"
             ),
             "{e}"
         );

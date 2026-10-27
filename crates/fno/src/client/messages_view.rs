@@ -952,7 +952,7 @@ impl MessagesBoard {
     }
 
     /// The selected You thread's items, oldest first.
-    fn you_items(&self, sid: &str) -> Vec<Value> {
+    pub(crate) fn you_items(&self, sid: &str) -> Vec<Value> {
         self.projection()
             .and_then(|p| p.get("you"))
             .and_then(Value::as_array)
