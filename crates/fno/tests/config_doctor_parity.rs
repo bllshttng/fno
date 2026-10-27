@@ -1,5 +1,5 @@
 //! parity-stage: characterization
-//! parity-oracle: fno.setup.config_doctor
+//! parity-oracle: cli/src/fno/setup/config_doctor.py
 //!
 //! `fno config doctor`, frozen against goldens captured from the Python leg
 //! (cli/src/fno/setup/doctor.py and config_doctor.py, deleted in the same

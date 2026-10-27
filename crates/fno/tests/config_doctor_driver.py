@@ -211,9 +211,9 @@ def scrubbed_env(root: Path, case_env: dict[str, str]) -> dict[str, str]:
 
 def run_case(case: Case, root: Path) -> tuple[str, str, int]:
     project = FIXTURES[case.fixture](root)
-    try:
-        import fno.setup.config_doctor  # noqa: F401
-    except ImportError:
+    import fno
+
+    if not (Path(fno.__file__).parent / "setup" / "config_doctor.py").is_file():
         raise SystemExit(
             "the Python `fno config doctor` leg is gone; a golden can only be "
             "captured on the base commit that still holds it"
