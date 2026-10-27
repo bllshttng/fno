@@ -34,6 +34,7 @@ mod common;
 const NOW: i64 = 1788004800;
 const NOW_ISO: &str = "2026-08-29T12:00:00Z";
 const SESSION: &str = "11111111-2222-3333-4444-555555555555";
+const SESSION_B: &str = "66666666-7777-8888-9999-000000000000";
 const BIRTH: &str = "2026-08-28T12:00:00Z";
 const CURSOR_SEED: &str = "2026-08-29T10:00:00Z";
 const PROMPT: &str =
@@ -182,6 +183,12 @@ impl World {
 }
 
 fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
+    row_as(name, cwd, short_id, scope, SESSION)
+}
+
+/// A second row in one registry needs its own session: the store refuses two
+/// rows with one session identity.
+fn row_as(name: &str, cwd: &Path, short_id: &str, scope: &str, session: &str) -> Value {
     json!({
         "name": name,
         "status": "live",
@@ -190,7 +197,7 @@ fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
         "role_scope": scope,
         "role_level": 1,
         "created_at": "2026-08-28T12:00:00Z",
-        "harness_session_id": SESSION,
+        "harness_session_id": session,
     })
 }
 
@@ -747,7 +754,7 @@ fn a_conflicted_scope_is_skipped() {
     let world = World::new();
     let rows = world.set_registry(json!([
         row("lead-a", &world.root(), "", "epic-x"),
-        row("lead-b", &world.root(), "", "epic-x"),
+        row_as("lead-b", &world.root(), "", "epic-x", SESSION_B),
     ]));
     let rec = Rec::default();
     let outcome = run_with(
@@ -783,7 +790,7 @@ fn the_receipt_names_refusals_and_dropped_roles() {
     let world = World::new();
     let rows = world.set_registry(json!([
         row("lead-x", &world.root(), "aa11bb22", "epic-x"),
-        row("lead-y", &world.root(), "cc33dd44", "epic-y"),
+        row_as("lead-y", &world.root(), "cc33dd44", "epic-y", SESSION_B),
     ]));
     world.manifest("epic-x", "");
     let rec = Rec::default();
@@ -1175,7 +1182,7 @@ fn a_blocked_truth_read_yields_the_role_and_still_wakes_the_next() {
     let world = World::new();
     let rows = world.set_registry(json!([
         row("lead-a", &world.root(), "aa11bb22", "epic-a1"),
-        row("lead-b", &world.root(), "cc22dd33", "epic-b1"),
+        row_as("lead-b", &world.root(), "cc22dd33", "epic-b1", SESSION_B),
     ]));
     world.manifest("epic-a1", "");
     world.manifest("epic-b1", "");
@@ -1237,7 +1244,7 @@ fn a_blocked_graph_read_degrades_and_mail_still_wakes() {
     let world = World::new();
     let rows = world.set_registry(json!([
         row("lead-a", &world.root(), "aa11bb22", "epic-a1"),
-        row("lead-b", &world.root(), "cc22dd33", "epic-b1"),
+        row_as("lead-b", &world.root(), "cc22dd33", "epic-b1", SESSION_B),
     ]));
     world.manifest("epic-a1", "");
     world.manifest("epic-b1", "");
