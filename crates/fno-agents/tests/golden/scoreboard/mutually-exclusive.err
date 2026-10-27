@@ -1,4 +1,1 @@
-Usage: python -m fno.cli whoami scoreboard [OPTIONS]
-Try 'python -m fno.cli whoami scoreboard --help' for help.
-
-Error: Invalid value: --calibration and --by-skill are mutually exclusive views; pick one.
+--calibration and --by-skill are mutually exclusive views; pick one.
