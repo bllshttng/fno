@@ -20,24 +20,7 @@
       "sample_state": "insufficient_sample"
     }
   ],
-  "live": [
-    {
-      "provider": "unattributed",
-      "model": "glm-5",
-      "effort": "high",
-      "occupancy": 3,
-      "cap": null,
-      "headroom": null
-    },
-    {
-      "provider": "unattributed",
-      "model": "sonnet",
-      "effort": "medium",
-      "occupancy": 1,
-      "cap": null,
-      "headroom": null
-    }
-  ],
+  "live": [],
   "rate_limited": 1,
   "coverage_floor": 5,
   "event_coverage": {
