@@ -39,10 +39,6 @@ A	cli/src/fno/events/log.py	target-state.md	unowned	target-state.md has NO resol
 A	cli/src/fno/graph/_reconcile.py	events.jsonl	unowned	Python journal site surviving PR 1252; fix is fno.paths.project_events_json().
 A	cli/src/fno/graph/_reconcile.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/graph/node_builder.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain. The site moved here verbatim from graph/cli.py with the node builder.
-A	cli/src/fno/observer/cli.py	ledger.json	unowned	call the resolver STATE_FILES names for this file.
-A	cli/src/fno/observer/isolation.py	events.jsonl	unowned	Python journal site surviving PR 1252; fix is fno.paths.project_events_json().
-A	cli/src/fno/observer/isolation.py	ledger.json	unowned	call the resolver STATE_FILES names for this file.
-A	cli/src/fno/observer/isolation.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/phase/cli.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/pr_watch/cli.py	events.jsonl	unowned	Python journal site surviving PR 1252; fix is fno.paths.project_events_json().
 A	cli/src/fno/recovery.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
@@ -94,5 +90,9 @@ A	crates/fno-agents/src/resume_receipt/door.rs	events.jsonl	unowned	the resume r
 A	crates/fno-agents/src/target_init.rs	target-state.md	unowned	the lane-reconcile port reads the manifest at the pre-space checkout path its Python twin named (repo_root .fno join); a space-regime run no-ops the same way; drains when a legacy manifest resolver lands
 A	crates/fno-agents/src/target_orient.rs	target-state.md	unowned	the manifest read keeps the Python reader's space-first-legacy-fallback order with the legacy leg hand-built (no native target_state_path_or_legacy resolver exists); drains when that resolver lands
 A	crates/fno-agents/src/target_start.rs	target-state.md	unowned	the start port binds existing manifests with the Python reader's space-first-legacy-fallback order, legacy leg hand-built (no native target_state_path_or_legacy resolver exists); drains when that resolver lands
+A	crates/fno-agents/src/observer/isolation.rs	events.jsonl	unowned	the detective scan must name the real state files it polices; a resolver here would make the scan read the state it is scanning.
+A	crates/fno-agents/src/observer/isolation.rs	ledger.json	unowned	the detective scan must name the real state files it polices; a resolver here would make the scan read the state it is scanning.
+A	crates/fno-agents/src/observer/isolation.rs	target-state.md	unowned	the detective scan must name the real state files it polices; a resolver here would make the scan read the state it is scanning.
+A	crates/fno-agents/src/observer/mod.rs	ledger.json	unowned	read_scratch_cost reads the ISOLATED scratch ledger inside the throwaway replay worktree, not the ambient one.
 A	crates/fno-agents/src/whoami.rs	events.jsonl	unowned	the status tail reads the project journal its deleted Python twin read; no crate journal resolver exists yet; drains when one lands
 A	crates/fno-agents/src/whoami.rs	target-state.md	unowned	the manifest-identity read keeps its deleted Python twin's hand-built legacy path (no native target_state_path_or_legacy resolver exists); drains when that resolver lands

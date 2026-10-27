@@ -37,6 +37,35 @@ def _plan_key(plan_path, project=None) -> str | None:
     return f"{project or ''}::{tail}"
 
 
+def _load_ledger_rows(path):
+    """The gate's client-side ledger read, feeding the native keeper op.
+
+    Mirrors the tolerant native reader (`crates/fno-agents/src/scoreboard/
+    readers.rs load_ledger_rows`, the one owner): missing file reads empty,
+    a parse error retries once (the writer holds the flock for milliseconds),
+    rows unwrap from the `entries` key, non-object rows drop. Any failure
+    reads empty: no planned rows is the gate's nothing-to-measure."""
+    import json
+
+    for attempt in range(2):
+        try:
+            with open(path, encoding="utf-8") as f:
+                value = json.load(f)
+        except (OSError, ValueError):
+            if attempt == 0:
+                import time
+
+                time.sleep(0.1)
+                continue
+            return []
+        if isinstance(value, dict):
+            value = value.get("entries")
+        if not isinstance(value, list):
+            return []
+        return [row for row in value if isinstance(row, dict)]
+    return []
+
+
 def fidelity_refusal(
     *, unjoined_rows: list[dict], carveouts: list[dict], forbidden: bool = False
 ) -> dict:
@@ -92,7 +121,6 @@ def compute_plan_fidelity(
     from datetime import datetime
 
     from fno import paths as _paths
-    from fno.observer.fold import load_ledger_rows
     from fno.graph.store import request_scoreboard_plan_fidelity
 
     now = now or datetime.now()
@@ -104,7 +132,7 @@ def compute_plan_fidelity(
         )
 
     try:
-        rows = load_ledger_rows(_paths.ledger_json())
+        rows = _load_ledger_rows(_paths.ledger_json())
     except Exception:  # noqa: BLE001 - a missing ledger is no planned rows, not a crash
         rows = []
     graph_nodes = _load_graph_nodes()

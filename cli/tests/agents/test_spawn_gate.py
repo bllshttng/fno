@@ -84,7 +84,7 @@ def _row(name: str, *, status="live", pid=None, short_id=""):
 ALIVE = os.getpid()  # a pid that is definitely alive (this test process)
 
 
-class TestCensus:
+class TestPidLiveness:
 
     def test_pid_start_token_mismatch_is_not_our_process(self, monkeypatch):
         """A reused numeric PID must not keep an old registry row alive."""
@@ -113,76 +113,6 @@ class TestCensus:
         monkeypatch.setattr(spawn_gate, "_process_start_time", lambda *_args: None)
         assert spawn_gate._pid_alive(4242, 42_000_000, _psutil=Psutil) is None
         assert not spawn_gate._pid_alive(4242, 42_000_000, _psutil=Psutil)
-
-    def test_union_counts_and_dedups_adopted_session(self, tmp_path, monkeypatch):
-        """AC1-EDGE: 1 fno pane worker + 1 foreign roster worker + 1 adopted
-        session (roster row AND minted registry row) -> count 3."""
-        _write_roster(
-            tmp_path,
-            {
-                "aaaaaaaa": {"sessionId": "aaaaaaaa-1-2-3-4", "pid": ALIVE},
-                "bbbbbbbb": {"sessionId": "bbbbbbbb-1-2-3-4", "pid": ALIVE},
-            },
-        )
-        rows = [
-            _row("pane-worker", pid=ALIVE),  # fno-only
-            _row("adopted", pid=ALIVE, short_id="bbbbbbbb"),  # dup of roster
-        ]
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-        c = spawn_gate.census()
-        assert c.count == 3
-        assert not c.warnings
-
-    def test_spawning_outlived_by_a_live_pid_renders_quiet_with_basis(
-        self, monkeypatch
-    ):
-        """(x-d401 / x-0248) AC3-HP: a stored `spawning` token a live pid has
-        outlived does not render a bare `spawning` - the row names the
-        movement-derived state and a basis for the rewrite. The process is
-        confirmed but the transcript is unread, so the served word is
-        `quiet`, never a `live` token. AC3-EDGE: a row with no pid recorded
-        yet keeps its honest token."""
-        from datetime import datetime, timedelta, timezone
-
-        stale = datetime.now(timezone.utc) - timedelta(hours=13)
-        fresh = datetime.now(timezone.utc) - timedelta(seconds=5)
-        rows = [
-            _row("stale-spawn", status="spawning", pid=ALIVE),
-            _row("fresh-spawn", status="spawning", pid=ALIVE),
-        ]
-        rows[0].created_at = stale.strftime("%Y-%m-%dT%H:%M:%SZ")
-        rows[1].created_at = fresh.strftime("%Y-%m-%dT%H:%M:%SZ")
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-
-        by_name = {w.name: w for w in spawn_gate.census().workers}
-
-        assert by_name["stale-spawn"].status == "quiet", (
-            "a working row must not read spawning"
-        )
-        assert by_name["stale-spawn"].status_basis == "stale-spawning-live-pid"
-        assert by_name["fresh-spawn"].status == "spawning", (
-            "a live pid younger than the spawn timeout is still mid-spawn"
-        )
-        assert by_name["fresh-spawn"].status_basis is None
-
-    def test_unknown_process_incarnation_counts_conservatively(self, monkeypatch):
-        row = _row("unreadable-worker", pid=ALIVE)
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: [row])
-        monkeypatch.setattr(spawn_gate, "_pid_alive", lambda *_args: None)
-
-        result = spawn_gate.census()
-
-        assert result.count == 1
-        assert [worker.name for worker in result.workers] == ["unreadable-worker"]
-        assert any("incarnation unreadable" in warning for warning in result.warnings)
-
-    def test_malformed_roster_fails_open_with_warning(self, tmp_path, monkeypatch):
-        (tmp_path / "daemon" / "roster.json").write_text("{ not json")
-        rows = [_row("ok", pid=ALIVE)]
-        monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-        c = spawn_gate.census()
-        assert c.count == 1, "registry still counts when the roster is garbage"
-        assert any("roster unreadable" in w for w in c.warnings)
 
 
 def _stub_command(monkeypatch, answer=None, error=None):

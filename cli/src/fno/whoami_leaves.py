@@ -2,12 +2,13 @@
 
 ``fno whoami`` itself is native (the agent family's port deleted the Python
 render), but its hidden leaves still register here: ``context`` serves
-``fno.context_probe``, ``ledger`` serves ``fno.agents.history``,
-``scoreboard`` serves ``fno.scoreboard.cli``, and ``cost`` forwards to the
-native session-cost leg. Each is the same one-line re-registration the
-deleted group mounted, so the retired roots (``fno context`` -> ``whoami
-context``, ``fno cost`` -> ``whoami cost``) keep a registered destination
-and every spelling stays invocable one release out.
+``fno.context_probe``, ``ledger`` serves ``fno.agents.history``, and
+``cost`` forwards to the native session-cost leg. Each is the same one-line
+re-registration the deleted group mounted, so the retired roots (``fno
+context`` -> ``whoami context``, ``fno cost`` -> ``whoami cost``) keep a
+registered destination and every spelling stays invocable one release out.
+The ``scoreboard`` views are native (`fno whoami scoreboard`); the retired
+root spelling keeps its one-release signpost in ``cli.py``.
 """
 from __future__ import annotations
 

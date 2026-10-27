@@ -388,6 +388,8 @@ crates/fno-agents/src/delivery_eval.rs
 crates/fno-agents/src/hook/diff_budget.rs
 crates/fno-agents/src/kill_criteria.rs
 crates/fno-agents/src/merge_hold.rs
+crates/fno-agents/src/observer/fold.rs
+crates/fno-agents/src/observer/mod.rs
 crates/fno-agents/src/plan_carry.rs
 crates/fno-agents/src/scoreboard/plan_join.rs
 crates/fno-agents/src/surface_check.rs
@@ -435,6 +437,10 @@ crates/fno-agents/src/verify_advise.rs"
 # The plan-doc writer writes the status line the graph decides (stamp,
 # graduate, projection). It reads status only to keep its writes forward-only,
 # so it is exempt from both scans; readiness stays with `fno do plan rung`.
+# observer/mod.rs reads a corpus item's plan text only to score it (the
+# judge's section checks and the replay's plan input); observer/fold.rs
+# names the Python plan loader in a parity comment. Neither extracts a plan
+# status, so the shelling rule does not apply to them.
 # verify_advise.rs reads only the plan's acceptance-criteria section
 # (`read_plan_acs`) to build the verification prompt; it never extracts a
 # plan status, so the shelling rule does not apply to it.

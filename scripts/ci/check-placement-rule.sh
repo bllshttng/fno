@@ -311,7 +311,6 @@ cli/src/fno/agents/cli.py
 cli/src/fno/agents/discover.py
 cli/src/fno/agents/dispatch.py
 cli/src/fno/agents/format.py
-cli/src/fno/agents/orphans.py
 cli/src/fno/agents/harnesses/_claude_session_registry.py
 cli/src/fno/agents/harnesses/claude.py
 cli/src/fno/agents/model_routing.py
@@ -345,7 +344,7 @@ cli/src/fno/context_audit.py
 cli/src/fno/doctor.py
 cli/src/fno/graph/cli.py
 cli/src/fno/inbox/drain.py
-cli/src/fno/observer/isolation.py
+crates/fno-agents/src/observer/fold.rs
 cli/src/fno/paths.py
 cli/src/fno/scratch_cli.py
 cli/src/fno/provenance/resolver.py
@@ -356,7 +355,6 @@ cli/src/fno/review/runners/claude_runner.py
 cli/src/fno/review/scorers/__init__.py
 cli/src/fno/runtime/cli.py
 cli/src/fno/runtime/worktree.py
-cli/src/fno/observer/fold.py
 crates/fno-agents/src/scoreboard/views.rs
 cli/src/fno/setup/doctor.py
 cli/src/fno/setup/integration.py
@@ -394,6 +392,7 @@ crates/fno-agents/src/model_env_scrub.rs
 crates/fno-agents/src/plans_path.rs
 crates/fno-agents/src/plans_dirs.rs
 crates/fno-agents/src/plans_path.rs
+crates/fno-agents/src/orphans.rs
 crates/fno-agents/src/plugin_install.rs
 crates/fno/src/uninstall.rs
 crates/fno/src/cli_hooks.rs

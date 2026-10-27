@@ -743,7 +743,7 @@ fn claim_records_from_dir(dir: &Path) -> Vec<crate::claims::ClaimRecord> {
 /// The dispatcher-minted handover holder (mirrors `HANDOVER_HOLDER_PREFIX` in
 /// `fno.claims.cli`): the suffix is the launched WORKER's name, and the
 /// record's own `session_id` is the dispatcher's, not the worker's.
-const HANDOVER_HOLDER_PREFIX: &str = "spawn-handover:";
+pub(crate) const HANDOVER_HOLDER_PREFIX: &str = "spawn-handover:";
 
 /// The spawn gate's lane-reservation holder (`spawn_gate.rs` mints it
 /// `spawn-gate:<pid>:<name>`): the pid segment is the GATE process, the

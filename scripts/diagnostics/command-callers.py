@@ -131,7 +131,7 @@ CONTROLS = {"agents spawn": 100, "do": 25, "backlog next": 25}
 # would read as "no internal callers" - the exact absence-with-two-explanations
 # shape that turns a correct sweep into a wrong deletion. Each floor below is a
 # command whose argv is built as a list literal in cli/src, verified by hand:
-#   agents spawn  cli/src/fno/evals/runner.py, cli/src/fno/observer/cli.py
+#   agents spawn  cli/src/fno/evals/runner.py, crates/fno-agents/src/observer/mod.rs
 #   backlog done  cli/src/fno/graph/cli.py
 # `agents mail send` now sits behind the argument-dispatched `agents` action,
 # so the collapsed inventory deliberately credits that call to `agents`; it can

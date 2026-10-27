@@ -171,11 +171,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Golden-task efficacy evals (run / report / diff)",
         {"hidden": True},
     ),
-    "observer": (
-        "fno.observer.cli:observer_app",
-        "Skill eval over a recorded corpus (sweep / replay).",
-        {"hidden": True},
-    ),
     "pr-watch": (
         "fno.pr_watch.cli:cli",
         "PR-state watcher: auto-fire /fno:ship pr check + /fno:ship pr merged for open-PR backlog nodes",
@@ -250,7 +245,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "event": {"emit"},
     "loops": {"resume-all"},
     "mail": {"send"},
-    "observer": set(),
     "paths": set(),
     "plan": set(),
     "pr-watch": set(),

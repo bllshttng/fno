@@ -189,15 +189,21 @@ rc=$?
 cleanup "$d"
 
 # AC4-EDGE: a `#[cfg(test)]` that opens a test module is the boundary; the
-# module's fixture writers stay legal without new allow markers.
+# module's fixture writers stay legal without new allow markers, and an
+# event-named production fn just above the module never reaches into them.
 d=$(make_fixture)
 mkdir -p "$d/crates/x/src"
 cat > "$d/crates/x/src/lib.rs" <<'INNER_EOF'
+pub fn maybe_tick() {}
+
 #[cfg(test)]
 pub(crate) mod tests {
     fn fixture_write() {
         let path = std::path::PathBuf::from(".fno").join("events.jsonl");
         std::fs::write(path, b"raw\n").unwrap();
+    }
+    fn stage(path: &std::path::Path) {
+        let _f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
     }
 }
 INNER_EOF

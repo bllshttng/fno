@@ -108,6 +108,32 @@ send = "digit"
 # Codex 1.x reworded the modal ("Folder access / <path> / Trust this folder?"
 # over "› 1. Trust and continue" / "2. Back to Agent Command Center"), so the
 # question arm carries both spellings.
+# The request_user_input question dialog (plan mode). Captured live in the
+# openharness fixtures (cli/src/lib/__fixtures__/question-codex.txt): a
+# `Question N/M` block over marked numbered rows, closed by the
+# `option N/M | tab to add notes` header line and the
+# `enter to submit answer | esc to interrupt` footer. The option-marker arm
+# is the false-positive guard: a model reply that merely prints the footer
+# phrase in prose has no option header beside a marked row, so it cannot
+# fire (the same guard the approval_prompt rule draws with its approval
+# footer). A bare digit selects and commits, as in the rules above.
+[[rule]]
+id = "question_prompt"
+state = "blocked"
+priority = 984
+region = "bottom_non_empty_lines(20)"
+gate = { all = [
+  { line_regex = '^\s*\x{203a}\s*[0-9]\.\s' },
+  { contains = "enter to submit answer" },
+  { any = [
+    { regex = 'option [0-9]+/[0-9]+' },
+    { contains = "tab to add notes" },
+  ] },
+] }
+[rule.answer]
+option = '^\s*\x{203a}?\s*(?P<idx>[0-9])\.\s+(?P<label>.+?)\s*$'
+send = "digit"
+
 [[rule]]
 id = "trust_prompt"
 state = "blocked"
