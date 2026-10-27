@@ -967,6 +967,11 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
         eprintln!("fno-agents: not open: {item_id} (state {})", item.state);
         return 2;
     }
+    // The clear door refuses a copy, so an answer recorded here never lands.
+    if let Some(host) = &item.host {
+        eprintln!("fno-agents: {item_id} was asked on {host}; answer it there");
+        return 2;
+    }
     let answer = if let Some(n) = args.option {
         if n as usize > item.options.len() {
             eprintln!(

@@ -199,7 +199,7 @@ WHERE machine_id = ? AND question_id = ? AND closed_at IS NULL"
 /// peer hosts seen).
 fn pull(remote: &Remote, me: &Host) -> Result<(usize, usize, Vec<String>), String> {
     let reply = remote.execute(
-        "SELECT machine_id, question_id, host, record, closed_at, close_reason \
+        "SELECT machine_id, question_id, host, closed_at, close_reason \
 FROM fleet_question WHERE machine_id != ?",
         &[SqlValue::Text(me.machine.clone())],
     )?;
@@ -211,13 +211,15 @@ FROM fleet_question WHERE machine_id != ?",
     for row in &reply.rows {
         let text = |i: usize| row.get(i).and_then(SqlValue::text).unwrap_or_default();
         let (machine, qid, host) = (text(0), text(1), text(2));
-        let open = row.get(4).is_none_or(|v| *v == SqlValue::Null);
+        let open = row.get(3).is_none_or(|v| *v == SqlValue::Null);
         seen.insert((machine, qid));
         if !hosts.iter().any(|h| h == host) {
             hosts.push(host.to_string());
         }
         if open && !local.asked.contains_key(qid) {
-            let Ok(mut record) = serde_json::from_str::<Value>(text(3)) else {
+            // The record rides a second read, one row at a time: a full
+            // table of records in one reply crosses the primary's reply limit.
+            let Some(mut record) = fetch_record(remote, machine, qid)? else {
                 continue;
             };
             if let Some(data) = record.get_mut("data").and_then(Value::as_object_mut) {
@@ -227,7 +229,7 @@ FROM fleet_question WHERE machine_id != ?",
             crate::provider_cap::append_questions_row(&index, &record)?;
             copied += 1;
         } else if !open && local.asked.contains_key(qid) && !local.closed.contains_key(qid) {
-            let reason = format!("closed on {host}: {}", text(5));
+            let reason = format!("closed on {host}: {}", text(4));
             crate::provider_cap::append_questions_row(&index, &peer_close(qid, &reason, host))?;
             closed += 1;
         }
@@ -247,6 +249,15 @@ FROM fleet_question WHERE machine_id != ?",
     }
     hosts.sort();
     Ok((copied, closed, hosts))
+}
+
+fn fetch_record(remote: &Remote, machine: &str, qid: &str) -> Result<Option<Value>, String> {
+    let reply = remote.execute(
+        "SELECT record FROM fleet_question WHERE machine_id = ? AND question_id = ?",
+        &[SqlValue::Text(machine.into()), SqlValue::Text(qid.into())],
+    )?;
+    let text = reply.rows.first().and_then(|r| r.first()?.text());
+    Ok(text.and_then(|t| serde_json::from_str(t).ok()))
 }
 
 fn peer_close(qid: &str, reason: &str, host: &str) -> Value {
