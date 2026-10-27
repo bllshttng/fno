@@ -1347,6 +1347,21 @@ pub fn open_do_row_quality(entry: &Value) -> &'static str {
 /// Apply lazy migration defaults to graph entries (store._apply_graph_defaults)
 /// - the one migration seam every reader routes through. Mutates in place.
 pub fn apply_defaults(entries: &mut Vec<Value>, keep_malformed: bool) {
+    apply_defaults_inner(entries, keep_malformed, true);
+}
+
+/// The writer-side defaults pass: every default except the readiness
+/// overlay. The whole-graph write path reads, baselines, and publishes
+/// through it, so a publish never stores the overlay's answer for an open
+/// blocker; that stored `blocked` is the status flip the primary logs.
+pub(crate) fn apply_defaults_without_readiness_overlay(
+    entries: &mut Vec<Value>,
+    keep_malformed: bool,
+) {
+    apply_defaults_inner(entries, keep_malformed, false);
+}
+
+fn apply_defaults_inner(entries: &mut Vec<Value>, keep_malformed: bool, readiness_overlay: bool) {
     let migration = |raw: &str| -> Option<&'static str> {
         PRIORITY_MIGRATION
             .iter()
@@ -1484,7 +1499,9 @@ pub fn apply_defaults(entries: &mut Vec<Value>, keep_malformed: bool) {
         }
     }
     normalize_lock_fields(entries);
-    apply_readiness_overlay(entries);
+    if readiness_overlay {
+        apply_readiness_overlay(entries);
+    }
     compute_children(entries);
     if !keep_malformed {
         entries.retain(|e| is_dict(e));
@@ -2783,9 +2800,12 @@ pub fn locked_mutate_with_hook(
     }
 
     // Pre-image defaults for the curation snapshot, re-derived through the
-    // same pipeline (store.py's _status_normalized + _pre_curation).
+    // same pipeline (store.py's _status_normalized + _pre_curation). The
+    // overlay stays out: the baseline must describe the rows as stored, or a
+    // status the overlay alone differs on restamps touched_at and ships a
+    // change nobody asked for.
     let mut pre = raw.clone();
-    apply_defaults(&mut pre, false);
+    apply_defaults_without_readiness_overlay(&mut pre, false);
     let mut pre_normalized = pre.clone();
     recompute_statuses_with_plan_rungs(&mut pre_normalized, input.plan_rungs.as_ref());
     // The baseline is the rows as read: the db holds the last publish, so
@@ -2855,7 +2875,7 @@ pub fn locked_mutate_with_hook(
     // Status stays the row's own: the pre-image carries the recomputed
     // status, not the readiness overlay the defaults pass applies.
     let mut defaulted = entries.clone();
-    apply_defaults(&mut defaulted, true);
+    apply_defaults_without_readiness_overlay(&mut defaulted, true);
     for (e, view) in entries.iter_mut().zip(defaulted.iter_mut()) {
         let (Some(id), true) = (entry_id(e).map(str::to_string), is_dict(e)) else {
             continue;
@@ -3010,6 +3030,19 @@ pub fn read_rows(path: &Path) -> Result<Vec<Value>, StoreError> {
     read_rows_where(path, &crate::backlog::RowQuery::default())
 }
 
+/// The whole-graph write read: stored statuses only, no readiness overlay.
+/// A publish must ship the statuses it mutated, never the overlay's answer
+/// for an open blocker; two machines publishing at different blocker
+/// visibility is what flipped stored statuses back and forth (x-36f2).
+pub(crate) fn read_rows_for_write(path: &Path) -> Result<Vec<Value>, StoreError> {
+    crate::backlog::read_entries_where_defaulted_no_overlay(
+        path,
+        &crate::backlog::RowQuery::default(),
+        false,
+    )
+    .map_err(StoreError::Sqlite)
+}
+
 pub fn read_rows_where(
     path: &Path,
     query: &crate::backlog::RowQuery,
@@ -3098,9 +3131,10 @@ pub fn mutate_rows(
 ) -> Result<Option<MutateOutcome>, StoreError> {
     const ATTEMPTS: usize = 5;
     const RETRY_BACKOFF: Duration = Duration::from_millis(100);
+    let mut rebased = false;
     for attempt in 0..ATTEMPTS {
         let base = base_version(path)?;
-        let mut working = read_rows(path)?;
+        let mut working = read_rows_for_write(path)?;
         if !apply(&mut working)? {
             return Ok(None);
         }
@@ -3131,6 +3165,20 @@ pub fn mutate_rows(
             // a fresh read.
             Ok(outcome) => match crate::backlog_share::publish_after_write(path) {
                 Ok(()) => return Ok(Some(outcome)),
+                // A stale-row refusal already rebased this machine on the
+                // primary's rows: one resend on the fresh read, then the
+                // refusal goes back to the caller. Five full publish cycles
+                // per write at a seconds-long primary RTT was the refusal
+                // storm the primary stalled under.
+                Err(refusal) if crate::backlog_share::is_stale_row_refusal(&refusal) => {
+                    if rebased {
+                        return Err(StoreError::Sqlite(refusal));
+                    }
+                    rebased = true;
+                    std::thread::sleep(RETRY_BACKOFF);
+                }
+                // An unreachable primary keeps every attempt: the write stays
+                // in the outbox until the store answers again.
                 Err(_) if attempt + 1 < ATTEMPTS => std::thread::sleep(RETRY_BACKOFF),
                 Err(refusal) => return Err(StoreError::Sqlite(refusal)),
             },
@@ -3862,6 +3910,112 @@ mod tests {
             .collect();
         assert!(ids.contains(&"x-fresh".to_string()), "ids: {ids:?}");
         assert!(ids.contains(&"x-mine".to_string()), "ids: {ids:?}");
+    }
+
+    /// One machine against a live test primary whose row moves underneath
+    /// it, so every publish meets the CAS stale-row guard.
+    fn a_machine_and_a_moved_primary_row() -> (
+        crate::store_remote::test_primary::Primary,
+        tempfile::TempDir,
+        PathBuf,
+    ) {
+        let primary = crate::store_remote::test_primary::start();
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        seed_rows(
+            &graph,
+            &[json!({"id": "x-s", "title": "first", "type": "feature",
+                     "status": "idea", "priority": "p2", "domain": "code"})],
+        )
+        .unwrap();
+        crate::backlog_share::route_to_primary(Some((
+            primary.remote.clone(),
+            crate::backlog::database_path(&graph),
+        )));
+        crate::backlog_share::seed(&graph).unwrap();
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute("UPDATE nodes SET title = 'moved' WHERE id = 'x-s'", [])
+            .unwrap();
+        (primary, dir, graph)
+    }
+
+    fn set_title_second(working: &mut Vec<Value>) -> Result<bool, StoreError> {
+        for row in working.iter_mut() {
+            if row.get("id").and_then(Value::as_str) == Some("x-s") {
+                if let Some(obj) = row.as_object_mut() {
+                    obj.insert("title".into(), Value::String("second".into()));
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    #[test]
+    fn a_stale_row_refusal_is_resent_once_and_then_returned() {
+        let (primary, _dir, graph) = a_machine_and_a_moved_primary_row();
+        let apply_runs = std::cell::Cell::new(0usize);
+        let primary_rows = std::sync::Arc::clone(&primary.db);
+        let error = mutate_rows(&graph, Duration::from_secs(5), None, None, |working| {
+            let run = apply_runs.get() + 1;
+            apply_runs.set(run);
+            // The row moves again while the resend is in flight, so the
+            // second publish meets the guard too - the every-refusing case.
+            if run == 2 {
+                primary_rows
+                    .lock()
+                    .unwrap()
+                    .execute("UPDATE nodes SET title = 'moved2' WHERE id = 'x-s'", [])
+                    .unwrap();
+            }
+            set_title_second(working)
+        })
+        .unwrap_err();
+        let StoreError::Sqlite(text) = &error else {
+            panic!("the refusal surfaces as Sqlite: {error:?}")
+        };
+        assert!(
+            crate::backlog_share::is_stale_row_refusal(text),
+            "the stale-row refusal comes back: {text}"
+        );
+        assert_eq!(
+            apply_runs.get(),
+            2,
+            "one resend, not the five-attempt storm"
+        );
+        // The take-back that rode the refusal rebased this machine on the
+        // primary's row.
+        let local: String = crate::backlog::open(&graph)
+            .unwrap()
+            .query_row("SELECT title FROM nodes WHERE id = 'x-s'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(local, "moved2", "the take-back ran before the return");
+        crate::backlog_share::route_to_primary(None);
+        drop(primary);
+    }
+
+    #[test]
+    fn a_stale_row_refusal_lands_on_its_one_resend() {
+        let (primary, _dir, graph) = a_machine_and_a_moved_primary_row();
+        let apply_runs = std::cell::Cell::new(0usize);
+        let outcome = mutate_rows(&graph, Duration::from_secs(5), None, None, |working| {
+            apply_runs.set(apply_runs.get() + 1);
+            set_title_second(working)
+        })
+        .unwrap();
+        assert!(outcome.is_some(), "the resend lands");
+        assert_eq!(apply_runs.get(), 2, "two cycles, one resend");
+        let shipped: String = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT title FROM nodes WHERE id = 'x-s'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(shipped, "second", "the primary took the resent write");
+        crate::backlog_share::route_to_primary(None);
+        drop(primary);
     }
 
     #[test]
