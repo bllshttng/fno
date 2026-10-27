@@ -175,7 +175,7 @@ fn repair_against_the_running_executable_succeeds() {
             probe_exec(p, t)
         }
     });
-    assert_ne!(ino(&bin), before);
+    assert_ne!(ino(&bin), before, "the repair left the inode in place: {out:?}");
     assert!(out.instrument_error.is_some()); // test binary speaks no version --json
     assert!(!out
         .instrument_error
