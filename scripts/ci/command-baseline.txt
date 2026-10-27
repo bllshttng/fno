@@ -79,7 +79,6 @@ inbox approvals decide
 inbox approvals ls
 inbox approvals show
 inbox board
-inbox notify
 inbox operator ack
 inbox operator list
 inbox operator status
@@ -105,7 +104,6 @@ resume
 route
 scoreboard
 state
-status
 stub-manifest
 target
 test
