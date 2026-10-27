@@ -44,6 +44,25 @@ fn id_of(body: &str) -> Option<String> {
     v["id"].as_str().map(str::to_string)
 }
 
+/// Discord refuses `content` over 2,000 characters.
+const MAX_CONTENT: usize = 2000;
+
+/// A message body: the text bounded to Discord's limit with the last line
+/// (how to answer, and the id) kept whole, and mention parsing off, so a
+/// question that quotes `@everyone` never pings the channel.
+fn message(text: &str) -> Value {
+    let content = if text.chars().count() <= MAX_CONTENT {
+        text.to_string()
+    } else {
+        let (head, tail) = text.rsplit_once('\n').unwrap_or(("", text));
+        let room = MAX_CONTENT.saturating_sub(tail.chars().count() + 2);
+        let cut: String = head.chars().take(room).collect();
+        let joined = format!("{cut}…\n{tail}");
+        joined.chars().take(MAX_CONTENT).collect()
+    };
+    json!({"content": content, "allowed_mentions": {"parse": []}})
+}
+
 /// Snowflakes order by their numeric value.
 fn snowflake(id: &str) -> u64 {
     id.parse().unwrap_or(0)
@@ -52,7 +71,7 @@ fn snowflake(id: &str) -> u64 {
 impl ChatTransport for Discord<'_> {
     fn send(&mut self, text: &str, _buttons: &[(String, String)]) -> Sent {
         let path = format!("/channels/{}/messages", self.channel);
-        let sent = Sent::from_result(&self.post(&path, &json!({ "content": text })), id_of);
+        let sent = Sent::from_result(&self.post(&path, &message(text)), id_of);
         if let Sent::Posted(id) = &sent {
             if !id.is_empty() {
                 let name: String = text
@@ -77,7 +96,7 @@ impl ChatTransport for Discord<'_> {
         Sent::from_result(
             &self.post(
                 &format!("/channels/{external_ref}/messages"),
-                &json!({ "content": text }),
+                &message(text),
             ),
             id_of,
         )
@@ -195,9 +214,19 @@ mod tests {
         drop(t);
         assert_eq!(tick.closed, 1);
         assert!(http.calls[0].1.ends_with("/channels/900/messages"));
-        assert_eq!(
-            http.calls[0].2.as_deref(),
-            Some(r#"{"content":"Closed: q-9"}"#)
-        );
+        let body: serde_json::Value =
+            serde_json::from_str(http.calls[0].2.as_deref().unwrap()).unwrap();
+        assert_eq!(body["content"], "Closed: q-9");
+        assert_eq!(body["allowed_mentions"]["parse"], serde_json::json!([]));
+
+        // A question past Discord's 2,000-character limit is cut, and the
+        // answer line survives whole.
+        let long = format!("{}\nReply to this message. Id: q-9", "x".repeat(3000));
+        let content = super::message(&long)["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(content.chars().count() <= 2000);
+        assert!(content.ends_with("\nReply to this message. Id: q-9"));
     }
 }
