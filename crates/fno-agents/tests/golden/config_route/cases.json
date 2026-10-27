@@ -1,0 +1,306 @@
+{
+  "subject": "config route",
+  "cases": [
+    {
+      "label": "ls text renders the table",
+      "args": [
+        "ls"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-0.toml"
+      },
+      "exit": 0,
+      "out": "ROLE            PROVIDER/MODEL             PROTOCOL   KEY                                         ASSIGNED-BY\ncoordinate      zai/glm-5.3                anthropic  MISSING (checked ZAI_API_KEY, ~/.fno/.env)  manual only (built-in)\ntidy            zai/glm-5.3                anthropic  MISSING (checked ZAI_API_KEY, ~/.fno/.env)  manual only (built-in)\norient          zai/glm-5.3                anthropic  MISSING (checked ZAI_API_KEY, ~/.fno/.env)  manual only (built-in)\nconsolidate     zai/glm-5.3                anthropic  MISSING (checked ZAI_API_KEY, ~/.fno/.env)  manual only (built-in)\npost-merge      zai/glm-5.3                anthropic  MISSING (checked ZAI_API_KEY, ~/.fno/.env)  pr_watch post-merge dispatch (built-in)\nbuild           unconfigured               -          -                                           /target bg + fno backlog advance (unconfigured)\nimplement       never routed (hard guard)  -          -                                           protected name; delivery routes via 'build'\nreview-verdict  never routed (hard guard)  -          -                                           protected name; no dispatch surface declares it\n",
+      "err": ""
+    },
+    {
+      "label": "ls json emits the rows",
+      "args": [
+        "ls",
+        "--json"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-1.toml"
+      },
+      "exit": 0,
+      "out": "[\n  {\n    \"role\": \"coordinate\",\n    \"provider_model\": \"zai/glm-5.3\",\n    \"protocol\": \"anthropic\",\n    \"key\": \"MISSING (checked ZAI_API_KEY, ~/.fno/.env)\",\n    \"assigned_by\": \"manual only (built-in)\"\n  },\n  {\n    \"role\": \"tidy\",\n    \"provider_model\": \"zai/glm-5.3\",\n    \"protocol\": \"anthropic\",\n    \"key\": \"MISSING (checked ZAI_API_KEY, ~/.fno/.env)\",\n    \"assigned_by\": \"manual only (built-in)\"\n  },\n  {\n    \"role\": \"orient\",\n    \"provider_model\": \"zai/glm-5.3\",\n    \"protocol\": \"anthropic\",\n    \"key\": \"MISSING (checked ZAI_API_KEY, ~/.fno/.env)\",\n    \"assigned_by\": \"manual only (built-in)\"\n  },\n  {\n    \"role\": \"consolidate\",\n    \"provider_model\": \"zai/glm-5.3\",\n    \"protocol\": \"anthropic\",\n    \"key\": \"MISSING (checked ZAI_API_KEY, ~/.fno/.env)\",\n    \"assigned_by\": \"manual only (built-in)\"\n  },\n  {\n    \"role\": \"post-merge\",\n    \"provider_model\": \"zai/glm-5.3\",\n    \"protocol\": \"anthropic\",\n    \"key\": \"MISSING (checked ZAI_API_KEY, ~/.fno/.env)\",\n    \"assigned_by\": \"pr_watch post-merge dispatch (built-in)\"\n  },\n  {\n    \"role\": \"build\",\n    \"provider_model\": \"unconfigured\",\n    \"protocol\": \"-\",\n    \"key\": \"-\",\n    \"assigned_by\": \"/target bg + fno backlog advance (unconfigured)\"\n  },\n  {\n    \"role\": \"implement\",\n    \"provider_model\": \"never routed (hard guard)\",\n    \"protocol\": \"-\",\n    \"key\": \"-\",\n    \"assigned_by\": \"protected name; delivery routes via 'build'\"\n  },\n  {\n    \"role\": \"review-verdict\",\n    \"provider_model\": \"never routed (hard guard)\",\n    \"protocol\": \"-\",\n    \"key\": \"-\",\n    \"assigned_by\": \"protected name; no dispatch surface declares it\"\n  }\n]\n",
+      "err": ""
+    },
+    {
+      "label": "set comma form normalizes",
+      "args": [
+        "set",
+        "tidy",
+        "zai,glm-4.7"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-2.toml"
+      },
+      "exit": 0,
+      "out": "route set tidy = zai/glm-4.7 (global)\n",
+      "err": ""
+    },
+    {
+      "label": "set slash form writes",
+      "args": [
+        "set",
+        "build",
+        "zai/glm-5.2"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-3.toml"
+      },
+      "exit": 0,
+      "out": "route set build = zai/glm-5.2 (global)\n",
+      "err": ""
+    },
+    {
+      "label": "set protected role refuses",
+      "args": [
+        "set",
+        "implement",
+        "zai,glm-5.2"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-4.toml"
+      },
+      "exit": 2,
+      "out": "",
+      "err": "error: 'implement' is a protected role (never routable via the roles table); refusing. Config unchanged.\nhint: delivery spawns route via the 'build' lane (fno config route set build <provider/model>).\n"
+    },
+    {
+      "label": "set malformed target refuses",
+      "args": [
+        "set",
+        "build",
+        "zia-no-slash"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-5.toml"
+      },
+      "exit": 2,
+      "out": "",
+      "err": "error: provider/model must be 'provider/model' with a non-empty model token; got 'zia-no-slash'. Config unchanged.\n"
+    },
+    {
+      "label": "set unknown provider refuses",
+      "args": [
+        "set",
+        "build",
+        "zia/glm-5.2"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-6.toml"
+      },
+      "exit": 2,
+      "out": "",
+      "err": "error: unknown provider 'zia'; known: zai. Config unchanged.\n"
+    },
+    {
+      "label": "unset configured role reverts",
+      "args": [
+        "unset",
+        "tidy"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n[model_routing.roles]\nbuild = \"zai/glm-5.2\"\ntidy = \"zai/glm-4.6\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-7.toml"
+      },
+      "exit": 0,
+      "out": "not configured in global: tidy is routed by the built-in default (zai,glm-5.3); nothing to unset.\n",
+      "err": ""
+    },
+    {
+      "label": "unset default-routed no-op",
+      "args": [
+        "unset",
+        "build"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-8.toml"
+      },
+      "exit": 0,
+      "out": "not configured in global: build (no-op).\n",
+      "err": ""
+    },
+    {
+      "label": "unset unknown role no-op",
+      "args": [
+        "unset",
+        "random-role"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-9.toml"
+      },
+      "exit": 0,
+      "out": "not configured in global: random-role (no-op).\n",
+      "err": ""
+    },
+    {
+      "label": "env routed prints unset then exports",
+      "args": [
+        "env",
+        "zai/glm-5.3"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "ZAI_API_KEY": "zk-golden",
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-10.toml"
+      },
+      "exit": 0,
+      "out": "unset ANTHROPIC_API_KEY\nunset CLAUDE_CODE_OAUTH_TOKEN\nexport ANTHROPIC_AUTH_TOKEN=zk-golden\nexport ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic\nexport ANTHROPIC_DEFAULT_FABLE_MODEL=glm-5.3\nexport ANTHROPIC_DEFAULT_HAIKU_MODEL=glm-4.7\nexport ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.3\nexport ANTHROPIC_DEFAULT_SONNET_MODEL=glm-5.3\nexport ANTHROPIC_MODEL=glm-5.3\n",
+      "err": ""
+    },
+    {
+      "label": "env missing key fails closed",
+      "args": [
+        "env",
+        "zai/glm-5.3"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-11.toml"
+      },
+      "exit": 1,
+      "out": "",
+      "err": "route env: model-routing: no API key for provider 'zai' (peer 'zai'); skipping the peer; missing API key (checked ZAI_API_KEY, ~/.fno/.env)\n"
+    },
+    {
+      "label": "env role unrouted fails",
+      "args": [
+        "env",
+        "never-routed-role"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-12.toml"
+      },
+      "exit": 1,
+      "out": "",
+      "err": "route env: 'never-routed-role' is not routed (unconfigured / protected / no key)\n"
+    },
+    {
+      "label": "env malformed target refuses",
+      "args": [
+        "env",
+        "zai/"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-13.toml"
+      },
+      "exit": 2,
+      "out": "",
+      "err": "route env: malformed target 'zai/'; expected provider/model\n"
+    },
+    {
+      "label": "init appends the sample",
+      "args": [
+        "init"
+      ],
+      "config": "",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-14.toml"
+      },
+      "exit": 0,
+      "out": "routing sample appended (commented out) to <CASE-TMP>/home-14/.fno/config.toml\n",
+      "err": ""
+    },
+    {
+      "label": "init is idempotent",
+      "args": [
+        "init"
+      ],
+      "config": "",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-idem.toml"
+      },
+      "exit": 0,
+      "out": "routing sample already present in <CASE-TMP>/home-idem/.fno/config.toml; nothing to do.\n",
+      "err": ""
+    },
+    {
+      "label": "inventory without declared rows answers the note",
+      "args": [
+        "inventory"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-16.toml"
+      },
+      "exit": 0,
+      "out": "objective=cheapest-that-clears\nNAME           HARNESS  MODEL        BAND    PERCENTILE  EFFORT  WINDOW                       VERDICT\nclaude-fable   claude   fable        max                         unmeasured, default 200000   ok\nclaude-haiku   claude   haiku        low                         unmeasured, default 200000   ok\nclaude-opus    claude   opus         high                        unmeasured, default 200000   ok\nclaude-sonnet  claude   sonnet       medium                      unmeasured, default 200000   ok\ncodex-luna     codex    luna         low                         unmeasured, default 200000   ok\ncodex-sol      codex    sol          max                         unmeasured, default 200000   ok\ncodex-terra    codex    terra        medium                      unmeasured, default 200000   ok\nglm-4.7        claude   glm-4.7      low                         unmeasured, default 200000   ok\nglm-5.3[1m]    claude   glm-5.3[1m]  medium                      unmeasured, default 1000000  ok\nslots: preview (simulated; no launch)\n  think: no lanes; no inventory; harness default\n  blueprint: no lanes; no inventory; harness default\n  target: no lanes; no inventory; harness default\n  review: no lanes; no inventory; harness default\n  role: no lanes; no inventory; harness default\n",
+      "err": ""
+    },
+    {
+      "label": "inventory declares rows bands and verdicts",
+      "args": [
+        "inventory"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n[[routing.models]]\nname = \"glm-5.3\"\nharness = \"claude\"\nmodel = \"glm-5.3\"\nroute = \"zai/glm-5.3\"\nband = \"medium\"\n\n[[routing.models]]\nname = \"ghost-x\"\nharness = \"ghostharness\"\nmodel = \"g\"\nband = \"high\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-17.toml"
+      },
+      "exit": 0,
+      "out": "objective=cheapest-that-clears\nNAME           HARNESS       MODEL        BAND    PERCENTILE  EFFORT  WINDOW                       VERDICT\nclaude-fable   claude        fable        max                         unmeasured, default 200000   ok\nclaude-haiku   claude        haiku        low                         unmeasured, default 200000   ok\nclaude-opus    claude        opus         high                        unmeasured, default 200000   ok\nclaude-sonnet  claude        sonnet       medium                      unmeasured, default 200000   ok\ncodex-luna     codex         luna         low                         unmeasured, default 200000   ok\ncodex-sol      codex         sol          max                         unmeasured, default 200000   ok\ncodex-terra    codex         terra        medium                      unmeasured, default 200000   ok\nghost-x        ghostharness  g            high                        unmeasured, default 200000   not-installed\nglm-4.7        claude        glm-4.7      low                         unmeasured, default 200000   ok\nglm-5.3        claude        glm-5.3      medium                      unmeasured, default 1000000  ok\nglm-5.3[1m]    claude        glm-5.3[1m]  medium                      unmeasured, default 1000000  ok\nslots: preview (simulated; no launch)\n  think: no lanes; grid over 11 rows\n  blueprint: no lanes; grid over 11 rows\n  target: no lanes; grid over 11 rows\n  review: no lanes; grid over 11 rows\n  role: no lanes; grid over 11 rows\n",
+      "err": "refused: ghost-x: harness 'ghostharness' is not installed (known: claude, codex, gemini, agy, opencode, pi, cursor-agent, grok, zcode, footnote, muse)\n"
+    },
+    {
+      "label": "inventory json carries slots and policy",
+      "args": [
+        "inventory",
+        "--json"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n[[routing.models]]\nname = \"glm-5.3\"\nharness = \"claude\"\nmodel = \"glm-5.3\"\nroute = \"zai/glm-5.3\"\nband = \"medium\"\n\n[[routing.models]]\nname = \"ghost-x\"\nharness = \"ghostharness\"\nmodel = \"g\"\nband = \"high\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-18.toml"
+      },
+      "exit": 0,
+      "out": "{\n  \"objective\": \"cheapest-that-clears\",\n  \"prefer_harness\": \"\",\n  \"models\": [\n    {\n      \"name\": \"claude-fable\",\n      \"harness\": \"claude\",\n      \"model\": \"fable\",\n      \"model_id\": \"fable\",\n      \"route\": \"\",\n      \"band\": \"max\",\n      \"percentile\": \"\",\n      \"effort\": \"\",\n      \"window\": \"unmeasured, default 200000\",\n      \"verdict\": \"ok\"\n    },\n    {\n      \"name\": \"claude-haiku\",\n      \"harness\": \"claude\",\n      \"model\": \"haiku\",\n      \"model_id\": \"haiku\",\n      \"route\": \"\",\n      \"band\": \"low\",\n      \"percentile\": \"\",\n      \"effort\": \"\",\n      \"window\": \"unmeasured, default 200000\",\n      \"verdict\": \"ok\"\n    },\n    {\n      \"name\": \"claude-opus\",\n      \"harness\": \"claude\",\n      \"model\": \"opus\",\n      \"model_id\": \"opus\",\n      \"route\": \"\",\n      \"band\": \"high\",\n      \"percentile\": \"\",\n      \"effort\": \"\",\n      \"window\": \"unmeasured, default 200000\",\n      \"verdict\": \"ok\"\n    },\n    {\n      \"name\": \"claude-sonnet\",\n      \"harness\": \"claude\",\n      \"model\": \"sonnet\",\n      \"model_id\": \"sonnet\",\n      \"route\": \"\",\n      \"band\": \"medium\",\n      \"percentile\": \"\",\n      \"effort\": \"\",\n      \"window\": \"unmeasured, default 200000\",\n      \"verdict\": \"ok\"\n    },\n    {\n      \"name\": \"codex-luna\",\n      \"harness\": \"codex\",\n      \"model\": \"luna\",\n      \"model_id\": \"luna\",\n      \"route\": \"\",\n      \"band\": \"low\",\n      \"percentile\": \"\",\n      \"effort\": \"\",\n      \"window\": \"unmeasured, default 200000\",\n      \"verdict\": \"ok\"\n    },\n    {\n      \"name\": \"codex-sol\",\n      \"harness\": \"codex\",\n      \"model\": \"sol\",\n      \"model_id\": \"sol\",\n      \"route\": \"\",\n      \"band\": \"max\",\n      \"percentile\": \"\",\n      \"effort\": \"\",\n      \"window\": \"unmeasured, default 200000\",\n      \"verdict\": \"ok\"\n    },\n    {\n      \"name\": \"codex-terra\",\n      \"harness\": \"codex\",\n      \"model\": \"terra\",\n      \"model_id\": \"terra\",\n      \"route\": \"\",\n      \"band\": \"medium\",\n      \"percentile\": \"\",\n      \"effort\": \"\",\n      \"window\": \"unmeasured, default 200000\",\n      \"verdict\": \"ok\"\n    },\n    {\n      \"name\": \"ghost-x\",\n      \"harness\": \"ghostharness\",\n      \"model\": \"g\",\n      \"model_id\": \"g\",\n      \"route\": \"\",\n      \"band\": \"high\",\n      \"percentile\": \"\",\n      \"effort\": \"\",\n      \"window\": \"unmeasured, default 200000\",\n      \"verdict\": \"not-installed\"\n    },\n    {\n      \"name\": \"glm-4.7\",\n      \"harness\": \"claude\",\n      \"model\": \"glm-4.7\",\n      \"model_id\": \"glm-4.7\",\n      \"route\": \"\",\n      \"band\": \"low\",\n      \"percentile\": \"\",\n      \"effort\": \"\",\n      \"window\": \"unmeasured, default 200000\",\n      \"verdict\": \"ok\"\n    },\n    {\n      \"name\": \"glm-5.3\",\n      \"harness\": \"claude\",\n      \"model\": \"glm-5.3\",\n      \"model_id\": \"glm-5.3\",\n      \"route\": \"zai/glm-5.3\",\n      \"band\": \"medium\",\n      \"percentile\": \"\",\n      \"effort\": \"\",\n      \"window\": \"unmeasured, default 1000000\",\n      \"verdict\": \"ok\"\n    },\n    {\n      \"name\": \"glm-5.3[1m]\",\n      \"harness\": \"claude\",\n      \"model\": \"glm-5.3[1m]\",\n      \"model_id\": \"glm-5.3[1m]\",\n      \"route\": \"\",\n      \"band\": \"medium\",\n      \"percentile\": \"\",\n      \"effort\": \"\",\n      \"window\": \"unmeasured, default 1000000\",\n      \"verdict\": \"ok\"\n    }\n  ],\n  \"slots\": [\n    {\n      \"verb\": \"think\",\n      \"lanes\": [],\n      \"on_exhausted\": \"\",\n      \"would_take\": \"no lanes; grid over 11 rows\",\n      \"routing\": \"unarmed\",\n      \"operator_access\": \"unknown\",\n      \"fingerprint\": \"4d370f2e0e7c\"\n    },\n    {\n      \"verb\": \"blueprint\",\n      \"lanes\": [],\n      \"on_exhausted\": \"\",\n      \"would_take\": \"no lanes; grid over 11 rows\",\n      \"routing\": \"unarmed\",\n      \"operator_access\": \"unknown\",\n      \"fingerprint\": \"4d370f2e0e7c\"\n    },\n    {\n      \"verb\": \"target\",\n      \"lanes\": [],\n      \"on_exhausted\": \"\",\n      \"would_take\": \"no lanes; grid over 11 rows\",\n      \"routing\": \"unarmed\",\n      \"operator_access\": \"unknown\",\n      \"fingerprint\": \"4d370f2e0e7c\"\n    },\n    {\n      \"verb\": \"review\",\n      \"lanes\": [],\n      \"on_exhausted\": \"\",\n      \"would_take\": \"no lanes; grid over 11 rows\",\n      \"routing\": \"unarmed\",\n      \"operator_access\": \"unknown\",\n      \"fingerprint\": \"4d370f2e0e7c\"\n    },\n    {\n      \"verb\": \"role\",\n      \"lanes\": [],\n      \"on_exhausted\": \"\",\n      \"would_take\": \"no lanes; grid over 11 rows\",\n      \"routing\": \"unarmed\",\n      \"operator_access\": \"unknown\",\n      \"fingerprint\": \"4d370f2e0e7c\"\n    }\n  ],\n  \"fingerprint\": \"4d370f2e0e7c\",\n  \"policy\": {\n    \"enforce_inventory\": false,\n    \"operator_access\": \"unknown\"\n  },\n  \"drift\": []\n}\n",
+      "err": "refused: ghost-x: harness 'ghostharness' is not installed (known: claude, codex, gemini, agy, opencode, pi, cursor-agent, grok, zcode, footnote, muse)\n"
+    },
+    {
+      "label": "settings ls refuses a sub-day prune",
+      "args": [
+        "settings",
+        "ls",
+        "--prune",
+        "--age-days",
+        "0"
+      ],
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {
+        "FNO_CONFIG": "/var/folders/x5/55784lvn1bn4sh16bjgj5glm0000gn/T/tmprg3p19sg/cfg-19.toml"
+      },
+      "exit": 2,
+      "out": "",
+      "err": "--age-days 0 would prune a file a launching spawn may have just written but not yet recorded (unreferenced at age 0); the minimum is 1 day.\n"
+    },
+    {
+      "label": "settings ls folds a seeded overlay",
+      "payload": {
+        "mode": "settings"
+      },
+      "config": "",
+      "env": {},
+      "overlay": {
+        "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "tok-golden",
+        "ANTHROPIC_MODEL": "glm-5.3",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.6"
+      },
+      "exit": 0,
+      "out": "FILE         PROVIDER  MODEL  HAIKU  TIERS  STALE  AGE-D  REF\nseeded.json  -         -      -      -      -      20.0   no\n",
+      "err": ""
+    }
+  ]
+}

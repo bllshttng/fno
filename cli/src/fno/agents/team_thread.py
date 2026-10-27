@@ -36,7 +36,7 @@ def plan_thread_promotion(message: str, level: int, scope: Optional[str], succes
 
 def settle_thread_promotion(ask: dict, *, name: str, cwd: Path, session_id: str) -> None:
     """Rust's spawn-team settle op stamps, arms, journals and prints the receipt."""
-    from fno.lead.state import lead_loop_enabled
+    from fno.agents.role import lead_loop_enabled
 
     try:
         spawn_team_write("settle", **ask, name=name, cwd=str(cwd), session_id=session_id,

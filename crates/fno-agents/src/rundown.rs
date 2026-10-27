@@ -1125,7 +1125,7 @@ pub(crate) fn render(
     out
 }
 
-pub(crate) fn write_atomic(path: &PathBuf, body: &str) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
@@ -1151,7 +1151,50 @@ pub(crate) fn write_atomic(path: &PathBuf, body: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The default page: the `term.html` layout row under the configured state
+/// root, not --graph's parent (the anchor lives at <state>/db/graph.json).
+fn default_page() -> PathBuf {
+    let root = crate::backlog::settings::state_dir().unwrap_or_else(|| PathBuf::from(".fno"));
+    crate::state_layout::place(&root, "term.html")
+}
+
+/// `fno agents org ledger [--out PATH]`, riding `lead-rundown --ledger`: the
+/// team comes from `fno agents org --nodes`, so the term ledger and the team
+/// read share one gather. The daemon's team_ledger arm greps the
+/// `lead ledger: ` line ([`run_ledger`]).
+fn run_ledger_command(args: &[String]) -> i32 {
+    let out = match args {
+        [] => None,
+        [flag, path] if flag == "--out" => Some(PathBuf::from(path)),
+        _ => {
+            eprintln!("Usage: fno agents org ledger [--out PATH]");
+            return 2;
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_default();
+    // The team alarm's bounded read: one reader of the team for both.
+    let org = match crate::team_alarm::read_org_payload(&cwd) {
+        Ok(org) => org,
+        Err(e) => {
+            eprintln!("lead: {e}");
+            return 2;
+        }
+    };
+    let out_path = out.unwrap_or_else(default_page);
+    let generated = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let graph = crate::org_board::scope::graph_json_path(&cwd);
+    if let Err(e) = write_page(&org, &graph, &generated, &out_path) {
+        eprintln!("lead: {e}");
+        return 2;
+    }
+    println!("lead ledger: {}", out_path.display());
+    0
+}
+
 pub fn run_lead_ledger(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) == Some("--ledger") {
+        return run_ledger_command(&args[1..]);
+    }
     let mut org_json: Option<PathBuf> = None;
     let mut graph: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
@@ -1189,19 +1232,7 @@ pub fn run_lead_ledger(args: &[String]) -> i32 {
         eprintln!("fno-agents lead-rundown: --org-json and --graph are required");
         return 2;
     };
-    // No --out: the command resolves the lead page itself, through the
-    // `term.html` row (cache/pages/lead.html once written, a straggler at
-    // the legacy spelling until the fold). The state root is the configured
-    // ladder, not --graph's parent: the anchor lives at
-    // <state>/db/graph.json, so the parent is the db folder, not the root.
-    let out_path = match out {
-        Some(p) => p,
-        None => {
-            let root =
-                crate::backlog::settings::state_dir().unwrap_or_else(|| PathBuf::from(".fno"));
-            crate::state_layout::place(&root, "term.html")
-        }
-    };
+    let out_path = out.unwrap_or_else(default_page);
     let org_text = match read_org(&org_path, &mut std::io::stdin()) {
         Ok(t) => t,
         Err(e) => {
@@ -1209,15 +1240,26 @@ pub fn run_lead_ledger(args: &[String]) -> i32 {
             return 1;
         }
     };
-    let org: Value = match serde_json::from_str(&org_text) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("fno-agents lead-rundown: org JSON is not JSON: {e}");
-            return 1;
-        }
-    };
-    let entries: Vec<Value> = match crate::graph_store::read_rows_where(
-        &graph_path,
+    let written = serde_json::from_str::<Value>(&org_text)
+        .map_err(|e| format!("org JSON is not JSON: {e}"))
+        .and_then(|org| write_page(&org, &graph_path, &generated, &out_path));
+    if let Err(e) = written {
+        eprintln!("fno-agents lead-rundown: {e}");
+        return 1;
+    }
+    println!("rundown: {}", out_path.display());
+    0
+}
+
+/// Render the page from an org payload and write it atomically.
+fn write_page(
+    org: &Value,
+    graph_path: &Path,
+    generated: &str,
+    out_path: &Path,
+) -> Result<(), String> {
+    let entries: Vec<Value> = crate::graph_store::read_rows_where(
+        graph_path,
         &crate::backlog::RowQuery {
             fields: Some(
                 [
@@ -1241,13 +1283,8 @@ pub fn run_lead_ledger(args: &[String]) -> i32 {
             with_blockers: true,
             ..Default::default()
         },
-    ) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("fno-agents lead-rundown: graph unreadable: {e}");
-            return 1;
-        }
-    };
+    )
+    .map_err(|e| format!("graph unreadable: {e}"))?;
     let reload = reload_secs(crate::agents_config::config_lookup(
         &std::env::current_dir().unwrap_or_default(),
         &["backlog", "page_reload_s"],
@@ -1266,23 +1303,18 @@ pub fn run_lead_ledger(args: &[String]) -> i32 {
         ..Default::default()
     });
     let workers = crate::ledger_workers::read();
-    if let Err(e) = write_atomic(
-        &out_path,
+    write_atomic(
+        out_path,
         &render(
-            &org,
+            org,
             &entries,
-            &generated,
+            generated,
             reload,
             &split_read,
             Some(&board),
             &workers,
         ),
-    ) {
-        eprintln!("fno-agents lead-rundown: {e}");
-        return 1;
-    }
-    println!("rundown: {}", out_path.display());
-    0
+    )
 }
 
 #[cfg(test)]

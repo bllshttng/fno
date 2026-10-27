@@ -1,0 +1,1 @@
+register failed: this session already IS mesh worker 't-pending-worker' (FNO_AGENT_SELF); registering would mint a duplicate row for one worker - the session-start restamp keeps the existing row pointed at this session

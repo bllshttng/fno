@@ -1,0 +1,1 @@
+error: --delivery-policy accepts 'bus-only' or 'off', got 'always'

@@ -5,16 +5,6 @@ claim:
   - fno.claims.cli:cli
   - Work-claim coordination primitive
   - hidden: true
-lead:
-  - fno.lead.cli:agents_lead_app
-  - The lead session manifest and escalation controls.
-  - hidden: true
-# The canonical spelling the Rust front and every hint teach: the same app
-# under both names until the lead mount takes its one-release exit.
-org:
-  - fno.lead.cli:agents_lead_app
-  - The org chart of roles and their lifecycle.
-  - hidden: true
 mail:
   - fno.mail.cli:mail_app
   - "Durable polled mailbox: send/unread/ack/reply/drain/status (canonical spelling; root `fno mail` is the shim)."

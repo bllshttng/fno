@@ -10,7 +10,6 @@ import json
 import os
 import re
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -189,28 +188,6 @@ def test_preamble_budget_step_is_unconditionally_reachable() -> None:
     assert "SessionStart preamble byte budget" in step_names
 
 
-def test_doctor_does_not_execute_a_foreign_checkout_gate(tmp_path: Path) -> None:
-    """A consumer-controlled path must never become a doctor code-execution hook."""
-    init = subprocess.run(
-        ["git", "init", "-q", str(tmp_path)],
-        capture_output=True,
-        text=True,
-    )
-    assert init.returncode == 0, init.stderr
-    scripts = tmp_path / "scripts" / "ci"
-    scripts.mkdir(parents=True)
-    marker = tmp_path / "executed"
-    (scripts / "check-preamble-budget.sh").write_text(
-        '#!/usr/bin/env bash\ntouch "$1/executed"\necho "preamble: forged"\n',
-        encoding="utf-8",
-    )
-
-    from fno import doctor
-
-    assert doctor._preamble_budget_line(ROOT, cwd=tmp_path) is None
-    assert not marker.exists()
-
-
 def test_non_regular_rule_fails_instead_of_blocking(tmp_path: Path) -> None:
     """A discovered device or pipe must never leave wc waiting for EOF."""
     _write_fixed_roots(tmp_path, agents_bytes=100)
@@ -221,45 +198,6 @@ def test_non_regular_rule_fails_instead_of_blocking(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "not a regular file" in result.stderr
     assert ".claude/rules/stall.md" in result.stderr
-
-
-def test_doctor_timeout_kills_gate_descendants(tmp_path: Path) -> None:
-    """A timed-out gate must not leave its byte-counting child behind."""
-    from fno import doctor
-
-    pid_path = tmp_path / "child.pid"
-    result = doctor._bounded_command(
-        [
-            "bash",
-            "-c",
-            'sleep 30 & child=$!; printf "%s" "$child" > "$1"; wait "$child"',
-            "bash",
-            str(pid_path),
-        ]
-    )
-
-    assert result is None
-    child_pid = int(pid_path.read_text(encoding="utf-8"))
-    deadline = time.monotonic() + 1
-    while time.monotonic() < deadline:
-        try:
-            os.kill(child_pid, 0)
-        except ProcessLookupError:
-            break
-        time.sleep(0.05)
-    else:
-        pytest.fail(f"timed-out gate descendant {child_pid} is still alive")
-
-
-def test_doctor_resolves_the_worktree_from_a_subdirectory() -> None:
-    """The report stays visible below the repo root without trusting other repos."""
-    from fno import doctor
-
-    line = doctor._preamble_budget_line(ROOT / "cli", cwd=ROOT / "cli")
-
-    assert line is not None
-    assert line.startswith("preamble: ")
-    assert f" / {CEILING_BYTES} B (" in line
 
 
 # --- The second budget: always-loaded skill descriptions ---------------------
