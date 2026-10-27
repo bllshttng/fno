@@ -173,6 +173,15 @@ fn revert_for(
     let tree = std::env::temp_dir().join(format!("fno-main-revert-{node}"));
     let tree_s = tree.to_string_lossy().into_owned();
     run(root, "git", &["fetch", "origin", "main"])?;
+    // The red verdict is a cached read: a main that moved since may already
+    // carry the fix, and a revert on top of it would undo a green main.
+    let fetched = run(root, "git", &["rev-parse", "origin/main"])?;
+    if fetched != sha {
+        return Err(format!(
+            "main moved to {} since the red read",
+            short(&fetched)
+        ));
+    }
     let add = ["worktree", "add", "-b", &branch, &tree_s, "origin/main"];
     run(root, "git", &add)?;
     let body = format!("{why} This reverts that merge so main turns green in one CI run. The author of #{pr} re-lands it with the fix.\n\nFixes {node}");
@@ -263,14 +272,14 @@ pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
-    let flakes = crate::ci_cadence::flake_checks(&path);
-    let emitter = crate::events::EventEmitter::new(path, "daemon");
+    let emitter = crate::events::EventEmitter::new(path.clone(), "daemon");
     let mut slugs = HashSet::new();
     for root in roots {
         let root = Path::new(&root);
         // Two clones of one repo are one main.
         let slug = crate::pr_status::cache::git_slug(root).filter(|s| slugs.insert(s.clone()));
         let Some(slug) = slug else { continue };
+        let flakes = crate::ci_cadence::flake_checks(&path, root);
         if let Some((outcome, mut fields)) = check_repo(root, &slug, &rows, &flakes, now_ms) {
             fields.insert("slug".into(), json!(slug));
             fields.insert("outcome".into(), json!(outcome));

@@ -217,11 +217,16 @@ fn read_rows(path: &Path, now_ms: i64) -> Result<(Vec<Push>, Vec<Check>), String
     Ok((pushes, checks))
 }
 
-/// Check names heal's flake ledger saw fail and then pass on a rerun.
-pub(crate) fn flake_checks(path: &Path) -> HashSet<String> {
+/// Check names heal's flake ledger saw fail and then pass on a rerun, in the
+/// repo at `cwd` only: a row with no repo, or another repo's, proves nothing.
+pub(crate) fn flake_checks(path: &Path, cwd: &Path) -> HashSet<String> {
+    let Some(repo) = crate::pr_status::cache::git_slug(cwd).map(|s| s.replace('/', "--")) else {
+        return HashSet::new();
+    };
     crate::event_store::journal_text(path, &["pr_heal_flake"])
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|row| row.pointer("/data/repo").and_then(Value::as_str) == Some(repo.as_str()))
         .filter_map(|row| {
             row.pointer("/data/check")
                 .and_then(Value::as_str)
@@ -392,10 +397,10 @@ pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
     if due.is_empty() {
         return Ok(());
     }
-    let flakes = flake_checks(&path);
-    let emitter = crate::events::EventEmitter::new(path, "daemon");
+    let emitter = crate::events::EventEmitter::new(path.clone(), "daemon");
     let mut runner = crate::burn_watch::run_command;
     for (push, offset_s) in due {
+        let flakes = flake_checks(&path, Path::new(&push.cwd));
         let (outcome, mut fields) = check_one(&push, offset_s, &checks, &flakes, &mut runner);
         fields.insert("branch".into(), json!(push.branch));
         fields.insert("sha".into(), json!(push.sha));

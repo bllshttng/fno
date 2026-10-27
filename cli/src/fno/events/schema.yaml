@@ -6656,6 +6656,9 @@ event_types:
         check:
           type: string
           description: "The check name that flapped."
+        repo:
+          type: string
+          description: "The origin slug as owner--repo. Readers count a flake only in the repo that recorded it."
         node_id:
           type: string
           description: "The backlog node named on the PR branch, when one resolved."
