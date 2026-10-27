@@ -158,6 +158,10 @@ pub fn admit(params: &mut Map<String, Value>) -> Result<(), (String, i32)> {
             return Err((line, 2));
         }
     }
+    let blank = text(params, "message").is_none_or(|m| m.trim().is_empty());
+    if let Some(node) = text(params, "node").filter(|n| blank && !n.is_empty()) {
+        render_node_seed(params, &node, &harness)?;
+    }
     let promoted = params
         .get("promote")
         .and_then(Value::as_array)
@@ -219,6 +223,95 @@ pub fn admit(params: &mut Map<String, Value>) -> Result<(), (String, i32)> {
         })?;
         params.insert("no_wait".into(), Value::Bool(true));
         params.insert("wait_secs".into(), json!(secs));
+    }
+    Ok(())
+}
+
+/// `--node` with no message: the node's own seed fills the message, its brief
+/// env joins this process's env, and with no `--cwd` or `--here` the node's
+/// worktree becomes the launch dir. `cmd_spawn`'s `render_node_seed` twin.
+fn render_node_seed(
+    params: &mut Map<String, Value>,
+    node: &str,
+    harness: &str,
+) -> Result<(), (String, i32)> {
+    let row = crate::spawn_compose::graph_row_for(node)
+        .filter(|row| row.get("archived_at").is_none_or(Value::is_null));
+    let field = |key: &str| {
+        row.as_ref()
+            .and_then(|r| r.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    let id = field("id").unwrap_or_else(|| node.to_string());
+    let command = field("dispatch_command")
+        .or_else(|| field(crate::backlog::model::LEGACY_DISPATCH_COMMAND_KEY));
+    let (Some(row), Some(command)) = (row.as_ref(), command) else {
+        return Err((
+            format!(
+                "refusing node-seeded spawn: node {id} carries no dispatch_command and no message was typed; an idle worker holds a fleet slot and reads as alive. Encode one with `fno backlog update {id} dispatch_command=<command>`."
+            ),
+            2,
+        ));
+    };
+    let cfg_root = field("cwd")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        });
+    let floor = crate::agents_config::config_lookup(&cfg_root, &["dispatch", "blueprint_floor"])
+        .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
+    let lifecycle =
+        crate::backlog_ready::effective_command_with_floor(row, &floor).map_err(|e| (e, 2))?;
+    let brief = crate::backlog::autobrief::resolve_dispatch_brief(row);
+    let stage = lifecycle.0.clone().unwrap_or_else(|| command.clone());
+    let cfg = crate::backlog::dispatch_resolve::dispatch_cfg_for(None, &stage);
+    let input = crate::backlog::dispatch_resolve::DispatchInput {
+        harness: Some(harness),
+        node_id: Some(id.as_str()),
+        command_name: Some(command.as_str()),
+        lifecycle: Some(lifecycle),
+        brief: brief.text.as_deref(),
+        trigger: "autonomous".to_string(),
+        ..Default::default()
+    };
+    let resolved =
+        crate::backlog::dispatch_resolve::resolve_dispatch(&input, &cfg).map_err(|e| (e, 2))?;
+    for (key, value) in &resolved.env {
+        std::env::set_var(key, value);
+    }
+    params.insert("message".into(), Value::String(resolved.command));
+    for (key, source) in [("slug", "slug"), ("plan", "plan_path")] {
+        if let (false, Some(value)) = (params.contains_key(key), field(source)) {
+            params.insert(key.into(), Value::String(value));
+        }
+    }
+    let here = params.get("here").and_then(Value::as_bool) == Some(true);
+    let cwd_given = params
+        .get("cwd")
+        .and_then(Value::as_str)
+        .is_some_and(|c| !c.is_empty());
+    if !here && !cwd_given {
+        let recorded = field("_resolved_cwd")
+            .or_else(|| field("cwd"))
+            .map(std::path::PathBuf::from);
+        let recorded = recorded.unwrap_or_else(|| cfg_root.clone());
+        let workdir = crate::launch_workdir::ensure_node_workdir(&recorded, &id, harness).map_err(|_| {
+            (
+                format!(
+                    "fno agents spawn: worktree ensure refused or misconfigured for {id}; holding the node rather than launching on canonical main"
+                ),
+                2,
+            )
+        })?;
+        params.insert(
+            "cwd".into(),
+            Value::String(workdir.to_string_lossy().into_owned()),
+        );
     }
     Ok(())
 }

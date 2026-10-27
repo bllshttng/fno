@@ -2386,7 +2386,13 @@ fn maybe_run_spawn(
         (std::path::PathBuf::new(), false)
     } else {
         let caller = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        match fno_agents::spawn_cwd::node_cwd_or_refuse(params, &caller) {
+        // An explicit --cwd (or the node's worktree, spawn_bare's render)
+        // wins over the node row's recorded checkout, as on the daemon path.
+        let node_cwd = match params.get("cwd") {
+            Some(_) => Ok(None),
+            None => fno_agents::spawn_cwd::node_cwd_or_refuse(params, &caller),
+        };
+        match node_cwd {
             Err(msg) => {
                 eprintln!("fno-agents: refusing to dispatch: {msg}");
                 return Some(2);
