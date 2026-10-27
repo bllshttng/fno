@@ -1,15 +1,14 @@
-"""`fno doctor test rust` derives its thread cap from the fno doctor lanes reading.
+"""`fno doctor test rust` derives its thread cap from the native lanes door.
 
 Every claim here is a positive marker: the flag in the built command, the
 printed reading line. "The suite passed" proves nothing about the cap (the
 defect this cap fixes was exactly that a green run hid an 18-worker pile-up),
-so no test in this file treats a zero-exit as evidence.
+so no test in this file treats a zero-exit as evidence. The lanes reading
+itself is the native census's contract (Rust tests); these tests pin
+`_lanes_threads` and own the cap/clamp/print behavior around it.
 """
 
-from types import SimpleNamespace
-
 from fno import test_cmd
-from fno.doctor_lanes import LaneReading
 
 MARKER_LOAD = 319.21
 MARKER_CEILING = 96.0
@@ -26,28 +25,19 @@ def _fake_checkout(tmp_path, monkeypatch):
 
 
 def _capture_rust_cmds(monkeypatch, nextest=True):
-    """Fake subprocess.run, fake nextest presence; returns the cmds list.
-
-    subprocess and shutil are shared singletons, so these fakes intercept
-    every subprocess call the reading path makes too - callers below patch
-    the lane sensors themselves to keep the capture clean.
-    """
+    """Fake subprocess.run, fake nextest presence; returns the cmds list."""
     cmds: list[list[str]] = []
 
     class _Proc:
         returncode = 0
 
     def _record(cmd):
-        # Only the suite commands are recorded: config loads and root
-        # resolvers shell git on the side and were never part of this capture.
         argv = cmd.split() if isinstance(cmd, str) else list(cmd)
         if argv and argv[0] != "git":
             cmds.append(argv)
         return _Proc()
 
     class _GroupProc:
-        # The runner spawns through Popen in its own process group, so a
-        # fake here must answer wait(timeout) like a real exit.
         def __init__(self, cmd, env=None, **kw):
             _record(cmd)
 
@@ -64,11 +54,14 @@ def _capture_rust_cmds(monkeypatch, nextest=True):
     return cmds
 
 
-def _reading(lane_count, refusal=""):
-    reading = LaneReading()
-    reading.lane_count = lane_count
-    reading.refusal_reason = refusal
-    return reading
+def _pin_lanes(monkeypatch, lane_count, refusal=""):
+    """Pin the native lanes reading at the runner's edge (the one-read
+    cache is bypassed the same way the old reader tests did)."""
+    if lane_count is None:
+        note = f"reading refused ({refusal})"
+    else:
+        note = f"{lane_count} more fit (fno doctor lanes)"
+    monkeypatch.setattr(test_cmd, "_lanes_threads", lambda: (lane_count, note))
 
 
 def _reset_lanes(monkeypatch):
@@ -87,54 +80,7 @@ def test_marker_breached_ceiling_caps_threads_at_one(tmp_path, monkeypatch, caps
     _fake_checkout(tmp_path, monkeypatch)
     _reset_lanes(monkeypatch)
     cmds = _capture_rust_cmds(monkeypatch)
-
-    import fno.agents.team as team
-    import fno.agents.spawn_gate as spawn_gate
-    import fno.config as fno_config
-    import fno.doctor_footprint as footprint
-    import fno.doctor_lanes as lanes
-
-    # subprocess is a shared singleton: anything real that shells out would
-    # land in the capture. The team census is one such caller.
-    monkeypatch.setattr(team, "gather_team", lambda rows=None: {})
-    # The census now also carries the caller's own spawn-gate share
-    # (x-5283), patched here like every sensor: gate_census and
-    # load_settings both reach the repo-root resolution, and a cold cache
-    # shells git into the capture as the first rust command.
-    monkeypatch.setattr(spawn_gate, "probe_capacity", lambda *a, **k: {"verdict": "unknown"})
-    monkeypatch.setattr(
-        fno_config,
-        "load_settings",
-        lambda: SimpleNamespace(agents=SimpleNamespace(max_live=6)),
-    )
-    monkeypatch.setattr(
-        footprint,
-        "_spawn_load_snapshot",
-        lambda: SimpleNamespace(
-            load_1m=MARKER_LOAD, load_ceiling=MARKER_CEILING, spawn_load_status="exceeded"
-        ),
-    )
-    monkeypatch.setattr(
-        lanes,
-        "read_macmon",
-        lambda **kw: (
-            {
-                "cpu_usage_pct": 0.2,
-                "memory": {
-                    "ram_total": 32e9,
-                    "ram_usage": 16e9,
-                    "swap_total": 0,
-                    "swap_usage": 0,
-                },
-                "sys_power": 5.0,
-                "temp": {"cpu_temp_avg": 40.0},
-            },
-            None,
-        ),
-    )
-    monkeypatch.setattr(lanes, "read_memory_pressure", lambda **kw: (0.5, None))
-    monkeypatch.setattr(footprint, "cause_reading", lambda **_kw: (None, "test: no footprint"))
-    monkeypatch.setattr(footprint, "live_registry_rows", lambda: ([], None))
+    _pin_lanes(monkeypatch, 0)
 
     assert test_cmd._run_rust([]) == 0
 
@@ -155,10 +101,8 @@ def test_lanes_exceed_cpu_ceiling_caps_at_core_count(tmp_path, monkeypatch, caps
     _reset_lanes(monkeypatch)
     cmds = _capture_rust_cmds(monkeypatch)
     monkeypatch.setattr(test_cmd.os, "cpu_count", lambda: 12)
+    _pin_lanes(monkeypatch, 54)
 
-    import fno.doctor_lanes as lanes
-
-    monkeypatch.setattr(lanes, "read_lanes", lambda: _reading(54))
     assert test_cmd._run_rust([]) == 0
     assert cmds[0][:5] == ["cargo", "nextest", "run", "--test-threads", "12"]
     out = capsys.readouterr().out
@@ -173,10 +117,8 @@ def test_cargo_test_path_with_existing_separator_reuses_it(tmp_path, monkeypatch
     _reset_lanes(monkeypatch)
     cmds = _capture_rust_cmds(monkeypatch, nextest=False)
     monkeypatch.setattr(test_cmd.os, "cpu_count", lambda: 12)
+    _pin_lanes(monkeypatch, 3)
 
-    import fno.doctor_lanes as lanes
-
-    monkeypatch.setattr(lanes, "read_lanes", lambda: _reading(3))
     assert test_cmd._run_rust(["--manifest-path", "crates/alpha/Cargo.toml", "--", "--nocapture"]) == 0
     assert cmds[0] == [
         "cargo",
@@ -198,10 +140,8 @@ def test_refused_reading_keeps_runner_default(tmp_path, monkeypatch, capsys):
     _fake_checkout(tmp_path, monkeypatch)
     _reset_lanes(monkeypatch)
     cmds = _capture_rust_cmds(monkeypatch)
+    _pin_lanes(monkeypatch, None, refusal="cpu arm dark")
 
-    import fno.doctor_lanes as lanes
-
-    monkeypatch.setattr(lanes, "read_lanes", lambda: _reading(None, refusal="cpu arm dark"))
     assert test_cmd._run_rust([]) == 0
     assert all("--test-threads" not in cmd for cmd in cmds)
     out = capsys.readouterr().out
@@ -215,10 +155,8 @@ def test_space_separated_build_jobs_flag_is_clamped(tmp_path, monkeypatch, capsy
     _reset_lanes(monkeypatch)
     cmds = _capture_rust_cmds(monkeypatch)
     monkeypatch.setattr(test_cmd.os, "cpu_count", lambda: 12)
+    _pin_lanes(monkeypatch, 64)
 
-    import fno.doctor_lanes as lanes
-
-    monkeypatch.setattr(lanes, "read_lanes", lambda: _reading(64))
     assert test_cmd._run_rust(["-j", "32"]) == 0
     assert cmds[0][cmds[0].index("-j") + 1] == "12"
     assert "build jobs 32 capped at 12" in capsys.readouterr().out
@@ -229,10 +167,8 @@ def test_explicit_test_threads_equals_form_is_clamped(tmp_path, monkeypatch, cap
     _reset_lanes(monkeypatch)
     cmds = _capture_rust_cmds(monkeypatch)
     monkeypatch.setattr(test_cmd.os, "cpu_count", lambda: 12)
+    _pin_lanes(monkeypatch, 64)
 
-    import fno.doctor_lanes as lanes
-
-    monkeypatch.setattr(lanes, "read_lanes", lambda: _reading(64))
     assert test_cmd._run_rust(["--test-threads=54"]) == 0
     assert "--test-threads=12" in cmds[0]
     assert "explicit --test-threads 54 capped at 12" in capsys.readouterr().out
