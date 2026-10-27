@@ -48,6 +48,7 @@ READ_ALLOWLIST = (
     "crates/fno-agents/src/pr_nudge.rs",  # the merge-order hold's read-only decision join (read_store_live over the state dir)
     "crates/fno-agents/src/scratch.rs",  # the sweep's status read routes through graph_store::read_rows
     "crates/fno-agents/src/route_slot.rs",  # the routing audit's read-only decision projection
+    "crates/fno-agents/src/observer/isolation.rs",  # the replay leak scan names the real graph.json path to police it, never a read
     # Not readers: store plumbing and path builders. note_history.rs
     # defaults the journal's derived file name; note_migrate.rs help text
     # names the default store path.

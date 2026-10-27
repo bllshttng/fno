@@ -126,11 +126,11 @@ def test_send_then_unread_then_ack(runner, mailbox):
     )
     assert sent.exit_code == 0, sent.output
 
-    from fno.bus.cursor import scan_unread
+    from tests.fixtures.bus_rows import scan_unread
 
     msgs = scan_unread("web")
-    assert [m.body for m in msgs] == ["build is green"]
-    msg_id = msgs[0].id
+    assert [m.get("body", "") for m in msgs] == ["build is green"]
+    msg_id = msgs[0]["id"]
 
     acked = runner.invoke(app, ["agents", "mail", "ack", msg_id, "--name", "web"])
     assert acked.exit_code == 0, acked.output
@@ -151,23 +151,22 @@ def test_send_body_and_body_file_refused(runner, mailbox):
 
 
 def test_ack_refuses_hosted_audit_without_skipping_durable_mail(runner, mailbox):
-    from fno.bus.cursor import read_cursor, scan_unread
-    from fno.bus.log import Envelope, append
+    from tests.fixtures.bus_rows import append_row, read_cursor, scan_unread
     from fno.inbox.store import write_new_thread
 
     durable = write_new_thread(
         recipient="web", sender="etl", kind="send", body="still pending"
     )
-    append(
-        Envelope.new(
-            id="msg-hosted2",
-            from_="etl",
-            to="web",
-            kind="send",
-            body="already delivered",
-            delivery="hosted",
-            to_kind="session",
-        )
+    append_row(
+        {
+            "id": "msg-hosted2",
+            "from": "etl",
+            "to": "web",
+            "kind": "send",
+            "body": "already delivered",
+            "delivery": "hosted",
+            "to_kind": "session",
+        }
     )
 
     result = runner.invoke(
@@ -177,14 +176,14 @@ def test_ack_refuses_hosted_audit_without_skipping_durable_mail(runner, mailbox)
     assert result.exit_code == 2
     assert "already delivered (hosted)" in (result.stderr or "")
     assert read_cursor("web") is None
-    assert [m.id for m in scan_unread("web")] == [durable]
+    assert [m["id"] for m in scan_unread("web")] == [durable]
 
 
 def test_unknown_agent_heads_up_exits_16_without_writing(
     runner, mailbox, monkeypatch
 ):
     from fno.agents import discover
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
     empty = mailbox / "discovery-empty"
     empty.mkdir()
@@ -203,13 +202,13 @@ def test_unknown_agent_heads_up_exits_16_without_writing(
 
     assert result.exit_code == 16
     assert "unknown agent or live-session handle" in result.stderr
-    assert list(iter_messages()) == []
+    assert read_rows() == []
     assert list(mailbox.glob("**/*.md")) == []
 
 
 @pytest.mark.parametrize("kind", ["question"])
 def test_handle_question_and_fyi_are_refused_before_any_write(runner, mailbox, kind):
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
     result = runner.invoke(
         app,
@@ -229,7 +228,7 @@ def test_handle_question_and_fyi_are_refused_before_any_write(runner, mailbox, k
     assert f"--kind {kind} to a session handle" in result.stderr
     assert "Drop --kind to inject it live" in result.stderr
     assert "add --to-project <project>" in result.stderr
-    assert list(iter_messages()) == []
+    assert read_rows() == []
     assert list(mailbox.glob("**/*.md")) == []
 
 
@@ -384,14 +383,14 @@ def test_ac3_hp_envelope_carries_real_from_and_the_model_rides_the_bus(
     # record, never in the delivered text.
     assert body.splitlines()[0].startswith("`@abcd1234 · fmail-")
     assert 'model=' not in body
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
     row = next(
-        m for m in iter_messages()
-        if m.body.splitlines()[0].startswith("`@abcd1234 · fmail-")
+        m for m in read_rows()
+        if m.get("body", "").splitlines()[0].startswith("`@abcd1234 · fmail-")
     )
-    assert row.from_model == "claude-opus-4-8"
-    assert row.from_harness == "claude"
+    assert row.get("from_model") == "claude-opus-4-8"
+    assert row.get("from_harness") == "claude"
 
 
 # ---------------------------------------------------------------------------

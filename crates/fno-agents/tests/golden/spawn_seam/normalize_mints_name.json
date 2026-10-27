@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "spawn",
+    "--name",
+    "nimble-quartz",
+    "check the failing test"
+  ],
+  "stderr": []
+}

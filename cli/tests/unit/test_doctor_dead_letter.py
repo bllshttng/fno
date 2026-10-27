@@ -21,11 +21,12 @@ def bus(tmp_path, monkeypatch):
 
 
 def _seed(to, body, ts, *, meta=None):
-    from fno.bus.log import Envelope, append
+    from tests.fixtures.bus_rows import append_row
 
-    env = Envelope.new(from_="claude-cafe0001", to=to, kind="send", body=body, ts=ts, meta=meta)
-    append(env)
-    return env.id
+    fields = {"from": "claude-cafe0001", "to": to, "kind": "send", "body": body, "ts": ts}
+    if meta is not None:
+        fields["meta"] = meta
+    return append_row(fields)
 
 
 def _write_hooks(path, *, with_drain):
@@ -54,7 +55,7 @@ def test_doctor_dead_letter_drained_handle_not_flagged(bus):
     # A recipient that genuinely drained advances its cursor; scan_unread then
     # returns nothing, so the thread never surfaces - liveness is not the gate,
     # the drain cursor is.
-    from fno.bus.cursor import write_cursor
+    from tests.fixtures.bus_rows import write_cursor
 
     mid = _seed("claude-deadbeef", "drained", ts="2020-01-01T00:00:00Z")
     write_cursor("claude-deadbeef", mid)
@@ -64,12 +65,12 @@ def test_doctor_dead_letter_drained_handle_not_flagged(bus):
 def test_doctor_dead_letter_all_hex_project_not_flagged(bus):
     # An all-hex project name matches the bare-handle shape, so to_kind is what
     # keeps a project broadcast from being reported as mail to a dead session.
-    from fno.bus.log import Envelope, append
+    from tests.fixtures.bus_rows import append_row
 
-    append(Envelope.new(
-        from_="claude-cafe0001", to="deadbeef", kind="send", body="project note",
-        ts="2020-01-01T00:00:00Z", to_kind="project",
-    ))
+    append_row({
+        "from": "claude-cafe0001", "to": "deadbeef", "kind": "send",
+        "body": "project note", "ts": "2020-01-01T00:00:00Z", "to_kind": "project",
+    })
     assert doctor._stale_dead_letters() == []
 
 

@@ -407,7 +407,7 @@ pub enum ServerMsg {
     /// (v29) The transcript body for a [`Command::PeekAgent`], sent only
     /// to the requesting client. `seq` echoes the request's counter so the client
     /// drops a stale reply; `name` is the peeked row (for a defensive header
-    /// cross-check); `lines` is the shelled `fno agents peek` output (already
+    /// cross-check); `lines` is the shelled `fno agents session peek` output (already
     /// split into display lines), with any error/timeout text carried in-band as
     /// lines too - the overlay renders whatever comes back and never closes on a
     /// fetch error. Reliable (one small message per keystroke).

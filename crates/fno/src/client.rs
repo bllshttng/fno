@@ -1457,7 +1457,7 @@ pub(crate) struct PeekView {
     last_fetch: Instant,
     /// An auto-refresh request is in flight (armed, body not yet
     /// landed). Guards against stacking a new refresh every Layout push while a
-    /// slow `fno agents peek` is still running - without it a >3s peek read on a
+    /// slow `fno agents session peek` is still running - without it a >3s peek read on a
     /// busy row would supersede each response before it arrives and never settle.
     /// Cleared when any body lands (`apply_peek_body`).
     refresh_pending: bool,
