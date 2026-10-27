@@ -1224,6 +1224,8 @@ pub(crate) struct View {
     /// Split-CSI carry for the reply input (its own buffer, like `rename_esc`),
     /// so an arrow key mid-type never leaks a param byte into the buffer.
     peek_input_esc: Vec<u8>,
+    /// The peek paints docked under the sideline list (space's reply dock).
+    peek_docked: bool,
     /// The session-local active claude account: every mux-initiated
     /// worker spawn (prefix+g `DispatchNext`, a targeted `DispatchNode`)
     /// appends `--account <id>` while `Some`. Client-local ephemera like
@@ -1852,6 +1854,7 @@ pub(crate) mod input_field;
 mod input_folds;
 mod mail_input;
 mod overlay_keys;
+mod reply_dock;
 mod terminal_cursor;
 // The overlay key state machines live in the module; the re-import keeps
 // every existing bare-name caller (the tests' `use super::*` chain) resolving.
@@ -2122,6 +2125,7 @@ impl View {
             peek_seq: 0,
             peek_input: None,
             peek_input_esc: Vec::new(),
+            peek_docked: false,
             active_account: None,
             connections: None,
             conn_esc: Vec::new(),
@@ -5053,17 +5057,8 @@ impl View {
             let lines = peek_overlay_lines(agent, peek, reply, now_secs);
             let title = agent.map(|a| a.name.as_str()).unwrap_or("peek");
             let chrome = chrome::Chrome::new(title, Anchor::Center).footer("esc close");
-            draw_lines_overlay(
-                &mut cells,
-                rows,
-                cols,
-                overlay_origin,
-                overlay_dims,
-                &chrome,
-                &lines,
-                &self.theme,
-                None,
-            );
+            let layout = self.peek_layout(&chrome, &lines);
+            draw_overlay_layout(&mut cells, rows, cols, &layout, &self.theme);
         } else if self.backlog_board.is_some() {
             // The board's whole surface - docked column, drill-down,
             // pickers, centered or full-screen overlay - paints from its
@@ -5257,7 +5252,6 @@ impl View {
     /// tick between draw and click can move a width by a character; the hit
     /// spans are wide enough that this never unclicks the footer.
     fn peek_overlay_layout(&self, _rows: usize, peek: &PeekView) -> OverlayLayout {
-        let (origin, dims) = self.overlay_viewport();
         let drows = self.display_rows();
         let agent = drows.get(peek.cursor).and_then(|r| match r {
             DisplayRow::Agent(a) => Some(*a),
@@ -5271,7 +5265,7 @@ impl View {
         let lines = peek_overlay_lines(agent, peek, reply, now_secs);
         let title = agent.map(|a| a.name.as_str()).unwrap_or("peek");
         let chrome = chrome::Chrome::new(title, Anchor::Center).footer("esc close");
-        layout_lines_overlay(origin, dims, &chrome, &lines, None, OverlayAnchor::Center)
+        self.peek_layout(&chrome, &lines)
     }
 
     fn draw_confirm_line(
@@ -5374,7 +5368,7 @@ impl View {
             let (glyph_prefix, fg, glyph_flags) =
                 match tab_rollup_state(&self.layout.agents, s.id, t.id) {
                     Some(st) => {
-                        let style = lattice_style(st, self.theme.needs_you);
+                        let style = lattice_style(st, self.theme.needs_you, self.theme.ok);
                         (format!("{} ", style.glyph), style.fg, style.flags)
                     }
                     None => (String::new(), Color::Default, 0),
@@ -7010,11 +7004,11 @@ pub(crate) use crate::lattice::{
 };
 
 /// The lane fg for one agent row, shared by both sideline arms:
-/// the fixed cascade over the row's axes, with the lattice accent standing
-/// on Blocked (attention is never re-colored) and the lattice fg as the
-/// fallback when nothing declares the lane.
+/// the fixed cascade over the row's axes, with the lattice color standing
+/// on Blocked and DoneUnseen (attention and done are never re-colored) and
+/// the lattice fg as the fallback when nothing declares the lane.
 fn agent_lane_fg(a: &AgentRow, st: LatticeState, fallback: Color) -> Color {
-    if st == LatticeState::Blocked {
+    if matches!(st, LatticeState::Blocked | LatticeState::DoneUnseen) {
         return fallback;
     }
     sideline_color::resolve_lane_color(
@@ -9738,15 +9732,13 @@ async fn selector_keys(
             }
             b'r' => view.rename_at_cursor(cur),
             b' ' => {
-                // Open the read-only peek overlay: an agent row shows
-                // its status sentence + recent transcript from disk; a
-                // workspace row shows its tabs and members rendered
-                // locally from the layout, no wire round trip. Any other row
-                // notices why (US3). The selector stays open
-                // underneath; Esc drops back into it at the peeked row.
+                // An agent row opens the reply dock: the peek under the
+                // list, reply input focused. A workspace row shows its tabs
+                // and members rendered locally, no wire round trip. Any
+                // other row notices why. The selector stays open underneath.
                 match view.display_rows().get(cur) {
                     Some(DisplayRow::Agent(a)) => {
-                        fetch_peek(view, cur, a.name.clone(), sock_w).await?
+                        reply_dock::open(view, cur, a.name.clone(), sock_w).await?
                     }
                     Some(DisplayRow::Sel(r)) if r.tab.is_none() => {
                         view.open_squad_peek(cur, r.squad);

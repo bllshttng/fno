@@ -1,7 +1,7 @@
 //! The unified icon lattice: ONE state->style mapping every renderer
 //! (sideline rows, tab rollups, overlays) calls, so glyph, weight,
 //! and accent read as one system. Outline `○` = waiting/idle, filled `●` =
-//! active, `▲` = needs-attention (the sole accent state). Exhaustive by design:
+//! active, `▲` = needs-attention (the accent state; an unseen `✓` wears the done color). Exhaustive by design:
 //! a new variant is a compile error at every call site, never a silent glyph.
 
 use crate::proto::{cell_flags, Color};
@@ -51,13 +51,14 @@ pub(crate) struct LatticeStyle {
 /// theme it is the palette's pick - never the brand color, so waiting and
 /// selected never read alike. Only the one caller that reads `.fg` supplies
 /// it; callers that want only the glyph/flags use [`lattice_glyph`] and stay
-/// out of color.
-pub(crate) fn lattice_style(s: LatticeState, needs_you: Color) -> LatticeStyle {
+/// out of color. `ok` is the theme's done color: an unseen Done row reads
+/// green, the one other state that wears a color (the user's 2026-10-27 pick).
+pub(crate) fn lattice_style(s: LatticeState, needs_you: Color, ok: Color) -> LatticeStyle {
     let (glyph, flags, fg) = match s {
         LatticeState::Working => ('●', cell_flags::BOLD, Color::Default),
         LatticeState::Idle => ('○', 0, Color::Default),
         LatticeState::Blocked => ('▲', cell_flags::BOLD, needs_you),
-        LatticeState::DoneUnseen => ('✓', cell_flags::BOLD, Color::Default),
+        LatticeState::DoneUnseen => ('✓', cell_flags::BOLD, ok),
         LatticeState::Exited => ('✗', cell_flags::DIM, Color::Default),
         LatticeState::Unmeasured => ('?', cell_flags::DIM, Color::Default),
         LatticeState::Empty => ('∅', cell_flags::DIM, Color::Default),
@@ -69,7 +70,7 @@ pub(crate) fn lattice_style(s: LatticeState, needs_you: Color) -> LatticeStyle {
 /// read `.fg` (i.e. every caller except the one accent-colored span), so they
 /// do not have to thread a theme accent they never use.
 pub(crate) fn lattice_glyph(s: LatticeState) -> (char, u8) {
-    let st = lattice_style(s, Color::Default);
+    let st = lattice_style(s, Color::Default, Color::Default);
     (st.glyph, st.flags)
 }
 

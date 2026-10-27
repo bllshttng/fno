@@ -704,7 +704,12 @@ impl View {
                 if matches!(drow, DisplayRow::Agent(_)) && density == Density::Slim {
                     // The slim rail's agent lines wear the lattice color.
                     if let DisplayRow::Agent(a) = drow {
-                        let fg = lattice_style(agent_lattice_state(a), self.theme.needs_you).fg;
+                        let fg = lattice_style(
+                            agent_lattice_state(a),
+                            self.theme.needs_you,
+                            self.theme.ok,
+                        )
+                        .fg;
                         for cell in &mut cells[r * cols..r * cols + text_w] {
                             cell.fg = fg;
                         }
@@ -769,7 +774,7 @@ impl View {
                 // (Default) keeps the band's own explicit pair everywhere.
                 if let DisplayRow::Agent(a) = drow {
                     let lat = agent_lattice_state(a);
-                    let style = lattice_style(lat, self.theme.needs_you);
+                    let style = lattice_style(lat, self.theme.needs_you, self.theme.ok);
                     let accent = if a.pane_id == Some(self.layout.focus) && a.exited {
                         self.theme.brand
                     } else {
@@ -912,7 +917,7 @@ impl View {
             }
             DisplayRow::Agent(a) => {
                 let lat = agent_lattice_state(a);
-                let style = lattice_style(lat, self.theme.needs_you);
+                let style = lattice_style(lat, self.theme.needs_you, self.theme.ok);
                 let mut flags = style.flags;
                 if a.external && lat != LatticeState::Blocked {
                     flags |= cell_flags::DIM;
@@ -1275,7 +1280,7 @@ impl View {
             agent_lane_fg(
                 agent,
                 lattice,
-                lattice_style(lattice, self.theme.needs_you).fg,
+                lattice_style(lattice, self.theme.needs_you, self.theme.ok).fg,
             )
         };
         let spans = card_line::identity_spans(agent, text_w);
