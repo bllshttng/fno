@@ -48,11 +48,14 @@ impl View {
         let follow = lines.len().checked_sub(1);
         let mut layout =
             layout_lines_overlay(origin, dims, chrome, lines, follow, OverlayAnchor::Center);
-        // Sit on the column's floor, flush left: docked, not floating.
-        layout.origin = (
-            (origin.0 + rows).saturating_sub(layout.framed.lines.len()),
-            0,
-        );
+        // Sit on the column's floor, flush left: docked, not floating. When
+        // the row being answered sits under that seat, the dock takes the
+        // top half instead, so it never hides its own row.
+        let floor = (origin.0 + rows).saturating_sub(layout.framed.lines.len());
+        let cursor_row = self.peek.as_ref().map_or(0, |p| {
+            p.cursor.saturating_sub(self.sideline_offset()) + origin.0
+        });
+        layout.origin = (if cursor_row >= floor { origin.0 } else { floor }, 0);
         layout
     }
 }

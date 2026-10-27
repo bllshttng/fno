@@ -1,8 +1,9 @@
 //! The unified icon lattice: ONE state->style mapping every renderer
 //! (sideline rows, tab rollups, overlays) calls, so glyph, weight,
 //! and accent read as one system. Outline `○` = waiting/idle, filled `●` =
-//! active, `▲` = needs-attention (the accent state; an unseen `✓` wears the done color). Exhaustive by design:
-//! a new variant is a compile error at every call site, never a silent glyph.
+//! active, `▲` = needs-attention (the accent state; an unseen `✓` wears the
+//! done color). Exhaustive by design: a new variant is a compile error at
+//! every call site, never a silent glyph.
 
 use crate::proto::{cell_flags, Color};
 
