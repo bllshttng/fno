@@ -90,6 +90,9 @@ pub fn run_context_run(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("--probe") {
         return run_context_probe(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("--audit") {
+        return crate::context_audit::run_context_audit(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("--effective-window") {
         return run_effective_window(&args[1..]);
     }
@@ -862,31 +865,26 @@ fn build_hook_output(event: &str, contexts: &[String], messages: &[String]) -> S
     Value::Object(out).to_string()
 }
 
-/// Native rows come from the existing `fno doctor --context-audit` command so
-/// Rust and the Python audit keep one owner for host-source measurement.
+/// Native rows come from the audit op: one owner for host-source
+/// measurement, called in-process (the spawn of `fno doctor
+/// --context-audit` is gone; its wheel arm is deleted too).
 fn fetch_native_manifest(
     input: &CoreInput,
     harness: &str,
     entry_state: &str,
 ) -> Result<(Vec<Value>, Vec<String>), String> {
-    let host = input.host_dir.display().to_string();
-    let plugin = input.plugin_root.display().to_string();
-    let cmd: Vec<String> = match &input.native_cmd {
-        Some(cmd) => cmd.clone(),
-        None => vec![
-            "fno".to_string(),
-            "doctor".to_string(),
-            "--context-audit".to_string(),
-            "--source".to_string(),
-            plugin,
-            "--context-host".to_string(),
-            host.clone(),
-            "--context-harness".to_string(),
-            harness.to_string(),
-            "--context-entry".to_string(),
-            entry_state.to_string(),
-            "--json".to_string(),
-        ],
+    let Some(cmd) = &input.native_cmd else {
+        // In-process: the audit runs in this process; the shared cell
+        // extractor pulls the rows the runner reads.
+        let report = crate::context_audit::build_context_report(
+            &input.host_dir,
+            &input.plugin_root,
+            &[harness],
+            &[entry_state],
+            crate::context_audit::DEFAULT_PACKET_BUDGET_BYTES,
+            1,
+        )?;
+        return extract_cell_rows(&report, harness, entry_state);
     };
     let child = spawn_bounded(
         OsStr::new(&cmd[0]),
@@ -917,6 +915,17 @@ fn fetch_native_manifest(
     }
     let data: Value =
         serde_json::from_slice(&outcome.stdout).map_err(|e| format!("unparseable json: {e}"))?;
+    extract_cell_rows(&data, harness, entry_state)
+}
+
+/// The cell + row filter `fetch_native_manifest` shares with the in-process
+/// read: pick this run's (harness, entry_state) cell, keep only observed
+/// harness-native directive rows, surface the rest as errors.
+fn extract_cell_rows(
+    data: &Value,
+    harness: &str,
+    entry_state: &str,
+) -> Result<(Vec<Value>, Vec<String>), String> {
     let cells = data
         .get("cells")
         .and_then(Value::as_array)

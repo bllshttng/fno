@@ -7,9 +7,8 @@
 //! own classifiers earlier in `decide_role`; every other leaf
 //! (`codemap`, `evals`, `test`, ...) returns None so the argv falls
 //! through to the Python wheel byte-verbatim until its family ports.
-//! `--context-audit` also falls through: the diag family owns
-//! `fno.context_audit` (epic change 23) and `context_run.rs` still spawns
-//! the Python spelling.
+//! `--context-audit` execs `fno-agents context-run --audit`: the same
+//! in-process audit `context_run.rs` reads.
 
 mod bind_canary;
 mod bundle;
@@ -161,11 +160,42 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
         }
         // A leading flag: native unless the context-audit family rides along.
         Some(word) if word.starts_with('-') => {
-            let context = args[1..]
+            // The context audit rides context-run --audit: a pure transport
+            // like bash-census/reclaim. Combos the deleted Python arm refused
+            // (--fix, --cost-check, --codex-hooks, --codex-bind) fall through
+            // to the wheel, which rejects them with its own exit 2.
+            let context_audit = args[1..]
                 .iter()
                 .any(|a| a.to_str() == Some("--context-audit"));
-            if context {
-                return None;
+            if context_audit {
+                let forbidden = args[1..].iter().any(|a| {
+                    matches!(
+                        a.to_str(),
+                        Some("--fix")
+                            | Some("--cost-check")
+                            | Some("--codex-hooks")
+                            | Some("--codex-bind")
+                    )
+                });
+                if forbidden {
+                    return None;
+                }
+                let mut argv = vec![OsString::from("context-run"), OsString::from("--audit")];
+                for a in &args[1..] {
+                    match a.to_str() {
+                        Some("--context-audit") => {}
+                        Some(w)
+                            if w.starts_with("--source")
+                                || w.starts_with("--context-")
+                                || w.starts_with("--json")
+                                || w == "-J" =>
+                        {
+                            argv.push(a.clone())
+                        }
+                        _ => return None,
+                    }
+                }
+                return Some(Claim::AgentsExec("fno doctor --context-audit", argv));
             }
             let claimed = args[1..].iter().any(|a| match a.to_str() {
                 Some("--fix")
