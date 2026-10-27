@@ -186,14 +186,19 @@ cat > "$BIN/fno-agents" <<'EOF'
 #!/usr/bin/env bash
 # preflight invokes the native runner directly since the test-command family
 # ported (`test-run doctor smoke --changed`): route the smoke tail through the
-# uv stub so the scenario sentinel files keep working, and answer the claim
-# queue reads with silence (an absent queue reads as 0 waiters).
+# uv stub so the scenario sentinel files keep working. Every OTHER call passes
+# through to the real binary: the wait-queue scenarios assert on the real
+# `claim queue` tickets, and a stubbed silence passes the capability probe
+# while no ticket can ever land. $BIN is this test's own first PATH entry, so
+# stripping it finds the job's build; with none, the fallthrough exit 0 keeps
+# preflight's QBIN-absent degrade for a local run without a build.
 case " $* " in
   *" smoke "*)
     shift 3
     exec "$(dirname "$0")/uv" "$@" ;;
-  *" claim queue "*) exit 0 ;;
 esac
+real="$(PATH="${PATH#*:}" command -v fno-agents 2>/dev/null || true)"
+[[ -n "$real" ]] && exec "$real" "$@"
 exit 0
 EOF
 chmod +x "$BIN/fno" "$BIN/fno-agents" "$BIN/cargo" "$BIN/cargo-audit" "$BIN/rustup" "$BIN/mkdir" "$BIN/uv"
