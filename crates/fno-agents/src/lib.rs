@@ -645,6 +645,7 @@ pub mod wave;
 pub mod whoami;
 pub mod worked_nodes;
 pub mod worker_wake;
+pub mod worktree;
 pub mod worktree_reapable;
 pub mod write_queue;
 pub mod yard;

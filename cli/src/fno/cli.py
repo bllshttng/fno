@@ -145,12 +145,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     ),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
     "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
-    "worktree": ("fno.worktree_cli:app", "Worktree management", {"hidden": True}),
-    "workspace": (
-        "fno.workspace.cli:cli",
-        "Worktree lifecycle and worker registration (now `fno agents workspace`).",
-        {"hidden": True},
-    ),
     "route": (
         "fno.route_cli:route_app",
         "Provider route lanes: ls / set / unset / env (GLM build lane).",
@@ -242,7 +236,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "state": set(),
     "stub-manifest": set(),
     "target": set(),
-    "worktree": set(),
 }
 
 for _group_name, _keep in COLLAPSE_KEEP.items():

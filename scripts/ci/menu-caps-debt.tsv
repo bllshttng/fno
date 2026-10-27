@@ -2,7 +2,7 @@
 # Shrink-only: `fno doctor lint menu-caps` refuses a row above, below, or
 # inside the cap. Seed or lower a row from the guard's own output, never by hand.
 # Columns: path, ceiling, note (where the fold goes).
-agents (python compat)	99	the flat agents registrations the menu forwards to; delete them when the old spellings retire
+agents (python compat)	98	the flat agents registrations the menu forwards to; delete them when the old spellings retire
 agents mail (python compat)	17	the flat mail registrations behind mail and mail admin; goes with the compat leg
 backlog	54	retire the legacy flat spellings once their window ends; split the admin junk drawer
 config	17	nest under typed groups

@@ -18,6 +18,23 @@ from typing import Optional
 import pytest
 
 
+def _quiet_stranded_door(rows):
+    """Stand in for the fno-agents ``worktree-stranded`` door.
+
+    The sweep runs in the binary since the worktree-family port; these tests
+    exercise the Python leg around it, so the door answers the staged rows
+    and refuses every other command (which reads as an empty leg, the same
+    posture the deleted modules' stubs produced).
+    """
+
+    def _door(command, args, timeout=None):
+        if command != "worktree-stranded":
+            return ("stubbed door", None)
+        return None, {"rows": list(rows), "outcomes": []}
+
+    return _door
+
+
 @pytest.fixture(autouse=True)
 def _sandbox_bounce_receipts(tmp_path, monkeypatch):
     """Bounce receipts and pr_watch_bounce reads land in a tmp state dir,
@@ -1392,8 +1409,7 @@ class TestTickRecordsAndDeadline:
         # The stranded leg now WRITES (the branch-provenance cache); its root
         # loop must see the fixture roots, never the sidecar-derived real ones.
         monkeypatch.setattr(prcli, "_catchup_roots", lambda: list(roots))
-        monkeypatch.setattr("fno.worktree_stranded.sweep", lambda **kw: [])
-        monkeypatch.setattr("fno.worktree_stranded.apply_sweep", lambda *a, **kw: [])
+        monkeypatch.setattr("fno.rust_binary.call_binary_json", _quiet_stranded_door([]))
 
         from fno.agents import unfinished_work as uw
 
@@ -1545,7 +1561,6 @@ class TestTickRecordsAndDeadline:
         from fno.agents import watchdog
         from fno.branch_provenance_cache import read_cache
         from fno.pr_watch import cli as prcli
-        from fno.worktree_stranded import STRANDED, Row
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -1553,34 +1568,36 @@ class TestTickRecordsAndDeadline:
         monkeypatch.setenv("FNO_PR_WATCH_TICK_TIMEOUT", "600")
         monkeypatch.setattr(prcli, "_catchup_roots", lambda: [repo])
         monkeypatch.setattr(watchdog, "lane_armed", lambda s: False)
-        applied = []
-        monkeypatch.setattr(
-            "fno.worktree_stranded.apply_sweep",
-            lambda rows, *, wake: applied.append(wake) or [],
-        )
+        # The sweep runs in the binary; the leg's own contract is the door
+        # call. Report posture travels as --no-wake in the argv, and the
+        # returned rows still reach the provenance cache.
+        stranded_row = {
+            "class": "STRANDED",
+            "node": "x-beef",
+            "unpushed": 4,
+            "age": "2 hours ago",
+            "facts": {"path": "/wt/d", "branch": "feature/x-beef",
+                      "has_remote": False, "pr_number": None, "live": False},
+        }
+        door = _quiet_stranded_door([stranded_row])
+        seen = []
+
+        def _recording_door(command, args, timeout=None):
+            seen.append((command, list(args)))
+            return door(command, args, timeout=timeout)
+
+        monkeypatch.setattr("fno.rust_binary.call_binary_json", _recording_door)
         monkeypatch.setattr(prcli, "_replay_views", lambda: None)
-        monkeypatch.setattr(
-            "fno.worktree_stranded.sweep",
-            lambda **kw: [
-                Row(
-                    STRANDED,
-                    "x-beef",
-                    4,
-                    "2 hours ago",
-                    {"path": "/wt/d", "branch": "feature/x-beef",
-                     "has_remote": False, "pr_number": None, "live": False},
-                )
-            ],
-        )
 
         app = typer.Typer()
         app.command()(prcli.tick)
         result = CliRunner().invoke(app, [])
 
         assert result.exit_code == 0, (result.output, lines)
+        assert seen and seen[0][0] == "worktree-stranded"
+        assert "--no-wake" in seen[0][1], "report posture must never act"
         cached = read_cache(repo)
         assert [r["node"] for r in cached] == ["x-beef"], f"cache said: {cached}"
-        assert applied == [False], "report posture must never act"
         assert "report" in result.output
 
     def test_watchdog_tick_publishes_a_refused_recovery_once(self, monkeypatch, tmp_path):
@@ -1619,8 +1636,7 @@ class TestTickRecordsAndDeadline:
         monkeypatch.setattr(prcli, "_emit_event", lambda *a, **k: True)
         monkeypatch.setattr(prcli, "_watchdog_recovery_roots", lambda: [tmp_path])
         monkeypatch.setattr(prcli, "_catchup_roots", lambda: [tmp_path])
-        monkeypatch.setattr("fno.worktree_stranded.sweep", lambda **kw: [])
-        monkeypatch.setattr("fno.worktree_stranded.apply_sweep", lambda *a, **kw: [])
+        monkeypatch.setattr("fno.rust_binary.call_binary_json", _quiet_stranded_door([]))
 
         from fno.agents import unfinished_work as uw
 
