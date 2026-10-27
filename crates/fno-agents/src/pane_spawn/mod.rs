@@ -123,6 +123,11 @@ pub struct PaneContext {
     /// The `--route` target (`provider,model` or a declared lane name): the
     /// owning arm resolves it to the routed env the wrapper carries.
     pub route: Option<String>,
+    /// The `--role`: with no `--route`, the claude arm resolves its route.
+    pub role: Option<String>,
+    /// The resolved account overlay (`accounts::launch::pane_overlay`),
+    /// sealed. The wrapper carries it under any route.
+    pub account_env: Map<String, Value>,
 }
 
 impl PaneContext {
@@ -147,6 +152,8 @@ impl PaneContext {
             passthrough: Vec::new(),
             monitor: None,
             route: None,
+            role: None,
+            account_env: Map::new(),
         }
     }
 
@@ -218,6 +225,12 @@ impl PaneContext {
                 .get("route")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            role: opt_str("role"),
+            account_env: params
+                .get("account_env")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default(),
         })
     }
 
@@ -373,6 +386,14 @@ pub fn run_pane_spawn(home: &AgentsHome, params: &Value, name: &str, _args: &[St
             crate::provider::known_providers_csv()
         );
         return EXIT_REFUSAL;
+    }
+    // The account step, once the harness is known: the overlay rides the
+    // wrapper, because the pane shell is the mux server's child.
+    let harness = params["provider"].as_str().unwrap_or_default().to_string();
+    match crate::accounts::launch::pane_overlay(&params, &harness) {
+        Err(code) => return code,
+        Ok(None) => {}
+        Ok(Some(applied)) => params["account_env"] = Value::Object(applied.env),
     }
     let ctx = match PaneContext::from_params(&params) {
         Some(ctx) => ctx,

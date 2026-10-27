@@ -218,35 +218,23 @@ pub fn seam(
     }
 }
 
-/// The spawn arm's account step: a refusal prints its receipt and exits 2;
-/// an overlay goes into this process's env, which every harness child
-/// inherits. A claude launch scrubs the inherited auth vars first, and a
-/// moved HOME is sealed so this client's own state reads stay put. The
-/// carrier is claimed whatever the flags say, so it never reaches a child.
-/// A routed spawn is left whole to the route arm.
-pub fn seam_exit(params: &Value, provider: &str) -> Option<i32> {
-    // The stamp dies at entry, before anything: an inherited id is the
-    // PARENT's account, and every path below either re-stamps it (Apply) or
-    // hands the spawn to Python, whose cmd_spawn re-stamps after it resolves.
+/// One spawn's resolved account: the sealed overlay and the id its row
+/// stamps.
+pub struct Applied {
+    pub env: Map<String, Value>,
+    pub launch_account: String,
+}
+
+/// The account step every lane shares: the inherited stamp and the carrier
+/// are claimed whatever the flags say, so neither reaches a child that did
+/// not ask for it; a refusal prints its receipt and answers exit 2. The
+/// overlay comes back sealed, so a moved HOME cannot move this client's own
+/// state reads.
+fn resolve(params: &Value, provider: &str) -> Result<Option<Applied>, i32> {
+    // The stamp dies at entry: an inherited id is the PARENT's account.
     std::env::remove_var(crate::state::LAUNCH_ACCOUNT_ENV_KEY);
-    // The carrier is claimed before any early return, so its proven values
-    // never ride into a child that did not ask for them: a routed spawn
-    // without --dispatch-account refuses exactly as cmd_spawn would.
     let carrier = std::env::var(DISPATCH_ACCOUNT_ENV).ok();
     std::env::remove_var(DISPATCH_ACCOUNT_ENV);
-    // A route with either account flag composes in the Python CLI, which the
-    // route arm re-execs. Scrubbing here first would strip a vendor key the
-    // route reads from a scrubbed var (ANTHROPIC_AUTH_TOKEN as api_key_env).
-    if params.get("route").is_some() {
-        if carrier.is_some() {
-            eprintln!(
-                "refusing: the proven-credential carrier is set but no \
-                 --dispatch-account was given; no worker launched"
-            );
-            return Some(2);
-        }
-        return None;
-    }
     let text = |key: &str| params.get(key).and_then(Value::as_str);
     let cwd = text("cwd")
         .map(std::path::PathBuf::from)
@@ -260,33 +248,98 @@ pub fn seam_exit(params: &Value, provider: &str) -> Option<i32> {
         &cwd,
         &src,
     ) {
-        Seam::None => None,
+        Seam::None => Ok(None),
         Seam::Refuse(line) => {
             eprintln!("{line}");
-            Some(2)
+            Err(2)
         }
         Seam::Apply {
             env,
             launch_account,
             note,
         } => {
-            if provider == "claude" {
-                for var in credentials::SCRUB_AUTH_VARS {
-                    std::env::remove_var(var);
-                }
-            }
-            for (key, value) in credentials::seal(&env, &cwd) {
-                if let Some(value) = value.as_str() {
-                    std::env::set_var(key, value);
-                }
-            }
-            std::env::set_var(crate::state::LAUNCH_ACCOUNT_ENV_KEY, launch_account);
             if let Some(note) = note {
                 eprintln!("{note}");
             }
-            None
+            std::env::set_var(crate::state::LAUNCH_ACCOUNT_ENV_KEY, &launch_account);
+            Ok(Some(Applied {
+                env: credentials::seal(&env, &cwd),
+                launch_account,
+            }))
         }
     }
+}
+
+/// The receipt a routed account spawn prints: the account contributes its
+/// profile, the route owns auth and billing.
+pub fn routed_receipt(applied: &Applied, route: &Map<String, Value>, cwd: &Path) -> String {
+    let vendor = |endpoint: &str| credentials::vendor_for_endpoint(cwd, endpoint);
+    let (_, made) = credentials::compose(
+        Some(&applied.env),
+        Some(route),
+        &Map::new(),
+        Some(&applied.launch_account),
+        &vendor,
+    );
+    format!(
+        "account: {} (profile only; auth {}, bills {})",
+        applied.launch_account, made.auth, made.bills
+    )
+}
+
+/// The thread and headless lanes' account step: the overlay goes into this
+/// process's env, which every harness child inherits; a claude launch scrubs
+/// the inherited auth vars first. `route_env` is the resolved route the
+/// launch layers over this overlay; the caller resolves it first, because
+/// the scrub can remove the var a vendor key lives in.
+pub fn seam_exit(
+    params: &Value,
+    provider: &str,
+    route_env: Option<&std::collections::BTreeMap<String, String>>,
+) -> Option<i32> {
+    let applied = match resolve(params, provider) {
+        Err(code) => return Some(code),
+        Ok(None) => return None,
+        Ok(Some(applied)) => applied,
+    };
+    if provider == "claude" {
+        for var in credentials::SCRUB_AUTH_VARS {
+            std::env::remove_var(var);
+        }
+    }
+    for (key, value) in &applied.env {
+        if let Some(value) = value.as_str() {
+            std::env::set_var(key, value);
+        }
+    }
+    if let Some(route) = route_env.filter(|r| !r.is_empty()) {
+        let route: Map<String, Value> = route
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+            .collect();
+        // A self-authed route owns the credential slot: the account's own
+        // secret vars leave this env, and the launch layers the route.
+        if route.contains_key("ANTHROPIC_AUTH_TOKEN") || route.contains_key("ANTHROPIC_API_KEY") {
+            for var in credentials::SECRET_ROUTE_VARS {
+                if !route.contains_key(*var) {
+                    std::env::remove_var(var);
+                }
+            }
+        }
+        let cwd = params
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        eprintln!("{}", routed_receipt(&applied, &route, &cwd));
+    }
+    None
+}
+
+/// The pane lane's account step: the pane shell is the mux server's child,
+/// not this process's, so the overlay rides the env wrapper instead.
+pub fn pane_overlay(params: &Value, provider: &str) -> Result<Option<Applied>, i32> {
+    resolve(params, provider)
 }
 
 fn payload_cwd(payload: &Value) -> std::path::PathBuf {

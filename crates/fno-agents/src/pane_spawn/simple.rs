@@ -294,12 +294,18 @@ pub(crate) fn make_plan(arm: &SimpleArm, ctx: &PaneContext) -> Result<ArmPlan, P
     let wrapped = {
         let seed_prov = seed_provenance_env(&seed);
         let qos_argv = qos_wrap_for(ctx, argv);
+        // A --dispatch-account overlay rides the wrapper like a route does.
+        let overlay: Vec<(String, String)> = ctx
+            .account_env
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
+            .collect();
         mesh_env_wrapper(
             &ctx.worker_name,
             arm.harness,
             uuid.as_deref(),
             &seed_prov,
-            &[],
+            &overlay,
             qos_argv,
         )
     };

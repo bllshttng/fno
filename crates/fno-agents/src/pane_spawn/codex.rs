@@ -88,6 +88,17 @@ impl PaneArm for CodexArm {
     /// collision before `ensure_codex_daemon` at :3655).
     fn prepare(&self, ctx: &PaneContext) -> Result<ArmPlan, PaneRefusal> {
         refuse_without_git_grant(ctx)?;
+        // The codex pane attaches to the shared app-server, whose env is not
+        // this spawn's, so an account overlay has nowhere to ride.
+        if !ctx.account_env.is_empty() {
+            return Err(PaneRefusal {
+                line: "a codex pane runs on the shared app-server and cannot carry an \
+                       account overlay; spawn it on the thread lane (drop --as pane)"
+                    .to_string(),
+                exit_code: EXIT_REFUSAL,
+                after_pane: None,
+            });
+        }
         // Python's splice-site refusal (`mux_spawn.py:3507`) precedes the
         // daemon start (:3655): a colliding passthrough must refuse before
         // any daemon side effect, like the Python leg's ordering.
