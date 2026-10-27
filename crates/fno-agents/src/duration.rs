@@ -38,5 +38,8 @@ pub fn parse_wait_secs(raw: &str) -> Option<f64> {
     if !digits(whole) || !digits(fraction) {
         return None;
     }
-    number.parse::<f64>().ok().map(|n| n * multiplier)
+    let secs = number.parse::<f64>().ok()? * multiplier;
+    // A long digit run parses as infinity, and `Duration::from_secs_f64`
+    // panics past `u64::MAX` seconds: refuse it as a bad duration.
+    (secs.is_finite() && secs < 1e12).then_some(secs)
 }

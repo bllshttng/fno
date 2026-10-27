@@ -558,7 +558,7 @@ pub fn native_lane(params: &Value, name: &str, route: Option<&Route>, cwd: &Path
         "account_env": {},
         "sandbox": params.get("sandbox").cloned().unwrap_or(Value::Null),
         "model": route.model,
-        "effort": "",
+        "effort": route.effort.as_deref().unwrap_or(""),
         "permission_mode": permission,
         "cwd": cwd.to_string_lossy(),
         "provider": route.provider,
@@ -646,6 +646,15 @@ mod tests {
         admit(&mut p).unwrap();
         assert_eq!(p["no_wait"], true);
         assert_eq!(p["wait_secs"], 90.0);
+        let mut p = params(&[
+            ("provider", json!("claude")),
+            ("substrate", json!("headless")),
+            ("wait", json!("9".repeat(400))),
+        ]);
+        assert!(admit(&mut p)
+            .unwrap_err()
+            .0
+            .starts_with("error: --wait wants"));
         let mut p = params(&[
             ("provider", json!("claude")),
             ("substrate", json!("headless")),
