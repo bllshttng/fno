@@ -1435,17 +1435,18 @@ fn prune(remote: &Remote, cutoff_ms: i64, rows: i64) -> Result<u64, String> {
         .affected;
     // The writer stamp rides the batch's lifetime: the stamp row goes when
     // the change-log row goes. A primary from before the table has none, so
-    // its absence prunes nothing instead of failing the run.
-    let writers = match remote.execute(
+    // its absence prunes nothing instead of failing the run. The count
+    // answers the change log; the stamps ride along unsung.
+    match remote.execute(
         "DELETE FROM backlog_writers WHERE at < ?1
          AND batch NOT IN (SELECT batch FROM backlog_changes)",
         &[SqlValue::Integer(cutoff_ms)],
     ) {
-        Ok(reply) => reply.affected,
-        Err(error) if error.contains("no such table: backlog_writers") => 0,
+        Ok(_) => {}
+        Err(error) if error.contains("no such table: backlog_writers") => {}
         Err(error) => return Err(error),
-    };
-    Ok(changes + writers)
+    }
+    Ok(changes)
 }
 
 /// Apply the change log past `cursor`, one page per local transaction. Each
@@ -2760,8 +2761,11 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
+        // The overlay's answer as a STATUS is the defect signature. The rows
+        // legitimately carry a `blocked_by` column and list, so a bare
+        // substring would false-positive on those.
         assert!(
-            !ops.contains("blocked"),
+            !ops.contains(r#"value":"blocked""#) && !ops.contains(r#"\"status\":\"blocked\""#),
             "the shipped batch names no overlay answer: {ops}"
         );
         let changes: Vec<Value> = serde_json::from_str(&ops).unwrap();
@@ -2819,18 +2823,21 @@ mod tests {
         );
         // A stamp lives exactly as long as its batch: an aged batch and its
         // stamp prune together, and the fresh batch's change-log row is the
-        // newest, so its stamp survives the run.
+        // newest, so its stamp survives the run. The fixture batch lands
+        // below the live minimum, so the newest-row guard keeps the real
+        // batch and the cursor gate still reaches the old one.
         let connection = primary.db.lock().unwrap();
         connection
             .execute(
-                "INSERT INTO backlog_changes (seq, origin, batch, at, ops) VALUES
-                 (1, 'o', 'old', 500, '[]')",
+                "INSERT INTO backlog_changes (seq, origin, batch, at, ops)
+                 SELECT MIN(seq) - 1, 'o', 'old', 500, '[]' FROM backlog_changes",
                 [],
             )
             .unwrap();
         connection
             .execute(
-                "INSERT INTO backlog_cursors (origin, seq, at) VALUES ('o', 1, 60000)",
+                "INSERT INTO backlog_cursors (origin, seq, at)
+                 VALUES ('o', (SELECT MIN(seq) FROM backlog_changes), 60000)",
                 [],
             )
             .unwrap();
@@ -2887,8 +2894,15 @@ mod tests {
 
     #[test]
     fn the_probe_reads_the_recent_average_batch_size() {
-        // LENGTH counts the ops string: 3, 7 and 5 bytes average to 5.
+        // LENGTH counts the ops string: 3, 7 and 5 bytes average to 5. The
+        // fresh test primary holds no tables until the share DDL runs.
         let primary = test_primary::start();
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch(PRIMARY_DDL)
+            .unwrap();
         primary
             .db
             .lock()
