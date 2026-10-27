@@ -656,6 +656,13 @@ def _is_bounded_codex_code_spawn(args: Sequence[str]) -> bool:
         longs=("--yolo", "--dangerously-bypass-approvals-and-sandbox"),
     ):
         return False
+    # A promoted spawn (a --promote scope, or a complete role pair) launches
+    # full access, so the bounded preflight's git-grant and sandbox-probe
+    # refusals answer a posture this spawn will not run under.
+    if _has_flag(args, longs=("--promote",)) or (
+        _spawn_flag_value(args, "--role-level") and _spawn_flag_value(args, "--role-scope")
+    ):
+        return False
     headless_spawn = _has_flag(args, longs=("--once",)) or (
         (_spawn_flag_value(args, "--substrate") or "").strip().lower() == "headless"
     )

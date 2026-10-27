@@ -2868,7 +2868,7 @@ mod tests {
     /// detail and the wire field is what the app-server reads.
     #[test]
     fn permission_mode_yolo_reaches_a_full_access_frame() {
-        let yolo = resolve_thread_posture(None, Some("yolo")).expect("yolo maps");
+        let yolo = resolve_thread_posture(None, Some("yolo"), None).expect("yolo maps");
         let frame: Value = serde_json::from_str(&thread_start_request_with_options(
             1,
             std::path::Path::new("/tmp/w"),
@@ -2882,8 +2882,8 @@ mod tests {
         assert_eq!(frame["params"]["approvalPolicy"], "never");
 
         // The explicit pair form resolves off its halves, not its name.
-        let paired =
-            resolve_thread_posture(None, Some("danger-full-access:never")).expect("pair maps");
+        let paired = resolve_thread_posture(None, Some("danger-full-access:never"), None)
+            .expect("pair maps");
         let frame: Value = serde_json::from_str(&thread_start_request_with_options(
             1,
             std::path::Path::new("/tmp/w"),

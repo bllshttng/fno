@@ -67,7 +67,7 @@ context
 cost
 delivery evaluate
 do
-doctor !--context-audit !--context-budget !--context-entry !--context-harness !--context-host
+doctor
 done
 evals
 event

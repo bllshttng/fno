@@ -1,0 +1,4 @@
+fno doctor bundle check: needs the footnote plugin (skill sources), which a bare `pip install fno` does not ship - there is no skills/ tree to bundle.
+Install the plugin and run from its checkout:
+  clone the footnote repo, then run `claude --plugin-dir /path/to/footnote`
+Or set FNO_REPO_ROOT to an existing plugin checkout. (resolved, not on disk: <CASE>/scripts/lint/check-skill-bundles-fresh.sh)

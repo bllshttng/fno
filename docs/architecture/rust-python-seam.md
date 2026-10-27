@@ -104,6 +104,11 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `yard_overlay.rs:50` | infrastructure | the delegation body line, one resolver per crate enforced here |
 | `yard_overlay.rs:57` | conforming | yard fold read through the command owner, fail-open |
 | `spawn_gate_lanes.rs:123` | conforming | pane listing fallback for the same probe, the pane owner's authoritative enumeration |
+| `doctor/report/collectors.rs deployed_config_keys` | conforming | installed-wheel config keys read through `fno-py`, the wheel's own interpreter; the wheel owns the fact and no native import exists |
+| `doctor/report/collectors.rs installed_pkg_dir` | conforming | installed package dir resolved by the interpreter that owns it, so source-vs-deployed comparison never guesses a site-packages layout |
+| `doctor/report/ops.rs run_session_cost` | conforming | session cost computed by the cost module's own `python3 -m` entry point; the billing arithmetic stays single-implementation in Python |
+
+The last three rows are the interpreter direction, new with the doctor family port. They exec `fno-py` or `python3`, never the literal porcelain, so the lint above is silent on them and these rows are the record. Each carries the whole fact set in one spawn: one answer, parsed, no decision split across the boundary. The hook probe's interpreter list in `doctor/report/hooks_probe.rs` launches plugin hook scripts, not facts, so it is no crossing.
 
 ## The refusal of consumer-driven scoping
 
