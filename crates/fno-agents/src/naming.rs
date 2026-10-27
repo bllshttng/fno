@@ -683,24 +683,14 @@ fn node_slug(token: &str, cwd: &std::path::Path) -> Option<String> {
 /// node from a `/target` seed, and the seed's command fills `{skill}`.
 /// Prints the name; exit 3 when a template token has no fact.
 fn run_worker_mint(args: &[String]) -> i32 {
-    let nonblank = |v: &String| !v.trim().is_empty();
-    let seed = value_of(args, "--seed").filter(nonblank);
-    let node = value_of(args, "--worker")
-        .filter(nonblank)
-        .or_else(|| seed.as_deref().and_then(target_seed_node));
     let cwd = std::path::Path::new(".");
-    let slug = value_of(args, "--slug")
-        .filter(nonblank)
-        .or_else(|| node.as_deref().and_then(|n| node_slug(n, cwd)));
-    let skill = seed.as_deref().and_then(seed_skill);
-    let template = worker_template(cwd);
-    let facts = WorkerFacts {
-        node: node.as_deref(),
-        slug: slug.as_deref(),
-        skill: skill.as_deref(),
-        session: None,
-    };
-    match render_worker_name(&template, &facts) {
+    let (template, name) = worker_mint(
+        value_of(args, "--worker").as_deref(),
+        value_of(args, "--seed").as_deref(),
+        value_of(args, "--slug").as_deref(),
+        cwd,
+    );
+    match name {
         Some(name) => {
             println!("{name}");
             0
@@ -710,6 +700,36 @@ fn run_worker_mint(args: &[String]) -> i32 {
             3
         }
     }
+}
+
+/// A node worker's name and the template it rendered from. An empty node
+/// reads the node from a `/target` seed; the seed's command fills `{skill}`.
+pub(crate) fn worker_mint(
+    node: Option<&str>,
+    seed: Option<&str>,
+    slug: Option<&str>,
+    cwd: &std::path::Path,
+) -> (String, Option<String>) {
+    let nonblank = |v: &&str| !v.trim().is_empty();
+    let seed = seed.filter(nonblank);
+    let node = node
+        .filter(nonblank)
+        .map(str::to_string)
+        .or_else(|| seed.and_then(target_seed_node));
+    let slug = slug
+        .filter(nonblank)
+        .map(str::to_string)
+        .or_else(|| node.as_deref().and_then(|n| node_slug(n, cwd)));
+    let skill = seed.and_then(seed_skill);
+    let template = worker_template(cwd);
+    let facts = WorkerFacts {
+        node: node.as_deref(),
+        slug: slug.as_deref(),
+        skill: skill.as_deref(),
+        session: None,
+    };
+    let name = render_worker_name(&template, &facts);
+    (template, name)
 }
 
 /// `fno-agents name-mint [prefix] <node> [--slug S] [--qualifier Q]

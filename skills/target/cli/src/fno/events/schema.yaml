@@ -4538,7 +4538,7 @@ event_types:
           description: "Optional backlog node ids that stop while the question remains open."
         subject:
           type: string
-          description: "Optional. The decision subject the question is about; the ask verb refuses it when live law rules that subject."
+          description: "Optional. The decision subject the question is about; the ask action refuses it when live law rules that subject."
         context:
           type: object
           description: "Optional. The structured context the Rust intake writes: blocked_because, options_rationale, recommendation {option, why, downside}, unknowns, reversible, cost_if_wrong, meanwhile. Keys are open; the attention projection reads each by name."

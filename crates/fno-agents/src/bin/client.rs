@@ -162,10 +162,8 @@ fn main() {
         std::process::exit(fno_agents::wave::run(&args[1..]));
     }
     // cli/src/fno/pr/_sync_canonical.py transports HERE through command_call:
-    // the post-merge canonical sync + its catch-up sweep and staleness
-    // alarm, native. Registers no command (the shrink law allows no new
-    // action); the transport reaches it through resolve_binary like the
-    // other early arms.
+    // the post-merge sync + its catch-up sweep and staleness alarm, native.
+    // Registers no command (the shrink law allows no new action).
     if args.first().map(String::as_str) == Some("sync-canonical") {
         std::process::exit(fno_agents::sync_canonical::run_sync_canonical_command(
             &args[1..],
@@ -182,6 +180,9 @@ fn main() {
     }
     if args.first().map(String::as_str) == Some("pr") {
         std::process::exit(fno_agents::pr_front::run(&args[1..]));
+    }
+    if args.first() == Some(&"do".to_string()) && args.get(1) == Some(&"ci".to_string()) {
+        std::process::exit(fno_agents::ci_front::run(&args[2..]));
     }
     // gh-cache, target-status: the early transport arms; client_transport.rs
     // holds their bodies and comments. worktree-reapable and launch-workdir

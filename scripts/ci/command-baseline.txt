@@ -116,7 +116,6 @@ whoami context
 whoami cost
 whoami ledger
 whoami scoreboard
-whoami status
 workspace reap
 workspace register-worker
 workspace worktree archive

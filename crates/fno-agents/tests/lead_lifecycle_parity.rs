@@ -8,6 +8,8 @@
 //! Capture mode refuses: a golden can only be captured while the old leg runs.
 //! The check-in's board lines are the exception: the capture host refused the
 //! board's GraphQL read, so those lines follow this world's `gh` stub instead.
+//! A later hand edit added the check-in's `boot_revival` line and its coverage
+//! bump when that reading joined the render, after the old leg was gone.
 //!
 //! The temp root folds to `<ROOT>` (raw and canonical spellings) and its slug
 //! to `<ROOTSLUG>`. The check-in's control-plane rows name the host's service
