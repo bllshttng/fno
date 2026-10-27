@@ -251,7 +251,7 @@ rotate-append-log.sh
 # Cross-references a worktree path against ~/.fno/agents/registry.json for
 # its real session name + live/exited status. Invoked by
 # scripts/lib/worktree-lifecycle.sh's `status` case, which IS the wrapped
-# entry point (`fno workspace worktree status` -> cli/src/fno/worktree_cli/cli.py);
+# entry point (`fno workspace worktree status` -> crates/fno/src/worktree_door.rs);
 # a second wrapper here would be a third opinion on one question.
 # tests/test-worktree-status.sh runs it directly. Pure helper, no CLI of its own.
 worktree-status.py

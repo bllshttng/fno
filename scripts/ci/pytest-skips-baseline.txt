@@ -63,7 +63,6 @@ cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_apply_salv
 cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_apply_salvages_untracked_pins_detached_and_keeps_branch::pytest.skip  # on main before this ratchet
 cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_salvage_failure_keeps_tree::marker.requires_gate  # on main before this ratchet
 cli/tests/integration/test_worktree_cleanup_merged.py::test_aggressive_salvages_the_tracked_diff_to_a_ref_then_prunes::marker.requires_gate  # the sweep under test needs the fno-agents gate binary; CI builders without it skip rather than fail
-cli/tests/integration/test_worktree_ensure.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_backlog_single_flight.py::iso::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_blueprint_batching_rule.py::test_behavioral_dispatch_plan_batches_the_shape_pair::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_claim_rebind.py::test_rebind_live_different_pid_refuses_concurrent_writer::pytest.skip  # on main before this ratchet

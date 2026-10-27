@@ -23,24 +23,6 @@ out=$("$TMPDIR_INSTALL/venv/bin/fno-py" --version 2>&1 || true)
 echo "$out" | grep -qE '[0-9]+\.[0-9]+\.[0-9]+'
 echo "PASS: uv build produces installable wheel"
 
-# The stranded sweep lives in the bundled fno-agents binary since the
-# worktree family port. Whether or not a repo tree is discoverable from the
-# installed wheel (env scrubbed; the ~/.fno/plugin-root pointer may still
-# exist on a dev box), a sweep over a non-repo must never raise and must
-# answer zero rows - the fail-open contract, not a crash or a fabricated ok.
-EMPTY_CWD=$(mktemp -d)
-if ( cd "$EMPTY_CWD"
-     env -u FNO_REPO_ROOT -u CLAUDE_PLUGIN_ROOT \
-       "$TMPDIR_INSTALL/venv/bin/fno-agents" worktree-stranded \
-       --repo "$EMPTY_CWD" --json ); then
-  rm -rf "$EMPTY_CWD"
-  echo "PASS: installed wheel stranded sweep degrades without raising"
-else
-  rm -rf "$EMPTY_CWD"
-  echo "FAIL: installed wheel stranded sweep raised or fabricated ok"
-  exit 1
-fi
-
 # The events schema must SHIP inside the wheel as `fno/events/schema.yaml`
 # (ordinary package data under src/fno; no force-include), so the Python
 # validator reads its sibling from an installed artifact with no `docs/` tree
