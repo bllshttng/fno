@@ -732,7 +732,7 @@ def test_role_bearing_spawn_routes_in_forced_rust_mode(monkeypatch, tmp_path) ->
     called: list = []
     monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
     monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
-    CliRunner().invoke(app, ["agents", "spawn", "--as", "thread", "--role=tidy", "--help"])
+    CliRunner().invoke(app, ["agents", "spawn", "--as", "thread", "--role=tidy", "--help", "check the role"])
     assert called and "--role=tidy" in called[0]
 
 

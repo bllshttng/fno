@@ -25,7 +25,7 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 
 use super::env_wrap::{mesh_env_wrapper, qos_wrap_for, seed_provenance_env};
 use super::readiness::{await_interactive_readiness, ReadinessState};

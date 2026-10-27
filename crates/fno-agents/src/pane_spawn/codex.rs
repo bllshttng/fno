@@ -11,11 +11,10 @@
 //! predicates upstream).
 //!
 //! Recorded narrowing, bounded by what the client door refuses before the
-//! arm runs: `--yolo`/`-Y`/`--permission-mode` are refused axes at the door
-//! (and the Python seam keeps their spawns on the Python leg), headless
-//! never reaches a pane arm, and the role routes are seam-shielded too
-//! (`_is_role_bearing_spawn`). The arm's gate is therefore the payload scan
-//! plus the `--node` leg, and the identity leaf renders from
+//! arm runs: `--yolo`/`-Y`/`--permission-mode` are refused axes at the door,
+//! and headless never reaches a pane arm. A `--role` routes only claude, so
+//! it changes nothing here. The arm's gate is therefore the payload scan plus
+//! the `--node` leg, and the identity leaf renders from
 //! [`super::PaneContext::worker_name`].
 use serde_json::Value;
 use std::collections::HashSet;
@@ -195,8 +194,9 @@ fn late_bind_probe(budget: Duration, step: Duration, child_pid: Option<u32>) -> 
 /// (`--yolo`/`-Y`/`--dangerously-bypass-approvals-and-sandbox`) and the
 /// headless lane. Both are unreachable through the pane arm: the refused
 /// axes (`--yolo`/`--permission-mode`) die at the client door before the arm
-/// runs, headless never reaches a pane arm, and role-routed spawns are
-/// seam-shielded (`_is_role_bearing_spawn`). The arm's gate is the payload
+/// runs, and headless never reaches a pane arm. Python also skipped a
+/// `--role` spawn; this gate does not, so a role-bearing codex pane with a
+/// code payload still needs the git grant. The arm's gate is the payload
 /// scan plus the `--node` leg (`rust_runtime.py:632`).
 fn refuse_without_git_grant(ctx: &PaneContext) -> Result<(), PaneRefusal> {
     if !is_code_payload(&ctx.message) && ctx.node.is_none() {
