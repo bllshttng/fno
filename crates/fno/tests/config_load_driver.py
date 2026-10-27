@@ -331,7 +331,10 @@ def emit_fields(target: Path) -> None:
             row["default"] = TypeAdapter(info.annotation).dump_python(value, mode="json")
             fields.append(row)
         table[model.__name__] = {"extra": model.model_config.get("extra") or "ignore", "fields": fields}
-    target.write_text(json.dumps(table, indent=1) + "\n", encoding="utf-8")
+    from fno.config.registry import FIELD_META
+
+    doc = {"models": table, "field_meta": list(FIELD_META)}
+    target.write_text(json.dumps(doc, indent=1) + "\n", encoding="utf-8")
 
 
 def main() -> None:
