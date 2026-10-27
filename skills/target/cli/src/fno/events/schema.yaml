@@ -304,7 +304,7 @@ event_types:
           type: integer
         detail:
           type: string
-    consumers: [scripts/ci/preflight.sh, fno do pr, fno agents worker ship, fno-agents verify-evidence]
+    consumers: [scripts/ci/preflight.sh, fno do pr, fno-agents verify-evidence]
 
   - name: review_attestation
     retention: gate
@@ -7946,9 +7946,9 @@ event_types:
   # The `decision` and `state` enums below are ADVISORY at the validator layer,
   # matching the `outcome` crumb further down: both validators check required
   # fields and envelope shape, not per-type data enums, unless a type opts into a
-  # hardcoded check. Real enforcement is at the only emitter -- fno.approvals'
-  # DecisionKind and EffectState are typed enums, so an out-of-vocabulary value
-  # cannot be constructed. Promote to a hardcoded check in BOTH validators (and
+  # hardcoded check. Real enforcement is at the emitter -- the Rust effect gate
+  # and approvals module write only the vocabulary below, so an out-of-vocabulary
+  # value cannot be produced. Promote to a hardcoded check in BOTH validators (and
   # add invalid corpus fixtures) if a second, untyped emitter ever appears.
 
   - name: approval_requested
@@ -8574,6 +8574,14 @@ event_types:
     description: "The daemon nudged an ended Codex worker turn on an open node. The session and last activity timestamp identify one quiet episode."
     sources: [daemon]
     data: {required: [session_id, node, last_activity_ms, via]}
+  - name: pr_push_landed
+    description: "fno do pr push landed a commit. The ci_cadence arm checks the PR's CI at 1, 15, 30 and 55 minutes from this row."
+    sources: [daemon, rust]
+    data: {required: [branch, sha, cwd]}
+  - name: ci_cadence_check
+    description: "The ci_cadence arm read a pushed head's CI at one offset. outcome names what it did: pending, green, superseded, flake_wait, flake_rerun, stale_red, woke, red_no_session or unreadable."
+    sources: [daemon]
+    data: {required: [branch, sha, offset_s, outcome]}
   - name: mcp_channel_demoted_to_socket
     description: "Legacy agents-family telemetry kind, envelope-mapped by the shared emitter."
     sources: [daemon, agents]

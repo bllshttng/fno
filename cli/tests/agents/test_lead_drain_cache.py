@@ -193,9 +193,9 @@ def test_external_backend_never_serves_the_cache(graph, monkeypatch):
     assert ident is not None
     drain_cache.store(SCOPE, ident, undelivered=999)
 
-    import fno.tracker as tracker
+    import fno.graph.api as graph_api
 
-    monkeypatch.setattr(tracker, "active_backend_name", lambda: "external")
+    monkeypatch.setattr(graph_api, "active_backend_name", lambda: "external")
     result = CliRunner().invoke(agents_lead_app, ["drain", SCOPE])
     assert result.exit_code != 0  # unreadable under an external backend, as before
     assert "999" not in result.output  # the poisoned cache row never surfaced

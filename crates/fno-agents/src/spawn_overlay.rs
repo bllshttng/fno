@@ -41,6 +41,11 @@
 //!   (`territory::role_grant_kind`), over the one containment rule
 //!   `territory::scope_contains`.
 //!
+//! - kinds `credentials`, `state-root-seal`, `account-overlay`,
+//!   `dispatch-account`, `account-for-env` and `login-present`: the account
+//!   answers a Python spawn seam reads (`accounts::credentials`,
+//!   `accounts::launch`).
+//!
 //! The `fno config accounts` commands ride the same action as argv ops,
 //! `spawn-overlay accounts <command>` (see `accounts::run`).
 //! The `fno config plugins` commands ride it too, as
@@ -91,6 +96,10 @@ pub fn run_spawn_overlay(args: &[String]) -> i32 {
     // add no fno-agents root command.
     if args.first().map(String::as_str) == Some("roles") {
         return crate::roles::cli::run(&args[1..]);
+    }
+    // The whoami family nests the same way (crate::whoami::run).
+    if args.first().map(String::as_str) == Some("whoami") {
+        return crate::whoami::run(&args[1..]);
     }
     // The `fno config accounts` commands nest here as argv ops
     // (crate::accounts::run), so they add no fno-agents root action.
@@ -205,10 +214,15 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("team-rescope") => crate::team_rescope::resolve(&payload),
         Some("spawn-team") => crate::team_spawn::resolve(&payload),
         Some("roles-discover") => crate::roles::registry::discover_kind(&payload),
+        Some("credentials") => crate::accounts::credentials::compose_kind(&payload),
+        Some("state-root-seal") => crate::accounts::credentials::seal_kind(&payload),
+        Some(kind @ ("account-overlay" | "dispatch-account" | "account-for-env" | "login-present")) => {
+            crate::accounts::launch::resolve_kind(kind, &payload)
+        }
         Some("roles-resolve") => crate::roles::resolver::resolve_kind(&payload),
         Some("business-role") => crate::roles::routing::business_role_kind(&payload),
         other => Err(format!(
-            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-resolve|role-grant|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team|roles-discover|roles-resolve|business-role"
+            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-resolve|role-grant|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team|roles-discover|credentials|state-root-seal|account-overlay|dispatch-account|account-for-env|login-present|roles-resolve|business-role"
         )),
     }
 }

@@ -255,7 +255,7 @@ FIELD_META: dict[str, Meta] = {
         "advanced", "How long after a review dispatch (a sent review_invocation row) with no answering attestation the settle sweep declares the attempt lost and emits one lost attestation row for it (default 15), so the gate reads a named refusal instead of waiting on silence. The doctor report runs the sweep; it is idempotent, so re-running adds nothing.",
     ),
     "review.nonblocking_categories": Meta(
-        "advanced", "Categories a finding may carry and still be non-blocking when its verdict is not CONFIRMED (default: docs, formatting, naming, nit, simplification, style, test-coverage, typo). A configured list EXTENDS that default rather than replacing it, so naming one category cannot silently narrow the gate. A CONFIRMED verdict blocks whatever the category says, and a finding missing a required field blocks too. The gate re-derives blocking from this list itself and never reads the producer's own blocking count.",
+        "advanced", "Categories a finding may carry and still be non-blocking when its verdict is not CONFIRMED (default: altitude, conventions, docs, efficiency, formatting, naming, nit, reuse, simplification, style, test-coverage, typo). A configured list EXTENDS that default rather than replacing it, so naming one category cannot silently narrow the gate. A CONFIRMED verdict blocks whatever the category says, and a finding missing a required field blocks too. The gate re-derives blocking from this list itself and never reads the producer's own blocking count.",
     ),
     "review.hold_ttl_minutes": Meta(
         "advanced", "How long a registered review hold blocks a merge before it ages out (default 90). A review that starts registers review:branch:<branch>; fno do pr status and fno do pr merge refuse while it is live, so a merge cannot land on the pre-review code. A wedge bound, not an estimate: an expired hold clears with a receipt rather than holding the lane forever.",
@@ -629,6 +629,7 @@ FIELD_META: dict[str, Meta] = {
     "store.remote_token": Meta("never", "Bearer token for store.remote_url, when the primary asks for one. Default unset."),
     "store.remote_addrs": Meta("never", "IPs (or IP:port) to dial, in order, when the host in store.remote_url does not answer, such as its Tailscale 100.x IP for when MagicDNS breaks. A bare IP takes the URL's port. Default unset."),
     "store.share_backlog": Meta("never", "true moves the backlog itself to the primary named by store.remote_url; both keys must be set. Default false."),
+    "store.ssh_peers": Meta("never", "Optional plan rescue: a map of host key to ssh destination, e.g. store.ssh_peers.\"macbook\" = \"macbook.lan\". When this host cannot place a plan file from the shared store, the plan carrier asks that peer over ssh (BatchMode, 5s connect timeout). A key is the pushing host's name, a host in the fno_plan_seen ledger, or the store host in store.remote_url. Off by default: the shared store stays the only required transport. Read from the global config only. Default unset."),
     "worktree.prune_done": Meta(
         "advanced",
         "How far the merged sweep's done-node arm goes on a done tree with "

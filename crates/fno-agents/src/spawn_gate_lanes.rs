@@ -1728,6 +1728,7 @@ mod tests {
         let now = crate::claims::now_ms();
         let launch = |name: &str, provider: Option<&str>| crate::launch_record::Launch {
             harness: "claude".into(),
+            resume: None,
             name: Some(name.into()),
             node: None,
             slot: None,

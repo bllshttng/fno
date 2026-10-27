@@ -2,10 +2,9 @@
 
 One typed contract for every consumer of ``.fno/target-state.md`` so the
 resume-bind primitive and the orienter cannot drift apart on what a manifest
-looks like. The manifest is YAML frontmatter (validated by
-:func:`fno.agent.state.load_agent_context`) PLUS body ``key: value`` lines that
-init writes below the frontmatter for the body-only identity fields. Both halves
-are merged here.
+looks like. The manifest is YAML frontmatter (parsed here) PLUS body ``key:
+value`` lines that init writes below the frontmatter for the body-only
+identity fields. Both halves are merged here.
 
 The manifest is the identity anchor for native resume : its
 ``harness``/``harness_session_id``/``fno_id``/``graph_node_id``/
@@ -18,38 +17,55 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+import yaml
+
 
 # Body keys appended below the frontmatter (init-target-state.sh writes them as
-# `key: value` lines, NOT YAML frontmatter), so load_agent_context (frontmatter
-# only) never sees them. Kept here as the single source of the body-key set.
+# `key: value` lines, NOT YAML frontmatter), so a frontmatter-only read never
+# sees them. Kept here as the single source of the body-key set.
 BODY_KEYS = ("graph_node_id", "target_claim_key", "target_claim_holder")
+
+
+def _frontmatter(path: Path) -> Optional[dict[str, Any]]:
+    """The manifest file's YAML frontmatter, or None on any fault.
+
+    The whoami family's state loader is native now, so this module owns its
+    frontmatter read: parse the delimited block with yaml.safe_load, return
+    {} when no delimiters are present, None when the file is missing,
+    unreadable, or malformed (a read degrades, never refuses).
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not text.startswith("---"):
+        return {}
+    rest = text[3:].lstrip("\n")
+    idx = rest.find("\n---")
+    if idx == -1:
+        return None
+    try:
+        parsed = yaml.safe_load(rest[:idx])
+    except yaml.YAMLError:
+        return None
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def read_target_manifest(project_root: Path) -> Optional[dict[str, Any]]:
     """Merged session manifest: frontmatter + the body ``key: value`` lines.
 
-    Returns the frontmatter dict (from :func:`load_agent_context`) enriched with
-    any body-only keys (``graph_node_id`` / ``target_claim_*``) the frontmatter
-    did not already carry. ``None`` when no manifest exists. Never raises.
+    Returns the frontmatter dict enriched with any body-only keys
+    (``graph_node_id`` / ``target_claim_*``) the frontmatter did not already
+    carry. ``None`` when no manifest exists. Never raises.
 
     ``project_root`` pins both the frontmatter read and the body read to the
-    SAME manifest (``load_agent_context`` otherwise detects the root from cwd,
-    which can differ under ``FNO_REPO_ROOT`` or a subdirectory).
+    SAME manifest (detected from the root, not cwd, which can differ under
+    ``FNO_REPO_ROOT`` or a subdirectory).
     """
-    raw: Optional[dict[str, Any]] = None
-    ctx = None
-    try:
-        from fno.agent.state import load_agent_context
+    from fno import paths as _paths
 
-        ctx = load_agent_context(project_root_override=project_root)
-        if ctx.session is not None:
-            raw = dict(ctx.session.raw)
-    except Exception:  # noqa: BLE001 - no/unreadable manifest is fine
-        pass
-    manifest = getattr(getattr(ctx, "session", None), "path", None)
-    if manifest is None:
-        from fno import paths as _paths
-        manifest = _paths.target_state_path_or_legacy(project_root)
+    manifest = _paths.target_state_path_or_legacy(project_root)
+    raw: Optional[dict[str, Any]] = _frontmatter(manifest)
     try:
         text = manifest.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):

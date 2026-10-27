@@ -279,8 +279,8 @@ def release(
         False,
         "--stamp-do",
         help="Stamp a execute provenance row (started_at from this claim's acquire time, "
-        "ended_at now). Set ONLY by a session releasing its OWN node claim at a "
-        "finished terminal - never a handoff, which runs under a successor's "
+        "ended_at now). A released node: claim now stamps by default; this flag is "
+        "the explicit spelling. Never a handoff, which runs under a successor's "
         "identity and would mis-attribute the predecessor's window.",
     ),
     rollback_do: bool = typer.Option(
@@ -735,7 +735,7 @@ def _node_settlement(reading: Optional[RosterReading] = None):
     def _terminal_ids():
         if "terminal" not in cache:
             try:
-                from fno.tracker import active_backend_name
+                from fno.graph.api import active_backend_name
 
                 if active_backend_name() != "graph":
                     # graph.json is not the store under an external tracker

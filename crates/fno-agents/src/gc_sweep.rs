@@ -4,16 +4,19 @@
 //! `gc::tree_action`; this module owns their I/O.
 //!
 //! The settle (`settle_stale_do_rows`) writes the graph before the row pass:
-//! an open do row on a done, merged node with no open additional PR has
-//! nothing left to re-open, so the sweep fills `ended_at` and KEEPS the row -
-//! the session provenance (phase, harness, session id, started_at) survives,
-//! stamped `ended_by: "reap-sweep"` because the sweep infers the end instant
-//! rather than observing it. A row the settle cannot fill on a node still in
+//! an open do row on a done node with no open additional PR has nothing left
+//! to re-open - the node read merged, or it never recorded a PR at all (a
+//! measurement or report node ships no PR, so there is no merge to wait
+//! for) - so the sweep fills `ended_at` and KEEPS the row - the session
+//! provenance (phase, harness, session id, started_at) survives, stamped
+//! `ended_by: "reap-sweep"` because the sweep infers the end instant rather
+//! than observing it. A row the settle cannot fill on a node still in
 //! flight keeps under `open do row`. That stranded population
 //! (an open do row is what holds its node out of this settle's own gate) has
 //! its own lane: `fno backlog maintain` detects it in Python, where the
 //! transcript resolver lives, and reaps a row only after the prover proves
-//! the session gone. Widen THIS gate never; extend that lane instead.
+//! the session gone. Widen THIS gate past a done node never; extend that
+//! lane instead.
 //!
 //! Retirement removes the session from its harness's ACTIVE surface only
 //! (the agent list, the session index); the native history is never deleted,
@@ -814,7 +817,8 @@ pub fn read_graph_entries(home: &AgentsHome) -> Option<GraphRead> {
 }
 
 /// One open do row the sweep may settle: its node is done, GitHub-confirmed
-/// merged, and carries no additional PR whose outcome nothing recorded.
+/// merged or shipped with no PR, and carries no additional PR whose outcome
+/// nothing recorded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaleDoRow {
     pub node: String,
@@ -832,11 +836,16 @@ pub(crate) fn gh_pr_is_open(pr: u64, cwd: &str) -> Option<bool> {
 }
 
 /// Every open do row sitting on a settled node. Every clause is a positive
-/// marker: `status == "done"`; `merge_status == "merged"`, a field written
-/// only when a caller resolved MERGED from `gh`, so its absence has two
-/// explanations and neither is asserted here; and no `additional_prs` entry
-/// still open under the three settle rules ([`crate::additional_prs`]) -
-/// presence alone never holds the row, and an entry no rule settles does.
+/// marker: `status == "done"`; the merge question settled one of two ways -
+/// `merge_status == "merged"`, a field written only when a caller resolved
+/// MERGED from `gh`, or no PR ever recorded (`pr_number` null and `pr_url`
+/// blank beside a null `merge_status`: a measurement or report node ships
+/// no PR, so there is no merge to wait for); a recorded PR - by number or
+/// by a parseable url alone, the shape [`crate::additional_prs`] reads -
+/// with an unrecorded outcome still holds, and the stamp pass resolves it
+/// or the hold stands. And no `additional_prs` entry still open under the
+/// three settle rules ([`crate::additional_prs`]) - presence alone never
+/// holds the row, and an entry no rule settles does.
 pub(crate) fn stale_open_do_rows(entries: &[Value]) -> Vec<StaleDoRow> {
     let mut stale = Vec::new();
     let primaries = crate::additional_prs::primary_index(entries);
@@ -847,7 +856,13 @@ pub(crate) fn stale_open_do_rows(entries: &[Value]) -> Vec<StaleDoRow> {
         if entry.get("status").and_then(Value::as_str) != Some("done") {
             continue;
         }
-        if entry.get("merge_status").and_then(Value::as_str) != Some("merged") {
+        let merge = entry.get("merge_status").and_then(Value::as_str);
+        let pr_url_present = entry
+            .get("pr_url")
+            .and_then(Value::as_str)
+            .is_some_and(|u| !u.trim().is_empty());
+        let pr_recorded = entry.get("pr_number").is_some_and(|v| !v.is_null()) || pr_url_present;
+        if merge != Some("merged") && (merge.is_some() || pr_recorded) {
             continue;
         }
         let holds_pr = entry
@@ -1665,8 +1680,19 @@ pub(crate) fn run_with_release(
             .map(|c| std::path::Path::new(c.as_str()).join(crate::claims::CLAIMS_DIRNAME)),
     );
     let claim_records = crate::claims::list_in(&claims_dirs, None, false).unwrap_or_default();
+    // A claim on a done node is not live work: the node it guards is over,
+    // so it never shields the row that still holds it.
+    let claim_on_done_node = |key: &str| {
+        key.strip_prefix("node:").is_some_and(|node| {
+            graph
+                .as_ref()
+                .and_then(|g| g.statuses.get(node))
+                .is_some_and(|status| status == "done")
+        })
+    };
     let claims_by_session: std::collections::HashMap<String, String> = claim_records
         .iter()
+        .filter(|rec| !claim_on_done_node(&rec.key))
         .filter_map(|rec| {
             let sid = rec.session_id.as_deref()?.trim().to_ascii_lowercase();
             (!sid.is_empty()).then_some((sid, format!("{} (holder {})", rec.key, rec.holder)))
@@ -1841,7 +1867,22 @@ pub(crate) fn run_with_release(
                 continue;
             }
         }
-        if e.origin.as_deref() == Some("operator") {
+        // The done rule: every node the row names is done and the row sat
+        // quiet past the idle hour. No origin shields such a row; the claim,
+        // attended and tree gates below still run. A node read only from the
+        // transcript is a witness, never the row's own work.
+        let done_quiet = matches!(
+            staged_row,
+            Some((verdict, age)) if matches!(verdict.work, WorkState::AllDone { .. })
+                && !verdict
+                    .route
+                    .source
+                    .is_some_and(node_route::NodeSource::is_transcript)
+                && (*age)
+                    .or_else(|| report_age(e, now))
+                    .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS)
+        );
+        if e.origin.as_deref() == Some("operator") && !done_quiet {
             summary.kept_operator.push(id);
             continue;
         }
@@ -1878,14 +1919,30 @@ pub(crate) fn run_with_release(
             .is_some_and(|a| a > grace_secs);
         let adopted_terminal = idle_past_grace
             && crate::gc_adopt::adopted_claude_terminal(e, &agents_memo, agents_read);
-        if !is_spawn && !adopted_finished(e) && !adopted_terminal {
-            if !crate::gc_adopt::origin_corpse(e, quiet, &agents_memo, agents_read) {
+        // The bg-adoption ruling, computed once per row BEFORE the early
+        // origin gate: a no-origin claude row whose transcript carries a
+        // real fno skill invocation takes the spawn path, and a row this
+        // would adopt must not be classified here and `continue`d - past
+        // this gate it never reaches the policy arm, so the scan has to
+        // happen at the gate, not only at GcRow construction.
+        let bg_adopted = e.origin.is_none()
+            && e.harness.as_deref() == Some("claude")
+            && crate::session_backfill::bg_fno_invocation(
+                e.harness_session_id.as_deref().unwrap_or("").trim(),
+                e.launch_account.as_deref(),
+            );
+        if !is_spawn && !adopted_finished(e) && !adopted_terminal && !done_quiet {
+            let corpse_probe = crate::gc_adopt::origin_corpse(e, quiet, &agents_memo, agents_read);
+            // An adopted bg row falls through as a live row judged like a
+            // spawn one, never as a corpse: only a row the corpse probe
+            // actually PASSED carries origin_corpse into the policy.
+            if !bg_adopted && !corpse_probe {
                 summary
                     .kept_not_spawn
                     .push((id, e.origin.clone().unwrap_or_default()));
                 continue;
             }
-            corpse = true;
+            corpse = corpse_probe;
         }
         let Some(graph) = &graph else {
             summary.kept_graph_unreadable.push(id);
@@ -1937,11 +1994,13 @@ pub(crate) fn run_with_release(
         // Locked Decision 1: every named node done but one still carries an
         // OPEN do row for this session -> the row stays and the node is
         // named. The retirement never settles graph rows itself. Past the
-        // origin ruling's idle hour a spawn row no longer holds on it.
-        let idle_hour_past = (is_spawn || adopted_terminal)
-            && (*age)
-                .or_else(|| report_age(e, now))
-                .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS);
+        // origin ruling's idle hour a spawn row no longer holds on it, and
+        // under the done rule no row does.
+        let idle_hour_past = done_quiet
+            || ((is_spawn || adopted_terminal)
+                && (*age)
+                    .or_else(|| report_age(e, now))
+                    .is_some_and(|a| a > crate::gc::SPAWN_IDLE_RETIRE_SECS));
         if matches!(work, WorkState::AllDone { .. }) && !idle_hour_past {
             if let Some(nodes) = graph.open_do.get(&sid.to_ascii_lowercase()) {
                 let node = nodes.first().cloned().unwrap_or_default();
@@ -2191,6 +2250,9 @@ pub(crate) fn run_with_release(
         };
         let mut row = GcRow {
             origin: e.origin.clone(),
+            // Computed once above, at the early origin gate: past that gate
+            // a row this adopts would never have reached construction.
+            bg_fno_invoked: bg_adopted,
             teamed: e.role_level.is_some(),
             work,
             transcript_age_s: age,
@@ -4807,6 +4869,82 @@ mod tests {
         let (settled, _) = settle_stale_do_rows(&home);
         assert!(settled.is_empty());
         assert_eq!(crate::backlog::version(&path).unwrap(), version_before);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// The production row shape for a node that finished without a PR: the
+    /// graph writes the fields as explicit nulls, never as absent keys.
+    fn one_done_no_pr_entry(id: &str) -> Value {
+        serde_json::json!({
+            "id": id, "title": "No PR by design", "slug": id, "type": "feature",
+            "status": "done", "priority": "p2", "pr_number": null, "merge_status": null,
+            "created_at": "2026-10-13T00:00:00+00:00",
+            "completed_at": "2026-10-13T02:00:00+00:00",
+            "sessions": [{"phase": "execute", "harness": "claude", "session_id": "s-nopr",
+                          "started_at": "2026-10-13T01:00:00+00:00"}]
+        })
+    }
+
+    /// A done node that never recorded a PR settles its do row: there is no
+    /// merge to wait for, so the worker seat cannot hold forever.
+    #[test]
+    fn done_node_without_pr_settles_its_do_row() {
+        let stale = stale_open_do_rows(&[one_done_no_pr_entry("x-nopr")]);
+        assert_eq!(
+            stale.len(),
+            1,
+            "a done node with no recorded PR has no merge to wait for"
+        );
+        assert_eq!(stale[0].session_id, "s-nopr");
+    }
+
+    /// A recorded PR URL with a null `pr_number` is still a recorded PR: the
+    /// stamp pass reads that url, and an open or unreadable answer leaves
+    /// the merge unrecorded, so the row holds.
+    #[test]
+    fn done_node_with_pr_url_only_holds() {
+        let mut entry = one_done_no_pr_entry("x-url");
+        entry["pr_url"] = serde_json::json!("https://github.com/owner/repo/pull/4242");
+        assert!(
+            stale_open_do_rows(&[entry]).is_empty(),
+            "a recorded url keeps the merge question open"
+        );
+    }
+
+    /// A recorded PR with an unrecorded outcome still holds: the stamp pass
+    /// resolves live PRs, and until it answers, the hold is the right
+    /// failure.
+    #[test]
+    fn done_node_with_recorded_pr_and_unrecorded_merge_holds() {
+        let mut entry = one_done_no_pr_entry("x-pr");
+        entry["pr_number"] = serde_json::json!(4242);
+        assert!(
+            stale_open_do_rows(&[entry]).is_empty(),
+            "a recorded PR keeps the merge question open"
+        );
+    }
+
+    /// A recorded merge outcome that is not `merged` holds even beside a
+    /// missing `pr_number`: an unexplained recorded outcome is a state the
+    /// writers do not produce, so the hold is the right answer.
+    #[test]
+    fn done_node_with_recorded_unmerged_merge_holds_without_pr() {
+        let mut entry = one_done_no_pr_entry("x-stray");
+        entry["merge_status"] = serde_json::json!("closed");
+        assert!(
+            stale_open_do_rows(&[entry]).is_empty(),
+            "a recorded non-merged outcome keeps the hold with no PR present"
+        );
+    }
+
+    /// The store-level plan door sees the no-PR done node too: the plan is
+    /// what the dry run reports and what the release's narrowed settle
+    /// consults.
+    #[test]
+    fn store_plan_includes_done_node_without_pr() {
+        let (base, home) = stale_state_home("settle-nopr");
+        seed_store(&home, vec![one_done_no_pr_entry("x-nopr-store")]);
+        assert_eq!(plan_stale_do_rows(&home).len(), 1);
         std::fs::remove_dir_all(&base).ok();
     }
 }

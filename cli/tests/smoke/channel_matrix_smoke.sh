@@ -323,9 +323,13 @@ row_claude_marketplace() {
     return 0
   fi
   pass "marketplace-add" "marketplace added"
-  run_capture claude plugin install fno@footnote
+  run_capture claude plugin install fno@fno
   if [ "$RC" -eq 0 ]; then
     pass "install" "plugin installed"
+  elif run_capture claude plugin install fno@footnote && [ "$RC" -eq 0 ]; then
+    # The stable branch serves the marketplace under its old name until the
+    # next stable promotion carries the rename to fno.
+    pass "install" "plugin installed as fno@footnote (stable predates the fno rename)"
   else
     miss "install" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
   fi
@@ -401,7 +405,7 @@ row_codex_plugin_session() {
     miss "marketplace-add" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0
   fi
-  run_capture codex plugin add fno@footnote
+  run_capture codex plugin add fno@fno
   if [ "$RC" -ne 0 ]; then
     miss "plugin-add" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0

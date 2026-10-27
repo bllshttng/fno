@@ -1,0 +1,12 @@
+request     b9822f9ebf0114b1cf9c2fa2ef41de47b86dc6e3c99790059ce1601ead28eeb9
+  principal   agent-1
+  work order  wo-2
+  attempt     att-2
+  effect      eff-2
+  class       repo.write
+  destination github:org/repo
+  action      act-2
+  expires     <FUTURE>
+  decision    approved by founder at 2025-02-01T10:00:00+00:00
+  transport   slack (informational, not authority)
+  effect      not prepared

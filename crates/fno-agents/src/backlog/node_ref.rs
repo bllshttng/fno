@@ -400,6 +400,12 @@ pub(crate) fn node_pr_refs(node: &Value) -> Vec<(i64, Option<String>)> {
             let Some(obj) = extra.as_object() else {
                 continue;
             };
+            // A reopen-demoted row carries its recorded outcome and the
+            // history mark: record-keeping, not a promised ship; no gate
+            // waits on it and no split counts it.
+            if obj.get("history").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
             if let Some(n) = obj.get("number").and_then(Value::as_i64) {
                 if seen.insert(n) {
                     refs.push((
@@ -498,6 +504,27 @@ pub fn release_contained(entries: &mut [Value], node_id: &str) -> Result<(), Str
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn node_pr_refs_skips_a_history_marked_extra() {
+        let node = json!({
+            "id": "x-aaaa1111",
+            "pr_number": 900,
+            "pr_url": "https://github.com/o/r/pull/900",
+            "additional_prs": [
+                {"number": 930, "url": "https://github.com/o/r/pull/930"},
+                {"number": 940, "url": "https://github.com/o/r/pull/940",
+                 "merge_status": "MERGED", "history": true},
+            ],
+        });
+        assert_eq!(
+            node_pr_refs(&node),
+            vec![
+                (900, Some("https://github.com/o/r/pull/900".to_string())),
+                (930, Some("https://github.com/o/r/pull/930".to_string())),
+            ]
+        );
+    }
 
     #[test]
     fn wellformed_gate_matches_python_and_compact_legacy_grammar() {

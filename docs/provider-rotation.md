@@ -632,15 +632,15 @@ So the same dict means two different things, and the receiver decides which. Han
 
 Two rules follow. Which one applies depends on whether the launch has an argv carrier.
 
-**Prefer the carrier.** `fno agents spawn --dispatch-account <record>` takes the record id on argv. It resolves the overlay inside `cmd_spawn` and applies it where the harness is exec'd. The record id travels. The credentials do not. `backlog.advance` uses this for every cross-harness cutover. `_spawn_worker` refuses an `extra_env` carrying any key in `STATE_ROOT_ENV_KEYS`, and names the carrier in the refusal.
+**Prefer the carrier.** `fno agents spawn --dispatch-account <record>` takes the record id on argv. `accounts::launch` resolves the overlay in the spawn arm and applies it where the harness is exec'd. The record id travels. The credentials do not. `backlog.advance` uses this for every cross-harness cutover.
 
-**Seal what must forward.** `_codex_thread_spawn` has no argv carrier, because the env is its only channel to the app-server child. It calls `fno.agents.account_env.seal_state_root`. That pins `FNO_AGENTS_HOME`, `FNO_CLAIMS_ROOT` and `FNO_STATE_DIR` to the roots the current process resolves, whenever a mapping moves `HOME`. The registry row, the claim, the locks and the graph stay findable. `FNO_STATE_DIR` is the carrier that `state_dir` and `locks_dir` honor ahead of their config/`$HOME` defaults. The Rust default graph path reads it ahead of `FNO_HOME`, so a sealed Rust child reads the graph its parent wrote.
+**Seal what must forward.** `_codex_thread_spawn` has no argv carrier, because the env is its only channel to the app-server child. It calls the `state-root-seal` kind of `fno-agents spawn-overlay`, which `accounts::credentials::seal` answers. That pins `FNO_AGENTS_HOME`, `FNO_CLAIMS_ROOT` and `FNO_STATE_DIR` to the roots the current process resolves, whenever a mapping moves `HOME`. The registry row, the claim, the locks and the graph stay findable. `FNO_STATE_DIR` is the carrier that `state_dir` and `locks_dir` honor ahead of their config/`$HOME` defaults. The Rust default graph path reads it ahead of `FNO_HOME`, so a sealed Rust child reads the graph its parent wrote.
 
 The remaining limit: a root the seal does not pin still follows the moved `HOME`. That includes the `FNO_HOME`-anchored sidecars (push-stamps, the corrections log, the decision index), whose carrier the seal leaves free. Prefer the argv carrier over the seal wherever a launch has one.
 
 A lane that can carry neither refuses. The codex one-shot path threads no overlay, so a pinned account there raises rather than launching on the ambient account.
 
-`STATE_ROOT_ENV_KEYS` names the axis, and holds `HOME` alone today. It sits beside `SCRUB_AUTH_VARS` and `SECRET_ROUTE_VARS` in `account_env.py` on purpose. Three sets ask three different questions about the same env dict, so a new variable has to be weighed against each.
+`accounts::credentials` holds the seal beside `SCRUB_AUTH_VARS` and `SECRET_ROUTE_VARS` on purpose. The three ask three different questions about the same env map, so a new variable has to be weighed against each.
 
 ---
 
@@ -1376,7 +1376,7 @@ So a two-record queue of `readyrule` + `makers`, both `auth: managed`, is not re
 
 The fix is not more `managed` records. It is one `api_key` record as the last-resort rung.
 
-The lane is already wired end to end. `resolve_account_overlay` returns the `api-key` lane and `pick_account` accepts it. This needs no code, only registration.
+The lane is already wired end to end. The `--account` overlay (`accounts::env::overlay`) returns the `api-key` lane and `pick_account` accepts it. This needs no code, only registration.
 
 ```bash
 fno config accounts add anthropic-key \

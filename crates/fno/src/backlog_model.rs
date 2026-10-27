@@ -1708,11 +1708,11 @@ pub(crate) enum OpenSession {
     Dim(String),
 }
 
-/// The shell line that reaches a session by id: `fno agents <command> <sid>
-/// --cross-project`, pinned to `cwd` when the caller knows one. The ONE
+/// The shell line that reaches a session by id: `fno agents <command> <sid>`,
+/// pinned to `cwd` when the caller knows one. The ONE
 /// spelling both [`SessionView`] and [`open_session`] print.
 fn session_command(command: &str, sid: &str, cwd: Option<&str>) -> String {
-    let mut cmd = format!("fno agents {command} {sid} --cross-project");
+    let mut cmd = format!("fno agents {command} {sid}");
     if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
         cmd.push_str(&format!(" --cwd {}", sh_quote(cwd)));
     }

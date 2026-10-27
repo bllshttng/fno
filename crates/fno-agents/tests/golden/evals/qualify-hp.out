@@ -1,0 +1,2 @@
+0
+{"qualified": true, "bank_rev": "db2d468d0cf92156b61ac2210cb536879bb38e51", "declared_tasks": 1, "tasks_with_valid_grades": 1, "missing_tasks": 0, "valid_grades": 1, "passes": 1, "attempts": {"graded": 1}, "excluded": {"wrong_rev": 0, "legacy": 0}}

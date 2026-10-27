@@ -1978,14 +1978,14 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) {
         );
         failed.push("post-install groom agent refresh".into());
     }
-    restage_plugin(resolved, &fno_py, failed);
+    restage_plugin(resolved, failed);
 }
 
 /// The plugin-stage restage, plus the codex refresh when its channel marker
 /// says dev. The stage holds skills, hooks and scripts, none of them
 /// compiled, so it also rides a Python hold: a skill fix never waits on a
 /// Rust tarball.
-fn restage_plugin(resolved: &Path, fno_py: &Path, failed: &mut Vec<String>) {
+fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) {
     if let Some(agents_bin) = cargo_installed_bin() {
         let args: Vec<String> = [
             "plugin-install".into(),
@@ -2005,16 +2005,14 @@ fn restage_plugin(resolved: &Path, fno_py: &Path, failed: &mut Vec<String>) {
         // forced converge, so the dev-channel marker gates the refresh.
         if codex_channel_is_dev() {
             let args: Vec<String> = [
-                "config".into(),
-                "plugin".into(),
-                "install".into(),
+                "plugin-install".into(),
                 "codex".into(),
                 "--force".into(),
                 "--source".into(),
                 resolved.to_string_lossy().into_owned(),
             ]
             .to_vec();
-            let code = run_inherit(fno_py, &args);
+            let code = run_inherit(&agents_bin, &args);
             if code != 0 {
                 eprintln!(
                     "fno doctor update: WARNING: post-install codex refresh exited {code}; continuing"
@@ -2134,17 +2132,7 @@ fn has_shipped_pyc(td: &Path) -> bool {
 /// marker reads this run's rev) or is under way, so it JOINS that run and
 /// exits with its result. It never starts a second install.
 fn acquire_update_claim(rev: Option<&str>) -> Result<(), i32> {
-    let holder = format!("fno-update-pid{}", std::process::id());
-    let args: Vec<String> = [
-        "claim".into(),
-        "acquire".into(),
-        UPDATE_CLAIM_KEY.into(),
-        "--holder".into(),
-        holder,
-        "--reason".into(),
-        "machine-global install guard (tool env + cargo bins)".into(),
-    ]
-    .to_vec();
+    let args = update_claim_acquire_args(std::process::id());
     match run_bounded(&fno_agents_bin(), &args, Duration::from_secs(60), None) {
         Ok((0, _, _)) => Ok(()),
         Ok((1, out, _err)) => {
@@ -2177,6 +2165,29 @@ fn acquire_update_claim(rev: Option<&str>) -> Result<(), i32> {
             Err(1)
         }
     }
+}
+
+/// The acquire argv for the update claim held by process `pid`. The claim's
+/// liveness pid is the update itself, stamped `holder-process`: left unset,
+/// acquire anchors it to the calling harness session, and a killed or
+/// finished update then held the claim for as long as that session lived.
+pub(crate) fn update_claim_acquire_args(pid: u32) -> Vec<String> {
+    [
+        "claim",
+        "acquire",
+        UPDATE_CLAIM_KEY,
+        "--holder",
+        &format!("fno-update-pid{pid}"),
+        "--pid",
+        &pid.to_string(),
+        "--pid-provenance",
+        "holder-process",
+        "--reason",
+        "machine-global install guard (tool env + cargo bins)",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 /// The pid in an update claim holder (`fno-update-pid<N>`), or None for any
@@ -2587,7 +2598,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     } else if held.is_none() {
         failed.push("uv install".into());
     } else {
-        restage_plugin(&resolved, &resolve_fno_py(), &mut failed);
+        restage_plugin(&resolved, &mut failed);
     }
 
     release_update_claim();

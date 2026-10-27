@@ -3,7 +3,8 @@
 //!
 //! Differential parity for `accounts::env`, the port of `dispatch.py`
 //! (`dispatch_env`, `resolve_env_value`), `staging.verify_staged` and
-//! `account_env.resolve_account_overlay`. Each
+//! the `--account` overlay, whose Python leg was deleted after its cases
+//! froze. Each
 //! `tests/golden/accounts_env/*.json` case lays down an accounts config,
 //! staged links, credential files, store principals, Keychain items and a
 //! slot stamp; `expect` holds what the Python leg answered, captured by

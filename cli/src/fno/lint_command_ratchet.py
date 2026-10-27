@@ -56,7 +56,6 @@ NATIVE_SERVED_LEAVES = {
     "agents mail show",
     "mail show",
     "agents roles ls",
-    "roles ls",
     "backlog advance",
     "backlog album",
     "backlog archive",
@@ -101,10 +100,16 @@ NATIVE_SERVED_LEAVES = {
     "backlog session open",
     "backlog session reap-open",
     "config schema",
+    # The ci namespace answers through the native front door (the same
+    # classifier handover as the pr spellings below); it has no click child.
+    "do ci status",
     "do review resolve-level",
     "do review post-dispositions",
     "do review classify",
     "do review invocations",
+    "do research",
+    "do think dispatch",
+    "do think inspect",
     # The pr spellings answer through the native front door now; the wheel's
     # pr group keeps only the watch and stub-manifest mounts, whose leaves the
     # enumerator still reads from the live typer tree.

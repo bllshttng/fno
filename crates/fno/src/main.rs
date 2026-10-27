@@ -225,6 +225,15 @@ enum Role {
     /// `fno do target blast-check <plan>`: the blast classifier is native
     /// (target_blast.rs); the Python command is a thin forward.
     TargetBlastCheck(Vec<OsString>),
+    /// `fno do research <topic> ...`: exec'd through the sibling fno-agents
+    /// `research` door. No Python leg remains.
+    DoResearch(Vec<OsString>),
+    /// `fno do think inspect ...` and `fno do think dispatch ...`: exec'd
+    /// through the `think-inspect` and `think-dispatch` doors.
+    ThinkInspect(Vec<OsString>),
+    ThinkDispatch(Vec<OsString>),
+    /// Bare `fno do think`, `--help`, or an unknown leaf (named, exit 2).
+    ThinkUsage(Option<String>),
     /// `fno do review post-dispositions ...`: the disposition-comment leaf,
     /// exec'd through the sibling fno-agents `review-level findings post`
     /// door. The tail passes through byte-verbatim, --help included: the
@@ -259,6 +268,10 @@ enum Role {
     /// `fno agents restart ...` and root `fno restart ...`: exec'd as
     /// `fno-agents restart`, the one implementation.
     AgentsRestart(Vec<OsString>),
+    /// `fno agents org chart fold ...` (forwarded as `agents org-fold`):
+    /// exec'd as `fno-agents org-fold`, so the Explorer org tab's read skips
+    /// the Python front.
+    AgentsOrgFold(Vec<OsString>),
     /// `fno agents status ...`: the read command hooks and wait loops spend,
     /// exec'd natively for the same reason as agents_top: the Python front
     /// only turned around and exec'd the same binary. The argv passes
@@ -267,6 +280,15 @@ enum Role {
     /// `fno agents roles <op>` for an op the Rust door owns: exec'd as
     /// `fno-agents spawn-overlay roles`, the group options carried along.
     AgentsRoles(Vec<OsString>),
+    /// `fno whoami` and `fno whoami status`: the render with the session
+    /// receipt (`fno-agents intel --receipt`) appended. The seam runs the
+    /// front door as a marker child; the four leaves other families own
+    /// still forward to the Python leg; see `classify_whoami`.
+    Whoami(Vec<OsString>),
+    /// The retired root `fno status ...`: the move notice the Python
+    /// forwarder printed lands on stderr (byte-identical), then the same
+    /// exec as `fno whoami status`.
+    WhoamiStatusAlias(Vec<OsString>),
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
@@ -334,10 +356,14 @@ enum Role {
     /// paths commands still forward to Python (one command per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
-    /// `fno agents org` history, verdict, faq, `chart shape`, `chart
-    /// manifest-path`, and `fno inbox board`: the lead read commands, exec'd as
+    /// The `fno agents org` lead commands and `fno inbox board`, exec'd as
     /// arguments of existing fno-agents actions. Their Python legs are gone.
-    LeadRead(fno::lead_reads_route::Claim),
+    Lead(fno::lead_route::Claim),
+    /// `fno agents mcp send ...` and the deprecated root `fno mcp send ...`:
+    /// the ported MCP channel family's send command, exec'd through the
+    /// worker's --mcp-exec lane with the tail byte-verbatim. The bool is the
+    /// root spelling, whose move notice prints before the same exec.
+    AgentsMcpRoot(bool, Vec<OsString>),
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
@@ -355,6 +381,9 @@ enum Role {
     /// namespace execs the sibling Rust binary's pr dispatcher. The argv
     /// passes through byte-verbatim, the backlog namespace's contract.
     DoPr,
+    /// `fno do ci ...`: the per-commit CI-state namespace execs the sibling
+    /// binary's ci dispatcher, the same byte-verbatim handover as DoPr.
+    DoCi,
     /// `fno backlog list [<query>]`: the native node-query door (the grammar
     /// and the read model both live in this crate, d-069a9fa1). Args after
     /// `list`.
@@ -611,6 +640,58 @@ fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(rest.to_vec())
 }
 
+/// The leaves still owned by other families' Python legs: `fno whoami
+/// context|ledger|scoreboard|cost` forward to them.
+const PYTHON_LEAVES: [&str; 4] = ["context", "ledger", "scoreboard", "cost"];
+
+/// `fno whoami ...` and the retired root `fno status ...`: the summary
+/// render and the status read, exec'd as `fno-agents spawn-overlay whoami`.
+/// The four leaves other families still own (context / ledger / scoreboard /
+/// cost) forward to the Python leg byte-verbatim; the retired `fno status`
+/// root prints the move notice the Python forwarder printed, on the same
+/// stream, before the same exec. A root `-J` before either folds into the
+/// group's own `-J`, byte-for-byte what `fno -J whoami` answered before.
+fn classify_whoami(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    match args.first()?.to_str()? {
+        "whoami" => {
+            // args[0] is `whoami` itself; the exec action re-prefixes the
+            // group name, so the tail is everything after it.
+            let tail = &args[1..];
+            let mut i = 0usize;
+            while i < tail.len() {
+                match tail[i].to_str()? {
+                    "--json" | "-J" | "--no-walker" | "--no-fleet" => {}
+                    "--state-file" => i += 1,
+                    a if a.starts_with("--state-file=") => {}
+                    "status" => return Some((claimed_tail(tail, root_json), false)),
+                    leaf if PYTHON_LEAVES.contains(&leaf) => return None,
+                    leaf if leaf.starts_with('-') => {}
+                    _ => return Some((claimed_tail(tail, root_json), false)),
+                }
+                i += 1;
+            }
+            Some((claimed_tail(tail, root_json), false))
+        }
+        "status" => {
+            let mut tail: Vec<OsString> = std::iter::once(OsString::from("status"))
+                .chain(args[1..].iter().cloned())
+                .collect();
+            let json = root_json.then(|| OsString::from("--json"));
+            let tail = json.into_iter().chain(tail.drain(..)).collect();
+            Some((tail, true))
+        }
+        _ => None,
+    }
+}
+
+/// The claimed tail, with a root `-J` folded into the group's own spelling.
+fn claimed_tail(tail: &[OsString], root_json: bool) -> Vec<OsString> {
+    let json = root_json.then(|| OsString::from("--json"));
+    json.into_iter().chain(tail.iter().cloned()).collect()
+}
+
 /// `fno config plugins ...` or `fno plugins ...`: the args after the group.
 fn classify_plugins(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
     if args.first()?.to_str()? == "plugins" {
@@ -695,6 +776,24 @@ fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
         return None;
     }
     Some(args[3..].to_vec())
+}
+
+/// `fno do research <tail>`: the whole leaf is native.
+fn classify_do_research(args: &[OsString]) -> Option<Vec<OsString>> {
+    classify_group_command(args, "do", "research")
+}
+
+/// `fno do think <tail>`: the group is native, so the bare group and its help
+/// claim here too; only the first tail token names a leaf.
+fn classify_do_think(args: &[OsString]) -> Option<Role> {
+    let tail = classify_group_command(args, "do", "think")?;
+    let rest = tail.get(1..).unwrap_or_default().to_vec();
+    Some(match tail.first().and_then(|a| a.to_str()) {
+        Some("inspect") => Role::ThinkInspect(rest),
+        Some("dispatch") => Role::ThinkDispatch(rest),
+        None | Some("--help") | Some("-h") => Role::ThinkUsage(None),
+        Some(other) => Role::ThinkUsage(Some(other.to_string())),
+    })
 }
 
 /// `fno do review post-dispositions ...`: the disposition-comment leaf,
@@ -876,8 +975,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::paths_route::classify(args) {
         return Role::PathsCli(rest);
     }
-    if let Some(claim) = fno::lead_reads_route::classify(args) {
-        return Role::LeadRead(claim);
+    if let Some(claim) = fno::lead_route::classify(args) {
+        return Role::Lead(claim);
+    }
+    if let Some((root_alias, rest)) = fno::agents_mcp_route::classify(args) {
+        return Role::AgentsMcpRoot(root_alias, rest);
     }
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
@@ -900,6 +1002,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
     }
+    if let Some(rest) = fno::whoami_seam::classify(args) {
+        return Role::Whoami(rest);
+    }
     if let Some(rest) = classify_agents_lead_refresh_canon(args) {
         return Role::AgentsLeadRefreshCanon(rest);
     }
@@ -920,6 +1025,12 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_target_blast_check(args) {
         return Role::TargetBlastCheck(rest);
+    }
+    if let Some(rest) = classify_do_research(args) {
+        return Role::DoResearch(rest);
+    }
+    if let Some(role) = classify_do_think(args) {
+        return role;
     }
     if let Some(rest) = classify_review_post_dispositions(args) {
         return Role::ReviewPostDispositions(rest);
@@ -946,8 +1057,18 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_agents_restart(args) {
         return Role::AgentsRestart(rest);
     }
+    if let Some(rest) = classify_agents_command(args, "org-fold") {
+        return Role::AgentsOrgFold(rest);
+    }
     if let Some(rest) = classify_agents_status(args) {
         return Role::AgentsStatus(rest);
+    }
+    if let Some((rest, alias)) = classify_whoami(args) {
+        return if alias {
+            Role::WhoamiStatusAlias(rest)
+        } else {
+            Role::Whoami(rest)
+        };
     }
     if let Some(rest) = classify_agents_roles(args) {
         return Role::AgentsRoles(rest);
@@ -1008,6 +1129,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     {
         return Role::DoPr;
     }
+    // The ci namespace claims itself lexically, the pr namespace's contract:
+    // the sibling dispatcher owns its spellings and the argv passes through
+    // byte-verbatim. No bare `ci` claim: the root word stays unclaimed.
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("ci")
+    {
+        return Role::DoCi;
+    }
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
     }
@@ -1028,6 +1157,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(argv) = fno::inbox_user::classify_inbox_user(args)
         .or_else(|| fno::inbox_user::classify_inbox_peers(args))
+        .or_else(|| fno::inbox_user::classify_inbox_approvals(args))
     {
         return Role::InboxUser(argv);
     }
@@ -1276,6 +1406,7 @@ fn main() {
         Role::Forward => bootstrap::forward(&args),
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
+        Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
         Role::BacklogList(rest) => std::process::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
             // AC1-EDGE: piped/CI bare `fno` gets a notice, not a TUI. Exit 0 -
@@ -1340,7 +1471,10 @@ fn main() {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
-        Role::LeadRead(claim) => std::process::exit(fno::lead_reads_route::run(&claim)),
+        Role::Lead(claim) => std::process::exit(fno::lead_route::run(&claim)),
+        Role::AgentsMcpRoot(root_alias, rest) => {
+            std::process::exit(fno::agents_mcp_route::run(root_alias, &rest))
+        }
         Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],
@@ -1368,6 +1502,7 @@ fn main() {
         }
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
+        Role::Whoami(rest) => std::process::exit(fno::whoami_seam::run(&rest)),
         Role::AgentsLeadRefreshCanon(rest) => {
             std::process::exit(fno::lead_refresh_canon::run(&rest))
         }
@@ -1439,17 +1574,30 @@ fn main() {
         }
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
-            &["census", "--workers"],
+            fno::agents_menu::native_leaf("top"),
             &rest,
         )),
         Role::AgentsRestart(rest) => {
             std::process::exit(fno_agents_exec("fno agents restart", &["restart"], &rest))
         }
+        Role::AgentsOrgFold(rest) => std::process::exit(fno_agents_exec(
+            "fno agents org chart fold",
+            fno::agents_menu::native_leaf("org-fold"),
+            &rest,
+        )),
         Role::AgentsRoles(rest) => std::process::exit(fno_agents_exec(
             "fno agents roles",
             &["spawn-overlay", "roles"],
             &rest,
         )),
+        Role::WhoamiStatusAlias(rest) => {
+            eprintln!("fno status is now fno whoami status");
+            std::process::exit(fno_agents_exec(
+                "fno whoami",
+                &["spawn-overlay", "whoami"],
+                &rest,
+            ))
+        }
         Role::AgentsStatus(rest) => match fno::digest_overlay::fno_agents_bin_auto() {
             Some(bin) => std::process::exit(fno_agents_exec_bin(
                 "fno agents status",
@@ -1499,6 +1647,34 @@ fn main() {
             &["target-blast-check"],
             &rest,
         )),
+        Role::DoResearch(rest) => {
+            std::process::exit(fno_agents_exec("fno do research", &["research"], &rest))
+        }
+        Role::ThinkInspect(rest) => std::process::exit(fno_agents_exec(
+            "fno do think inspect",
+            &["think-inspect"],
+            &rest,
+        )),
+        Role::ThinkDispatch(rest) => std::process::exit(fno_agents_exec(
+            "fno do think dispatch",
+            &["think-dispatch"],
+            &rest,
+        )),
+        Role::ThinkUsage(unknown) => {
+            if let Some(leaf) = &unknown {
+                eprintln!("fno do think: no such command '{leaf}'");
+            }
+            println!("usage: fno do think <command> [ARGS]...");
+            println!();
+            println!("Read-only discovery inspection and explicit conversational dispatch.");
+            println!();
+            println!("commands:");
+            println!(
+                "  inspect <seed> [--repo DIR] [--json]   collect discovery evidence, no writes"
+            );
+            println!("  dispatch <node> [--json]               hand a node to a bg /think");
+            std::process::exit(if unknown.is_some() { 2 } else { 0 })
+        }
         Role::ReviewPostDispositions(rest) => std::process::exit(fno_agents_exec(
             "fno do review post-dispositions",
             &["review-level", "findings", "post"],
@@ -1716,6 +1892,55 @@ mod tests {
     }
 
     #[test]
+    fn do_ci_claims_its_namespace_and_no_root_word() {
+        assert_eq!(
+            decide_role(&os(&["do", "ci", "status", "main"]), false),
+            Role::DoCi
+        );
+        assert_eq!(decide_role(&os(&["do", "ci", "--help"]), false), Role::DoCi);
+        // Bare `fno do ci` claims too: the grouped help is native.
+        assert_eq!(decide_role(&os(&["do", "ci"]), false), Role::DoCi);
+        // The root word `ci` stays unclaimed: only the do tree carries it.
+        assert_ne!(
+            decide_role(&os(&["ci", "status", "main"]), false),
+            Role::DoCi
+        );
+        // A non-ci `do` tree stays with its owners.
+        assert_ne!(
+            decide_role(&os(&["do", "pr", "status", "41"]), false),
+            Role::DoCi
+        );
+    }
+
+    #[test]
+    fn do_research_and_do_think_claim_their_whole_groups() {
+        assert_eq!(
+            decide_role(&os(&["do", "research", "a topic", "--no-claim"]), false),
+            Role::DoResearch(os(&["a topic", "--no-claim"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "inspect", "x-1", "--json"]), false),
+            Role::ThinkInspect(os(&["x-1", "--json"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "dispatch", "x-1"]), false),
+            Role::ThinkDispatch(os(&["x-1"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think"]), false),
+            Role::ThinkUsage(None)
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "--help"]), false),
+            Role::ThinkUsage(None)
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "ponder"]), false),
+            Role::ThinkUsage(Some("ponder".to_string()))
+        );
+    }
+
+    #[test]
     fn agents_history_claims_only_forwarded_graph_requests() {
         let forwarded = os(&[
             "agents",
@@ -1747,7 +1972,7 @@ mod tests {
             Role::AgentsLeadRefreshCanon(os(&["--extra"]))
         );
         assert_eq!(
-            decide_role(&os(&["agents", "lead", "checkin"]), false),
+            decide_role(&os(&["agents", "lead", "done"]), false),
             Role::Forward
         );
         // The mail reader claims its command and refuses the renamed one by

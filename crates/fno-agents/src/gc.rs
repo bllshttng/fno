@@ -140,6 +140,12 @@ pub struct GcRow {
     /// ESRCH. The origin gate skips such a row, so it is judged like any
     /// other row; every downstream gate still applies.
     pub origin_corpse: bool,
+    /// The bg-adoption ruling (2026-10-24): the row's claude transcript
+    /// carries a real fno skill invocation (`using-fno` never counts - the
+    /// preamble is injected after a join, not invoked). Computed only for a
+    /// row with no origin recorded. Such a row is fno's own work, so the
+    /// origin gate judges it like a spawn row.
+    pub bg_fno_invoked: bool,
     /// The registry's own status reads terminal (`exited`,
     /// `permanent-dead`): a sweep observed the exit and stamped it. Distinct
     /// from `session_terminal` (the LIVE roster's state, which a session
@@ -347,7 +353,10 @@ pub enum TreeAction {
 /// team, provenance, open work, transcript, grace, retire. No boolean folds
 /// two questions together.
 pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>) {
-    if row.origin.as_deref() == Some("operator") {
+    // The done rule outranks the operator shield: an operator origin is
+    // often a guess (a mint that saw no spawner), and a row whose every node
+    // is done and that sat quiet past the hour has nothing left to protect.
+    if row.origin.as_deref() == Some("operator") && !past_idle_hour(row) {
         return (GcAction::Keep, Some(KeepReason::Operator));
     }
     if row.teamed {
@@ -372,17 +381,21 @@ pub fn gc_decide(row: &GcRow, grace_secs: i64) -> (GcAction, Option<KeepReason>)
     // fact about a session, and done-plus-quiet does not make it fno's to
     // remove - unless the row is provably a registry corpse, in which case
     // there is no session left to own it and the row is judged like any
-    // other: every downstream gate still applies. An adopted row whose
-    // status reads terminal and that holds no open PR is a finished session
-    // nobody owns anymore: it takes the same grace gate a spawned row takes
-    // instead of keeping forever as a phantom. The graph's node mentions do
-    // NOT pin it: a terminal adopted session drives nothing, and its
-    // sessions[] rows are history from before the adopt (a recycled
+    // other: every downstream gate still applies. The bg-adoption ruling is
+    // the second exception: a no-origin claude row whose transcript carries
+    // a real fno skill invocation IS fno's own work - the invocation is the
+    // join fno can prove - so it takes the spawn path too. An adopted row
+    // whose status reads terminal and that holds no open PR is a finished
+    // session nobody owns anymore: it takes the same grace gate a spawned
+    // row takes instead of keeping forever as a phantom. The graph's node
+    // mentions do NOT pin it: a terminal adopted session drives nothing,
+    // and its sessions[] rows are history from before the adopt (a recycled
     // blueprinter is named on dozens of still-open nodes it will never
     // touch again). An open PR is different - retiring here must not be
     // readable as the PR's remedy - so an open-PR row keeps. A live adopted
     // row keeps exactly as before.
-    if row.origin.as_deref() != Some("spawn") && !row.origin_corpse {
+    let bg_adopted = row.origin.is_none() && row.bg_fno_invoked;
+    if row.origin.as_deref() != Some("spawn") && !row.origin_corpse && !bg_adopted {
         // Ruling d-1538e896: an adopted row Claude reports finished takes
         // the idle-hour rule ahead of every keep, like a spawn row.
         if past_idle_hour(row) {
@@ -579,14 +592,20 @@ fn idle_age_s(row: &GcRow) -> Option<i64> {
 
 /// An fno-started row, or an adopted row whose harness reads it terminal
 /// (ruling d-1538e896), idle past the origin ruling's hour with no live
-/// claim: it retires whatever its work state says. Operator rows never do.
+/// claim: it retires whatever its work state says. The done rule widens it
+/// to every origin: a row whose every node is done and that sat quiet past
+/// the hour retires, so no origin, open do row or settle refusal pins it.
+/// The tree still follows the worktree rule: a dirty or unmerged tree stays.
+/// The node must come from a dispatch record: a transcript mention is a
+/// witness, and a user's session that only named a done node keeps.
 pub fn past_idle_hour(row: &GcRow) -> bool {
     let fleet = match row.origin.as_deref() {
         Some("spawn") => true,
         Some("adopted") => row.session_terminal.is_some(),
         _ => false,
     };
-    fleet
+    let done_worked = row.worked_node && matches!(row.work, WorkState::AllDone { .. });
+    (fleet || done_worked)
         && row.live_claim.is_none()
         && idle_age_s(row).is_some_and(|age| age > SPAWN_IDLE_RETIRE_SECS)
 }
@@ -2448,6 +2467,7 @@ mod tests {
             peer_drives_pr: false,
             pr_settled: false,
             origin_corpse: false,
+            bg_fno_invoked: false,
             registry_terminal: false,
             open_work_retire_s: crate::agents_config::DEFAULT_OPEN_WORK_RETIRE_SECS as i64,
             live_claim: None,
@@ -2544,17 +2564,41 @@ mod tests {
             (GcAction::Retire, None),
             "an fno-started row idle past the hour retires"
         );
-        // user-started: never removed, whatever the clock says.
+        // user-started on open work: never removed, whatever the clock says.
         let operator = GcRow {
             origin: Some("operator".into()),
             transcript_age_s: Some(5 * 24 * 3600),
+            work: WorkState::Open {
+                node: "N1".into(),
+                status: "in_progress".into(),
+            },
             ..retiring()
         };
         assert_eq!(
             gc_decide(&operator, GRACE),
             (GcAction::Keep, Some(KeepReason::Operator)),
-            "a user-started row is never the reaper's to remove"
+            "a user-started row on open work is never the reaper's to remove"
         );
+        // The done rule: every node done and quiet past the hour retires
+        // whatever the origin says - operator, or adopted and not terminal.
+        for origin in ["operator", "adopted"] {
+            let done = GcRow {
+                origin: Some(origin.into()),
+                transcript_age_s: Some(104 * 3600),
+                ..retiring()
+            };
+            assert_eq!(
+                gc_decide(&done, GRACE),
+                (GcAction::Retire, None),
+                "a done {origin} row quiet past the hour retires"
+            );
+            // A node only the transcript named is a witness: the row keeps.
+            let witnessed = GcRow {
+                worked_node: false,
+                ..done
+            };
+            assert_ne!(gc_decide(&witnessed, GRACE), (GcAction::Retire, None));
+        }
         // A live claim outranks the spent hour on the fno side too.
         let claimed = GcRow {
             live_claim: Some("node:N1 (holder s-1)".into()),
@@ -3019,11 +3063,15 @@ mod tests {
         };
         assert_eq!(tree_action(&bare), TreeAction::None);
 
-        // origin None is NOT the spawn fact: with no origin recorded, done
-        // work and a quiet transcript still keep the row - only an explicit
-        // spawn origin retires, and retiring() above carries one.
+        // origin None is NOT the spawn fact: with no origin recorded, open
+        // work and a quiet transcript still keep the row. Done work retires
+        // under the done rule whatever the origin.
         let unstamped = GcRow {
             origin: None,
+            work: WorkState::Open {
+                node: "N1".into(),
+                status: "in_progress".into(),
+            },
             ..retiring()
         };
         assert_eq!(
@@ -3032,6 +3080,39 @@ mod tests {
                 GcAction::Keep,
                 Some(KeepReason::NotSpawn { origin: "".into() })
             )
+        );
+    }
+
+    /// The bg-adoption ruling, both sides: a no-origin claude row whose
+    /// transcript carries a real fno skill invocation takes the spawn path
+    /// - the invocation is the join fno can prove - and one with neither
+    /// invocation nor origin stays a discussion under the not-spawn keep.
+    #[test]
+    fn a_bg_row_with_an_fno_invocation_reaps_like_a_spawn_row() {
+        let adopted = GcRow {
+            origin: None,
+            bg_fno_invoked: true,
+            ..retiring()
+        };
+        assert_eq!(
+            gc_decide(&adopted, GRACE),
+            (GcAction::Retire, None),
+            "past the idle hour, an adopted bg row retires like a spawn row"
+        );
+        let young = GcRow {
+            transcript_age_s: Some(60),
+            ..adopted
+        };
+        let (action, reason) = gc_decide(&young, GRACE);
+        assert_eq!(
+            action,
+            GcAction::Keep,
+            "inside the hour the spawn keeps hold"
+        );
+        assert_ne!(
+            reason,
+            Some(KeepReason::NotSpawn { origin: "".into() }),
+            "the invocation, not the origin field, decides the path"
         );
     }
 
@@ -3140,6 +3221,7 @@ mod tests {
             peer_drives_pr: false,
             pr_settled: false,
             origin_corpse: false,
+            bg_fno_invoked: false,
             registry_terminal: false,
             open_work_retire_s: crate::agents_config::DEFAULT_OPEN_WORK_RETIRE_SECS as i64,
             live_claim: None,

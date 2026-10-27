@@ -37,21 +37,27 @@ fn ts_key(raw: &str) -> String {
 
 /// The delivery trend split so filing cannot inflate it (Python `scope_split`,
 /// lead/scope.py). A lead filing real nodes raises undelivered by working
-/// well, so the convergence signal is the INHERITED set (created before
-/// `generation_start`) only. A row with no birth date reads as inherited: an old
-/// undated backlog is work the lead can be stalled on, never fresh filing
-/// that excuses it.
+/// well, so the undelivered sides stay split inherited vs filed. Closes read
+/// the other way: a close by ANYONE is delivery evidence, except a node the
+/// lead's own session filed (`lead_session`, the manifest's teamed session) -
+/// the lead closing its own filings must not read as convergence, so that
+/// close stays invisible to both close counts (lead ruling, 2026-10-26). A row
+/// with no birth date reads as inherited: an old undated backlog is work the
+/// lead can be stalled on, never fresh filing that excuses it. A row with no
+/// filer reads as not-own-filed, so its close counts.
 pub(crate) fn scope_split(
     ids: &std::collections::HashSet<String>,
     entries: &[Value],
     generation_start: &str,
     window_start: &str,
-) -> (u64, u64, u64) {
+    lead_session: Option<&str>,
+) -> (u64, u64, u64, u64) {
     let generation_start = ts_key(generation_start);
     let window = ts_key(window_start);
     let mut inherited_undelivered: u64 = 0;
     let mut filed_undelivered: u64 = 0;
     let mut inherited_closed_in_window: u64 = 0;
+    let mut filed_closed_in_window: u64 = 0;
     for row in entries {
         let Some(id) = row.get("id").and_then(Value::as_str) else {
             continue;
@@ -67,14 +73,24 @@ pub(crate) fn scope_split(
             } else {
                 filed_undelivered += 1;
             }
-        } else if inherited {
+        } else {
+            let own_filed = lead_session.is_some_and(|session| {
+                row.get("source_session_id").and_then(Value::as_str) == Some(session)
+            });
+            if own_filed {
+                continue;
+            }
             let completed = ts_key(
                 row.get("completed_at")
                     .and_then(Value::as_str)
                     .unwrap_or(""),
             );
             if completed >= window {
-                inherited_closed_in_window += 1;
+                if inherited {
+                    inherited_closed_in_window += 1;
+                } else {
+                    filed_closed_in_window += 1;
+                }
             }
         }
     }
@@ -82,6 +98,7 @@ pub(crate) fn scope_split(
         inherited_undelivered,
         filed_undelivered,
         inherited_closed_in_window,
+        filed_closed_in_window,
     )
 }
 
@@ -122,6 +139,9 @@ pub(crate) struct VerdictInputs {
     pub inherited_undelivered: u64,
     pub filed_undelivered: u64,
     pub inherited_closed_in_window: u64,
+    /// In-window closes on rows another session filed. The lead's own
+    /// filings' closes count in neither field (the guard in `scope_split`).
+    pub filed_closed_in_window: u64,
 }
 
 /// The caller's canonical team scope: explicit `--scope` wins (canonicalized,
@@ -245,7 +265,7 @@ fn generation_start(
 /// canonical project, so the manifest path and the graph compile select what
 /// the team actually wrote at `<space>/leads/<canonical>.md`. Canonical
 /// members map to themselves, so a registry-derived scope is unchanged.
-fn canonical_members_with_aliases(scope: &str, cwd: &Path) -> String {
+pub(crate) fn canonical_members_with_aliases(scope: &str, cwd: &Path) -> String {
     let map = crate::org_board::scope::project_map(cwd).unwrap_or_default();
     let members: Vec<String> = scope
         .split(',')
@@ -446,8 +466,18 @@ pub(crate) fn resolve_verdict_inputs(
         crate::org_board::scope::project_map(cwd);
     let ids = crate::territory::compile_scope_ids(&scope, &entries, &projects)
         .map_err(|e| format!("scope {scope} unreadable: {e}"))?;
-    let (inherited_undelivered, filed_undelivered, inherited_closed_in_window) =
-        scope_split(&ids, &entries, &generation_start, &window_start);
+    let (
+        inherited_undelivered,
+        filed_undelivered,
+        inherited_closed_in_window,
+        filed_closed_in_window,
+    ) = scope_split(
+        &ids,
+        &entries,
+        &generation_start,
+        &window_start,
+        manifest.harness_session_id.as_deref(),
+    );
 
     Ok(VerdictInputs {
         scope,
@@ -468,6 +498,7 @@ pub(crate) fn resolve_verdict_inputs(
         inherited_undelivered,
         filed_undelivered,
         inherited_closed_in_window,
+        filed_closed_in_window,
     })
 }
 
@@ -908,5 +939,111 @@ mod tests {
             assert!(!err.contains("no teamed registry row"), "{err}");
         });
         fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- the close-count guard (lead ruling, 2026-10-26) ---
+
+    fn scope_ids() -> std::collections::HashSet<String> {
+        ["x-root".to_string(), "x-kid".to_string()]
+            .into_iter()
+            .collect()
+    }
+
+    fn close_row(id: &str, created_at: &str, extra: Value) -> Value {
+        let mut v = entry(
+            id,
+            "",
+            created_at,
+            serde_json::json!({
+                "status": "done",
+                "completed_at": "2026-10-26T04:00:00+00:00",
+            }),
+        );
+        if let (Value::Object(map), Value::Object(base)) = (&extra, &mut v) {
+            for (k, val) in map {
+                base.insert(k.clone(), val.clone());
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn an_other_session_filed_close_counts_in_window() {
+        let rows = [close_row(
+            "x-kid",
+            "2026-10-25T23:00:30+00:00",
+            serde_json::json!({"source_session_id": "worker-session"}),
+        )];
+        let (inherited_open, filed_open, inherited_closed, filed_closed) = scope_split(
+            &scope_ids(),
+            &rows,
+            "2026-10-25T20:13:46+00:00",
+            "2026-10-26T01:51:00+00:00",
+            Some("lead-session"),
+        );
+        assert_eq!(inherited_open, 0);
+        assert_eq!(filed_open, 0);
+        assert_eq!(inherited_closed, 0);
+        assert_eq!(filed_closed, 1);
+    }
+
+    #[test]
+    fn the_lead_s_own_filed_close_counts_in_neither_close_counter() {
+        let rows = [close_row(
+            "x-kid",
+            "2026-10-25T20:13:03+00:00",
+            serde_json::json!({"source_session_id": "lead-session"}),
+        )];
+        let (_, _, inherited_closed, filed_closed) = scope_split(
+            &scope_ids(),
+            &rows,
+            "2026-10-25T20:13:46+00:00",
+            "2026-10-26T01:51:00+00:00",
+            Some("lead-session"),
+        );
+        assert_eq!(inherited_closed, 0);
+        assert_eq!(filed_closed, 0);
+    }
+
+    #[test]
+    fn an_inherited_close_still_counts_and_a_filerless_row_is_not_own_filed() {
+        let rows = [
+            // created before generation_start, no filer recorded: inherited
+            // close that still counts (old undated backlog behavior kept).
+            close_row("x-root", "2026-10-03T22:26:33+00:00", serde_json::json!({})),
+            // filed after generation_start, no filer recorded: counts as a
+            // filed close - an absence of a filer is not the lead's own hand.
+            close_row("x-kid", "2026-10-25T23:00:30+00:00", serde_json::json!({})),
+        ];
+        let (inherited_open, filed_open, inherited_closed, filed_closed) = scope_split(
+            &scope_ids(),
+            &rows,
+            "2026-10-25T20:13:46+00:00",
+            "2026-10-26T01:51:00+00:00",
+            Some("lead-session"),
+        );
+        assert_eq!(inherited_open, 0);
+        assert_eq!(filed_open, 0);
+        assert_eq!(inherited_closed, 1);
+        assert_eq!(filed_closed, 1);
+    }
+
+    #[test]
+    fn an_open_filed_child_still_lands_in_filed_undelivered() {
+        let rows = [entry(
+            "x-kid",
+            "x-root",
+            "2026-10-25T23:00:30+00:00",
+            serde_json::json!({"status": "in_progress"}),
+        )];
+        let (inherited_open, filed_open, _, _) = scope_split(
+            &scope_ids(),
+            &rows,
+            "2026-10-25T20:13:46+00:00",
+            "2026-10-26T01:51:00+00:00",
+            Some("lead-session"),
+        );
+        assert_eq!(inherited_open, 0);
+        assert_eq!(filed_open, 1);
     }
 }
