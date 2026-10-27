@@ -187,8 +187,8 @@ pub(crate) fn dispatch_helper(cmd: std::process::Command) -> std::process::Comma
     out
 }
 
-/// The state-root's `bin/github-cli` dir (the `fno.paths.github_cli_proxy_dir`
-/// port): `$HOME/.fno` or `$FNO_STATE_DIR`, never a settings load.
+/// The state-root's `bin/github-cli` dir (twin of `fno::gh_proxy::proxy_dir`,
+/// which installs the shim): `$HOME/.fno` or `$FNO_STATE_DIR`, never a settings load.
 fn machine_state_bin_github_cli() -> Option<PathBuf> {
     let root = non_empty_env("FNO_STATE_DIR")
         .map(PathBuf::from)

@@ -52,6 +52,10 @@ pub mod fleet_route;
 pub mod footnote_transcript;
 pub mod frame_ansi;
 pub mod frame_html;
+pub mod gh_proxy;
+#[cfg(test)]
+#[path = "gh_proxy_tests.rs"]
+mod gh_proxy_tests;
 pub mod git_paths;
 pub mod inbox_user;
 pub mod join_marker;

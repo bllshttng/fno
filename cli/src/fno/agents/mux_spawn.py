@@ -1182,11 +1182,6 @@ def _mesh_env_pairs(
     ]
     if session_id and session_id.strip():
         pairs.append(f"FNO_HARNESS_SESSION_ID={session_id.strip()}")
-    from fno.setup.github_cli import worker_environment
-
-    proxy_env = worker_environment(os.environ)
-    if proxy_env.get("PATH") != os.environ.get("PATH"):
-        pairs.append(f"PATH={proxy_env['PATH']}")
     unset: list[str] = []
     # A spawned child inherits its parent's ROUTE (account, model, node
     # provenance below) but never its parent's IDENTITY. An ambient session

@@ -212,7 +212,7 @@ One file per session, per day, or per throttle window.
 | `state/locks/github-request-budget.json` (+ `.lock`) | `crates/fno-agents/src/gh_budget.rs` via the `fno-agents fleet-incident gh-budget` door | rewritten per admitted request; stamps pruned past 60 s |
 | `state/locks/github-request-spend.jsonl` (+ `.1`) | `crates/fno-agents/src/gh_spend.rs` | one line per admitted or refused request: caller, shape, bucket, points, verdict; rotated at 8 MiB to one previous generation |
 | `state/locks/plan-<sha1>.lock` | `crates/fno-agents/src/plan_doc/lock.rs` (`PlanDocLock`) and `cli/src/fno/plan/locking.py` (`plan_doc_lock`), keyed on the plan doc's resolved path | advisory flock sidecar, one per plan doc the two writers rewrite; a held lock keeps the daemon's locks fold pending, and the takers re-resolve after the flock so the fold cannot split one; stale locks are reaped past `locks_retain_days` by the gc sweep |
-| `bin/github-cli/gh`, `gh.pre-fno` | `setup/github_cli.py` via `paths.github_cli_proxy_dir()` | permanent proxy; one backup is retained only when an unrelated wrapper was present |
+| `bin/github-cli/gh`, `gh.pre-fno` | `crates/fno/src/gh_proxy.rs` via `proxy_dir()` | permanent proxy; one backup is retained only when an unrelated wrapper was present |
 
 `.preflight-receipt-locks/` is the shape to copy. It derives from `dirname "$GLOBAL_EVENTS_PATH"`, so it already follows the resolver, and it sits at the root because the events file does.
 

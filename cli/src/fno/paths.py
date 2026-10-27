@@ -753,11 +753,6 @@ def graphql_quota_lock() -> Path:
     return locks_dir() / "github-graphql-quota.lock"
 
 
-def github_cli_proxy_dir() -> Path:
-    """Installed worker-only `gh` proxy directory."""
-    return state_dir() / "bin" / "github-cli"
-
-
 def locks_dir() -> Path:
     """Advisory-lock sidecar directory: the layout table's ``locks`` row
     (``state/locks`` once the fold ran).

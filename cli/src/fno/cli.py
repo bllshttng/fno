@@ -407,44 +407,6 @@ app = typer.Typer(
 )
 
 
-def _protect_process_path(ctx: typer.Context) -> None:
-    """Put the quota proxy in PATH for subprocesses spawned by this command."""
-    from fno.setup.github_cli import (
-        PROXY_DEPTH_ENV,
-        worker_environment,
-    )
-
-    # PROXY_DEPTH_ENV is in the key set so `worker_environment`'s drop reaches
-    # os.environ: this call also prepends the proxy to PATH, and a marker left
-    # beside it makes every bare-`gh` shell-out from this process refuse.
-    keys = ("PATH", "FNO_GH_PROXY_DIR", "FNO_REAL_GH", PROXY_DEPTH_ENV)
-    original = {key: os.environ.get(key) for key in keys}
-    base = dict(os.environ)
-    # Never honor an inherited dir: a requested dir re-raises on a failed
-    # install, and a parent's temp pin would win PATH over the durable home.
-    base.pop("FNO_GH_PROXY_DIR", None)
-    protected = worker_environment(base)
-    changed = False
-    for key in keys:
-        value = protected.get(key)
-        if value != original[key]:
-            changed = True
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-    if changed:
-        def restore_path() -> None:
-            for key, value in original.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
-
-        ctx.call_on_close(restore_path)
-
-
 @app.callback()
 def callback(
     ctx: typer.Context,
@@ -453,7 +415,6 @@ def callback(
 ) -> None:
     _check_migration()
     _warn_deprecated_alias_if_needed()
-    _protect_process_path(ctx)
     ctx.ensure_object(dict)
     ctx.obj["json"] = json_output
     if version:
