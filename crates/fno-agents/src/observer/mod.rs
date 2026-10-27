@@ -398,7 +398,6 @@ fn sweep_skill(cwd: &Path, skill: &str, since: i64, judge_n: usize, json_out: bo
         .cloned()
         .unwrap_or_default();
     let skill_id = fold::skill_id_for(skill);
-    let repo_root = crate::paths::worktree_repo_root(cwd);
 
     // Insufficient guard first (AC1-UI): <10 attributable -> no run_complete.
     if items.len() < fold::MIN_ATTRIBUTABLE {

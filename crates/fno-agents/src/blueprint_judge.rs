@@ -895,28 +895,6 @@ fn run_single_plan(
     }
 }
 
-/// [`run_single_plan`]'s computation without the stdout print - the timeout
-/// stamp still lands, the rows come back as the judge payload. The observer
-/// door shares it so the sweep's `--judge` tail and `fno doctor observer
-/// judge` answer from one judge body.
-pub(crate) fn judge_plan_rows(
-    plan_path: &Path,
-    node_id: Option<&str>,
-    cwd: &Path,
-    lenses: &Lenses,
-    spawn: Spawn,
-    budget: u64,
-) -> Value {
-    let plan_text = std::fs::read_to_string(plan_path).unwrap_or_default();
-    let (kind, rows, timeout_reason) = judge_rows(&plan_text, node_id, cwd, lenses, spawn, budget);
-    if let Some(reason) = timeout_reason {
-        stamp_judge_timeout(plan_path, &reason);
-    } else {
-        clear_judge_stamp(plan_path);
-    }
-    json!({"kind": kind, "rows": rows})
-}
-
 fn run_calibration(
     labels_path: &Path,
     split: &str,
