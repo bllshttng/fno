@@ -243,7 +243,7 @@ fn the_spawn_seam_applies_refuses_and_clears() {
     // inherited route scrubbed and the row's stamp set.
     std::env::set_var("ANTHROPIC_BASE_URL", "https://parent.example.test");
     let params = json!({ "account": "alt", "cwd": cwd });
-    let code = launch::seam_exit(&params, "claude");
+    let code = launch::seam_exit(&params, "claude", None);
     let applied = (
         std::env::var("CLAUDE_CONFIG_DIR").ok(),
         std::env::var("ANTHROPIC_BASE_URL").ok(),
@@ -256,36 +256,53 @@ fn the_spawn_seam_applies_refuses_and_clears() {
     // A carrier with no --dispatch-account refuses, and the carrier is
     // claimed so no child inherits it.
     std::env::set_var(launch::DISPATCH_ACCOUNT_ENV, "{\"A\": \"1\"}");
-    let carrier_code = launch::seam_exit(&json!({ "cwd": cwd }), "claude");
+    let carrier_code = launch::seam_exit(&json!({ "cwd": cwd }), "claude", None);
     let carrier_left = std::env::var(launch::DISPATCH_ACCOUNT_ENV).ok();
 
     // A spawn with no account clears the stamp a parent left behind.
     std::env::set_var("FNO_LAUNCH_ACCOUNT", "parent-acct");
-    let plain_code = launch::seam_exit(&json!({ "cwd": cwd }), "claude");
+    let plain_code = launch::seam_exit(&json!({ "cwd": cwd }), "claude", None);
     let stamp_left = std::env::var("FNO_LAUNCH_ACCOUNT").ok();
 
-    // A routed account spawn is the route arm's to bounce, env untouched: a
-    // vendor may read its key from a var the scrub would strip. The stamp
-    // still dies at entry; the bounce re-execs Python, whose cmd_spawn
-    // re-stamps after it resolves.
+    // A routed account spawn composes in process: the route resolved first
+    // (it may read its key from a var the scrub strips), the account keeps
+    // its profile, the inherited auth leaves, and the launch layers the route.
     std::env::set_var("FNO_LAUNCH_ACCOUNT", "parent-acct");
-    std::env::set_var("ANTHROPIC_AUTH_TOKEN", "route-key");
+    std::env::set_var("ANTHROPIC_AUTH_TOKEN", "parent-key");
+    let route_env: std::collections::BTreeMap<String, String> = [
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "route-key"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
     let routed = json!({ "account": "alt", "route": "zai,glm-5.2", "cwd": cwd });
-    let routed_code = launch::seam_exit(&routed, "claude");
-    let route_key = std::env::var("ANTHROPIC_AUTH_TOKEN").ok();
-    let routed_stamp = std::env::var("FNO_LAUNCH_ACCOUNT").ok();
+    let routed_code = launch::seam_exit(&routed, "claude", Some(&route_env));
+    let routed_applied = (
+        std::env::var("CLAUDE_CONFIG_DIR").ok(),
+        std::env::var("ANTHROPIC_AUTH_TOKEN").ok(),
+        std::env::var("FNO_LAUNCH_ACCOUNT").ok(),
+    );
 
     // A routed spawn carrying the proven carrier but no --dispatch-account
     // refuses, and the carrier is claimed so no child inherits its values.
     std::env::set_var(launch::DISPATCH_ACCOUNT_ENV, "{\"A\": \"1\"}");
-    let routed_carrier_code =
-        launch::seam_exit(&json!({ "route": "zai,glm-5.2", "cwd": cwd }), "claude");
+    let routed_carrier_code = launch::seam_exit(
+        &json!({ "route": "zai,glm-5.2", "cwd": cwd }),
+        "claude",
+        Some(&route_env),
+    );
     let routed_carrier_left = std::env::var(launch::DISPATCH_ACCOUNT_ENV).ok();
 
     restore(saved);
+    assert_eq!(routed_code, None);
     assert_eq!(
-        (routed_code, route_key.as_deref(), routed_stamp.as_deref()),
-        (None, Some("route-key"), None)
+        routed_applied,
+        (
+            Some(alt.display().to_string()),
+            None,
+            Some("alt".to_string())
+        )
     );
     assert_eq!(
         (routed_carrier_code, routed_carrier_left.as_deref()),

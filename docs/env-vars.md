@@ -184,7 +184,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_OPENCODE_LIVE_URL` | rs | unclear: crates/fno-agents/src/opencode_archive_tests.rs:338 |
 | `FNO_OPENCODE_STORAGE_DIR` | py+rs | Moves opencode's storage root, and with it the sibling `opencode.db` session store: the discover default and the dispatch brief's transcript tail read the store beside it. |
 | `FNO_OPERATOR_CAPTURE_DIR` | rs | Moves the operator-capture dir that holds each session's ack ledger and scan cursor; unset, it is `<state dir>/operator-capture`. |
-| `FNO_ORPHANS_SKIP_PROBE` | py | unclear: cli/src/fno/agents/cli.py:3732 |
+| `FNO_ORPHANS_SKIP_PROBE` | rs | unclear: crates/fno-agents/src/orphans.rs:706 |
 | `FNO_OWNER_BIRTH` | rs | The owner process start token paired with FNO_OWNER_PID; protects sandbox process cleanup from PID reuse. |
 | `FNO_OWNER_PID` | rs | The owner process for an owner-bound sandbox server and its descendants; shared fleet launches leave it unset. |
 | `FNO_OWNER_SESSION` | rs | The harness session id that owns a sandbox server and descendants; required with FNO_OWNER_PID and FNO_OWNER_BIRTH. |

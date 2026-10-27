@@ -1019,7 +1019,14 @@ jobs:
           cargo test --test hook_latency hook_sources_stay_small
           cargo test --test test_owned_keeper_reap every_triad_spawning_test_file_declares_its_owner
 
-      - name: cargo test --lib --bins (fno-agents)
+      - name: Install cargo-nextest
+        # One process per test: the fno-agents lib suite's PATH and FNO_HOME mutations become process-local, so the cross-test env races that keep reddening clean branches are structurally impossible instead of lock-guarded. nextest never runs doctests, but plain `cargo test --lib --bins` never ran them either.
+        timeout-minutes: 3
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: cargo nextest --lib --bins (fno-agents)
         id: lib
         working-directory: crates/fno-agents
         env:
@@ -1027,7 +1034,8 @@ jobs:
           CARGO_HOME: /home/runner/.cargo
           RUSTUP_HOME: /home/runner/.rustup
           FNO_TEST_HERMETIC: "0"
-        run: cargo test --lib --bins --no-fail-fast
+        # --no-fail-fast keeps the old contract: nextest stops scheduling new tests after a failure by default, and the suite must run whole.
+        run: cargo nextest run --lib --bins --no-fail-fast
 
       - name: Write-gate shell test (relay + state-root policy)
         # The Rust unit tests cover refuse_for's verdicts; this runs the real
@@ -1068,8 +1076,17 @@ jobs:
     # pushed it past a 30 minute cap with every test green. The cap leaves
     # room above that.
     timeout-minutes: 40
+    # On 2026-10-27 shards still ran out of disk after the disk step, and
+    # the runner died before its log uploaded, so the size is unmeasured.
+    # Cut the two large parts of a debug target dir: full debug info and
+    # the incremental cache. cargo-test-shard.sh prints df after the build.
+    # Line tables keep file:line in a panic backtrace. DEV and TEST must
+    # match, or cargo builds every dependency twice.
     env:
       FNO_CLAIMS_PARITY_PYTHON: ${{ github.workspace }}/cli/.venv/bin/python
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
     steps:
       - name: Checkout
@@ -1087,12 +1104,15 @@ jobs:
       # test failed. The image's unused toolchains are about 25 GB.
       - name: Free runner disk
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium
           df -h /
 
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # Its own key: the other cargo jobs cache full debug artifacts, and a
+      # restore of those would sit beside this job's rebuilt ones.
       - name: Cache Cargo registry + build artifacts
         uses: actions/cache@v5
         with:
@@ -1102,9 +1122,9 @@ jobs:
             ~/.cargo/build
             crates/fno-agents/target
             crates/fno/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-itest-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-itest-
 
       - name: Install ripgrep (gather_context's sibling-caller grep)
         timeout-minutes: 3

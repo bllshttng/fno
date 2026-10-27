@@ -259,8 +259,8 @@ const REMEDIES: &[Remedy] = &[
         "JSON-stdout contract: every -J command prints exactly one document, [] on empty; documented envelope keys; --timeout on mail send/ask (rank 1)", "low",
         ["agents", "mail", "send", "--help"], r"--timeout\b"),
     remedy!("ci_probe", "CI state for a commit, main, or PR",
-        "no command today: fno do ci status <sha|main|pr> --watch is the asked remedy; do pr status is PR-keyed and carries no per-check names (rank 4)", "medium",
-        ["help", "do", "--all"], r"(?im)^\s*ci\s"),
+        "existing: fno do ci status <sha|main|pr> [--watch] prints per-check names; do pr status keeps the merge verdict (rank 4)", "medium",
+        ["do", "ci", "--help"], r"(?m)^\s*status <sha"),
     remedy!("pr_threads", "PR review threads: list, reply, resolve",
         "no command today: fno do pr threads list|reply|resolve (rank 11)", "medium",
         ["do", "pr", "--help"], r"(?im)^\s*threads\s"),
@@ -1584,7 +1584,7 @@ mod tests {
         assert_eq!(flag(c, "--origin-evidence"), Some("scratch-shape:ci_probe"));
         assert!(c.contains(&"--separate".to_string()), "got {c:?}");
         assert!(
-            fake.calls().iter().any(|c| c == &["help", "do", "--all"]),
+            fake.calls().iter().any(|c| c == &["do", "ci", "--help"]),
             "the remedy probe runs before filing: {:?}",
             fake.calls()
         );

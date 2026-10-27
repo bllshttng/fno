@@ -583,12 +583,31 @@ pub(crate) mod test_primary {
     use super::*;
     use std::io::Read;
     use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     pub(crate) struct Primary {
         pub remote: Remote,
         pub db: Arc<Mutex<rusqlite::Connection>>,
+        /// A statement reply over this many bytes is refused, the way sqld
+        /// refuses one over its response size limit. Unlimited by default.
+        pub cap: Arc<AtomicUsize>,
         _dir: tempfile::TempDir,
+    }
+
+    impl Primary {
+        /// The bytes of the reply `sql` would get, measured the way the cap is.
+        pub(crate) fn reply_len(&self, sql: &str, args: &[SqlValue]) -> usize {
+            let args: Vec<Value> = args.iter().map(SqlValue::to_hrana).collect();
+            statement(&self.db.lock().unwrap(), &json!({"sql": sql, "args": args}))
+                .unwrap()
+                .to_string()
+                .len()
+        }
+
+        pub(crate) fn set_cap(&self, cap: usize) {
+            self.cap.store(cap, Ordering::SeqCst);
+        }
     }
 
     pub(crate) fn start() -> Primary {
@@ -602,14 +621,17 @@ pub(crate) mod test_primary {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let served = Arc::clone(&db);
+        let cap = Arc::new(AtomicUsize::new(usize::MAX));
+        let limit = Arc::clone(&cap);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                serve(stream, &served);
+                serve(stream, &served, limit.load(Ordering::SeqCst));
             }
         });
         Primary {
             remote: Remote::parse(&format!("http://127.0.0.1:{port}"), None).unwrap(),
             db,
+            cap,
             _dir: dir,
         }
     }
@@ -624,7 +646,7 @@ pub(crate) mod test_primary {
         Remote::parse(&format!("http://127.0.0.1:{port}"), None).unwrap()
     }
 
-    fn serve(stream: TcpStream, db: &Mutex<rusqlite::Connection>) {
+    fn serve(stream: TcpStream, db: &Mutex<rusqlite::Connection>, cap: usize) {
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut length = 0;
         loop {
@@ -645,7 +667,7 @@ pub(crate) mod test_primary {
             .as_array()
             .unwrap()
             .iter()
-            .map(|r| answer(&connection, r))
+            .map(|r| answer(&connection, r, cap))
             .collect();
         let reply = json!({"baton": null, "results": results}).to_string();
         let mut stream = stream;
@@ -741,7 +763,7 @@ pub(crate) mod test_primary {
         Ok(json!({"cols": cols, "rows": out, "affected_row_count": connection.changes()}))
     }
 
-    fn answer(connection: &rusqlite::Connection, request: &Value) -> Value {
+    fn answer(connection: &rusqlite::Connection, request: &Value, cap: usize) -> Value {
         let failed =
             |e: rusqlite::Error| json!({"type": "error", "error": {"message": e.to_string()}});
         match request["type"].as_str() {
@@ -751,6 +773,9 @@ pub(crate) mod test_primary {
                 Err(e) => failed(e),
             },
             Some("execute") => match statement(connection, &request["stmt"]) {
+                Ok(result) if result.to_string().len() > cap => {
+                    json!({"type": "error", "error": {"message": "Response is too large"}})
+                }
                 Ok(result) => {
                     json!({"type": "ok", "response": {"type": "execute", "result": result}})
                 }

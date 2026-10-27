@@ -217,6 +217,7 @@ config unset	T1	config unset	5
 context	KEEP	context	15	single-leaf group
 cost	KEEP	cost	7	single-leaf group
 delivery evaluate	KEEP	delivery evaluate	7	single-leaf group
+do ci status	T1	do ci status	0
 do delivery evaluate	T1	do delivery evaluate	7
 do loops ls	T1	do loops ls	1
 do loops pause-all	T1	do loops pause-all	1
