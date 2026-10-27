@@ -28,10 +28,13 @@
 # private and unlisted.
 
 
-# fno doctor bundle {build,check,lint} - operate on the plugin's skills/ source tree.
-scripts/generate-skill-bundles.sh :: bundle
-scripts/lint/check-skill-bundles-fresh.sh :: bundle check
-scripts/lint/no-cross-skill-runtime-calls.sh :: bundle lint
+# The bundle shell-outs (scripts/generate-skill-bundles.sh,
+# scripts/lint/check-skill-bundles-fresh.sh,
+# scripts/lint/no-cross-skill-runtime-calls.sh) dropped from this list in
+# the PR that deleted the Python bundle CLI: the guard scans cli/src/fno,
+# and the caller there is gone (the native `fno doctor bundle` resolves the
+# same scripts from the Rust side, outside this guard's scope). INTERNALIZED
+# for the Python tree the same way the pr-*.sh entries below were.
 
 
 # fno doctor lint flock-pattern - repository linting script remains clone-only and

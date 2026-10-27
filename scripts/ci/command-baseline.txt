@@ -55,7 +55,6 @@ backlog done
 backlog get
 backlog next
 backlog queued
-bundle
 carveout
 claim
 claim release
@@ -68,7 +67,40 @@ context
 cost
 delivery evaluate
 do
-doctor !--context-audit !--context-budget !--context-entry !--context-harness !--context-host
+doctor bash-census
+doctor bundle
+doctor codemap
+doctor evals export
+doctor evals grade
+doctor evals graduate
+doctor evals macro
+doctor evals qualify
+doctor evals report
+doctor evals run
+doctor evals trend
+doctor event audit
+doctor event emit
+doctor event fanout tick
+doctor event find !--session
+doctor event gate-escape
+doctor event gc
+doctor event push-parent
+doctor footprint !--cause-only
+doctor harness
+doctor harness-matrix
+doctor intel
+doctor lanes
+doctor lint
+doctor observer judge
+doctor observer replay
+doctor observer sweep
+doctor plugin-file
+doctor reclaim
+doctor scratch report
+doctor scratch sweep
+doctor stalls
+doctor test
+doctor update
 done
 evals
 event

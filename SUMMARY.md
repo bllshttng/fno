@@ -136,3 +136,13 @@ sibling-of-binary lookup finds no `fno-agents`, matching the capture machine.
   `git_checkout_identity`, the mechanism both contracts build on. The
   three dead Python tests and the now-unused `time` import dropped with
   the leg.
+- **The two ratchet reds (third red, same head).** The surface the port
+  reshaped tripped two checked-in inventories. The shellout-drift
+  allowlist still listed the three bundle scripts the deleted Python CLI
+  shelled out to; the rows dropped with a comment naming the Rust-side
+  caller (outside the guard's Python-tree scope). The command-surface
+  ratchet regenerated `command-baseline.txt` (126 leaves: the bundle leaf
+  gone, the old Python doctor leaf with its context-audit flags replaced
+  by the forward's enumerated subtree), and the collapsed-menu hidden-
+  option inventory dropped its two doctor-namespaced rows the collapsed
+  view can no longer see.
