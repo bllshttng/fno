@@ -182,12 +182,16 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     # Individual commands (plain functions wrapped as single-command apps) -
+    # `fno whoami` itself is native; this lazy row hosts the four hidden
+    # leaves other families still own (fno.whoami_leaves). `status` and
+    # `cost` are move-intercepted spellings; their rows stay for the release
+    # clock, now pointing at the leaf stub they land on.
     "whoami": (
-        "fno.agent.cli:whoami_app",
+        "fno.whoami_leaves:whoami_app",
         "Operating-stack summary: project + fleet + walker + session + harness.",
     ),
     "status": (
-        "fno.agent.cli:status_command",
+        "fno.whoami_leaves:whoami_app",
         "Session gate satisfaction + bounded events tail + inconsistencies.",
         {"hidden": True},
     ),
@@ -197,7 +201,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "cost": (
-        "fno.agent.cli:cost_command",
+        "fno.whoami_leaves:cost_command",
         "Cost + usage metrics from session transcripts and ledger.json.",
         {"hidden": True},
     ),

@@ -305,7 +305,7 @@ pub fn render_reap(summary: &GcSummary, json_out: bool, dry_run: bool) -> String
     for (node, harness, session_id) in &summary.settled_do_rows {
         let _ = harness; // named in the JSON; the text line carries node + session
         out.push_str(&format!(
-            "  {settle_command} {session_id} (stale open do row filled on done+merged node: {node})\n"
+            "  {settle_command} {session_id} (stale open do row filled on done node: {node})\n"
         ));
     }
     for (node, reason) in &summary.settle_refused {

@@ -1,0 +1,3 @@
+error: cannot decide which session is 'self': multiple harness markers present (inherited env?)
+markers: CODEX_THREAD_ID, CODEX_SESSION_ID
+resolve with: find ~/.codex/sessions ~/.claude/projects -name '*thread-abc*'

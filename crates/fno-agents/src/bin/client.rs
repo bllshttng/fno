@@ -162,10 +162,8 @@ fn main() {
         std::process::exit(fno_agents::wave::run(&args[1..]));
     }
     // cli/src/fno/pr/_sync_canonical.py transports HERE through command_call:
-    // the post-merge canonical sync + its catch-up sweep and staleness
-    // alarm, native. Registers no command (the shrink law allows no new
-    // action); the transport reaches it through resolve_binary like the
-    // other early arms.
+    // the post-merge sync + its catch-up sweep and staleness alarm, native.
+    // Registers no command (the shrink law allows no new action).
     if args.first().map(String::as_str) == Some("sync-canonical") {
         std::process::exit(fno_agents::sync_canonical::run_sync_canonical_command(
             &args[1..],
@@ -182,6 +180,9 @@ fn main() {
     }
     if args.first().map(String::as_str) == Some("pr") {
         std::process::exit(fno_agents::pr_front::run(&args[1..]));
+    }
+    if args.first() == Some(&"do".to_string()) && args.get(1) == Some(&"ci".to_string()) {
+        std::process::exit(fno_agents::ci_front::run(&args[2..]));
     }
     // gh-cache, target-status: the early transport arms; client_transport.rs
     // holds their bodies and comments. worktree-reapable and launch-workdir
@@ -1189,10 +1190,7 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::attest::dispatch(&args[1..]);
     }
 
-    // `needs`: read-only needs-me-queue fold over events.jsonl +
-    // ledger.json across ALL sessions, emitting review_wedged / budget_stop
-    // items. Never touches the daemon; exits 0 on empty. The mux client shells
-    // this off-loop when the prefix+a overlay opens.
+    // `needs`: read-only needs-me-queue fold over events + ledger; daemon-free.
     if command == "needs" {
         return fno_agents::needs::run_needs(&args[1..], &AgentsHome::from_env()).await;
     }
@@ -1247,6 +1245,14 @@ async fn run(args: Vec<String>) -> i32 {
                 .cloned()
                 .collect();
             return fno_agents::capability_leaves::run_capabilities(&sub);
+        }
+        if rest.iter().any(|a| a.as_str() == "--liveness") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--liveness")
+                .cloned()
+                .collect();
+            return fno_agents::liveness_cmd::run(&sub, &AgentsHome::from_env());
         }
         if has_family {
             let sub: Vec<String> = rest
@@ -4284,9 +4290,6 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             fno_agents::ask_project::parse(&mut params, &positional)?;
             "agent.ask"
         }
-        // `host`/`promote` (interactive daemon PTY hosting) were retired at G4
-        // and intercepted with a mux pointer before build_request; they
-        // never reach this match.
         "list" => "agent.list",
         "status" => "agent.status",
         "stop" => {

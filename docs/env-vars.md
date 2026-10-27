@@ -40,6 +40,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `EDITOR` | rs | The editor the board's full description edit runs in; `vi` when unset. |
 | `EVENTS_FILE` | rs | unclear: crates/fno-agents/src/verify_evidence.rs:932 |
 | `FNO_A2A_NO_CONFIRM` | py | unclear: cli/src/fno/agents/dispatch.py:5376 |
+| `FNO_AGENTS_ANSWER_MINUTES` | rs | The conversation mail-hold backstop in minutes: a hold armed on the user's last real message ends this long after it, whichever comes first with the Stop grace. Unset, the global config's `mail.hold.answer_minutes` reads; unset too, the default is 10. A value below 1 coerces to the default, one above 1440 clamps to 1440 (mail_hold.rs answer_minutes). |
 | `FNO_AGENTS_BIN` | py+rs | Explicit override path to the fno-agents binary; unset, empty, or non-executable falls through to the search rather than failing. |
 | `FNO_AGENTS_DAEMON_BIN` | rs | unclear: crates/fno-agents/src/client.rs:125 |
 | `FNO_AGENTS_FAIL_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/daemon.rs:2093 |
@@ -183,7 +184,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_OPENCODE_LIVE_URL` | rs | unclear: crates/fno-agents/src/opencode_archive_tests.rs:338 |
 | `FNO_OPENCODE_STORAGE_DIR` | py+rs | Moves opencode's storage root, and with it the sibling `opencode.db` session store: the discover default and the dispatch brief's transcript tail read the store beside it. |
 | `FNO_OPERATOR_CAPTURE_DIR` | rs | Moves the operator-capture dir that holds each session's ack ledger and scan cursor; unset, it is `<state dir>/operator-capture`. |
-| `FNO_ORPHANS_SKIP_PROBE` | py | unclear: cli/src/fno/agents/cli.py:3732 |
+| `FNO_ORPHANS_SKIP_PROBE` | rs | unclear: crates/fno-agents/src/orphans.rs:706 |
 | `FNO_OWNER_BIRTH` | rs | The owner process start token paired with FNO_OWNER_PID; protects sandbox process cleanup from PID reuse. |
 | `FNO_OWNER_PID` | rs | The owner process for an owner-bound sandbox server and its descendants; shared fleet launches leave it unset. |
 | `FNO_OWNER_SESSION` | rs | The harness session id that owns a sandbox server and descendants; required with FNO_OWNER_PID and FNO_OWNER_BIRTH. |

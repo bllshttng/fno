@@ -114,6 +114,27 @@ fn append_text(python: &str, receipt: Result<String, String>) -> String {
 }
 
 pub fn run(args: &[OsString]) -> i32 {
+    // The marker child is the plain render. With the python leg ported, that
+    // render is the native spawn-overlay exec; re-entering the seam here
+    // would spawn itself forever.
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let bin = crate::digest_overlay::fno_agents_bin();
+        let status = Command::new(&bin)
+            .arg("spawn-overlay")
+            .arg("whoami")
+            .args(&args[1..])
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status();
+        return match status {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(e) => {
+                eprintln!("fno whoami: the render could not run: {e}");
+                2
+            }
+        };
+    }
     let json = args.iter().any(|a| a == "--json" || a == "-J");
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,

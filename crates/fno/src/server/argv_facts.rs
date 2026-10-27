@@ -290,7 +290,7 @@ pub(super) fn set_attach_program(argv: &[&str]) {
     ATTACH_PROGRAM.with(|p| *p.borrow_mut() = Some(argv.iter().map(|s| s.to_string()).collect()));
 }
 
-/// The Follow tier's viewer argv: `fno agents peek <name> --follow`,
+/// The Follow tier's viewer argv: `fno agents session peek <name> --follow`,
 /// tailing the row's transcript in the dedicated pane. Read-only by
 /// construction (peek never writes the observed). Tests override the program
 /// via `set_peek_program` so the spawn path runs without the deployed CLI.
@@ -303,6 +303,7 @@ pub(super) fn peek_argv(name: &str) -> Vec<String> {
     vec![
         "fno".to_string(),
         "agents".to_string(),
+        "session".to_string(),
         "peek".to_string(),
         name.to_string(),
         "--follow".to_string(),

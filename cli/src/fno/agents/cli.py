@@ -2184,6 +2184,7 @@ def cmd_list(
 ) -> None:
     """List registered agents: ROW NAME SESSION HARNESS MODEL EFFORT PR AGE
     LAST MESSAGE STATUS, JSON when stdout is not a TTY or ``--json`` is passed.
+    The JSON envelope's top-level key is ``agents``.
 
     The ``fno-agents`` client owns this command; the options above document its
     surface. There is no Python list lane left: a missing binary is refused.
@@ -2721,31 +2722,18 @@ def cmd_orphans(
     ``--reap`` kills only what we named ourselves. Attribution is a heuristic,
     and a heuristic must not hold a kill signal.
     """
-    import json as _json
+    # The sweep answers natively (crates/fno-agents/src/orphans.rs, behind the
+    # census action as `fno-agents census --orphans`); the Python body is gone.
+    from fno.agents.rust_runtime import route_to_rust
 
-    from fno.agents.orphans import filter_new, render, scan, seen_path, to_json
-
-    skip = os.environ.get("FNO_ORPHANS_SKIP_PROBE") or None
-    result = scan(reap=reap, skip_probe=skip)
-    speak = True
+    flags = []
+    if reap:
+        flags.append("--reap")
     if quiet_unless_new:
-        # A broken scan always speaks: silence there is the exact failure this
-        # command exists to make impossible.
-        # `filter_new` is called FIRST, never behind a short-circuiting `or`.
-        # Recording this scan's findings is its side effect, and skipping it on
-        # a reaping run left the seen-file stale after exactly the most
-        # interesting sweep. (A BROKEN scan records nothing - `filter_new`
-        # handles that itself, because `render` withheld the list.)
-        is_new = filter_new(result, seen_path())
-        # A reap ALWAYS speaks. A finding reported at 8 minutes is no longer new
-        # when the next sweep kills it past the age gate, and that path
-        # SIGKILLed a process and printed nothing. A broken scan speaks for the
-        # same reason.
-        speak = result.broken or bool(result.reaped) or is_new
-    if speak:
-        print(_json.dumps(to_json(result), indent=2) if as_json else render(result))
-    if result.broken:
-        raise typer.Exit(2)
+        flags.append("--quiet-unless-new")
+    if as_json:
+        flags.append("--json")
+    route_to_rust(["census", "--orphans", *flags])
 
 
 # The pane-identity command moved to fno.agents.pane_identity (file
