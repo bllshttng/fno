@@ -514,7 +514,7 @@ mod quota_signal_tests {
     fn state_file(dir: &Path, used_pct: f64, resets_at: f64) -> PathBuf {
         let path = dir.join("runtime-state.json");
         let body = format!(
-            r#"{{"usage": {{"p1": {{"probed_at": {}, "source": "t", "windows": [{{"label": "5h", "used_pct": {}, "resets_at": {}}}]}}}}}}"#,
+            r#"{{"schema_version": 2, "usage": {{"p1": {{"probed_at": {}, "source": "t", "windows": [{{"label": "5h", "used_pct": {}, "resets_at": {}}}]}}}}}}"#,
             NOW - 10.0,
             used_pct,
             resets_at
