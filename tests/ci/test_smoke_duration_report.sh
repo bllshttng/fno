@@ -269,7 +269,7 @@ jobs = yaml.safe_load(open(".github/workflows/cli-ci.yml"))["jobs"]
 # it. "Runs the runner" alone picks up `changed-smoke`, the early partial-
 # feedback job, which never gates a merge; its dynamic cap is asserted
 # separately below.
-RUNNER = "fno-agents test-run doctor smoke"
+RUNNER = "test-run doctor smoke"
 needs = jobs["smoke"].get("needs") or []
 if isinstance(needs, str):
     needs = [needs]

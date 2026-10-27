@@ -368,14 +368,10 @@ fn shell_quote(arg: &str) -> String {
 /// FILE: plant and verify run in the SAME process, so the pid keys both
 /// halves.
 pub(crate) fn state_canary_snapshot() -> String {
+    let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
     format!(
-        "{}{}fno-state-canary.{}.snapshot",
-        std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into()),
-        if std::env::var("TMPDIR").is_ok() {
-            "/"
-        } else {
-            ""
-        },
+        "{}/fno-state-canary.{}.snapshot",
+        tmp.trim_end_matches('/'),
         std::process::id()
     )
 }

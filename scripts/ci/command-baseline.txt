@@ -100,7 +100,6 @@ state
 status-fanout tick
 stub-manifest
 target
-think
 uninstall
 update
 version
