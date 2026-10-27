@@ -1969,11 +1969,30 @@ mod tests {
             .unwrap();
     }
 
+    /// Cap the primary's replies at twice the widest one-row reply of `sql`
+    /// over the keys `keys_sql` lists, so one row fits and a full page of
+    /// six does not.
+    fn cap_at_two_rows(primary: &test_primary::Primary, sql: &str, keys_sql: &str) {
+        let keys: Vec<i64> = {
+            let db = primary.db.lock().unwrap();
+            let mut statement = db.prepare(keys_sql).unwrap();
+            let keys = statement.query_map([], |r| r.get(0)).unwrap();
+            keys.map(Result::unwrap).collect()
+        };
+        let one =
+            |key: i64| primary.reply_len(sql, &[SqlValue::Integer(key - 1), SqlValue::Integer(1)]);
+        let cap = 2 * keys.iter().map(|&key| one(key)).max().unwrap();
+        let page = primary.reply_len(sql, &[SqlValue::Integer(0), SqlValue::Integer(PAGE)]);
+        assert!(
+            page > cap,
+            "a full page ({page} bytes) must exceed the cap ({cap})"
+        );
+        primary.set_cap(cap);
+    }
+
     #[test]
     fn a_page_over_the_primary_reply_limit_halves_until_it_fits() {
-        // Six rows of about 1.5 KB each, under a 5 KB reply limit: one change
-        // row fits, a full page refuses, so both readers must page smaller.
-        let primary = test_primary::start_capped(5_000);
+        let primary = test_primary::start();
         let (a, b) = (machine(), machine());
         let long = |word: &str| format!("{word} {}", "x".repeat(1_500));
         on(&primary, &a);
@@ -1982,15 +2001,30 @@ mod tests {
             add_node(&a, &format!("x-{i}"), &long("first"));
             flush(&a.graph).unwrap();
         }
+        let columns = shared_columns(&crate::backlog::open(&a.graph).unwrap()).unwrap();
+        let nodes = format!(
+            "SELECT rowid, {} FROM \"{NODES}\" WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+            quoted(&columns[NODES])
+        );
+        cap_at_two_rows(&primary, &nodes, &format!("SELECT rowid FROM {NODES}"));
         on(&primary, &b);
         assert!(sync(&b.graph).unwrap().snapshot);
         assert_eq!(found(&b, "first"), 6, "the snapshot read every row");
 
+        primary.set_cap(usize::MAX);
         on(&primary, &a);
         for i in 0..6 {
             retitle(&a, &format!("x-{i}"), &long("second"));
             flush(&a.graph).unwrap();
         }
+        let after = crate::backlog::meta(&crate::backlog::open(&b.graph).unwrap(), CURSOR)
+            .unwrap()
+            .unwrap();
+        cap_at_two_rows(
+            &primary,
+            "SELECT seq, ops FROM backlog_changes WHERE seq > ?1 ORDER BY seq LIMIT ?2",
+            &format!("SELECT seq FROM backlog_changes WHERE seq > {after}"),
+        );
         on(&primary, &b);
         let receipt = sync(&b.graph).unwrap();
         assert!(!receipt.snapshot);

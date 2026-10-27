@@ -583,21 +583,34 @@ pub(crate) mod test_primary {
     use super::*;
     use std::io::Read;
     use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     pub(crate) struct Primary {
         pub remote: Remote,
         pub db: Arc<Mutex<rusqlite::Connection>>,
+        /// A statement reply over this many bytes is refused, the way sqld
+        /// refuses one over its response size limit. Unlimited by default.
+        pub cap: Arc<AtomicUsize>,
         _dir: tempfile::TempDir,
     }
 
-    pub(crate) fn start() -> Primary {
-        start_capped(usize::MAX)
+    impl Primary {
+        /// The bytes of the reply `sql` would get, measured the way the cap is.
+        pub(crate) fn reply_len(&self, sql: &str, args: &[SqlValue]) -> usize {
+            let args: Vec<Value> = args.iter().map(SqlValue::to_hrana).collect();
+            statement(&self.db.lock().unwrap(), &json!({"sql": sql, "args": args}))
+                .unwrap()
+                .to_string()
+                .len()
+        }
+
+        pub(crate) fn set_cap(&self, cap: usize) {
+            self.cap.store(cap, Ordering::SeqCst);
+        }
     }
 
-    /// A primary that refuses a statement reply over `cap` bytes, the way
-    /// sqld refuses one over its response size limit.
-    pub(crate) fn start_capped(cap: usize) -> Primary {
+    pub(crate) fn start() -> Primary {
         let dir = tempfile::tempdir().unwrap();
         let connection = rusqlite::Connection::open(dir.path().join("primary.db")).unwrap();
         // The real primary enforces foreign keys.
@@ -608,14 +621,17 @@ pub(crate) mod test_primary {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let served = Arc::clone(&db);
+        let cap = Arc::new(AtomicUsize::new(usize::MAX));
+        let limit = Arc::clone(&cap);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                serve(stream, &served, cap);
+                serve(stream, &served, limit.load(Ordering::SeqCst));
             }
         });
         Primary {
             remote: Remote::parse(&format!("http://127.0.0.1:{port}"), None).unwrap(),
             db,
+            cap,
             _dir: dir,
         }
     }
