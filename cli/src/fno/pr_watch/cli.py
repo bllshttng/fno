@@ -179,6 +179,9 @@ def _post_merge_readiness(repo_dir: Path) -> Any:
     proc = subprocess.run(
         [str(binary), "config", "doctor", "--post-merge", "--json"],
         cwd=repo_dir,
+        # The door reads this pin before the cwd; an inherited one names
+        # another repo.
+        env={**os.environ, "FNO_REPO_ROOT": str(repo_dir)},
         capture_output=True,
         text=True,
         timeout=30,

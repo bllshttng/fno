@@ -438,11 +438,9 @@ fn read_provider_file(path: &Path) -> Value {
 /// `error: <cause>`; no binary means no answer, never a finding.
 fn loader_refusal(argv: &[&str]) -> Option<String> {
     let binary = crate::digest_overlay::fno_agents_bin_auto()?;
-    let output = std::process::Command::new(binary)
-        .args(argv)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    let mut cmd = crate::process_admission::std_command(binary);
+    cmd.args(argv);
+    let output = super::bounded_output(&mut cmd, None, super::AGENTS_CALL_CAP).ok()?;
     if output.status.code() != Some(1) {
         return None;
     }

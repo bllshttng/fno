@@ -137,6 +137,59 @@ fn usage_error(message: &str) -> i32 {
 // The fno-agents round trip
 // ---------------------------------------------------------------------------
 
+/// The Python transport's bound on one fno-agents call: a wedged binary
+/// fails the reporter instead of hanging the doctor (and the setup verify
+/// that runs it in process).
+pub(crate) const AGENTS_CALL_CAP: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Run `cmd` with `stdin` (or a null stdin), collecting both streams, and
+/// kill it when `cap` runs out.
+pub(crate) fn bounded_output(
+    cmd: &mut std::process::Command,
+    stdin: Option<Vec<u8>>,
+    cap: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = crate::process_admission::std_spawn(cmd).map_err(|e| e.to_string())?;
+    if let (Some(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        std::thread::spawn(move || {
+            let _ = pipe.write_all(&bytes);
+        });
+    }
+    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>));
+    let deadline = std::time::Instant::now() + cap;
+    let status = loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => break status,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("timed out after {}s", cap.as_secs()));
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: out.join().unwrap_or_default(),
+        stderr: err.join().unwrap_or_default(),
+    })
+}
+
 /// One `fno-agents <command...>` round trip: the JSON payload on stdin (when
 /// given), the parsed JSON answer out. The error strings are the ones the
 /// Python transport raised, so a reporter that prints one prints the same
@@ -146,25 +199,10 @@ pub(crate) fn agents_call(command: &[&str], payload: Option<&Value>) -> Result<V
     let Some(binary) = crate::digest_overlay::fno_agents_bin_auto() else {
         return Err("the fno-agents binary was not found; reinstall fno, run `fno doctor update --rust`, or set FNO_AGENTS_BIN".to_string());
     };
-    let mut cmd = std::process::Command::new(&binary);
-    cmd.args(command)
-        .stdin(if payload.is_some() {
-            std::process::Stdio::piped()
-        } else {
-            std::process::Stdio::null()
-        })
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("fno-agents {display} failed: {e}"))?;
-    if let Some(payload) = payload {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.to_string().as_bytes());
-        }
-    }
-    let output = child
-        .wait_with_output()
+    let mut cmd = crate::process_admission::std_command(&binary);
+    cmd.args(command);
+    let stdin = payload.map(|p| p.to_string().into_bytes());
+    let output = bounded_output(&mut cmd, stdin, AGENTS_CALL_CAP)
         .map_err(|e| format!("fno-agents {display} failed: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
