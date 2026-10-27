@@ -171,6 +171,9 @@ pub(crate) fn walk(
                     &mut items,
                     &mut resuming,
                     turn_stamp(&obj).unwrap_or("").to_string(),
+                    // argv-fence: exempt. A plain Rust call, not an argv
+                    // build: open_new is the walk's own closure, no launcher
+                    // parser touches this path.
                     prompt.to_string(),
                     line_start,
                 );
