@@ -103,6 +103,7 @@ pub mod census;
 pub mod chats;
 pub mod check_supersession;
 pub mod ci_cadence;
+pub mod ci_front;
 pub mod claim_cli;
 pub mod claim_commands;
 pub mod claim_lanes_cli;
