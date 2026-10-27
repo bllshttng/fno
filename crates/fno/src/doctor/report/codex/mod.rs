@@ -2,16 +2,37 @@
 //! arithmetic, and the plugin freshness verdict.
 
 mod context_window;
-mod freshness;
 mod hooks;
 
 pub(crate) use context_window::*;
-pub(crate) use freshness::*;
 pub(crate) use hooks::*;
 
 use serde_json::{json, Value};
 
 use super::codex_home;
+
+/// The codex plugin verdict from `fno-agents plugin-install codex --status`,
+/// the engine that converges the plugin, so doctor never reads the state a
+/// second way.
+pub(crate) fn codex_plugin_report() -> Value {
+    plugin_verdict(super::call_binary_json(
+        "plugin-install",
+        &["--status", "codex"],
+        120,
+    ))
+}
+
+fn plugin_verdict((err, verdict): (Option<String>, Value)) -> Value {
+    if err.is_none() && verdict.is_object() {
+        return verdict;
+    }
+    json!({
+        "status": "unknown",
+        "issue": "state-unreadable",
+        "detail": err.unwrap_or_else(|| "plugin-install codex --status: not a JSON object".into()),
+        "remedy": "fno config plugin install codex --force",
+    })
+}
 
 /// Whether a codex app-server daemon is listening on its control socket
 /// (doctor.py:3190-3210). The socket file survives its daemon, so liveness is
@@ -50,4 +71,25 @@ pub(crate) fn codex_hooks_dual_and_foreign() -> (bool, Value) {
         .cloned()
         .unwrap_or_else(|| Value::Array(vec![]));
     (duplicate && footnote, foreign)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_engine_verdict_is_the_doctor_row() {
+        let fresh = json!({"status": "fresh", "channel": "dev"});
+        assert_eq!(plugin_verdict((None, fresh.clone())), fresh);
+    }
+
+    #[test]
+    fn an_unreadable_engine_reads_state_unreadable() {
+        let row = plugin_verdict((Some("plugin-install exited 1: ".into()), Value::Null));
+        assert_eq!(
+            (row["status"].as_str(), row["issue"].as_str()),
+            (Some("unknown"), Some("state-unreadable"))
+        );
+        assert_eq!(row["remedy"], "fno config plugin install codex --force");
+    }
 }
