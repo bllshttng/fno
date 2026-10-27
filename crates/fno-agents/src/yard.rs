@@ -344,14 +344,18 @@ mod tests {
 
     #[test]
     fn seen_species_reads_only_string_sessions() {
+        // Sessions a/c/d hash to three distinct species buckets (16/2/11 of
+        // 18), so the length pins the inclusions and the exclusions both:
+        // junk and the numeric id land at 8 and 3 and would widen the set
+        // the moment the lenient reader took them.
         let archive = vec![
             json!({"source_session_id": "a"}),
-            json!({"sessions": [{"session_id": "b"}, "junk"]}),
+            json!({"sessions": [{"session_id": "c"}, {"session_id": "d"}, "junk"]}),
             json!("not-a-dict"),
             json!({"session_id": 42}),
         ];
         let seen = seen_species(&archive);
-        assert_eq!(seen.len(), 2);
+        assert_eq!(seen.len(), 3);
     }
 
     #[test]
