@@ -92,13 +92,10 @@ fn transcript_facts() -> Option<(usize, u64, u64)> {
             continue;
         };
         for f in files.flatten() {
-            let path = f.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            if f.path().extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            let Ok(meta) = f.metadata() else {
-                continue;
-            };
+            let Ok(meta) = f.metadata() else { continue };
             if !meta.is_file() {
                 continue;
             }

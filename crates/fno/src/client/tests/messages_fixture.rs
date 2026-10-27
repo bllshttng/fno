@@ -633,13 +633,8 @@ async fn messages_you_tab_contract() {
         "announcements": [],
         "unreadable": 0,
         "you": [
-            {"session_id":"older","name":"older-worker","last_ts":"2026-10-01T09:00:00Z",
-             "items":[{"ts":"2026-10-01T09:00:00Z","typed_text":"earlier question","reply_text":""}]},
-            {"session_id":"fresh","name":"gavin","last_ts":"2026-10-01T10:00:00Z",
-             "items":[
-                {"ts":"2026-10-01T09:30:00Z","typed_text":"mid-turn follow-up","reply_text":"Working on it."},
-                {"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."},
-             ]},
+            {"session_id":"older","name":"older-worker","last_ts":"2026-10-01T09:00:00Z","items":[{"ts":"2026-10-01T09:00:00Z","typed_text":"earlier question","reply_text":""}]},
+            {"session_id":"fresh","name":"gavin","last_ts":"2026-10-01T10:00:00Z","items":[{"ts":"2026-10-01T09:30:00Z","typed_text":"mid-turn follow-up","reply_text":"Working on it."},{"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."}]},
         ],
     }));
     b.col2 = ChatTab::You;
@@ -687,8 +682,11 @@ async fn messages_you_tab_contract() {
     super::keys(&mut view, b"j", &mut tokio::io::sink())
         .await
         .unwrap();
-    let b = view.messages_board.as_ref().unwrap();
-    assert_eq!(b.cursors[1], 1, "j moves on the You tab: {:?}", b.cursors);
+    assert_eq!(
+        view.messages_board.as_ref().unwrap().cursors,
+        [0, 1, 1],
+        "j moves on the You tab"
+    );
     let b = view.messages_board.as_mut().unwrap();
     b.sel_thread = Some("you:fresh".into());
     b.col = Col::Thread;
@@ -696,10 +694,9 @@ async fn messages_you_tab_contract() {
     super::keys(&mut view, b"k", &mut tokio::io::sink())
         .await
         .unwrap();
-    let b = view.messages_board.as_ref().unwrap();
     assert_eq!(
-        b.cursors[2], 0,
-        "k walks the You thread's items: {:?}",
-        b.cursors
+        view.messages_board.as_ref().unwrap().cursors,
+        [0, 1, 0],
+        "k walks the You thread's items"
     );
 }

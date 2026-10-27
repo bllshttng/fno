@@ -649,11 +649,9 @@ impl MessagesBoard {
         ]);
         let mut lines = vec![strip, BLine::meta("")];
         // The You tab is session-wide: no column-1 selection gates it.
-        if self.col2 != ChatTab::You {
-            if self.sel_agent.is_none() {
-                lines.extend(BLine::meta("(select an agent in column 1)").wrap(wrap_w));
-                return lines;
-            }
+        if self.col2 != ChatTab::You && self.sel_agent.is_none() {
+            lines.extend(BLine::meta("(select an agent in column 1)").wrap(wrap_w));
+            return lines;
         }
         let rows = self.active_chat_rows();
         if rows.is_empty() {
@@ -1603,7 +1601,7 @@ fn copy_bubble(view: &mut View, whole_body: bool) {
         };
         let typed = text_of(item, "typed_text").to_string();
         let value = if whole_body {
-            let reply = text_of(item, "reply_text").to_string();
+            let reply = text_of(item, "reply_text");
             if reply.is_empty() {
                 typed
             } else {
