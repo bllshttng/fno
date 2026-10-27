@@ -137,12 +137,11 @@ pub struct ScopeRead {
     pub undelivered: i64,
 }
 
-/// The graph read's answer: rows, a named outage, or no answer inside the
-/// pass's wait bound.
+/// The graph read's answer: rows, or a named outage. The receiver's wait
+/// bound owns the timeout, so no variant carries it.
 pub(crate) enum GraphOutcome {
     Rows(Vec<Value>),
     Failed(String),
-    TimedOut,
 }
 
 /// The leg's pass outcome: the counts the tick row's detail carries.
@@ -378,7 +377,7 @@ pub fn run_with(config: &TriggerConfig, seams: Seams) -> TriggerOutcome {
                         graph_cut = true;
                         append_note(&mut summary, &format!("graph read failed: {e}"));
                     }
-                    Ok(GraphOutcome::TimedOut) | Err(_) => {
+                    Err(_) => {
                         graph_cut = true;
                         append_note(&mut summary, GRAPH_TIMED_OUT_NOTE);
                     }
