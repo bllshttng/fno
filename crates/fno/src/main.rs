@@ -2067,7 +2067,7 @@ mod tests {
             Role::Forward
         );
         // The canon-refresh door claims the front's rewrite exactly; the
-        // sibling lead commands stay on the compat leg.
+        // sibling lead commands answer through the lead route.
         assert_eq!(
             decide_role(&os(&["agents", "lead", "refresh-canon"]), false),
             Role::AgentsLeadRefreshCanon(os(&[]))
@@ -2076,10 +2076,10 @@ mod tests {
             decide_role(&os(&["agents", "lead", "refresh-canon", "--extra"]), false),
             Role::AgentsLeadRefreshCanon(os(&["--extra"]))
         );
-        assert_eq!(
+        assert!(matches!(
             decide_role(&os(&["agents", "lead", "done"]), false),
-            Role::Forward
-        );
+            Role::Lead(_)
+        ));
         // The mail reader claims its command and refuses the renamed one by
         // name; the send port claims local sends, while @host and plain
         // names stay the relay's.

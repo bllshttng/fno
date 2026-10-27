@@ -178,21 +178,22 @@ def test_every_moved_spelling_is_hidden():
         # `setup` joined when every setup command ported native: the front
         # door claims the root spelling and answers it. `research` and `think`
         # joined when the research family ported native, and `workspace` and
-        # `worktree` when the worktree family did. `loops` and
-        # `autonomy` joined when the fleet family ported: the front's fleet
-        # route claims both spellings of each (root and group form), prints
-        # the move notice, and execs the fno-agents doors (`loops`,
-        # `census yard`, `spawn-overlay autonomy`), so a python registration
-        # would sit behind an intercept that never reaches it. `observer`
-        # joined the same way: the front door claims both spellings and
-        # execs the native ops. Every OTHER moved
+        # `worktree` when the worktree family did. `loops` and `autonomy`
+        # joined when the fleet family ported: the front's fleet route claims
+        # both spellings of each (root and group form), prints the move
+        # notice, and execs the fno-agents doors (`loops`, `census yard`,
+        # `spawn-overlay autonomy`), so a python registration would sit behind
+        # an intercept that never reaches it. `observer` joined the same way:
+        # the front door claims both spellings and execs the native ops.
+        # `lead` joined when the lead family ported: the front door claims
+        # `lead <command>` and prints the move notice itself. Every OTHER moved
         # spelling keeps a one-release registration, and any registration
         # that exists must be hidden: an advertised moved name teaches a
         # doomed spelling.
         if name in (
             "decide", "yard", "review", "pr", "retro", "restart", "project", "skill-diff",
             "mcp", "setup", "research", "think", "workspace", "worktree",
-            "autonomy", "loops", "observer",
+            "autonomy", "loops", "observer", "lead",
             # `test` joined when the whole test-command family ported native:
             # the front door claims both spellings (classify_test_command),
             # the tail byte-verbatim, so a python registration would forward

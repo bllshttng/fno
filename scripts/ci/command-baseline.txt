@@ -77,7 +77,6 @@ help
 inbox approvals decide
 inbox approvals ls
 inbox approvals show
-inbox board
 inbox notify
 inbox operator ack
 inbox operator list
@@ -85,10 +84,6 @@ inbox operator status
 inbox user ack
 inbox user list
 inbox user status
-lead board
-lead done
-lead drain
-lead escalate
 lint
 mail
 mail send !--origin !--provider
