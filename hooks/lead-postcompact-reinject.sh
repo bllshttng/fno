@@ -137,35 +137,49 @@ fi
 # still carries its default placeholder, recognizable by its signature text.
 # Bounded like the FAQ (byte cap) and degrade-safe: no resolvable doc, no doc
 # on disk, or nothing filled means no section, never a failed hook.
+# Workarounds in force and Open decisions ride FIRST, under their own budget:
+# they hold the commands and rulings a lead otherwise re-asks the user for, and
+# they sit last in the doc, so one doc-order cap over a long doc cut both.
 CANON_MAX_BYTES=4000
+CANON_PRIORITY_MAX_BYTES=6000
+# $1 = 1 for the priority sections, 0 for the rest; $2 = the doc.
+canon_sections() {
+    awk -v want="$1" '
+        /^## / { heading = $0; next }
+        /<!-- fno:session -->/ { grab = 1; buf = ""; next }
+        grab && /<!-- \/fno:session -->/ {
+            grab = 0
+            prio = (heading ~ /^## (Workarounds in force|Open decisions)/) ? 1 : 0
+            if (prio == want + 0 && buf ~ /[^[:space:]]/ && buf !~ /Nothing external knows this/) {
+                print ""
+                print heading
+                printf "%s", buf
+            }
+            next
+        }
+        grab { buf = buf $0 "\n" }
+    ' "$2" 2>/dev/null
+}
+# $1 = text, $2 = byte cap. Same UTF-8-safe cut as the FAQ: decode, drop the
+# trailing partial character, never split one mid-sequence.
+canon_cap() {
+    local bytes
+    bytes="$(printf '%s' "$1" | wc -c | tr -d ' ')"
+    if [[ "$bytes" -le "$2" ]]; then
+        printf '%s' "$1"
+        return
+    fi
+    printf '%s' "$1" | python3 -c "
+import sys
+sys.stdout.write(sys.stdin.buffer.read($2).decode('utf-8', errors='ignore'))
+"
+    printf '\n\n_(truncated at %sB; `%s` has the rest)_' "$2" "$CANON_PATH"
+}
 if [[ -n "$TEAM_SCOPE" ]]; then
     CANON_PATH="$(fno config paths handoff --scope "$TEAM_SCOPE" 2>/dev/null || true)"
     if [[ -n "$CANON_PATH" && -f "$CANON_PATH" ]]; then
-        CANON_SECTIONS="$(awk '
-            /^## / { heading = $0; next }
-            /<!-- fno:session -->/ { grab = 1; buf = ""; next }
-            grab && /<!-- \/fno:session -->/ {
-                grab = 0
-                if (buf ~ /[^[:space:]]/ && buf !~ /Nothing external knows this/) {
-                    print ""
-                    print heading
-                    printf "%s", buf
-                }
-                next
-            }
-            grab { buf = buf $0 "\n" }
-        ' "$CANON_PATH" 2>/dev/null)"
-        CANON_BYTES="$(printf '%s' "$CANON_SECTIONS" | wc -c | tr -d ' ')"
-        if [[ "$CANON_BYTES" -gt "$CANON_MAX_BYTES" ]]; then
-            # Same UTF-8-safe cut as the FAQ: decode, drop the trailing
-            # partial character, never split one mid-sequence.
-            CANON_SECTIONS="$(printf '%s' "$CANON_SECTIONS" | python3 -c "
-import sys
-sys.stdout.write(sys.stdin.buffer.read(${CANON_MAX_BYTES}).decode('utf-8', errors='ignore'))
-")
-
-_(truncated at ${CANON_MAX_BYTES}B; \`${CANON_PATH}\` has the rest)_"
-        fi
+        CANON_SECTIONS="$(canon_cap "$(canon_sections 1 "$CANON_PATH")" "$CANON_PRIORITY_MAX_BYTES")
+$(canon_cap "$(canon_sections 0 "$CANON_PATH")" "$CANON_MAX_BYTES")"
         if [[ -n "$(printf '%s' "$CANON_SECTIONS" | tr -d '[:space:]')" ]]; then
             CONTEXT="$CONTEXT
 

@@ -217,11 +217,20 @@ Session id (authoritative): `sess-lead`  |  refreshed by precompact-canon-doc.sh
 <!-- fno:session -->
 Ship the sibling's PR before the read-back wave.
 SENTINEL_CANON_MERGE
+DOC
+# Past the 4000B cap on its own: one doc-order cap cut the Workarounds below.
+for _ in $(seq 1 80); do echo "Merge filler line that pads the section past the whole-doc byte cap."; done >> "$CANON_DOC"
+cat >> "$CANON_DOC" <<'DOC'
 <!-- /fno:session -->
 
 ## Open decisions awaiting the operator (session)
 <!-- fno:session -->
 _Open decisions awaiting the operator. Nothing external knows this. The session fills it at full context._
+<!-- /fno:session -->
+
+## Workarounds in force (session)
+<!-- fno:session -->
+SENTINEL_CANON_WORKAROUND restart sqld yourself.
 <!-- /fno:session -->
 DOC
 printf '%s\n' "$CANON_DOC" > "$LEAD_HANDOFF_PATH_FIXTURE"
@@ -229,9 +238,11 @@ OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
 RC=$?
 [[ $RC -eq 0 ]] \
   && echo "$OUT" | jq -e '.hookSpecificOutput.additionalContext
-      | contains("Your team'"'"'s handoff") and contains("SENTINEL_CANON_MERGE") and contains("Full canon doc")' >/dev/null 2>&1 \
+      | contains("Your team'"'"'s handoff") and contains("SENTINEL_CANON_MERGE") and contains("Full canon doc")
+        and contains("truncated at 4000B") and contains("SENTINEL_CANON_WORKAROUND")
+        and (index("SENTINEL_CANON_WORKAROUND") < index("SENTINEL_CANON_MERGE"))' >/dev/null 2>&1 \
   && ! printf '%s' "$OUT" | grep -q "Nothing external knows this" \
-  && pass "canon read-back: filled blocks injected, placeholders dropped" \
+  && pass "canon read-back: workarounds ride first past the cap, placeholders dropped" \
   || fail "canon read-back rc=$RC payload=${OUT:0:300}"
 : > "$LEAD_HANDOFF_PATH_FIXTURE"
 
