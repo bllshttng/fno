@@ -10,8 +10,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from fno.adapters.providers.rotation import Combo
-
 
 def _write_settings(path: Path, content: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
