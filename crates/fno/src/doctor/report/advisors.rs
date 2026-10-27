@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::{command_call, home_dir, resolve_binary};
+use super::{command_call, resolve_binary};
+use crate::digest_overlay::{config_roots, global_config_toml, non_empty_env_os};
 
 // ---------------------------------------------------------------------------
 // Config reading (the silent-switch inputs)
@@ -27,8 +28,8 @@ fn config_string(doc: Option<&toml::Value>, section: &str, key: &str) -> Option<
     doc?.get(section)?.get(key)?.as_str().map(str::to_string)
 }
 
-/// The config chain the silent-switch pair reads: global, then the project
-/// config walking up from cwd. Later layers win; unset keys take the
+/// The config chain the silent-switch pair reads: global, then the canonical
+/// checkout, then this checkout. Later layers win; unset keys take the
 /// Python loader's defaults at the read sites.
 struct DoctorConfig {
     active_backlog: Option<bool>,
@@ -62,17 +63,20 @@ fn load_doctor_config() -> DoctorConfig {
     cfg
 }
 
+/// The config ladder, lowest precedence first: `$FNO_CONFIG` is the sole
+/// candidate when set; otherwise the global config.toml, then the project
+/// roots (the canonical checkout behind this worktree, then this checkout on
+/// top). Same merge order as the Python loader and the mux keymap ladder
+/// (digest_overlay.rs), so the doctor cannot read a value `fno config get`
+/// disagrees with.
 pub(crate) fn config_candidates() -> Vec<PathBuf> {
-    let mut paths = vec![home_dir().join(".fno/config.toml")];
-    if let Ok(cwd) = std::env::current_dir() {
-        let mut cur: Option<&Path> = Some(cwd.as_path());
-        while let Some(dir) = cur {
-            let candidate = dir.join(".fno/config.toml");
-            if candidate.is_file() {
-                paths.push(candidate);
-            }
-            cur = dir.parent();
-        }
+    if let Some(explicit) = non_empty_env_os("FNO_CONFIG").and_then(|v| v.into_string().ok()) {
+        return vec![PathBuf::from(explicit)];
+    }
+    let mut paths: Vec<PathBuf> = global_config_toml().into_iter().collect();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    for root in config_roots(&cwd).into_iter().rev() {
+        paths.push(root.join(".fno/config.toml"));
     }
     paths
 }
@@ -347,8 +351,10 @@ fn read_review_keys(root: &Path) -> Vec<String> {
     let mut required_bots: Vec<String> = Vec::new();
     let mut reviewers: Vec<String> = Vec::new();
     let mut peer_identity: Option<String> = None;
-    let mut layers: Vec<PathBuf> = vec![home_dir().join(".fno/config.toml")];
-    layers.push(root.join(".fno/config.toml"));
+    let mut layers: Vec<PathBuf> = global_config_toml().into_iter().collect();
+    for dir in config_roots(root).into_iter().rev() {
+        layers.push(dir.join(".fno/config.toml"));
+    }
     for path in layers {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
