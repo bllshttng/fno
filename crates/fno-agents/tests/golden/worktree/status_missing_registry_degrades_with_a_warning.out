@@ -1,0 +1,6 @@
+Worktrees:
+  main                           | <AGE>   | target: none                 | <ROOT>/s1
+  feature/live-one               | <AGE>   | target: none                 | <ROOT>/s1-wts/wt1
+  feature/exited-two             | <AGE>   | target: none                 | <ROOT>/s1-wts/wt2
+  feature/legacy-one             | <AGE>   | target: none                 | <ROOT>/s1/.claude/worktrees/legacy-one
+  feature/state-one              | <AGE>   | target: none                 | <ROOT>/state/worktrees/state-one

@@ -1212,15 +1212,28 @@ def cmd_spawn(
     # An undeclared FOREIGN target (explicit --cwd only) pins `never`; an
     # explicit ambient override rides the same overlay, else the pane wrapper
     # strips what the operator set.
-    from fno.worktree_paths import UNDECLARED_REPO_RECEIPT, undeclared_dispatch_pin
+    from fno.rust_binary import call_binary_json
 
-    _pin = (
-        undeclared_dispatch_pin(workdir, Path(os.getcwd()), harness) if cwd else {}
-    )
+    _pin: dict = {}
+    _receipt = None
+    if cwd:
+        _err, _payload = call_binary_json(
+            "worktree-dispatch-pin",
+            [
+                "--target", str(workdir),
+                "--caller", str(Path(os.getcwd())),
+                "--harness", harness or "",
+            ],
+            timeout=30,
+        )
+        if _err is None and isinstance(_payload, dict):
+            _pin = _payload.get("pin") or {}
+            _receipt = _payload.get("receipt")
     if _pin:
         prov_env = dict(prov_env) if prov_env is not None else {}
         prov_env.update(_pin)
-        print(UNDECLARED_REPO_RECEIPT, file=sys.stderr)
+        if _receipt:
+            print(_receipt, file=sys.stderr)
     elif os.environ.get("FNO_WORKTREE_POLICY"):
         prov_env = dict(prov_env) if prov_env is not None else {}
         prov_env["FNO_WORKTREE_POLICY"] = os.environ["FNO_WORKTREE_POLICY"]

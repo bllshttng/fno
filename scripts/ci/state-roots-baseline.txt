@@ -47,7 +47,6 @@ A	cli/src/fno/state/target_handoff.py	target-state.md	unowned	target-state.md ha
 A	cli/src/fno/state/v2_paths.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/target_cli.py	events.jsonl	unowned	Python journal site surviving PR 1252; fix is fno.paths.project_events_json().
 A	cli/src/fno/wake/detect.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
-A	cli/src/fno/worktree_stranded.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	crates/fno-agents/src/org_board.rs	events.jsonl	unowned	the board port's project-journal anchor: the needs fold reads the same journals the needs command reads, and no Rust project-events resolver exists yet; owns draining Rust journal sites.
 A	crates/fno-agents/src/active_backlog.rs	events.jsonl	unowned	surviving Rust ProjectJournalPath site; owns draining these and carries a standing warning against re-adding the events pin here.
 A	crates/fno-agents/src/claims.rs	events.jsonl	unowned	surviving Rust ProjectJournalPath site; owns draining these and carries a standing warning against re-adding the events pin here.
@@ -63,6 +62,7 @@ A	crates/fno-agents/src/loopcheck/authorship.rs	target-state.md	unowned	the mani
 A	crates/fno-agents/src/gc_sweep.rs	ledger.json	unowned	best-effort ledger enrichment for the reap receipt (moved from daemon.rs with the sweep); the receipt stands on the row when the path is overridden.
 A	crates/fno-agents/src/manifest_lookup.rs	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	crates/fno-agents/src/worktree_reapable.rs	target-state.md	unowned	the done-node arm reads ANOTHER worktree's manifest by name (same class as manifest_lookup.rs beside this line); target-state.md has NO resolver today, so this site drains when that resolver lands.
+A	crates/fno-agents/src/worktree/stranded.rs	target-state.md	unowned	the resolve tier reads the worktree's own manifest for its graph_node_id line (same class as manifest_lookup.rs and worktree_reapable.rs); target-state.md has NO resolver today, so this site drains when that resolver lands.
 A	crates/fno-agents/src/state_path.rs	target-state.md	unowned	this module IS the hook-facing resolver; the hand-built line is the one-release legacy checkout fallback and drains when it retires.
 A	crates/fno-agents/src/spawn_gate.rs	claims	unowned	call the resolver STATE_FILES names for this file.
 A	crates/fno/src/config_cli/history.rs	events.jsonl	unowned	the native journal reader's global fallback; the Rust door cannot call the Python resolver (fno.paths.project_events_json), so the hand-built read stays a declared root until a Rust resolver exists.

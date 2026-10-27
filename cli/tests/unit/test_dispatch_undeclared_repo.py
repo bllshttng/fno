@@ -1,9 +1,10 @@
-"""The dispatcher's pin for a spawn into an undeclared foreign repo.
+"""The dispatcher's pin seam for a spawn into an undeclared foreign repo.
 
-`undeclared_dispatch_pin` is the whole decision; the spawn body only merges
-its answer into the provenance overlay. Tests run it directly against real
-temp repos, passing the dirs a dispatch actually holds: the worker's cwd and
-the caller's cwd.
+The pin decision itself lives in the fno-agents binary
+(crates/fno-agents/src/worktree/policy.rs) and is characterized by the
+dispatch_pin goldens. What stays here is the Python seam's own contract: it
+computes the pin for an explicit foreign --cwd, returns it without touching
+the ambient env, and prints the receipt.
 """
 from __future__ import annotations
 
@@ -12,7 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from fno.worktree_paths import undeclared_dispatch_pin
+from fno.rust_binary import find_dev_binary
+
+requires_rust = pytest.mark.skipif(
+    find_dev_binary() is None,
+    reason="compiled fno-agents binary not present (build with `cargo build -p fno-agents`)",
+)
 
 
 def _make_repo(path: Path, config_text: str = "") -> Path:
@@ -39,35 +45,7 @@ def _sole_config(tmp_path_factory, monkeypatch):
     yield
 
 
-def test_pin_silent_when_target_declares_its_own_policy(tmp_path):
-    """AC3-ERR: the target's own config governs; no variable is exported."""
-    caller = _make_repo(tmp_path / "caller")
-    target = _make_repo(
-        tmp_path / "declared", '[worktree]\npolicy = "harness-native"\n'
-    )
-    assert undeclared_dispatch_pin(target, caller, "claude") == {}
-
-
-def test_pin_silent_for_a_worktree_of_the_callers_own_repo(tmp_path):
-    """Identity is the common dir: the caller's worktree spawning into its
-    own canonical checkout is the same repo, not a foreign target."""
-    repo = _make_repo(tmp_path / "own")
-    wt = tmp_path / "wt"
-    subprocess.run(
-        ["git", "-C", str(repo), "worktree", "add", "-q", str(wt), "-b", "side"],
-        check=True, capture_output=True,
-    )
-    assert undeclared_dispatch_pin(repo, wt, "claude") == {}
-
-
-def test_pin_silent_when_operator_env_already_decided(tmp_path, monkeypatch):
-    """An explicit ambient FNO_WORKTREE_POLICY outranks the dispatcher pin."""
-    caller = _make_repo(tmp_path / "caller")
-    target = _make_repo(tmp_path / "target")
-    monkeypatch.setenv("FNO_WORKTREE_POLICY", "external")
-    assert undeclared_dispatch_pin(target, caller, "claude") == {}
-
-
+@requires_rust
 def test_rust_seam_returns_pin_for_foreign_cwd(tmp_path, monkeypatch, capsys):
     """The Rust route execs before cmd_spawn, so the seam computes the pin for
     an explicit foreign --cwd and route_to_rust merges it into the exec env."""
