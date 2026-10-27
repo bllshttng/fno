@@ -197,7 +197,18 @@ fn resolve_state_path(path: Option<&str>, type_: Option<&str>) -> PathBuf {
     }
     let root = resolve_repo_root();
     if type_.is_none() || type_ == Some("target") {
-        return crate::state_path::resolve("target-state", &root).unwrap_or_default();
+        // The python door this CLI replaces resolved through
+        // `target_state_path_or_legacy`: the space manifest when it exists,
+        // else the pre-space checkout path, EVEN when that is missing too -
+        // a missing-file error must name where the next init creates the
+        // file. The shared `state path` table answers the space path in that
+        // case (its hooks migrate writers); this door keeps the oracle's
+        // answer so the parity goldens hold.
+        let space = crate::paths::worktree_space_dir(&root).join("target-state.md");
+        if space.exists() {
+            return space;
+        }
+        return root.join(".fno").join("target-state.md");
     }
     root.join(".fno")
         .join(format!("{}-state.md", type_.unwrap_or("target")))
@@ -441,6 +452,12 @@ pub fn run_init(args: &[String]) -> i32 {
         let root = resolve_repo_root();
         root.join(".fno").join(format!("{type_}-state.md"))
     });
+    // The python init created the parent on first write; the lock opens
+    // beside the manifest, so a missing .fno would fail the open and read
+    // as a five-second contention before the error.
+    if let Some(parent) = out_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     if out_path.exists() && !force {
         eprintln!(
             "error: {} already exists (use --force to overwrite)",

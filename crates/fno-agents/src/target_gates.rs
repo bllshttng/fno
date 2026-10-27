@@ -99,8 +99,18 @@ fn door_json(op: &str, args: &[&str], payload: &serde_json::Value) -> Option<ser
 }
 
 fn graph_get_row(input: &str) -> Option<serde_json::Value> {
+    // The owner lookup must read the SAME store the entries read:
+    // graph-get's own default answers FNO_STATE_DIR/graph.json while the
+    // entries read resolves the layout anchor (db twin), so a pinned
+    // FNO_STATE_DIR would split the two reads and every contained node
+    // would read as stale containment.
+    let graph = crate::graph_get::graph_path_for(
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    );
     let out = Command::new(self_exe())
         .arg("graph-get")
+        .arg("--graph")
+        .arg(&graph)
         .arg(input)
         .output()
         .ok()?;
@@ -898,10 +908,20 @@ fn handoff_prepare_run(args: &[String]) -> i32 {
     let content = match std::fs::read(&state) {
         Ok(bytes) => bytes,
         Err(err) => {
-            println!(
-                "{}",
-                serde_json::json!({"ok": false, "reason": format!("state read failed: {err}")})
-            );
+            // The python oracle str()d the OSError, so the parity golden
+            // carries the errno shape with the quoted path; mirror the two
+            // errnos a manifest read realistically raises and keep the
+            // native shape for the exotic rest.
+            let reason = match err.kind() {
+                std::io::ErrorKind::NotFound => {
+                    format!("[Errno 2] No such file or directory: '{}'", state.display())
+                }
+                std::io::ErrorKind::PermissionDenied => {
+                    format!("[Errno 13] Permission denied: '{}'", state.display())
+                }
+                _ => format!("state read failed: {err}"),
+            };
+            println!("{}", serde_json::json!({"ok": false, "reason": reason}));
             return 10;
         }
     };

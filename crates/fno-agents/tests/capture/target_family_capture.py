@@ -148,6 +148,18 @@ def make_shim(bindir: Path) -> None:
 
 def base_env(root: Path, bindir: Path) -> dict:
     env = dict(os.environ)
+    # Ambient FNO_* values are the capture machine's fleet posture, not the
+    # oracle's contract: an inherited FNO_ROUTE_PROVIDER once froze
+    # provider=zai into a golden and every other machine read it as drift.
+    # Keep only the pins this driver sets.
+    keep = {
+        "FNO_STATE_DIR", "FNO_HOME", "FNO_AGENTS_HOME", "FNO_BUS_DIR",
+        "FNO_EVENTS_PATH", "FNO_CLAIMS_ROOT", "FNO_HARNESS_NAME",
+        "FNO_HARNESS_SESSION_ID", "FNO_AGENTS_BIN",
+        "FNO_TEST_HERMETIC", "FNO_STYLE_ENFORCE",
+    }
+    for key in [k for k in env if k.startswith("FNO_") and k not in keep]:
+        del env[key]
     env.update(
         HOME=str(root),
         FNO_STATE_DIR=str(root),

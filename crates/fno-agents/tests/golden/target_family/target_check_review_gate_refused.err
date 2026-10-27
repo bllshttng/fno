@@ -1,4 +1,4 @@
-fno do target init: config.review.reviewers cannot be satisfied on harness=claude substrate=interactive provider=zai.
+fno do target init: config.review.reviewers cannot be satisfied on harness=claude substrate=interactive provider=unknown.
   unavailable: sigma - sigma is retired; run `/fno:review` (the default review lane) or change config.review.reviewers
 
 The gate is fail-closed: without a head-pinned review_attestation the session will block at the stop gate after the work is done.
