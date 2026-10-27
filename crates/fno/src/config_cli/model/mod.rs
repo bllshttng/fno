@@ -222,7 +222,7 @@ struct Walk<'a> {
     reg: &'a Registry,
 }
 
-impl Walk<'_> {
+impl<'a> Walk<'a> {
     fn push(&mut self, loc: &[Loc], input: &Value, text: impl Into<String>) {
         self.errors.push(Error {
             loc: loc.to_vec(),
@@ -540,7 +540,9 @@ impl Walk<'_> {
         None
     }
 
-    fn fork(&self) -> Walk<'_> {
+    /// A sibling walk for one union member: it shares the registry, not a
+    /// borrow of this walk, so the caller can merge its notes back.
+    fn fork(&self) -> Walk<'a> {
         Walk {
             ctx: Ctx {
                 notes: Vec::new(),
@@ -552,6 +554,17 @@ impl Walk<'_> {
             reg: self.reg,
         }
     }
+}
+
+/// Whether `value` validates as model `name`, for a validator whose Python
+/// body builds a sub-model and falls back to defaults when it refuses.
+pub fn validates_as(name: &str, value: &Value) -> bool {
+    let mut walk = Walk {
+        ctx: Ctx::default(),
+        errors: Vec::new(),
+        reg: registry(),
+    };
+    walk.model(name, value.clone(), &[]).is_some() && walk.errors.is_empty()
 }
 
 /// Registry keys are `&'static str`; resolve the walk's names onto them.

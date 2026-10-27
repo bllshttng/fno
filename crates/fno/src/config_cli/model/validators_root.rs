@@ -3,7 +3,7 @@
 //! and `_tiers.validate_tier_models`). `ConfigBlock`'s validators register
 //! under `SettingsModel`, which inherits them.
 
-use super::{coerce_bool, coerce_float, coerce_int, py_repr, Ctx, Fail, Registry};
+use super::{py_repr, Ctx, Fail, Registry};
 use serde_json::{Map, Value};
 
 const ROOT: &str = "SettingsModel";
@@ -396,86 +396,10 @@ fn coerce_parallel(ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
 /// `AccountsBlock(**v)` or, when that refuses, `AccountsBlock()`: an
 /// invalid accounts mapping drops to the defaults instead of refusing.
 fn coerce_accounts(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
-    match v {
-        Value::Object(map) if accounts_valid(&map) => Ok(Value::Object(map)),
-        _ => Ok(Value::Object(Map::new())),
+    if v.is_object() && super::validates_as("AccountsBlock", &v) {
+        return Ok(v);
     }
-}
-
-fn accounts_valid(map: &Map<String, Value>) -> bool {
-    let opt_str = |key: &str| {
-        matches!(
-            map.get(key),
-            None | Some(Value::Null) | Some(Value::String(_))
-        )
-    };
-    if !opt_str("active") || !opt_str("active_combo") || !bool_ok(map.get("auto_switch")) {
-        return false;
-    }
-    let records_ok = match map.get("records") {
-        None => true,
-        Some(Value::Array(items)) => items.iter().all(Value::is_object),
-        Some(_) => false,
-    };
-    let combos_ok = match map.get("combos") {
-        None => true,
-        Some(Value::Object(combos)) => combos.values().all(combo_valid),
-        Some(_) => false,
-    };
-    let quota_ok = match map.get("quota") {
-        Some(Value::Object(quota)) => quota_valid(quota),
-        _ => true,
-    };
-    let failover_ok = match map.get("failover") {
-        Some(Value::Object(failover)) => int_at_least(failover.get("max_swaps_per_phase"), 1.0),
-        _ => true,
-    };
-    records_ok && combos_ok && quota_ok && failover_ok
-}
-
-fn bool_ok(v: Option<&Value>) -> bool {
-    v.is_none_or(|v| coerce_bool(v).is_ok())
-}
-
-fn int_at_least(v: Option<&Value>, min: f64) -> bool {
-    v.is_none_or(|v| {
-        coerce_int(v)
-            .ok()
-            .and_then(|n| n.as_f64())
-            .is_some_and(|n| n >= min)
-    })
-}
-
-fn combo_valid(combo: &Value) -> bool {
-    let Value::Object(combo) = combo else {
-        return false;
-    };
-    let strategy_ok = match combo.get("strategy") {
-        None => true,
-        Some(Value::String(s)) => s == "fallback" || s == "round_robin",
-        Some(_) => false,
-    };
-    let providers_ok = match combo.get("providers") {
-        None => true,
-        Some(Value::Array(items)) => items.iter().all(Value::is_string),
-        Some(_) => false,
-    };
-    strategy_ok && providers_ok && int_at_least(combo.get("sticky_limit"), f64::NEG_INFINITY)
-}
-
-fn quota_valid(quota: &Map<String, Value>) -> bool {
-    let pct_ok = quota.get("defer_threshold_pct").is_none_or(|v| {
-        coerce_float(v)
-            .ok()
-            .and_then(|n| n.as_f64())
-            .is_some_and(|n| (0.0..=100.0).contains(&n))
-    });
-    ["observe", "defer_dispatch", "pick_on_launch"]
-        .iter()
-        .all(|k| bool_ok(quota.get(*k)))
-        && pct_ok
-        && int_at_least(quota.get("probe_ttl_seconds"), 1.0)
-        && int_at_least(quota.get("defer_horizon_minutes"), 0.0)
+    Ok(Value::Object(Map::new()))
 }
 
 fn validate_path_fields(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
