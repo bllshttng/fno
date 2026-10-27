@@ -7,7 +7,7 @@
    "dispatches": [],
    "events": [],
    "sidecar": {
-    "answered_cursor": "2026-08-28T12:00:00+00:00",
+    "answered_cursor": "2026-08-28T12:00:00Z",
     "board_hash": "371a94fbb643651f2f4f0e1faed93b6e5c8679a61b4550078f97c0b14df9e031",
     "board_rows": [
      [

@@ -385,7 +385,7 @@ fn run_json(
     } else {
         json!({"armed": false})
     };
-    json!({
+    let mut run = json!({
         "summary": summary,
         "events": rec.events(),
         "dispatches": rec.dispatches(),
@@ -394,8 +394,12 @@ fn run_json(
         "unread_calls": rec.unread(),
         "sidecar": world.read_sidecar(scope),
         "wake_times": world.wake_times(scope),
-        "wake_log": if wake_log { world.wake_log(scope) } else { None },
-    })
+    });
+    // The goldens carry `wake_log` only for the runs that asked for it.
+    if wake_log {
+        run["wake_log"] = json!(world.wake_log(scope));
+    }
+    run
 }
 
 /// Compare one pass against the golden's run at `index`.

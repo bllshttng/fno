@@ -26,7 +26,7 @@
     ]
    ],
    "sidecar": {
-    "answered_cursor": "2026-08-28T12:00:00+00:00",
+    "answered_cursor": "2026-08-28T12:00:00Z",
     "board_hash": "1d98bbe491ace2bd8519abecc91c128184c102b102863715c56bb6fcd8af0ea5",
     "board_rows": [
      [

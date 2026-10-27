@@ -9,7 +9,7 @@
      "epic-x",
      "escalation_answered",
      null,
-     "Answer to your question q-ab12cd34 \"what does the operator want for epic-x?\": ship it. The answer was also delivered as mail addressed to 11111111-2222-3333-4444-555555555555: run `fno agents mail unread --name 11111111-2222-3333-4444-555555555555` and drain it, then advance the cursor with `fno agents mail ack <id> --name 11111111-2222-3333-4444-555555555555`."
+     "Answer to your question q-ab12cd34 \"what does the operator want for epic-x?\": ship it The answer was also delivered as mail addressed to 11111111-2222-3333-4444-555555555555: run `fno agents mail unread --name 11111111-2222-3333-4444-555555555555` and drain it, then advance the cursor with `fno agents mail ack <id> --name 11111111-2222-3333-4444-555555555555`."
     ]
    ],
    "events": [
