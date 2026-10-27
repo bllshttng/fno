@@ -705,9 +705,13 @@ ARCHIVED_STATE="$PLAN_ARTIFACTS_DIR/target-state-${SESSION_ID}.md"
 
 _PREPARE_RC=0
 _HANDOFF_PREPARE_LOG="$(mktemp "${TMPDIR:-/tmp}/fno-handoff-prepare.XXXXXX")"
-# The prepare module is native now: the target-handoff-prepare op
-# under the fno-agents binary serves the same contract and exits (0/10/12).
-FNO_CLAIMS_ROOT="$HOME" fno-agents target-gates target-handoff-prepare \
+# The prepare op is native now: target-handoff-prepare under the fno-agents
+# binary serves the same contract and exits (0/10/12). The binary resolves
+# through the same resolver the hooks use, so the smoke job's FRONT export
+# (the built checkout binary) wins over a stale installed release that
+# predates the op.
+_PREPARE_AGENTS="$(_handoff_agents_bin)"
+FNO_CLAIMS_ROOT="$HOME" "${_PREPARE_AGENTS:-fno-agents}" target-gates target-handoff-prepare \
   --state "$STATE_FILE" \
   --archive "$ARCHIVED_STATE" \
   --claim-key "node:$NODE_ID" \
