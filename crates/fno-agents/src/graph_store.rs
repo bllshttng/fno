@@ -2782,6 +2782,30 @@ pub fn locked_mutate_with_hook(
     timeout: Duration,
     before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
 ) -> Result<MutateOutcome, StoreError> {
+    locked_mutate_flavored(path, input, timeout, before_publish, false)
+}
+
+/// The stored-status seam: `raw`, and with it the curation baseline and the
+/// store diff, reads the rows as STORED, no readiness overlay. The
+/// whole-graph writer uses this so a publish diffs stored rows against
+/// stored rows; a caller whose entries came from an overlaid read keeps the
+/// default seam, where baseline and entries always agree.
+pub(crate) fn locked_mutate_with_hook_stored(
+    path: &Path,
+    input: MutateInput,
+    timeout: Duration,
+    before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
+) -> Result<MutateOutcome, StoreError> {
+    locked_mutate_flavored(path, input, timeout, before_publish, true)
+}
+
+fn locked_mutate_flavored(
+    path: &Path,
+    input: MutateInput,
+    timeout: Duration,
+    before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
+    stored_statuses: bool,
+) -> Result<MutateOutcome, StoreError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -2792,7 +2816,11 @@ pub fn locked_mutate_with_hook(
     // as Conflict and the caller retries, the same surface a stale
     // base_version already produced.
     let begin_version = crate::backlog::version(path).map_err(StoreError::Sqlite)?;
-    let raw = crate::backlog::read_entries(path).map_err(StoreError::Sqlite)?;
+    let raw = if stored_statuses {
+        crate::backlog::read_entries_stored(path).map_err(StoreError::Sqlite)?
+    } else {
+        crate::backlog::read_entries(path).map_err(StoreError::Sqlite)?
+    };
     let _lock = BoundedLock::acquire(path, timeout)?;
     let current = crate::backlog::version(path).map_err(StoreError::Sqlite)?;
     if current != begin_version || current != input.base_version {
@@ -3147,7 +3175,7 @@ pub fn mutate_rows(
                 Some(h) => Some(&mut **h),
                 None => None,
             };
-            locked_mutate_with_hook(
+            locked_mutate_with_hook_stored(
                 path,
                 MutateInput {
                     entries: working,
@@ -3169,8 +3197,12 @@ pub fn mutate_rows(
                 // primary's rows: one resend on the fresh read, then the
                 // refusal goes back to the caller. Five full publish cycles
                 // per write at a seconds-long primary RTT was the refusal
-                // storm the primary stalled under.
-                Err(refusal) if crate::backlog_share::is_stale_row_refusal(&refusal) => {
+                // storm the primary stalled under. The loop bound holds: a
+                // continue past the last attempt would reach unreachable!.
+                Err(refusal)
+                    if crate::backlog_share::is_stale_row_refusal(&refusal)
+                        && attempt + 1 < ATTEMPTS =>
+                {
                     if rebased {
                         return Err(StoreError::Sqlite(refusal));
                     }

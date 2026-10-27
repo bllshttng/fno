@@ -553,8 +553,9 @@ fn ops_json(changes: &[Change]) -> String {
 /// words, so a bad batch on the primary names its writer. The status flip
 /// shipped 175 stored-status reversals with no writer field anywhere.
 fn writer_stamp() -> (i64, String) {
-    let cmd: String = std::env::args()
+    let cmd: String = std::env::args_os()
         .take(3)
+        .map(|arg| arg.to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join(" ")
         .chars()
@@ -608,7 +609,9 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
     // The writer stamp: which process produced this batch. A side table
     // instead of new change-log columns, so a primary from before the stamp
     // gains the table from the first new-binary publish and an old binary
-    // never reads it - no schema skew between deploy moments.
+    // never reads it - no schema skew between deploy moments. The upsert
+    // keeps a re-sent batch (a lost reply, the same batch id) from failing
+    // the stamp instead of answering the data.
     let (pid, cmd) = writer_stamp();
     steps.push((
         "CREATE TABLE IF NOT EXISTS main.backlog_writers (
@@ -618,7 +621,9 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
     ));
     owner.push(None);
     steps.push((
-        "INSERT INTO backlog_writers (batch, pid, cmd, at) VALUES (?1, ?2, ?3, ?4)".to_string(),
+        "INSERT INTO backlog_writers (batch, pid, cmd, at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(batch) DO UPDATE SET pid = excluded.pid, cmd = excluded.cmd, at = excluded.at"
+            .to_string(),
         vec![
             SqlValue::Text(batch.to_string()),
             SqlValue::Integer(pid),
@@ -2841,7 +2846,11 @@ mod tests {
             .db
             .lock()
             .unwrap()
-            .query_row("SELECT batch FROM backlog_writers", [], |r| r.get(0))
+            .query_row(
+                "SELECT batch FROM backlog_writers ORDER BY at DESC, batch DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_ne!(live, "old", "the aged stamp went with its batch");
         let batch_of_live: i64 = primary

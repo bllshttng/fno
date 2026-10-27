@@ -1451,6 +1451,13 @@ pub fn export_rows(connection: &Connection) -> Result<Vec<Value>, String> {
     query_rows(connection, &RowQuery::default(), None, true)
 }
 
+/// The canonical export as stored: no readiness overlay. The whole-graph
+/// write seam reads this, so its baseline, its store diff, and its guards
+/// never meet the overlay's answer for an open blocker.
+pub fn read_entries_stored(graph: &Path) -> Result<Vec<Value>, String> {
+    query_rows(&read_connection(graph)?, &RowQuery::default(), None, false)
+}
+
 /// The light resolution index for single-node doors: id, slug, and archived
 /// flag only, in store order. The single-node loader serves the body; the
 /// whole export exists for callers that read every row. Never pass these
