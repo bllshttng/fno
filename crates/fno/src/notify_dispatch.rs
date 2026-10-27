@@ -461,19 +461,41 @@ mod tests {
 
     #[test]
     fn empty_title_and_message_take_the_defaults() {
-        // The decision table with every channel absent: the defaults ride the
-        // request, the exit is the loud degrade, and the message is byte-equal
-        // to the Python _NO_TOOL_MSG.
-        let _guard = env_lock();
-        std::env::remove_var("FNO_TEST_HERMETIC");
-        // No local tool on a non-macOS runner; on macOS osascript always
-        // answers present, so pin the suppressed posture instead: the toast
-        // channel is skipped but still counts, which is the golden case.
-        std::env::set_var("FNO_TEST_HERMETIC", "1");
-        let (code, msg) = send_notification("", "", "");
-        assert_eq!(code, 0, "suppressed macOS toast still counts as a channel");
+        // The decision table on injected channels, the way the deleted
+        // Python leg's tests monkeypatched the module: no env stamp, no host
+        // tool dependence (the Linux runner has no notify-send, so the env
+        // stamp cannot make the toast count there). Case one: the toast
+        // answers, the defaults ride the request, an accepted channel exits
+        // 0 with an empty message. Case two: every channel absent, and the
+        // loud degrade answers NO_TOOL_MSG byte for byte.
+        let seen = &mut Vec::new();
+        let (code, msg) = send_notification_seams(
+            "",
+            "",
+            "",
+            &mut |_t, _m| true,
+            &mut |_t, _m| None,
+            &mut |t, m, _p| {
+                seen.push((t.to_string(), m.to_string()));
+                false
+            },
+            &mut |_e| false,
+        );
+        assert_eq!(code, 0);
         assert!(msg.is_empty());
-        std::env::remove_var("FNO_TEST_HERMETIC");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0], ("target".to_string(), "Complete".to_string()));
+        let (code, msg) = send_notification_seams(
+            "",
+            "",
+            "",
+            &mut |_t, _m| false,
+            &mut |_t, _m| None,
+            &mut |_t, _m, _p| false,
+            &mut |_e| false,
+        );
+        assert_eq!(code, 1);
+        assert_eq!(msg, NO_TOOL_MSG);
     }
 
     #[test]
@@ -501,11 +523,5 @@ mod tests {
         assert!(classify_inbox_notify(&os(&["inbox", "mail"])).is_none());
         assert!(classify_root_notify(&os(&["notify", "T", "B"])).is_some());
         assert!(classify_root_notify(&os(&["notifyx"])).is_none());
-    }
-
-    /// One env-var test at a time: the dispatch posture reads the process env.
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
