@@ -336,6 +336,7 @@ pub mod mail_threads;
 pub mod main_ci;
 pub mod main_ci_proof;
 pub mod main_ci_transition;
+pub mod main_revert;
 pub mod manifest;
 pub mod manifest_lookup;
 pub mod mcp;
@@ -1832,6 +1833,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
     "pr_push_landed",
     "ci_cadence_check",
+    // The main_revert arm's read of a red main (main_revert.rs).
+    "main_revert_check",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
