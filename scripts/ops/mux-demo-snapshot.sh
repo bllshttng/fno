@@ -399,7 +399,8 @@ agents = [
     row("archer", "codex", "gpt-6-sol", ids[0], "working", sids[1]),
     row("scout", "claude", "opus", ids[1], "done", sids[0]),
     row("reviewer", "opencode", "zen", ids[2], "working", sids[2]),
-    row("pager", "pi", "glm-5", ids[3], "working"),
+    # Blocked, so the strip's need-input count and the Input word render.
+    row("pager", "pi", "glm-5", ids[3], "blocked"),
     row("scribe", "claude", "sonnet", ids[4], "done"),
     # Paneless threads, so the sideline shows the other states too.
     # Leads dispatch and never host a pane: attachable thread rows.

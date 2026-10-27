@@ -9415,6 +9415,10 @@ async fn aux_keys(
                     view.aux = None;
                 }
             }
+            // Space flips a settings checkbox in place, as Enter does.
+            ModalKey::Byte(b' ') if settings_modal::space_toggle(view).is_some() => {
+                aux_execute_selected(view, sock_w).await?;
+            }
             // Any other (unbound) key dismisses, per the shared popup contract.
             ModalKey::Byte(_) => {
                 theme_import_ui::reset(view);
@@ -10063,28 +10067,9 @@ async fn selector_keys(
                     None => view.set_notice("no other workspace to move this tab to".into()),
                 }
             }
-            b'.' => {
-                // Pin/unpin the agent row under the cursor. Pinned rows lead
-                // every sort (the operator's 2026-10-07 ask), persisted like
-                // the sort itself; a non-agent row notices why.
-                match view.display_rows().get(cur) {
-                    Some(DisplayRow::Agent(a)) => {
-                        let name = a.name.clone();
-                        let pinned =
-                            if let Some(pos) = view.pinned_agents.iter().position(|n| *n == name) {
-                                view.pinned_agents.remove(pos);
-                                false
-                            } else {
-                                view.pinned_agents.push(name.clone());
-                                true
-                            };
-                        view_store::save_pinned(&view.pinned_agents);
-                        let word = if pinned { "pinned" } else { "unpinned" };
-                        view.set_notice(format!("{word} {name}"));
-                    }
-                    _ => view.set_notice("pin works on an agent row".into()),
-                }
-            }
+            // Pinned rows lead every sort (the operator's 2026-10-07 ask);
+            // ctrl+t is Claude's agents-view chord for the same pin.
+            b'.' | 0x14 => agent_sort::toggle_pin(view, cur),
             0x1b | b'q' => view.selector = None,
             _ => {}
         }
