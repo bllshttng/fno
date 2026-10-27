@@ -1,0 +1,2918 @@
+{
+ "SettingsModel": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "state_dir",
+    "default": "~/.fno/"
+   },
+   {
+    "name": "plans_dir",
+    "default": ".fno/plans/"
+   },
+   {
+    "name": "plans_filename",
+    "default": "%Y%m%d-{slug}-{node}.md"
+   },
+   {
+    "name": "branch",
+    "default": {
+     "prefix": "fno"
+    }
+   },
+   {
+    "name": "build",
+    "default": {
+     "agent_freeze": false
+    }
+   },
+   {
+    "name": "paths",
+    "default": {
+     "ledger_json": null,
+     "evals_history": null,
+     "briefs_dir": null,
+     "fleet_dir": null,
+     "postmortems_dir": null,
+     "worktrees_base": null,
+     "cargo_targets_base": null,
+     "memory_dir": null,
+     "hook_logs_dir": null,
+     "inbox_path": null,
+     "handoffs_dir": null,
+     "retro_pending_dir": null,
+     "bus_dir": null,
+     "chats": null,
+     "observer_reports_dir": null,
+     "operator_lane": null,
+     "spaces_dir": null
+    }
+   },
+   {
+    "name": "obsidian",
+    "default": {
+     "enabled": false,
+     "vault": null
+    }
+   },
+   {
+    "name": "project",
+    "default": {
+     "id": null,
+     "vision": null
+    }
+   },
+   {
+    "name": "inbox",
+    "default": {
+     "unclaimed_ttl": 1800,
+     "landed_abandon_ttl": 21600,
+     "tool_boundary_ordinary": false
+    }
+   },
+   {
+    "name": "user",
+    "default": {
+     "name": ""
+    }
+   },
+   {
+    "name": "sandbox",
+    "default": {
+     "on_unavailable": "refuse"
+    }
+   },
+   {
+    "name": "blueprint",
+    "default": {
+     "max_prs_per_epic": 4,
+     "python_repair_added_lines": 30
+    }
+   },
+   {
+    "name": "plan",
+    "default": {
+     "default_diff_budget": 300
+    }
+   },
+   {
+    "name": "backlog",
+    "default": {
+     "maintain": {
+      "staleness_days": 30,
+      "max_failed_attempts": 3,
+      "abandoned_do_row_hours": 24,
+      "budget_seconds": 300,
+      "validity_days": 60,
+      "validity_batch_size": 25
+     },
+     "id_prefix": null,
+     "id_hex_width": 8,
+     "staleness_days": 21,
+     "epic_max_open_children": null,
+     "max_open_ideas": 25,
+     "render_targets": [],
+     "page_reload_s": 60
+    }
+   },
+   {
+    "name": "batch",
+    "default": {
+     "enabled": false,
+     "max_nodes": 3,
+     "max_loc": null
+    }
+   },
+   {
+    "name": "post_merge",
+    "default": {
+     "parking_lot_path": null,
+     "maintainer_marker": null,
+     "enabled": true,
+     "self_reap": false,
+     "sync_command": null,
+     "sync_paths": [],
+     "auto_run": false,
+     "catchup_window_days": 3,
+     "sync_stale_hours": 24,
+     "model": "claude-opus-5"
+    }
+   },
+   {
+    "name": "telemetry",
+    "default": {
+     "claude_otel": true,
+     "otlp": {
+      "enabled": false,
+      "endpoint": "",
+      "headers_env": "FNO_OTLP_HEADERS",
+      "log_content": false
+     }
+    }
+   },
+   {
+    "name": "attention",
+    "default": {
+     "enabled": true,
+     "sinks": []
+    }
+   },
+   {
+    "name": "research",
+    "default": {
+     "output_dir": null
+    }
+   },
+   {
+    "name": "review",
+    "default": {
+     "posture": null,
+     "github_apps": null,
+     "required_bots": null,
+     "peers": [],
+     "peer_identity": null,
+     "peer_token_env": null,
+     "bot_identity": null,
+     "bot_token_env": null,
+     "optional_apps": null,
+     "nudge": {},
+     "reviewer_registry": {},
+     "reviewers": [],
+     "self_review_required": true,
+     "require_corroboration": false,
+     "github_approval_satisfies": true,
+     "max_rounds": 2,
+     "carry_interdiff_lines": 100,
+     "invocation_ttl_minutes": 15,
+     "nonblocking_categories": null,
+     "hold_ttl_minutes": 90,
+     "optout_ttl_minutes": 60,
+     "external_reviewers": [],
+     "agent_harnesses": {},
+     "agent_providers": {},
+     "agent_routes": {},
+     "cross_model": {
+      "enabled": false
+     }
+    }
+   },
+   {
+    "name": "style",
+    "default": {
+     "word_cap": {
+      "mail": 80,
+      "encounter": 80
+     }
+    }
+   },
+   {
+    "name": "preflight",
+    "default": {
+     "required": false
+    }
+   },
+   {
+    "name": "approvals",
+    "default": {
+     "authorized_principals": {}
+    }
+   },
+   {
+    "name": "context",
+    "default": {
+     "artifacts": {}
+    }
+   },
+   {
+    "name": "done_probes",
+    "default": []
+   },
+   {
+    "name": "target",
+    "default": {
+     "dedupe_dead_duplicates": false,
+     "handoff": {
+      "enabled": true,
+      "used_pct_trigger": 50,
+      "lead_used_pct_trigger": 40
+     },
+     "blast": {
+      "enabled": false,
+      "downgrade": true,
+      "reuse_loc_manifest": true,
+      "high_blast_globs": []
+     },
+     "defaults": {
+      "no_external": false,
+      "no_docs": false,
+      "max_iterations": 40
+     }
+    }
+   },
+   {
+    "name": "test",
+    "default": {
+     "timeout_seconds": 1800,
+     "max_net_new": null
+    }
+   },
+   {
+    "name": "guards",
+    "default": {
+     "preset": "standard"
+    }
+   },
+   {
+    "name": "store",
+    "default": {
+     "remote_url": null,
+     "remote_token": null,
+     "remote_addrs": null,
+     "share_backlog": false,
+     "ssh_peers": null
+    }
+   },
+   {
+    "name": "agents",
+    "default": {
+     "single_flight_ttl_seconds": 60,
+     "single_flight_join_budget_seconds": 30,
+     "orphan_reap_after_seconds": 5400,
+     "a2a": {
+      "auto": true,
+      "turn_ceiling": 6
+     },
+     "defaults": {
+      "provider": "",
+      "model": "",
+      "effort": "",
+      "substrate": "",
+      "permission_mode": "",
+      "route": "",
+      "account": "",
+      "harness": {}
+     },
+     "profiles": {},
+     "fallback": {},
+     "silence_deadline_seconds": 600,
+     "confirm": "auto",
+     "auto_register_sessions": false,
+     "happy_routed_panes": false,
+     "first_check_minutes": 10,
+     "retire_grace_s": 900,
+     "retire_interval_s": 300,
+     "hold_escalate_after_s": 5400,
+     "reap_receipts": {
+      "retain_days": 7
+     },
+     "reap": {
+      "roster_scope": "provenanced"
+     },
+     "state_reap": {
+      "enabled": true,
+      "locks_retain_days": 7,
+      "expired_claims_retain_days": 30,
+      "pr_status_cache_retain_days": 14
+     },
+     "claude": {
+      "beat": "auto"
+     },
+     "codex": {
+      "beat": "auto",
+      "headless_yolo": false
+     },
+     "gemini": {
+      "headless_yolo": false
+     },
+     "naming": {
+      "worker": "t-{slug}"
+     },
+     "max_live": 3,
+     "max_live_per_territory": 4,
+     "provider_limits": {
+      "zai": {
+       "lanes": 5,
+       "subagents": 1
+      }
+     },
+     "pane_group_max": 4,
+     "min_free_gb": 4.0,
+     "max_swap_pct": 90.0,
+     "max_load_per_cpu": 8.0,
+     "max_fleet_cpu_share": 0.5,
+     "worker_qos": "utility",
+     "footprint_sustained_cpu_cores": null
+    }
+   },
+   {
+    "name": "process_admission",
+    "default": {
+     "max_processes": 400
+    }
+   },
+   {
+    "name": "dispatch",
+    "default": {
+     "harness": "",
+     "substrate": "",
+     "command": "",
+     "command_registry": {},
+     "allowed_commands": [
+      "/target",
+      "/think",
+      "/blueprint"
+     ],
+     "auto_merge": false,
+     "on_exhaustion": "defer",
+     "cutover_low_after_minutes": 0,
+     "blueprint_floor": "high"
+    }
+   },
+   {
+    "name": "routing",
+    "default": {
+     "objective": "cheapest-that-clears",
+     "prefer_harness": "",
+     "models": [],
+     "enforce_inventory": false,
+     "operator_access": "unknown"
+    }
+   },
+   {
+    "name": "sideline",
+    "default": {
+     "colors": {
+      "harness": {},
+      "route": {},
+      "model": {},
+      "row": {}
+     },
+     "layout": "card"
+    }
+   },
+   {
+    "name": "split",
+    "default": {
+     "opens": "pane"
+    }
+   },
+   {
+    "name": "autonomy",
+    "default": {
+     "enabled": true
+    }
+   },
+   {
+    "name": "auto_continue",
+    "default": {
+     "enabled": false
+    }
+   },
+   {
+    "name": "keep_going",
+    "default": {
+     "enabled": false
+    }
+   },
+   {
+    "name": "think_spawn",
+    "default": {
+     "enabled": false,
+     "max_per_run": 5,
+     "idle_threshold_s": 0,
+     "on_work_start": false,
+     "daily_cap": 20,
+     "on_decompose_wave0": false,
+     "substrate": null,
+     "attended": "offer"
+    }
+   },
+   {
+    "name": "active_backlog",
+    "default": {
+     "enabled": false,
+     "interval": "5m",
+     "failure_limit": 3,
+     "max_concurrent": 1,
+     "mission": null
+    }
+   },
+   {
+    "name": "parallel",
+    "default": {
+     "max_lanes": 1
+    }
+   },
+   {
+    "name": "auto_merge",
+    "default": {
+     "enabled": false,
+     "grant": "none",
+     "merge_strategy": "merge",
+     "delete_branch_on_merge": true,
+     "require_checks_pass": true,
+     "require_fresh_ci": false,
+     "conflict_resolution": "opus",
+     "remediation": "attempt"
+    }
+   },
+   {
+    "name": "auto_heal",
+    "default": {
+     "enabled": false
+    }
+   },
+   {
+    "name": "pr_watch",
+    "default": {
+     "enabled": false,
+     "interval_seconds": 600,
+     "retries": 3,
+     "max_age_days": 14,
+     "model": "claude-haiku-4-5",
+     "tick_timeout_seconds": null,
+     "graphql_min_remaining": 200,
+     "wedged_after_ticks": 3
+    }
+   },
+   {
+    "name": "groom",
+    "default": {
+     "enabled": true
+    }
+   },
+   {
+    "name": "evals",
+    "default": {
+     "enabled": true,
+     "schedule_days": 7,
+     "stale_days": 7,
+     "scratch_threshold": 3,
+     "scratch_window_days": 28
+    }
+   },
+   {
+    "name": "recovery",
+    "default": {
+     "enabled": true,
+     "idle_threshold_seconds": 900,
+     "max_nudges": 3,
+     "watchdog": {
+      "enabled": false,
+      "mode": "report",
+      "mail_to": ""
+     },
+     "startup_destructive": false,
+     "provider_outage_quorum": 2,
+     "provider_outage_fup_window_seconds": 300,
+     "provider_outage_529_count": 3,
+     "provider_outage_529_span_seconds": 120,
+     "provider_outage_529_cross_session_window_seconds": 600,
+     "provider_outage_pane_freshness_seconds": 120,
+     "provider_outage_evidence_freshness_seconds": 600,
+     "provider_outage_reset_grace_seconds": 120,
+     "provider_health_marker_ttl_seconds": 120
+    }
+   },
+   {
+    "name": "health_monitor",
+    "default": {
+     "enabled": true,
+     "thresholds": {
+      "idea_pile_depth": 25,
+      "stale_ready_days": 30,
+      "failure_prone_attempts": 2,
+      "collision_count": 3,
+      "project_cwd_mismatch": 0,
+      "orphan_feature_rate": 1.0
+     },
+     "notifications": {
+      "surfaces": [
+       "terminal"
+      ],
+      "discord_channel": null,
+      "webhook_url": null,
+      "throttle_minutes": 60
+     },
+     "history": {
+      "enabled": true,
+      "path": null,
+      "retain_days": 90
+     }
+    }
+   },
+   {
+    "name": "resource_meter",
+    "default": {
+     "enabled": false,
+     "refresh_seconds": 5,
+     "thresholds": {
+      "cpu_busy_fraction": 0.9,
+      "swap_used_gb": 1.0
+     },
+     "notifications": {
+      "surfaces": [
+       "terminal"
+      ],
+      "discord_channel": null,
+      "webhook_url": null,
+      "throttle_minutes": 60
+     },
+     "history": {
+      "enabled": true,
+      "path": null,
+      "retain_days": 90
+     }
+    }
+   },
+   {
+    "name": "collision",
+    "default": {
+     "severity_thresholds": {
+      "high_count": 3.0,
+      "high_ratio": 0.5,
+      "medium_count": 2.0,
+      "medium_ratio": 0.25
+     }
+    }
+   },
+   {
+    "name": "work",
+    "default": {
+     "workspaces": {}
+    }
+   },
+   {
+    "name": "join",
+    "default": {
+     "sandbox": false
+    }
+   },
+   {
+    "name": "worktree",
+    "default": {
+     "policy": null,
+     "auto_install": true,
+     "setup_command": "",
+     "skip_verification": false,
+     "test_command": "",
+     "prune_done": "balanced"
+    }
+   },
+   {
+    "name": "model_routing",
+    "default": {
+     "enabled": true,
+     "providers": {},
+     "roles": {},
+     "extra_env": {}
+    }
+   },
+   {
+    "name": "mux",
+    "default": {
+     "shell_integration": "mux-panes",
+     "restore": {
+      "hold_workers": true,
+      "policy": null
+     },
+     "board_scope": "repo",
+     "prefix": null,
+     "keys": {},
+     "notify_on_blocked": true,
+     "notify_on_done": false,
+     "attach_digest": true,
+     "attach_digest_threshold_min": 10,
+     "hover_focus": true,
+     "status_row": true,
+     "load_readout": "simple",
+     "theme": null,
+     "paint_background": true,
+     "card_graph": "activity",
+     "open_with": "inmux",
+     "viewer": "panel",
+     "wheel_lines": 1,
+     "wheel_passthrough_rate": 3
+    }
+   },
+   {
+    "name": "dev",
+    "default": {
+     "source": ""
+    }
+   },
+   {
+    "name": "loops",
+    "default": {}
+   },
+   {
+    "name": "status_sinks",
+    "default": []
+   },
+   {
+    "name": "status_fanout",
+    "default": {
+     "interval_secs": 5,
+     "http_timeout_secs": 5,
+     "retries": 2,
+     "short_circuit_backoff_secs": 300
+    }
+   },
+   {
+    "name": "lead",
+    "default": {
+     "enabled": false,
+     "autonomous_merge": false,
+     "wake_enabled": false,
+     "wake_ceiling": 32,
+     "wake_debounce_seconds": 900,
+     "wake_backstop_seconds": 1800,
+     "blocked_child_grace_minutes": 30,
+     "implementation_guard": "refuse",
+     "write_roots": [],
+     "checkin_interval": "55m",
+     "checkin_text": "lead check-in. Run fno agents org checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. "
+    }
+   },
+   {
+    "name": "accounts",
+    "default": {
+     "active": null,
+     "auto_switch": false,
+     "active_combo": null,
+     "records": [],
+     "combos": {},
+     "quota": {
+      "observe": false,
+      "defer_dispatch": false,
+      "defer_threshold_pct": 90.0,
+      "probe_ttl_seconds": 300,
+      "defer_horizon_minutes": 60,
+      "pick_on_launch": false
+     },
+     "failover": null
+    }
+   },
+   {
+    "name": "schema_version",
+    "default": 1
+   }
+  ]
+ },
+ "BranchBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "prefix",
+    "default": "fno"
+   }
+  ]
+ },
+ "BuildBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "agent_freeze",
+    "default": false
+   }
+  ]
+ },
+ "PathsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "ledger_json",
+    "default": null
+   },
+   {
+    "name": "evals_history",
+    "default": null
+   },
+   {
+    "name": "briefs_dir",
+    "default": null
+   },
+   {
+    "name": "fleet_dir",
+    "default": null
+   },
+   {
+    "name": "postmortems_dir",
+    "default": null
+   },
+   {
+    "name": "worktrees_base",
+    "default": null
+   },
+   {
+    "name": "cargo_targets_base",
+    "default": null
+   },
+   {
+    "name": "memory_dir",
+    "default": null
+   },
+   {
+    "name": "hook_logs_dir",
+    "default": null
+   },
+   {
+    "name": "inbox_path",
+    "default": null
+   },
+   {
+    "name": "handoffs_dir",
+    "default": null
+   },
+   {
+    "name": "retro_pending_dir",
+    "default": null
+   },
+   {
+    "name": "bus_dir",
+    "default": null
+   },
+   {
+    "name": "chats",
+    "default": null
+   },
+   {
+    "name": "observer_reports_dir",
+    "default": null
+   },
+   {
+    "name": "operator_lane",
+    "default": null
+   },
+   {
+    "name": "spaces_dir",
+    "default": null
+   }
+  ]
+ },
+ "ObsidianBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   },
+   {
+    "name": "vault",
+    "default": null
+   }
+  ]
+ },
+ "ProjectBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "id",
+    "default": null
+   },
+   {
+    "name": "vision",
+    "default": null
+   }
+  ]
+ },
+ "InboxBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "unclaimed_ttl",
+    "default": 1800
+   },
+   {
+    "name": "landed_abandon_ttl",
+    "default": 21600
+   },
+   {
+    "name": "tool_boundary_ordinary",
+    "default": false
+   }
+  ]
+ },
+ "UserBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "name",
+    "default": ""
+   }
+  ]
+ },
+ "SandboxBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "on_unavailable",
+    "default": "refuse"
+   }
+  ]
+ },
+ "BlueprintBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "max_prs_per_epic",
+    "default": 4
+   },
+   {
+    "name": "python_repair_added_lines",
+    "default": 30
+   }
+  ]
+ },
+ "PlanBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "default_diff_budget",
+    "default": 300
+   }
+  ]
+ },
+ "BacklogBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "maintain",
+    "default": {
+     "staleness_days": 30,
+     "max_failed_attempts": 3,
+     "abandoned_do_row_hours": 24,
+     "budget_seconds": 300,
+     "validity_days": 60,
+     "validity_batch_size": 25
+    }
+   },
+   {
+    "name": "id_prefix",
+    "default": null
+   },
+   {
+    "name": "id_hex_width",
+    "default": 8
+   },
+   {
+    "name": "staleness_days",
+    "default": 21
+   },
+   {
+    "name": "epic_max_open_children",
+    "default": null
+   },
+   {
+    "name": "max_open_ideas",
+    "default": 25
+   },
+   {
+    "name": "render_targets",
+    "default": []
+   },
+   {
+    "name": "page_reload_s",
+    "default": 60
+   }
+  ]
+ },
+ "BatchBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   },
+   {
+    "name": "max_nodes",
+    "default": 3
+   },
+   {
+    "name": "max_loc",
+    "default": null
+   }
+  ]
+ },
+ "PostMergeBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "parking_lot_path",
+    "default": null
+   },
+   {
+    "name": "maintainer_marker",
+    "default": null
+   },
+   {
+    "name": "enabled",
+    "default": true
+   },
+   {
+    "name": "self_reap",
+    "default": false
+   },
+   {
+    "name": "sync_command",
+    "default": null
+   },
+   {
+    "name": "sync_paths",
+    "default": []
+   },
+   {
+    "name": "auto_run",
+    "default": false
+   },
+   {
+    "name": "catchup_window_days",
+    "default": 3
+   },
+   {
+    "name": "sync_stale_hours",
+    "default": 24
+   },
+   {
+    "name": "model",
+    "default": "claude-opus-5"
+   }
+  ]
+ },
+ "TelemetryBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "claude_otel",
+    "default": true
+   },
+   {
+    "name": "otlp",
+    "default": {
+     "enabled": false,
+     "endpoint": "",
+     "headers_env": "FNO_OTLP_HEADERS",
+     "log_content": false
+    }
+   }
+  ]
+ },
+ "AttentionBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": true
+   },
+   {
+    "name": "sinks",
+    "default": []
+   }
+  ]
+ },
+ "ResearchBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "output_dir",
+    "default": null
+   }
+  ]
+ },
+ "ReviewBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "posture",
+    "default": null
+   },
+   {
+    "name": "github_apps",
+    "default": null
+   },
+   {
+    "name": "required_bots",
+    "default": null
+   },
+   {
+    "name": "peers",
+    "default": []
+   },
+   {
+    "name": "peer_identity",
+    "default": null
+   },
+   {
+    "name": "peer_token_env",
+    "default": null
+   },
+   {
+    "name": "bot_identity",
+    "default": null
+   },
+   {
+    "name": "bot_token_env",
+    "default": null
+   },
+   {
+    "name": "optional_apps",
+    "default": null
+   },
+   {
+    "name": "nudge",
+    "default": {}
+   },
+   {
+    "name": "reviewer_registry",
+    "default": {}
+   },
+   {
+    "name": "reviewers",
+    "default": []
+   },
+   {
+    "name": "self_review_required",
+    "default": true
+   },
+   {
+    "name": "require_corroboration",
+    "default": false
+   },
+   {
+    "name": "github_approval_satisfies",
+    "default": true
+   },
+   {
+    "name": "max_rounds",
+    "default": 2
+   },
+   {
+    "name": "carry_interdiff_lines",
+    "default": 100
+   },
+   {
+    "name": "invocation_ttl_minutes",
+    "default": 15
+   },
+   {
+    "name": "nonblocking_categories",
+    "default": null
+   },
+   {
+    "name": "hold_ttl_minutes",
+    "default": 90
+   },
+   {
+    "name": "optout_ttl_minutes",
+    "default": 60
+   },
+   {
+    "name": "external_reviewers",
+    "default": []
+   },
+   {
+    "name": "agent_harnesses",
+    "default": {}
+   },
+   {
+    "name": "agent_providers",
+    "default": {}
+   },
+   {
+    "name": "agent_routes",
+    "default": {}
+   },
+   {
+    "name": "cross_model",
+    "default": {
+     "enabled": false
+    }
+   }
+  ]
+ },
+ "StyleBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "word_cap",
+    "default": {
+     "mail": 80,
+     "encounter": 80
+    }
+   }
+  ]
+ },
+ "PreflightBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "required",
+    "default": false
+   }
+  ]
+ },
+ "ApprovalsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "authorized_principals",
+    "default": {}
+   }
+  ]
+ },
+ "ContextBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "artifacts",
+    "default": {}
+   }
+  ]
+ },
+ "TargetConfig": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "dedupe_dead_duplicates",
+    "default": false
+   },
+   {
+    "name": "handoff",
+    "default": {
+     "enabled": true,
+     "used_pct_trigger": 50,
+     "lead_used_pct_trigger": 40
+    }
+   },
+   {
+    "name": "blast",
+    "default": {
+     "enabled": false,
+     "downgrade": true,
+     "reuse_loc_manifest": true,
+     "high_blast_globs": []
+    }
+   },
+   {
+    "name": "defaults",
+    "default": {
+     "no_external": false,
+     "no_docs": false,
+     "max_iterations": 40
+    }
+   }
+  ]
+ },
+ "TestBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "timeout_seconds",
+    "default": 1800
+   },
+   {
+    "name": "max_net_new",
+    "default": null
+   }
+  ]
+ },
+ "GuardsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "preset",
+    "default": "standard"
+   }
+  ]
+ },
+ "StoreBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "remote_url",
+    "default": null
+   },
+   {
+    "name": "remote_token",
+    "default": null
+   },
+   {
+    "name": "remote_addrs",
+    "default": null
+   },
+   {
+    "name": "share_backlog",
+    "default": false
+   },
+   {
+    "name": "ssh_peers",
+    "default": null
+   }
+  ]
+ },
+ "AgentsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "single_flight_ttl_seconds",
+    "default": 60
+   },
+   {
+    "name": "single_flight_join_budget_seconds",
+    "default": 30
+   },
+   {
+    "name": "orphan_reap_after_seconds",
+    "default": 5400
+   },
+   {
+    "name": "a2a",
+    "default": {
+     "auto": true,
+     "turn_ceiling": 6
+    }
+   },
+   {
+    "name": "defaults",
+    "default": {
+     "provider": "",
+     "model": "",
+     "effort": "",
+     "substrate": "",
+     "permission_mode": "",
+     "route": "",
+     "account": "",
+     "harness": {}
+    }
+   },
+   {
+    "name": "profiles",
+    "default": {}
+   },
+   {
+    "name": "fallback",
+    "default": {}
+   },
+   {
+    "name": "silence_deadline_seconds",
+    "default": 600
+   },
+   {
+    "name": "confirm",
+    "default": "auto"
+   },
+   {
+    "name": "auto_register_sessions",
+    "default": false
+   },
+   {
+    "name": "happy_routed_panes",
+    "default": false
+   },
+   {
+    "name": "first_check_minutes",
+    "default": 10
+   },
+   {
+    "name": "retire_grace_s",
+    "default": 900
+   },
+   {
+    "name": "retire_interval_s",
+    "default": 300
+   },
+   {
+    "name": "hold_escalate_after_s",
+    "default": 5400
+   },
+   {
+    "name": "reap_receipts",
+    "default": {
+     "retain_days": 7
+    }
+   },
+   {
+    "name": "reap",
+    "default": {
+     "roster_scope": "provenanced"
+    }
+   },
+   {
+    "name": "state_reap",
+    "default": {
+     "enabled": true,
+     "locks_retain_days": 7,
+     "expired_claims_retain_days": 30,
+     "pr_status_cache_retain_days": 14
+    }
+   },
+   {
+    "name": "claude",
+    "default": {
+     "beat": "auto"
+    }
+   },
+   {
+    "name": "codex",
+    "default": {
+     "beat": "auto",
+     "headless_yolo": false
+    }
+   },
+   {
+    "name": "gemini",
+    "default": {
+     "headless_yolo": false
+    }
+   },
+   {
+    "name": "naming",
+    "default": {
+     "worker": "t-{slug}"
+    }
+   },
+   {
+    "name": "max_live",
+    "default": 3
+   },
+   {
+    "name": "max_live_per_territory",
+    "default": 4
+   },
+   {
+    "name": "provider_limits",
+    "default": {
+     "zai": {
+      "lanes": 5,
+      "subagents": 1
+     }
+    }
+   },
+   {
+    "name": "pane_group_max",
+    "default": 4
+   },
+   {
+    "name": "min_free_gb",
+    "default": 4.0
+   },
+   {
+    "name": "max_swap_pct",
+    "default": 90.0
+   },
+   {
+    "name": "max_load_per_cpu",
+    "default": 8.0
+   },
+   {
+    "name": "max_fleet_cpu_share",
+    "default": 0.5
+   },
+   {
+    "name": "worker_qos",
+    "default": "utility"
+   },
+   {
+    "name": "footprint_sustained_cpu_cores",
+    "default": null
+   }
+  ]
+ },
+ "ProcessAdmissionBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "max_processes",
+    "default": 400
+   }
+  ]
+ },
+ "DispatchBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "harness",
+    "default": ""
+   },
+   {
+    "name": "substrate",
+    "default": ""
+   },
+   {
+    "name": "command",
+    "default": ""
+   },
+   {
+    "name": "command_registry",
+    "default": {}
+   },
+   {
+    "name": "allowed_commands",
+    "default": [
+     "/target",
+     "/think",
+     "/blueprint"
+    ]
+   },
+   {
+    "name": "auto_merge",
+    "default": false
+   },
+   {
+    "name": "on_exhaustion",
+    "default": "defer"
+   },
+   {
+    "name": "cutover_low_after_minutes",
+    "default": 0
+   },
+   {
+    "name": "blueprint_floor",
+    "default": "high"
+   }
+  ]
+ },
+ "RoutingBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "objective",
+    "default": "cheapest-that-clears"
+   },
+   {
+    "name": "prefer_harness",
+    "default": ""
+   },
+   {
+    "name": "models",
+    "default": []
+   },
+   {
+    "name": "enforce_inventory",
+    "default": false
+   },
+   {
+    "name": "operator_access",
+    "default": "unknown"
+   }
+  ]
+ },
+ "SidelineBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "colors",
+    "default": {
+     "harness": {},
+     "route": {},
+     "model": {},
+     "row": {}
+    }
+   },
+   {
+    "name": "layout",
+    "default": "card"
+   }
+  ]
+ },
+ "SplitBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "opens",
+    "default": "pane"
+   }
+  ]
+ },
+ "AutonomyBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": true
+   }
+  ]
+ },
+ "AutoContinueBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   }
+  ]
+ },
+ "KeepGoingBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   }
+  ]
+ },
+ "ThinkSpawnBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   },
+   {
+    "name": "max_per_run",
+    "default": 5
+   },
+   {
+    "name": "idle_threshold_s",
+    "default": 0
+   },
+   {
+    "name": "on_work_start",
+    "default": false
+   },
+   {
+    "name": "daily_cap",
+    "default": 20
+   },
+   {
+    "name": "on_decompose_wave0",
+    "default": false
+   },
+   {
+    "name": "substrate",
+    "default": null
+   },
+   {
+    "name": "attended",
+    "default": "offer"
+   }
+  ]
+ },
+ "ActiveBacklogConfig": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   },
+   {
+    "name": "interval",
+    "default": "5m"
+   },
+   {
+    "name": "failure_limit",
+    "default": 3
+   },
+   {
+    "name": "max_concurrent",
+    "default": 1
+   },
+   {
+    "name": "mission",
+    "default": null
+   }
+  ]
+ },
+ "ParallelBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "max_lanes",
+    "default": 1
+   }
+  ]
+ },
+ "AutoMergeBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   },
+   {
+    "name": "grant",
+    "default": "none"
+   },
+   {
+    "name": "merge_strategy",
+    "default": "merge"
+   },
+   {
+    "name": "delete_branch_on_merge",
+    "default": true
+   },
+   {
+    "name": "require_checks_pass",
+    "default": true
+   },
+   {
+    "name": "require_fresh_ci",
+    "default": false
+   },
+   {
+    "name": "conflict_resolution",
+    "default": "opus"
+   },
+   {
+    "name": "remediation",
+    "default": "attempt"
+   }
+  ]
+ },
+ "AutoHealBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   }
+  ]
+ },
+ "PrWatchBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   },
+   {
+    "name": "interval_seconds",
+    "default": 600
+   },
+   {
+    "name": "retries",
+    "default": 3
+   },
+   {
+    "name": "max_age_days",
+    "default": 14
+   },
+   {
+    "name": "model",
+    "default": "claude-haiku-4-5"
+   },
+   {
+    "name": "tick_timeout_seconds",
+    "default": null
+   },
+   {
+    "name": "graphql_min_remaining",
+    "default": 200
+   },
+   {
+    "name": "wedged_after_ticks",
+    "default": 3
+   }
+  ]
+ },
+ "GroomBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": true
+   }
+  ]
+ },
+ "EvalsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": true
+   },
+   {
+    "name": "schedule_days",
+    "default": 7
+   },
+   {
+    "name": "stale_days",
+    "default": 7
+   },
+   {
+    "name": "scratch_threshold",
+    "default": 3
+   },
+   {
+    "name": "scratch_window_days",
+    "default": 28
+   }
+  ]
+ },
+ "RecoveryBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": true
+   },
+   {
+    "name": "idle_threshold_seconds",
+    "default": 900
+   },
+   {
+    "name": "max_nudges",
+    "default": 3
+   },
+   {
+    "name": "watchdog",
+    "default": {
+     "enabled": false,
+     "mode": "report",
+     "mail_to": ""
+    }
+   },
+   {
+    "name": "startup_destructive",
+    "default": false
+   },
+   {
+    "name": "provider_outage_quorum",
+    "default": 2
+   },
+   {
+    "name": "provider_outage_fup_window_seconds",
+    "default": 300
+   },
+   {
+    "name": "provider_outage_529_count",
+    "default": 3
+   },
+   {
+    "name": "provider_outage_529_span_seconds",
+    "default": 120
+   },
+   {
+    "name": "provider_outage_529_cross_session_window_seconds",
+    "default": 600
+   },
+   {
+    "name": "provider_outage_pane_freshness_seconds",
+    "default": 120
+   },
+   {
+    "name": "provider_outage_evidence_freshness_seconds",
+    "default": 600
+   },
+   {
+    "name": "provider_outage_reset_grace_seconds",
+    "default": 120
+   },
+   {
+    "name": "provider_health_marker_ttl_seconds",
+    "default": 120
+   }
+  ]
+ },
+ "HealthMonitorBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": true
+   },
+   {
+    "name": "thresholds",
+    "default": {
+     "idea_pile_depth": 25,
+     "stale_ready_days": 30,
+     "failure_prone_attempts": 2,
+     "collision_count": 3,
+     "project_cwd_mismatch": 0,
+     "orphan_feature_rate": 1.0
+    }
+   },
+   {
+    "name": "notifications",
+    "default": {
+     "surfaces": [
+      "terminal"
+     ],
+     "discord_channel": null,
+     "webhook_url": null,
+     "throttle_minutes": 60
+    }
+   },
+   {
+    "name": "history",
+    "default": {
+     "enabled": true,
+     "path": null,
+     "retain_days": 90
+    }
+   }
+  ]
+ },
+ "ResourceMeterBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   },
+   {
+    "name": "refresh_seconds",
+    "default": 5
+   },
+   {
+    "name": "thresholds",
+    "default": {
+     "cpu_busy_fraction": 0.9,
+     "swap_used_gb": 1.0
+    }
+   },
+   {
+    "name": "notifications",
+    "default": {
+     "surfaces": [
+      "terminal"
+     ],
+     "discord_channel": null,
+     "webhook_url": null,
+     "throttle_minutes": 60
+    }
+   },
+   {
+    "name": "history",
+    "default": {
+     "enabled": true,
+     "path": null,
+     "retain_days": 90
+    }
+   }
+  ]
+ },
+ "CollisionBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "severity_thresholds",
+    "default": {
+     "high_count": 3.0,
+     "high_ratio": 0.5,
+     "medium_count": 2.0,
+     "medium_ratio": 0.25
+    }
+   }
+  ]
+ },
+ "WorkBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "workspaces",
+    "default": {}
+   }
+  ]
+ },
+ "JoinBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "sandbox",
+    "default": false
+   }
+  ]
+ },
+ "WorktreeBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "policy",
+    "default": null
+   },
+   {
+    "name": "auto_install",
+    "default": true
+   },
+   {
+    "name": "setup_command",
+    "default": ""
+   },
+   {
+    "name": "skip_verification",
+    "default": false
+   },
+   {
+    "name": "test_command",
+    "default": ""
+   },
+   {
+    "name": "prune_done",
+    "default": "balanced"
+   }
+  ]
+ },
+ "ModelRoutingBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": true
+   },
+   {
+    "name": "providers",
+    "default": {}
+   },
+   {
+    "name": "roles",
+    "default": {}
+   },
+   {
+    "name": "extra_env",
+    "default": {}
+   }
+  ]
+ },
+ "MuxBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "shell_integration",
+    "default": "mux-panes"
+   },
+   {
+    "name": "restore",
+    "default": {
+     "hold_workers": true,
+     "policy": null
+    }
+   },
+   {
+    "name": "board_scope",
+    "default": "repo"
+   },
+   {
+    "name": "prefix",
+    "default": null
+   },
+   {
+    "name": "keys",
+    "default": {}
+   },
+   {
+    "name": "notify_on_blocked",
+    "default": true
+   },
+   {
+    "name": "notify_on_done",
+    "default": false
+   },
+   {
+    "name": "attach_digest",
+    "default": true
+   },
+   {
+    "name": "attach_digest_threshold_min",
+    "default": 10
+   },
+   {
+    "name": "hover_focus",
+    "default": true
+   },
+   {
+    "name": "status_row",
+    "default": true
+   },
+   {
+    "name": "load_readout",
+    "default": "simple"
+   },
+   {
+    "name": "theme",
+    "default": null
+   },
+   {
+    "name": "paint_background",
+    "default": true
+   },
+   {
+    "name": "card_graph",
+    "default": "activity"
+   },
+   {
+    "name": "open_with",
+    "default": "inmux"
+   },
+   {
+    "name": "viewer",
+    "default": "panel"
+   },
+   {
+    "name": "wheel_lines",
+    "default": 1
+   },
+   {
+    "name": "wheel_passthrough_rate",
+    "default": 3
+   }
+  ]
+ },
+ "DevBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "source",
+    "default": ""
+   }
+  ]
+ },
+ "LoopEntry": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "level",
+    "default": "report"
+   },
+   {
+    "name": "budget_usd_per_run",
+    "default": 30.0
+   }
+  ]
+ },
+ "StatusSinkConfig": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "name",
+    "required": true
+   },
+   {
+    "name": "type",
+    "required": true
+   },
+   {
+    "name": "events",
+    "default": []
+   },
+   {
+    "name": "match",
+    "default": {}
+   },
+   {
+    "name": "url",
+    "default": null
+   },
+   {
+    "name": "url_env",
+    "default": null
+   },
+   {
+    "name": "template",
+    "default": null
+   },
+   {
+    "name": "field",
+    "default": "content"
+   },
+   {
+    "name": "raw_body",
+    "default": false
+   },
+   {
+    "name": "cloudevents",
+    "default": false
+   },
+   {
+    "name": "enabled",
+    "default": true
+   }
+  ]
+ },
+ "StatusFanoutConfig": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "interval_secs",
+    "default": 5
+   },
+   {
+    "name": "http_timeout_secs",
+    "default": 5
+   },
+   {
+    "name": "retries",
+    "default": 2
+   },
+   {
+    "name": "short_circuit_backoff_secs",
+    "default": 300
+   }
+  ]
+ },
+ "LeadBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   },
+   {
+    "name": "autonomous_merge",
+    "default": false
+   },
+   {
+    "name": "wake_enabled",
+    "default": false
+   },
+   {
+    "name": "wake_ceiling",
+    "default": 32
+   },
+   {
+    "name": "wake_debounce_seconds",
+    "default": 900
+   },
+   {
+    "name": "wake_backstop_seconds",
+    "default": 1800
+   },
+   {
+    "name": "blocked_child_grace_minutes",
+    "default": 30
+   },
+   {
+    "name": "implementation_guard",
+    "default": "refuse"
+   },
+   {
+    "name": "write_roots",
+    "default": []
+   },
+   {
+    "name": "checkin_interval",
+    "default": "55m"
+   },
+   {
+    "name": "checkin_text",
+    "default": "lead check-in. Run fno agents org checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. "
+   }
+  ]
+ },
+ "AccountsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "active",
+    "default": null
+   },
+   {
+    "name": "auto_switch",
+    "default": false
+   },
+   {
+    "name": "active_combo",
+    "default": null
+   },
+   {
+    "name": "records",
+    "default": []
+   },
+   {
+    "name": "combos",
+    "default": {}
+   },
+   {
+    "name": "quota",
+    "default": {
+     "observe": false,
+     "defer_dispatch": false,
+     "defer_threshold_pct": 90.0,
+     "probe_ttl_seconds": 300,
+     "defer_horizon_minutes": 60,
+     "pick_on_launch": false
+    }
+   },
+   {
+    "name": "failover",
+    "default": null
+   }
+  ]
+ },
+ "MaintainBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "staleness_days",
+    "default": 30
+   },
+   {
+    "name": "max_failed_attempts",
+    "default": 3
+   },
+   {
+    "name": "abandoned_do_row_hours",
+    "default": 24
+   },
+   {
+    "name": "budget_seconds",
+    "default": 300
+   },
+   {
+    "name": "validity_days",
+    "default": 60
+   },
+   {
+    "name": "validity_batch_size",
+    "default": 25
+   }
+  ]
+ },
+ "RenderTargetConfig": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "path",
+    "required": true
+   },
+   {
+    "name": "project",
+    "default": null
+   },
+   {
+    "name": "scope",
+    "default": null
+   },
+   {
+    "name": "projection",
+    "default": "local"
+   }
+  ]
+ },
+ "TelemetryOtlpBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   },
+   {
+    "name": "endpoint",
+    "default": ""
+   },
+   {
+    "name": "headers_env",
+    "default": "FNO_OTLP_HEADERS"
+   },
+   {
+    "name": "log_content",
+    "default": false
+   }
+  ]
+ },
+ "CrossModelBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   }
+  ]
+ },
+ "WordCapBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "mail",
+    "default": 80
+   },
+   {
+    "name": "encounter",
+    "default": 80
+   }
+  ]
+ },
+ "ArtifactConfig": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "path",
+    "required": true
+   },
+   {
+    "name": "sensitivity",
+    "default": "internal"
+   }
+  ]
+ },
+ "HandoffBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": true
+   },
+   {
+    "name": "used_pct_trigger",
+    "default": 50
+   },
+   {
+    "name": "lead_used_pct_trigger",
+    "default": 40
+   }
+  ]
+ },
+ "BlastConfig": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   },
+   {
+    "name": "downgrade",
+    "default": true
+   },
+   {
+    "name": "reuse_loc_manifest",
+    "default": true
+   },
+   {
+    "name": "high_blast_globs",
+    "default": []
+   }
+  ]
+ },
+ "TargetDefaultsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "no_external",
+    "default": false
+   },
+   {
+    "name": "no_docs",
+    "default": false
+   },
+   {
+    "name": "max_iterations",
+    "default": 40
+   }
+  ]
+ },
+ "A2aBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "auto",
+    "default": true
+   },
+   {
+    "name": "turn_ceiling",
+    "default": 6
+   }
+  ]
+ },
+ "SpawnDefaultsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "provider",
+    "default": ""
+   },
+   {
+    "name": "model",
+    "default": ""
+   },
+   {
+    "name": "effort",
+    "default": ""
+   },
+   {
+    "name": "substrate",
+    "default": ""
+   },
+   {
+    "name": "permission_mode",
+    "default": ""
+   },
+   {
+    "name": "route",
+    "default": ""
+   },
+   {
+    "name": "account",
+    "default": ""
+   },
+   {
+    "name": "harness",
+    "default": {}
+   }
+  ]
+ },
+ "SpawnProfileBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "provider",
+    "default": ""
+   },
+   {
+    "name": "model",
+    "default": ""
+   },
+   {
+    "name": "effort",
+    "default": ""
+   },
+   {
+    "name": "substrate",
+    "default": ""
+   },
+   {
+    "name": "permission_mode",
+    "default": ""
+   },
+   {
+    "name": "route",
+    "default": ""
+   },
+   {
+    "name": "account",
+    "default": ""
+   },
+   {
+    "name": "harness",
+    "default": {}
+   },
+   {
+    "name": "pane_group",
+    "default": ""
+   },
+   {
+    "name": "lanes",
+    "default": []
+   },
+   {
+    "name": "on_exhausted",
+    "default": ""
+   },
+   {
+    "name": "on_low",
+    "default": ""
+   },
+   {
+    "name": "on_unknown",
+    "default": ""
+   },
+   {
+    "name": "by_difficulty",
+    "default": {}
+   }
+  ]
+ },
+ "ReapReceiptsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "retain_days",
+    "default": 7
+   }
+  ]
+ },
+ "ReapBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "roster_scope",
+    "default": "provenanced"
+   }
+  ]
+ },
+ "StateReapBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": true
+   },
+   {
+    "name": "locks_retain_days",
+    "default": 7
+   },
+   {
+    "name": "expired_claims_retain_days",
+    "default": 30
+   },
+   {
+    "name": "pr_status_cache_retain_days",
+    "default": 14
+   }
+  ]
+ },
+ "AgentBeatBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "beat",
+    "default": "auto"
+   }
+  ]
+ },
+ "CodexAgentBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "beat",
+    "default": "auto"
+   },
+   {
+    "name": "headless_yolo",
+    "default": false
+   }
+  ]
+ },
+ "AgentProviderBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "headless_yolo",
+    "default": false
+   }
+  ]
+ },
+ "NamingBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "worker",
+    "default": "t-{slug}"
+   }
+  ]
+ },
+ "ProviderBudget": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "lanes",
+    "default": null
+   },
+   {
+    "name": "subagents",
+    "default": null
+   }
+  ]
+ },
+ "SidelineColorsBlock": {
+  "extra": "forbid",
+  "fields": [
+   {
+    "name": "harness",
+    "default": {}
+   },
+   {
+    "name": "route",
+    "default": {}
+   },
+   {
+    "name": "model",
+    "default": {}
+   },
+   {
+    "name": "row",
+    "default": {}
+   }
+  ]
+ },
+ "WatchdogBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": false
+   },
+   {
+    "name": "mode",
+    "default": "report"
+   },
+   {
+    "name": "mail_to",
+    "default": ""
+   }
+  ]
+ },
+ "HealthThresholdsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "idea_pile_depth",
+    "default": 25
+   },
+   {
+    "name": "stale_ready_days",
+    "default": 30
+   },
+   {
+    "name": "failure_prone_attempts",
+    "default": 2
+   },
+   {
+    "name": "collision_count",
+    "default": 3
+   },
+   {
+    "name": "project_cwd_mismatch",
+    "default": 0
+   },
+   {
+    "name": "orphan_feature_rate",
+    "default": 1.0
+   }
+  ]
+ },
+ "HealthNotificationsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "surfaces",
+    "default": [
+     "terminal"
+    ]
+   },
+   {
+    "name": "discord_channel",
+    "default": null
+   },
+   {
+    "name": "webhook_url",
+    "default": null
+   },
+   {
+    "name": "throttle_minutes",
+    "default": 60
+   }
+  ]
+ },
+ "HealthHistoryBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "enabled",
+    "default": true
+   },
+   {
+    "name": "path",
+    "default": null
+   },
+   {
+    "name": "retain_days",
+    "default": 90
+   }
+  ]
+ },
+ "ResourceMeterThresholdsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "cpu_busy_fraction",
+    "default": 0.9
+   },
+   {
+    "name": "swap_used_gb",
+    "default": 1.0
+   }
+  ]
+ },
+ "CollisionThresholdsBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "high_count",
+    "default": 3.0
+   },
+   {
+    "name": "high_ratio",
+    "default": 0.5
+   },
+   {
+    "name": "medium_count",
+    "default": 2.0
+   },
+   {
+    "name": "medium_ratio",
+    "default": 0.25
+   }
+  ]
+ },
+ "WorkspaceEntry": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "projects",
+    "default": []
+   }
+  ]
+ },
+ "ModelProvider": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "protocol",
+    "default": "anthropic"
+   },
+   {
+    "name": "base_url",
+    "default": ""
+   },
+   {
+    "name": "api_key_env",
+    "default": ""
+   },
+   {
+    "name": "api_key_file",
+    "default": null
+   },
+   {
+    "name": "haiku_model",
+    "default": null
+   },
+   {
+    "name": "tier_models",
+    "default": null
+   },
+   {
+    "name": "wire_api",
+    "default": null
+   }
+  ]
+ },
+ "MuxRestoreBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "hold_workers",
+    "default": true
+   },
+   {
+    "name": "policy",
+    "default": null
+   }
+  ]
+ },
+ "ComboBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "strategy",
+    "default": "fallback"
+   },
+   {
+    "name": "sticky_limit",
+    "default": 1
+   },
+   {
+    "name": "providers",
+    "default": []
+   }
+  ]
+ },
+ "QuotaBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "observe",
+    "default": false
+   },
+   {
+    "name": "defer_dispatch",
+    "default": false
+   },
+   {
+    "name": "defer_threshold_pct",
+    "default": 90.0
+   },
+   {
+    "name": "probe_ttl_seconds",
+    "default": 300
+   },
+   {
+    "name": "defer_horizon_minutes",
+    "default": 60
+   },
+   {
+    "name": "pick_on_launch",
+    "default": false
+   }
+  ]
+ },
+ "FailoverBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "max_swaps_per_phase",
+    "default": 5
+   }
+  ]
+ },
+ "HarnessOverlayBlock": {
+  "extra": "allow",
+  "fields": [
+   {
+    "name": "permission_mode",
+    "default": ""
+   },
+   {
+    "name": "effort",
+    "default": ""
+   },
+   {
+    "name": "substrate",
+    "default": ""
+   },
+   {
+    "name": "args",
+    "default": []
+   }
+  ]
+ },
+ "DifficultyLaneBlock": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "lanes",
+    "default": []
+   },
+   {
+    "name": "on_exhausted",
+    "default": ""
+   },
+   {
+    "name": "on_low",
+    "default": ""
+   },
+   {
+    "name": "on_unknown",
+    "default": ""
+   }
+  ]
+ },
+ "WorkspaceProjectEntry": {
+  "extra": "ignore",
+  "fields": [
+   {
+    "name": "name",
+    "default": null
+   },
+   {
+    "name": "path",
+    "default": null
+   },
+   {
+    "name": "type",
+    "default": null
+   },
+   {
+    "name": "stack",
+    "default": []
+   },
+   {
+    "name": "package_manager",
+    "default": null
+   },
+   {
+    "name": "worktree",
+    "default": null
+   }
+  ]
+ }
+}
