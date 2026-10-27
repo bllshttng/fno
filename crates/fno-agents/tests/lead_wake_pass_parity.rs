@@ -190,9 +190,7 @@ fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
         "role_scope": scope,
         "role_level": 1,
         "created_at": "2026-08-28T12:00:00Z",
-        // The registry store refuses two rows with one session identity,
-        // and the pass reads the session from the manifest, not the row.
-        "harness_session_id": format!("{name}-2222-3333-4444-555555555555"),
+        "harness_session_id": SESSION,
     })
 }
 
