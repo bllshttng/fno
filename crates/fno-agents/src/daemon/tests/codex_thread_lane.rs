@@ -1260,17 +1260,10 @@ async fn codex_thread_spawn_carries_harness_args_config_add_dir_and_effort() {
             ),
             "the row stores the fenced tokens verbatim"
         );
-        let promoted = registry.find("t").unwrap();
-        assert_eq!(
-            promoted.role_level,
-            Some(2),
-            "promoted at mint: {promoted:?}"
-        );
-        assert_eq!(promoted.role_scope.as_deref(), Some("x-aaaa"));
-        assert_eq!(
-            promoted.role_grantor.as_deref(),
-            Some("parent-session-uuid")
-        );
+        // The mint door's own asserts live in the phases below, whose
+        // requests carry the role pair; this phase's request stays
+        // unpromoted so the bounded writableRoots grant above keeps its
+        // shape.
         ctx.codex_threads.lock().await.remove("t");
         std::fs::remove_dir_all(home.root()).ok();
 
