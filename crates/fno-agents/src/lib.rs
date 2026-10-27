@@ -300,6 +300,7 @@ pub mod lead_term;
 pub mod lead_termination;
 pub mod lead_verdict_inputs;
 pub mod lead_wake;
+pub mod lead_wake_triggers;
 pub mod lease_heartbeat;
 pub mod ledger_axes;
 pub(crate) mod ledger_register;
@@ -1845,6 +1846,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The lead-wake arm's receipt: one row per daemon wake episode, the
     // dedupe memory the arm folds before it wakes again (lead_wake.rs).
     "lead_wake",
+    // The trigger leg's receipts (lead_wake_triggers.rs): the refill-respawn
+    // side of the arm, ported from the pr-watch tick's Python wake phase.
+    "lead_woken",
+    "lead_wake_refused",
+    "lead_spawned_successor",
     "worker_wake",
     // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
     "pr_push_landed",

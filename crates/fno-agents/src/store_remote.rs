@@ -53,6 +53,13 @@ impl SqlValue {
         }
     }
 
+    pub fn real(&self) -> Option<f64> {
+        match self {
+            SqlValue::Real(value) => Some(*value),
+            _ => None,
+        }
+    }
+
     pub(crate) fn to_hrana(&self) -> Value {
         match self {
             SqlValue::Null => json!({"type": "null"}),
@@ -375,8 +382,7 @@ impl Remote {
         };
         format!(
             "remote store {} ({KEY}) {verdict}: {error}. Nothing was written locally. \
-             A request that timed out can still have reached the primary. \
-             Unset {KEY} in the global config to use the local store.",
+             A request that timed out can still have reached the primary.",
             self.url
         )
     }
@@ -842,10 +848,14 @@ mod tests {
             !quiet.contains(UNREACHABLE) && is_unreachable(&quiet),
             "{quiet}"
         );
+        // The local-store advice predates the share: a local write today
+        // splits the claim store, so the text must never send a reader there.
+        assert!(!quiet.contains("local store"), "{quiet}");
         let refused = remote.unreachable("connect 1.2.3.4:18080: refused");
         assert!(
             refused.contains(UNREACHABLE) && is_unreachable(&refused),
             "{refused}"
         );
+        assert!(!refused.contains("local store"), "{refused}");
     }
 }
