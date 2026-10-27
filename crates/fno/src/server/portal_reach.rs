@@ -151,6 +151,10 @@ pub(super) fn rearm_held_portal_seats(
             }
             continue;
         }
+        // The session id recorded at capture is an id; the stored key may be
+        // a name an older build saved. Key the seat by the id, so the resume
+        // lineage refills it after a restart.
+        let row = recorded_sid.clone().unwrap_or(row);
         core.journal_portal_open(
             index,
             Portal {
