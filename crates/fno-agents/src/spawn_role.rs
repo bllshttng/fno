@@ -109,8 +109,13 @@ fn target(
         Business::Unrouted => return Ok(None),
         Business::Hint { provider, model } => (provider, model),
     };
-    let provider = provider.or_else(|| legacy.as_ref().map(|l| l.0.clone()));
-    let model = model.or_else(|| legacy.as_ref().map(|l| l.1.clone()));
+    // Python's `provider or legacy`: an empty field falls back like an absent one.
+    let provider = provider
+        .filter(|p| !p.is_empty())
+        .or_else(|| legacy.as_ref().map(|l| l.0.clone()));
+    let model = model
+        .filter(|m| !m.is_empty())
+        .or_else(|| legacy.as_ref().map(|l| l.1.clone()));
     match (provider, model) {
         (Some(p), Some(m)) => Ok(Some((p, m))),
         (p, m) => {
@@ -274,7 +279,7 @@ mod tests {
             model: m.map(str::to_string),
         };
         assert_eq!(
-            target("tidy", &b, hint(None, Some("glm-5.2"))),
+            target("tidy", &b, hint(Some(""), Some("glm-5.2"))),
             Ok(Some(("zai".into(), "glm-5.2".into())))
         );
         assert_eq!(
