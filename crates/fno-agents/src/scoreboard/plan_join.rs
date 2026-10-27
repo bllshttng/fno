@@ -263,7 +263,7 @@ pub(crate) fn read_diff(row: &Value) -> Option<Vec<String>> {
             cmd.args(["--repo", &slug]);
         }
     }
-    let out = cmd.output().ok()?;
+    let out = crate::gh_budget::output(cmd).ok()?;
     if !out.status.success() {
         return None;
     }
