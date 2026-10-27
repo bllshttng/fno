@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import typer
@@ -453,18 +454,54 @@ app.command("rm")(unset_cmd)
 # byte-identical - the group help page lists the same commands with the same
 # descriptions, and `fno help config --all` still finds them. A leaf body
 # below runs only when the front door did not claim the argv (a non-UTF-8
-# argument is the one shape the lexical classifier forwards), and it refuses
-# rather than silently answering nothing.
+# argument is the one shape the lexical classifier forwards, and a wheel-only
+# environment has no compiled front on PATH at all). The body forwards to the
+# front door built in this checkout when one exists - the worktree manager's
+# wt_config and the hooks read config through exactly that wheel-only path -
+# and refuses only where no front door exists to forward to.
 # ---------------------------------------------------------------------------
 
 
-def _native_refusal(leaf: str) -> None:
-    typer.echo(
-        f"fno config {leaf} is answered natively by the fno front door; "
-        "this Python registration only carries the help-page entry",
-        err=True,
+def _front_door() -> Optional[Path]:
+    """The compiled front door built in THIS checkout, newest first.
+
+    A bare site-packages install has no checkout and no build, and stays on
+    the refusal; a dev checkout and the CI smoke lanes build debug beside the
+    source, so the forwarding path is the one they take.
+    """
+    here = Path(__file__).resolve()
+    try:
+        repo_root = here.parents[3]
+    except IndexError:  # installed shallower than a dev checkout
+        return None
+    if not (repo_root / "crates" / "fno").is_dir():
+        return None
+    from fno.rust_binary import newest_runnable
+
+    return newest_runnable(
+        [
+            repo_root / "crates" / "fno" / "target" / kind / "fno"
+            for kind in ("release", "debug")
+        ]
     )
-    raise typer.Exit(code=2)
+
+
+def _native_leaf(leaf: str, argv: list[str]) -> None:
+    """Forward the leaf's argv verbatim to the compiled front door: stdout,
+    stderr and the exit code relay byte-exact, which is what keeps the wheel
+    path inside the parity goldens' byte contract."""
+    binary = _front_door()
+    if binary is None:
+        typer.echo(
+            f"fno config {leaf} is answered natively by the fno front door; "
+            "this Python registration carries the help page. Build the front "
+            "door to answer here: (cd crates/fno && cargo build --bin fno)",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    import subprocess
+
+    raise typer.Exit(code=subprocess.run([str(binary), *argv]).returncode)
 
 
 @app.command("get")
@@ -481,14 +518,17 @@ def get(
     ),
 ) -> None:
     """Print a single resolved config value. Read-only."""
-    _native_refusal("get")
+    argv = ["config", "get", key]
+    if json_out:
+        argv.append("--json")
+    _native_leaf("get", argv)
 
 
 @app.command("active-backlog")
 def active_backlog() -> None:
     """Print the active-backlog drain reading. Full contract:
     docs/architecture/coordination.md#per-territory-team-cap"""
-    _native_refusal("active-backlog")
+    _native_leaf("active-backlog", ["config", "active-backlog"])
 
 
 @app.command("status-sinks")
@@ -498,7 +538,10 @@ def status_sinks(
     ),
 ) -> None:
     """Resolve which projects the status-fanout supervisor should tick."""
-    _native_refusal("status-sinks")
+    argv = ["config", "status-sinks"]
+    if json_out:
+        argv.append("--json")
+    _native_leaf("status-sinks", argv)
 
 
 @app.command("assert-subagent-budget", hidden=True)
@@ -512,13 +555,16 @@ def assert_subagent_budget(
     ),
 ) -> None:
     """Refuse a declared fan-out wider than the provider's subagent budget."""
-    _native_refusal("assert-subagent-budget")
+    argv = ["config", "assert-subagent-budget", "--width", str(width)]
+    if provider is not None:
+        argv.extend(["--provider", provider])
+    _native_leaf("assert-subagent-budget", argv)
 
 
 @app.command("build-dir", hidden=True)
 def build_dir() -> None:
     """Print the CARGO_BUILD_BUILD_DIR value: ``<base>/{workspace-path-hash}``."""
-    _native_refusal("build-dir")
+    _native_leaf("build-dir", ["config", "build-dir"])
 
 
 @app.command("history", hidden=True)
@@ -534,4 +580,10 @@ def history(
     ),
 ) -> None:
     """Read config-write receipts from the global and project journals."""
-    _native_refusal("history")
+    argv = ["config", "history"]
+    if key is not None:
+        argv.append(key)
+    argv.extend(["--limit", str(limit), "--scope", scope])
+    if json_out:
+        argv.append("--json")
+    _native_leaf("history", argv)
