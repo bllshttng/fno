@@ -557,6 +557,16 @@ jobs:
       - name: Provision the smoke runner
         uses: ./.github/actions/smoke-setup
 
+      # Positive probe over the checked-in graduation registry. Every decision
+      # in REGISTERED_GRADUATION_PROBES claims a shipped enforcement artifact;
+      # this re-measures that claim, so deleting the enforcement a retired
+      # ruling rests on turns red here instead of silently un-retiring it.
+      # BEFORE the smoke shard: the probe's pytest drives the dev fno-agents
+      # binary, and the shard's pytest lane scrubs that binary by design - a
+      # post-smoke placement probed a dead path and red every shard.
+      - name: Decision graduation probes
+        run: uv run --project cli python scripts/ci/check-decision-graduation.py
+
       - name: "Smoke shard: everything except pytest (${{ matrix.shard }}/4)"
         # Same trap, same reason as the pytest shard above.
         #
@@ -590,13 +600,6 @@ jobs:
       # independent of test selection (and faster than full collection).
       - name: Dead import paths (module-move guard)
         run: bash scripts/ci/check-import-paths.sh
-
-      # Positive probe over the checked-in graduation registry. Every decision
-      # in REGISTERED_GRADUATION_PROBES claims a shipped enforcement artifact;
-      # this re-measures that claim, so deleting the enforcement a retired
-      # ruling rests on turns red here instead of silently un-retiring it.
-      - name: Decision graduation probes
-        run: uv run --project cli python scripts/ci/check-decision-graduation.py
 
   # Keeps the required check named `smoke`. Branch protection and the review
   # gate key on that exact name, so publishing only `smoke-pytest` and
