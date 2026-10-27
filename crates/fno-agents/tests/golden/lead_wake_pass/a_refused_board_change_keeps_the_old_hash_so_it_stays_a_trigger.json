@@ -1,0 +1,58 @@
+{
+ "label": "a refused board change keeps the old hash so it stays a trigger",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [],
+   "events": [
+    [
+     "lead_wake_refused",
+     {
+      "ceiling": 32,
+      "reason": "board",
+      "refusal": "debounce",
+      "scope": "epic-x",
+      "window_count": 1
+     }
+    ]
+   ],
+   "sidecar": {
+    "answered_cursor": "2026-08-28T12:00:00+00:00",
+    "board_hash": "1d98bbe491ace2bd8519abecc91c128184c102b102863715c56bb6fcd8af0ea5",
+    "board_rows": [
+     [
+      "x-1",
+      "ready",
+      "ready",
+      "p1"
+     ]
+    ]
+   },
+   "successor_flags": [],
+   "summary": {
+    "armed": true,
+    "evaluated": 1,
+    "note": "",
+    "refused": [
+     {
+      "refusal": "debounce",
+      "scope": "epic-x"
+     }
+    ],
+    "roles": 1,
+    "team_incomplete": false,
+    "truth_reads": 1,
+    "woke": []
+   },
+   "unread_calls": [
+    "aa11bb22",
+    "epic-x",
+    "lead-x"
+   ],
+   "wake_times": [
+    "2026-08-29T11:58:00Z"
+   ]
+  }
+ ]
+}

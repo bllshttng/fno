@@ -1,0 +1,52 @@
+{
+ "label": "a dead holder at the respawn ceiling spawns nothing and escalates",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [
+    [
+     "epic-x",
+     4,
+     4
+    ]
+   ],
+   "dispatches": [],
+   "events": [
+    [
+     "lead_wake_refused",
+     {
+      "holder": "lead-x",
+      "reason": "mail",
+      "refusal": "respawn-ceiling",
+      "scope": "epic-x"
+     }
+    ]
+   ],
+   "sidecar": {
+    "answered_cursor": "2026-08-28T12:00:00+00:00"
+   },
+   "successor_flags": [],
+   "summary": {
+    "armed": true,
+    "evaluated": 1,
+    "note": "",
+    "refused": [
+     {
+      "refusal": "respawn-ceiling",
+      "scope": "epic-x"
+     }
+    ],
+    "roles": 1,
+    "team_incomplete": false,
+    "truth_reads": 1,
+    "woke": []
+   },
+   "unread_calls": [
+    "aa11bb22",
+    "epic-x",
+    "lead-x"
+   ],
+   "wake_times": null
+  }
+ ]
+}
