@@ -1303,6 +1303,16 @@ impl View {
                 lattice_style(lattice, self.theme.needs_you, self.theme.ok).fg,
             )
         };
+        // The state glyph wears the state color, as the list's status cell
+        // does: a waiting ▲ and an unseen ✓ read at a glance in a card too.
+        let glyph = status_glyph(lattice);
+        // A highlighted card keeps its band's own pair (the inverted cursor
+        // card above all), so only a resting card recolors its glyph.
+        if let Some(cell) = line.iter_mut().find(|c| c.c == glyph).filter(|_| !highlit) {
+            if status_fg != Color::Default {
+                cell.fg = status_fg;
+            }
+        }
         let spans = card_line::identity_spans(agent, text_w);
         // Read before the ifs below move the span fields.
         let identity_free = spans.node.is_none() && spans.pr.is_none();

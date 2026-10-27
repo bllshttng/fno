@@ -959,7 +959,7 @@ fn agents_tab_selector_row_inverts_from_the_theme() {
     let theme = crate::theme::theme_footnote_superscript();
     assert_eq!(
         crate::theme::focus_style(&theme),
-        (theme.base, theme.title, cell_flags::BOLD)
+        (theme.base, theme.title, 0)
     );
     assert_eq!(
         crate::theme::cell_style(crate::theme::Role::BodyFocus, &theme),

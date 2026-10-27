@@ -329,13 +329,11 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
 /// above all, inverts through the emulator's own pair instead.
 pub fn focus_style(t: &Theme) -> (Color, Color, u8) {
     if t.inherit || t.base == Color::Default {
-        (
-            Color::Default,
-            Color::Default,
-            cell_flags::INVERSE | cell_flags::BOLD,
-        )
+        // No BOLD on either leg: a terminal brightens bold text, which
+        // turns the dark letters on the light ground gray.
+        (Color::Default, Color::Default, cell_flags::INVERSE)
     } else {
-        (t.base, t.title, cell_flags::BOLD)
+        (t.base, t.title, 0)
     }
 }
 
