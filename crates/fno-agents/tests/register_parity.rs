@@ -54,7 +54,7 @@ fn run_register(
     ] {
         cmd.env_remove(key);
     }
-    cmd.arg("register");
+    cmd.args(["status", "--register"]);
     for a in args {
         cmd.arg(a);
     }

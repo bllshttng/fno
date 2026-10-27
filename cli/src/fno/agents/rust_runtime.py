@@ -1271,6 +1271,7 @@ def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
 _STATUS_ARG_LEAVES = {
     "capabilities": "--capabilities",
     "target-family": "--target-family",
+    "register": "--register",
 }
 
 

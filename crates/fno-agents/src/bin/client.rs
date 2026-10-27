@@ -1076,10 +1076,6 @@ async fn run(args: Vec<String>) -> i32 {
     if command == "registry-json" {
         return fno_agents::registry_json::run_registry_json(&args[1..], &AgentsHome::from_env());
     }
-    // register: the /fno-me self-service join; daemon-free like registry-json.
-    if command == "register" {
-        return fno_agents::register::run_register(&args[1..], &AgentsHome::from_env());
-    }
     if matches!(command, "worker-wake") {
         return fno_agents::worker_wake::run_dry_run(&args[1..], &AgentsHome::from_env());
     }
@@ -1229,8 +1225,13 @@ async fn run(args: Vec<String>) -> i32 {
         // `status` as arguments instead of actions of their own. The Python
         // router rewrites `fno agents capabilities <h> ...` into
         // `fno-agents status --capabilities <h> ...`. With neither flag the
-        // behavior is exactly the plain status read.
+        // behavior is exactly the plain status read. The /fno-me join rides
+        // the same way: `fno agents register ...` arrives as
+        // `status --register ...`, daemon-free like registry-json.
         let rest = &args[1..];
+        if rest.first().map(String::as_str) == Some("--register") {
+            return fno_agents::register::run_register(&rest[1..], &AgentsHome::from_env());
+        }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");
         let has_family = rest.iter().any(|a| a.as_str() == "--target-family");
         if has_cap && has_family {
