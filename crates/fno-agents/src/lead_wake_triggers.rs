@@ -1048,17 +1048,12 @@ pub(crate) fn select_targets(rows: &[crate::state::RegistryEntry]) -> TargetSele
             short_id: row.short_id.clone(),
         });
     }
-    TargetSelection {
-        ok,
-        drops,
-        registry_unreadable: false,
-    }
+    TargetSelection { ok, drops }
 }
 
 pub(crate) struct TargetSelection {
     pub ok: Vec<Target>,
     pub drops: Vec<String>,
-    pub registry_unreadable: bool,
 }
 
 /// The refusal word for a holder that is NOT absent: only `done` and
