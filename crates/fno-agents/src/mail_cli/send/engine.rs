@@ -1889,3 +1889,25 @@ pub(super) fn project_id_from_settings_text(text: &str) -> Option<String> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod wake_rung_tests {
+    use super::*;
+
+    // contract: "1h-non-claude-never-woken-as-claude"
+    /// The wake rung revives claude sessions only: an asleep codex session
+    /// names the unsupported harness and never reaches the resume door.
+    #[test]
+    fn a_non_claude_session_is_never_woken_as_claude() {
+        let codex = ReachableSession {
+            session_id: "04b5621d-1111-2222-3333-444455556666".to_string(),
+            source: "registry",
+            agent: "codex".to_string(),
+            cwd: None,
+        };
+        let (delivered, woken, lane) = wake_rung(&codex, "<fno_mail>hi</fno_mail>");
+        assert!(!delivered);
+        assert_eq!(woken, None);
+        assert_eq!(lane.as_deref(), Some("wake=unsupported-harness(codex)"));
+    }
+}

@@ -501,3 +501,621 @@ fn mail_send_matches_captured_goldens() {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Live-lane contracts
+// ---------------------------------------------------------------------------
+//
+// The goldens above freeze the durable floor. These rows drive the live
+// lanes through a shell stub that stands in for every child the send leaf
+// shells: `FNO_AGENTS_BIN` (the `mail-inject` lanes) and `FNO_BIN` (the
+// `agents resume` wake and the `mux pane read|send` pane lane). The stub logs
+// each call, snapshots the bus at inject time, answers from the row's env,
+// and execs the real binary for every other argv (the receipt door).
+
+const ASLEEP_SID: &str = "c4d5e6f7-1111-2222-3333-444455556666";
+const LIVE_SID: &str = "e5f6a7b8-1111-2222-3333-444455556666";
+const UNKNOWN_SID: &str = "f6a7b8c9-1111-2222-3333-444455556666";
+const TWIN_A_SID: &str = "a7b8c9d0-1111-2222-3333-444455556666";
+const TWIN_B_SID: &str = "a7b8c9d0-9999-8888-7777-666655554444";
+
+const STUB: &str = r#"#!/bin/sh
+printf '%s\n' "$*" >> "$STUB_ROOT/calls.log"
+if [ "$1" = "mail-inject" ]; then
+  cat > /dev/null
+  bus="$FNO_BUS_DIR/messages.jsonl"
+  if [ -f "$bus" ]; then
+    printf 'bus-at-inject=%s\n' "$(wc -l < "$bus" | tr -d ' ')" >> "$STUB_ROOT/calls.log"
+  else
+    printf 'bus-at-inject=0\n' >> "$STUB_ROOT/calls.log"
+  fi
+  miss='{"delivered": false, "reason": "not-injectable"}'
+  if [ "$3" = "codex" ]; then
+    printf '%s\n' "${STUB_INJECT_CODEX:-$miss}"
+  else
+    printf '%s\n' "${STUB_INJECT_CLAUDE:-$miss}"
+  fi
+  exit 0
+fi
+if [ "$1" = "agents" ] && [ "$2" = "resume" ]; then
+  exit "${STUB_RESUME_EXIT:-1}"
+fi
+if [ "$1" = "mux" ] && [ "$2" = "pane" ] && [ "$3" = "read" ]; then
+  printf '{"text": "ready"}\n'
+  exit 0
+fi
+if [ "$1" = "mux" ] && [ "$2" = "pane" ] && [ "$3" = "send" ]; then
+  exit "${STUB_PANE_EXIT:-0}"
+fi
+exec "$STUB_REAL" "$@"
+"#;
+
+/// One assistant turn. `API Error` reads stalled at any age; plain text
+/// written now reads working.
+fn transcript_line(text: &str) -> String {
+    serde_json::json!({
+        "type": "assistant",
+        "timestamp": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+        "message": {"role": "assistant", "model": "claude-test", "content": [{"type": "text", "text": text}]},
+    })
+    .to_string()
+}
+
+fn plant_transcript(root: &Path, sid: &str, text: &str) {
+    let dir = root.join("projects").join("-repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{sid}.jsonl")),
+        format!("{}\n", transcript_line(text)),
+    )
+    .unwrap();
+}
+
+fn plant_asleep(root: &Path, sid: &str) {
+    plant_transcript(root, sid, "API Error: Request rejected (529) overloaded");
+}
+
+fn mux_row(name: &str, sid: &str, status: &str) -> serde_json::Value {
+    let mut v = row(name, "claude", Some(sid));
+    v["status"] = serde_json::json!(status);
+    v["mux"] = serde_json::json!({"session": "s1", "pane_id": 7});
+    v
+}
+
+struct LiveOut {
+    exit: i32,
+    stdout: String,
+    stderr: String,
+    calls: String,
+    bus: Vec<serde_json::Value>,
+    events: Vec<serde_json::Value>,
+}
+
+impl LiveOut {
+    fn bus_rows_for(&self, msg_id: &str) -> usize {
+        self.bus
+            .iter()
+            .filter(|r| r["msg_id"] == msg_id || r["id"] == msg_id)
+            .count()
+    }
+    fn receipt_msg_id(&self) -> String {
+        self.stdout
+            .lines()
+            .find_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .and_then(|v| v["msg_id"].as_str().map(str::to_string))
+            .unwrap_or_default()
+    }
+    fn typed_rows(&self) -> Vec<&serde_json::Value> {
+        self.bus
+            .iter()
+            .filter(|r| r["delivery"] == "typed")
+            .collect()
+    }
+    fn inject_calls(&self) -> Vec<&str> {
+        self.calls
+            .lines()
+            .filter(|l| l.starts_with("mail-inject"))
+            .collect()
+    }
+}
+
+fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+/// An event field at the top level or inside the emitter's payload object.
+fn event_field<'a>(row: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    ["", "data", "payload", "fields"].iter().find_map(|nest| {
+        let scope = if nest.is_empty() {
+            row
+        } else {
+            row.get(*nest)?
+        };
+        scope.get(key).filter(|v| !v.is_null())
+    })
+}
+
+fn events_of<'a>(out: &'a LiveOut, kind: &str) -> Vec<&'a serde_json::Value> {
+    out.events
+        .iter()
+        .filter(|e| {
+            ["type", "event", "kind"]
+                .iter()
+                .any(|k| e.get(*k).and_then(|v| v.as_str()) == Some(kind))
+        })
+        .collect()
+}
+
+fn live_root(label: &str, rows: &[serde_json::Value]) -> PathBuf {
+    let root = temp_root(&format!("live-{}", slug(label)));
+    seed_registry(&root, rows);
+    let stub = root.join("stub.sh");
+    std::fs::write(&stub, STUB).unwrap();
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    root
+}
+
+fn live_command(root: &Path, env: &[(&str, &str)], argv: &[&str]) -> Command {
+    let stub = root.join("stub.sh");
+    let mut cmd = Command::new(binary_path());
+    base_env(&mut cmd, root);
+    cmd.env("FNO_AGENTS_BIN", &stub)
+        .env("FNO_BIN", &stub)
+        .env("STUB_ROOT", root)
+        .env("STUB_REAL", binary_path())
+        .env("FNO_CLAUDE_PROJECTS_DIR", root.join("projects"));
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    cmd.args(["mail", "send"]).args(argv).current_dir(root);
+    cmd
+}
+
+fn collect(root: &Path, out: std::process::Output) -> LiveOut {
+    LiveOut {
+        exit: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        calls: std::fs::read_to_string(root.join("calls.log")).unwrap_or_default(),
+        bus: read_jsonl(&root.join("bus").join("messages.jsonl")),
+        events: read_jsonl(&root.join("events.jsonl")),
+    }
+}
+
+struct LiveRow {
+    contract: &'static str,
+    rows: Vec<serde_json::Value>,
+    setup: fn(&Path),
+    env: &'static [(&'static str, &'static str)],
+    argv: Vec<String>,
+    check: fn(&LiveOut),
+}
+
+fn run_live_rows(rows: Vec<LiveRow>) {
+    for row in rows {
+        let root = live_root(row.contract, &row.rows);
+        (row.setup)(&root);
+        let argv: Vec<&str> = row.argv.iter().map(String::as_str).collect();
+        let out = live_command(&root, row.env, &argv)
+            .output()
+            .expect("run mail send");
+        let leg = collect(&root, out);
+        let report = format!(
+            "contract {}: exit={}\nstdout:\n{}\nstderr:\n{}\ncalls:\n{}",
+            row.contract, leg.exit, leg.stdout, leg.stderr, leg.calls
+        );
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (row.check)(&leg)));
+        let _ = std::fs::remove_dir_all(&root);
+        if outcome.is_err() {
+            panic!("{report}");
+        }
+    }
+}
+
+fn args(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| s.to_string()).collect()
+}
+
+fn no_setup(_: &Path) {}
+
+const CLAUDE_DELIVERS: &[(&str, &str)] = &[(
+    "STUB_INJECT_CLAUDE",
+    r#"{"delivered": true, "reason": "ok"}"#,
+)];
+const CODEX_DELIVERS: &[(&str, &str)] = &[(
+    "STUB_INJECT_CODEX",
+    r#"{"delivered": true, "reason": "ok"}"#,
+)];
+const WAKE_OK: &[(&str, &str)] = &[("STUB_RESUME_EXIT", "0")];
+const PANE_FAILS: &[(&str, &str)] = &[("STUB_PANE_EXIT", "1")];
+const NOT_CONFIRMED: &[(&str, &str)] = &[(
+    "STUB_INJECT_CLAUDE",
+    r#"{"delivered": false, "reason": "not-confirmed"}"#,
+)];
+
+/// Delivery-matrix lanes below discovery: the inject probe, the asleep
+/// resolution, and the wake rung (swept Python: test_mail_delivery_matrix).
+#[test]
+fn mail_send_delivery_matrix_lanes() {
+    run_live_rows(vec![
+        LiveRow {
+            contract: "1a-discovery-miss-still-injects",
+            rows: vec![],
+            setup: no_setup,
+            env: CLAUDE_DELIVERS,
+            argv: args(&[UNKNOWN_SID, "hello there team"]),
+            check: |o| {
+                assert_eq!(o.exit, 0);
+                assert!(o.stdout.contains("delivered (hosted)"));
+                assert!(o
+                    .calls
+                    .contains(&format!("--harness claude --session {UNKNOWN_SID}")));
+            },
+        },
+        LiveRow {
+            contract: "1b-inject-precedes-durable-write",
+            rows: vec![],
+            setup: |r| plant_asleep(r, ASLEEP_SID),
+            env: &[],
+            argv: args(&[ASLEEP_SID, "hello there team"]),
+            check: |o| {
+                // At inject time only the staged body row exists; the durable
+                // envelope for the same msg id lands after the live miss.
+                assert!(o.calls.contains("bus-at-inject=1"));
+                assert!(o.stdout.contains("queued (durable)"));
+                assert_eq!(o.bus_rows_for(&o.receipt_msg_id()), 2);
+            },
+        },
+        LiveRow {
+            contract: "1c-asleep-session-woken-not-queued",
+            rows: vec![],
+            setup: |r| plant_asleep(r, ASLEEP_SID),
+            env: WAKE_OK,
+            argv: args(&[ASLEEP_SID, "hello there team"]),
+            check: |o| {
+                assert_eq!(o.exit, 0);
+                assert!(o.stdout.contains("delivered (woken)"));
+                assert!(!o.stdout.contains("queued"));
+                assert!(o
+                    .calls
+                    .contains(&format!("agents resume {ASLEEP_SID} --message")));
+            },
+        },
+        LiveRow {
+            contract: "1d-wake-prompt-envelope-wrapped",
+            rows: vec![],
+            setup: |r| plant_asleep(r, ASLEEP_SID),
+            env: WAKE_OK,
+            argv: args(&[ASLEEP_SID, "hello there team"]),
+            check: |o| {
+                let wake = o.calls.split("agents resume").nth(1).unwrap_or_default();
+                assert!(wake.contains("--message <fno_mail"));
+                assert!(wake.contains("hello there team"));
+            },
+        },
+        LiveRow {
+            contract: "1e-failed-wake-demotes-with-lane-receipt",
+            rows: vec![],
+            setup: |r| plant_asleep(r, ASLEEP_SID),
+            env: &[],
+            argv: args(&[ASLEEP_SID, "hello there team"]),
+            check: |o| {
+                assert!(o
+                    .stderr
+                    .contains("lanes tried: inject=not-delivered, wake=resume-failed"));
+                assert!(o.stdout.contains("queued (durable)"));
+            },
+        },
+        LiveRow {
+            contract: "1f-ambiguous-short-id-wakes-nothing",
+            rows: vec![],
+            setup: |r| {
+                plant_asleep(r, TWIN_A_SID);
+                plant_asleep(r, TWIN_B_SID);
+            },
+            env: WAKE_OK,
+            argv: args(&["a7b8c9d0", "hello there team"]),
+            check: |o| {
+                assert_eq!(o.exit, 2);
+                assert!(o.stderr.contains(TWIN_A_SID) && o.stderr.contains(TWIN_B_SID));
+                assert!(o.calls.is_empty());
+                assert!(o.bus.is_empty());
+            },
+        },
+        LiveRow {
+            contract: "1g-unreadable-store-never-injects",
+            rows: vec![],
+            setup: |r| {
+                std::fs::write(r.join("agents-home").join("name-map.json"), "{torn").unwrap()
+            },
+            env: CLAUDE_DELIVERS,
+            argv: args(&["b8c9d0e1", "hello there team"]),
+            check: |o| {
+                assert_eq!(o.exit, 2);
+                assert!(o.stderr.contains("unreadable stores: registry"));
+                assert!(o.calls.is_empty());
+            },
+        },
+        LiveRow {
+            contract: "1i-live-failure-receipt-positives-durable-leg",
+            rows: vec![],
+            setup: |r| plant_asleep(r, ASLEEP_SID),
+            env: NOT_CONFIRMED,
+            argv: args(&[ASLEEP_SID, "hello there team"]),
+            check: |o| {
+                assert!(o.stdout.contains("durable leg holds"));
+                assert!(!o.stdout.contains("not-confirmed"));
+            },
+        },
+        LiveRow {
+            contract: "1j-codex-probed-when-nothing-resolved",
+            rows: vec![],
+            setup: no_setup,
+            env: CODEX_DELIVERS,
+            argv: args(&[UNKNOWN_SID, "hello there team"]),
+            check: |o| {
+                let calls = o.inject_calls();
+                assert_eq!(calls.len(), 2);
+                assert!(calls[0].contains("--harness claude"));
+                assert!(calls[1].contains("--harness codex"));
+                assert!(o.stdout.contains("delivered (hosted)"));
+            },
+        },
+    ]);
+}
+
+/// The --force pane lane: transport changes, mail semantics stay (swept
+/// Python: test_mail_force).
+#[test]
+fn mail_send_force_pane_lane() {
+    run_live_rows(vec![
+        LiveRow {
+            contract: "2a-refused-pane-write-leaves-staged-row",
+            rows: vec![mux_row("worker-1", OTHER_SID, "live")],
+            setup: no_setup,
+            env: PANE_FAILS,
+            argv: args(&["worker-1", "hello there team", "--force"]),
+            check: |o| {
+                assert_eq!(o.exit, 1);
+                assert_eq!(o.bus.len(), 1);
+                assert!(o.typed_rows().is_empty());
+            },
+        },
+        LiveRow {
+            contract: "2b-force-receipt-typed-never-delivered",
+            rows: vec![mux_row("worker-1", OTHER_SID, "live")],
+            setup: no_setup,
+            env: &[],
+            argv: args(&["worker-1", "hello there team", "--force"]),
+            check: |o| {
+                assert_eq!(o.exit, 0);
+                assert!(o.stdout.contains("typed (pane 7)"));
+                assert!(!o.stdout.contains("delivered"));
+            },
+        },
+        LiveRow {
+            contract: "2c-force-refuses-non-live-row",
+            rows: vec![mux_row("worker-1", OTHER_SID, "exited")],
+            setup: no_setup,
+            env: &[],
+            argv: args(&["worker-1", "hello there team", "--force"]),
+            check: |o| {
+                assert_eq!(o.exit, 1);
+                assert!(o.stderr.contains("is exited"));
+                assert!(!o.calls.contains("mux pane send"));
+            },
+        },
+        LiveRow {
+            contract: "2d-force-refuses-this-session",
+            rows: vec![mux_row("self-row-1", SID, "live")],
+            setup: no_setup,
+            env: &[],
+            argv: args(&[SID, "hello there team", "--force"]),
+            check: |o| {
+                assert_eq!(o.exit, 2);
+                assert!(o
+                    .stderr
+                    .contains("cannot type into this session's own prompt"));
+                assert!(!o.calls.contains("mux pane send"));
+            },
+        },
+        LiveRow {
+            contract: "2e-outbox-row-names-the-pane",
+            rows: vec![mux_row("worker-1", OTHER_SID, "live")],
+            setup: no_setup,
+            env: &[],
+            argv: args(&["worker-1", "hello there team", "--force"]),
+            check: |o| {
+                let typed = o.typed_rows();
+                assert_eq!(typed.len(), 1);
+                assert_eq!(typed[0]["meta"]["pane_id"], "7");
+            },
+        },
+    ]);
+}
+
+/// Registered and discovered live lanes for codex and claude recipients
+/// (swept Python: test_send, test_mail_cli).
+#[test]
+fn mail_send_codex_and_claude_live_lanes() {
+    run_live_rows(vec![
+        LiveRow {
+            contract: "3a-codex-hosted-inject-short-circuits-durable",
+            rows: vec![],
+            setup: no_setup,
+            env: CODEX_DELIVERS,
+            argv: args(&[UNKNOWN_SID, "hello there team"]),
+            check: |o| {
+                assert_eq!(o.exit, 0);
+                assert!(o.stdout.contains("delivered (hosted)"));
+                assert!(o.bus.iter().all(|r| r["delivery"] == "hosted"));
+                assert!(!o.calls.contains("agents resume"));
+            },
+        },
+        LiveRow {
+            contract: "3b-pane-rung-delivers-on-socket-miss",
+            rows: vec![mux_row("worker-1", OTHER_SID, "live")],
+            setup: no_setup,
+            env: &[],
+            argv: args(&["worker-1", "hello there team"]),
+            check: |o| {
+                assert_eq!(o.exit, 0);
+                assert!(o.stdout.contains("delivered (hosted)"));
+                assert!(o.calls.contains("mux pane send 7"));
+            },
+        },
+        LiveRow {
+            contract: "3c-pane-rung-failure-falls-closed",
+            rows: vec![mux_row("worker-1", OTHER_SID, "live")],
+            setup: no_setup,
+            env: PANE_FAILS,
+            argv: args(&["worker-1", "hello there team"]),
+            check: |o| {
+                assert!(o.stdout.contains("queued (durable)"));
+                assert!(!o.stdout.contains("delivered"));
+                assert_eq!(o.calls.matches("mux pane send 7").count(), 2);
+            },
+        },
+        LiveRow {
+            contract: "3d-transcript-veto-names-the-reading",
+            rows: vec![mux_row("worker-1", OTHER_SID, "live")],
+            setup: |r| plant_asleep(r, OTHER_SID),
+            env: CLAUDE_DELIVERS,
+            argv: args(&["worker-1", "hello there team"]),
+            check: |o| {
+                assert!(o.stdout.contains("[transcript-stalled"));
+                assert!(!o.stdout.contains("live-miss"));
+                assert!(o.inject_calls().is_empty());
+                assert!(!o.calls.contains("mux pane send"));
+            },
+        },
+        LiveRow {
+            contract: "3e-registered-handle-colliding-with-discovery-sends-nothing",
+            rows: vec![row_worker()],
+            setup: |r| {
+                let mut map = serde_json::Map::new();
+                map.insert(LIVE_SID.to_string(), serde_json::json!("worker-1"));
+                let map = serde_json::Value::Object(map).to_string();
+                std::fs::write(r.join("agents-home").join("name-map.json"), map).unwrap();
+                plant_transcript(r, LIVE_SID, "Running the tests now.");
+            },
+            env: CLAUDE_DELIVERS,
+            argv: args(&["worker-1", "hello there team"]),
+            check: |o| {
+                assert_eq!(o.exit, 2);
+                assert!(o.stderr.contains("ambiguous"));
+                assert!(o.calls.is_empty());
+                assert!(o.bus.is_empty());
+            },
+        },
+        LiveRow {
+            contract: "3f-discovered-handle-is-session-addressed",
+            rows: vec![],
+            setup: |r| plant_transcript(r, LIVE_SID, "Running the tests now."),
+            env: CLAUDE_DELIVERS,
+            argv: args(&[LIVE_SID, "hello there team"]),
+            check: |o| {
+                assert_eq!(o.exit, 0);
+                assert!(o.stdout.contains("delivered (hosted) [live claude session"));
+                assert!(o.calls.contains(&format!("--session {LIVE_SID}")));
+                assert!(!o.calls.contains("agents resume"));
+            },
+        },
+    ]);
+}
+
+/// Receipts and events on the failure paths (swept Python: test_send).
+#[test]
+fn mail_send_failure_receipts() {
+    run_live_rows(vec![LiveRow {
+        contract: "4a-send-failed-carries-msg-id",
+        rows: vec![row_worker()],
+        // A regular file where the bus dir belongs: every bus append fails
+        // after the msg id is minted.
+        setup: |r| std::fs::write(r.join("bus"), "not a dir").unwrap(),
+        env: &[],
+        argv: args(&["worker-1", "hello there team"]),
+        check: |o| {
+            assert_eq!(o.exit, 12);
+            let started = events_of(o, "agent_send_started");
+            let failed: Vec<_> = events_of(o, "agent_send_failed")
+                .into_iter()
+                .filter(|e| {
+                    event_field(e, "stage").and_then(|v| v.as_str()) == Some("envelope-write")
+                })
+                .collect();
+            assert_eq!(failed.len(), 1);
+            assert!(event_field(failed[0], "msg_id").is_some());
+            assert_eq!(
+                event_field(failed[0], "msg_id"),
+                event_field(started[0], "msg_id")
+            );
+        },
+    }]);
+
+    // contract: "4b-lock-timeout-names-grace-never-not-live"
+    // It stages a held agent lock, so it runs outside the table: the test
+    // holds the flock and releases it when the grace acquire starts waiting.
+    let contract = "4b-lock-timeout-names-grace-never-not-live";
+    let root = live_root(contract, &[row_worker()]);
+    let lock_dir = root.join("agents-home").join("locks");
+    std::fs::create_dir_all(&lock_dir).unwrap();
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(lock_dir.join("worker-1.lock"))
+        .unwrap();
+    use std::os::unix::io::AsRawFd as _;
+    assert_eq!(
+        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    let mut child = live_command(
+        &root,
+        &[("_FNO_MACHINE_MAIL_LOCK_TIMEOUT", "0.2")],
+        &["worker-1", "hello there team"],
+    )
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped())
+    .spawn()
+    .expect("spawn mail send");
+    let stdout_pipe = child.stdout.take().unwrap();
+    let stdout_reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = std::io::Read::read_to_string(&mut { stdout_pipe }, &mut text);
+        text
+    });
+    let mut stderr = String::new();
+    let mut reader = std::io::BufReader::new(child.stderr.take().unwrap());
+    let mut released = false;
+    loop {
+        let mut line = String::new();
+        if std::io::BufRead::read_line(&mut reader, &mut line).unwrap_or(0) == 0 {
+            break;
+        }
+        if !released && line.starts_with("Waiting for agent") {
+            unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_UN) };
+            released = true;
+        }
+        stderr.push_str(&line);
+    }
+    let _ = child.wait();
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&root);
+    let report = format!("contract {contract}:\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(released, "{report}");
+    assert!(
+        stdout.contains("queued (durable)") && stdout.contains("agent-lock-timeout"),
+        "{report}"
+    );
+    assert!(stderr.contains("lock was busy"), "{report}");
+    assert!(
+        !stderr.contains("is not live") && !stderr.contains("fno agents resume"),
+        "{report}"
+    );
+}
