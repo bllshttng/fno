@@ -524,7 +524,9 @@ words: {}. 'decision' is not a class.",
     if has_options && node.is_none() {
         answer.lines.push(
             "outstanding: refused: a question with options names its node (--node). \
-One line plus a node pointer (law d-59af3235)."
+The ask line stays one line plus the pointer (law d-59af3235); a question \
+file carries the context sections and is not a violation, so pass the file \
+with --question-file and --node together."
                 .to_string(),
         );
         answer.refusal = Some("node_pointer".to_string());

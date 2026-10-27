@@ -313,15 +313,22 @@ def escalate_cmd(
         "NoProgress", "--reason", "-R", help="The terminal reason that triggered this."
     ),
 ) -> None:
-    """Escalate to the presiding role or operator with work pending (AC4-HP)."""
+    """Escalate to the presiding role or operator with work pending (AC4-HP).
+
+    A user-only decision files straight on the question board with
+    `fno inbox outstanding ask`, the board the user reads. Under the default
+    `questions.route=direct` no relay mail copy goes out; set
+    `questions.route=triage` in .fno/config.toml for a triage lead.
+    """
     from fno.carveout.core import resolve_carveout_root, resolve_session_id
     from fno.lead.escalate import escalate, mail_presiding_lead, resolve_presiding_lead
     from fno.lead.state import term_state
     from fno.paths import resolve_repo_root
 
     ids = [part.strip() for part in stalled.split(",") if part.strip()]
+    repo_root = resolve_repo_root()
     try:
-        session_id = resolve_session_id(resolve_repo_root())
+        session_id = resolve_session_id(repo_root)
     except Exception:  # noqa: BLE001 - an unresolvable session never blocks the ask
         session_id = None
     # The caller's own liveness, read not asserted: unknown reads as dead
@@ -353,12 +360,12 @@ def escalate_cmd(
         ids = ["reading:verdict:" + (verdict_scope or scope_arg).replace(",", "+")]
     presiding = resolve_presiding_lead(session_id)
     try:
-        outcome, qid = escalate(
+        outcome, qid, mail_relay, nudge = escalate(
             ids,
             reason=reason,
             root=resolve_carveout_root(),
             session_id=session_id,
-            cwd=Path.cwd(),
+            cwd=repo_root,
             live=live,
             unknown_reason=unknown_reason,
             verdict=summary,
@@ -367,8 +374,12 @@ def escalate_cmd(
     except Exception as exc:  # noqa: BLE001 - named, never swallowed
         typer.echo(f"lead: escalation failed: {exc}", err=True)
         raise typer.Exit(1) from exc
+    if nudge:
+        typer.echo(nudge, err=True)
     holder = presiding["holder"] if presiding is not None else None
-    mailed = holder is not None and mail_presiding_lead(holder, ids, reason, verdict=summary)
+    mailed = holder is not None and mail_relay and mail_presiding_lead(
+        holder, ids, reason, verdict=summary
+    )
     target = f"lead:{holder}" if mailed else f"operator:{qid}"
     note = f", mailed presiding lead {holder}" if mailed else ""
     typer.echo(f"lead: {outcome}{note} {qid}", err=True)

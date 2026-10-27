@@ -246,6 +246,10 @@ while IFS= read -r hit; do
     if [ -n "$test_start" ] && [ "$lineno" -ge "$test_start" ]; then
         continue
     fi
+    # A production fn near the file's end must not reach into the fixtures.
+    if [ -n "$test_start" ] && [ "$window_end" -ge "$test_start" ]; then
+        window_end=$((test_start - 1))
+    fi
     # The formatter moves a trailing marker comment to its own line below.
     if sed -n "${lineno},$((lineno + 2))p" "$file" 2>/dev/null | grep -q 'events-discipline:allow'; then
         continue

@@ -2041,9 +2041,9 @@ async fn run_backlog_command(node: &str, command: crate::proto::BacklogCommand) 
     }
 }
 
-/// Shell `fno agents peek <name> -n 20` for the sideline peek overlay,
+/// Shell `fno agents session peek <name> -n 20` for the sideline peek overlay,
 /// bounded + fail-open: the captured lines (stdout, else stderr, else a
-/// synthesized one-liner) become the overlay body verbatim. `fno agents peek`
+/// synthesized one-liner) become the overlay body verbatim. `fno agents session peek`
 /// reads the peer's on-disk transcript, so it works on a suspended/watch-only
 /// worker without spawning anything; it is read-only (never writes what the peer
 /// reads). Every failure path yields a visible body line, never an empty result:
@@ -2058,7 +2058,7 @@ async fn run_agent_peek(name: &str) -> Vec<String> {
     const PEEK_LINES: &str = "20";
     let mut command = crate::process_admission::tokio_command(fno_bin());
     command
-        .args(["agents", "peek", name, "-n", PEEK_LINES])
+        .args(["agents", "session", "peek", name, "-n", PEEK_LINES])
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     let fut = crate::process_admission::tokio_output(&mut command);
@@ -7324,7 +7324,7 @@ impl Core {
         });
     }
 
-    /// Shell `fno agents peek <name>` OFF the core loop, the
+    /// Shell `fno agents session peek <name>` OFF the core loop, the
     /// `dispatch_next` pattern: the transcript routes back as a `PeekResult` the
     /// core loop turns into a `PeekBody` for the requesting client only. `seq`
     /// rides through unchanged so the client can drop a stale reply. Read-only -
@@ -10343,7 +10343,7 @@ impl Core {
                 Flow::Continue
             }
             Command::PeekAgent { name, seq } => {
-                // Read-only transcript fetch: shell `fno agents peek`
+                // Read-only transcript fetch: shell `fno agents session peek`
                 // off-loop and reply to this client only. No catalog validation -
                 // an unknown name returns peek's own exit-13 body, which the
                 // overlay renders (fail-open, never a refusal notice).

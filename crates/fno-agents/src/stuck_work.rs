@@ -446,7 +446,10 @@ mod tests {
     #[test]
     fn bad_ps_is_an_error_not_an_empty_list() {
         // A ps whose exit is non-zero is Err; this stub never runs, so the
-        // error kind is the spawn failure itself.
+        // error kind is the spawn failure itself. The swap to a nonexistent
+        // dir rides the shared PATH guard: a concurrent git-spawning test
+        // must never inherit it.
+        let _path = crate::path_test_guard();
         let prev = std::env::var_os("PATH");
         std::env::set_var("PATH", "/nonexistent-for-stuck-work");
         let result = ps_rows();
