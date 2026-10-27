@@ -428,11 +428,14 @@ def read_lanes(
     assert cpu_arm.value is not None and mem_arm.value is not None  # measured arms
     per_cpu, per_gb, row_count, cost_source = _fleet_cost(footprint, rows)
 
-    # The lane answer IS the gate's `headroom`: the probe computes it beside
-    # its own cap and slot occupancy, and a machine-load hold caps it at 0
-    # through the same footprint admission the gate refuses spawns on. One
-    # decider, no second arithmetic (law d-b6cc1a2a: Python deletes, the
-    # gate decides).
+    # The lane answer IS the gate's own cap read (one decider, no second
+    # arithmetic): the probe carries the live slot count and the learned
+    # effective cap, and the CPU-share arithmetic it replaces (an answer of
+    # 15 more fit at 90% CPU) is deleted. Delegating to the Rust probe is
+    # the law (d-b6cc1a2a): Python deletes, the gate decides. When the probe
+    # cannot answer, a holding CPU axis still caps at 0 (a spawn-load breach
+    # runs the suite serial); only a silent probe AND an admitting axis
+    # refuses, because then nothing measured is holding anything back.
     from fno.agents.spawn_gate import probe_capacity
 
     probe = probe_capacity(only=["lanes"])
@@ -440,26 +443,16 @@ def read_lanes(
     effective = probe.get("effective")
     answer: Optional[int] = None
     if isinstance(slots, int) and isinstance(effective, int):
-        # headroom rides the same answer; an older binary without it is a
-        # stale-install refusal, never a silent second subtraction.
-        raw_headroom = probe.get("headroom")
-        if not isinstance(raw_headroom, int):
-            reading.refusal_reason = (
-                "the gate cannot answer the lane question: the spawn-gate "
-                "probe carries no headroom (stale fno-agents; run fno doctor "
-                "update)"
-            )
-            return reading
-        answer = max(0, int(raw_headroom))
+        answer = max(0, effective - int(slots))
         cost_source += f"; probe {slots} live, effective cap {effective}"
 
     hold_verdict = isinstance(load_arm.value, dict) and load_arm.value.get(
         "verdict"
     ) in ("hold", "undecidable", "refuse")
     if load_arm.state == DARK or hold_verdict:
-        # The probe's headroom already folds this hold to 0; a dark load arm
-        # still pins the display answer at 0 here, because a dark sensor is
-        # never headroom (AC12). The cap reason is named by headroom_note.
+        # The CPU axis is not admitting, or never answered: a dark sensor is
+        # never headroom, and neither is a hold, an undecidable band, or a
+        # refusal (AC12).
         answer = 0
         cap_why = (
             "dark"

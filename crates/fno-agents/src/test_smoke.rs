@@ -207,6 +207,7 @@ fn boolean_flag(a: &str) -> Option<bool> {
         "--verbose" => Some(true),
         "--keep-going" => Some(true),
         "--changed" => Some(true),
+        "--retry-failed" => Some(true),
         _ => None,
     }
 }
