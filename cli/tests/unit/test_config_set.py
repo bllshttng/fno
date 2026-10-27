@@ -224,7 +224,7 @@ def test_set_warns_when_higher_precedence_layer_overrides(
         project="[auto_merge]\nenabled = true\n",
         global_="[auto_merge]\nenabled = true\n",
     )
-    from fno.config_cli import app
+    from fno.config_writer_cli import app
 
     res = CliRunner().invoke(app, ["set", "auto_merge.enabled", "false"])
     assert res.exit_code == 0, res.output

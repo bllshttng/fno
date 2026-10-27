@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 import typer
 
-from fno.config_cli import _report_band_routing
+from fno.setup.config_doctor import _report_band_routing
 
 requires_rust = pytest.mark.dev_build
 
@@ -125,7 +125,7 @@ def test_doctor_names_a_profile_scalar_the_spawn_no_longer_reads(monkeypatch):
     """A permission or effort scalar on the target profile gets one line
     naming its path and value: the spawn axis is retired, so the lane
     template owns the launch line and the scalar is inert."""
-    from fno.config_cli import _report_harness_overlays
+    from fno.setup.config_doctor import _report_harness_overlays
 
     _pin_overlay_settings(
         monkeypatch,
