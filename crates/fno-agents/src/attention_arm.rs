@@ -169,6 +169,11 @@ pub fn tick_pages(
         // knows question ids and no-ops on unknown ones), so note items stay
         // on the projection and the mux until the note-closing path ships.
         .filter(|i| !i.id.starts_with("note-"))
+        // A copy of another machine's question gets no page here: the asking
+        // machine writes and settles that page in the synced folder, and a
+        // second writer would race it. It stays in all_open below, so its page
+        // is never closed as gone.
+        .filter(|i| i.host.is_none())
         .collect();
     let all_open: std::collections::HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
     let mut tick = SinkTick::default();

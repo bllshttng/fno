@@ -865,6 +865,19 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 continue;
             }
         }
+        // A copy of a question another machine asked closes only through
+        // that machine's door, which records the decision and wakes the
+        // asker; a close here would leave the original open there.
+        if crate::question_bus::peer_origin(question_event).is_some() {
+            let host = question_event["data"]["host"]
+                .as_str()
+                .unwrap_or("another machine");
+            refused += 1;
+            answer.lines.push(format!(
+                "outstanding: refused: {qid} was asked on {host}. Nothing was closed; answer it on {host}, and the close reaches this machine within a minute."
+            ));
+            continue;
+        }
         if let Some(text) = req.answer.as_deref() {
             let text = cut(text, req.cap);
             let current = match live_decision(req, qid) {
