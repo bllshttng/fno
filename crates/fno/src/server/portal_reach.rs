@@ -8,34 +8,30 @@ use super::*;
 
 /// Does `portal_key` name the same ROW the reach resolved?
 ///
-/// Not the same KEY: the TUI door keys a portal by the attach id while
-/// `fno agents attach` keys it by the registry name, and both doors advertise
-/// the same pane. Attach ids are unique per bg session, so a portal keyed by
-/// this row's attach id IS this row whatever door the reach came from - and the
-/// reverse (keyed by name, reached again by attach id) is the same row too,
-/// which is why the name comparison runs both directions.
+/// Not the same KEY: a portal stores the row's id, and a reach may name the
+/// row by any id it carries. Every id is unique to its row, so a portal
+/// keyed by any of them IS this row whatever door the reach came from.
 ///
 /// One function, three callers: the same-row focus arm for the REQUESTED
 /// portal, the held-seat default-reach arm, and the one-row-one-viewer check
 /// across every OTHER portal. Copies of this comparison drifting apart is
 /// how a duplicate viewer gets minted.
 pub(super) fn row_matches_portal_key(row: &RegistryAgent, key: &str, portal_key: &str) -> bool {
-    portal_key == key
-        || row.attach_id.as_deref() == Some(portal_key)
-        || portal_key == row.name
-        || super::agent_harness_session_id(row) == Some(portal_key)
+    portal_key == key || row.keyed_by(portal_key)
 }
 
-/// The live-paneless-row match, shared by every door: the reach's
-/// resolution, the control door's ambiguity check, and the held-seat
-/// focus fill must agree on who answers a key.
+/// The live-paneless-row match for a STORED key, shared by every door: the
+/// reach's resolution, the control door's ambiguity check, and the
+/// held-seat focus fill must agree on who answers a key. Ids only: a
+/// restored portal refills from its row's id or resume lineage.
 pub(super) fn row_answers_key(a: &RegistryAgent, key: &str) -> bool {
-    a.mux.is_none()
-        && !a.exited
-        && (a.attach_id.as_deref() == Some(key)
-            || super::agent_harness_session_id(a) == Some(key)
-            || a.predecessor_session_ids.iter().any(|p| p == key)
-            || a.name == key)
+    a.mux.is_none() && !a.exited && a.keyed_by(key)
+}
+
+/// The match for what an operator TYPED: an id, or a row name. A name is
+/// input only - the reach stores the row's id, never the name it was given.
+pub(super) fn row_answers_input(a: &RegistryAgent, key: &str) -> bool {
+    row_answers_key(a, key) || (a.mux.is_none() && !a.exited && a.name == key)
 }
 
 /// Two registry rows for one session (an adopted twin) are one row to a
@@ -629,7 +625,7 @@ impl Core {
             || !matches!(placement.target, PaneTarget::CurrentRoute);
         // Resolve exactly one live paneless row for the key. Names are not
         // unique; a name that matches two rows must refuse, never pick.
-        let mut hits = self.agents.iter().filter(|a| row_answers_key(a, key));
+        let mut hits = self.agents.iter().filter(|a| row_answers_input(a, key));
         let row = match (hits.next(), hits.next()) {
             (Some(a), None) => a.clone(),
             (Some(a), Some(b)) if same_session_twins(a, b) => a.clone(),
@@ -651,6 +647,10 @@ impl Core {
                 return Flow::Continue;
             }
         };
+        // From here the key is the row's id, whatever the caller typed: the
+        // portal saves it, and a restart finds the row again by it.
+        let stored_key = row.stored_key();
+        let key = stored_key.as_str();
         // A DEFAULT reach goes home to the held seat that remembers
         // the row. Restore put a shell in the seat and the entry back in the
         // map; without this retarget the reach would open a fresh viewer at
@@ -1205,7 +1205,7 @@ impl Core {
         // never pick, same as reach_portal's own guard. The count is over
         // LIVE PANELESS rows - the rows a reach could serve - so a hosted
         // or exited namesake never turns a reachable row into a refusal.
-        let mut named_hits = self.agents.iter().filter(|a| row_answers_key(a, name));
+        let mut named_hits = self.agents.iter().filter(|a| row_answers_input(a, name));
         if let (Some(a), Some(b)) = (named_hits.next(), named_hits.next()) {
             if same_session_twins(a, b) {
                 // twins are one row; fall through to the reach below
@@ -1532,18 +1532,29 @@ impl Core {
                         && (a.name == title || a.harness_title.as_deref() == Some(title.as_str()))
                 })
                 .collect();
-            let claim: Option<String> = match named.as_slice() {
+            // A title no live row goes by (an unnamed thread shows the
+            // harness default, "Claude Code") is no evidence the screen
+            // switched rows: the seat keeps the id it holds.
+            if named.is_empty()
+                && self
+                    .agents
+                    .iter()
+                    .any(|a| row_answers_key(a, &self.portals[&idx].row_key))
+            {
+                continue;
+            }
+            let claim: Option<(String, String)> = match named.as_slice() {
                 [row] => row.attach_id.as_deref().and_then(|id| {
                     let free = self.live_viewer_portal(row, id, idx).is_none()
                         && match self.attached.get(id) {
                             Some(p) => *p == seat || !self.panes.contains_key(p),
                             None => true,
                         };
-                    free.then(|| id.to_string())
+                    free.then(|| (id.to_string(), row.stored_key()))
                 }),
                 _ => None,
             };
-            let Some(id) = claim else {
+            let Some((id, key)) = claim else {
                 self.attached.retain(|_, p| *p != seat);
                 changed |= self.follow_unclaimed_title(idx, seat, &title);
                 continue;
@@ -1561,7 +1572,7 @@ impl Core {
             self.attached.retain(|_, p| *p != seat);
             self.attached.insert(id.clone(), seat);
             let (_, cd) = self.attach_account_ctx(&id);
-            self.portals.get_mut(&idx).expect("candidate idx").row_key = id.clone();
+            self.portals.get_mut(&idx).expect("candidate idx").row_key = key;
             self.name_attached_pane(seat, &id, cd.as_deref());
             self.notice_all(format!("portal {idx} now shows {title}"));
             changed = true;
@@ -1573,11 +1584,11 @@ impl Core {
 
     /// The label half of the follow: the screen names `title`, so
     /// the border always names it marked unclaimed, and the channel follows
-    /// the title when exactly one live row answers it by name and no other
-    /// portal holds its attach claim - the sideline marks what the viewer
-    /// shows. Any other title (ambiguous, unknown, claimed elsewhere) is
-    /// stored marked, deepened until no live row answers it, so no row wears
-    /// this seat and a claimant elsewhere stays unpoisoned. A portal is a TV
+    /// the title to the row's id when exactly one live row goes by it and no
+    /// other portal holds its attach claim - the sideline marks what the
+    /// viewer shows. Any other title (ambiguous, claimed elsewhere) is
+    /// stored marked, so no row wears this seat and a claimant elsewhere
+    /// stays unpoisoned. A portal is a TV
     /// and every row is a channel: the label never keeps a stale row.
     fn follow_unclaimed_title(&mut self, idx: u8, seat: u64, title: &str) -> bool {
         let live_named: Vec<&RegistryAgent> = self
@@ -1596,21 +1607,22 @@ impl Core {
             _ => false,
         };
         let marked = format!("{title}?");
-        let key = if live_named.len() == 1 && !claimed_elsewhere {
-            title.to_string()
-        } else {
-            // The marked key must answer no row: the mark exists so nothing
-            // wears the seat. A row coincidentally named into the marked
-            // form pushes the mark one character deeper.
-            let mut key = marked.clone();
-            while self
-                .agents
-                .iter()
-                .any(|a| !a.exited && row_answers_key(a, &key))
-            {
-                key.push('?');
+        let key = match live_named.as_slice() {
+            [row] if !claimed_elsewhere => row.stored_key(),
+            _ => {
+                // The marked key must answer no row. Only a row with no id
+                // answers by name, so only one named into the marked form
+                // pushes the mark a character deeper.
+                let mut key = marked.clone();
+                while self
+                    .agents
+                    .iter()
+                    .any(|a| !a.exited && row_answers_key(a, &key))
+                {
+                    key.push('?');
+                }
+                key
             }
-            key
         };
         let mut changed = false;
         let portal = self.portals.get_mut(&idx).expect("candidate idx");
@@ -1713,7 +1725,7 @@ impl Core {
         key: &str,
         placement: &PanePlacement,
     ) -> Flow {
-        let mut hits = self.agents.iter().filter(|a| row_answers_key(a, key));
+        let mut hits = self.agents.iter().filter(|a| row_answers_input(a, key));
         let row = match (hits.next(), hits.next()) {
             (Some(a), None) => a.clone(),
             (Some(a), Some(b)) if same_session_twins(a, b) => a.clone(),
@@ -1853,15 +1865,11 @@ impl Core {
     }
 
     /// What a parked seat wears: the registry name of the one row the
-    /// channel key (an attach id or a name) answers, exited rows included.
-    /// The key stays in the argv where restore reads it; the operator reads
-    /// the name, never an attach id. A key no single row answers is its own
-    /// label.
+    /// channel key (an id) answers, exited rows included. The key stays in
+    /// the argv where restore reads it; the operator reads the name, never
+    /// an id. A key no single row answers is its own label.
     pub(crate) fn portal_channel_label(&self, key: &str) -> String {
-        let mut hits = self
-            .agents
-            .iter()
-            .filter(|a| a.attach_id.as_deref() == Some(key) || a.name == key);
+        let mut hits = self.agents.iter().filter(|a| a.keyed_by(key));
         match (hits.next(), hits.next()) {
             (Some(row), None) if !row.name.is_empty() => row.name.clone(),
             _ => key.to_string(),
@@ -1908,17 +1916,17 @@ impl Core {
         let named_slot = self.portals.get(&portal).is_some_and(|p| {
             let k = p.row_key.as_str();
             k == name
-                || self.agents.iter().any(|a| {
-                    (a.attach_id.as_deref() == Some(k) && a.name == name)
-                        || (a.name == k && a.attach_id.as_deref() == Some(name))
-                })
+                || self
+                    .agents
+                    .iter()
+                    .any(|a| a.keyed_by(k) && (a.name == name || a.keyed_by(name)))
         });
         if named_slot {
             return true;
         }
         self.agents
             .iter()
-            .filter(|a| row_answers_key(a, name))
+            .filter(|a| row_answers_input(a, name))
             .any(|row| {
                 self.live_viewer_portal(row, name, portal)
                     .is_some_and(|idx| self.session.find_pane(self.portals[&idx].seat).is_some())
