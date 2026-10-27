@@ -446,7 +446,7 @@ pub(super) fn wake_and_deliver(
     if session_uuid.is_empty() {
         return (false, "no-session-uuid".to_string());
     }
-    // argv[0] is the front-door binary itself, so the verb starts at `agents`.
+    // argv[0] is the front-door binary itself, so the command starts at `agents`.
     let mut argv = vec![
         "agents".to_string(),
         "resume".to_string(),
