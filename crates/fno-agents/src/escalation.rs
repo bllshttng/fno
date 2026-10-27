@@ -398,34 +398,6 @@ pub fn overdue(e: &Escalation, now: chrono::DateTime<chrono::Utc>) -> bool {
         .unwrap_or(false)
 }
 
-/// The inverse of [`parse`], for a Rust writer.
-pub fn to_note(e: &Escalation) -> String {
-    let mut fm = String::new();
-    fm.push_str(&format!("class: {}\n", e.class));
-    fm.push_str(&format!("status: {}\n", e.status));
-    if let Some(node) = &e.node {
-        fm.push_str(&format!("node: {node}\n"));
-    }
-    fm.push_str(&format!("raised_by: {}\n", e.raised_by));
-    fm.push_str(&format!("raised_at: {}\n", e.raised_at));
-    fm.push_str(&format!("deadline: {}\n", e.deadline));
-    if let Some(n) = e.recommend {
-        fm.push_str(&format!("recommend: {n}\n"));
-    }
-    fm.push_str(&format!("on_silence: {}\n", e.on_silence));
-    let options = e
-        .options
-        .iter()
-        .enumerate()
-        .map(|(i, o)| format!("{}. {} What happens next: {}", i + 1, o.text, o.next))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "---\n{fm}---\n# {}\n\n## {SECTION_DECIDING}\n{}\n\n## {SECTION_WHY_NOW}\n{}\n\n## {SECTION_OPTIONS}\n{options}\n\n## {SECTION_RECOMMENDATION}\n{}\n\n## {SECTION_ON_DEADLINE}\n{}\n",
-        e.title, e.deciding, e.why_now, e.recommendation, e.on_deadline
-    )
-}
-
 /// Every note in the directory, path-stamped and sorted. An unreadable
 /// directory is an error, never an empty list; one unreadable note logs and
 /// skips.

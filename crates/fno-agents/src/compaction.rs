@@ -156,38 +156,6 @@ fn first_boundary_after(transcript: &Path, after_epoch: i64) -> Result<Option<St
     Ok(None)
 }
 
-/// The timestamp of the newest `type:"assistant"` entry. User, system and
-/// summary lines keep transcript mtime warm without meaning the worker spoke
-/// (trap 4: one session read 0.4h fresh by mtime while its newest assistant
-/// entry was 10.5h old), so liveness reads THIS, never mtime.
-pub fn newest_assistant_ts(transcript: &Path) -> Result<Option<String>, String> {
-    let raw =
-        std::fs::read_to_string(transcript).map_err(|e| format!("transcript unreadable: {e}"))?;
-    let mut newest: Option<(i64, String)> = None;
-    for line in raw.lines() {
-        // Cheap prefilter before the JSON parse: only assistant entries can win.
-        if !line.contains("\"type\":\"assistant\"") {
-            continue;
-        }
-        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if row.get("type").and_then(|v| v.as_str()) != Some("assistant") {
-            continue;
-        }
-        let Some(ts) = row.get("timestamp").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(epoch) = rfc3339_to_epoch(ts) else {
-            continue;
-        };
-        if newest.as_ref().is_none_or(|(e, _)| epoch > *e) {
-            newest = Some((epoch, ts.to_string()));
-        }
-    }
-    Ok(newest.map(|(_, ts)| ts))
-}
-
 /// The full reader. `transcript` is the claude JSONL path when known; a
 /// `None` transcript with a live stamp still answers from the stamp alone.
 pub fn compaction_state(

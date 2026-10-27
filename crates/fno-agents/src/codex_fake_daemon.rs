@@ -204,18 +204,8 @@ impl Behavior {
         self
     }
 
-    pub fn with_thread_cwd(mut self, cwd: &str) -> Self {
-        self.thread_cwd = cwd.to_string();
-        self
-    }
-
     pub fn with_thread_sandbox(mut self, sandbox: Value) -> Self {
         self.thread_sandbox = Some(sandbox);
-        self
-    }
-
-    pub fn with_failing_thread_resume(mut self) -> Self {
-        self.fail_thread_resume = true;
         self
     }
 
@@ -319,11 +309,6 @@ impl FakeDaemon {
         self.home
             .join("app-server-control")
             .join("app-server-control.sock")
-    }
-
-    /// The pid recorded as the serving app-server, which is this process.
-    pub fn recorded_pid(&self) -> u32 {
-        std::process::id()
     }
 
     /// Every request frame received so far, in arrival order.
@@ -599,24 +584,4 @@ async fn send(
     frame: Value,
 ) -> Result<(), tokio_tungstenite::tungstenite::Error> {
     sink.send(Message::Text(frame.to_string().into())).await
-}
-
-/// A live control socket, or `None` with a printed skip line. Live tests that
-/// need the operator's real daemon gate on this rather than failing on a
-/// machine that has none.
-pub fn live_socket_or_skip() -> Option<PathBuf> {
-    let path = crate::codex_inject::codex_app_server_socket_path();
-    if path.exists() {
-        return Some(path);
-    }
-    eprintln!(
-        "skip: no codex app-server daemon at {} (start one with `codex app-server daemon start`)",
-        path.display()
-    );
-    None
-}
-
-/// Whether `path` is a socket this process can reach at all.
-pub fn socket_exists(path: &Path) -> bool {
-    path.exists()
 }

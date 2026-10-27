@@ -298,26 +298,6 @@ fn py_json_compact_sorted(v: &Value) -> String {
     }
 }
 
-/// Reorder one row's keys into the canonical graph order, extras appended.
-pub fn canonical_order(row: &Value) -> Value {
-    let order = crate::graph_store::CANONICAL_FIELD_ORDER;
-    let Some(obj) = row.as_object() else {
-        return row.clone();
-    };
-    let mut out = serde_json::Map::with_capacity(obj.len());
-    for key in order {
-        if let Some(v) = obj.get(*key) {
-            out.insert((*key).to_string(), v.clone());
-        }
-    }
-    for (k, v) in obj {
-        if !order.contains(&k.as_str()) {
-            out.insert(k.clone(), v.clone());
-        }
-    }
-    Value::Object(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -751,20 +751,6 @@ pub fn raw_get<'a>(raw: &'a Value, dotted: &str) -> Option<&'a Value> {
     Some(node)
 }
 
-/// Dotted lookup with the loader's prefix tolerance: `config.` is optional.
-pub fn raw_get_variant(raw: &Value, key: &str) -> Option<Value> {
-    let variants: Vec<String> = match key.strip_prefix("config.") {
-        Some(stripped) => vec![key.to_string(), stripped.to_string()],
-        None => vec![key.to_string(), format!("config.{key}")],
-    };
-    for variant in &variants {
-        if let Some(got) = raw_get(raw, variant) {
-            return Some(got.clone());
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

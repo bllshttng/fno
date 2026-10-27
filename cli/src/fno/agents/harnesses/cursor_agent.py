@@ -13,7 +13,6 @@ Cursor commands.
 """
 from __future__ import annotations
 
-import os
 import re
 import select
 import subprocess
@@ -314,13 +313,3 @@ def reap_detached_worker_servers(
                     f"cursor-agent worker-server pid {process.pid} survived teardown: {exc}"
                 ) from exc
     return len(candidates)
-
-
-def cursor_agent_provider() -> str:
-    """Conceptual provider axis; Cursor's CLI folds it into its model service."""
-    return os.environ.get("FNO_CURSOR_AGENT_PROVIDER") or "cursor"
-
-
-def cursor_agent_model() -> str:
-    """Configured Cursor model, or its native automatic selection."""
-    return os.environ.get("FNO_CURSOR_AGENT_MODEL") or "auto"
