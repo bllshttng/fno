@@ -197,7 +197,7 @@ fn skipped(state: &State) -> Vec<&'static str> {
 
 #[test]
 fn screen_order_and_skips_follow_the_presets() {
-    // Balanced with every default accepted: the twelve screens run in
+    // Balanced with every default accepted: the thirteen screens run in
     // order, three skip, and the proposal set is the balanced one.
     let mut state = State::new(None, fresh_detect(), false);
     let mut pr = Script::auto();
@@ -216,6 +216,7 @@ fn screen_order_and_skips_follow_the_presets() {
             "budget",
             "review-merge",
             "services",
+            "messaging",
             "projects",
             "review",
             "apply",
@@ -306,6 +307,7 @@ fn back_navigation_and_the_write_latch() {
         Que::C(Conf::Yes),             // review-merge again: posture
         Que::C(Conf::No),              // review-merge again: merge (offered true now)
         Que::T(Ticks::Ok(vec![0, 2])), // services again
+        Que::T(Ticks::Ok(vec![])),     // messaging: none
         Que::C(Conf::Yes),             // projects: register
         Que::C(Conf::No),              // projects: no scan
         Que::C(Conf::Back),            // review: back
@@ -338,6 +340,7 @@ fn back_navigation_and_the_write_latch() {
         Que::C(Conf::Yes),             // posture
         Que::C(Conf::No),              // merge
         Que::T(Ticks::Ok(vec![0, 2])), // services
+        Que::T(Ticks::Ok(vec![])),     // messaging: none
         Que::C(Conf::Yes),             // register
         Que::C(Conf::No),              // scan
     ]);
@@ -372,6 +375,7 @@ fn back_navigation_and_the_write_latch() {
         Que::C(Conf::No),              // review-merge again: decline the posture
         Que::C(Conf::No),              // review-merge again: no merge
         Que::T(Ticks::Ok(vec![0, 2])), // services again
+        Que::T(Ticks::Ok(vec![])),     // messaging: none
         Que::C(Conf::Yes),             // projects: register
         Que::C(Conf::No),              // projects: no scan
         Que::C(Conf::Yes),             // review: write (the latch)
