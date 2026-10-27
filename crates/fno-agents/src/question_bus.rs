@@ -269,7 +269,7 @@ fn peer_close(qid: &str, reason: &str, host: &str) -> Value {
     json!({
         "ts": chrono::Utc::now().to_rfc3339(),
         "type": "operator_question_closed",
-        "source": "question_bus",
+        "source": "daemon",
         "data": {"question_id": qid, "reason": reason, "closed_by": format!("peer:{host}")},
     })
 }
