@@ -13,6 +13,7 @@ use std::path::Path;
 
 use crate::claude_ask::py_repr;
 use crate::provider_route::{claude_route, ClaudeRoute, RouteCtx};
+use crate::spawn_route::Target;
 
 /// `DEFAULT_SECONDARY_MODEL` and `DEFAULT_ROUTED_ROLES`: the roles routed to
 /// zai by default. The config `model_routing.roles` map overrides per role.
@@ -22,14 +23,6 @@ pub const DEFAULT_ROUTED_ROLES: &[&str] =
 /// Roles the secondary provider never touches, enforced before config.
 pub const PROTECTED_ROLES: &[&str] = &["implement", "review-verdict"];
 pub const PROTECTED_ROLE_FLOOR: &str = "high";
-
-/// A role resolved to a route env, stamped with its provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoleRoute {
-    pub provider: String,
-    pub model: String,
-    pub env: BTreeMap<String, String>,
-}
 
 /// The `model_routing` block, read once: `enabled` (default true) and the
 /// effective role table (built-ins overlaid by config, keys lowercased).
@@ -145,7 +138,7 @@ pub fn resolve(
     cwd: &Path,
     env_get: &dyn Fn(&str) -> Option<String>,
     notices: &mut Vec<String>,
-) -> Result<Option<RoleRoute>, String> {
+) -> Result<Option<Target>, String> {
     resolve_with(role, block, cwd, env_get, notices, &business)
 }
 
@@ -156,7 +149,7 @@ fn resolve_with(
     env_get: &dyn Fn(&str) -> Option<String>,
     notices: &mut Vec<String>,
     business: &dyn Fn(&str) -> Result<Business, String>,
-) -> Result<Option<RoleRoute>, String> {
+) -> Result<Option<Target>, String> {
     let requested = role.trim();
     let name = requested.to_lowercase();
     if name.is_empty() {
@@ -188,9 +181,10 @@ fn resolve_with(
                 crate::spawn_route::ROUTE_PROVIDER_ENV.to_string(),
                 pname.clone(),
             );
-            Ok(Some(RoleRoute {
+            Ok(Some(Target {
                 provider: pname,
                 model,
+                effort: None,
                 env,
             }))
         }

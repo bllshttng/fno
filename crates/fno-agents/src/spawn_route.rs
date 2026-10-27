@@ -101,6 +101,29 @@ pub fn route_seam(
     if substrate == "cloud" {
         return RouteSeam::Refuse(refused(route, "the cloud lane carries no route"));
     }
+    match resolve_target(route, cwd, env_get) {
+        Err(line) => RouteSeam::Refuse(line),
+        Ok(target) => settled(&|reason| refused(route, reason), target, cwd),
+    }
+}
+
+/// A route target resolved to its env, stamped with its provider: what the
+/// thread seam, the pane arm and the role table all launch on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    pub provider: String,
+    pub model: String,
+    pub effort: Option<String>,
+    pub env: BTreeMap<String, String>,
+}
+
+/// Resolve a `--route` value (`provider,model` or a declared lane name) to
+/// its env. `Err` is the refusal line, `cmd_spawn`'s words.
+pub fn resolve_target(
+    route: &str,
+    cwd: &Path,
+    env_get: &dyn Fn(&str) -> Option<String>,
+) -> Result<Target, String> {
     let (provider, model, effort) = match parse_target(route) {
         Some((p, m)) => (p, m, None),
         None => {
@@ -109,14 +132,14 @@ pub fn route_seam(
                 cwd,
             );
             if row.get("found").and_then(Value::as_bool) != Some(true) {
-                return RouteSeam::Refuse(format!(
+                return Err(format!(
                     "--route takes 'provider,model' or a declared lane name; got {}",
                     py_repr(route)
                 ));
             }
             let field = |k: &str| row.get(k).and_then(Value::as_str).unwrap_or("").to_string();
             if field("vendor").is_empty() {
-                return RouteSeam::Refuse(format!(
+                return Err(format!(
                     "--route {} names a lane that declares no route; no worker launched, \
                      node stays dispatchable.",
                     py_repr(route)
@@ -129,43 +152,35 @@ pub fn route_seam(
     // resolve_explicit_route: a blank provider or model resolves nothing.
     let pname = provider.trim().to_lowercase();
     if pname.is_empty() || model.trim().is_empty() {
-        return RouteSeam::Refuse(refused(route, crate::spawn_route::ROUTE_KEYLESS));
+        return Err(refused(route, ROUTE_KEYLESS));
     }
     let ctx = RouteCtx::Peer(pname.clone());
     let mut env = match claude_route(cwd, &pname, model.trim(), &ctx, env_get) {
         ClaudeRoute::Routed { env, .. } => env,
         ClaudeRoute::Skipped { notices } => {
             let reason = if notices.is_empty() {
-                crate::spawn_route::ROUTE_KEYLESS.to_string()
+                ROUTE_KEYLESS.to_string()
             } else {
                 notices.join("; ")
             };
-            return RouteSeam::Refuse(refused(route, &reason));
+            return Err(refused(route, &reason));
         }
     };
-    // bind_route_provider: the stamp rides the route env into the file.
+    // bind_route_provider: the stamp rides the route env.
     env.insert(ROUTE_PROVIDER_ENV.to_string(), provider.clone());
-    settled(
-        &|reason| refused(route, reason),
-        env,
+    Ok(Target {
         provider,
         model,
         effort,
-        cwd,
-    )
+        env,
+    })
 }
 
 /// Write the route's `--settings` file and hand the lane its route. A write
 /// failure refuses in the caller's own line, `refuse(reason)`.
-fn settled(
-    refuse: &dyn Fn(&str) -> String,
-    env: BTreeMap<String, String>,
-    provider: String,
-    model: String,
-    effort: Option<String>,
-    cwd: &Path,
-) -> RouteSeam {
-    let route_env: Map<String, Value> = env
+fn settled(refuse: &dyn Fn(&str) -> String, target: Target, cwd: &Path) -> RouteSeam {
+    let route_env: Map<String, Value> = target
+        .env
         .iter()
         .map(|(k, v)| (k.clone(), Value::String(v.clone())))
         .collect();
@@ -176,19 +191,35 @@ fn settled(
             Err(e) => return RouteSeam::Refuse(refuse(&e)),
         };
     RouteSeam::Routed(Route {
-        env,
-        provider,
-        model,
-        effort,
+        env: target.env,
+        provider: target.provider,
+        model: target.model,
+        effort: target.effort,
         settings,
     })
+}
+
+/// A role's route under the config's routing block, or `None` for the
+/// primary model. Its notices print here, the lines the Python lane's
+/// notice sink wrote; `Err` is a blocked or incomplete business role.
+pub fn role_target(
+    role: &str,
+    cwd: &Path,
+    env_get: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<Target>, String> {
+    let block = crate::spawn_role::RoutingBlock::read(cwd);
+    let mut notices = Vec::new();
+    let resolved = crate::spawn_role::resolve(role, &block, cwd, env_get, &mut notices);
+    for note in &notices {
+        eprintln!("{note}");
+    }
+    resolved
 }
 
 /// The `--role` verdict for a spawn with no `--route` (an explicit route wins
 /// over a role). Only claude resolves a role route: another harness takes its
 /// model from its own config, and its role routes nothing, as before. A role
-/// that resolves no route answers `None`, the primary model. Its notices
-/// print here, the lines the Python lane's notice sink wrote.
+/// that resolves no route answers `None`, the primary model.
 pub fn role_seam(
     role: Option<&str>,
     harness: &str,
@@ -198,26 +229,17 @@ pub fn role_seam(
     let Some(role) = role.filter(|_| harness == "claude") else {
         return RouteSeam::None;
     };
-    let block = crate::spawn_role::RoutingBlock::read(cwd);
-    let mut notices = Vec::new();
-    let resolved = crate::spawn_role::resolve(role, &block, cwd, env_get, &mut notices);
-    for note in &notices {
-        eprintln!("{note}");
-    }
-    match resolved {
+    match role_target(role, cwd, env_get) {
         Err(line) => RouteSeam::Refuse(line),
         Ok(None) => RouteSeam::None,
-        Ok(Some(r)) => settled(
+        Ok(Some(target)) => settled(
             &|reason| {
                 format!(
                     "--role {} refused ({reason}); no worker launched, node stays dispatchable.",
                     py_repr(role)
                 )
             },
-            r.env,
-            r.provider,
-            r.model,
-            None,
+            target,
             cwd,
         ),
     }

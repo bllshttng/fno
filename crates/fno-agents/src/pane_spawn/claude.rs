@@ -35,7 +35,7 @@ use super::{
     EXIT_REFUSAL,
 };
 use crate::claude_ask::py_repr;
-use crate::provider_route::{claude_route, ClaudeRoute, RouteCtx};
+use crate::spawn_route::Target;
 
 /// The one claude pane arm. Stateless: every per-spawn fact rides the
 /// [`PaneContext`] and the plan it produces.
@@ -87,127 +87,29 @@ const MONITOR_ROUTE_KEYS: [&str; 3] = [
 const MONITOR_COMPLETE_GOLDEN: &str =
     "--monitor happy currently requires a complete resolved zai route";
 
-/// A resolved route for one pane spawn: the parsed target's provider and the
-/// resolved env with the provider stamp - the env the monitor gates read,
-/// the wrapper carries, and the happy wrap forwards.
-struct ResolvedRoute {
-    provider: String,
-    env: BTreeMap<String, String>,
-}
-
-/// `spawn_route.rs`'s refusal spelling, reused so the pane arm and the thread
-/// seam cannot disagree about what a bad `--route` says.
-fn route_refused(route: &str, reason: &str) -> PaneRefusal {
-    PaneRefusal {
-        line: crate::spawn_route::refused(route, reason),
+/// The pane's route: an explicit `--route`, else a `--role`'s, through the
+/// thread seam's own resolvers minus the settings file, because a pane
+/// carries its route as env.
+fn resolve_route(ctx: &PaneContext) -> Result<Option<Target>, PaneRefusal> {
+    let env_get = |k: &str| std::env::var(k).ok();
+    let resolved = match (ctx.route.as_deref(), ctx.role.as_deref()) {
+        (Some(route), _) => {
+            crate::spawn_route::resolve_target(route, &ctx.cwd, &env_get).map(Some)
+        }
+        (None, Some(role)) => crate::spawn_route::role_target(role, &ctx.cwd, &env_get),
+        (None, None) => Ok(None),
+    };
+    resolved.map_err(|line| PaneRefusal {
+        line,
         exit_code: EXIT_REFUSAL,
         after_pane: None,
-    }
-}
-
-/// Resolve `ctx.route` the way `route_seam` does for a thread spawn
-/// (spawn_route.rs:100-146), minus the settings file: a pane carries its
-/// route as env, and `route_seam` itself refuses the pane substrate to
-/// Python - the one leg the pane arm must not call.
-fn resolve_route(ctx: &PaneContext) -> Result<Option<ResolvedRoute>, PaneRefusal> {
-    let Some(route) = ctx.route.as_deref() else {
-        return resolve_role(ctx);
-    };
-    let (provider, model) = match crate::spawn_route::parse_target(route) {
-        Some((p, m)) => (p, m),
-        None => {
-            let row = crate::route_gather::run_mode(
-                &json!({"mode": "lane", "match": "name", "name": route}),
-                &ctx.cwd,
-            );
-            if row.get("found").and_then(Value::as_bool) != Some(true) {
-                return Err(PaneRefusal {
-                    line: format!(
-                        "--route takes 'provider,model' or a declared lane name; got {}",
-                        py_repr(route)
-                    ),
-                    exit_code: EXIT_REFUSAL,
-                    after_pane: None,
-                });
-            }
-            let field = |k: &str| row.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-            if field("vendor").is_empty() {
-                return Err(route_refused(
-                    route,
-                    &format!(
-                        "--route {} names a lane that declares no route; no worker launched, \
-                         node stays dispatchable.",
-                        py_repr(route)
-                    ),
-                ));
-            }
-            (field("vendor"), field("model"))
-        }
-    };
-    // resolve_explicit_route: a blank provider or model resolves nothing.
-    let pname = provider.trim().to_lowercase();
-    if pname.is_empty() || model.trim().is_empty() {
-        return Err(route_refused(route, crate::spawn_route::ROUTE_KEYLESS));
-    }
-    let mut env = match claude_route(
-        &ctx.cwd,
-        &pname,
-        model.trim(),
-        &RouteCtx::Peer(pname.clone()),
-        &|k| std::env::var(k).ok(),
-    ) {
-        ClaudeRoute::Routed { env, .. } => env,
-        ClaudeRoute::Skipped { notices } => {
-            let reason = if notices.is_empty() {
-                crate::spawn_route::ROUTE_KEYLESS.to_string()
-            } else {
-                notices.join("; ")
-            };
-            return Err(route_refused(route, &reason));
-        }
-    };
-    // bind_route_provider: the stamp rides the route env into the wrapper.
-    env.insert(
-        crate::spawn_route::ROUTE_PROVIDER_ENV.to_string(),
-        provider.clone(),
-    );
-    Ok(Some(ResolvedRoute { provider, env }))
-}
-
-/// A `--role` with no `--route`: the role table's route, or the primary model.
-fn resolve_role(ctx: &PaneContext) -> Result<Option<ResolvedRoute>, PaneRefusal> {
-    let Some(role) = ctx.role.as_deref() else {
-        return Ok(None);
-    };
-    let block = crate::spawn_role::RoutingBlock::read(&ctx.cwd);
-    let mut notices = Vec::new();
-    let resolved = crate::spawn_role::resolve(
-        role,
-        &block,
-        &ctx.cwd,
-        &|k| std::env::var(k).ok(),
-        &mut notices,
-    );
-    for note in &notices {
-        eprintln!("{note}");
-    }
-    match resolved {
-        Ok(route) => Ok(route.map(|r| ResolvedRoute {
-            provider: r.provider,
-            env: r.env,
-        })),
-        Err(line) => Err(PaneRefusal {
-            line,
-            exit_code: EXIT_REFUSAL,
-            after_pane: None,
-        }),
-    }
+    })
 }
 
 /// The wrapper overlay: the account's profile under the route, composed by
 /// the one owner (`accounts::credentials::compose`), in its order. A routed
 /// account spawn prints the receipt the thread lane prints.
-fn overlay_for(ctx: &PaneContext, route: Option<ResolvedRoute>) -> Vec<(String, String)> {
+fn overlay_for(ctx: &PaneContext, route: Option<Target>) -> Vec<(String, String)> {
     let route_env: Option<Map<String, Value>> = route.map(|r| {
         r.env
             .into_iter()
@@ -280,7 +182,7 @@ pub(crate) fn claude_core_argv(
 /// The monitor gates (`resolve_monitor` port): the value gate on any explicit
 /// value, then the completeness gate a happy monitor pays. The
 /// harness-is-claude gate is unreachable - this arm only owns claude.
-fn monitor_gates(ctx: &PaneContext, route: &Option<ResolvedRoute>) -> Result<(), PaneRefusal> {
+fn monitor_gates(ctx: &PaneContext, route: &Option<Target>) -> Result<(), PaneRefusal> {
     let Some(monitor) = ctx.monitor.as_deref() else {
         // The auto-happy tail (mux_spawn.py:348-349) reads
         // config.agents.happy_routed_panes, which defaults off through the
