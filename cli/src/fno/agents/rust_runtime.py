@@ -462,10 +462,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # shell-out cycle. No Rust client port, never auto-routes.
     "stale-escalate",
     "friction-escalate",
-    # The citizen-yard read (folded under agents from the retired root command).
-    # Pure Python: reads the registry + graph archive; no Rust client port, so
-    # it must never auto-route to the daemon.
-    "yard",
     # The provider-cap relay: argv passthrough to the Rust client's
     # provider-cap commands (status/decide). No parsing in Python; the Rust side
     # owns the snapshot, the decision ladder and the journal. Hidden on the

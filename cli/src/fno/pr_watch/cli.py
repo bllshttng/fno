@@ -800,11 +800,16 @@ def tick() -> None:
                 # ticks instead.
                 if _fleet_swept:
                     try:
-                        from fno.fleet_state import write_heartbeat
+                        from fno.rust_binary import command_call
 
-                        write_heartbeat(
-                            candidates=_fleet_candidates, refused=_fleet_refused,
-                            silent=_fleet_silent,
+                        command_call(
+                            ["fleet-incident", "fleet-state", "heartbeat"],
+                            {
+                                "candidates": _fleet_candidates,
+                                "refused": _fleet_refused,
+                                "silent": _fleet_silent,
+                            },
+                            timeout=5,
                         )
                     except Exception as exc:  # noqa: BLE001 - never fatal to the PR legs
                         log.warning("pr-watch: fleet heartbeat write failed: %s", exc)
