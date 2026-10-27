@@ -116,3 +116,10 @@ sibling-of-binary lookup finds no `fno-agents`, matching the capture machine.
   arms are registered and dispatched; the fnh-taught
   `fno doctor update --rust` parses at `crates/fno/src/doctor_update.rs:126`;
   the `pr_watch` stale-days idiom is the Python twin of the fixed read.
+- **The placement-rule red (first CI red at f8047c1d).** The port's three
+  read-only `.claude` sites (plugin-cache detection, harness-native
+  worktree manifests, the transcript root the find-transcript op joins)
+  took allowlist rows with rationale in `check-placement-rule.sh`, the
+  same by-file convention the whoami fold used; the deleted
+  `cli/src/fno/doctor.py` row dropped in the same PR. All three failures
+  in the smoke self-test shared that one root.
