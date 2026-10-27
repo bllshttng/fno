@@ -187,17 +187,17 @@ def _inbound(
     kind: str = "send",
 ) -> str:
     """Write one bus envelope FROM the recipient TO the sender."""
-    from fno.bus.log import Envelope, append
+    from tests.fixtures.bus_rows import append_row
 
-    append(
-        Envelope.new(
-            id=msg_id,
-            from_=recipient,
-            to=sender,
-            kind=kind,
-            body="ok",
-            word_count=1,
-        )
+    append_row(
+        {
+            "id": msg_id,
+            "from": recipient,
+            "to": sender,
+            "kind": kind,
+            "body": "ok",
+            "word_count": 1,
+        }
     )
     return msg_id
 
