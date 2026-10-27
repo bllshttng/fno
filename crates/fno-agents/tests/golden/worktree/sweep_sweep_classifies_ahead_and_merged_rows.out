@@ -1,0 +1,1 @@
+[{"age":"<AGE>","class":"CLEAN","facts":{"branch":"main","has_remote":true,"live":false,"pr_number":null},"node":null,"path_token":"main","unpushed":0},{"age":"<AGE>","class":"STRANDED","facts":{"branch":"feature/sweep-node-xb00","has_remote":false,"live":false,"pr_number":null},"node":"x-b00","path_token":"wt","unpushed":1}]

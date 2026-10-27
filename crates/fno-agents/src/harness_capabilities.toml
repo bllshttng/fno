@@ -315,6 +315,7 @@ ready_rule_ids = ["idle_prompt"]
 manifest_rules = [
   { id = "idle_prompt", state = "idle" },
   { id = "approval_prompt", state = "blocked" },
+  { id = "question_prompt", state = "blocked" },
 ]
 # Measured 2026-08-23 on a live mux pane: floor 0. Every D in
 # {0,100,200,400,800} ms, 3 trials each, submitted both idle and mid-turn,
@@ -2118,7 +2119,11 @@ via = ["hooks/session-state.sh", "hooks/codex-hooks.json", "crates/fno-agents/sr
 # PreToolUse is the load-bearing entry: a goal-mode continuation is a
 # user-role row, so UserPromptSubmit never fires and the goal leg is only
 # visible through its tool calls. PermissionRequest is NOT wired: the
-# payload shape was never captured, so `blocked` stays "none" until one is.
+# payload shape was never captured, so this row names no blocked producer.
+# `blocked = "none"` is the screen-rung hand-off: the daemon sweep reads it
+# and scrapes rows this harness reports hooks for, because the manifest
+# carries the blocked rules (auth_wall, trust_prompt, approval_prompt,
+# question_prompt) the hook lane cannot state.
 [harness.codex.hooks.session_state.wiring]
 events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
 blocked = "none"

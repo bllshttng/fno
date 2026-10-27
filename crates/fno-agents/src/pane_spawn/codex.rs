@@ -11,11 +11,10 @@
 //! predicates upstream).
 //!
 //! Recorded narrowing, bounded by what the client door refuses before the
-//! arm runs: `--yolo`/`-Y`/`--permission-mode` are refused axes at the door
-//! (and the Python seam keeps their spawns on the Python leg), headless
-//! never reaches a pane arm, and the role routes are seam-shielded too
-//! (`_is_role_bearing_spawn`). The arm's gate is therefore the payload scan
-//! plus the `--node` leg, and the identity leaf renders from
+//! arm runs: `--yolo`/`-Y`/`--permission-mode` are refused axes at the door,
+//! and headless never reaches a pane arm. A `--role` routes only claude, so
+//! it changes nothing here. The arm's gate is therefore the payload scan plus
+//! the `--node` leg, and the identity leaf renders from
 //! [`super::PaneContext::worker_name`].
 use serde_json::Value;
 use std::collections::HashSet;
@@ -88,6 +87,17 @@ impl PaneArm for CodexArm {
     /// collision before `ensure_codex_daemon` at :3655).
     fn prepare(&self, ctx: &PaneContext) -> Result<ArmPlan, PaneRefusal> {
         refuse_without_git_grant(ctx)?;
+        // The codex pane attaches to the shared app-server, whose env is not
+        // this spawn's, so an account overlay has nowhere to ride.
+        if !ctx.account_env.is_empty() {
+            return Err(PaneRefusal {
+                line: "a codex pane runs on the shared app-server and cannot carry an \
+                       account overlay; spawn it on the thread lane (drop --as pane)"
+                    .to_string(),
+                exit_code: EXIT_REFUSAL,
+                after_pane: None,
+            });
+        }
         // Python's splice-site refusal (`mux_spawn.py:3507`) precedes the
         // daemon start (:3655): a colliding passthrough must refuse before
         // any daemon side effect, like the Python leg's ordering.
@@ -184,8 +194,9 @@ fn late_bind_probe(budget: Duration, step: Duration, child_pid: Option<u32>) -> 
 /// (`--yolo`/`-Y`/`--dangerously-bypass-approvals-and-sandbox`) and the
 /// headless lane. Both are unreachable through the pane arm: the refused
 /// axes (`--yolo`/`--permission-mode`) die at the client door before the arm
-/// runs, headless never reaches a pane arm, and role-routed spawns are
-/// seam-shielded (`_is_role_bearing_spawn`). The arm's gate is the payload
+/// runs, and headless never reaches a pane arm. Python also skipped a
+/// `--role` spawn; this gate does not, so a role-bearing codex pane with a
+/// code payload still needs the git grant. The arm's gate is the payload
 /// scan plus the `--node` leg (`rust_runtime.py:632`).
 fn refuse_without_git_grant(ctx: &PaneContext) -> Result<(), PaneRefusal> {
     if !is_code_payload(&ctx.message) && ctx.node.is_none() {
@@ -285,8 +296,14 @@ pub(crate) fn build_wrapped(ctx: &PaneContext) -> ArmPlan {
     argv.extend(["-C".to_string(), ctx.cwd.to_string_lossy().into_owned()]);
     // The lane default posture ("the mode axis is retired; the lane default
     // is the only answer left", mux_spawn.py:952-956), routed through the
-    // Rust owner so pane and thread cannot disagree.
-    let posture = crate::codex_posture::permission_pane_tokens("codex", "workspace-write:never")
+    // Rust owner so pane and thread cannot disagree. A promoted spawn
+    // (a `--promote` scope or a complete role-level/scope pair) launches at
+    // the role-aware default instead: full access, because a lead must write
+    // the state root to spawn, claim and journal. An operator
+    // spelling never reaches this arm - the client door refuses
+    // --yolo/--permission-mode before the arm runs - so the role default
+    // is the only new answer here.
+    let posture = crate::codex_posture::codex_pane_default_tokens(ctx.promoted.then_some(1))
         .expect("the lane default posture is in the vocabulary");
     argv.extend(posture);
     argv.extend(crate::codex_ask::hook_trust_flag());

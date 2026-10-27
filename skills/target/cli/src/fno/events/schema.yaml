@@ -2792,6 +2792,16 @@ event_types:
       properties:
         name: { type: string }
         reason: { type: string }
+
+  - name: quiet_worker_skip
+    description: "A deliberately stopped worker on a delivered node was skipped, never revived; the revival rule's recorded skip."
+    sources: [daemon]
+    data:
+      required: [session_id, node, reason]
+      properties:
+        session_id: { type: string }
+        node: { type: string }
+        reason: { type: string }
   - name: agent_followup_started
     description: "An fno-agents followup ask started against a live registry entry."
     sources: [daemon, agents]
@@ -4538,7 +4548,7 @@ event_types:
           description: "Optional backlog node ids that stop while the question remains open."
         subject:
           type: string
-          description: "Optional. The decision subject the question is about; the ask verb refuses it when live law rules that subject."
+          description: "Optional. The decision subject the question is about; the ask action refuses it when live law rules that subject."
         context:
           type: object
           description: "Optional. The structured context the Rust intake writes: blocked_because, options_rationale, recommendation {option, why, downside}, unknowns, reversible, cost_if_wrong, meanwhile. Keys are open; the attention projection reads each by name."
@@ -6656,6 +6666,9 @@ event_types:
         check:
           type: string
           description: "The check name that flapped."
+        repo:
+          type: string
+          description: "The origin slug as owner--repo. Readers count a flake only in the repo that recorded it."
         node_id:
           type: string
           description: "The backlog node named on the PR branch, when one resolved."
@@ -8582,6 +8595,10 @@ event_types:
     description: "The ci_cadence arm read a pushed head's CI at one offset. outcome names what it did: pending, green, superseded, flake_wait, flake_rerun, stale_red, woke, red_no_session or unreadable."
     sources: [daemon]
     data: {required: [branch, sha, offset_s, outcome]}
+  - name: main_revert_check
+    description: "The main_revert arm read a red main head. outcome names what it did: seen, ambiguous, flaky, opened, failed or unreadable."
+    sources: [daemon]
+    data: {required: [slug, head, outcome]}
   - name: mcp_channel_demoted_to_socket
     description: "Legacy agents-family telemetry kind, envelope-mapped by the shared emitter."
     sources: [daemon, agents]

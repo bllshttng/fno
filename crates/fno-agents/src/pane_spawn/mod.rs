@@ -123,6 +123,15 @@ pub struct PaneContext {
     /// The `--route` target (`provider,model` or a declared lane name): the
     /// owning arm resolves it to the routed env the wrapper carries.
     pub route: Option<String>,
+    /// The `--role`: with no `--route`, the claude arm resolves its route.
+    pub role: Option<String>,
+    /// The spawn carries a promoted role (a `--promote <scope>` plan, or a
+    /// complete `--role-level`/`--role-scope` pair): the codex pane launches
+    /// at the role-aware pane default instead of the bounded one.
+    pub promoted: bool,
+    /// The resolved account overlay (`accounts::launch::pane_overlay`),
+    /// sealed. The wrapper carries it under any route.
+    pub account_env: Map<String, Value>,
 }
 
 impl PaneContext {
@@ -147,6 +156,9 @@ impl PaneContext {
             passthrough: Vec::new(),
             monitor: None,
             route: None,
+            role: None,
+            promoted: false,
+            account_env: Map::new(),
         }
     }
 
@@ -218,6 +230,21 @@ impl PaneContext {
                 .get("route")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            role: opt_str("role"),
+            // A promote plan, or a COMPLETE role pair, names a promoted
+            // spawn. A lone half widens nothing: the thread lane's role
+            // reader refuses an incomplete role, so the pane's widening
+            // reads the same permission boundary.
+            promoted: params
+                .get("promote")
+                .and_then(Value::as_array)
+                .is_some_and(|scopes| !scopes.is_empty())
+                || (params.get("role_level").is_some() && params.get("role_scope").is_some()),
+            account_env: params
+                .get("account_env")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default(),
         })
     }
 
@@ -373,6 +400,14 @@ pub fn run_pane_spawn(home: &AgentsHome, params: &Value, name: &str, _args: &[St
             crate::provider::known_providers_csv()
         );
         return EXIT_REFUSAL;
+    }
+    // The account step, once the harness is known: the overlay rides the
+    // wrapper, because the pane shell is the mux server's child.
+    let harness = params["provider"].as_str().unwrap_or_default().to_string();
+    match crate::accounts::launch::pane_overlay(&params, &harness) {
+        Err(code) => return code,
+        Ok(None) => {}
+        Ok(Some(applied)) => params["account_env"] = Value::Object(applied.env),
     }
     let ctx = match PaneContext::from_params(&params) {
         Some(ctx) => ctx,
@@ -1184,6 +1219,9 @@ pub fn write_pane_row(
     };
     let pid_start_time = pane.child_pid.and_then(process_start_time);
     let entry_log_path = resolvable_handle_log_fallback(home, name, pane, &session_id);
+    let stamp: std::collections::BTreeMap<String, String> =
+        crate::accounts::launch::pane_stamp().into_iter().collect();
+    let launch_account = stamp.get(crate::state::LAUNCH_ACCOUNT_ENV_KEY).cloned();
     let entry = RegistryEntry {
         name: name.to_string(),
         harness: Some(ctx.provider.clone()),
@@ -1208,6 +1246,11 @@ pub fn write_pane_row(
         origin: Some("spawn".to_string()),
         substrate: Some("pane".to_string()),
         spawn_trigger: spawn_trigger.clone(),
+        launch_account_source: stamp
+            .get(crate::state::LAUNCH_ACCOUNT_SOURCE_ENV_KEY)
+            .cloned(),
+        account_record_id: launch_account.clone(),
+        launch_account,
         ..RegistryEntry::new(None, Lineage::captured((None, None, None)))
     };
     write_pane_row_txn(home, name, entry, replacing)

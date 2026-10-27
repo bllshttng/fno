@@ -38,7 +38,7 @@ Any batched member returning FAILED/BLOCKED, or a batch PR that cannot open, **a
 | `DoneBatched` terminal | `crates/fno-agents/src/loopcheck.rs`, `loop_target.rs` |
 | `batched` manifest flag | `hooks/helpers/init-target-state.sh` |
 | Batched member run | `skills/target/SKILL.md` (§0c) |
-| Per-repo enable in daemon config | `cli/src/fno/active_backlog.py` |
+| Per-repo enable in daemon config | `crates/fno-agents/src/status_sinks.rs` |
 
 ## Acceptance
 

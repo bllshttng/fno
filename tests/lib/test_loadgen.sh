@@ -4,9 +4,9 @@
 # The guarantees are live-process ones, so this spawns real (short-bounded)
 # generators rather than fabricating state: the bound must fire unattended, the
 # names must be findable by BOTH stop's pgrep pattern and the orphan sweep's
-# attribution (which reads argv[0], never psutil.name() - the trap measured in
-# orphans.py display_name), and stop must not reach a longer label that shares
-# a prefix.
+# attribution (which reads argv[0], never the kernel comm - the trap measured
+# in crates/fno-agents/src/orphans.rs display_name), and stop must not reach a
+# longer label that shares a prefix.
 #
 # Runs under /bin/bash explicitly; bash 3.2 is the floor.
 #
@@ -24,7 +24,6 @@ pass() { echo "  PASS: $*"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $*"; FAIL=$((FAIL + 1)); }
 
 [[ -f "$LOADGEN" ]] || { echo "FAIL: helper not found at $LOADGEN" >&2; exit 1; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 not on PATH" >&2; exit 77; }
 command -v pgrep >/dev/null 2>&1 || { echo "SKIP: pgrep not on PATH" >&2; exit 77; }
 
 bash -n "$LOADGEN" || fail "bash -n rejected $LOADGEN"
@@ -59,22 +58,22 @@ else
 fi
 
 # --- the sweep-shape check: argv[0] carries the name, not the executable ---
-# This is the documented detection trap: ps -o comm and psutil.name() both read
-# the executable (`yes`), and only the argument vector carries the rename. The
-# orphan sweep attributes on argv[0], so proving the emitted shape satisfies
+# This is the documented detection trap: ps -o comm and the kernel process
+# name both read the executable (`yes`), and only the argument vector carries
+# the rename. The orphan sweep attributes on argv[0]
+# (crates/fno-agents/src/orphans.rs), so proving the emitted shape satisfies
 # the sweep's own predicate is what makes `fno agents orphans` a net for a
-# generator whose creator died before the bound fired.
-SWEEP_SHAPE="$(ps -o command= -p "$FIRST_PID" 2>/dev/null | awk '{print $1}')"
-PYTHONPATH="$REPO_ROOT/cli/src" python3 - "$SWEEP_SHAPE" <<'EOF' && pass "names satisfy the sweep's attribution (argv[0], renamed)" \
-  || fail "sweep attribution rejected the emitted name: $SWEEP_SHAPE"
-import sys
-from fno.agents import orphans
-argv0 = sys.argv[1]
-info = {"cmdline": [argv0], "name": "yes", "exe": "/bin/yes"}
-name = orphans.display_name(info)
-assert name.startswith(orphans.FNO_PREFIX), name
-assert orphans.was_renamed(info), name
-EOF
+# generator whose creator died before the bound fired. Both facts checked
+# here in ps terms: the argv[0] basename is fno- prefixed, and the comm
+# (which ps truncates to 16 chars) is NOT that basename, i.e. renamed.
+SWEEP_ARGV0="$(ps -o command= -p "$FIRST_PID" 2>/dev/null | awk '{print $1}')"
+SWEEP_COMM="$(ps -o comm= -p "$FIRST_PID" 2>/dev/null | awk '{print $1}')"
+SWEEP_BASENAME="${SWEEP_ARGV0##*/}"
+if [[ -n "$SWEEP_BASENAME" && "$SWEEP_BASENAME" == fno-load-* && "$SWEEP_COMM" != "$SWEEP_BASENAME" ]]; then
+  pass "names satisfy the sweep's attribution (argv[0], renamed)"
+else
+  fail "sweep attribution rejected the emitted name: argv0=$SWEEP_ARGV0 comm=$SWEEP_COMM"
+fi
 
 # --- list reports a positive count under the listing ------------------------
 LIST_OUT="$(bash "$LOADGEN" list "$LABEL" 2>/dev/null)"

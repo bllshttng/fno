@@ -660,48 +660,6 @@ def test_plan_progress_creates_then_appends(tmp_path):
 # ── US6: daemon host resolver + config emitter ──────────────────────────────
 
 
-def test_fanout_resolver_includes_only_projects_with_enabled_sinks(monkeypatch):
-    import fno.active_backlog as ab
-    from fno.config import SettingsModel
-
-    monkeypatch.setattr(ab, "_workspace_paths",
-                        lambda: {"withsinks": "/w", "nosinks": "/n", "disabled": "/d"})
-
-    def fake_load(root):
-        r = str(root)
-        if r == "/w":
-            return SettingsModel(status_sinks=[{"name": "s", "type": "backlog-progress"}])
-        if r == "/d":
-            return SettingsModel(status_sinks=[
-                {"name": "s", "type": "backlog-progress", "enabled": False}])
-        return SettingsModel()  # /n: no sinks
-
-    monkeypatch.setattr("fno.config.load_settings_for_repo", fake_load)
-    targets = ab.resolve_fanout_targets()
-    # Only the project with an ENABLED sink; active_backlog enablement is never
-    # consulted (none is configured here, yet withsinks still ticks).
-    assert [t.project for t in targets] == ["withsinks"]
-    assert targets[0].cwd == "/w"
-    assert targets[0].interval_seconds == 5  # default status_fanout.interval_secs
-
-
-def test_config_status_sinks_json_command(monkeypatch):
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.active_backlog as ab
-    from fno.config import SettingsModel
-
-    monkeypatch.setattr(ab, "_workspace_paths", lambda: {"p": "/p"})
-    monkeypatch.setattr("fno.config.load_settings_for_repo",
-                        lambda root: SettingsModel(
-                            status_sinks=[{"name": "s", "type": "backlog-progress"}]))
-    res = CliRunner().invoke(app, ["config", "status-sinks", "--json"], catch_exceptions=False)
-    assert res.exit_code == 0
-    import json as _json
-    payload = _json.loads(res.stdout)
-    assert payload == [{"project": "p", "cwd": "/p", "interval_seconds": 5}]
-
-
 # ── review follow-ups: same-second tiebreak, tick_cmd surface, new validators ─
 
 

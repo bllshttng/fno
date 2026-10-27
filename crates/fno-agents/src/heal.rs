@@ -2101,6 +2101,11 @@ fn emit_flake_row(
     fields.insert("sha".to_string(), serde_json::json!(sha));
     fields.insert("run_id".to_string(), serde_json::json!(run));
     fields.insert("check".to_string(), serde_json::json!(check));
+    // Readers scope flake evidence per repo: a check name like `unit` in one
+    // repo says nothing about the same name in another.
+    if let Some(repo) = origin_slug_key(a) {
+        fields.insert("repo".to_string(), serde_json::json!(repo));
+    }
     if let Some(n) = node_id {
         fields.insert("node_id".to_string(), serde_json::json!(n));
     }

@@ -296,9 +296,10 @@ def _utc_timestamp(value: Any) -> _dt.datetime | None:
 def _validate_via_store(event: dict[str, Any]) -> None:
     """Judge through the native door: the store's judge is the one owner.
 
-    Kept only until the reader families (pr, scoreboard, worktree_cli)
+    Kept only until the reader families (pr, scoreboard)
     port their read-side re-validation in their own children; the dual
-    inventory row names it. Served as the module attribute ``validate``
+    inventory row names it. The worktree reader left with the family's
+    Python removal. Served as the module attribute ``validate``
     through ``__getattr__`` so the judge symbol itself stays deleted.
     """
     import subprocess

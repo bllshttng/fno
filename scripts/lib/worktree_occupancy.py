@@ -251,7 +251,7 @@ def main(argv: List[str]) -> int:
     One tab-separated row per pid: ``pid verdict action job reason cmd``.
     Any failure exits 2 with nothing on stdout, so the bridge fails closed."""
     try:
-        from fno.agents.orphans import iter_processes
+        from fno.agents.keeper_lane import iter_processes
     except Exception:  # noqa: BLE001
         return 2
     try:
