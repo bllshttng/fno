@@ -539,7 +539,7 @@ def tick() -> None:
     """
     import time
 
-    from fno.config_cli import post_merge_readiness
+    from fno.setup.config_doctor import post_merge_readiness
     from fno.pr_watch._dispatch import (
         current_tick_phase,
         phase_seconds_left,

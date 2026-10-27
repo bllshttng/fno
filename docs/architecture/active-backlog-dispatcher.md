@@ -159,7 +159,7 @@ All transitions are emitted through the loop `Journal` (project journal fatal, g
 |------|------|
 | `cli/src/fno/config/__init__.py` | `ActiveBacklogConfig` schema + fail-safe coercion |
 | `cli/src/fno/active_backlog.py` | active-mission drain-target resolver + nudge sentinel touch |
-| `cli/src/fno/config_cli.py` | `fno config active-backlog --json` |
+| `crates/fno/src/config_cli/leaves.rs` | `fno config active-backlog --json` |
 | `cli/src/fno/backlog/advance.py` | `advance_epic` converge core (incl. `--continuation` daemon mode); nudge touch on dispatch |
 | `cli/src/fno/graph/store.py` | nudge touch after `locked_mutate_graph` render |
 | `crates/fno-agents/src/active_backlog.rs` | mission drain tick + loop, circuit breaker, reconcile, supervisor, wake scheduler |
