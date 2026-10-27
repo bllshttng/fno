@@ -41,6 +41,9 @@ pub(super) fn same_session_twins(a: &RegistryAgent, b: &RegistryAgent) -> bool {
     sid(a).is_some() && sid(a) == sid(b)
 }
 
+/// The title a claude viewer shows for a thread that has no name yet.
+const UNNAMED_THREAD_TITLE: &str = "Claude Code";
+
 /// The session a claude viewer's OSC title names: the title minus one
 /// leading status glyph token ("✳", "◐", a braille spinner frame).
 pub(super) fn title_session_name(title: &str) -> &str {
@@ -1536,10 +1539,11 @@ impl Core {
                         && (a.name == title || a.harness_title.as_deref() == Some(title.as_str()))
                 })
                 .collect();
-            // A title no live row goes by (an unnamed thread shows the
-            // harness default, "Claude Code") is no evidence the screen
-            // switched rows: the seat keeps the id it holds.
+            // The harness default title, shown by every unnamed thread, is no
+            // evidence the screen switched rows: the seat keeps the id it
+            // holds. Any other title no row goes by still unclaims below.
             if named.is_empty()
+                && title == UNNAMED_THREAD_TITLE
                 && self
                     .agents
                     .iter()
