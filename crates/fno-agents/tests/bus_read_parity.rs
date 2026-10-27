@@ -261,11 +261,11 @@ fn stage_mints_the_hosted_receipt() {
         .stderr(Stdio::piped())
         .spawn()
         .and_then(|mut c| {
-            c.stdin
-                .take()
-                .unwrap()
-                .write_all(fields.as_bytes())
-                .and_then(|_| c.wait_with_output())
+            // Close stdin before the wait: the door reads it to EOF.
+            let mut stdin = c.stdin.take().unwrap();
+            stdin.write_all(fields.as_bytes())?;
+            drop(stdin);
+            c.wait_with_output()
         })
         .expect("run fno-agents chats stage");
     assert_eq!(out.status.code(), Some(0));
@@ -335,11 +335,11 @@ fn stage_mints_the_typed_receipt() {
         .stderr(Stdio::piped())
         .spawn()
         .and_then(|mut c| {
-            c.stdin
-                .take()
-                .unwrap()
-                .write_all(fields.as_bytes())
-                .and_then(|_| c.wait_with_output())
+            // Close stdin before the wait: the door reads it to EOF.
+            let mut stdin = c.stdin.take().unwrap();
+            stdin.write_all(fields.as_bytes())?;
+            drop(stdin);
+            c.wait_with_output()
         })
         .expect("run fno-agents chats stage");
     assert_eq!(out.status.code(), Some(0));
