@@ -2923,6 +2923,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
             return 2;
         }
     }
+    let handoffs_defaulted = ctx.handoffs_dir.as_os_str().is_empty();
     if user_command {
         // `fno agents org checkin`: the paths the retired Python shell passed,
         // resolved here for any the caller left out.
@@ -2965,6 +2966,14 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     ) {
         eprintln!("lead: {msg}");
         return 2;
+    }
+    // The canon doc lives in the scope's project, not the lead's cwd: a lead
+    // whose shell sat elsewhere read an empty dir while `config paths handoff
+    // --scope` found the doc. The cwd default stays only for an unknown scope.
+    if user_command && handoffs_defaulted {
+        if let Some(dir) = crate::paths_cli::scope_handoffs_dir(&ctx.scope, None) {
+            ctx.handoffs_dir = dir;
+        }
     }
 
     // The graph read rides the beat once, before anything else needs it: the

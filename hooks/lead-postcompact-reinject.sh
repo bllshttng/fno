@@ -187,7 +187,7 @@ $(canon_cap "$(canon_sections 0 "$CANON_PATH")" "$CANON_MAX_BYTES")"
 
 $CANON_SECTIONS
 
-Full canon doc: \`${CANON_PATH}\`."
+Full canon doc: \`${CANON_PATH}\`. Before you ask the user to do a thing, check its Workarounds in force: the command may already be yours to run."
         fi
 
         # The fno:user block rides back too: the machine never writes it, so
