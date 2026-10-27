@@ -1077,10 +1077,11 @@ jobs:
     # room above that.
     timeout-minutes: 40
     # On 2026-10-27 shards still ran out of disk after the disk step, and
-    # the runner died before its log uploaded. Full debug info and the
-    # incremental cache made up most of the target dir. Line tables keep
-    # file:line in a panic backtrace. DEV and TEST must match, or cargo
-    # builds every dependency twice.
+    # the runner died before its log uploaded, so the size is unmeasured.
+    # Cut the two large parts of a debug target dir: full debug info and
+    # the incremental cache. cargo-test-shard.sh prints df after the build.
+    # Line tables keep file:line in a panic backtrace. DEV and TEST must
+    # match, or cargo builds every dependency twice.
     env:
       FNO_CLAIMS_PARITY_PYTHON: ${{ github.workspace }}/cli/.venv/bin/python
       CARGO_INCREMENTAL: 0
