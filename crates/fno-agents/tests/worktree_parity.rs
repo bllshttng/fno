@@ -1269,6 +1269,9 @@ fn apply_case() {
             apply_wt.to_str().unwrap(),
         ],
     );
+    std::fs::write(apply_wt.join("file.txt"), "two\n").expect("apply wt writes");
+    run_git(&apply_wt, &["add", "-A"]);
+    run_git(&apply_wt, &["commit", "-q", "-m", "ahead"]);
     let row = fno_agents::worktree::stranded::classify(
         apply_wt.to_str().unwrap(),
         Some("feature/apply-node-xc00"),
@@ -1454,12 +1457,23 @@ fn overlap_dispatch_register_cases() {
     let pins = Pins::new(&root, &home);
     let now_pin = "2026-10-26T00:00:00+00:00";
     // The fold cases: pure, in-process, pinned now.
+    // The fold cases carry their own daemon event (cases.json), not the
+    // record op's hashed observation.
     let fold_events = || {
-        let line = overlap_line();
-        vec![
-            serde_json::from_str::<Value>(line.trim()).expect("fold line parses"),
-            serde_json::from_str::<Value>(line.trim()).expect("fold line parses"),
-        ]
+        let event = json!({
+            "type": "worktree_overlap_observed",
+            "ts": "2026-10-20T12:00:00+00:00",
+            "source": "daemon",
+            "data": {
+                "observer_session_id": "sess-a",
+                "peer_session_ids": ["sess-b"],
+                "repository_key": "/fix/repo",
+                "worktree_key": "/fix/repo/wt",
+                "observation_id": "a".repeat(64),
+                "live_window_seconds": 120,
+            },
+        });
+        vec![event.clone(), event]
     };
     let events = fold_events();
     let pinned_now = chrono::DateTime::parse_from_rfc3339(now_pin).expect("now pin parses");
