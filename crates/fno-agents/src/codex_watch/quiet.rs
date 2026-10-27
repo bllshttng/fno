@@ -458,14 +458,13 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
     let now = chrono::Utc::now().timestamp();
     let claude_home = crate::claude_ask::ClaudeHome::from_env();
     let watches = crate::watch_expiry::read_evidence(home, now * 1000)?;
-    // Every `agent_stopped` emit carries only the row's `name`, never a
-    // `session_id` (daemon.rs, claude_stop.rs, keeper_stop.rs all stamp
-    // `{"name": ...}`), so this keys on name - keying on `session_id` here
-    // leaves the set permanently empty.
+    // The evidence reader stamps each `agent_stopped` row with the session
+    // that held the stopped name at the time, so a respawn under the same
+    // name keeps its own recovery.
     let stopped: std::collections::HashSet<_> = watches
         .iter()
         .filter(|e| e.kind == "agent_stopped")
-        .filter_map(|e| e.data.get("name").and_then(Value::as_str))
+        .filter_map(|e| e.session_id.as_deref())
         .collect();
     let mut stores = crate::gc_inventory::HarnessStoreIndex::default();
     let mut loaded = None;
@@ -520,7 +519,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             }
             // A row a lead stopped on purpose is the lead's, not quiet
             // recovery's: send no nudge, no resume and no help for it.
-            if stopped.contains(entry.name.as_str()) {
+            if stopped.contains(sid) {
                 return Ok(());
             }
             let state_path = dir.join(format!("{sid}.json"));
