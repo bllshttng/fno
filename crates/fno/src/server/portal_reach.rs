@@ -577,7 +577,7 @@ impl Core {
     /// for every other harness) through portal `portal`. The tier is
     /// capability-computed (`agents_view::thread_reach`): Drive runs the
     /// account-wrapped attach argv, Follow tails the transcript with
-    /// `fno agents peek --follow`, Locate renders the self-teaching screen.
+    /// `fno agents session peek --follow`, Locate renders the self-teaching screen.
     ///
     /// Resolution order is per INDEX, and every arm touches only its
     /// own portal: no portal at `portal` opens one through the ordinary
