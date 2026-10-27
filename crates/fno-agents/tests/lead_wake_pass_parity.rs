@@ -579,10 +579,9 @@ fn a_ceiling_refused_answer_keeps_the_cursor_so_it_stays_a_trigger() {
         run_json(&outcome, &rec, &world, "epic-x", false),
         world.root().as_path(),
     );
-    // The window rolled; the answer waits and then wakes. The capture ran
-    // the second pass on a fresh manifest, so the roll bills into an empty
-    // ledger and the stored stamps are the new bill alone.
-    world.rewrite_manifest("epic-x", "");
+    // The window rolled; the answer waits and then wakes. Same ledger as
+    // the capture: the 32 aged stamps fall outside the 24h window, so the
+    // admitted bill is the only stamp the ledger keeps.
     let rec2 = Rec::default();
     let mut seams2 = seams(
         &world,
