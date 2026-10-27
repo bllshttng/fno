@@ -262,7 +262,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TEST_JOURNAL` | rs | Test seam: the global events journal the worktree overlap record and report ops read and write, so the parity goldens never touch the real state root. |
 | `FNO_TEST_LIVE_CARGO_CWDS` | rs | Test seam: colon-separated cwd paths that stand in for a live `lsof` scan of running cargo processes, so cargo_build_dirs tests can drive the tree-to-shard mapping without a real cargo process. |
 | `FNO_TEST_MARKER_HOLD_MS` | rs | unclear: crates/fno/src/proto/startup_guard.rs:97 |
-| `FNO_TEST_MODE` | py | unclear: cli/src/fno/setup/doctor.py:229 |
+| `FNO_TEST_MODE` | rs | `1` makes `fno config doctor` skip the claim-store write probe and the temp-dir path patterns (crates/fno/src/config_doctor/checks.rs). |
 | `FNO_TEST_NEVER_WAIT_AFTER_SECS` | rs | Test seam: seconds a cargo admission waiter waits before printing the CI-first push reminder. The default is 0, so a waiting agent hears "push now" from its first line. |
 | `FNO_TEST_NOW` | rs | Test seam: an RFC3339 instant the worktree overlap ops use as now, so the parity goldens pin the fold window. |
 | `FNO_TEST_ORPHAN_MIN_ELAPSED_SECONDS` | rs | Env override of `config.test.orphan_min_elapsed_seconds` (900). Lets a positive control plant a fresh orphan and still exercise the kill. |

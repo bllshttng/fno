@@ -1,8 +1,9 @@
 """Does the config read back the way an operator reads it?
 
-The checks `fno config doctor` prints, plus the unknown-key walker and the one
-provenance renderer they share. Rationale, specimens and measurements:
-docs/architecture/config-readback.md.
+The loader's half: the unknown-key walker it warns through and the refusal
+renderer `SettingsRefused` carries. `fno config doctor` runs the same walks
+natively (crates/fno/src/config_doctor/). Rationale, specimens and
+measurements: docs/architecture/config-readback.md.
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import typing
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 #: An unknown table with more leaves than this reports as the table.
 _UNKNOWN_LEAF_CAP = 3
@@ -105,31 +106,6 @@ def warn_unknown_keys(
     return unknown
 
 
-def source_note(key: str, root: Optional[Path] = None) -> Optional[str]:
-    """``"set in <file>"`` when a config file decides ``key``, else None."""
-    try:
-        decided = _cfg().resolve_source(key, root)
-    except Exception:  # noqa: BLE001 - a receipt, not the loader
-        return None
-    return f"set in {decided[0]}" if decided is not None else None
-
-
-def check_config_files_read() -> list[str]:
-    """Settings files the loader could not read back. An EMPTY table is legal."""
-    try:
-        from fno.config_io import _parse_settings
-
-        seen: set[Path] = set()
-        problems = []
-        for path in _cfg()._candidate_paths():
-            if path.is_file() and path.resolve() not in seen:
-                seen.add(path.resolve())
-                problems.append(_parse_settings(path)[1])
-        return [p for p in problems if p is not None]
-    except Exception:  # noqa: BLE001 - a report, not the loader
-        return []
-
-
 def _near_miss_keys(unknown: str) -> list[str]:
     """Modeled keys the operator plausibly meant, in schema order.
 
@@ -185,11 +161,6 @@ def unknown_key_problems(
     return problems
 
 
-def check_unknown_keys() -> list[str]:
-    """Keys the model ignores, each named with the file that holds it."""
-    return unknown_key_problems()
-
-
 _MISSING = object()
 
 
@@ -239,56 +210,6 @@ def describe_config_failure(
     if len(errors) > _REFUSAL_ERROR_CAP:
         lines.append(f"... and {len(errors) - _REFUSAL_ERROR_CAP} more")
     return "refusing to load settings:\n  " + "\n  ".join(lines)
-
-
-def check_values() -> list[str]:
-    """Values the schema refuses (an out-of-enum string, a bad number), each
-    named with the file that holds it. Per layer, like check_unknown_keys: a
-    higher-priority file can mask the value today without disarming it."""
-    try:
-        from fno.config_io import _unwrap_config_dict
-
-        model = _cfg().SettingsModel
-    except Exception:  # noqa: BLE001 - a report, not the loader
-        return []
-    problems: list[str] = []
-    for path, parsed in _layers():
-        try:
-            model.model_validate(_unwrap_config_dict(dict(parsed)))
-        except ValidationError as exc:
-            problems.append(describe_config_failure(exc, [(path, parsed)]))
-    return problems
-
-
-def check_enabled_with_empty_population() -> list[str]:
-    """A switch on with nothing that can satisfy it. Read the consumer first.
-
-    The kinds read rides the native review-policy door; a door error keeps
-    the report-nothing posture (the same `[]` the except arm returns)."""
-    try:
-        if not bool(_cfg().load_settings().review.cross_model.enabled):
-            return []
-        from fno.rust_binary import call_binary_json
-
-        _err, row = call_binary_json("review-policy", ["kinds"])
-        if _err is not None or not isinstance(row, dict):
-            return []
-        kinds = [str(k).strip().lower() for k in row.get("available") or []]
-    except Exception:  # noqa: BLE001 - a report, not the loader
-        return []
-    if any(kind != "claude" for kind in kinds):
-        return []
-    return [
-        "review.cross_model.enabled is true and no non-claude provider is dispatchable. "
-        f"available reviewer kinds: {', '.join(kinds) or 'none'}. The switch buys nothing "
-        "for a claude-written change. Only where codex or gemini wrote the code is a "
-        "claude reviewer a different family."
-    ]
-
-
-def contributing_files() -> list[str]:
-    """The files that actually contributed to the merge, highest first."""
-    return [str(path) for path, _ in _layers()]
 
 
 def _layers() -> list[tuple[Path, dict[str, object]]]:

@@ -161,6 +161,32 @@ def _reviewers_for(repo_dir: Path) -> list[str]:
         return []
 
 
+def _post_merge_readiness(repo_dir: Path) -> Any:
+    """The post-merge verdict for ``repo_dir``, from the native oracle.
+
+    The oracle lives in the front door (`fno config doctor --post-merge
+    --json`); the tick reads only ``is_ready``. A missing front door or a bad
+    answer raises, and the tick already maps a raise to not-ready.
+    """
+    import subprocess
+    from types import SimpleNamespace
+
+    from fno.rust_binary import resolve_front_binary
+
+    binary = resolve_front_binary()
+    if binary is None:
+        raise RuntimeError("the fno front door is not installed")
+    proc = subprocess.run(
+        [str(binary), "config", "doctor", "--post-merge", "--json"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    return SimpleNamespace(is_ready=json.loads(proc.stdout).get("status") == "ready")
+
+
 def _catchup_roots() -> list[Path]:
     """Distinct project roots the canonical-sync catch-up should sweep.
 
@@ -539,7 +565,6 @@ def tick() -> None:
     """
     import time
 
-    from fno.setup.config_doctor import post_merge_readiness
     from fno.pr_watch._dispatch import (
         current_tick_phase,
         phase_seconds_left,
@@ -1171,7 +1196,7 @@ def tick() -> None:
                     emit=_emit_event,
                     reviewers_for=_reviewers_for,
                     notify=lambda message, **_kw: _notify_parked(message),
-                    post_merge_readiness_fn=post_merge_readiness,
+                    post_merge_readiness_fn=_post_merge_readiness,
                     now_iso=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     max_age_days=cfg.max_age_days,
                     max_retries=cfg.retries,

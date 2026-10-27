@@ -1,23 +1,19 @@
-"""The `fno config` write shell: the typer app, its lazy mounts, the writer
-commands, and the doctor leaf.
+"""The `fno config` write shell: the typer app, its lazy mounts and the
+writer commands.
 
-The family port moved the read-side commands (get, history, build-dir,
-assert-subagent-budget, status-sinks, active-backlog, the non-codex arms of
-plugin install) native to the `fno` front door. What remains here is a
-composition root: the writer's engine lives in the config hub
-(fno.config.writer) while the doctor's lives in the setup family
-(fno.setup.config_doctor), and the merge-gating lease wrapper it composes is
-claims vocabulary the config package may not import (the boundary rule in
-check-company-boundaries). So this module stays top-level and unmapped by
-the layer scan, like its config_cli.py ancestor; the config-writer port
-deletes it with the hub.
+The family ports moved the read-side commands (get, history, build-dir,
+assert-subagent-budget, status-sinks, active-backlog, plugin install, doctor)
+native to the `fno` front door. What remains here is a composition root: the
+writer's engine lives in the config hub (fno.config.writer), and the
+merge-gating lease wrapper it composes is claims vocabulary the config
+package may not import (the boundary rule in check-company-boundaries). So
+this module stays top-level and unmapped by the layer scan, like its
+config_cli.py ancestor; the config-writer port deletes it with the hub.
 """
 
 from __future__ import annotations
 
-import json
 import sys
-from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
@@ -60,14 +56,6 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
         "Declared model-routing inventory: init (sample) / inventory (reach).",
         {"hidden": True},
     ),
-    # One local-dev install door for every plugin harness. VISIBLE on
-    # purpose and as a lazy mount: this installs the footnote plugin itself,
-    # from the filtered stage, in one action per harness (claude|codex|
-    # opencode|agy). The codex arm stays on the Python converge engine.
-    "plugin": (
-        "fno.setup.plugin_install_cli:plugin_app",
-        "Install your local checkout of footnote into a harness, for development.",
-    ),
 }
 
 app = typer.Typer(
@@ -107,53 +95,11 @@ def doctor(
     readiness summary plus the resolved ship gates (each probe with its source,
     each reviewer with the rung it asserts).
     """
-    from fno.setup.config_doctor import _report_gates, _report_review_capability, _report_state_roots
-    from fno.setup.config_doctor import (
-        _report_deprecated_active_backlog_mission,
-        _report_deprecated_dispatch_harness,
-        _report_deprecated_auto_merge,
-        _report_band_routing,
-        _report_harness_overlays,
-        _repo_root,
-        post_merge_readiness,
-    )
-
-    if review:
-        raise typer.Exit(_report_review_capability(json_out=json_out))
-
-    if post_merge or json_out:
-        verdict = post_merge_readiness(_repo_root())
-        if json_out:
-            typer.echo(json.dumps(verdict.to_dict()))
-        else:
-            typer.echo(verdict.summary_line())
-        raise typer.Exit(0)
-
-    from fno.setup.doctor import run_doctor
-
-    rc = run_doctor()
-    # Every report is advisory: one that fails never crashes the diagnostic.
-    # The post-merge line runs first so bare doctor shows the gap without the
-    # flag (Open Question 1). One wrapper, so the next report is a name here.
-    # Typed as a list, not a bare tuple: mypy's join over the mixed lambda +
-    # imported helpers collapsed to an untyped callable and strict mode read
-    # the call itself as untyped.
-    reports: list[Callable[[], None]] = [
-        lambda: typer.echo(post_merge_readiness(_repo_root()).summary_line()),
-        _report_gates,
-        _report_state_roots,
-        _report_deprecated_auto_merge,
-        _report_deprecated_dispatch_harness,
-        _report_deprecated_active_backlog_mission,
-        _report_band_routing,
-        _report_harness_overlays,
-    ]
-    for report in reports:
-        try:
-            report()
-        except Exception:  # noqa: BLE001 - a report, not the diagnostic itself
-            pass
-    raise typer.Exit(rc)
+    argv = ["config", "doctor"]
+    for on, flag in ((post_merge, "--post-merge"), (review, "--review"), (json_out, "--json")):
+        if on:
+            argv.append(flag)
+    _native_leaf("doctor", argv)
 
 
 @app.command("set")
@@ -587,3 +533,4 @@ def history(
     if json_out:
         argv.append("--json")
     _native_leaf("history", argv)
+

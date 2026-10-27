@@ -174,7 +174,7 @@ pub fn resolve_path(path: &Path) -> PathBuf {
 // The candidate chain and its layers
 // ---------------------------------------------------------------------------
 
-fn global_settings_path() -> PathBuf {
+pub fn global_settings_path() -> PathBuf {
     if let Some(env) = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
         if !env.is_empty() {
             return PathBuf::from(env);
@@ -377,7 +377,7 @@ pub fn unwrap_config_dict(raw: &Value) -> Value {
 }
 
 /// `_flatten_leaf_paths`: dotted path and value for every leaf in a tree.
-fn flatten_leaf_paths(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
+pub(crate) fn flatten_leaf_paths(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
     match value {
         Value::Object(map) => {
             for (key, entry) in map {
@@ -399,7 +399,7 @@ const WORKTREE_LOCAL_KEYS: [&str; 1] = ["project.id"];
 
 /// `_worktree_local_override`: the local file reduced to the allowlisted
 /// leaves, nested back into blocks.
-pub(super) fn worktree_local_override(local_raw: &Value) -> Option<Value> {
+pub(crate) fn worktree_local_override(local_raw: &Value) -> Option<Value> {
     let mut leaves: Vec<(String, Value)> = Vec::new();
     flatten_leaf_paths(local_raw, "", &mut leaves);
     let mut override_map = Map::new();

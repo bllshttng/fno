@@ -1340,29 +1340,13 @@ fn run_verify(exe: &Path, loaded: &[String], rep: &mut Report) {
         rep.needs_human.push(message);
     }
     const VERIFY_CAP: std::time::Duration = std::time::Duration::from_secs(10);
-    if let Some(exe) = exe.to_str() {
-        fold(
-            rep,
-            "fno doctor --blockers",
-            crate::setup_detect::bounded_for(&[exe, "doctor", "--blockers"], VERIFY_CAP),
-        );
-        fold(
-            rep,
-            "fno config doctor",
-            crate::setup_detect::bounded_for(&[exe, "config", "doctor"], VERIFY_CAP),
-        );
-    } else {
-        fold(
-            rep,
-            "fno doctor --blockers",
-            Err("executable path is not valid UTF-8".into()),
-        );
-        fold(
-            rep,
-            "fno config doctor",
-            Err("executable path is not valid UTF-8".into()),
-        );
-    }
+    let blockers = match exe.to_str() {
+        Some(exe) => crate::setup_detect::bounded_for(&[exe, "doctor", "--blockers"], VERIFY_CAP),
+        None => Err("executable path is not valid UTF-8".into()),
+    };
+    fold(rep, "fno doctor --blockers", blockers);
+    // In process: the config diagnostic is this binary's own module.
+    fold(rep, "fno config doctor", crate::config_doctor::verify());
     let serving = crate::digest_overlay::fno_agents_bin()
         .to_str()
         .and_then(|bin| {
