@@ -92,6 +92,7 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
 /// quarantine). Drain by deleting a line: discovery then covers it, and
 /// both consumers subtract this set.
 pub(super) const DISCOVERY_DEFERRED: &[&str] = &[
+    "scripts/tests/test_graph_resolve.sh",
     "tests/events/test-check-pr-emits-polling.sh",
     "tests/hooks/test_init_claim_stderr_and_modern_claim.sh",
     "tests/hooks/test_init_contested_steal_guard.sh",

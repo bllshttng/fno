@@ -141,6 +141,7 @@ runner_passthrough = [
     "FNO_AGENTS_FRONT",
     "FNO_RUST_FRONT",
     "FNO_PYTEST_SHARD",
+    "FNO_REAL_CODEX_PLUGIN_TEST",
     "FNO_LIVE_PROVIDER_USAGE",
     "FNO_PI_LIVE",
     "FNO_GROK_LIVE",
