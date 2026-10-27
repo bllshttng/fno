@@ -198,7 +198,8 @@ fn done_matches_the_python_goldens() {
         &["lead-state", "--done", "--scope", "epic-y"],
     );
     assert!(!held.exists(), "the vacated manifest stayed");
-    let registry = fs::read_to_string(p.join("home/registry.json")).unwrap();
+    // A registry write imports the rows into graph.db and fences the file.
+    let registry = fno_agents::registry_read::registry_text(&p.join("home/registry.json")).unwrap();
     let rows: serde_json::Value = serde_json::from_str(&registry).unwrap();
     let live = rows["agents"]
         .as_array()
