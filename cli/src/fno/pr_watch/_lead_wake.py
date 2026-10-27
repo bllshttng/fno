@@ -16,9 +16,9 @@ _GRAPH_ENTRIES_MEMO: dict = {"ident": None, "entries": None}
 
 def graph_entries(path: Optional[Path] = None) -> list:
     """The tick's graph read, one real read per graph identity: an unchanged
-    graph is byte-identical, so the memo is not staleness. Serves every
-    phase that needs entries - sweep discovery and the wake alike - so the
-    15 MB store is read once per tick, not once per phase."""
+    graph is byte-identical, so the memo is not staleness. Sweep discovery is
+    the tick's only reader now that the wake phase moved into the daemon,
+    and the memo keeps the 15 MB store at one real read per tick."""
     from fno.graph.api import wire_rows
     from fno.paths import graph_json
     from fno.graph.api import active_backend_name

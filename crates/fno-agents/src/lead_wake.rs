@@ -410,34 +410,34 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
             mins(beat_secs)
         ));
     } else {
-    // holder -> repo root (project_root, else the row's workspace entry,
-    // else cwd): where the lead manifest and the provider thread's cwd
-    // live, read once per pass, and only when a wake actually plans (the
-    // quiet pass never pays the registry parse).
-    let roots: BTreeMap<String, String> = crate::state::load_registry(&registry)
-        .map(|loaded| {
-            loaded
-                .entries
-                .into_iter()
-                .map(|e| {
-                    let member = e
-                        .role_scope
-                        .as_deref()
-                        .and_then(|s| scope_members(s).next());
-                    let root = journal_root(&e, member, &workspace_roots);
-                    (e.name, root)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    for plan in plans {
-        let journal = beat_journals.get(&plan.lead.scope).cloned().flatten();
-        let (n, note) = act_on_plan(home, plan, beat_secs, journal.as_deref(), &roots);
-        acted += n;
-        if !note.is_empty() {
-            notes.push(note);
+        // holder -> repo root (project_root, else the row's workspace entry,
+        // else cwd): where the lead manifest and the provider thread's cwd
+        // live, read once per pass, and only when a wake actually plans (the
+        // quiet pass never pays the registry parse).
+        let roots: BTreeMap<String, String> = crate::state::load_registry(&registry)
+            .map(|loaded| {
+                loaded
+                    .entries
+                    .into_iter()
+                    .map(|e| {
+                        let member = e
+                            .role_scope
+                            .as_deref()
+                            .and_then(|s| scope_members(s).next());
+                        let root = journal_root(&e, member, &workspace_roots);
+                        (e.name, root)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for plan in plans {
+            let journal = beat_journals.get(&plan.lead.scope).cloned().flatten();
+            let (n, note) = act_on_plan(home, plan, beat_secs, journal.as_deref(), &roots);
+            acted += n;
+            if !note.is_empty() {
+                notes.push(note);
+            }
         }
-    }
     }
     // The refill-respawn leg: which lead that left its board is woken this
     // beat. One writer of the `lead_wake` row now carries both the
@@ -446,7 +446,7 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
     if config.enabled {
         let leg = crate::lead_wake_triggers::run(home, config_cwd, &config);
         acted += leg.acted as u64;
-        if leg.acted > 0 {
+        if leg.acted > 0 || leg.roles > 0 {
             skip_reason = None;
         }
         notes.push(leg.detail_line());

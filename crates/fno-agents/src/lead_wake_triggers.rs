@@ -537,7 +537,7 @@ pub fn run_with(config: &TriggerConfig, seams: Seams) -> TriggerOutcome {
                 );
                 true
             }
-            None => dispatch_walk_detached(
+            None => match dispatch_walk_detached(
                 target,
                 &reason_word,
                 walk_binary(),
@@ -546,17 +546,28 @@ pub fn run_with(config: &TriggerConfig, seams: Seams) -> TriggerOutcome {
                 holder_gone,
                 window_count,
                 config.ceiling,
-                &mut |payload| emit("lead_wake_refused", payload),
-            ),
+            ) {
+                Ok(()) => true,
+                Err(refusal_word) => {
+                    // A refused spawn still spent a wake bill; the feed must
+                    // say why nothing launched, with the real refusal word.
+                    emit(
+                        "lead_wake_refused",
+                        json!({
+                            "scope": target.scope,
+                            "refusal": refusal_word,
+                            "reason": reason_word,
+                            "window_count": window_count,
+                            "ceiling": config.ceiling,
+                        }),
+                    );
+                    summary
+                        .refused
+                        .push((target.scope.clone(), refusal_word.to_string()));
+                    false
+                }
+            },
         };
-        if !spawned {
-            // A refused spawn still spent a wake bill; the feed must say
-            // why nothing launched.
-            summary.refused.push((
-                target.scope.clone(),
-                "manifest-carries-no-model-pin".to_string(),
-            ));
-        }
         if holder_gone && spawned {
             // The new session does not exist yet; its trail is the walk's
             // journal.
@@ -847,9 +858,10 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
 }
 
 /// The real walk spawn, detached in its own process group, the wake log as
-/// its output. A manifest with no model pin writes the refusal to the log,
-/// emits the feed row through the caller, and returns false - the bill was
-/// spent, so the feed must say why nothing launched.
+/// its output. A manifest with no model pin writes the refusal to the log
+/// and answers `Err("manifest-carries-no-model-pin")`; an unwritable log or
+/// a failed spawn answers the matching refusal word - the bill was spent,
+/// so the caller must say why nothing launched.
 fn dispatch_walk_detached(
     target: &Target,
     reason: &str,
@@ -859,8 +871,7 @@ fn dispatch_walk_detached(
     successor: bool,
     window_count: usize,
     ceiling: i64,
-    on_refused: &mut dyn FnMut(Value),
-) -> bool {
+) -> Result<(), &'static str> {
     let fields = crate::lead_ops::parse_manifest(&target.manifest);
     let model = fields
         .get("model")
@@ -885,14 +896,7 @@ fn dispatch_walk_detached(
                 target.scope
             );
         }
-        on_refused(json!({
-            "scope": target.scope,
-            "refusal": "manifest-carries-no-model-pin",
-            "reason": reason,
-            "window_count": window_count,
-            "ceiling": ceiling,
-        }));
-        return false;
+        return Err("manifest-carries-no-model-pin");
     }
     let argv = build_walk_argv(target, reason, &binary, address, detail, successor, &model);
     let Ok(sink) = std::fs::OpenOptions::new()
@@ -900,7 +904,7 @@ fn dispatch_walk_detached(
         .append(true)
         .open(&log)
     else {
-        return false;
+        return Err("wake-log-unwritable");
     };
     let spawned = std::process::Command::new(&argv[0])
         .args(&argv[1..])
@@ -909,7 +913,7 @@ fn dispatch_walk_detached(
         .stderr(std::process::Stdio::null())
         .process_group(0)
         .spawn();
-    spawned.is_ok()
+    spawned.map(|_| ()).map_err(|_| "walk-spawn-failed")
 }
 
 /// The walk binary: this daemon's own executable, so a drift-retired
