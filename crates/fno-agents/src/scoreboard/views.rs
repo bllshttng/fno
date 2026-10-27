@@ -1155,15 +1155,22 @@ pub(crate) fn round1(value: f64) -> f64 {
 const CI_RED_PREFIX: &str = "FAILURE:";
 const CI_RECOGNIZED_NONRED: [&str; 5] = ["SUCCESS", "PENDING", "none", "unknown", "skipped"];
 
-/// `_percentile`: nearest-rank over a sorted copy; None on empty.
-pub(crate) fn percentile(values: &mut Vec<f64>, p: i64) -> Option<f64> {
+/// `_percentile`: nearest-rank over a sorted copy; None on empty. The
+/// element returns verbatim, so an integer sample stays an integer in the
+/// emission exactly as the Python leg's list element did.
+pub(crate) fn percentile(values: &mut Vec<Value>, p: i64) -> Option<Value> {
     if values.is_empty() {
         return None;
     }
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let n = values.len() as i64;
-    let k = std::cmp::max(1, super::readers::py_round(p as f64 / 100.0 * n as f64));
-    values.get((k - 1) as usize).copied()
+    values.sort_by(|a, b| {
+        a.as_f64()
+            .unwrap_or(f64::NAN)
+            .partial_cmp(&b.as_f64().unwrap_or(f64::NAN))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let n = values.len() as f64;
+    let k = std::cmp::max(1, (p as f64 / 100.0 * n).ceil()) as usize;
+    values.get(k - 1).cloned()
 }
 
 /// `_row_session_ids`: the `sessions` list plus the scalar `session_id`.
@@ -1260,8 +1267,8 @@ fn transcript_counts(session_ids: &BTreeSet<String>) -> (Option<i64>, Option<i64
 }
 
 /// `_dist`: median/p90/n over the non-None values only.
-fn dist(values: Vec<Option<f64>>) -> Value {
-    let present: Vec<f64> = values.into_iter().flatten().collect();
+fn dist(values: Vec<Option<Value>>) -> Value {
+    let present: Vec<Value> = values.into_iter().flatten().collect();
     let n = present.len() as i64;
     let mut vals = present.clone();
     let median = percentile(&mut vals, 50);
@@ -1330,10 +1337,10 @@ pub(crate) fn build_efficiency(
 
     let mut buckets: Vec<(String, Bucket)> = Vec::new();
     let mut bucket_index: HashMap<String, usize> = HashMap::new();
-    let mut per_row_fires: Vec<Option<f64>> = Vec::new();
-    let mut per_row_reds: Vec<Option<f64>> = Vec::new();
-    let mut per_row_tokens: Vec<Option<f64>> = Vec::new();
-    let mut per_row_duration: Vec<Option<f64>> = Vec::new();
+    let mut per_row_fires: Vec<Option<Value>> = Vec::new();
+    let mut per_row_reds: Vec<Option<Value>> = Vec::new();
+    let mut per_row_tokens: Vec<Option<Value>> = Vec::new();
+    let mut per_row_duration: Vec<Option<Value>> = Vec::new();
 
     for r in &windowed {
         let sids = row_session_ids(r);
@@ -1424,20 +1431,20 @@ pub(crate) fn build_efficiency(
         b.n += 1;
         b.spend_usd += num(r.get("cost_usd"));
         if let Some(t) = tokens {
-            b.tokens.push(t);
+            b.tokens.push(Value::from(t));
         }
         if let Some(d) = duration {
-            b.duration.push(d);
+            b.duration.push(Value::from(d));
         }
         if let Some(f) = loop_fires {
-            b.fires.push(f as f64);
+            b.fires.push(Value::from(f));
         }
 
         if loop_fires.is_some() {
-            per_row_fires.push(loop_fires.map(|f| f as f64));
-            per_row_reds.push(ci_reds.map(|r| r as f64));
-            per_row_tokens.push(tokens);
-            per_row_duration.push(duration);
+            per_row_fires.push(loop_fires.map(Value::from));
+            per_row_reds.push(ci_reds.map(Value::from));
+            per_row_tokens.push(tokens.map(Value::from));
+            per_row_duration.push(duration.map(Value::from));
         }
     }
 
@@ -1529,7 +1536,7 @@ fn upsert_plan_cost(list: &mut Vec<(String, f64)>, nid: &str, cost: f64) {
 struct Bucket {
     n: i64,
     spend_usd: f64,
-    tokens: Vec<f64>,
-    fires: Vec<f64>,
-    duration: Vec<f64>,
+    tokens: Vec<Value>,
+    fires: Vec<Value>,
+    duration: Vec<Value>,
 }
