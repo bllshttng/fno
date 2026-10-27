@@ -1227,6 +1227,32 @@ pub(crate) const AMBIENT_IDENTITY_NAMES: &[&str] = &[
     "CODEX_COMPANION_TRANSCRIPT_PATH",
 ];
 
+/// The same names with their harness family, in the Python
+/// `AMBIENT_IDENTITY_ENV` order: the one list the identity strip remedy
+/// walks, so a name without a classified family is never suggested for
+/// deletion (Python's fail-closed `.get(name)` rule).
+pub(crate) const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
+    ("FNO_HARNESS_NAME", "fno"),
+    ("FNO_HARNESS_SESSION_ID", "fno"),
+    ("CODEX_THREAD_ID", "codex"),
+    ("CLAUDE_CODE_SESSION_ID", "claude"),
+    ("CODEX_SESSION_ID", "codex"),
+    ("GEMINI_SESSION_ID", "gemini"),
+    ("OPENCODE_SESSION_ID", "opencode"),
+    ("CLAUDE_SESSION_ID", "claude"),
+    ("CLAUDECODE", "claude"),
+    ("CLAUDECODE_SESSION_ID", "claude"),
+    ("HERMES_SESSION_ID", "hermes"),
+    ("TARGET_SESSION_ID", "fno"),
+    ("CODEX_CI", "codex"),
+    ("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "codex"),
+    ("CODEX_SHELL", "codex"),
+    ("CODEX_COMPANION_SESSION_ID", "codex"),
+    ("CODEX_COMPANION_TRANSCRIPT_PATH", "codex"),
+    ("FNO_AGENT_SUBSTRATE", "fno"),
+    ("FNO_NODE_REASON", "fno"),
+];
+
 /// Clear inherited session identity before stamping the values owned by this
 /// launcher. Routing and authentication variables remain untouched.
 pub(crate) fn stamp_command_env(

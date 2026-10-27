@@ -303,6 +303,7 @@ pub mod ledger_axes;
 pub(crate) mod ledger_register;
 pub(crate) mod ledger_workers;
 mod lifecycle_child;
+pub mod list_render;
 pub mod list_row;
 pub mod live_store_fence;
 pub mod liveness_cmd;
@@ -472,6 +473,7 @@ pub mod reclaim;
 pub mod reentry;
 pub mod refusal_rate;
 pub mod refusal_trend;
+pub mod register;
 pub mod registry_commit;
 pub mod registry_guard;
 pub mod registry_json;
@@ -2045,6 +2047,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // (observer/mod.rs: sweep and replay).
     "skill_eval_finding",
     "skill_eval_run_complete",
+    // The register command's join row (register.rs): one event per minted
+    // or refreshed roster row.
+    "session_registered",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the
