@@ -475,19 +475,6 @@ mod quota_signal_tests {
                 saved_state,
             }
         }
-
-        fn pin_state_only(state: Option<&Path>) -> Self {
-            let saved_config = std::env::var_os("FNO_CONFIG");
-            let saved_state = std::env::var_os("FNO_RUNTIME_STATE_PATH");
-            if let Some(path) = state {
-                std::env::set_var("FNO_RUNTIME_STATE_PATH", path);
-            }
-            Self {
-                _config_dir: None,
-                saved_config,
-                saved_state,
-            }
-        }
     }
 
     impl Drop for EnvPin {
@@ -607,7 +594,9 @@ mod quota_signal_tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("absent.json");
-        let _env = EnvPin::pin_state_only(Some(&missing));
+        // Observation is opt-in: without a pinned config the gate answers
+        // quota-observation-off before any state probe runs.
+        let _env = EnvPin::pin(&quota_config(true, true), Some(&missing));
         let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
         assert_eq!(sig.state, HeadroomState::Unknown);
         assert!(!sig.defer && !sig.cutover);
