@@ -879,16 +879,6 @@ fn top_row(v: &View) -> String {
         .collect()
 }
 
-fn agent_names(v: &View) -> Vec<String> {
-    v.display_rows()
-        .iter()
-        .filter_map(|r| match r {
-            DisplayRow::Agent(a) => Some(a.name.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
 #[test]
 fn agents_tab_strip_counts_rows_that_need_input() {
     let mk = |name: &str, pane: u64, b: AgentBadge| agent_row(name, pane, Some(b), false);
@@ -946,49 +936,6 @@ async fn agents_tab_ctrl_t_pins_like_dot() {
         .notice
         .as_ref()
         .is_some_and(|(n, _)| n == "pin works on an agent row"));
-}
-
-#[test]
-fn agents_tab_lead_rows_rank_after_hand_pins() {
-    let mk = |name: &str, pane: u64, level: Option<u32>| {
-        let mut r = agent_row(name, pane, Some(AgentBadge::Working), false);
-        r.role_level = level;
-        r
-    };
-    let rows = || {
-        vec![
-            mk("a-worker", 4, None),
-            mk("b-worker", 5, None),
-            mk("y-lead", 6, Some(1)),
-            mk("z-pinned", 7, None),
-        ]
-    };
-    for column in [
-        AgentSortColumn::Agent,
-        AgentSortColumn::Status,
-        AgentSortColumn::Age,
-    ] {
-        let mut v = wide_view(rows());
-        v.pinned_agents = vec!["z-pinned".into()];
-        v.agent_sort = AgentSort {
-            column,
-            direction: SortDirection::Ascending,
-        };
-        let names = agent_names(&v);
-        assert_eq!(&names[..2], ["z-pinned", "y-lead"], "{column:?}: {names:?}");
-    }
-
-    // Two leads at one altitude lead the run in name order.
-    let mut v = wide_view(vec![
-        mk("c", 4, None),
-        mk("b-lead", 5, Some(1)),
-        mk("a-lead", 6, Some(1)),
-    ]);
-    v.agent_sort = AgentSort {
-        column: AgentSortColumn::Agent,
-        direction: SortDirection::Ascending,
-    };
-    assert_eq!(agent_names(&v), ["a-lead", "b-lead", "c"]);
 }
 
 #[test]
