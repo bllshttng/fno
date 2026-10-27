@@ -19,8 +19,7 @@ mod common;
 
 use common::{assert_golden, env_mutex, Golden};
 use fno_agents::status_fanout::{
-    python_json_compact_ascii, run_tick, DispatchFn, FanoutTuning, HttpPost, HttpResult,
-    SinkConfig, StreamFn, TickResult,
+    run_tick, DispatchFn, FanoutTuning, HttpPost, HttpResult, SinkConfig, StreamFn, TickResult,
 };
 use fno_agents::wake_read::python_json_default;
 use serde_json::{json, Value};
@@ -304,7 +303,7 @@ fn run_tick_case(sb: &Sandbox, label: &str, rows: &[Value], sinks: &[SinkConfig]
         Some(&mut *stream_seam),
     );
     let record = projection(&result, &sb.state, label);
-    let dumped = fno_agents::status_fanout::python_json_compact_ascii(&record);
+    let dumped = python_json_default(&record);
     assert_fanout_golden(
         label,
         &Golden {
@@ -362,15 +361,16 @@ fn adapter_case(sb: &Sandbox, label: &str, sink: SinkConfig, post: &mut Recordin
         json!({"run": "r1", "node": "ab-12", "outcome": "fail"}),
     );
     std::fs::write(&journal, format!("{ev}\n{ev2}\n")).unwrap();
-    let mut dispatch_seam: Box<DispatchFn> =
-        Box::new(|_sink, _event| ("delivered".to_string(), String::new()));
+    // No dispatch seam: the goldens hold the real adapters' webhook bodies,
+    // so the real dispatch_event path must run against the RecordingPost.
+    // A seam would answer "delivered" without ever touching the post.
     let _ = run_tick(
         &sb.root,
         std::slice::from_ref(&sink),
         &FanoutTuning::default(),
         false,
         post,
-        Some(&mut *dispatch_seam),
+        None,
         None,
     );
     let calls: Vec<Value> = post
@@ -693,7 +693,7 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
             &format!("template {label}"),
             &Golden {
                 exit: Some(0),
-                streams: vec![python_json_compact_ascii(&record)],
+                streams: vec![python_json_default(&record)],
             },
         );
     }
@@ -733,7 +733,7 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
         "eof cursor values",
         &Golden {
             exit: Some(0),
-            streams: vec![python_json_compact_ascii(&record)],
+            streams: vec![python_json_default(&record)],
         },
     );
 
