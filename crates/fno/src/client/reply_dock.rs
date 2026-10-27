@@ -42,7 +42,8 @@ impl View {
             .saturating_sub(TAB_BAR_ROWS + self.status_rows()) as usize;
         let origin = (TAB_BAR_ROWS as usize, 0);
         // The last column is the sideline divider; the dock leaves it.
-        let dims = (rows.div_ceil(2).max(1), self.panel_w() as usize - 1);
+        // At most half the column, so the two seats never share a row.
+        let dims = ((rows / 2).max(1), self.panel_w() as usize - 1);
         // Follow the last line, so a long transcript windows to its tail:
         // the newest message and the reply input stay in view.
         let follow = lines.len().checked_sub(1);
@@ -57,5 +58,11 @@ impl View {
         });
         layout.origin = (if cursor_row >= floor { origin.0 } else { floor }, 0);
         layout
+    }
+
+    /// The dock paints over sideline rows, so it owns a press inside its box.
+    pub(super) fn dock_holds(&self, l: &OverlayLayout, rep: crate::mouse::MouseReport) -> bool {
+        let (row, col) = (rep.row as usize, rep.col as usize);
+        self.peek_is_docked() && chrome::framed_contains(&l.framed, l.origin, row, col)
     }
 }

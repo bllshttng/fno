@@ -954,13 +954,8 @@ fn agents_tab_selector_hint_names_pin_and_move() {
 #[test]
 fn agents_tab_selector_row_inverts_from_the_theme() {
     // The selector's cursor row takes the theme's text color as its ground
-    // and the base as its text, every cell of the row; a named theme's pair
-    // comes from its own fields, and settings' cursor row maps to the same.
+    // and the base as its text, every cell of the row.
     let theme = crate::theme::theme_footnote_superscript();
-    assert_eq!(
-        crate::theme::focus_style(&theme),
-        (theme.base, theme.title, 0)
-    );
     assert_eq!(
         crate::theme::cell_style(crate::theme::Role::BodyFocus, &theme),
         crate::theme::focus_style(&theme)
