@@ -313,6 +313,31 @@ impl View {
     pub(super) fn paint_top_row(&self, cells: &mut [Cell], cols: usize, text_w: usize) {
         let limit = text_w.min(cols.saturating_sub(1));
         let rest_fg = crate::theme::dim_fg(&self.theme);
+        // The count folds the same state function as every section rollup,
+        // so it always equals the sum of the section ▲ counts.
+        let need = self
+            .layout
+            .agents
+            .iter()
+            .filter(|a| agent_lattice_state(a) == LatticeState::Blocked)
+            .count();
+        if need > 0 && self.sideline_view == crate::view_store::SidelineView::Agents {
+            let stop = self
+                .top_row_spans()
+                .first()
+                .map_or(limit, |s| s.0.saturating_sub(1));
+            for (col, ch) in format!(" {need} need input").chars().enumerate() {
+                if col >= stop.min(limit) {
+                    break;
+                }
+                cells[col] = Cell {
+                    c: ch,
+                    fg: self.theme.needs_you,
+                    bg: Color::Default,
+                    flags: cell_flags::BOLD,
+                };
+            }
+        }
         for ((start, _, view), (word, _)) in
             self.top_row_spans().into_iter().zip(self.top_row_words())
         {

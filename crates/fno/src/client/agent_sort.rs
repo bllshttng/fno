@@ -12,6 +12,28 @@ pub(super) struct AgentOrder<'a> {
     pub pinned: &'a [String],
 }
 
+/// Pin or unpin the agent row under the selector cursor, persisted like the
+/// sort itself; a non-agent row notices why.
+pub(super) fn toggle_pin(view: &mut View, cur: usize) {
+    let name = match view.display_rows().get(cur) {
+        Some(DisplayRow::Agent(a)) => a.name.clone(),
+        _ => {
+            view.set_notice("pin works on an agent row".into());
+            return;
+        }
+    };
+    let pinned = if let Some(pos) = view.pinned_agents.iter().position(|n| *n == name) {
+        view.pinned_agents.remove(pos);
+        false
+    } else {
+        view.pinned_agents.push(name.clone());
+        true
+    };
+    view_store::save_pinned(&view.pinned_agents);
+    let word = if pinned { "pinned" } else { "unpinned" };
+    view.set_notice(format!("{word} {name}"));
+}
+
 #[allow(clippy::type_complexity)]
 pub(super) fn append_sorted_agent_group<'a>(
     out: &mut Vec<(DisplayRow<'a>, usize)>,
@@ -110,9 +132,16 @@ fn compare_agent_rows(
     now_secs: u64,
     order: &AgentOrder<'_>,
 ) -> Ordering {
-    // Pin rank leads every column: a pinned row keeps its seat first. The
-    // name lists are tiny (tens of entries), so the linear scans stay cheap.
-    let pin = order_rank(&a.name, order.pinned).cmp(&order_rank(&b.name, order.pinned));
+    // Pin rank leads every column: a pinned row keeps its seat first, then
+    // team leads by altitude, then the rest. The name lists are tiny (tens
+    // of entries), so the linear scans stay cheap.
+    let rank = |r: &AgentRow| {
+        (
+            order_rank(&r.name, order.pinned),
+            r.role_level.unwrap_or(u32::MAX),
+        )
+    };
+    let pin = rank(a).cmp(&rank(b));
     let order = match sort.column {
         AgentSortColumn::Status => {
             let a_key = attention_key(a, need_a);

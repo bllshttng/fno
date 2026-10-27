@@ -870,3 +870,136 @@ fn header_hint_takes_only_the_gap_the_fit_left_over() {
     assert_eq!(tight, header_band_text("sq", &rollup, 12));
     assert_eq!(header_band::folder_hint(""), "(no folder)");
 }
+
+fn top_row(v: &View) -> String {
+    let f = v.compose();
+    f.cells[..v.panel_w() as usize]
+        .iter()
+        .map(|c| c.c)
+        .collect()
+}
+
+fn agent_names(v: &View) -> Vec<String> {
+    v.display_rows()
+        .iter()
+        .filter_map(|r| match r {
+            DisplayRow::Agent(a) => Some(a.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn agents_tab_strip_counts_rows_that_need_input() {
+    let mk = |name: &str, pane: u64, b: AgentBadge| agent_row(name, pane, Some(b), false);
+    let mut far = mk("b2", 6, AgentBadge::Blocked);
+    far.cwd_base = Some("/tmp/other".into());
+    let v = wide_view(vec![
+        mk("b1", 4, AgentBadge::Blocked),
+        far,
+        mk("d1", 5, AgentBadge::Done),
+    ]);
+    let row = top_row(&v);
+    assert!(row.starts_with(" 2 need input"), "{row:?}");
+    let rollup = section_rollup(v.layout.agents.iter().map(agent_lattice_state));
+    assert_eq!(rollup.first(), Some(&(LatticeState::Blocked, 2)));
+
+    // No Blocked row: no count, and the view words sit where they sat.
+    let calm = wide_view(vec![mk("d1", 5, AgentBadge::Done)]);
+    let row = top_row(&calm);
+    let start = calm.top_row_spans()[0].0;
+    assert!(row.chars().take(start).all(|c| c == ' '), "{row:?}");
+}
+
+#[tokio::test]
+async fn agents_tab_ctrl_t_pins_like_dot() {
+    let mk = |name: &str, pane: u64| agent_row(name, pane, Some(AgentBadge::Working), false);
+    let mut v = wide_view(vec![mk("a", 4), mk("b", 5)]);
+    let at = v
+        .display_rows()
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == "b"))
+        .unwrap();
+    v.selector = Some(at);
+    let mut buf: Vec<u8> = Vec::new();
+    selector_keys(&mut v, &[0x14], &mut buf).await.unwrap();
+    assert_eq!(v.pinned_agents, vec!["b".to_string()]);
+    let at = v
+        .display_rows()
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == "b"))
+        .unwrap();
+    v.selector = Some(at);
+    selector_keys(&mut v, &[0x14], &mut buf).await.unwrap();
+    assert!(v.pinned_agents.is_empty(), "a second ctrl+t unpins");
+
+    // A non-agent row notices why and persists nothing.
+    let band = v
+        .display_rows()
+        .iter()
+        .position(|r| !matches!(r, DisplayRow::Agent(_)))
+        .unwrap();
+    v.selector = Some(band);
+    selector_keys(&mut v, &[0x14], &mut buf).await.unwrap();
+    assert!(v.pinned_agents.is_empty());
+    assert!(v
+        .notice
+        .as_ref()
+        .is_some_and(|(n, _)| n == "pin works on an agent row"));
+}
+
+#[test]
+fn agents_tab_lead_rows_rank_after_hand_pins() {
+    let mk = |name: &str, pane: u64, level: Option<u32>| {
+        let mut r = agent_row(name, pane, Some(AgentBadge::Working), false);
+        r.role_level = level;
+        r
+    };
+    let rows = || {
+        vec![
+            mk("a-worker", 4, None),
+            mk("b-worker", 5, None),
+            mk("y-lead", 6, Some(1)),
+            mk("z-pinned", 7, None),
+        ]
+    };
+    for column in [
+        AgentSortColumn::Agent,
+        AgentSortColumn::Status,
+        AgentSortColumn::Age,
+    ] {
+        let mut v = wide_view(rows());
+        v.pinned_agents = vec!["z-pinned".into()];
+        v.agent_sort = AgentSort {
+            column,
+            direction: SortDirection::Ascending,
+        };
+        let names = agent_names(&v);
+        assert_eq!(&names[..2], ["z-pinned", "y-lead"], "{column:?}: {names:?}");
+    }
+
+    // Two leads at one altitude lead the run in name order.
+    let mut v = wide_view(vec![
+        mk("c", 4, None),
+        mk("b-lead", 5, Some(1)),
+        mk("a-lead", 6, Some(1)),
+    ]);
+    v.agent_sort = AgentSort {
+        column: AgentSortColumn::Agent,
+        direction: SortDirection::Ascending,
+    };
+    assert_eq!(agent_names(&v), ["a-lead", "b-lead", "c"]);
+}
+
+#[test]
+fn agents_tab_selector_hint_names_pin_and_move() {
+    let hint = crate::keys::selector_hint();
+    for word in [
+        "space reply",
+        ". or ctrl+t pin",
+        "shift+up/down move",
+        "r rename",
+    ] {
+        assert!(hint.contains(word), "missing {word}: {hint}");
+    }
+}
