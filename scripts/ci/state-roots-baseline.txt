@@ -23,7 +23,6 @@
 # There is no --update flag on purpose. Adding a line is a deliberate act with
 # an owner attached, in a diff a reviewer reads.
 
-A	cli/src/fno/agent/cli.py	events.jsonl	unowned	Python journal site surviving PR 1252; fix is fno.paths.project_events_json().
 A	cli/src/fno/agents/context.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/agents/truth_status.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
 A	cli/src/fno/agents/whoami.py	target-state.md	unowned	target-state.md has NO resolver today (STATE_FILES records resolver=None). That gap is the finding; a resolver must exist before this can drain.
@@ -96,3 +95,5 @@ A	crates/fno-agents/src/observer/isolation.rs	events.jsonl	unowned	the detective
 A	crates/fno-agents/src/observer/isolation.rs	ledger.json	unowned	the detective scan must name the real state files it polices; a resolver here would make the scan read the state it is scanning.
 A	crates/fno-agents/src/observer/isolation.rs	target-state.md	unowned	the detective scan must name the real state files it polices; a resolver here would make the scan read the state it is scanning.
 A	crates/fno-agents/src/observer/mod.rs	ledger.json	unowned	read_scratch_cost reads the ISOLATED scratch ledger inside the throwaway replay worktree, not the ambient one.
+A	crates/fno-agents/src/whoami.rs	events.jsonl	unowned	the status tail reads the project journal its deleted Python twin read; no crate journal resolver exists yet; drains when one lands
+A	crates/fno-agents/src/whoami.rs	target-state.md	unowned	the manifest-identity read keeps its deleted Python twin's hand-built legacy path (no native target_state_path_or_legacy resolver exists); drains when that resolver lands

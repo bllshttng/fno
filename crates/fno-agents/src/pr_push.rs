@@ -300,7 +300,7 @@ pub(crate) fn zero_job_rows(
     head: &str,
     check_runs: &[Value],
 ) -> Result<Vec<Value>, String> {
-    let pages = gh_api_pages(
+    let pages = gh_api_pages_conditional(
         gh_bin,
         cwd,
         &format!("repos/{{owner}}/{{repo}}/actions/runs?head_sha={head}&per_page=100"),
