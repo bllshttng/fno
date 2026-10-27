@@ -66,6 +66,22 @@ fn route_candidates(cwd: Option<&Path>, agents_home: Option<&Path>) -> Vec<PathB
 }
 
 /// Tolerant scan: the first candidate that sets `questions.route` wins.
+/// The `questions.route` knob for a native caller in `cwd`: the read
+/// starts at the enclosing checkout root, so a run from a subdirectory still
+/// reads the project config.
+pub(crate) fn route_for(cwd: &Path) -> Option<String> {
+    let root = cwd
+        .ancestors()
+        .find(|p| p.join(".git").exists())
+        .unwrap_or(cwd);
+    route_from_configs(&route_candidates(
+        Some(root),
+        crate::paths::AgentsHome::from_env_opt()
+            .map(|h| h.root().to_path_buf())
+            .as_deref(),
+    ))
+}
+
 fn route_from_configs(candidates: &[PathBuf]) -> Option<String> {
     for candidate in candidates {
         let Some(table) = crate::finalize::load_config_toml(candidate) else {

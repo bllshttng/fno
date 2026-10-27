@@ -17,6 +17,21 @@ import pytest
 from fno.paths_testing import use_tmpdir
 
 
+def _read_manifest(path) -> dict:
+    """The manifest's fields through the native lead `read` op."""
+    from fno.agents.role import lead_manifest_call
+
+    return lead_manifest_call("read", path=str(path))["fields"]
+
+
+def _write_manifest(path, **fields) -> None:
+    """Write one manifest through the native spawn-team `manifest` op."""
+    from fno.agents.spawn_overlay_client import spawn_overlay_call
+
+    answer = spawn_overlay_call({"kind": "spawn-team", "op": "manifest", "path": str(path), **fields})
+    assert not answer.get("error"), answer
+
+
 def _entry(name: str, **kw):
     from fno.agents.registry import AgentEntry
 
@@ -312,7 +327,6 @@ def test_team_names_the_manifest_and_role_source_per_scope(
     tmp_path: Path, monkeypatch
 ) -> None:
     """A promoted row with a matching promoted manifest renders source `both`."""
-    import fno.lead.state as lead_state
     from fno.agents.team import gather_team
     from fno.paths import space_dir
 
@@ -331,7 +345,7 @@ def test_team_names_the_manifest_and_role_source_per_scope(
         graph_entries=[{"id": "e-1", "type": "epic", "project": "alpha", "status": "ready"}],
     )
     manifest = space_dir(tmp_path) / "leads" / "e-1.md"
-    lead_state.write_manifest(
+    _write_manifest(
         manifest,
         scope="e-1",
         harness_session_id="lead-session",
@@ -361,7 +375,6 @@ def test_a_split_role_counts_apart_from_disagreements_and_unknowns(
     disagreement and not an unknown: the summary counts it separately."""
     from fno.agents.team import gather_team
     from fno.paths import space_dir
-    import fno.lead.state as lead_state
 
     row = _entry(
         "lead",
@@ -377,7 +390,7 @@ def test_a_split_role_counts_apart_from_disagreements_and_unknowns(
         [row],
         graph_entries=[{"id": "e-1", "type": "epic", "project": "alpha", "status": "ready"}],
     )
-    lead_state.write_manifest(
+    _write_manifest(
         space_dir(tmp_path) / "leads" / "e-1.md",
         scope="e-1",
         harness_session_id="someone-else",
@@ -409,13 +422,12 @@ def test_a_manifest_role_survives_its_project_having_no_rows_at_all(
     names the project and no cwd can be derived. The sweep must key on the
     spaces root, not on rows, or the orphan role is invisible exactly when
     the fleet lost it."""
-    import fno.lead.state as lead_state
     from fno.agents.team import gather_team
     from fno.paths import space_dir
 
     _prepare(monkeypatch, tmp_path, [], graph_entries=[])
     manifest = space_dir(tmp_path) / "leads" / "x-dede.md"
-    lead_state.write_manifest(
+    _write_manifest(
         manifest,
         scope="x-dede",
         harness_session_id="gone-lead",
@@ -449,7 +461,6 @@ def test_total_counts_row_roles_only_so_the_census_keeps_its_arithmetic(
     """doctor_lanes._census reads summary.total as a ROW count and computes
     workers = len(rows) - total; an orphan inside total subtracts a worker
     that still exists. manifest-only roles count in their own field."""
-    import fno.lead.state as lead_state
     from fno.agents.team import gather_team
     from fno.paths import space_dir
 
@@ -457,7 +468,7 @@ def test_total_counts_row_roles_only_so_the_census_keeps_its_arithmetic(
         monkeypatch, tmp_path, [_entry("plain-worker", cwd=str(tmp_path), status="busy")]
     )
     manifest = space_dir(tmp_path) / "leads" / "x-dede.md"
-    lead_state.write_manifest(
+    _write_manifest(
         manifest, scope="x-dede", harness_session_id="gone-lead",
         owner_cwd=str(tmp_path), role_level=2, role_scope="x-dede",
     )

@@ -11,7 +11,6 @@ the durable role record, the row its cache.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Optional
 
 from fno.agents.role import (
@@ -139,21 +138,23 @@ def _conflicts(rows: list) -> list[dict[str, Any]]:
 
 
 def _manifest_limb(scope: Any, row: Any) -> dict[str, Any]:
-    """The manifest side of one role; ``term_state`` is the single comparator."""
-    from fno.lead.state import lead_state_root, term_state
+    """The manifest side of one role; the Rust term reader (``lead`` op
+    ``term``) is the single comparator. An unreadable read keeps the row side."""
+    from fno.agents.role import lead_manifest_call
 
     limb: dict[str, Any] = {"manifest_path": None, "manifest_session": None, "role_source": "row"}
     cwd = getattr(row, "cwd", None)
     if not (isinstance(scope, str) and scope.strip() and isinstance(cwd, str) and cwd.strip()):
         return limb
-    try:
-        state = term_state(scope, state_root=lead_state_root(Path(cwd)))
-    except (OSError, ValueError):
+    state = lead_manifest_call("term", scope=scope, owner_cwd=cwd)
+    if state.get("error"):
         return limb
-    limb["manifest_session"], limb["manifest_path"] = state.manifest_session, state.manifest_path
-    if state.split is True:
+    limb["manifest_session"], limb["manifest_path"] = (
+        state.get("manifest_session"), state.get("manifest_path"),
+    )
+    if state.get("split") is True:
         limb["role_source"] = "split"
-    elif state.role_on_manifest is True:
+    elif state.get("team_on_manifest") is True:
         limb["role_source"] = "both"
     return limb
 

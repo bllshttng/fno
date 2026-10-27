@@ -68,11 +68,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
-    "lead": (
-        "fno.lead.cli:lead_app",
-        "The lead's board and its session manifest.",
-        {"hidden": True},
-    ),
     "event": ("fno.events.cli:cli", "emit and audit events", {"hidden": True}),
     "inbox": (
         "fno.inbox.cli:inbox_app",
