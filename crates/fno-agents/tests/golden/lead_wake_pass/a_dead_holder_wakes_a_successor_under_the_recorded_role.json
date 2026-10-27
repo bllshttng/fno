@@ -1,0 +1,70 @@
+{
+ "label": "a dead holder wakes a successor under the recorded role",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [
+    [
+     "epic-x",
+     "mail",
+     "lead-x",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "lead_spawned_successor",
+     {
+      "holder": "lead-x",
+      "old_session_id": "11111111-2222-3333-4444-555555555555",
+      "scope": "epic-x",
+      "trigger": "mail"
+     }
+    ],
+    [
+     "lead_woken",
+     {
+      "address": "lead-x",
+      "ceiling": 32,
+      "reason": "mail",
+      "scope": "epic-x",
+      "successor": true,
+      "window_count": 1
+     }
+    ]
+   ],
+   "sidecar": {
+    "answered_cursor": "2026-08-28T12:00:00+00:00"
+   },
+   "successor_flags": [
+    true
+   ],
+   "summary": {
+    "armed": true,
+    "evaluated": 1,
+    "note": "",
+    "refused": [],
+    "roles": 1,
+    "team_incomplete": false,
+    "truth_reads": 1,
+    "woke": [
+     {
+      "address": "lead-x",
+      "reason": "mail",
+      "scope": "epic-x",
+      "successor": true
+     }
+    ]
+   },
+   "unread_calls": [
+    "aa11bb22",
+    "epic-x",
+    "lead-x"
+   ],
+   "wake_times": [
+    "2026-08-29T12:00:00Z"
+   ]
+  }
+ ]
+}

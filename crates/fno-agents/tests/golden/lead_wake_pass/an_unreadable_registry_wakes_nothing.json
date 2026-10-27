@@ -1,0 +1,25 @@
+{
+ "label": "an unreadable registry wakes nothing",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [],
+   "events": [],
+   "sidecar": null,
+   "successor_flags": [],
+   "summary": {
+    "armed": true,
+    "evaluated": 0,
+    "note": "registry unreadable - no scope enumerated, nothing woken",
+    "refused": [],
+    "roles": 0,
+    "team_incomplete": false,
+    "truth_reads": 0,
+    "woke": []
+   },
+   "unread_calls": [],
+   "wake_times": null
+  }
+ ]
+}

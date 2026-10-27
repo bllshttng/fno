@@ -1,0 +1,18 @@
+{
+ "label": "unarmed phase reads no bus and emits nothing",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [],
+   "events": [],
+   "sidecar": null,
+   "successor_flags": [],
+   "summary": {
+    "armed": false
+   },
+   "unread_calls": [],
+   "wake_times": null
+  }
+ ]
+}

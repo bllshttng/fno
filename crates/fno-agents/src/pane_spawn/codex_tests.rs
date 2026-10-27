@@ -372,9 +372,12 @@ fn late_bind_reprobes_the_fd_oracle_within_budget() {
 
 #[test]
 fn late_bind_returns_none_on_a_miss() {
-    // pid 1's fd table (or a permission-denied read of it) never holds a
-    // fno rollout, so the miss is deterministic and parallel-safe.
-    let sid = late_bind_probe(Duration::ZERO, Duration::ZERO, Some(1));
+    // This process's own tree holds no fno rollout, and nextest runs each
+    // test in its own process, so no sibling's rollout fd can appear as a
+    // descendant. A pid-1 probe was raced by that: on the runner every
+    // parallel test process is pid 1's descendant, and the sibling test's
+    // brief fd showed up as a hit.
+    let sid = late_bind_probe(Duration::ZERO, Duration::ZERO, Some(std::process::id()));
     assert_eq!(sid, None);
 }
 

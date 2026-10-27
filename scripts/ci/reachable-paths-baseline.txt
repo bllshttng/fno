@@ -420,3 +420,4 @@ A	fno-agents binary not found	py=cli/src/fno/claims/verdict.py|cli/src/fno/pr_wa
 A	scripts/ci/check-preamble-budget.sh	py=cli/src/fno/lint_cli.py;rs=crates/fno/src/doctor/report/collectors.rs	# CLASSIFY protocol|msg-twin|data the port's parity string, the py emitter's twin
 A	the fno-agents binary was not found	py=cli/src/fno/agents/team.py;rs=crates/fno/src/doctor/report.rs	# CLASSIFY protocol|msg-twin|data the port's parity string, the py emitter's twin
 A	scoreboard_plan_fidelity	py=cli/src/fno/graph/store.py;rs=crates/fno-agents/src/graph_keeper.rs	# the python plan-fidelity gate calls the keeper op by name; the op-name literal is the wire contract both legs spell
+A	transcript-{family1_state}	py=cli/src/fno/agents/dispatch.py;rs=crates/fno-agents/src/mail_cli/send/engine.rs	# CLASSIFY protocol|msg-twin|data the transcript-veto receipt reason; the Python dispatch_send twin stays live through the watchdog until the agents port deletes it

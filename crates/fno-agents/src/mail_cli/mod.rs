@@ -17,6 +17,7 @@ pub mod sent;
 pub mod team;
 pub mod unread;
 pub mod withdraw;
+pub mod you_pairs;
 
 pub fn run(rest: &[String]) -> i32 {
     let first = rest.first().map(String::as_str);
