@@ -504,7 +504,7 @@ dual_owner_kinds = {
     # Rust (observer/mod.rs). schema.yaml keeps the rows for the validator.
     "skill_eval_finding",
     "skill_eval_run_complete",
-    # session_registered: the Rust register verb is the one writer; the
+    # session_registered: the Rust register command is the one writer; the
     # Python side carries it in schema.yaml for the validator and
     # `doctor event find`, the way pr_watch_unparked above does.
     "session_registered",
