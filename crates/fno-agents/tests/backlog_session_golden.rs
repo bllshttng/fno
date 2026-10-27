@@ -154,10 +154,16 @@ fn open_joins_a_spawn_handover_or_target_claim_this_session_owns() {
     let (_dir, config, graph) = sandbox();
     seed(
         &graph,
-        &[serde_json::json!({
-            "id": "x-cccc3333", "title": "n", "status": "design",
-            "project": "fno", "slug": "n",
-        })],
+        &[
+            serde_json::json!({
+                "id": "x-cccc3333", "title": "n", "status": "design",
+                "project": "fno", "slug": "n",
+            }),
+            serde_json::json!({
+                "id": "x-cccc3334", "title": "m", "status": "design",
+                "project": "fno", "slug": "m",
+            }),
+        ],
     );
     let root = graph.parent().unwrap().join("claims-root");
     let outcome = fno_agents::claims::acquire(
@@ -186,13 +192,6 @@ fn open_joins_a_spawn_handover_or_target_claim_this_session_owns() {
     assert_eq!(receipt["holder"], "spawn-handover:worker-a");
 
     // A target worker on an unplanned node plans under its own target claim.
-    seed(
-        &graph,
-        &[serde_json::json!({
-            "id": "x-cccc3334", "title": "n", "status": "design",
-            "project": "fno", "slug": "n",
-        })],
-    );
     let outcome = fno_agents::claims::acquire(
         "node:x-cccc3334",
         "target-session:sess-golden-0001",
