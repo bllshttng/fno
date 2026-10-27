@@ -1,0 +1,118 @@
+{
+ "label": "an empty board stores an observation so its first node is a change",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [],
+   "events": [],
+   "sidecar": {
+    "answered_cursor": "2026-08-28T12:00:00+00:00",
+    "board_hash": "af0e4f9d9b3e4309ebde6af9aea8a274afa1386a60e53163ef9f8bd29237fd46",
+    "board_rows": [
+     [
+      "x-1",
+      "done",
+      "ready",
+      "p2"
+     ],
+     [
+      "x-2",
+      "done",
+      "done",
+      "p2"
+     ]
+    ]
+   },
+   "successor_flags": [],
+   "summary": {
+    "armed": true,
+    "evaluated": 1,
+    "note": "",
+    "refused": [],
+    "roles": 1,
+    "team_incomplete": false,
+    "truth_reads": 0,
+    "woke": []
+   },
+   "unread_calls": [
+    "aa11bb22",
+    "epic-x",
+    "lead-x"
+   ],
+   "wake_times": [
+    "2026-08-29T12:00:00Z"
+   ]
+  },
+  {
+   "asks": [],
+   "dispatches": [
+    [
+     "epic-x",
+     "board",
+     null,
+     "added: x-1 (done/ready/p2)\nadded: x-2 (done/done/p2)"
+    ]
+   ],
+   "events": [
+    [
+     "lead_woken",
+     {
+      "address": null,
+      "ceiling": 32,
+      "reason": "board",
+      "scope": "epic-x",
+      "successor": false,
+      "window_count": 1
+     }
+    ]
+   ],
+   "sidecar": {
+    "answered_cursor": "2026-08-28T12:00:00+00:00",
+    "board_hash": "af0e4f9d9b3e4309ebde6af9aea8a274afa1386a60e53163ef9f8bd29237fd46",
+    "board_rows": [
+     [
+      "x-1",
+      "done",
+      "ready",
+      "p2"
+     ],
+     [
+      "x-2",
+      "done",
+      "done",
+      "p2"
+     ]
+    ]
+   },
+   "successor_flags": [
+    false
+   ],
+   "summary": {
+    "armed": true,
+    "evaluated": 1,
+    "note": "",
+    "refused": [],
+    "roles": 1,
+    "team_incomplete": false,
+    "truth_reads": 1,
+    "woke": [
+     {
+      "address": null,
+      "reason": "board",
+      "scope": "epic-x",
+      "successor": false
+     }
+    ]
+   },
+   "unread_calls": [
+    "aa11bb22",
+    "epic-x",
+    "lead-x"
+   ],
+   "wake_times": [
+    "2026-08-29T12:00:00Z"
+   ]
+  }
+ ]
+}
