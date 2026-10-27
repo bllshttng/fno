@@ -30,10 +30,11 @@ pub fn key_present(key_env: &str, api_key_file: Option<&str>) -> bool {
     resolve_key(key_env, api_key_file).is_some()
 }
 
-/// Port of Python's `read_var_from_env_file` (`cli/src/fno/env_file.py`):
+/// Port of the deleted Python leg `cli/src/fno/env_file.py`:
 /// skip `#` lines, allow an `export ` prefix, trim, strip the quotes Python's
 /// `str.strip` would strip. A missing file or key is None, never fatal.
-pub(crate) fn read_var_from_env_file(path_str: &str, key_name: &str) -> Option<String> {
+/// `pub` so the env_file parity test drives it against the goldens.
+pub fn read_var_from_env_file(path_str: &str, key_name: &str) -> Option<String> {
     let path = expand_tilde(path_str)?;
     let text = std::fs::read_to_string(path).ok()?;
     for line in text.lines() {
