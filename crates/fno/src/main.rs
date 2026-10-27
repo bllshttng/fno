@@ -70,10 +70,9 @@ enum Role {
     ConfigDefaults(Vec<OsString>),
     ConfigSchema(Vec<String>),
     /// The native read-side `config` doors (get, history, build-dir,
-    /// assert-subagent-budget, status-sinks, active-backlog, plugin install).
-    /// One classify, bodies in `config_cli::`; the writer stays with the
-    /// config hub's write surface and the doctor command beside the setup
-    /// family's engine.
+    /// assert-subagent-budget, status-sinks, active-backlog, plugin install,
+    /// doctor). One classify, bodies in `config_cli::` and `config_doctor::`;
+    /// the writer stays with the config hub's write surface.
     ConfigCli(fno::config_cli::Door),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
@@ -1497,6 +1496,10 @@ fn main() {
             fno::config_cli::Door::PluginInstall(rest) => {
                 fno::config_cli::plugin_install::run(&rest)
             }
+            fno::config_cli::Door::PluginGroup(rest) => {
+                fno::config_cli::plugin_install::run_group(&rest)
+            }
+            fno::config_cli::Door::Doctor(rest) => fno::config_doctor::run(&rest),
         }),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
         Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
