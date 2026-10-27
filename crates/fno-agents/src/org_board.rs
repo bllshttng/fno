@@ -391,6 +391,9 @@ pub(crate) fn as_int(v: &Value) -> i64 {
 /// role manifest bounds the board, and the payload prints as the text page
 /// (`--max-rows` per queue) or, with `--json`, indented.
 pub fn run_board(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--last-run") {
+        return crate::lead_ops::run_last_run(args);
+    }
     let mut opts = BoardOpts::default();
     let mut user_command = false;
     let mut as_json = false;

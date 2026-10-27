@@ -44,6 +44,45 @@ def _ask_respawn_ceiling(target: "RoleTarget", count: int, ceiling: int) -> str:
     )
 
 
+def _lead_op(op: str, **payload: Any) -> dict:
+    """The Rust lead manifest, wake-ledger and scope ops (``lead`` kind)."""
+    from fno.agents.role import lead_manifest_call
+
+    return lead_manifest_call(op, **payload)
+
+
+def _manifest_fields(manifest: Path) -> dict:
+    """The manifest's frontmatter fields; unreadable reads as empty."""
+    return _lead_op("read", path=str(manifest)).get("fields") or {}
+
+
+def _iso(stamp: datetime) -> str:
+    return stamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@dataclass(frozen=True)
+class WakeVerdict:
+    """One gate read: allow, or refuse naming the word that refused."""
+
+    refusal: str  # "" = allow | "debounce" | "ceiling"
+    count: int
+
+    @property
+    def allowed(self) -> bool:
+        return not self.refusal
+
+
+def admit_wake(path: Path, *, now: datetime, ceiling: int, debounce_s: int) -> WakeVerdict:
+    """Decide AND bill one wake under the manifest lock, in Rust: ``allowed``
+    means the bill landed, so two overlapping ticks cannot both dispatch."""
+    answer = _lead_op(
+        "admit-wake", path=str(path), now=_iso(now), ceiling=ceiling, debounce_s=debounce_s
+    )
+    if answer.get("error"):
+        raise OSError(answer["error"])
+    return WakeVerdict(refusal=str(answer.get("refusal") or ""), count=int(answer.get("count") or 0))
+
+
 @dataclass(frozen=True)
 class RoleTarget:
     """One promoted scope the phase may wake."""
@@ -65,8 +104,6 @@ def _promoted(
         from fno.agents.registry import load_registry
 
         rows_fn = load_registry
-    from fno.lead.state import lead_manifest_path, lead_state_root
-
     rows = rows_fn()
     by_holder = {row.name: row for row in rows}
     team = team_fn(rows)
@@ -99,11 +136,11 @@ def _promoted(
         root = Path(cwd)
         # The validating helper, never a hand join: a corrupted role_scope
         # must refuse, not escape .fno/leads.
-        try:
-            manifest = lead_manifest_path(scope, state_root=lead_state_root(root))
-        except ValueError as exc:
-            dropped.append(f"{scope}: {exc}")
+        answer = _lead_op("path", scope=scope, owner_cwd=str(root))
+        if answer.get("error"):
+            dropped.append(f"{scope}: {answer['error']}")
             continue
+        manifest = Path(answer["path"])
         if not manifest.is_file():
             dropped.append(f"{scope}: manifest missing at {manifest}")
             continue
@@ -153,9 +190,8 @@ def _escalation_answer_trigger(
     covers. The ts is stored only after a dispatch - refusals re-fire."""
     addresses = {target.holder, target.short_id}
     from fno.harness_identity import canonical_handle
-    from fno.lead.state import parse_manifest
 
-    full_id = parse_manifest(target.manifest).get("harness_session_id") or ""
+    full_id = _manifest_fields(target.manifest).get("harness_session_id") or ""
     if full_id:
         addresses.update({full_id, canonical_handle(full_id)})
     from fno import paths
@@ -216,36 +252,28 @@ def _read_sidecar(target: RoleTarget) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def _write_sidecar(target: RoleTarget, payload: dict) -> None:
-    sidecar = _sidecar_path(target)
-    sidecar.parent.mkdir(parents=True, exist_ok=True)
-    tmp = sidecar.with_suffix(f".json.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(payload), encoding="utf-8")
-    tmp.replace(sidecar)
-
-
 def _update_sidecar(target: RoleTarget, **fields: object) -> None:
     """Read-modify-write under the manifest-lock helper, like the ledger:
     two overlapping ticks must not lose each other's key."""
-    from fno.lead.state import _manifest_lock
+    sidecar = _sidecar_path(target)
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    answer = _lead_op("sidecar-update", path=str(sidecar), fields=fields)
+    if answer.get("error"):
+        raise OSError(answer["error"])
 
-    with _manifest_lock(_sidecar_path(target)):
-        payload = _read_sidecar(target)
-        payload.update(fields)
-        _write_sidecar(target, payload)
+
+def _scope_read(scope: str) -> dict:
+    """The scope's node ids and its undelivered count, compiled in Rust;
+    ``{"error": ...}`` for a scope that cannot compile."""
+    return _lead_op("scope", scope=scope)
 
 
 def _board_rows(
-    scope: str, entries: list, resolver: Optional[Callable] = None
+    ids: "set[str] | None", entries: list
 ) -> "list[tuple[str, str, str, str]] | None":
-    """The scope's ``(id, status, column, priority)`` rows, sorted, via
-    ``compile_scope_ids``; None is no signal, not an empty board."""
-    from fno.lead.scope import compile_scope_ids
-
-    kwargs = {"resolve": resolver} if resolver is not None else {}
-    try:
-        ids = compile_scope_ids(scope, entries, **kwargs)
-    except Exception:  # noqa: BLE001 - an uncompilable scope is not a trigger
+    """The scope's ``(id, status, column, priority)`` rows, sorted; None ids
+    (an uncompilable scope) is no signal, not an empty board."""
+    if ids is None:
         return None
     fields = ("id", "status", "_kanban_column", "priority")
     rows = [
@@ -261,21 +289,12 @@ def _hash_rows(rows: list) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
-def _board_digest(scope: str, entries: list, resolver: Optional[Callable] = None) -> str:
-    """The digest the sidecar stores: sha256 over the scope's rows; no
-    observation digests as the empty string."""
-    rows = _board_rows(scope, entries, resolver)
-    return "" if rows is None else _hash_rows(rows)
-
-
 def _birth_cursor(manifest: Path) -> str:
     """The manifest's created_at in the journal's ts shape: seeding the
     answer cursor at the term's birth keeps a just-closed answer live."""
-    from fno.lead.state import parse_manifest
-
     try:
         stamp = datetime.strptime(
-            parse_manifest(manifest).get("created_at") or "", "%Y-%m-%dT%H:%M:%SZ"
+            _manifest_fields(manifest).get("created_at") or "", "%Y-%m-%dT%H:%M:%SZ"
         )
     except ValueError:
         return ""
@@ -323,45 +342,30 @@ def _store_board_hash(target: RoleTarget, digest: str, rows: Iterable) -> None:
     _update_sidecar(target, board_hash=digest, board_rows=[list(row) for row in rows])
 
 
-def _scope_undelivered(scope: str, entries: list, resolver: Optional[Callable] = None) -> int:
-    """Role nodes not closed for good; 0 when the scope cannot compile."""
-    from fno.lead.scope import scope_undelivered
-
-    try:
-        return scope_undelivered(scope, entries, resolver)
-    except Exception:  # noqa: BLE001 - an uncompilable scope has nothing to re-check
-        return 0
-
-
 def _backstop_due(
     target: RoleTarget,
-    entries: list,
+    undelivered: int,
     *,
     now: datetime,
     backstop_s: int,
-    resolver: Optional[Callable] = None,
 ) -> bool:
     """Whether the timer backstop fires: an approximation of the event
     triggers so a missed event cannot strand a scope; a billed wake or lead
-    terminal inside the window suppresses it. The count below is the goal's
-    own predicate, done or superseded, so a driven-but-unshipped row keeps
-    the scope wakeable."""
-    from fno.lead.state import last_run_is_fresh
-    from fno.lead.wake import read_wakes
+    terminal inside the window suppresses it. ``undelivered`` is the goal's
+    own count, done or superseded, so a driven-but-unshipped row keeps the
+    scope wakeable."""
     from fno import paths
 
-    now_iso = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if last_run_is_fresh(
-        paths.project_log("events.jsonl", project_root=target.root),
-        since_s=backstop_s,
-        now_iso=now_iso,
-    ):
+    events = paths.project_log("events.jsonl", project_root=target.root)
+    if _lead_op("last-run", path=str(events), since_s=backstop_s, now=_iso(now)).get("fresh"):
         return False
-    if _scope_undelivered(target.scope, entries, resolver) <= 0:
+    if undelivered <= 0:
         return False
-    stamps = read_wakes(target.manifest, now=now)
-    if stamps and (now - stamps[-1]).total_seconds() < backstop_s:
-        return False
+    stamps = _lead_op("read-wakes", path=str(target.manifest), now=_iso(now)).get("stamps") or []
+    if stamps:
+        last = datetime.strptime(stamps[-1], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        if (now - last).total_seconds() < backstop_s:
+            return False
     return True
 
 
@@ -418,9 +422,7 @@ def _dispatch_walk(
     Neither can it derive a model: the argv carries the role manifest's pin,
     and a manifest without one refuses the walk - an unpinned lead respawn
     bills the account default model."""
-    from fno.lead.state import parse_manifest
-
-    model = (parse_manifest(target.manifest).get("model") or "").strip()
+    model = (_manifest_fields(target.manifest).get("model") or "").strip()
     log = target.manifest.with_suffix(".md.wake.log")
     if not model:
         with log.open("ab") as sink:
@@ -477,7 +479,6 @@ def graph_entries(path: Optional[Path] = None) -> list:
     phase that needs entries - sweep discovery and the wake alike - so the
     15 MB store is read once per tick, not once per phase."""
     from fno.graph.api import wire_rows
-    from fno.lead import drain_cache
     from fno.paths import graph_json
     from fno.graph.api import active_backend_name
 
@@ -485,7 +486,7 @@ def graph_entries(path: Optional[Path] = None) -> list:
         if active_backend_name() != "graph":
             return []
         gpath = path or graph_json()
-        ident = drain_cache.graph_ident(gpath)
+        ident = _lead_op("graph-ident", path=str(gpath)).get("ident")
         if ident is not None and _GRAPH_ENTRIES_MEMO["ident"] == ident:
             return _GRAPH_ENTRIES_MEMO["entries"]
         entries = wire_rows(path=gpath)
@@ -507,7 +508,7 @@ def run_lead_wake(
     unread_fn: Optional[Callable] = None,
     answered_fn: Optional[Callable] = None,
     entries_fn: Optional[Callable] = None,
-    scope_resolver: Optional[Callable] = None,
+    scope_fn: Optional[Callable[[str], dict]] = None,
     admit_fn: Optional[Callable] = None,
     dispatch_fn: Optional[Callable] = None,
     ask_fn: Optional[Callable] = None,
@@ -554,10 +555,8 @@ def run_lead_wake(
     graph_future, graph_cut = graph_pool.submit(entries_fn), False
 
     entries: Optional[list] = None
-    if admit_fn is None:
-        from fno.lead.wake import admit_wake
-
-        admit_fn = admit_wake
+    admit_fn = admit_fn or admit_wake
+    scope_fn = scope_fn or _scope_read
 
     # None-vs-zero matters: 0 is the unbounded spelling, and `or` would
     # coerce it back to the default, refusing an operator's explicit choice.
@@ -667,9 +666,7 @@ def run_lead_wake(
                 reason = "escalation_answered"
                 # Delivery mail addressed the full session id: name it or the
                 # row lingers unread (no scan covers that address).
-                from fno.lead.state import parse_manifest
-
-                full_id = parse_manifest(target.manifest).get("harness_session_id") or ""
+                full_id = _manifest_fields(target.manifest).get("harness_session_id") or ""
                 if full_id:
                     answer_prompt += (
                         f" The answer was also delivered as mail addressed to "
@@ -706,14 +703,16 @@ def run_lead_wake(
             # One compile feeds both lanes; None rows (empty or uncompilable
             # scope) is no signal for either.
             _step("board")
-            rows = _board_rows(target.scope, entries, scope_resolver) if entries else None
+            scope = scope_fn(target.scope) if entries else {}
+            ids = set(scope["ids"]) if isinstance(scope.get("ids"), list) else None
+            rows = _board_rows(ids, entries) if entries else None
             changed, fresh_board_hash, fresh_board_rows, wake_detail, first_observation = (
                 _board_trigger(target, rows)
             )
             if changed:
                 reason = "board"
             elif rows is not None and _backstop_due(
-                target, entries or [], now=now, backstop_s=backstop_s, resolver=scope_resolver
+                target, int(scope.get("undelivered") or 0), now=now, backstop_s=backstop_s
             ):
                 reason = "backstop"
         if reason is None:
@@ -753,10 +752,9 @@ def run_lead_wake(
         if first_observation and fresh_board_hash is not None:
             _store_board_hash(target, fresh_board_hash, fresh_board_rows or ())
         if holder_gone:
-            from fno.lead.state import at_respawn_ceiling, parse_manifest, respawn_ceiling
-
-            if at_respawn_ceiling(target.manifest):
-                fields = parse_manifest(target.manifest)
+            budget = _lead_op("read", path=str(target.manifest))
+            if budget.get("at_respawn_ceiling"):
+                fields = budget.get("fields") or {}
                 emit(
                     "lead_wake_refused",
                     {
@@ -770,7 +768,7 @@ def run_lead_wake(
                     (ask_fn or _ask_respawn_ceiling)(
                         target,
                         int(fields.get("respawn_count") or 0),
-                        respawn_ceiling(target.manifest),
+                        int(budget.get("respawn_ceiling") or 0),
                     )
                 except Exception:  # noqa: BLE001 - a failed ask never blocks the lane
                     summary["note"] = "successor ceiling question could not be raised"
@@ -836,14 +834,13 @@ def run_lead_wake(
                 summary["refused"].append({"scope": target.scope, "refusal": refusal})
         if holder_gone and spawned:
             # The new session does not exist yet; its trail is the walk's journal.
-            from fno.lead.state import parse_manifest as _pm
-
             emit(
                 "lead_spawned_successor",
                 {
                     "scope": target.scope,
                     "holder": target.holder,
-                    "old_session_id": _pm(target.manifest).get("harness_session_id") or "",
+                    "old_session_id": _manifest_fields(target.manifest).get("harness_session_id")
+                    or "",
                     "trigger": reason,
                 },
             )

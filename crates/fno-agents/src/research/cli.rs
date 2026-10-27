@@ -6,8 +6,6 @@
 //! another writer, 5 `config.research.output_dir` is unset, 6 the
 //! deliverable write failed.
 
-use std::path::PathBuf;
-
 use super::deliverable::{self, DeliverError, OUTPUT_DIR_UNSET};
 use super::engine::{self, RoundError, DEFAULT_MAX_RESULTS, NOTE_CLAIMED, NOTE_NO_SOURCES};
 use super::pyfmt;
@@ -171,20 +169,6 @@ fn parse(argv: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
-/// The project journal: the `FNO_EVENTS_PATH` pin, else the space journal
-/// of `$FNO_REPO_ROOT`, else of the cwd's repository.
-fn events_path() -> PathBuf {
-    if let Some(pin) = std::env::var_os("FNO_EVENTS_PATH").filter(|v| !v.is_empty()) {
-        return PathBuf::from(pin);
-    }
-    let anchor = std::env::var_os("FNO_REPO_ROOT")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
-    crate::paths::events_path(&anchor)
-}
-
 fn resolved_node(flag: Option<&str>) -> Option<String> {
     let flag = pyfmt::strip(flag.unwrap_or(""));
     if !flag.is_empty() {
@@ -268,7 +252,7 @@ pub fn run(argv: &[String]) -> i32 {
         }
     };
 
-    deliverable::emit_done_advisory(&events_path(), &delivered.slug);
+    deliverable::emit_done_advisory(&crate::paths::project_events_path(), &delivered.slug);
     println!(
         "research: shipped {} (+{}.sources.jsonl, {} cited) -> DoneAdvisory",
         delivered.brief_path.display(),
