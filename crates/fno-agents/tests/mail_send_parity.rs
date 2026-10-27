@@ -754,9 +754,9 @@ fn mail_send_lock_timeout_names_the_grace() {
     let out = child.wait_with_output().expect("wait mail send");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let _ = std::fs::remove_dir_all(&root);
-    let held = stdout.contains("queued (durable)") && stdout.contains("agent-lock-timeout");
+    let queued = stdout.contains("queued (durable)") && stdout.contains("agent-lock-timeout");
     let named = stderr.contains("Waiting for agent") && stderr.contains("lock was busy");
     let claims_dead = stderr.contains("is not live") || stderr.contains("fno agents resume");
     let report = format!("stdout:\n{stdout}\nstderr:\n{stderr}");
-    assert!(held && named && !claims_dead, "{report}");
+    assert!(queued && named && !claims_dead, "{report}");
 }
