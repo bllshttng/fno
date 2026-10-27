@@ -38,6 +38,9 @@ for i in "${!all[@]}"; do
 done
 
 echo "cargo-test-shard: shard $k/$n runs ${#mine[@]} of ${#all[@]} test names"
+# The --list above built every test binary. A full disk kills the runner
+# before its log uploads, so print the free space while it still can.
+df -h . || true
 if [ "${#mine[@]}" -eq 0 ]; then
   echo "cargo-test-shard: shard $k/$n has no tests; use fewer shards" >&2
   exit 1
