@@ -1966,11 +1966,11 @@ mod tests {
 
     #[test]
     fn a_page_over_the_primary_reply_limit_halves_until_it_fits() {
-        // Six rows of about 1 KB each, under a 4 KB reply limit: a full
-        // page refuses, so both readers must page smaller to advance.
-        let primary = test_primary::start_capped(4_000);
+        // Six rows of about 1.5 KB each, under a 5 KB reply limit: one change
+        // row fits, a full page refuses, so both readers must page smaller.
+        let primary = test_primary::start_capped(5_000);
         let (a, b) = (machine(), machine());
-        let long = |word: &str| format!("{word} {}", "x".repeat(1_000));
+        let long = |word: &str| format!("{word} {}", "x".repeat(1_500));
         on(&primary, &a);
         seed(&a.graph).unwrap();
         for i in 0..6 {
