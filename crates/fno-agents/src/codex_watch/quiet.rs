@@ -164,6 +164,13 @@ fn on_closed(decision: Action, closed: Option<&'static str>) -> Action {
     }
 }
 
+/// The skip a deliberately-stopped row records when its node also delivered:
+/// the revival rule's "record a skip reason instead". `None` proceeds into
+/// the ladder - an open node's revival stands.
+fn stopped_skip_reason(closed: Option<&'static str>) -> Option<String> {
+    closed.map(|why| format!("worker stopped on purpose; node {why}; never revived"))
+}
+
 fn action(episode: &mut Episode, tail: &Tail, now: i64, live: bool, dead: bool) -> Action {
     if episode.activity == 0 {
         episode.activity = tail.started_at.unwrap_or_default();
@@ -519,8 +526,18 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                 return Ok(());
             }
             // A row a lead stopped on purpose is the lead's, not quiet
-            // recovery's: send no nudge, no resume and no help for it.
+            // recovery's: send no nudge, no resume and no help for it. When
+            // its work also delivered, the revival rule records the skip it
+            // mandates; an open node stays the silent grace skip.
             if stopped.contains(entry.name.as_str()) {
+                if let Some(reason) = stopped_skip_reason(closed) {
+                    emitter
+                        .emit(
+                            "quiet_worker_skip",
+                            &json!({"session_id": sid, "node": node, "reason": reason}),
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
                 return Ok(());
             }
             let state_path = dir.join(format!("{sid}.json"));
@@ -885,6 +902,21 @@ mod tests {
         );
         let open = json!({"status": "in_progress", "superseded_by": null});
         assert_eq!(on_closed(Action::Recover, closed(&open)), Action::Recover);
+    }
+
+    #[test]
+    fn a_stopped_row_records_its_skip_only_on_a_delivered_node() {
+        for why in ["done", "superseded", "merged"] {
+            let reason = stopped_skip_reason(Some(why)).expect("delivered nodes record a skip");
+            assert!(
+                reason.contains(why) && reason.contains("never revived"),
+                "{reason}"
+            );
+        }
+        assert!(
+            stopped_skip_reason(None).is_none(),
+            "an open node's stopped worker keeps the silent grace skip"
+        );
     }
 
     #[test]

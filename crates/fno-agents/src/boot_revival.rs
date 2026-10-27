@@ -78,8 +78,16 @@ pub(crate) fn start(home: &AgentsHome) {
         );
         return;
     }
-    let closed = closed_nodes();
-    let (leads, workers, mut rows) = plan(&registry.entries, &listing, &closed, boot);
+    let (closed, merged) = closed_and_merged_nodes();
+    let deliberate = deliberate_stops(home);
+    let (leads, workers, mut rows) = plan(
+        &registry.entries,
+        &listing,
+        &closed,
+        &merged,
+        &deliberate,
+        boot,
+    );
     // Stamp the boot first: a daemon that dies mid-pass must not respawn the
     // fleet again on its next start. The tap is the fallback for a row the
     // pass never reached.
@@ -314,6 +322,8 @@ pub(crate) fn plan(
     entries: &[RegistryEntry],
     listing: &ClaudeAgentsSnapshot,
     closed_nodes: &HashSet<String>,
+    merged_nodes: &HashSet<String>,
+    deliberate_stops: &HashSet<String>,
     boot: u64,
 ) -> (Vec<String>, Vec<String>, Vec<ReceiptRow>) {
     let mut leads = Vec::new();
@@ -353,6 +363,19 @@ pub(crate) fn plan(
             Some("stopped" | "failed") => {
                 if e.role_level.is_some() {
                     leads.push(e.name.clone());
+                } else if let Some(node) = e
+                    .node
+                    .as_deref()
+                    .filter(|n| merged_nodes.contains(*n))
+                    .filter(|_| deliberate_stop(e, deliberate_stops))
+                {
+                    skipped.push(ReceiptRow::new(
+                        &e.name,
+                        "skipped",
+                        format!(
+                            "node {node}'s PR merged; worker stopped on purpose; never revived"
+                        ),
+                    ));
                 } else {
                     workers.push(e.name.clone());
                 }
@@ -397,16 +420,57 @@ fn revive(home: &AgentsHome, name: &str) -> ReceiptRow {
 }
 
 /// The nodes a revival must leave alone: done or superseded. A merged PR
-/// under a live node is a multi-ship node mid-flight; its worker comes back.
-/// The node's own status is the authority - the primary PR's merge state
-/// once read a multi-ship node closed and left its worker down during the
-/// 2026-10-10 reboot.
+/// under a live node is a multi-ship node mid-flight; its worker comes back
+/// UNLESS someone stopped it through fno (a deliberate stop, proven by a
+/// `StopRecord` or an `agent_stopped` event): a worker whose work delivered
+/// is never revived, whoever stopped it. The node's own status stays the
+/// authority for closure - the primary PR's merge state once read a
+/// multi-ship node closed and left its worker down during the 2026-10-10
+/// reboot.
 fn closed_row(row: &Value) -> bool {
     crate::graph_store::is_terminal_entry(row)
 }
 
-/// The closed set for this boot's pass.
-fn closed_nodes() -> HashSet<String> {
+/// True when the row proves a stop someone ran through fno: a `StopRecord`
+/// on the row, or an `agent_stopped` event naming it. A reboot death
+/// carries neither, which is what keeps the multi-ship worker coming back.
+fn deliberate_stop(e: &RegistryEntry, evidence: &HashSet<String>) -> bool {
+    e.stop.is_some() || evidence.contains(&e.name)
+}
+
+/// Every name an `agent_stopped` event ever carried, ageless: the stop
+/// evidence is durable-class (never auto-expires), so the whole store
+/// answers. A failed read empties the set and says so - the pass proceeds
+/// and only the merged-PR skip loses its proof.
+fn deliberate_stops(home: &AgentsHome) -> HashSet<String> {
+    let query = crate::event_store::EventQuery::of_types(&["agent_stopped"]);
+    let rows = match crate::event_store::query_events(
+        &crate::daemon::global_events_path(home),
+        &query,
+    ) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!(
+                "boot revival: agent_stopped read failed ({error}); merged-PR skips lose their stop proof"
+            );
+            return Default::default();
+        }
+    };
+    rows.into_iter()
+        .filter_map(|row| {
+            let value: Value = serde_json::from_str(&row.line).ok()?;
+            value
+                .get("data")
+                .unwrap_or(&value)
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+/// The closed and merged sets for this boot's pass.
+fn closed_and_merged_nodes() -> (HashSet<String>, HashSet<String>) {
     let rows = crate::graph_store::read_rows_where(
         &crate::graph_get::default_graph_path(),
         &crate::backlog::RowQuery {
@@ -417,6 +481,7 @@ fn closed_nodes() -> HashSet<String> {
                     "completed_at",
                     "id",
                     "status",
+                    "merge_status",
                 ]
                 .into_iter()
                 .map(str::to_string)
@@ -427,10 +492,20 @@ fn closed_nodes() -> HashSet<String> {
         },
     )
     .unwrap_or_default();
-    rows.iter()
-        .filter(|row| closed_row(row))
-        .filter_map(|row| crate::graph_store::entry_id(row).map(str::to_string))
-        .collect()
+    let mut closed = HashSet::new();
+    let mut merged = HashSet::new();
+    for row in &rows {
+        let Some(id) = crate::graph_store::entry_id(row) else {
+            continue;
+        };
+        if closed_row(row) {
+            closed.insert(id.to_string());
+        }
+        if row.get("merge_status").and_then(Value::as_str) == Some("merged") {
+            merged.insert(id.to_string());
+        }
+    }
+    (closed, merged)
 }
 
 fn ran_this_boot(recorded: Option<u64>, boot: u64) -> bool {
@@ -534,6 +609,8 @@ mod tests {
             ],
             &listing,
             &closed,
+            &HashSet::new(),
+            &HashSet::new(),
             boot,
         );
         assert_eq!(leads, vec!["quill"]);
@@ -543,6 +620,51 @@ mod tests {
         assert!(skipped.iter().all(|r| r.outcome == "skipped"));
         assert!(skipped[0].reason.contains("x-done"), "{skipped:?}");
         assert!(skipped[1].reason.contains("working"), "{skipped:?}");
+    }
+
+    #[test]
+    fn a_deliberately_stopped_worker_on_a_merged_node_stays_down() {
+        let mut stopped_by_record = row("kestrel", "11112222-bbbb", AgentStatus::Live);
+        stopped_by_record.node = Some("x-merged".into());
+        crate::state::record_stop(&mut stopped_by_record, "lead", None);
+        let mut stopped_by_event = row("quill", "9999aaaa-aaaa", AgentStatus::Live);
+        stopped_by_event.node = Some("x-merged".into());
+        let mut reboot_death = row("folio", "33334444-cccc", AgentStatus::Live);
+        reboot_death.node = Some("x-merged".into());
+        let mut lead = row("lead-quill", "aaaa1111-lead", AgentStatus::Live);
+        lead.role_level = Some(1);
+        lead.node = Some("x-merged".into());
+        crate::state::record_stop(&mut lead, "operator", None);
+        let listing = ClaudeAgentsSnapshot::known(vec![
+            ClaudeAgentRow::new("11112222", Some("stopped")),
+            ClaudeAgentRow::new("9999aaaa", Some("stopped")),
+            ClaudeAgentRow::new("33334444", Some("stopped")),
+            ClaudeAgentRow::new("aaaa1111", Some("stopped")),
+        ]);
+        let merged = HashSet::from(["x-merged".to_string()]);
+        let evidence = HashSet::from(["quill".to_string()]);
+        let (leads, workers, skipped) = plan(
+            &[stopped_by_record, stopped_by_event, reboot_death, lead],
+            &listing,
+            &HashSet::new(),
+            &merged,
+            &evidence,
+            BOOT,
+        );
+        assert_eq!(leads, vec!["lead-quill"], "a lead comes back regardless");
+        assert_eq!(
+            workers,
+            vec!["folio"],
+            "no stop proof reads as a reboot death: the worker comes back"
+        );
+        let names: Vec<_> = skipped.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["kestrel", "quill"], "{skipped:?}");
+        assert!(
+            skipped
+                .iter()
+                .all(|r| r.reason.contains("merged") && r.reason.contains("never revived")),
+            "{skipped:?}"
+        );
     }
 
     #[test]
