@@ -128,7 +128,8 @@ impl World {
             &path,
             format!(
                 "---\nfno_id: wake-fixture\nscope: {scope}\nharness: claude\n\
-                 harness_session_id: {SESSION}\ncreated_at: {BIRTH}\n{extra}---\n"
+                 harness_session_id: {}\ncreated_at: {BIRTH}\n{extra}---\n",
+                session_for(scope)
             ),
         )
         .unwrap();
@@ -190,8 +191,18 @@ fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
         "role_scope": scope,
         "role_level": 1,
         "created_at": "2026-08-28T12:00:00Z",
-        "harness_session_id": SESSION,
+        "harness_session_id": session_for(scope),
     })
+}
+
+/// One session per scope: the registry refuses two rows with one session
+/// id, and epic-x keeps the session its goldens name.
+fn session_for(scope: &str) -> String {
+    if scope == "epic-x" {
+        SESSION.to_string()
+    } else {
+        format!("{scope}-session")
+    }
 }
 
 type TruthStub =
@@ -377,7 +388,7 @@ fn run_json(
     } else {
         json!({"armed": false})
     };
-    json!({
+    let mut run = json!({
         "summary": summary,
         "events": rec.events(),
         "dispatches": rec.dispatches(),
@@ -386,8 +397,13 @@ fn run_json(
         "unread_calls": rec.unread(),
         "sidecar": world.read_sidecar(scope),
         "wake_times": world.wake_times(scope),
-        "wake_log": if wake_log { world.wake_log(scope) } else { None },
-    })
+    });
+    // Only a run that reads the wake log carries the key; the goldens of
+    // every other run predate it.
+    if wake_log {
+        run["wake_log"] = json!(world.wake_log(scope));
+    }
+    run
 }
 
 /// Compare one pass against the golden's run at `index`.
@@ -745,10 +761,9 @@ fn the_33rd_wake_is_refused_naming_ceiling_and_asks_once() {
 #[test]
 fn a_conflicted_scope_is_skipped() {
     let world = World::new();
-    let rows = world.set_registry(json!([
-        row("lead-a", &world.root(), "", "epic-x"),
-        row("lead-b", &world.root(), "", "epic-x"),
-    ]));
+    let mut second = row("lead-b", &world.root(), "", "epic-x");
+    second["harness_session_id"] = json!("lead-b-session");
+    let rows = world.set_registry(json!([row("lead-a", &world.root(), "", "epic-x"), second]));
     let rec = Rec::default();
     let outcome = run_with(
         &armed(),
