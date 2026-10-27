@@ -263,7 +263,7 @@ pub(crate) enum ChatRow {
         ts: String,
     },
     /// A You thread: the session whose transcript carries the operator's
-    /// typed Q&A pairs, newest first (node x-cecf).
+    /// typed Q&A pairs, newest first.
     YouThread {
         session_id: String,
         name: String,

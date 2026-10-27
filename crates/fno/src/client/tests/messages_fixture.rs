@@ -601,7 +601,7 @@ fn fixture_projection() -> serde_json::Value {
     })
 }
 
-/// The You tab (node x-cecf): rows read the projection's `you` array
+/// The You tab: rows read the projection's `you` array
 /// (newest first, one per session, unread off the chat-id read marks) and
 /// the detail paints the typed turn right, the reply left, per item.
 #[tokio::test]

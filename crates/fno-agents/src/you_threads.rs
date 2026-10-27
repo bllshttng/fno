@@ -2,7 +2,7 @@
 //! replies to them, read from one claude transcript and classified by the
 //! same provenance rules `fno-agents intel` folds with. This module is a
 //! consumer of [`crate::provenance`], never a second classifier: a rule
-//! change lands there once, and both readers move together (node x-cecf).
+//! change lands there once, and both readers move together.
 //!
 //! The walk's shape, settled on the live lead transcript `ed2248ff` (49400
 //! rows): a typed user row (or a human `queued_command` attachment, the

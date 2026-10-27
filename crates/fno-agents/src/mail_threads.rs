@@ -453,7 +453,7 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
             .cmp(&b.get("last_ts").and_then(Value::as_str))
     });
     // The You section rides the same projection: one row per registry-named
-    // claude session whose transcript carries typed turns (node x-cecf).
+    // claude session whose transcript carries typed turns.
     // Fail-open: without a resolvable home the section reads as absent.
     let you = crate::paths::AgentsHome::from_env_opt()
         .map(|home| {

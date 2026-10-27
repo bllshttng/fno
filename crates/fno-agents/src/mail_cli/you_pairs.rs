@@ -1,6 +1,5 @@
 //! The `mail unread --mine` leg: the caller's own session's You pairs on the
-//! terminal, the same data the mux Messages tab's You tab paints (node
-//! x-cecf). Resolution rides `resolve_self_identity`, the same ladder
+//! terminal, the same data the mux Messages tab's You tab paints. Resolution rides `resolve_self_identity`, the same ladder
 //! `fno whoami` uses; outside a session it refuses with the remedy.
 
 use crate::provenance::BusIndex;
