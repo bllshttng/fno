@@ -132,16 +132,9 @@ fn compare_agent_rows(
     now_secs: u64,
     order: &AgentOrder<'_>,
 ) -> Ordering {
-    // Pin rank leads every column: a pinned row keeps its seat first, then
-    // team leads by altitude, then the rest. The name lists are tiny (tens
-    // of entries), so the linear scans stay cheap.
-    let rank = |r: &AgentRow| {
-        (
-            order_rank(&r.name, order.pinned),
-            r.role_level.unwrap_or(u32::MAX),
-        )
-    };
-    let pin = rank(a).cmp(&rank(b));
+    // Pin rank leads every column: a pinned row keeps its seat first. The
+    // name lists are tiny (tens of entries), so the linear scans stay cheap.
+    let pin = order_rank(&a.name, order.pinned).cmp(&order_rank(&b.name, order.pinned));
     let order = match sort.column {
         AgentSortColumn::Status => {
             let a_key = attention_key(a, need_a);

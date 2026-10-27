@@ -65,13 +65,16 @@ fn set_test_projects_dir(dir: Option<&Path>) {
 /// The claude projects (transcript) base dir. Mirrors fno-agents'
 /// `claude_drive::claude_projects_dir` - mirrored, not imported: the crates
 /// share no types and the FILE is the contract (same rule as `roster_path`).
-fn claude_projects_dir() -> PathBuf {
+pub(crate) fn claude_projects_dir() -> PathBuf {
     #[cfg(test)]
     if let Some(p) = TEST_PROJECTS_DIR.with(|c| c.borrow().clone()) {
         return p;
     }
     if let Some(v) = std::env::var_os(CLAUDE_PROJECTS_DIR_ENV) {
         return PathBuf::from(v);
+    }
+    if let Some(v) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        return PathBuf::from(v).join("projects");
     }
     std::env::var_os("HOME")
         .map(PathBuf::from)
