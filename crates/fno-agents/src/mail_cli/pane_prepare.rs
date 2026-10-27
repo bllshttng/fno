@@ -171,7 +171,7 @@ fn pane_entry<'a>(registry: &'a Registry, session: &str, pane: u64) -> Option<&'
 }
 
 /// The undeclared-harness note prints once per harness per process, matching
-/// the Python `_UNDECLARED_NOTED` module state.
+/// Module state.
 fn note_undeclared_once(harness: &str, pane: u64) {
     static NOTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
     let mut noted = match NOTED.lock() {

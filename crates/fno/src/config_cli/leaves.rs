@@ -136,7 +136,7 @@ pub fn state_dir_value() -> PathBuf {
     }
 }
 
-/// Python `os.path.expanduser` for the `~/` shapes this reader meets.
+/// For the `~/` shapes this reader meets.
 fn expanduser(path: &str) -> String {
     match path.strip_prefix("~/") {
         Some(rest) => format!("{}/{rest}", home_dir().to_string_lossy()),

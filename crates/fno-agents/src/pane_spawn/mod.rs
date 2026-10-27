@@ -1409,7 +1409,7 @@ pub fn stamp_late_bind(
         .unwrap_or(false)
 }
 
-/// Python `_RECLAIMABLE_STATUSES`: a row in one of these statuses does not own
+/// A row in one of these statuses does not own
 /// its name; the spawn's write transaction drops the corpse and appends the
 /// replacement.
 fn is_reclaimable(status: AgentStatus) -> bool {
@@ -1513,7 +1513,7 @@ impl PaneReceipt {
         PaneReceipt { obj }
     }
 
-    /// Python `json.dumps` spacing (", " between items, ": " after keys) so
+    /// Spacing (", " between items, ": " after keys) so
     /// the printed receipt is byte-equal to the CLI's stdout, not
     /// serde_json-compact.
     pub fn to_json(&self) -> String {

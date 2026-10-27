@@ -299,7 +299,7 @@ fn local_date() -> String {
 }
 
 /// `handoff [--session-id S | --slug S | --scope S] [--name-only]`: print the
-/// save path for a canon handoff doc (Python `paths_cli.handoff` parity). The
+/// Save path for a canon handoff doc. The
 /// filename key is the session's canonical handle (first-8) unless --slug
 /// overrides. --scope keys the doc on the role instead -- a role outlives
 /// its sessions -- and returns the newest existing doc for that scope, so a
@@ -394,7 +394,7 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
                 }
                 // A concurrent refresh can unlink between read_dir and stat;
                 // a vanished candidate sorts oldest and the writer recreates
-                // the file anyway (Python `_mtime` parity).
+                // The file anyway.
                 let mtime = entry
                     .metadata()
                     .and_then(|m| m.modified())

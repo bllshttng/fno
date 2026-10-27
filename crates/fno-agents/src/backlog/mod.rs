@@ -201,7 +201,7 @@ pub fn content_version(entries: &[Value]) -> String {
 
     let mut hash = Sha256::new();
     for row in entries {
-        hash.update(crate::graph_store::to_python_json(row).as_bytes());
+        hash.update(crate::graph_store::to_python_pretty_json(row).as_bytes());
         hash.update([0]);
     }
     format!("sqlite:{:x}", hash.finalize())
@@ -1294,7 +1294,8 @@ pub(crate) fn write_changed(
             // ponytail: whole-graph canonical compare, removed when
             // single-row writes land.
             (Some(b), Some(a)) => {
-                crate::graph_store::to_python_json(b) == crate::graph_store::to_python_json(a)
+                crate::graph_store::to_python_pretty_json(b)
+                    == crate::graph_store::to_python_pretty_json(a)
                     || canonical_row(b) == canonical_row(a)
             }
             (None, None) => true,
@@ -1927,7 +1928,7 @@ fn sorted_value(value: &Value) -> Value {
 }
 
 fn canonical_row(row: &Value) -> String {
-    crate::graph_store::to_python_json(&sorted_value(&model::strip_nulls_value(row)))
+    crate::graph_store::to_python_pretty_json(&sorted_value(&model::strip_nulls_value(row)))
 }
 
 #[cfg(test)]
@@ -2552,8 +2553,8 @@ mod tests {
         for (was, now) in before.iter().zip(after.iter()) {
             if entry_id_from(now) != Some("ab-one") {
                 assert_eq!(
-                    crate::graph_store::to_python_json(was),
-                    crate::graph_store::to_python_json(now),
+                    crate::graph_store::to_python_pretty_json(was),
+                    crate::graph_store::to_python_pretty_json(now),
                     "a non-target row moved"
                 );
             }

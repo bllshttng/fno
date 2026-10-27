@@ -341,7 +341,7 @@ pub fn apply_field_update(entry: &mut Map<String, Value>, field: &str, update: &
 /// Byte compatibility is a port requirement, not cosmetic: the differential
 /// parity stage asserts the Rust store publishes the same bytes the Python
 /// store did, and every `fno backlog` consumer reads this file.
-pub fn to_python_json(value: &Value) -> String {
+pub fn to_python_pretty_json(value: &Value) -> String {
     let mut out = String::new();
     write_value(value, 0, &mut out);
     out
@@ -433,7 +433,7 @@ fn write_json_string(s: &str, out: &mut String) {
 pub fn serialize_graph_file(entries: &[Value]) -> String {
     let mut root = Map::new();
     root.insert("entries".to_string(), Value::Array(entries.to_vec()));
-    let mut out = to_python_json(&Value::Object(root));
+    let mut out = to_python_pretty_json(&Value::Object(root));
     out.push('\n');
     out
 }
@@ -441,7 +441,7 @@ pub fn serialize_graph_file(entries: &[Value]) -> String {
 /// The serialized READ result: the defaulted entries as a JSON array,
 /// byte-identical to Python's `json.dumps(read_graph(path), indent=2)`.
 pub fn serialize_entries(entries: &[Value]) -> String {
-    to_python_json(&Value::Array(entries.to_vec()))
+    to_python_pretty_json(&Value::Array(entries.to_vec()))
 }
 
 // ---------------------------------------------------------------------------
@@ -3270,7 +3270,7 @@ mod tests {
         // the Python leg.
         let v = json!({"entries": [{"id": "ab-1", "n": 2, "ok": true, "none": null,
             "nested": {"a": [1, 2]}, "uni": "h\u{e9}llo", "emoji": "\u{1f600}"}]});
-        let out = to_python_json(&v);
+        let out = to_python_pretty_json(&v);
         assert!(out.contains("\"uni\": \"h\\u00e9llo\""), "{out}");
         assert!(out.contains("emoji\": \"\\ud83d\\ude00\""), "{out}");
         assert!(out.starts_with("{\n  \"entries\": [\n    {\n      \"id\": \"ab-1\","));

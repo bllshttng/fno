@@ -81,7 +81,7 @@ pub enum CanonicalClass {
 pub fn resolve_canonical_resolution(get: &impl Fn(&str) -> Option<String>) -> CanonicalResolution {
     let (session, harness, disposition) = parse_canonical_stamp(get);
     let markers = present_markers(get);
-    // The vendor fold, inlined (Python `_vendor_identity`): first family
+    // The vendor fold, inlined : first family
     // wins; two ids of one family that disagree conflict; multiple families
     // resolve to nothing.
     let mut family: Option<String> = None;
@@ -923,7 +923,6 @@ pub fn resolve_attester_identity(
 }
 
 /// The row statuses under which a session still owns its identity. Mirror of
-/// Python `OWNERSHIP_LIVE_STATUSES`.
 const OWNERSHIP_LIVE_STATUSES: [&str; 6] =
     ["spawning", "ready", "idle", "busy", "live", "restarting"];
 

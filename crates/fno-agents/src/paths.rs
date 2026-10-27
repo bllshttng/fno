@@ -547,7 +547,7 @@ pub fn is_file_mode_0600(path: &Path) -> bool {
 /// back to the caller cwd -- the safe side (Failure Modes > Boundaries). From a
 /// linked worktree this returns the main checkout; from the main checkout it
 /// returns itself (so a `--fresh`-style redirect is a no-op there). Mirrors the
-/// Python `resolve_canonical_worktree` in `cli/src/fno/paths.py` so the two
+/// In `cli/src/fno/paths.py` so the two
 /// layers cannot drift (; review HIGH). Shared by the client `--fresh`
 /// dispatch (`bin/client.rs`).
 ///

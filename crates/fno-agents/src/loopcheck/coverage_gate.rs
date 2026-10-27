@@ -876,7 +876,7 @@ code-review attestation"
 }
 
 /// The event logs a coverage read consults, for the refusal text. Mirrors
-/// the Python `coverage_sources`: the project journal and the global one,
+/// The project journal and the global one,
 /// whatever resolved.
 fn coverage_sources(cwd: &Path) -> Vec<String> {
     let inputs = resolve_review_inputs(cwd, None, None, None, None, None);

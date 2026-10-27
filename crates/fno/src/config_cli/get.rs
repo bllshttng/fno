@@ -322,7 +322,7 @@ fn py_float(float: f64) -> String {
     }
 }
 
-/// Python `json.dumps` text: `", "` and `": "` separators, `ensure_ascii`
+/// Text: `", "` and `": "` separators, `ensure_ascii`
 /// escaping, compact enough containers rendered exactly as the old leg's.
 pub(super) fn py_json(value: &Value) -> String {
     match value {
@@ -345,7 +345,7 @@ pub(super) fn py_json(value: &Value) -> String {
     }
 }
 
-/// Python `json.dumps` string form with `ensure_ascii=True`.
+/// String form with `ensure_ascii=True`.
 fn py_json_string(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');

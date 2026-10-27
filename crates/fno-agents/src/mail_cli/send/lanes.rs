@@ -95,7 +95,7 @@ mod stage_gate_tests {
     }
 }
 
-/// Python `record_hosted_delivery`: the audit row naming the lane actually
+/// The audit row naming the lane actually
 /// injected into.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_hosted_delivery(
@@ -122,7 +122,7 @@ pub(super) fn record_hosted_delivery(
     bus_append_row(&row)
 }
 
-/// Python `durable_leg_story` caller: the positive wording or None.
+/// Caller: the positive wording or None.
 pub(super) fn durable_leg_story_or_none(
     reason: Option<&str>,
     recipient: Option<&str>,
@@ -134,7 +134,7 @@ pub(super) fn durable_leg_story_or_none(
     crate::mail_receipt::durable_leg_story(reason, suffix.as_deref(), recipient)
 }
 
-/// Python `_warn_deferred`: the stderr recovery ladder by arm.
+/// The stderr recovery ladder by arm.
 pub(super) fn warn_deferred(target: &str, project: bool, reason: Option<&str>) {
     let arm = if project {
         "project"
@@ -154,7 +154,7 @@ pub(super) fn warn_deferred(target: &str, project: bool, reason: Option<&str>) {
     eprintln!("{rendered}");
 }
 
-/// Python `bounce_reason`: the hold's clock receipt, or None when no hold
+/// The hold's clock receipt, or None when no hold
 /// runs.
 pub(super) fn bounce_reason(recipient: &str) -> Option<String> {
     let now = chrono::Utc::now();
@@ -228,7 +228,7 @@ pub(crate) struct NameLaneArgs<'a> {
     pub(crate) subject: Option<&'a str>,
 }
 
-/// Python `_name_lane_send`: the ONE choke point every delivery ladder rung
+/// The ONE choke point every delivery ladder rung
 /// lives in. Returns the lane outcome; the caller prints the exit refusals.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
@@ -751,7 +751,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
 // The lead lane (cli.py _resolve_to_lead_address twin)
 // ---------------------------------------------------------------------------
 
-/// Python `role.resolve_to_lead`: every live row holding the role right now,
+/// Every live row holding the role right now,
 /// by name, sorted. Territory equality; the alias widening is a documented
 /// simplification in this port.
 pub(super) fn resolve_to_lead(scope: &str) -> Result<Vec<String>, (String, i32)> {
@@ -782,7 +782,7 @@ pub(super) fn resolve_to_lead(scope: &str) -> Result<Vec<String>, (String, i32)>
     Ok(holders)
 }
 
-/// Python `_resolve_to_lead_address`: resolve --to-lead to (holder, body),
+/// Resolve --to-lead to (holder, body),
 /// or refuse. A refusal queues nothing.
 pub(super) fn resolve_to_lead_address(
     scope: &str,
@@ -831,7 +831,7 @@ pub(super) fn resolve_to_lead_address(
 // The kind lane, the job lane, the project lane printer
 // ---------------------------------------------------------------------------
 
-/// Python `dispatch_send_to_project`: one live peer delivers live by name,
+/// One live peer delivers live by name,
 /// none queues durable to the project, many refuse (exit 17) unless --any.
 pub(super) fn dispatch_send_to_project(
     project: &str,
@@ -1074,7 +1074,7 @@ mod project_demotion_tests {
 // The kind lane (cli.py cmd_send's --kind branch twin)
 // ---------------------------------------------------------------------------
 
-/// Python `inbox.store.resolve_project` at the send command's working dir, or
+/// At the send command's working dir, or
 /// the caller's --from-name. The error text names the real flags.
 /// `pub(crate)`: the reply leaf resolves its thread-store sender here.
 pub(crate) fn resolve_kind_sender(
@@ -1353,7 +1353,7 @@ pub(super) fn resolve_job_address(token: &str) -> Option<JobHolder> {
     None
 }
 
-/// Python `_resolve_node`: the claim status read over the claims root.
+/// The claim status read over the claims root.
 pub(super) fn resolve_node_holder(node_id: &str) -> JobHolder {
     let key = format!("node:{node_id}");
     let (state, record) = crate::claims::status(&key, None);
@@ -1420,7 +1420,7 @@ pub(super) fn node_ids_for_pr(pr: &str) -> Vec<String> {
     out
 }
 
-/// Python `job_lane_send`: deliver to the WORK, resolved to whoever holds
+/// Deliver to the WORK, resolved to whoever holds
 /// the claim right now. A holder live-injects; a miss floors durable to the
 /// job address; no holder refuses (exit 16) and queues nothing.
 #[allow(clippy::too_many_lines)]
@@ -1817,7 +1817,7 @@ fn record_typed_delivery(
     bus_append_row(&row)
 }
 
-/// Python `_forced_pane_send`: --force changes only the TRANSPORT; every
+/// --force changes only the TRANSPORT; every
 /// mail semantic is kept. The receipt says `typed`, never `delivered`.
 /// Simplification documented for this port: a thread-substrate row (no
 /// mux/pane ref) refuses here rather than resolving a retask viewport.

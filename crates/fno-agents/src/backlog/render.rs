@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 
-/// Python `json.dumps` string escaping: ASCII stays, control characters take
+/// String escaping: ASCII stays, control characters take
 /// their short forms, and everything non-ASCII becomes `\uXXXX` (surrogate
 /// pairs above the BMP).
 fn escape_py_string(s: &str, out: &mut String) {
