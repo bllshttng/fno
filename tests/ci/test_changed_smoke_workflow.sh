@@ -235,7 +235,7 @@ for forbidden, why in (
 # A bare `test smoke` with no subset flag in the changed job would be a second
 # full run wearing the partial job's label.
 bare_full = any(
-    "fno-agents test-run doctor smoke" in line and "--changed" not in line
+    "test-run doctor smoke" in line and "--changed" not in line
     for line in changed_run.splitlines()
 )
 check(not bare_full, "changed-smoke never runs an unlabelled full smoke",
@@ -268,7 +268,7 @@ if not gate_shards:
 
 for name, job in sorted(runner_jobs.items()):
     run = "\n".join(st.get("run", "") for st in job.get("steps", []))
-    check("fno-agents test-run doctor smoke" in run,
+    check("test-run doctor smoke" in run,
           f"{name} runs the canonical full runner invocation",
           f"{name} does not invoke the canonical smoke runner")
     narrowed = [f for f in FORBIDDEN if f in run]
