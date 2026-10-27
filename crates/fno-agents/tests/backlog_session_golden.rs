@@ -150,7 +150,7 @@ fn a_second_open_by_the_same_session_refuses_and_keeps_the_acquire_time() {
 }
 
 #[test]
-fn open_joins_the_spawn_handover_claim_this_session_own() {
+fn open_joins_a_spawn_handover_or_target_claim_this_session_owns() {
     let (_dir, config, graph) = sandbox();
     seed(
         &graph,
@@ -184,6 +184,39 @@ fn open_joins_the_spawn_handover_claim_this_session_own() {
     let receipt: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(receipt["status"], "joined");
     assert_eq!(receipt["holder"], "spawn-handover:worker-a");
+
+    // A target worker on an unplanned node plans under its own target claim.
+    seed(
+        &graph,
+        &[serde_json::json!({
+            "id": "x-cccc3334", "title": "n", "status": "design",
+            "project": "fno", "slug": "n",
+        })],
+    );
+    let outcome = fno_agents::claims::acquire(
+        "node:x-cccc3334",
+        "target-session:sess-golden-0001",
+        fno_agents::claims::AcquireOpts {
+            ttl_ms: Some(60_000),
+            root: Some(graph.parent().unwrap().join("claims-root")),
+            ..Default::default()
+        },
+    );
+    assert!(matches!(
+        outcome,
+        fno_agents::claims::AcquireOutcome::Acquired(_)
+    ));
+    let (code, stdout, stderr) = session(
+        &config,
+        &graph,
+        &["open", "x-cccc3334", "--json"],
+        &[],
+        false,
+    );
+    assert_eq!(code, 0, "{}{}", stdout, stderr);
+    let receipt: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(receipt["status"], "joined");
+    assert_eq!(receipt["holder"], "target-session:sess-golden-0001");
 }
 
 #[test]
