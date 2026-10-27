@@ -909,7 +909,6 @@ pub(crate) fn judge_plan_rows(
 ) -> Value {
     let plan_text = std::fs::read_to_string(plan_path).unwrap_or_default();
     let (kind, rows, timeout_reason) = judge_rows(&plan_text, node_id, cwd, lenses, spawn, budget);
-    let tripped = timeout_reason.is_some();
     if let Some(reason) = timeout_reason {
         stamp_judge_timeout(plan_path, &reason);
     } else {

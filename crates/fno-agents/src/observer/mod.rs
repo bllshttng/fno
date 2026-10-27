@@ -68,8 +68,8 @@ fn events_paths(cwd: &Path) -> Vec<PathBuf> {
 struct Finding<'a> {
     run_id: &'a str,
     item: &'a Value,
-    dimension: &str,
-    verdict: &str,
+    dimension: &'a str,
+    verdict: &'a str,
     evidence: String,
     cost_usd: f64,
     skill_ref: Option<&'a str>,
@@ -550,7 +550,7 @@ fn run_sweep_finish(
         );
         return 5;
     }
-    if let Some(line) = evidence_line {
+    if let Some(line) = &evidence_line {
         if let Some(obj) = summary.as_object_mut() {
             obj.insert("evidence_line".to_string(), json!(line));
         }
@@ -944,7 +944,7 @@ fn truthy(v: &Value) -> bool {
 }
 
 /// `_arg_value` (cli.py:426): the token after *flag*, or None.
-fn arg_value(args: &[String], flag: &str) -> Option<&String> {
+fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a String> {
     args.iter()
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1))
@@ -1069,7 +1069,7 @@ fn replay_cost_cap(cwd: &Path) -> f64 {
         cwd,
         &["loops", "observer_harness", "budget_usd_per_run"],
     )
-    .and_then(|v| v.as_f64());
+    .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)));
     match budget {
         Some(b) => PER_ITEM_CAP_USD.min(b),
         None => PER_ITEM_CAP_USD,
@@ -1490,6 +1490,10 @@ fn replay_run(
             }
         }
         let scored = if findings.is_empty() { 0 } else { 1 };
+        let skill_id = item
+            .get("skill_id")
+            .and_then(Value::as_str)
+            .unwrap_or("fno:blueprint");
         let item_version = item
             .get("skill_version")
             .and_then(Value::as_str)
@@ -1497,7 +1501,7 @@ fn replay_run(
             .to_string();
         let mut summary = fold::build_run_summary(
             run_id,
-            &skill_id,
+            skill_id,
             &item_version,
             &findings,
             1, // truthful: a single-item replay batch

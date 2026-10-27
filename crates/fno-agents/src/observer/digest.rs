@@ -89,7 +89,7 @@ fn ranking_lines(summary: &Value) -> String {
 }
 
 /// `_write_digest`'s body (cli.py:261). `date` is the `%Y-%m-%d` stamp.
-pub(crate) fn sweep_digest_body(summary: &Value, skill: &str, mode: &str, date: &str) -> String {
+pub(crate) fn sweep_digest_body(summary: &Value, _skill: &str, mode: &str, date: &str) -> String {
     let skill_id = summary
         .get("skill_id")
         .and_then(Value::as_str)
@@ -253,7 +253,7 @@ fn crosstab_row(label: &str, cell: &Value) -> String {
 }
 
 /// The attempt -> PR (survivorship-corrected) block (cli.py:780).
-fn append_attempt_block(body: &mut String, summary: &Value, coverage: &Value) {
+fn append_attempt_block(body: &mut String, _summary: &Value, coverage: &Value) {
     body.push_str("## Attempt -> PR (survivorship-corrected)\n\n");
     let no_pr = coverage
         .get("no_pr_attempts")
