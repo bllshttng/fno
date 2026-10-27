@@ -73,8 +73,8 @@ async fn agents_tab_space_reaches_the_reply() {
     let layout = v.peek_layout(&chrome, &lines);
     assert_eq!(layout.origin.1, 0, "flush with the sideline's left edge");
     assert!(layout.framed.width < v.panel_w() as usize);
-    // A press inside the dock is the dock's, never the hidden row's.
-    assert!(modal_mouse(&mut v, left_click(layout.origin.0 as u16 + 1, 1)));
+    let press = left_click(layout.origin.0 as u16 + 1, 1);
+    assert!(modal_mouse(&mut v, press), "the dock owns the press");
     // On an odd column height a full dock never covers the answered row.
     let long: Vec<String> = (0..99).map(|i| format!(" line {i}")).collect();
     v.term.0 = 29;

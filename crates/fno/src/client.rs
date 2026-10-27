@@ -8496,14 +8496,14 @@ fn consume_modal_close_gesture(view: &mut View, kind: MouseKind) -> bool {
 /// Family-B name and confirmation overlays own every pointer event while open.
 /// The pre-pass's esc-chip tap cancels them; outside clicks are swallowed so
 /// they cannot dismiss the modal or reach a pane underneath it. The
-/// Connections modal joins them. The centered peek does NOT: it is click-
-/// through (a right-press under it opens the row's menu). The dock owns its box.
+/// Connections modal joins them. The centered peek is click-through; the dock owns its box.
 fn modal_mouse(view: &mut View, rep: crate::mouse::MouseReport) -> bool {
     let peek_open = view.peek.is_some();
     if !peek_open && consume_modal_close_gesture(view, rep.kind) {
         return true;
     }
-    view.active_overlay_layout().is_some_and(|l| !peek_open || view.dock_holds(&l, rep))
+    view.active_overlay_layout()
+        .is_some_and(|l| !peek_open || view.dock_holds(&l, rep))
 }
 
 /// Route one stdin chunk: the selector consumes keys while open (AC6-FR
