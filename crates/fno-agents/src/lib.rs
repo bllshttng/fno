@@ -1845,6 +1845,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // arm and `fno agents reap`). Python's attended `lead done` emits the
     // same kind through the shared emitter.
     "agent_team_vacated",
+    // The schema's canonical spelling of the same vacate (the alias pair in
+    // event_store::EVENT_TYPE_ALIASES): the native `org done` and the team
+    // spawn's succession write it.
+    "agent_role_vacated",
     // A succession reverted: the reap sweep restored the predecessor's
     // session after a successor died unbound past the window (team_reap.rs;
     // the daemon retire arm and `fno agents reap`).
