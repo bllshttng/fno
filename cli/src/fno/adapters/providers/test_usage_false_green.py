@@ -1,4 +1,4 @@
-"""The zai false green, the key-position label, and the confidence field (x-763a).
+"""The zai false green, the key-position label, and the confidence field.
 
 Run: cd cli && uv run pytest src/fno/adapters/providers/test_usage_false_green.py -v
 
@@ -7,7 +7,8 @@ Every payload here is a LIVE capture, not a synthesized shape. The sibling
 row leaves ``()``, which correctly reads unknown. A MIXED row list is the only
 shape that produces the defect and it is the shape the live endpoint returns,
 so every fixture in this module carries more than one row or reproduces a
-measured production body.
+measured production body. The verdict-side pins of the false-green criterion
+live in the Rust parity suites beside the deleted Python leg.
 """
 from __future__ import annotations
 
@@ -16,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from fno.adapters.providers.runtime_state import HeadroomState, _headroom_from
 from fno.adapters.providers.usage import (
     UsageSnapshot,
     UsageWindow,
@@ -46,58 +46,23 @@ def _snap(windows, **kw):
     )
 
 
-class TestZaiFalseGreen:
-    """AC1-HP / AC2-ERR: the binding window must survive, and green must not."""
+class TestZaiParseSurfaces:
+    """The parse-half of the false-green criterion: what survives the leg.
 
-    def test_a_walled_five_hour_cap_in_the_live_shape_does_not_read_ok(
+    The verdict half reads OK / LOW / EXHAUSTED through the Rust parity
+    suites; what stays here pins the parser contract the verdict consumed.
+    """
+
+    def test_todays_live_payload_parses_both_windows(
         self, zai_live
     ) -> None:
-        """AC2-ERR, the false-green criterion, on the condition that killed the
-        workers: the SAME live shape with the five-hour TOKENS_LIMIT full.
-
-        Today the row is dropped for its missing nextResetTime and the
-        surviving one-minute tool limit answers at 0.625%, so headroom reads OK
-        on a provider inside its five-hour wall. That is the false green.
-
-        The criterion is stated against a walled payload rather than against
-        today's near-empty one on purpose. Once the window is retained, today's
-        body genuinely IS green - both windows report headroom - and asserting
-        otherwise would floor the lane at LOW on every reading, which is the
-        pessimism AC3-EDGE forbids. What must never happen is a green reached
-        WITHOUT the binding window, and only a walled fixture can tell the two
-        apart.
-        """
-        walled = json.loads(json.dumps(zai_live))
-        tokens = [r for r in walled["data"]["limits"] if r["type"] == "TOKENS_LIMIT"]
-        assert tokens and "nextResetTime" not in tokens[0]
-        tokens[0]["percentage"] = 97
-
-        snap = _snap(_parse_zai_windows(walled))
-        verdict = _headroom_from(snap, None, now=1787000000.0, threshold_pct=80.0)
-        assert verdict.state is not HeadroomState.OK, (
-            "a green reached without reading the binding window is the false green"
-        )
-
-    def test_todays_live_payload_reads_green_from_both_windows_not_from_one(
-        self, zai_live
-    ) -> None:
-        """The other half of AC2-ERR: today's body is genuinely green, and it
-        must be green on the strength of BOTH windows rather than one.
-
-        The five-hour cap is near-empty right now, so OK is the true answer.
-        The fix is that the verdict is now computed over the window that
-        matters instead of over whatever survived the parse.
-        """
+        """Today's body parses to both windows, the shape a true green needs."""
         windows = _parse_zai_windows(zai_live)
         assert {w.label for w in windows} == {"1m", "5h"}
-        verdict = _headroom_from(
-            _snap(windows), None, now=1787000000.0, threshold_pct=80.0
-        )
-        assert verdict.state is HeadroomState.OK
 
     def test_a_rejected_row_marks_the_snapshot_partial(self) -> None:
-        """AC2-ERR. A row of a KNOWN limit type that fails the usability guard
-        poisons the response; it must not vanish from it."""
+        """A row of a KNOWN limit type that fails the usability guard poisons
+        the response; it must not vanish from it."""
         payload = {
             "success": True,
             "code": 200,
@@ -118,14 +83,9 @@ class TestZaiFalseGreen:
         }
         windows, partial = _parse_zai_windows(payload, with_partial=True)
         assert partial is True
-        snap = _snap(windows, partial=True)
-        verdict = _headroom_from(snap, None, now=1787000000.0, threshold_pct=80.0)
-        assert verdict.state is not HeadroomState.OK
 
-    def test_a_wholly_well_formed_response_is_not_partial_and_still_reads_ok(
-        self,
-    ) -> None:
-        """AC3-EDGE. The floor must not make every reading pessimistic."""
+    def test_a_wholly_well_formed_response_is_not_partial(self) -> None:
+        """The floor must not make every reading pessimistic."""
         payload = {
             "success": True,
             "code": 200,
@@ -151,17 +111,6 @@ class TestZaiFalseGreen:
         windows, partial = _parse_zai_windows(payload, with_partial=True)
         assert len(windows) == 2
         assert partial is False
-        verdict = _headroom_from(
-            _snap(windows, partial=False), None, now=1787000000.0, threshold_pct=80.0
-        )
-        assert verdict.state is HeadroomState.OK
-
-    def test_a_reset_less_window_at_full_reads_exhausted(self) -> None:
-        """AC5-ERR. A missing reset must never downgrade a certain exhaustion
-        to unknown: the window can never be 'already reset', so it always binds."""
-        snap = _snap([UsageWindow(label="5h", used_pct=100.0, resets_at=None)])
-        verdict = _headroom_from(snap, None, now=1787000000.0, threshold_pct=80.0)
-        assert verdict.state is HeadroomState.EXHAUSTED
 
 
 class TestIncoherentTimeLimitReset:

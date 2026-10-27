@@ -24,6 +24,8 @@ use std::path::{Path, PathBuf};
 
 use fno::{bootstrap, cli_args, mux_cli, proto};
 
+mod config_route_cli;
+
 /// Commands removed from the mux front, and what replaced each one.
 ///
 /// A removed command that lands on the bare usage banner makes the caller re-read
@@ -68,6 +70,7 @@ enum Role {
     /// `config setup run` composes on. Native, so the inventory answers
     /// beside the setup command that reads it.
     ConfigDefaults(Vec<OsString>),
+    ConfigRoute(Vec<OsString>),
     ConfigSchema(Vec<String>),
     /// The native read-side `config` doors (get, history, build-dir,
     /// assert-subagent-budget, status-sinks, active-backlog, plugin install).
@@ -1220,6 +1223,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::config_defaults::classify(args) {
         return Role::ConfigDefaults(rest);
     }
+    if let Some(rest) = config_route_cli::classify(args) {
+        return Role::ConfigRoute(rest);
+    }
     if let Some(rest) = fno::config_schema::classify(args) {
         return Role::ConfigSchema(rest);
     }
@@ -1482,6 +1488,7 @@ fn main() {
         Role::Uninstall(opts) => std::process::exit(fno::uninstall::run_uninstall(opts)),
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
+        Role::ConfigRoute(rest) => std::process::exit(config_route_cli::run(&rest)),
         Role::ConfigSchema(rest) => std::process::exit(fno::config_schema::run(&rest)),
         Role::ConfigCli(door) => std::process::exit(match door {
             fno::config_cli::Door::Get(rest) => fno::config_cli::get::run(&rest),

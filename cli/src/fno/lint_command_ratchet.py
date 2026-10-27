@@ -99,6 +99,11 @@ NATIVE_SERVED_LEAVES = {
     "backlog session close",
     "backlog session open",
     "backlog session reap-open",
+    # The route spellings answer through the front classifier now; the
+    # Python registry dropped every mount in the route-family port.
+    "config route",
+    "config routing",
+    "doctor route",
     "config schema",
     # The observer family (sweep | judge | replay) answers from the native
     # spawn-overlay door now; the doctor group's typer tree no longer mounts it.
