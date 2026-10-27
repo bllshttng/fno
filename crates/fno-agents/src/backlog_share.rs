@@ -1306,12 +1306,15 @@ fn catch_up(
         cursor,
         ..Receipt::default()
     };
+    let mut limit = PAGE;
     loop {
-        let (page, _) = read_page(
+        let page = read_page(
             remote,
             "SELECT seq, ops FROM backlog_changes WHERE seq > ?1 ORDER BY seq LIMIT ?2",
             cursor,
+            &mut limit,
         )?;
+        limit = (limit * 2).min(PAGE);
         if page.rows.is_empty() {
             return Ok(receipt);
         }
@@ -1339,15 +1342,15 @@ fn catch_up(
 }
 
 /// Read one page of `sql`, whose `?1` is the key to read past and `?2` the
-/// row limit, and return it with the limit it took. sqld refuses a reply
-/// over its size limit, so a refused page halves until it fits. A single
-/// row over the limit still refuses.
-fn read_page(remote: &Remote, sql: &str, after: i64) -> Result<(Reply, i64), String> {
-    let mut limit = PAGE;
+/// row limit. sqld refuses a reply over its size limit, so a refused page
+/// halves `limit` until it fits; a single row over the limit still refuses.
+/// The caller keeps `limit` across pages, so a run of large rows does not
+/// pay the refusals again on every page.
+fn read_page(remote: &Remote, sql: &str, after: i64, limit: &mut i64) -> Result<Reply, String> {
     loop {
-        match remote.execute(sql, &[SqlValue::Integer(after), SqlValue::Integer(limit)]) {
-            Err(e) if limit > 1 && e.contains("Response is too large") => limit /= 2,
-            read => return read.map(|page| (page, limit)),
+        match remote.execute(sql, &[SqlValue::Integer(after), SqlValue::Integer(*limit)]) {
+            Err(e) if *limit > 1 && e.contains("Response is too large") => *limit /= 2,
+            read => return read,
         }
     }
 }
@@ -1518,17 +1521,19 @@ fn primary_rows(
     let mut out = Vec::new();
     for (table, columns) in columns {
         let mut rows = Vec::new();
-        let mut after = 0;
+        let (mut after, mut limit) = (0, PAGE);
         loop {
-            let (page, limit) = read_page(
+            let page = read_page(
                 remote,
                 &format!(
                     "SELECT rowid, {} FROM \"{table}\" WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
                     quoted(columns)
                 ),
                 after,
+                &mut limit,
             )?;
             let full = page.rows.len() as i64 == limit;
+            limit = (limit * 2).min(PAGE);
             for mut row in page.rows {
                 after = row[0].integer().unwrap_or(after);
                 row.remove(0);
