@@ -935,28 +935,46 @@ fn handoff_prepare_run(args: &[String]) -> i32 {
         return 10;
     }
     // The exact release: a holder mismatch must RAISE, never report a
-    // release that did not happen. The claim door answers per-holder.
+    // release that did not happen. The claim door answers per-holder, and
+    // the ENGINE receipt decides, not the exit code: a foreign-held or
+    // already-released claim also exits 0 with a no-op receipt (the operator
+    // surface names it and moves on), so a release whose DELETE matched
+    // nothing must not read as custody proven. --with-claim is the engine
+    // surface for exactly this: `released` is true only when the row went.
     let release = Command::new(self_exe())
         .arg("claim")
         .arg("release")
         .arg(&claim_key)
         .arg("--holder")
         .arg(&holder)
+        .arg("--json")
+        .arg("--with-claim")
         .output();
-    let release = match release {
-        Ok(out) if out.status.success() => Some(out),
-        _ => None,
+    let released = match release {
+        Ok(out) if out.status.success() => std::str::from_utf8(&out.stdout)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+            .and_then(|receipt| receipt.get("released").and_then(|flag| flag.as_bool()))
+            .unwrap_or(false),
+        _ => false,
     };
-    if release.is_none() {
+    if !released {
         let restored = restore_manifest(&state, &archive, &digest);
+        // Name the holder the store still shows, so the handoff_failed
+        // event tells the operator whose claim blocked the handoff.
+        let live_holder = crate::claims::status(&claim_key, None)
+            .1
+            .filter(|record| !record.holder.is_empty())
+            .map(|record| record.holder)
+            .unwrap_or_else(|| "none".to_string());
         println!(
             "{}",
             serde_json::json!({
                 "ok": false,
                 "reason": format!(
                     "exact claim release failed: source claim {claim_key:?} is absent on disk \
-                     or held by another holder; the session cannot prove it holds the node to \
-                     hand off"
+                     or held by another holder (live holder: {live_holder}); the session cannot \
+                     prove it holds the node to hand off"
                 ),
                 "archive_path": archive.to_string_lossy(),
                 "restored": restored,
