@@ -41,8 +41,9 @@ READER FAILED main_ci: gh api branches/main returned no head sha
 control plane: <FOLDED>
 READER FAILED self_hold: current session identity is unavailable
 READER FAILED state_root_drift: inventory doc unreadable: neither FNO_STATE_ROOT_INVENTORY_DOC nor <ROOT>/plugin-stage/fno/docs/state-root-inventory.md is a file; run `fno doctor update` to restage the plugin
+boot_revival: none
 parked: none
-coverage: 17 of 37 readings ok
+coverage: 18 of 38 readings ok
 failed readers: user_notes (no canon handoff doc for scope epic-y), blueprint (no session id; cannot count this lead's blueprint subagents), escalations (unreadable (No such file or directory (os error 2))), state_root_drift (inventory doc unreadable: neither FNO_STATE_ROOT_INVENTORY_DOC nor <ROOT>/plugin-stage/fno/docs/state-root-inventory.md is a file; run `fno doctor update` to restage the plugin), capacity (gate payload did not parse: EOF while parsing a value at line 1 column 0: ), layout (layout unavailable: no stderr), workers (every status_age_s is null), answered (questions folder <ROOT>/spaces/<ROOTSLUG>-repo/questions unreadable: No such file or directory (os error 2)), posture (no session id resolved from the ambient environment), refusal_rate (no session id resolved from the ambient environment), pushback (no session id; cannot attribute pushback spans), subagents (no session id resolved from the ambient environment), wake_meter (no session id resolved from the ambient environment), correction_meter (no session id resolved from the ambient environment), drain (drain payload did not parse: EOF while parsing a value at line 1 column 0: ), held (the attention arm has not written items.json), repeated_asks (no session id resolved from the ambient environment), skill_drift (no session id resolved from the ambient environment), main_ci (gh api branches/main returned no head sha), self_hold (current session identity is unavailable)
 vs last beat (2026-10-24T10:00:00Z): open_prs 3 -> 0, free_claim_no_driver 1 -> 0, blocked 2 -> 0, owned_active 5 -> 3
 change: attention: <FOLDED>

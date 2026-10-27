@@ -1,0 +1,1 @@
+{"worker":[{"id":"m1","thread":"t1","from":"lead","to":"worker","kind":"send","body":"first","ts":"2026-10-12T09:00:00Z"}],"proj":[]}

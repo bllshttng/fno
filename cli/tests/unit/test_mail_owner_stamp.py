@@ -16,9 +16,9 @@ from fno.paths_testing import use_tmpdir
 
 
 def _bus():
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
-    return list(iter_messages())
+    return read_rows()
 
 
 def test_classify_matrix():
@@ -34,5 +34,6 @@ def test_write_new_thread_stamps_owner_and_ttl_on_bus(tmp_path, monkeypatch):
     write_new_thread("claude-cafe0001", "web", "send", "hello", owner=DurableOwner.WAKE_DAEMON.value)
     msgs = _bus()
     assert len(msgs) == 1
-    assert msgs[0].meta.get("owner") == "wake-daemon"
-    assert msgs[0].meta.get("ttl_at")  # derived from owner class + created ts
+    meta = msgs[0].get("meta") or {}
+    assert meta.get("owner") == "wake-daemon"
+    assert meta.get("ttl_at")  # derived from owner class + created ts

@@ -37,7 +37,7 @@ fn failed_reader_prints_own_line_and_beat_continues() {
         .any(|l| l.starts_with("workers:") && l.contains("overdue watches unmeasured")));
     assert!(lines
         .iter()
-        .any(|l| l.starts_with("coverage: 20 of 22 readings ok")));
+        .any(|l| l.starts_with("coverage: 21 of 23 readings ok")));
     assert!(lines.iter().any(|l| l.contains("failed readers: board (")
         && l.contains(", watch_expiry (watch expiry event has no valid timestamp)")));
     assert_eq!(

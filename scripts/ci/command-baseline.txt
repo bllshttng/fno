@@ -97,7 +97,6 @@ mail
 mail send !--origin !--provider
 mux
 notify
-observer
 paths
 plan
 pr-watch
