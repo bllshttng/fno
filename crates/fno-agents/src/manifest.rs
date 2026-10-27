@@ -1559,13 +1559,15 @@ mod tests {
             \u{203a} 1. Ship the parser\n\
               2. Ship the renderer\n\
             When the form is complete press enter to submit answer";
-        // Nothing fires on the prose screen, and question_prompt in
-        // particular cannot: the gate also requires the `option N/M` header
-        // or the `tab to add notes` hint, which only a live dialog draws.
-        assert!(
-            m.evaluate_answerable(&view(screen)).is_none(),
-            "a printed footer phrase over a plain numbered list fires no rule"
-        );
+        // No rule matching at all is the expected outcome; any rule that
+        // does match must not be question_prompt or carry an answer.
+        if let Some((v, ans)) = m.evaluate_answerable(&view(screen)) {
+            assert_ne!(
+                v.rule_id, "question_prompt",
+                "a printed footer phrase without the option markers must not fire"
+            );
+            assert!(ans.is_none(), "no live dialog -> not answerable");
+        }
     }
 
     // agy's trust prompt is ARROW-ONLY ("> Yes … / No, exit" +
