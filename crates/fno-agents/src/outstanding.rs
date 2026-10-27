@@ -388,7 +388,9 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                         live: None,
                         host: opt_str(data, "origin_machine")
                             .filter(|m| *m != crate::claims::machine_id())
-                            .map(|_| opt_str(data, "host").unwrap_or_else(|| "another machine".into())),
+                            .map(|_| {
+                                opt_str(data, "host").unwrap_or_else(|| "another machine".into())
+                            }),
                     },
                 );
             }

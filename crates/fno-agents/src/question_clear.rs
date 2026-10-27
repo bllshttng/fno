@@ -872,9 +872,12 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             let host = question_event["data"]["host"]
                 .as_str()
                 .unwrap_or("another machine");
+            let origin_id = question_event["data"]["origin_question_id"]
+                .as_str()
+                .unwrap_or(qid);
             refused += 1;
             answer.lines.push(format!(
-                "outstanding: refused: {qid} was asked on {host}. Nothing was closed; answer it on {host}, and the close reaches this machine within a minute."
+                "outstanding: refused: {qid} was asked on {host}. Nothing was closed; answer {origin_id} on {host}, and the close reaches this machine within a minute."
             ));
             continue;
         }

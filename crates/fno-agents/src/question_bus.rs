@@ -193,6 +193,12 @@ WHERE machine_id = ? AND question_id = ? AND closed_at IS NULL"
     Ok(steps.len())
 }
 
+/// A copy's local id: the origin's id with its host, so a fixed id two
+/// machines both use (`provider-cap:<lane>`) stays two questions here.
+pub(crate) fn copy_id(qid: &str, host: &str) -> String {
+    format!("{qid}@{host}")
+}
+
 /// Copy new peer questions in, close copies their origin closed, and close
 /// copies whose origin row is gone (closed and aged out while this machine
 /// was away: an origin never deletes an open row). Returns (copied, closed,
@@ -205,46 +211,45 @@ FROM fleet_question WHERE machine_id != ?",
     )?;
     let index = me.index();
     let local = fold(&index);
-    let mut seen: HashSet<(&str, &str)> = HashSet::new();
+    let mut seen: HashSet<String> = HashSet::new();
     let mut hosts: Vec<String> = Vec::new();
     let (mut copied, mut closed) = (0, 0);
     for row in &reply.rows {
         let text = |i: usize| row.get(i).and_then(SqlValue::text).unwrap_or_default();
         let (machine, qid, host) = (text(0), text(1), text(2));
         let open = row.get(3).is_none_or(|v| *v == SqlValue::Null);
-        seen.insert((machine, qid));
+        let id = copy_id(qid, host);
         if !hosts.iter().any(|h| h == host) {
             hosts.push(host.to_string());
         }
-        if open && !local.asked.contains_key(qid) {
+        if open && !local.asked.contains_key(&id) {
             // The record rides a second read, one row at a time: a full
             // table of records in one reply crosses the primary's reply limit.
             let Some(mut record) = fetch_record(remote, machine, qid)? else {
                 continue;
             };
             if let Some(data) = record.get_mut("data").and_then(Value::as_object_mut) {
+                data.insert("question_id".into(), json!(id));
+                data.insert("origin_question_id".into(), json!(qid));
                 data.insert("origin_machine".into(), json!(machine));
                 data.insert("host".into(), json!(host));
             }
             crate::provider_cap::append_questions_row(&index, &record)?;
             copied += 1;
-        } else if !open && local.asked.contains_key(qid) && !local.closed.contains_key(qid) {
+        } else if !open && local.asked.contains_key(&id) && !local.closed.contains_key(&id) {
             let reason = format!("closed on {host}: {}", text(4));
-            crate::provider_cap::append_questions_row(&index, &peer_close(qid, &reason, host))?;
+            crate::provider_cap::append_questions_row(&index, &peer_close(&id, &reason, host))?;
             closed += 1;
         }
+        seen.insert(id);
     }
-    for (qid, event) in &local.asked {
-        let origin = event["data"]["origin_machine"].as_str().unwrap_or_default();
-        if is_own(event, &me.machine)
-            || local.closed.contains_key(qid)
-            || seen.contains(&(origin, qid.as_str()))
-        {
+    for (id, event) in &local.asked {
+        if is_own(event, &me.machine) || local.closed.contains_key(id) || seen.contains(id) {
             continue;
         }
         let host = event["data"]["host"].as_str().unwrap_or("its machine");
         let reason = format!("gone from {host}");
-        crate::provider_cap::append_questions_row(&index, &peer_close(qid, &reason, host))?;
+        crate::provider_cap::append_questions_row(&index, &peer_close(id, &reason, host))?;
         closed += 1;
     }
     hosts.sort();
@@ -349,7 +354,9 @@ mod tests {
             root: tb.path().into(),
         };
 
-        // B asks; A's beat copies it once, stamped with B's host.
+        // B asks; A's beat copies it once, stamped with B's host, beside
+        // A's own question of the same id.
+        ask(&a, "q-1");
         ask(&b, "q-1");
         assert_eq!(beat(remote, &b).unwrap().published, 1);
         let first = beat(remote, &a).unwrap();
@@ -364,7 +371,7 @@ mod tests {
                 ..Beat::default()
             }
         );
-        let copy = fold(&a.index()).asked["q-1"].clone();
+        let copy = fold(&a.index()).asked["q-1@hostb"].clone();
         assert_eq!(
             (copy["data"]["host"].as_str(), peer_origin(&copy)),
             (Some("hostb"), Some("m-B"))
