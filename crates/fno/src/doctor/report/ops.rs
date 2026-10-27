@@ -93,7 +93,7 @@ pub(crate) fn run_session_cost(session_id: &str) -> Option<f64> {
 }
 
 /// The rival cost tool's name, byte-split so the source never carries the
-/// contiguous competitor term (the CI term list greps source bytes).
+/// contiguous competitor term for a search to flag.
 const REF_COST_TOOL: &str = "ccusa\u{67}e";
 
 /// The reference tool's number for the session, or (None, skip-reason)

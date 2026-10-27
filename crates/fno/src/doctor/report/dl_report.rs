@@ -52,10 +52,11 @@ fn walk_to_repo_root() -> std::path::PathBuf {
 }
 
 /// `evals.stale_days` from the config ladder, the deleted leg's
-/// `int(getattr(load_settings().evals, "stale_days", 7) or 7)`: a falsy or
-/// unreadable value reads the door's own default.
+/// `int(getattr(load_settings().evals, "stale_days", 7) or 7)`: the highest
+/// layer carrying the key wins, and a falsy value there reads the door's own
+/// default, never a lower layer's value.
 fn evals_stale_days() -> i64 {
-    for path in config_candidates() {
+    for path in config_candidates().into_iter().rev() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -67,9 +68,7 @@ fn evals_stale_days() -> i64 {
             .and_then(|e| e.get("stale_days"))
             .and_then(|v| v.as_integer())
         {
-            if v != 0 {
-                return v;
-            }
+            return if v != 0 { v } else { 7 };
         }
     }
     7

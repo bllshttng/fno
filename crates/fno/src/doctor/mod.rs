@@ -248,7 +248,10 @@ fn echo_stdout(line: &str) {
 }
 
 /// One bounded subprocess capture (the `_bounded_command` shape: a hung
-/// probe returns None instead of wedging the report).
+/// probe returns None instead of wedging the report). The pipes drain only
+/// after exit, so every caller must run a command with bounded output: a
+/// child that fills the OS pipe buffer before exiting blocks on write and
+/// dies at the deadline, reading as None.
 pub(crate) fn bounded_command_for(argv: &[String], secs: u64) -> Option<(i32, String, String)> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     run_bounded(argv, deadline)
