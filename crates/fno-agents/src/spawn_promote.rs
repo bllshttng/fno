@@ -24,11 +24,17 @@ pub struct Promotion {
     caller_session: Option<String>,
 }
 
-/// The calling session as the grant check reads it, and its session id.
-/// The kinds follow Python `calling_agent_row`: an identity fno cannot place
-/// is `unreadable`, an identity with no row is `unregistered`, no identity
-/// at all is an attended `human`.
-fn caller(home: &AgentsHome) -> (Value, Option<String>) {
+/// The calling session, read the way Python `calling_agent_row` read it: an
+/// identity fno cannot place is unreadable, an identity with no row is
+/// unregistered, no identity at all is an attended human.
+pub(crate) enum Calling {
+    Human,
+    Unreadable(Option<String>),
+    Unregistered(String),
+    Agent(Box<crate::state::RegistryEntry>, String),
+}
+
+pub(crate) fn calling_row(home: &AgentsHome) -> Calling {
     let get = |k: &str| std::env::var(k).ok();
     let ident = crate::spawn_context::resolve_self_identity(&get, None, None, home);
     let stamp = crate::spawn_context::parse_canonical_stamp(&get).2;
@@ -42,28 +48,39 @@ fn caller(home: &AgentsHome) -> (Value, Option<String>) {
             CanonicalDisposition::NameOnly | CanonicalDisposition::Complete
         ));
     if !placed {
-        return (json!({"kind": "unreadable"}), session);
+        return Calling::Unreadable(session);
     }
-    let (Some(sid), Some(harness)) = (session.clone(), ident.harness.clone()) else {
+    let (Some(sid), Some(harness)) = (session, ident.harness.clone()) else {
         let stray = get("FNO_AGENT_SELF").is_some_and(|v| !v.trim().is_empty());
-        return (
-            json!({"kind": if stray { "unreadable" } else { "human" }}),
-            None,
-        );
+        return if stray {
+            Calling::Unreadable(None)
+        } else {
+            Calling::Human
+        };
     };
     match crate::state::load_registry(&home.registry_json()) {
-        Err(_) => (json!({"kind": "unreadable"}), Some(sid)),
+        Err(_) => Calling::Unreadable(Some(sid)),
         Ok(registry) => match registry.find_by_session(&harness, &sid) {
-            None => (json!({"kind": "unregistered"}), Some(sid)),
-            Some(row) => {
-                let row = serde_json::to_value(row).unwrap_or(Value::Null);
-                let mut out = json!({"kind": "agent"});
-                for key in ["name", "status", "role_scope"] {
-                    out[key] = row[key].clone();
-                }
-                (out, Some(sid))
-            }
+            None => Calling::Unregistered(sid),
+            Some(row) => Calling::Agent(Box::new(row.clone()), sid),
         },
+    }
+}
+
+/// The calling session as the grant check reads it, and its session id.
+fn caller(home: &AgentsHome) -> (Value, Option<String>) {
+    match calling_row(home) {
+        Calling::Human => (json!({"kind": "human"}), None),
+        Calling::Unreadable(sid) => (json!({"kind": "unreadable"}), sid),
+        Calling::Unregistered(sid) => (json!({"kind": "unregistered"}), Some(sid)),
+        Calling::Agent(row, sid) => {
+            let row = serde_json::to_value(&*row).unwrap_or(Value::Null);
+            let mut out = json!({"kind": "agent"});
+            for key in ["name", "status", "role_scope"] {
+                out[key] = row[key].clone();
+            }
+            (out, Some(sid))
+        }
     }
 }
 

@@ -25,7 +25,7 @@ crossing	crates/fno-agents/src/backlog/publish.rs	let mut child = Command::new(c
 crossing	crates/fno-agents/src/backlog/reconcile_cli.rs	let py = crate::scrape::fno_bin();
 crossing	crates/fno-agents/src/bin/client.rs	let out = std::process::Command::new(fno_agents::scrape::fno_bin())
 crossing	crates/fno-agents/src/bin/client.rs	let err = std::process::Command::new(fno_agents::scrape::fno_bin())
-crossing	crates/fno-agents/src/bin/client.rs	let mut cmd = Command::new(fno_agents::scrape::fno_bin());
+crossing	crates/fno-agents/src/list_render.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/blueprint_judge.rs	return match Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/blueprint_judge.rs	let child = Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/claim_cli/reap.rs	let bin = crate::scrape::fno_bin().to_string_lossy().into_owned();

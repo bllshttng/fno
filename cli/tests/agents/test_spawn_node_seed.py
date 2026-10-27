@@ -155,9 +155,15 @@ def test_node_seeded_spawn_launches_in_the_ensured_worktree(monkeypatch, runner,
     received = _stub_pane_path(monkeypatch, rec=dict(_ENCODED, cwd="/repo"))
     seen: dict = {}
 
-    def fake_command_call(command, payload, unavailable_cls, **kw):
-        seen["verb"] = command
-        seen["payload"] = dict(payload)
+    def fake_command_call(command, payload, unavailable_cls=None, **kw):
+        # The folded flow makes other door asks around the ensure seam; answer
+        # the resolve ask the way the door does, and pin the ensure call
+        # itself, not the last call on the wire.
+        if command == "route-slot" and payload.get("mode") == "resolve":
+            return {"harness": "claude", "source": "builtin-default"}
+        if command == "launch-workdir":
+            seen["verb"] = command
+            seen["payload"] = dict(payload)
         return {"workdir": str(tmp_path / "wt")}
 
     import fno.rust_binary as rb
@@ -201,11 +207,13 @@ def _stub_row(monkeypatch, row):
 
 
 def _stub_command(monkeypatch, answer=None, *, unavailable=None):
+    from fno.rust_binary import CommandUnavailable
+
     import fno.rust_binary as rb
 
     seen: list = []
 
-    def _call(command, payload, unavailable_cls, **kw):
+    def _call(command, payload, unavailable_cls=CommandUnavailable, **kw):
         seen.append(payload.get("node_seed", payload))
         if unavailable is not None:
             raise unavailable_cls(str(unavailable))
@@ -278,7 +286,7 @@ def _stub_command_seq(monkeypatch, answers):
 
     seen: list = []
 
-    def _call(command, payload, unavailable_cls, **kw):
+    def _call(command, payload, unavailable_cls=None, **kw):
         seen.append(payload.get("node_seed", payload))
         return answers.pop(0) if answers else {"action": "pass"}
 

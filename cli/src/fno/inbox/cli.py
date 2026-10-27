@@ -3,12 +3,9 @@
 Mints the inbox root (unit 2 of the command reorg). approvals
 and notify fold in whole - each app is registered here exactly as it was
 registered at the top level, so `fno inbox approvals ls` etc. reach the same
-commands `fno approvals ls` did. The lead board LEAF joins them too (ruling
-d-8c62113b: a leaf places by its own meaning); the lead root itself stays put
-here and folds into agents in a later unit, so `board_cmd` is registered under
-both `lead` and `inbox` rather than moved. The board read answers at the Rust
-front door; this mount serves only `--last-run`. outstanding and its day relay
-are the Rust front's nested commands: no Python mount.
+commands `fno approvals ls` did. The lead board, `--last-run` included,
+answers at the Rust front door. outstanding and its day relay are the Rust
+front's nested commands: no Python mount.
 
  (d-add90c60): the human-authority commands join the human-facing group.
 `decisions` and the whole `law` app are the Rust front's nested commands (no
@@ -22,7 +19,6 @@ import typer
 
 from fno.approvals_cli import approvals_app
 from fno.inbox.operator_turns import operator_app
-from fno.lead.cli import board_cmd
 from fno.notify.cli import notify_app
 
 inbox_app = typer.Typer(
@@ -40,4 +36,3 @@ inbox_app.add_typer(notify_app, name="notify")
 # alias so existing scripts keep working.
 inbox_app.add_typer(operator_app, name="user")
 inbox_app.add_typer(operator_app, name="operator", hidden=True)
-inbox_app.command("board")(board_cmd)

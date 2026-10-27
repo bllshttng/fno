@@ -2009,9 +2009,11 @@ def register_existing_session(
     _REGISTERED_STATUS: AgentStatus = status or "idle"
 
     # A restore can strip a row's stamp; a manifest naming this session re-stamps it when bare.
-    from fno.lead.state import manifest_role_for_session
+    from fno.agents.role import lead_manifest_call
 
-    manifest_role = manifest_role_for_session(session_id, owner_cwd=cwd)
+    manifest_role = lead_manifest_call(
+        "for-session", session_id=session_id, owner_cwd=str(cwd or "")
+    ).get("fields")
 
     def _apply_manifest_role(entry: AgentEntry) -> None:
         if manifest_role and not entry.role_scope:
@@ -2320,7 +2322,7 @@ def _arm_role_after_identification(entry: AgentEntry, session_id: str) -> None:
     if entry.role_level is None or not entry.role_scope:
         return
     try:
-        from fno.lead.state import arm_lead_manifest
+        from fno.agents.role import arm_lead_manifest
 
         arm_lead_manifest(entry.role_scope, session_id, row=entry)
     except (OSError, ValueError) as exc:
