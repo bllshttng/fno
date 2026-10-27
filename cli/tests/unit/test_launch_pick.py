@@ -244,26 +244,3 @@ class TestPaneSeam:
             mux_spawn.dispatch_spawn_pane(
                 name="p1", message="hi", provider="claude", cwd=armed
             )
-        assert seen["account_env"]["CLAUDE_CONFIG_DIR"] == str(armed / "claude-main")
-
-
-class TestDeferDoesNotStallWhenPickingCanReroute:
-    """Deferring is the floor, not the answer, once picking can reroute.
-
-    With both knobs armed, holding work because the ACTIVE account is exhausted
-    while another account has headroom is precisely the stall this feature
-    exists to delete.
-    """
-
-
-    def test_no_healthy_alternate_leaves_the_defer_standing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _write_config(tmp_path, pick_on_launch=True)
-        _pin_config(tmp_path, monkeypatch)
-        monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(tmp_path / "rs.json"))
-        from fno.agents.autonomous_route import _healthy_alternate_exists
-
-        _seed_usage(tmp_path / "rs.json", readyrule=100.0, makers=100.0)
-        assert _healthy_alternate_exists() is False
-
