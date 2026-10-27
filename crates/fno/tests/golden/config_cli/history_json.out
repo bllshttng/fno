@@ -1,0 +1,2 @@
+{"type":"config_write","ts":"2026-10-21T10:00:00Z","data":{"key":"blueprint.max_prs_per_epic","new_value":"6","scope":"global","root_kind":"state","config_path":"global","present_before":false,"present_after":true}}
+{"type":"config_write","ts":"2026-10-20T10:00:00Z","data":{"key":"review.max_rounds","old_value":"2","new_value":"5","scope":"project","root_kind":"project","config_path":"<FIXTURE>/project/.fno/config.toml","present_before":true,"present_after":true,"attester_session_id":"sess-1","attester_witness":"hook"}}

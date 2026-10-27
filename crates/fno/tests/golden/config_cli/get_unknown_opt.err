@@ -1,0 +1,4 @@
+Usage: fno config get [OPTIONS] KEY
+Try 'fno config get --help' for help.
+
+Error: No such option: --nope
