@@ -169,11 +169,11 @@ A webhook sink receives the `Delivery` body. The body carries `delivery_id`, `ev
 
 ## Chat channels
 
-A chat channel sends each open question to one chat as one message. A reply in that message's thread answers it. The channels are Telegram, Discord, and iMessage through a BlueBubbles server. Each one is off until the user turns it on with `fno config setup run --only messaging`. The setup step walks the channel's own steps, writes the secret to `~/.fno/.env` with mode 0600, appends one row, and sends one test message.
+A chat channel sends each open question to one chat as one message. A reply in that message's thread answers it. The channels are Telegram, Discord, and iMessage through a BlueBubbles server. Each one is off until its row exists in config.toml. Keep the row's secret in `~/.fno/.env`, so the daemon reads it.
 
 A chat row is an `[[attention.sinks]]` row with `type` set to `telegram`, `discord` or `bluebubbles`. Every row carries `name`, `type`, `machine`, `token_env` and `allow`. Telegram adds `chat_id`. Discord adds `channel_id`. BlueBubbles adds `url` and `chat_guid`, and its `token_env` names the server password. A loopback `url` is legal for BlueBubbles, because the server runs on the same Mac.
 
-`machine` names the one machine that runs the row. Setup stamps it with that machine's id. Another machine's arm skips the row and names the skip in the tick detail. One owner is needed: Telegram allows one poller per bot, and two arms will each post every question. `allow` lists the sender ids that can answer. A row with an empty `allow` is refused. A reply from anyone else records nothing and gets one refusal line in the thread.
+`machine` names the one machine that runs the row: the same platform id the claims carry in their `machine` field. A row with no `machine` is refused, and the refusal names this machine's id. Another machine's arm skips the row and names the skip in the tick detail. One owner is needed: Telegram allows one poller per bot, and two arms will each post every question. `allow` lists the sender ids that can answer. A row with an empty `allow` is refused. A reply from anyone else records nothing and gets one refusal line in the thread.
 
 Each beat runs the chat stage after the ntfy and webhook sinks. It posts a close line for each delivered question that left the open set. It posts each new ready question once per row. Then it reads replies from a stored cursor. The state lives in `~/.fno/state/attention/chat.json`. It keeps the delivery rows keyed by the same delivery id as the sinks, and one cursor per row. A transient failure retries next beat in the same classes as the sinks. A failed read holds the cursor. The first read of a fresh row skips the chat's history.
 

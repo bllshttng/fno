@@ -196,7 +196,9 @@ pub fn parse_chat_rows(
         };
         match str_of("machine") {
             None => {
-                refuse("no machine: setup stamps the one machine that runs it".into());
+                refuse(format!(
+                    "no machine: name the one machine that runs it (this one is {machine})"
+                ));
                 continue;
             }
             Some(m) if m != machine => {
