@@ -72,6 +72,7 @@ pub mod attach;
 pub(crate) mod attended;
 pub mod attention;
 pub mod attention_arm;
+pub mod attention_chat;
 pub mod attention_file;
 pub mod attention_http;
 pub mod attention_reply;

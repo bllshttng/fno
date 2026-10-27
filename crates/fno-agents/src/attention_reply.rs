@@ -797,6 +797,7 @@ mod tests {
             "mux",
             &crate::attention_file::FileAnswer::Option(1),
             "sink",
+            "needs_door",
             "mux",
         )
         .unwrap();

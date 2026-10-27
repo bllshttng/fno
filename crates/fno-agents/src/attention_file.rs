@@ -399,6 +399,27 @@ fn section<'a>(body: &'a str, name: &str) -> Option<Vec<&'a str>> {
     None
 }
 
+/// One typed answer: a single letter (a, b, c) or digit maps to its option,
+/// any other text reads as words. The page cell and the chat lane both read
+/// through here, so a reply means the same thing on every surface.
+pub fn parse_answer_text(text: &str) -> FileAnswer {
+    let cell = text.trim();
+    let lowered = cell.to_ascii_lowercase();
+    if lowered.len() == 1 {
+        let c = lowered.as_bytes()[0];
+        if c.is_ascii_lowercase() {
+            return FileAnswer::Option(u32::from(c - b'a' + 1));
+        }
+        if c.is_ascii_digit() {
+            return cell
+                .parse::<u32>()
+                .map(FileAnswer::Option)
+                .unwrap_or(FileAnswer::Words(unescape_text(cell)));
+        }
+    }
+    FileAnswer::Words(unescape_text(cell))
+}
+
 /// The user's answer read out of one page. The typed `answer` cell in the
 /// frontmatter reads first: a letter (a, b, c) or a number maps to its
 /// option, any other words read as the answer, and an empty cell is never an
@@ -415,20 +436,7 @@ pub fn read_page_answer(text: &str) -> FileAnswer {
         .map(str::trim)
         .filter(|a| !a.is_empty())
     {
-        let lowered = cell.to_ascii_lowercase();
-        if lowered.len() == 1 {
-            let c = lowered.as_bytes()[0];
-            if c.is_ascii_lowercase() {
-                return FileAnswer::Option(u32::from(c - b'a' + 1));
-            }
-            if c.is_ascii_digit() {
-                return cell
-                    .parse::<u32>()
-                    .map(FileAnswer::Option)
-                    .unwrap_or(FileAnswer::Words(unescape_text(cell)));
-            }
-        }
-        return FileAnswer::Words(unescape_text(cell));
+        return parse_answer_text(cell);
     }
     let mut ticked: Vec<u32> = Vec::new();
     if let Some(lines) = section(&body, "Options") {
@@ -996,6 +1004,8 @@ mod tests {
         // A typed letter records its option.
         let b = page.replacen("answer: ''", "answer: b", 1);
         assert_eq!(read_page_answer(&b), FileAnswer::Option(2));
+        // The chat lane reads a reply through the same parser.
+        assert_eq!(parse_answer_text(" b "), FileAnswer::Option(2));
         let c = page.replacen("answer: ''", "answer: C", 1);
         assert_eq!(read_page_answer(&c), FileAnswer::Option(3));
         // A typed number too.
