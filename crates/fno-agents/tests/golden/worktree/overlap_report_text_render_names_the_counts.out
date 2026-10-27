@@ -1,0 +1,5 @@
+1 distinct worktree overlap observation(s) in the last 28 days
+  worktrees: 1  observers: 1
+  first: <TS>  latest: <TS>
+  1x  /fix/repo/wt
+  report: fno agents workspace worktree overlaps --since 28 --json

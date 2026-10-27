@@ -30,41 +30,6 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None,
 # ===========================================================================
 
 
-def test_health_load_config_failsopen_on_invalid_settings(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC2-HP (Finding B): load_config fails open when config_file() triggers validation error.
-
-    When user_settings=None (default), load_config calls _paths.config_file() which
-    triggers full Pydantic model validation. If settings.yaml has a validation error
-    (e.g. glob in state_dir), config_file() raises ValidationError.
-    load_config must catch that and fall back to defaults.
-    """
-    from fno.health_monitor import load_config, DEFAULT_CONFIG
-
-    # Write an invalid settings.yaml - glob char in state_dir fails Pydantic validation
-    bad_settings = tmp_path / "bad-settings.yaml"
-    bad_settings.write_text(
-        "schema_version: 1\nconfig:\n  state_dir: '/home/*/fno'\n",
-        encoding="utf-8",
-    )
-    # Wire FNO_CONFIG to point at the bad settings file
-    monkeypatch.setenv("FNO_CONFIG", str(bad_settings))
-    # Clear caches so the new bad settings are picked up
-
-    # Call with user_settings=None (default) so _paths.config_file() is called
-    # Should not raise; should return defaults
-    result = load_config(
-        project_settings=tmp_path / "nonexistent.yaml",
-        user_settings=None,  # triggers _paths.config_file() call
-    )
-    # The result should be the defaults (bad file is ignored gracefully)
-    assert isinstance(result, dict), "load_config must return a dict even on bad settings"
-    assert "thresholds" in result, "result must contain defaults thresholds key"
-    # thresholds should match defaults (or close) - not explode
-    assert result["thresholds"]["idea_pile_depth"] == DEFAULT_CONFIG["thresholds"]["idea_pile_depth"]
-
-
 def test_collision_load_thresholds_failsopen_on_invalid_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

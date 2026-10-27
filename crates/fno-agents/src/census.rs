@@ -1064,6 +1064,12 @@ pub async fn census() -> Vec<Value> {
 /// Run the daemon-free census subcommand.  The process walk stays in Rust so
 /// Python callers and the machine sample share one table implementation.
 pub async fn run_command(args: &[String]) -> i32 {
+    // The yard fold nests here as an argv op (crate::yard), so it adds no
+    // fno-agents root action (shrink law d-fe66560a): `census yard` is the
+    // roster command's identity dimension.
+    if args.first().map(String::as_str) == Some("yard") {
+        return crate::yard::run(&args[1..]);
+    }
     // `fno agents orphans`: the sweep rides the census action as an argument
     // (law d-fe66560a allows no new client action); the sweep body lives in
     // orphans.rs.

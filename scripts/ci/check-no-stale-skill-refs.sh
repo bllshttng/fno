@@ -45,7 +45,6 @@ ALLOWLIST_PATHS=(
   # they are the NEW pattern, not stale callers of the OLD pattern.
   cli/src/fno/codemap_cli/
   cli/src/fno/tokens/
-  cli/src/fno/worktree_cli/
   scripts/diagnostics/
 )
 

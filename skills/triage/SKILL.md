@@ -377,5 +377,5 @@ A row with `source_kind: external_request` holds visitor text from the public bo
   (or falls back to the in-repo module when `fno` is not on PATH)
 - `cli/src/fno/graph/store.py` — `locked_mutate_graph()` entry point
 - `~/.fno/cache/pages/graph.md` — the kanban view that reflects applied changes
-- `cli/src/fno/health_monitor.py` — threshold evaluation,
+- `crates/fno-agents/src/backlog/triage_health.rs` — threshold evaluation,
   notification dispatch, history append/read, trend summary
