@@ -539,10 +539,7 @@ pub(crate) fn build_calibration(
         .count();
     let cells = |v: &str, o: &str| -> i64 { table[v].get(o).and_then(Value::as_i64).unwrap_or(0) };
     let fp = cells("pass", "bounced") + cells("pass", "reverted");
-    let passes = COUNTABLE_VERDICTS
-        .iter()
-        .map(|o| cells("pass", o))
-        .sum::<i64>();
+    let passes = OUTCOMES.iter().map(|o| cells("pass", o)).sum::<i64>();
     json!({
         "state": "ok",
         "n": n,
