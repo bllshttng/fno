@@ -491,10 +491,15 @@ fn sweep_skill(cwd: &Path, skill: &str, since: i64, judge_n: usize, json_out: bo
         None,
         true,
     );
+    // A sweep is a read-only fold; the run_complete schema requires the key.
+    if let Some(obj) = summary.as_object_mut() {
+        obj.insert("cost_usd".to_string(), json!(0.0));
+    }
     run_sweep_finish(
         &mut summary,
         skill,
         &items,
+        scored_count,
         judge_n,
         &epaths,
         json_out,
@@ -509,10 +514,12 @@ fn sweep_skill(cwd: &Path, skill: &str, since: i64, judge_n: usize, json_out: bo
 /// The sweep's tail (cli.py 398-430): the optional judge pass, the terminal
 /// run_complete (its failure is exit 5 - the digest alone is not the machine
 /// contract), the evidence line for the digest, and the stdout state print.
+#[allow(clippy::too_many_arguments)]
 fn run_sweep_finish(
     summary: &mut Value,
     skill: &str,
     items: &[Value],
+    scored_count: usize,
     judge_n: usize,
     epaths: &[PathBuf],
     json_out: bool,
@@ -558,19 +565,9 @@ fn run_sweep_finish(
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let digest = write_sweep_digest(summary, skill, "sweep", &cwd);
-    let scored = summary
-        .get("pass_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        + summary
-            .get("degraded_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-        + summary
-            .get("fail_count")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-    let state = if scored as usize == items.len() {
+    // Items with at least one verdict, never the per-dimension finding count.
+    let scored = scored_count;
+    let state = if scored == items.len() {
         "ok"
     } else {
         "partial"
