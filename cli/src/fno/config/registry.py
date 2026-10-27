@@ -706,7 +706,7 @@ FIELD_META: dict[str, Meta] = {
     # --- config.lead.* (the lead loop; both default false) ---
     "lead.enabled": Meta("advanced", "Arm the lead loop: hold a lead session open while its board names work it can shrink. Defaults false."),
     "lead.autonomous_merge": Meta("advanced", "Let the lead merge a green mergeable PR. Defaults false; until set, a mergeable PR is reported and never counted as the lead's own work."),
-    "lead.wake_enabled": Meta("advanced", "Arm the pr-watch tick's wake phase: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false."),
+    "lead.wake_enabled": Meta("advanced", "Arm the fno-agents daemon's lead-wake arm: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Runs inside the fno-agents daemon; the pr-watcher LaunchAgent is no longer in the path. Defaults false."),
     "lead.wake_ceiling": Meta("advanced", "Wakes allowed per scope per ROLLING 24h (default 32, ~1.5x the worst measured day). Never a lifetime constant: a lifetime cap strands a long-lived lead."),
     "lead.wake_debounce_seconds": Meta("advanced", "Minimum gap between billed wakes (default 900): a lead woken inside the window is still working under its own in-session arm."),
     "lead.wake_backstop_seconds": Meta("advanced", "Timer-backstop interval (default 1800). An approximation of the mail and board-change triggers, kept so a missed event cannot strand a scope forever; the interval is a policy choice, not a measurement."),

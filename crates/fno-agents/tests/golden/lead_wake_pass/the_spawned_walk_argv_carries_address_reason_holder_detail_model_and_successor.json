@@ -1,0 +1,24 @@
+{
+ "argv": [
+  "fno-agents",
+  "loop",
+  "run",
+  "--driver",
+  "lead",
+  "--scope",
+  "epic-x",
+  "--model",
+  "glm-5.3-flash[1m]",
+  "--wake",
+  "--wake-reason",
+  "board",
+  "--wake-holder",
+  "lead-x",
+  "--wake-address",
+  "aa11bb22",
+  "--wake-detail",
+  "added: x-2 (ready/p1)",
+  "--wake-successor"
+ ],
+ "label": "the spawned walk argv carries address reason holder detail model and successor"
+}

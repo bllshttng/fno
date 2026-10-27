@@ -1635,6 +1635,14 @@ pub(super) fn run_name_lane_force(
     }
 }
 
+/// Python `resolve_or_suggest`: discovery lists LIVE sessions only, so an
+/// asleep session takes the token ladder (inject probe, then wake).
+fn live_discovery_hit(token: &str) -> Option<ReachableSession> {
+    let hit = resolve_reachable(token).hit?;
+    let state = crate::truth_probe::family1_truth_state(&hit.session_id)?;
+    matches!(state.as_str(), "working" | "watching" | "your-move").then_some(hit)
+}
+
 /// The registered-name lane: dispatch_send first; its unknown-name refusal
 /// falls into the shared name-lane choke point carrying the raw token, where
 /// exit 16 lives at the BOTTOM of the ladder.
@@ -1742,20 +1750,16 @@ pub(super) fn run_dispatch_then_name_lane(
             }
             // Discovery is a liveness-gated LISTING, so unknown means "not
             // listed", not "not reachable": fall into the name lane.
-            let reach = resolve_reachable(token);
+            let live = live_discovery_hit(token);
             let suggestions: Vec<String> = Vec::new();
             let lane_args = NameLaneArgs {
                 message: body,
                 from_name,
-                resolved: reach.hit.clone(),
+                resolved: live.clone(),
                 recipient: None,
                 provider: args.harness.as_deref(),
                 reply_to: args.reply_to.as_deref(),
-                token: if reach.hit.is_none() {
-                    Some(token)
-                } else {
-                    None
-                },
+                token: if live.is_none() { Some(token) } else { None },
                 force: false,
                 origin,
                 subject,
