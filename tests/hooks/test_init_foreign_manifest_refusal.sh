@@ -33,13 +33,14 @@ skip() { printf '[foreign-manifest] SKIP: %s\n' "$*" >&2; exit 77; }
 command -v git &>/dev/null || skip "git not on PATH"
 [[ -f "$INIT" ]] || fail "init script not found at $INIT"
 
-# The state CLI for the one command the suite runs (T5's archive repair). The
-# binary's name differs by environment: a developer PATH has `fno`; the smoke
-# env pins cli/.venv/bin, which ships `fno-py`. Same command tree either way.
-if command -v fno &>/dev/null; then
-  STATE_CLI=fno
-elif command -v fno-py &>/dev/null; then
-  STATE_CLI=fno-py
+# The native binary for the one command the suite runs (T5's archive
+# repair). The state family's python legs died with the target-family port,
+# so the repair serves from fno-agents: the smoke env pins the built
+# checkout binary by FNO_AGENTS_FRONT, a developer PATH has fno-agents.
+if [ -n "${FNO_AGENTS_FRONT:-}" ] && [ -x "${FNO_AGENTS_FRONT}" ]; then
+  STATE_CLI="${FNO_AGENTS_FRONT}"
+elif command -v fno-agents &>/dev/null; then
+  STATE_CLI=fno-agents
 else
   STATE_CLI=""
 fi
@@ -184,8 +185,8 @@ RC_B5="$(run_init "$TMP5" "$TMP5/init-b.out" \
 [[ "$RC_B5" != "0" ]] \
   || fail "T5 precondition: expected the foreign-manifest refusal first (got exit 0; $(cat "$TMP5/init-b.out"))"
 
-[[ -n "$STATE_CLI" ]] || fail "T5a: no fno/fno-py on PATH to run the state archive repair"
-ARCH_OUT="$(FNO_SPACES_DIR="$TMP5/spaces" "$STATE_CLI" do state archive --path "$STATE5" 2>&1)" \
+[[ -n "$STATE_CLI" ]] || fail "T5a: no fno-agents on PATH to run the state archive repair"
+ARCH_OUT="$("$STATE_CLI" state-cli archive --path "$STATE5" 2>&1)" \
   || fail "T5a: state archive failed: $ARCH_OUT"
 [[ -f "$STATE5" ]] || pass "T5a: archived manifest moved out of the way"
 compgen -G "${STATE5%.md}.archived.*.md" >/dev/null \
