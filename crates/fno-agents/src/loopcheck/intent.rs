@@ -92,7 +92,10 @@ pub(super) fn detect_intent_from_text(text: &str) -> Intent {
             }
         }
     }
-    if text.contains("<promise>") {
+    // The promise is the one attribute-less tag, so the closer is the
+    // discriminator: a real promise ships its closing tag, and prose
+    // mentioning the bare opener holds nothing.
+    if text.contains("<promise>") && text.contains("</promise>") {
         return Intent::Promise;
     }
     Intent::None

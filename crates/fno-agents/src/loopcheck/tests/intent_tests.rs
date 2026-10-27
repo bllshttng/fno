@@ -161,6 +161,10 @@ fn quoted_and_bare_tags_are_prose_not_intent() {
         detect_intent_from_text("bare <aborted> mention"),
         Intent::None
     );
+    assert_eq!(
+        detect_intent_from_text("I still owe the <promise>MISSION COMPLETE summary"),
+        Intent::None
+    );
     assert!(matches!(
         detect_intent_from_text("<watching reason=\"ci\" timeout=\"15m\">"),
         Intent::Watching { .. }
