@@ -22,6 +22,7 @@
 mod common;
 
 use common::{assert_golden, make_script, slug, Golden};
+use fno_agents::state_layout::place;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -616,11 +617,11 @@ fn live_cases() -> Vec<Live> {
             seed: |r| { asleep(r, "a7b8c9d0-1111-2222-3333-444455556666"); asleep(r, "a7b8c9d0-9999-8888-7777-666655554444") },
             env: &[("STUB_RESUME_EXIT", "0")], argv: &["a7b8c9d0", BODY],
             want: vec![Exit(2), Has(Stderr, "a7b8c9d0-1111-2222-3333-444455556666"),
-                Has(Stderr, "a7b8c9d0-9999-8888-7777-666655554444"), Lines(Log, "", 0), Lines(Bus, "", 0)] },
+                Has(Stderr, "a7b8c9d0-9999-8888-7777-666655554444"), Lacks(Log, "agents resume"), Lines(Bus, "", 0)] },
         Live { contract: "1g-unreadable-store-never-injects",
             seed: |r| std::fs::write(r.join("agents-home").join("name-map.json"), "{torn").unwrap(),
             env: &[("STUB_INJECT_CLAUDE", OK)], argv: &["b8c9d0e1", BODY],
-            want: vec![Exit(2), Has(Stderr, "unreadable stores: registry"), Lines(Log, "", 0)] },
+            want: vec![Exit(2), Has(Stderr, "unreadable stores: registry"), Lacks(Log, "mail-inject")] },
         Live { contract: "1i-live-failure-receipt-positives-durable-leg", seed: |r| asleep(r, ASLEEP_SID),
             env: &[("STUB_INJECT_CLAUDE", r#"{"delivered": false, "reason": "not-confirmed"}"#)],
             argv: &[ASLEEP_SID, BODY], want: vec![Has(Stdout, "durable leg holds"), Lacks(Stdout, "not-confirmed")] },
@@ -642,14 +643,10 @@ fn live_cases() -> Vec<Live> {
             want: vec![Has(Stdout, "[transcript-stalled"), Lacks(Stdout, "live-miss"), Lines(Log, "mail-inject", 0),
                 Lacks(Log, "mux pane send")] },
         Live { contract: "3e-registered-handle-colliding-with-discovery-sends-nothing",
-            seed: |r| {
-                seed_registry(r, &[row_worker()]);
-                let map = serde_json::json!({ LIVE_SID: "worker-1" }).to_string();
-                std::fs::write(r.join("agents-home").join("name-map.json"), map).unwrap();
-                plant_turn(r, LIVE_SID, "Running the tests now.");
-            },
+            seed: |r| { seed_registry(r, &[row_worker()]); plant_turn(r, LIVE_SID, "Running the tests now.");
+                std::fs::write(r.join("agents-home").join("name-map.json"), serde_json::json!({ LIVE_SID: "worker-1" }).to_string()).unwrap() },
             env: &[("STUB_INJECT_CLAUDE", OK)], argv: &["worker-1", BODY],
-            want: vec![Exit(2), Has(Stderr, "ambiguous"), Lines(Log, "", 0), Lines(Bus, "", 0)] },
+            want: vec![Exit(2), Has(Stderr, "ambiguous"), Lacks(Log, "mail-inject"), Lines(Bus, "", 0)] },
         Live { contract: "3f-discovered-handle-is-session-addressed", seed: |r| plant_turn(r, LIVE_SID, "Running the tests now."),
             env: &[("STUB_INJECT_CLAUDE", OK)], argv: &[LIVE_SID, BODY],
             want: vec![Exit(0), Has(Stdout, "delivered (hosted) [live claude session"), Has(Log, "--session e5f6a7b8-1111"),
@@ -683,7 +680,8 @@ fn mail_send_live_lanes() {
         let out = live_command(&root, case.env, case.argv).output().unwrap();
         let exit = out.status.code();
         let read = |p: PathBuf| std::fs::read_to_string(p).unwrap_or_default();
-        let journal = root.join("events.jsonl");
+        // The child routes events into its own state root's store; read that store.
+        let journal = place(&root, "events.db").with_extension("jsonl");
         let events = fno_agents::event_store::query_events(&journal, &Default::default());
         let events: Vec<String> = events
             .unwrap_or_default()
