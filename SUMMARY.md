@@ -118,8 +118,21 @@ sibling-of-binary lookup finds no `fno-agents`, matching the capture machine.
   the `pr_watch` stale-days idiom is the Python twin of the fixed read.
 - **The placement-rule red (first CI red at f8047c1d).** The port's three
   read-only `.claude` sites (plugin-cache detection, harness-native
-  worktree manifests, the transcript root the find-transcript op joins)
+  worktree manifest reads, the transcript root the find-transcript op joins)
   took allowlist rows with rationale in `check-placement-rule.sh`, the
   same by-file convention the whoami fold used; the deleted
   `cli/src/fno/doctor.py` row dropped in the same PR. All three failures
-  in the smoke self-test shared that one root.
+  in the smoke self-test tripped one root.
+- **The dead-import red (second red, at 625b5a74).** Three tests in
+  `cli/tests/lint/test_check_preamble_budget.py` still imported the deleted
+  `fno.doctor` module. The kill contract they tested is real and the port
+  had lost it: the Python transport killed the whole process group on
+  timeout, the Rust one only the direct child. `run_bounded` now spawns
+  the child as a process-group leader and group-kills on the deadline
+  (libc::kill, the deleted leg's start_new_session + killpg contract), and
+  a Rust unit test owns the kill contract where the Python one lived. The
+  two preamble-line premises (a foreign checkout's gate is never reached;
+  a subdirectory resolves to the root's identity) live as unit tests on
+  `git_checkout_identity`, the mechanism both contracts build on. The
+  three dead Python tests and the now-unused `time` import dropped with
+  the leg.

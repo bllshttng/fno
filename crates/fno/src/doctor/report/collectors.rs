@@ -1221,3 +1221,43 @@ pub(crate) fn session_start_bytes_line(preamble_line: &str) -> Option<String> {
     let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
     line.starts_with("preamble:").then_some(line)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::git_checkout_identity;
+    use std::path::PathBuf;
+
+    /// The preamble collector's foreign-checkout refusal builds on one
+    /// mechanism (the deleted test_doctor_does_not_execute_a_foreign_
+    /// checkout_gate's premise): another repo carries a different identity,
+    /// so its gate is never reached.
+    #[test]
+    fn foreign_checkout_identity_differs_from_this_repo() {
+        let tmp = tempfile::TempDir::new().expect("tmp dir");
+        let foreign = tmp.path().join("foreign");
+        std::fs::create_dir_all(&foreign).expect("foreign dir");
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&foreign)
+            .output()
+            .expect("git init runs");
+        assert!(init.status.success());
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let here = git_checkout_identity(&repo.canonicalize().expect("repo exists"));
+        let foreign_id = git_checkout_identity(&foreign);
+        assert!(here.is_some());
+        assert_ne!(here.map(|i| i.1), foreign_id.map(|i| i.1));
+    }
+
+    /// The deleted test_doctor_resolves_the_worktree_from_a_subdirectory's
+    /// premise: a subdirectory of this repo resolves to the same identity
+    /// as the root, so the report stays visible below the root.
+    #[test]
+    fn subdirectory_identity_matches_the_repo_root() {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let repo = repo.canonicalize().expect("repo exists");
+        let root = git_checkout_identity(&repo);
+        let sub = git_checkout_identity(&repo.join("cli"));
+        assert_eq!(root.map(|i| i.1), sub.map(|i| i.1));
+    }
+}

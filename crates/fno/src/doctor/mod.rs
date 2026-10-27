@@ -263,12 +263,17 @@ pub(crate) fn bounded_command(argv: &[String]) -> Option<(i32, String, String)> 
 }
 
 fn run_bounded(argv: &[String], deadline: std::time::Instant) -> Option<(i32, String, String)> {
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     let mut child = Command::new(&argv[0])
         .args(&argv[1..])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // The child leads its own process group, so the deadline kill below
+        // can take its descendants with it (the deleted Python leg's
+        // start_new_session + killpg contract).
+        .process_group(0)
         .spawn()
         .ok()?;
     loop {
@@ -284,6 +289,9 @@ fn run_bounded(argv: &[String], deadline: std::time::Instant) -> Option<(i32, St
                 return Some((status.code().unwrap_or(-1), stdout, stderr));
             }
             Ok(None) if std::time::Instant::now() >= deadline => {
+                unsafe {
+                    libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 return None;
@@ -706,4 +714,48 @@ fn cost_check_report() -> i32 {
         "fno doctor: cost-check WARN: session {session_id} ours=${ours:.2} reference=${theirs:.2} divergence={pct} (> 10% - catalog pricing or dedup drift; see crates/fno-agents/src/model_price.rs)"
     ));
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bounded_command_for;
+
+    /// The deleted Python transport's contract (its
+    /// test_doctor_timeout_kills_gate_descendants fixture): a timed-out
+    /// gate's descendant dies with the process group, not orphaned past the
+    /// leader.
+    #[test]
+    fn bounded_command_kills_gate_descendants() {
+        let tmp = tempfile::TempDir::new().expect("tmp dir");
+        let pid_path = tmp.path().join("child.pid");
+        let result = bounded_command_for(
+            &[
+                "bash".to_string(),
+                "-c".to_string(),
+                "sleep 30 & child=$!; printf \"%s\" \"$child\" > \"$1\"; wait \"$child\""
+                    .to_string(),
+                "bash".to_string(),
+                pid_path.to_string_lossy().into_owned(),
+            ],
+            2,
+        );
+        assert!(result.is_none());
+        let child_pid: i32 = std::fs::read_to_string(&pid_path)
+            .expect("the grandchild wrote its pid")
+            .trim()
+            .parse()
+            .expect("the pid file holds an int");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let alive = unsafe { libc::kill(child_pid, 0) } == 0;
+            if !alive {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed-out gate descendant {child_pid} is still alive"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 }
