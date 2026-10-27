@@ -399,8 +399,8 @@ impl MessagesBoard {
                                     marks.get(&chat_id).map(String::as_str) < Some(last_ts);
                                 ChatRow::YouThread {
                                     session_id: sid.to_string(),
-                                    name: text_of(t, "name"),
-                                    last_ts,
+                                    name: text_of(t, "name").to_string(),
+                                    last_ts: last_ts.to_string(),
                                     unread,
                                 }
                             })
