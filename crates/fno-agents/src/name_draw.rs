@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 /// reaching for (rowan, sorrel, wren, maya) and every name this fleet has
 /// already burned (avery, barnaby, folio, harriet, kestrel, marlow, vellum);
 /// the used-name filter is the general rule, this list is belt-and-suspenders.
-const NAME_POOL: &[&str] = &[
+pub(crate) const NAME_POOL: &[&str] = &[
     "aida",
     "alba",
     "alda",
