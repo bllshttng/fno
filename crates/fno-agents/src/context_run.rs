@@ -254,12 +254,27 @@ fn run_effective_window(args: &[String]) -> i32 {
     0
 }
 
+/// Python `{:,}` comma grouping for the retired verb's human line.
+fn comma_fmt(n: u64) -> String {
+    let raw = n.to_string();
+    let bytes = raw.as_bytes();
+    let mut out = String::new();
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
+}
+
 fn run_context_probe(args: &[String]) -> i32 {
     let mut transcript = None;
     let mut session = std::env::var("CODEX_THREAD_ID")
         .or_else(|_| std::env::var("FNO_HARNESS_SESSION_ID"))
         .unwrap_or_default();
     let mut json_output = false;
+    let mut summary = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         if crate::json_output::is_flag(arg) {
@@ -268,6 +283,7 @@ fn run_context_probe(args: &[String]) -> i32 {
         }
         match arg.as_str() {
             "--transcript" => transcript = rest.next().map(String::as_str),
+            "--summary" => summary = true,
             "--session" => {
                 session = rest
                     .next()
@@ -303,6 +319,33 @@ fn run_context_probe(args: &[String]) -> i32 {
         Some("harness") => " [harness window]".to_string(),
         _ => " [unmeasured default]".to_string(),
     };
+    if summary {
+        // The retired `fno context` / `fno whoami context` shapes: exactly
+        // the four keys, no provenance suffix, comma-grouped numbers.
+        if json_output {
+            println!(
+                "{}",
+                serde_json::to_string(&json!({
+                    "used_tokens": payload["used_tokens"],
+                    "window_tokens": payload["window_tokens"],
+                    "used_pct": payload["used_pct"],
+                    "model": payload["model"],
+                }))
+                .unwrap_or_else(|_| "{}".to_string())
+            );
+        } else {
+            let used = payload["used_tokens"].as_u64().unwrap_or(0);
+            let window = payload["window_tokens"].as_u64().unwrap_or(0);
+            println!(
+                "{}% used ({} of {} tokens), model {}",
+                payload["used_pct"],
+                comma_fmt(used),
+                comma_fmt(window),
+                payload["model"]
+            );
+        }
+        return 0;
+    }
     if json_output {
         println!("{payload}");
     } else {

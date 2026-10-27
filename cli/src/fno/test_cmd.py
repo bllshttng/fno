@@ -452,15 +452,29 @@ def _lanes_threads() -> tuple[Optional[int], str]:
     if _LANES_READING is not None:
         return _LANES_READING
     try:
-        from fno.doctor_lanes import read_lanes
+        from fno.rust_binary import resolve_binary
 
-        reading = read_lanes()
+        binary = resolve_binary()
+        if binary is None:
+            _LANES_READING = (None, "reading failed (the fno-agents binary was not found)")
+            return _LANES_READING
+        result = subprocess.run(
+            [str(binary), "census", "--lanes", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode not in (0, 3):
+            _LANES_READING = (None, f"reading failed (exit {result.returncode})")
+            return _LANES_READING
+        reading = json.loads(result.stdout or "{}")
     except Exception as exc:  # the reading must never block the suite
         _LANES_READING = (None, f"reading failed ({exc})")
         return _LANES_READING
-    lane_count = reading.lane_count
+    lane_count = reading.get("lane_count")
     if lane_count is None:
-        _LANES_READING = (None, f"reading refused ({reading.refusal_reason})")
+        _LANES_READING = (None, f"reading refused ({reading.get('refusal_reason')})")
         return _LANES_READING
     _LANES_READING = (
         max(1, int(lane_count)),
