@@ -46,14 +46,15 @@ pub(crate) struct YouItem {
 /// Where a walk stopped: the trailing item's resume state. `item_start` is
 /// the byte offset of the typed row that opened it, `consumed` the offset
 /// through the last complete row (a partial trailing line is re-read next
-/// time). Serialized into the cache entry, so field names are contract.
+/// time). Serialized into the cache entry, so field names are contract. The
+/// reply is deliberately not carried: a resume re-reads from `item_start`
+/// and rebuilds the reply from the same rows, so carrying it would double.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct WalkTail {
     pub item_start: u64,
     pub consumed: u64,
     pub ts: String,
     pub typed_text: String,
-    pub reply: Vec<String>,
 }
 
 /// One walk's output: complete items plus the trailing item's resume state.
@@ -67,7 +68,7 @@ pub(crate) struct WalkOut {
 /// Walk one transcript's text into You items. `base` is the absolute offset
 /// `raw` starts at; `resume`, when set, re-opens the trailing item the tail
 /// describes - the text then begins at that item's typed row, which the walk
-/// re-reads as the same opener (reply seeded, not cleared).
+/// re-reads as the same opener while the reply rebuilds from the same rows.
 pub(crate) fn walk(
     raw: &str,
     base: u64,
@@ -83,15 +84,16 @@ pub(crate) fn walk(
     let mut first_user_seen = false;
     let mut resuming = resume.is_some();
     if let Some(tail) = resume {
+        // The reply is NOT seeded: the re-read from item_start rebuilds it
+        // from the same rows, and seeding would double every block.
         open = Some((tail.ts, tail.typed_text));
-        reply = tail.reply;
         item_start = Some(tail.item_start);
     }
 
-    let mut close = |open: &mut Option<(String, String)>,
-                     reply: &mut Vec<String>,
-                     item_start: &mut Option<u64>,
-                     items: &mut Vec<YouItem>| {
+    let close = |open: &mut Option<(String, String)>,
+                 reply: &mut Vec<String>,
+                 item_start: &mut Option<u64>,
+                 items: &mut Vec<YouItem>| {
         if let Some((ts, typed_text)) = open.take() {
             items.push(YouItem {
                 ts,
@@ -102,16 +104,17 @@ pub(crate) fn walk(
         reply.clear();
         *item_start = None;
     };
-    // A typed source arrives: push the previous item (or replace the resumed
-    // opener, whose reply is already seeded), then open the new one.
-    let mut open_new = |open: &mut Option<(String, String)>,
-                        reply: &mut Vec<String>,
-                        item_start: &mut Option<u64>,
-                        items: &mut Vec<YouItem>,
-                        resuming: &mut bool,
-                        ts: String,
-                        text: String,
-                        line_start: u64| {
+    // A typed source arrives: push the previous item (or, on a resume, the
+    // opener re-reads its own row and the reply rebuilds from scratch), then
+    // open the new one.
+    let open_new = |open: &mut Option<(String, String)>,
+                    reply: &mut Vec<String>,
+                    item_start: &mut Option<u64>,
+                    items: &mut Vec<YouItem>,
+                    resuming: &mut bool,
+                    ts: String,
+                    text: String,
+                    line_start: u64| {
         if *resuming {
             *resuming = false;
         } else if let Some((ts, typed_text)) = open.take() {
@@ -120,8 +123,8 @@ pub(crate) fn walk(
                 typed_text,
                 reply_text: reply.join("\n\n"),
             });
-            reply.clear();
         }
+        reply.clear();
         *open = Some((ts, text));
         *item_start = Some(line_start);
     };
