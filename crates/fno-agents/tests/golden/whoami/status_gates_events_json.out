@@ -1,0 +1,43 @@
+{
+  "detected_paths": [
+    "<FIXTURE>/project/.fno/target-state.md"
+  ],
+  "events_tail": [
+    {
+      "ts": "T1",
+      "type": "phase_init"
+    },
+    {
+      "ts": "T2",
+      "type": "phase_transition"
+    }
+  ],
+  "fleet": null,
+  "harness": "claude",
+  "inconsistencies": [],
+  "project_root": "<FIXTURE>/project",
+  "session": {
+    "kind": "target",
+    "path": "<FIXTURE>/project/.fno/target-state.md",
+    "phase": "review",
+    "pr_number": 1234,
+    "raw": {
+      "artifact_shipped": false,
+      "current_phase": "review",
+      "iteration": 3,
+      "output_validated": false,
+      "pr_number": 1234,
+      "provenance_nonce": "deadbeefcafef00d",
+      "quality_check_passed": true,
+      "session_id": "20260512T010101Z-99999-fixaaa",
+      "status": "IN_PROGRESS"
+    },
+    "session_id": "20260512T010101Z-99999-fixaaa",
+    "status": "IN_PROGRESS"
+  },
+  "visitor": null,
+  "walker": null,
+  "warnings": [
+    "not a git repo, using cwd"
+  ]
+}

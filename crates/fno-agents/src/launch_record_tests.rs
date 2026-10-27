@@ -36,6 +36,7 @@ fn a_dispatcher_writes_a_record_the_child_claims() {
         home.path(),
         Launch {
             harness: "claude".into(),
+            resume: None,
             name: Some("w9".into()),
             node: Some("x-ab12".into()),
             slot: Some("g2".into()),
@@ -141,4 +142,31 @@ fn the_first_launch_edge_is_never_overwritten() {
     let row = back.iter().find(|r| r["id"] == "x-ab12").unwrap();
     assert_eq!(row["spawned_by_session"], "lead-1");
     assert_eq!(row["spawned_by_cwd"], "/repo");
+}
+
+/// The hand-typed revive that crossed two rows: an unnamed `--bg --resume`
+/// of a session still running.
+#[test]
+fn an_unnamed_or_forking_claude_bg_line_is_refused() {
+    let line = "cd /w/fb-9b9b && claude --bg --resume 58b9fbe4-b512 --model opus \"Lead Hope: go\"";
+    let launches = parse_command(line, "/repo");
+    assert_eq!(launches[0].resume.as_deref(), Some("58b9fbe4-b512"));
+    // The daemon-hosted session is in claude's listing only, and the line
+    // names a prefix of its id longer than the short id.
+    let mut row = crate::claude_roster::ClaudeAgentRow::new("58b9fbe4", Some("working"));
+    row.session_id = Some("58b9fbe4-b512-4d4c-87ef-2015ac6e5b13".into());
+    let roster = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![row]);
+    let forks = claude_bg_refusal(&launches, |id| roster.holds_session(id)).unwrap();
+    assert!(forks.contains("still running"), "{forks}");
+    let unnamed = claude_bg_refusal(&launches, |_| false).unwrap();
+    assert!(unnamed.contains("--name"), "{unnamed}");
+    // A named resume of a stopped session passes, and so does a bare `-r`
+    // picker, which names no id.
+    for ok in [
+        "claude --bg --name t-fb-9b9b --resume 58b9fbe4-b512 go",
+        "claude --bg -r -n w",
+    ] {
+        let launches = parse_command(ok, "/repo");
+        assert!(claude_bg_refusal(&launches, |_| false).is_none(), "{ok}");
+    }
 }

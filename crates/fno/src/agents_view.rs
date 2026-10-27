@@ -224,7 +224,7 @@ pub enum Liveness {
     Unmeasured,
 }
 
-/// The harnesses whose transcripts `fno agents peek` can tail: the
+/// The harnesses whose transcripts `fno agents session peek` can tail: the
 /// reader arms registered in `recent_records` (cli/src/fno/agents/peek.py).
 /// A static mirror of a Python seam; `thread_reach_mirrors_the_peek_reader_seam`
 /// pins it against that file so the two cannot drift (Rust checked against
@@ -2484,6 +2484,27 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
     }
     drop(reg_ids); // release the borrow of `out` before extending it
 
+    // A claude row that lost its cached short id (a mux restart drops it)
+    // still names its job: the jobId is the session uuid's leading 8 hex, the
+    // re-entry planner's own derivation, so a tap reaches Drive instead of a
+    // transcript tail. Only after the join: a roster worker answering the row
+    // by name holds the real job id, and a derived one would shadow it.
+    let roster_names: HashSet<&str> = roster.iter().map(|w| w.name.as_str()).collect();
+    for r in &mut out {
+        if r.attach_id.is_some()
+            || r.harness.as_deref() != Some("claude")
+            || roster_names.contains(r.name.as_str())
+        {
+            continue;
+        }
+        r.attach_id = r
+            .harness_session_id
+            .as_deref()
+            .or(r.claude_session_uuid.as_deref())
+            .map(attach_job_id)
+            .filter(|id| id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
     // A PARKED fork id renders as a lineage child of its
     // primary while the roster still lists it live. The second uuid a fork
     // minted under unknown evidence is addressable but owns no registry row
@@ -2732,6 +2753,7 @@ mod tests {
     mod roster_join_tests;
     mod spawned_by_name_tests;
     mod thread_row_status_tests;
+    mod uuid_attach_tests;
     fn reg(rows: &str) -> String {
         format!(r#"{{"schema_version": 6, "agents": [{rows}]}}"#)
     }

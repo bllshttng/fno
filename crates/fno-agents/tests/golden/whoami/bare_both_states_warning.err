@@ -1,0 +1,2 @@
+warn: not a git repo, using cwd
+warn: both .fno/target-state.md and .fno/session-state.md present; using target

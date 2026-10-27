@@ -1053,6 +1053,8 @@ fn escalation(
         verdict,
         scope,
         session_id,
+        route: crate::lead_escalation::route_for(&cwd()),
+        route_cwd: None,
     })
 }
 
@@ -1196,8 +1198,12 @@ pub fn run_escalate(args: &[String]) -> i32 {
     } else {
         outcome
     };
+    if let Some(nudge) = &answer.nudge {
+        eprintln!("{nudge}");
+    }
     let mailed = presiding
         .as_deref()
+        .filter(|_| answer.mail_relay)
         .filter(|holder| mail_presiding(holder, &ids, &key, &reason, &summary));
     let note = mailed.map_or(String::new(), |h| format!(", mailed presiding lead {h}"));
     eprintln!("lead: {outcome}{note} {qid}");
