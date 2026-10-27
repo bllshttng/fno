@@ -1145,6 +1145,10 @@ jobs:
         run: cargo build --bin fno-agents
 
       - name: cargo test --test '*' --test-threads=1 (fno-agents real-process integration)
+        # Under the job's own cap: a job cancelled at its cap keeps no log,
+        # while a step that times out keeps it, and with one test thread
+        # the last "test <name> ..." line names the test that hung.
+        timeout-minutes: 28
         env:
           HOME: ${{ runner.temp }}/fno-test-home
           CARGO_HOME: /home/runner/.cargo
