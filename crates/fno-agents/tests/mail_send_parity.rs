@@ -591,8 +591,7 @@ struct Live {
     want: Vec<Want>,
 }
 
-/// A folded case names its extra contract ids in the comment above it.
-/// Laid out by hand: rustfmt would spread each case over a dozen lines.
+/// Hand-laid so each case reads as one row; folded ids sit in comments above.
 #[rustfmt::skip]
 fn live_cases() -> Vec<Live> {
     use Stream::*;
