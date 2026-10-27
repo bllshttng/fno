@@ -222,7 +222,11 @@ def test_the_spawned_walk_argv_carries_the_matched_address(monkeypatch, tmp_path
         def __init__(self, args, **kwargs):
             argv.extend(args)
 
-    monkeypatch.setattr(subprocess_mod, "Popen", _FakePopen)
+    # Scoped to the wake module: the walk reads the native ops first, and
+    # their subprocess.run must keep the real Popen.
+    monkeypatch.setattr(
+        phase_mod, "subprocess", SimpleNamespace(Popen=_FakePopen, STDOUT=subprocess_mod.STDOUT)
+    )
     target = RoleTarget(
         holder="lead-x",
         scope="epic-x",
