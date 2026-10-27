@@ -19,13 +19,15 @@ use crate::announce::read_bus_segments;
 use crate::mail_control_drain::{deliverable, withdrawn_ids};
 
 const HELP: &str = "\
-usage: fno-agents mail unread [--name NAME] [-n NAME] [--json] [-J] [--help]
+usage: fno-agents mail unread [--name NAME] [-n NAME] [--mine] [--json] [-J] [--help]
 
 Show unread bus messages addressed to NAME (cursor-filtered): the bus log
-scanned oldest-first, rows addressed to NAME after its ack cursor.
+scanned oldest-first, rows addressed to NAME after its ack cursor. With
+--mine, print this session's You pairs instead (typed turn + reply).
 
 options:
   -n, --name NAME  whose inbox to read (registry name or project; default fno)
+  --mine           print this session's You pairs (typed + reply) instead
   -J, --json       emit JSON regardless of TTY
   -h, --help       print this help
 ";
@@ -33,6 +35,7 @@ options:
 pub fn run(args: &[String]) -> i32 {
     let mut name = String::from("fno");
     let mut json_out = false;
+    let mut mine_only = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         if let Some(value) = arg.strip_prefix("--name=") {
@@ -51,12 +54,18 @@ pub fn run(args: &[String]) -> i32 {
                     return 2;
                 }
             },
+            "--mine" => {
+                mine_only = true;
+            }
             "--json" | "-J" => json_out = true,
             other => {
                 eprintln!("unread: unknown argument {other:?}");
                 return 2;
             }
         }
+    }
+    if mine_only {
+        return super::you_pairs::run(json_out);
     }
     if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." {
         eprintln!("unread: invalid cursor name: {name:?}");
