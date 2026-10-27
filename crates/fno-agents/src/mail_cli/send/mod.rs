@@ -311,7 +311,7 @@ fn receipt_door(args: &[&str]) -> Result<String, String> {
     Ok(captured.stdout.trim_end_matches('\n').to_string())
 }
 
-/// Over the door: the caller owns printing.
+/// Render over the door: the caller owns printing.
 fn render_receipt(args: &[&str]) -> Result<String, String> {
     receipt_door(args)
 }

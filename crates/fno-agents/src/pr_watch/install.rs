@@ -22,7 +22,7 @@ use super::status::{
 
 const LABEL: &str = "sh.fno.pr-watcher";
 
-/// The plist template, byte-for-byte
+/// The plist template.
 const PLIST_TEMPLATE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--

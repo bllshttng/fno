@@ -575,7 +575,7 @@ pub(crate) fn events_journal() -> PathBuf {
     state_root().join("events.jsonl")
 }
 
-/// `config.backlog.id_prefix` or the legacy `ab-` fallback, fail-open like
+/// `config.backlog.id_prefix` or the legacy `ab-` fallback, fail-open.
 pub fn node_id_prefix(repo_root: &Path) -> String {
     match merged_config(&resolve_lenient(repo_root)) {
         Ok(merged) => merged

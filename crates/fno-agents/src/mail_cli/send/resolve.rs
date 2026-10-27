@@ -1,7 +1,7 @@
 // Ported from the single-file draft of send.rs; split by question.
 use super::*;
 
-/// (store_fallback): 32-hex or dashed-uuid shape.
+/// 32-hex or dashed-uuid shape.
 /// `pub(crate)`: the reply leaf's provenance arm reads it.
 pub(crate) fn is_full_session_id(token: &str) -> bool {
     let stripped: String = token.chars().filter(|c| *c != '-').collect();
@@ -604,7 +604,6 @@ pub(super) enum TokenFailure {
     },
 }
 
-/// / `is_job_token`.
 pub(super) fn is_job_token(token: &str) -> bool {
     token.starts_with("node:") || token.starts_with("pr:")
 }

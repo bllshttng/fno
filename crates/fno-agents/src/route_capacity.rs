@@ -285,7 +285,7 @@ pub(crate) fn capacity(
 }
 
 /// The `{harness: state}` summary the walk answer carries: the one piece the
-/// Renderer built, now read straight off the command's answer.
+/// renderer built, now read straight off the command's answer.
 pub(crate) fn capacity_summary(capacity: &Value) -> Value {
     Value::Object(
         capacity

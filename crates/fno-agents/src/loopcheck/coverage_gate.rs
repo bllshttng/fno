@@ -875,7 +875,7 @@ code-review attestation"
     )
 }
 
-/// The event logs a coverage read consults, for the refusal text. Mirrors
+/// The event logs a coverage read consults, for the refusal text.
 /// The project journal and the global one,
 /// whatever resolved.
 fn coverage_sources(cwd: &Path) -> Vec<String> {

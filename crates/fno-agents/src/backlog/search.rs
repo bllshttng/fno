@@ -1,6 +1,5 @@
 //! Full-text search over the backlog. The `nodes_fts` FTS5 mirror of the
-//! nodes table is owned here and no other file writes it (ruling 4); the
-//! Seam reaches it through the keeper's `search` read op.
+//! nodes table is owned here and no other file writes it (ruling 4).
 
 use super::api::{ApiError, Store};
 use rusqlite::{params, Connection};

@@ -394,7 +394,7 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
                 }
                 // A concurrent refresh can unlink between read_dir and stat;
                 // a vanished candidate sorts oldest and the writer recreates
-                // The file anyway.
+                // the file anyway.
                 let mtime = entry
                     .metadata()
                     .and_then(|m| m.modified())

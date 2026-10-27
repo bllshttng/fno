@@ -81,7 +81,7 @@ pub enum CanonicalClass {
 pub fn resolve_canonical_resolution(get: &impl Fn(&str) -> Option<String>) -> CanonicalResolution {
     let (session, harness, disposition) = parse_canonical_stamp(get);
     let markers = present_markers(get);
-    // The vendor fold, inlined : first family
+    // The vendor fold, inlined: first family
     // wins; two ids of one family that disagree conflict; multiple families
     // resolve to nothing.
     let mut family: Option<String> = None;

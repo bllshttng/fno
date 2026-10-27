@@ -157,7 +157,7 @@ pub(crate) fn graph_row_for(node_id: &str) -> Option<Value> {
 }
 
 /// The first command-shaped token anywhere in the seed, sigil and namespace
-/// Stripped.
+/// stripped.
 fn command_token(seed: Option<&str>) -> Option<String> {
     let seed = seed?;
     for tok in seed.split_whitespace() {
@@ -199,7 +199,7 @@ fn known_command_keys(inputs: &Inputs) -> (Vec<String>, bool) {
     (known, roster_ok)
 }
 
-/// The seed's profile key : a resolvable command token
+/// The seed's profile key: a resolvable command token
 /// names its canonical profile; a lead command or no token names `role`; an
 /// unknown `fno:`-namespaced token refuses (None).
 fn profile_key(seed: Option<&str>, known: Option<&[String]>) -> Option<String> {

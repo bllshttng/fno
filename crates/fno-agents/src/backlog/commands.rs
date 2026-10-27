@@ -21,8 +21,6 @@ pub struct Group {
     pub actions: &'static [(&'static str, &'static str)],
 }
 
-impl Group {}
-
 /// The canonical table, in plan order.
 pub const GROUPS: &[Group] = &[
     Group {

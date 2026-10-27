@@ -633,8 +633,7 @@ fn lane_path() -> PathBuf {
 
 /// The one lock-and-rewrite transaction: parse, read raw, apply the line
 /// change, atomic replace in the same directory, re-read. The bounded lock
-/// holds the lane's sidecar `<lane>.lock` for ten seconds, the same budget
-/// Took.
+/// holds the lane's sidecar `<lane>.lock` for ten seconds, the same budget.
 fn mutate_lane_at(path: &std::path::Path, action: &str, rest: &[String]) -> Result<usize, String> {
     let path = path.to_path_buf();
     if let Some(parent) = path.parent() {

@@ -5,8 +5,7 @@
 //! parity goldens in `tests/golden/mail_withdraw` are the contract. Reader
 //! divergences from the Python leg (both follow the drain-reader idiom):
 //! malformed bus lines and corrupt cursor files are skipped silently instead
-//! of warned to stderr, and cursor filenames use the raw address, not the
-//! Spelling.
+//! of warned to stderr, and cursor filenames use the raw address.
 
 use crate::mail_control_drain::{withdrawn_ids, WITHDRAW_KIND};
 use crate::paths::AgentsHome;

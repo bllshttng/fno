@@ -35,8 +35,6 @@ pub enum HeaderForm {
     Plain,
 }
 
-impl HeaderForm {}
-
 /// The body's summary: its first sentence, cut to at most 12 words. A body
 /// with no sentence end, or one that opens with a code fence or a bare URL,
 /// takes its first line cut at 12 words; a body empty after trimming

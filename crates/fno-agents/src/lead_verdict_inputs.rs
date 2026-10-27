@@ -26,7 +26,7 @@ const DEFAULT_COMPACTION_CEILING_CODEX: i64 = 12;
 
 /// A sortable instant: the `Z` and `+00:00` UTC spellings must compare equal,
 /// so a Z-suffixed manifest date and a +00:00 graph date cannot misorder at
-/// The same-second teaming boundary.
+/// the same-second teaming boundary.
 fn ts_key(raw: &str) -> String {
     if let Some(stripped) = raw.strip_suffix('Z') {
         format!("{stripped}+00:00")

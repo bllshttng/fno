@@ -178,7 +178,7 @@ fn stall_event_journals() -> Vec<std::path::PathBuf> {
     out
 }
 
-/// `python_json`: the report's JSON stdout keeps
+/// `python_json`: the report's JSON stdout keeps the
 /// byte shape the goldens froze (", " separators, ": " after keys,
 /// ensure_ascii escapes, insertion order via serde_json preserve_order).
 pub fn python_json(value: &Value) -> String {
