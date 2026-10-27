@@ -122,7 +122,7 @@ pub fn run(args: &[OsString]) -> i32 {
         let status = Command::new(&bin)
             .arg("spawn-overlay")
             .arg("whoami")
-            .args(&args[1..])
+            .args(args.iter().skip(1))
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
