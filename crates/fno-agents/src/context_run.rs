@@ -254,20 +254,6 @@ fn run_effective_window(args: &[String]) -> i32 {
     0
 }
 
-/// Python `{:,}` comma grouping for the retired verb's human line.
-fn comma_fmt(n: u64) -> String {
-    let raw = n.to_string();
-    let bytes = raw.as_bytes();
-    let mut out = String::new();
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*b as char);
-    }
-    out
-}
-
 fn run_context_probe(args: &[String]) -> i32 {
     let mut transcript = None;
     let mut session = std::env::var("CODEX_THREAD_ID")
@@ -339,8 +325,8 @@ fn run_context_probe(args: &[String]) -> i32 {
             println!(
                 "{}% used ({} of {} tokens), model {}",
                 payload["used_pct"],
-                comma_fmt(used),
-                comma_fmt(window),
+                crate::whoami::with_commas(used),
+                crate::whoami::with_commas(window),
                 payload["model"]
             );
         }

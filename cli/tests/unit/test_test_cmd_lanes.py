@@ -10,9 +10,6 @@ itself is the native census's contract (Rust tests); these tests pin
 
 from fno import test_cmd
 
-MARKER_LOAD = 319.21
-MARKER_CEILING = 96.0
-
 
 def _fake_checkout(tmp_path, monkeypatch):
     """A repo-root-shaped tmp cwd with one crate to sweep."""

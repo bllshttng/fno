@@ -1327,7 +1327,7 @@ fn emit_warnings(warnings: &[String]) {
     }
 }
 
-fn with_commas(mut n: u64) -> String {
+pub(crate) fn with_commas(mut n: u64) -> String {
     let mut parts: Vec<String> = Vec::new();
     loop {
         if n < 1000 {

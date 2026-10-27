@@ -1075,11 +1075,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
     }
-    if let Some(rest) = fno::whoami_seam::classify(args) {
-        return Role::Whoami(rest);
-    }
+    // The context probe claims before the whoami seam: `whoami context`
+    // is a whoami-shaped argv whose leaf the probe owns now.
     if let Some(rest) = classify_context(args) {
         return Role::ContextProbe(rest);
+    }
+    if let Some(rest) = fno::whoami_seam::classify(args) {
+        return Role::Whoami(rest);
     }
     if let Some(rest) = classify_agents_lead_refresh_canon(args) {
         return Role::AgentsLeadRefreshCanon(rest);
