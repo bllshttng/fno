@@ -1070,6 +1070,13 @@ jobs:
     timeout-minutes: 40
     env:
       FNO_CLAIMS_PARITY_PYTHON: ${{ github.workspace }}/cli/.venv/bin/python
+      # The freed 25 GB still ran out on 2026-10-27: four shards on two PRs
+      # died with "No space left on device" about 15 minutes into the test
+      # step. Full debug info on every linked tests/*.rs binary is the bulk.
+      # Line tables keep file:line in panics. Job-level, so the binary build
+      # steps and the test step share one profile and nothing builds twice.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
     steps:
       - name: Checkout
