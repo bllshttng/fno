@@ -63,12 +63,27 @@ pub fn effective_state(e: &RegistryEntry, now_secs: u64) -> (EffState, &'static 
     if matches!(e.status, AgentStatus::Exited | AgentStatus::PermanentDead) {
         return (EffState::Done, "exit");
     }
-    // Hook (inside_leg) is senior and TTL-gated. A lapsed hook row does NOT fall
-    // through to screen_state -- a hook-capable row is never scraped, so it goes
-    // straight to liveness-only (mirrors derive_rows: the screen rung is reached
-    // only for rows with no inside_leg at all).
+    // Hook (inside_leg) is senior and TTL-gated. A lapsed hook row does NOT
+    // fall through to screen_state wholesale -- one merge applies (mirrors
+    // derive_rows/blocked_rung): a harness whose wiring names no blocked
+    // producer (`blocked = "none"`, codex) can never state blocked through
+    // the hook, so a FRESH screen `blocked` verdict outranks the leg's last
+    // working/done word. A harness that wires a blocked event keeps the old
+    // whole-row rule: liveness-only, never a screen verdict.
     if let Some(leg) = &e.inside_leg {
-        if leg.is_live_at(now_secs) {
+        let live = leg.is_live_at(now_secs);
+        let no_producer =
+            crate::harness_capabilities::session_state_names_no_blocked_producer(e.harness_name());
+        // A hook-blocked leg keeps its own authority (parity with the view:
+        // the merge fires only when the leg's word is not blocked itself).
+        if !(live && leg.state == InsideLegState::Blocked) && no_producer {
+            if let Some(ss) = &e.screen_state {
+                if ss.is_live_at(now_secs) && ss.state == "blocked" {
+                    return (EffState::Blocked, "screen");
+                }
+            }
+        }
+        if live {
             let st = match leg.state {
                 InsideLegState::Working => EffState::Working,
                 InsideLegState::Blocked => EffState::Blocked,
@@ -407,6 +422,23 @@ mod tests {
                              "at": "2026-01-01T00:00:00Z"},
         }));
         assert_eq!(effective_state(&e, NOW), (EffState::Idle, "liveness"));
+    }
+
+    // The no-blocked-producer merge (mirrors derive_rows/blocked_rung): a
+    // codex row (wiring `blocked = "none"`) whose hook lane last said
+    // working reads Blocked from a FRESH screen verdict - the pane sitting
+    // at a permission prompt the hook lane can never state.
+    #[test]
+    fn no_blocked_producer_row_merges_a_fresh_screen_blocked_over_the_leg() {
+        let e = entry(json!({
+            // `harness`, not `provider`: harness_name() reads harness then
+            // legacy_provider, and from_value skips the load-time backfill.
+            "harness": "codex",
+            "inside_leg": live_leg("working"),
+            "screen_state": {"state": "blocked", "rule": "question_prompt",
+                             "seq": 1, "at": "2026-01-01T00:00:00Z"},
+        }));
+        assert_eq!(effective_state(&e, NOW), (EffState::Blocked, "screen"));
     }
 
     #[test]
