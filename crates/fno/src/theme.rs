@@ -323,14 +323,11 @@ pub fn cell_style(role: Role, t: &Theme) -> (Color, Color, u8) {
     }
 }
 
-/// `(fg, bg, flags)` for the focused row the user drives, inverted from the
-/// theme's own pair (the user's 2026-10-27 ruling): the text color is the
-/// ground and the base the text. A theme with no base of its own, `terminal`
-/// above all, inverts through the emulator's own pair instead.
+/// `(fg, bg, flags)` for the row the user drives, inverted from the theme's
+/// pair: text color as ground, base as text. With no base, the emulator's own.
 pub fn focus_style(t: &Theme) -> (Color, Color, u8) {
     if t.inherit || t.base == Color::Default {
-        // No BOLD on either leg: a terminal brightens bold text, which
-        // turns the dark letters on the light ground gray.
+        // No BOLD: a terminal brightens bold text, so dark letters go gray.
         (Color::Default, Color::Default, cell_flags::INVERSE)
     } else {
         (t.base, t.title, 0)

@@ -520,8 +520,10 @@ fn hover_and_selection_share_the_same_card_cell_snapshot() {
         "hover bands every cell of all three lines"
     );
     assert!(
-        selected_cells.iter().all(|cell| cell.bg != Color::Default),
-        "selection bands every cell of all three lines"
+        selected_cells
+            .iter()
+            .all(|cell| cell.flags & cell_flags::INVERSE != 0),
+        "the cursor card inverts every cell of all three lines"
     );
 }
 
