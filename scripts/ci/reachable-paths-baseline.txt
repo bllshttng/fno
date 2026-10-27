@@ -244,7 +244,6 @@ A	postmortem_corrections_log	py=cli/src/fno/hermetic.py;rs=crates/fno-agents/src
 A	pr #{first_pr_number}: no merged evidence	py=cli/src/fno/graph/_reconcile.py|cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs	# CLASSIFY protocol|msg-twin|data
 A	pr_status_cache_retain_days	py=cli/src/fno/config/_sweeps.py;rs=crates/fno-agents/src/agents_config.rs	# CLASSIFY protocol|msg-twin|data
 A	preassigned-or-session-start	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
-A	provider-default(no-difficulty)	py=cli/src/fno/target_cli.py;rs=crates/fno-agents/src/route_gather.rs|crates/fno-agents/src/target_start.rs	# CLASSIFY protocol|msg-twin|data
 A	provider-runtime-state.json	py=cli/src/fno/paths.py;rs=crates/fno-agents/src/provider_cap.rs|crates/fno-agents/src/spawn_gate_lanes.rs	# CLASSIFY protocol|msg-twin|data
 A	provider_outage_reset_grace_seconds	py=cli/src/fno/agents/provider_outage.py;rs=crates/fno-agents/src/agents_config.rs	# CLASSIFY protocol|msg-twin|data
 A	queued (durable){live}{corr} [{reason}]{window_tail}	py=cli/src/fno/mail/cli.py;rs=crates/fno-agents/src/mail_cli/send/lanes.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
