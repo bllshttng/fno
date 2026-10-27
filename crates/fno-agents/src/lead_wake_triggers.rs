@@ -303,7 +303,7 @@ pub fn run_with(config: &TriggerConfig, seams: Seams) -> TriggerOutcome {
         return budget_stop(summary, "answers");
     }
     let left = read_seconds_left(seconds_left.as_deref_mut());
-    let (answered, answers_timed_out) = bounded(|| answered(), wait_cap(left, truth_wait_s));
+    let (answered, answers_timed_out) = bounded(move || answered(), wait_cap(left, truth_wait_s));
     let _ = answers_timed_out;
     let answered_records = answered.unwrap_or_default();
 
@@ -548,8 +548,6 @@ pub fn run_with(config: &TriggerConfig, seams: Seams) -> TriggerOutcome {
                 wake_address.as_deref(),
                 wake_detail.as_deref(),
                 holder_gone,
-                window_count,
-                config.ceiling,
             ) {
                 Ok(()) => true,
                 Err(refusal_word) => {
@@ -716,16 +714,19 @@ pub(crate) fn build_seams(
         })
     };
     let cwd = config_cwd.to_path_buf();
+    let scope_compile_cwd = cwd.clone();
     let entries: Arc<dyn Fn() -> Result<Vec<Value>, String> + Send + Sync> =
         Arc::new(move || crate::lead_ops::scope_rows(&cwd));
-    let scope_compile_cwd = cwd.clone();
     let scope_read: Arc<dyn Fn(&str, &[Value]) -> ScopeRead + Send + Sync> =
         Arc::new(move |scope, rows| {
             match crate::lead_ops::scope_ids(scope, rows, &scope_compile_cwd) {
-                Ok(ids) => ScopeRead {
-                    ids: Some(ids.into_iter().collect()),
-                    undelivered: crate::lead_ops::undelivered_of(&ids, rows),
-                },
+                Ok(ids) => {
+                    let undelivered = crate::lead_ops::undelivered_of(&ids, rows);
+                    ScopeRead {
+                        ids: Some(ids.into_iter().collect()),
+                        undelivered,
+                    }
+                }
                 Err(_) => ScopeRead {
                     ids: None,
                     undelivered: 0,
@@ -831,19 +832,22 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
         return;
     }
     let qid = format!("q-{}", crate::law_match::random_hex8());
+    // The marker prefix is the dedupe key's other half: the next pass finds
+    // the question by the same `[{marker}:{scope}]` needle it stores.
+    let stored = format!("[{marker}:{}] {question}", target.scope);
     let envelope = json!({
         "ts": iso_stamp(now_epoch()),
         "type": "operator_question",
         "source": "daemon",
         "data": {
             "question_id": qid,
-            "question": question,
+            "question": stored,
             "cwd": target.root.display().to_string(),
             "ask": ask.clone(),
         },
     });
     let req = crate::question_intake::IntakeRequest {
-        question: question.clone(),
+        question: stored,
         template: false,
         ask: Some(ask),
         options: Vec::new(),
@@ -856,7 +860,7 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
         laws: Vec::new(),
         storage_root: target.root.clone(),
         index_path: None,
-        journal_path: None,
+        journal_path: Some(crate::paths::space_dir(&target.root).join("events.jsonl")),
         display_name: None,
         render_cap: None,
         op: Some("append".to_string()),
@@ -884,8 +888,6 @@ fn dispatch_walk_detached(
     address: Option<&str>,
     detail: Option<&str>,
     successor: bool,
-    window_count: usize,
-    ceiling: i64,
 ) -> Result<(), &'static str> {
     let fields = crate::lead_ops::parse_manifest(&target.manifest);
     let model = fields
