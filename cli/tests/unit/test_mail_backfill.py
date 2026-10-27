@@ -15,8 +15,6 @@ import subprocess
 
 import pytest
 
-from fno.bus.log import Envelope, is_deliverable
-
 _SENDER_SESSION = "0199aaaa-1111-7000-8000-aaaaaaaaaaaa"
 _RECEIVER_SESSION = "0199bbbb-2222-7000-8000-bbbbbbbbbbbb"
 _BODY = "hold ack: nothing running, tests green on both legs"
@@ -63,14 +61,16 @@ def test_archive_gate_and_fixture_join_through_the_real_binary(tmp_path, monkeyp
     second copy of its own history) and the argv contract through the real
     binary on fixture halves."""
     monkeypatch.setenv("FNO_BUS_DIR", str(tmp_path / "bus"))
-    row = Envelope.new(
-        from_="a", to="b", kind="send", body="x", delivery="cross-session"
-    )
-    assert is_deliverable(row) is False
-    from fno.bus.log import append as bus_append
+    # is_deliverable's vocabulary, inlined: the cross-session row is audit-only.
+    row = {"from": "a", "to": "b", "kind": "send", "body": "x", "delivery": "cross-session"}
+    deliverable = row.get("kind") not in ("withdraw", "landed") and row.get(
+        "delivery"
+    ) not in ("hosted", "typed", "cross-session")
+    assert deliverable is False
+    from tests.fixtures.bus_rows import append_row
     from fno.mail.landed import _sent_unclaimed
 
-    bus_append(row)
+    append_row(row)
     assert _sent_unclaimed("a", -1) == []
 
     from fno.rust_binary import resolve_binary

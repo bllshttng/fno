@@ -100,6 +100,11 @@ pub fn run_spawn_overlay(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("roles") {
         return crate::roles::cli::run(&args[1..]);
     }
+    // The `fno doctor observer` commands nest here the same way
+    // (crate::observer::run), so they add no fno-agents root action.
+    if args.first().map(String::as_str) == Some("observer") {
+        return crate::observer::run(&args[1..]);
+    }
     // The whoami family nests the same way (crate::whoami::run).
     if args.first().map(String::as_str) == Some("whoami") {
         return crate::whoami::run(&args[1..]);

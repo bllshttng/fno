@@ -92,7 +92,6 @@ mail
 mail send !--origin !--provider
 mux
 notify
-observer
 paths
 phase kill-check
 plan
