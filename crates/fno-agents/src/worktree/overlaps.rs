@@ -340,7 +340,7 @@ fn coerce_live_window(raw: Option<&Value>) -> Result<i64, String> {
         Value::String(s) => s
             .trim()
             .parse::<i64>()
-            .map_err(|_| format!("invalid literal for int() with base 10: {s:?}")),
+            .map_err(|_| format!("invalid literal for int() with base 10: '{s}'")),
         Value::Null => Err(
             "int() argument must be a string, a bytes-like object or a real \
              number, not 'NoneType'"

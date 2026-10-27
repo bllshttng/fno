@@ -86,10 +86,19 @@ fn lifecycle_script() -> Option<PathBuf> {
         Some(home) if !home.is_empty() => PathBuf::from(home),
         _ => home_dir().join(".fno"),
     };
-    let folded = root.join("install").join("plugin-root");
-    let legacy = root.join("plugin-root");
-    for candidate in [folded, legacy] {
-        if let Some(script) = probe_root(&candidate) {
+    pointer_script(&root)
+}
+
+/// The pointer files hold the plugin root's path as text, the way the
+/// session-start hook writes them.
+fn pointer_script(fno_home: &Path) -> Option<PathBuf> {
+    let folded = fno_home.join("install").join("plugin-root");
+    let legacy = fno_home.join("plugin-root");
+    for pointer in [folded, legacy] {
+        let Ok(text) = std::fs::read_to_string(&pointer) else {
+            continue;
+        };
+        if let Some(script) = probe_root(Path::new(text.trim())) {
             return Some(script);
         }
     }
@@ -227,5 +236,27 @@ mod tests {
             }
             other => panic!("expected a refusal, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_install_pointer_names_the_plugin_root_and_a_stale_one_falls_through() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let plugin = tmp.path().join("plugin");
+        let lib = plugin.join("scripts").join("lib");
+        std::fs::create_dir_all(&lib).expect("lib dir");
+        std::fs::write(lib.join("worktree-lifecycle.sh"), "#!/bin/sh\n").expect("script");
+        let home = tmp.path().join("fno-home");
+        std::fs::create_dir_all(home.join("install")).expect("install dir");
+        let pointer = home.join("install").join("plugin-root");
+
+        std::fs::write(&pointer, format!("{}\n", plugin.display())).expect("pointer");
+        assert_eq!(
+            pointer_script(&home),
+            Some(lib.join("worktree-lifecycle.sh"))
+        );
+
+        std::fs::write(&pointer, format!("{}\n", tmp.path().join("gone").display()))
+            .expect("pointer");
+        assert_eq!(pointer_script(&home), None);
     }
 }

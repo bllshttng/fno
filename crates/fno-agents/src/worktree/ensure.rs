@@ -106,6 +106,8 @@ fn continuation_base(repo: &Path, name: &str, base: &str, br: &str) -> Option<Co
         if count > 0 {
             return Some(Continuation {
                 kind: "continued".to_string(),
+                source: format!("origin/{br}"),
+                count,
                 create_target: feat_ref,
             });
         }
@@ -133,6 +135,8 @@ fn continuation_base(repo: &Path, name: &str, base: &str, br: &str) -> Option<Co
 
 struct Continuation {
     kind: String,
+    source: String,
+    count: i64,
     create_target: String,
 }
 
@@ -158,6 +162,8 @@ fn continue_salvage_arm(
         if count > 0 {
             return Some(Continuation {
                 kind: "salvaged".to_string(),
+                source: salvage.to_string(),
+                count,
                 create_target: remote_salvage.to_string(),
             });
         }
@@ -169,6 +175,8 @@ fn continue_salvage_arm(
         if count > 0 {
             return Some(Continuation {
                 kind: "salvaged".to_string(),
+                source: salvage.to_string(),
+                count,
                 create_target: salvage.to_string(),
             });
         }
@@ -246,7 +254,8 @@ fn ensure_inner(
     // Step 0 checks the repo is a git repository at all.
     let Some(top) = top_level(repo) else {
         err.push_str(&format!(
-            "worktree ensure: {repo:?} is not a git repository\n"
+            "worktree ensure: {} is not a git repository\n",
+            repo.display()
         ));
         return 1;
     };
@@ -309,8 +318,9 @@ fn ensure_step1(
         (Some(g), Some(c)) if g == c => {}
         _ => {
             err.push_str(&format!(
-                "worktree ensure: {top:?} is a linked worktree, not a main \
-                 checkout; refusing to nest\n"
+                "worktree ensure: {} is a linked worktree, not a main \
+                 checkout; refusing to nest\n",
+                top.display()
             ));
             return 1;
         }
@@ -474,23 +484,21 @@ fn ensure_create_arm(
     // anything that moved the resolved path reuses wherever the branch
     // actually lives - never `git worktree add`'s "already used by worktree
     // at ..." wedge.
-    if branch.is_none() && br != format!("feature/{name}") {
-        if let Some(existing) = worktree_for_branch(top, br) {
-            let existing_r = resolve_lenient(&existing);
-            let wt_r = resolve_lenient(wt);
-            let top_r = resolve_lenient(top);
-            if existing_r != wt_r && existing_r != top_r && existing.exists() {
-                err.push_str(&format!(
-                    "worktree ensure: {}; reusing {br} at {} (policy resolves {}; \
-                     a branch has one checkout) created=false\n",
-                    policy_receipt(pol),
-                    existing.to_string_lossy(),
-                    wt.to_string_lossy()
-                ));
-                out.push_str(&existing.to_string_lossy());
-                out.push('\n');
-                return 0;
-            }
+    if let Some(existing) = worktree_for_branch(top, br) {
+        let existing_r = resolve_lenient(&existing);
+        let wt_r = resolve_lenient(wt);
+        let top_r = resolve_lenient(top);
+        if existing_r != wt_r && existing_r != top_r && existing.exists() {
+            err.push_str(&format!(
+                "worktree ensure: {}; reusing {br} at {} (policy resolves {}; \
+                 a branch has one checkout) created=false\n",
+                policy_receipt(pol),
+                existing.to_string_lossy(),
+                wt.to_string_lossy()
+            ));
+            out.push_str(&existing.to_string_lossy());
+            out.push('\n');
+            return 0;
         }
     }
     create_branch_arm(top, name, branch, pol, wt, br, out, err)
@@ -562,15 +570,17 @@ fn create_fresh_arm(
     branch: Option<&str>,
     wt: &Path,
     br: &str,
-    _base_note: &mut String,
+    base_note: &mut String,
 ) -> Option<std::process::Output> {
-    let base = base_ref(top).unwrap_or_else(|| "HEAD".to_string());
+    let origin_base = base_ref(top);
+    let base = origin_base.clone().unwrap_or_else(|| "HEAD".to_string());
     let cont = if branch.is_none() {
         continuation_base(top, name, &base, br)
     } else {
         None
     };
     if let Some(cont) = cont {
+        *base_note = format!(" base={}:{}:+{}", cont.kind, cont.source, cont.count);
         if cont.kind == "continued" {
             return git_bounded(
                 top,
@@ -599,6 +609,9 @@ fn create_fresh_arm(
             FETCH_TIMEOUT_SECS,
         )
     } else {
+        if let Some(b) = &origin_base {
+            *base_note = format!(" base=fresh:{b}");
+        }
         git_bounded(
             top,
             &["worktree", "add", &wt.to_string_lossy(), "-b", br, &base],
