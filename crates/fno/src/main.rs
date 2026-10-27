@@ -308,6 +308,8 @@ enum Role {
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
+    DoctorHome(Vec<OsString>),
+    DoctorAgentsExec(&'static str, Vec<OsString>),
     /// `fno agents mail show ...`: the native one-message reader, lexically
     /// classified beside agents_history. The Python CLI keeps the rest of
     /// the mail tree; the carried tail runs `fno-agents chats show`.
@@ -380,6 +382,11 @@ enum Role {
     /// worker's --mcp-exec lane with the tail byte-verbatim. The bool is the
     /// root spelling, whose move notice prints before the same exec.
     AgentsMcpRoot(bool, Vec<OsString>),
+    /// The fleet family's claimed command spellings (`fno do loops`, `fno
+    /// agents yard`, `fno agents autonomy`, and their deprecated root
+    /// forms): the ported fleet doors, exec'd with the tail byte-verbatim.
+    /// The struct carries the door, the root-alias flag, and the tail.
+    Fleet(fno::fleet_route::FleetClaim),
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
@@ -1020,6 +1027,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some((root_alias, rest)) = fno::agents_mcp_route::classify(args) {
         return Role::AgentsMcpRoot(root_alias, rest);
     }
+    if let Some(claim) = fno::fleet_route::classify(args) {
+        return Role::Fleet(claim);
+    }
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
     }
@@ -1040,6 +1050,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_group_command(args, "doctor", "builds") {
         return Role::DoctorBuilds(rest);
+    }
+    match fno::doctor::classify(args) {
+        Some(fno::doctor::Claim::Home(rest)) => return Role::DoctorHome(rest),
+        Some(fno::doctor::Claim::AgentsExec(label, argv)) => {
+            return Role::DoctorAgentsExec(label, argv)
+        }
+        None => {}
     }
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
@@ -1544,6 +1561,7 @@ fn main() {
         Role::AgentsMcpRoot(root_alias, rest) => {
             std::process::exit(fno::agents_mcp_route::run(root_alias, &rest))
         }
+        Role::Fleet(claim) => std::process::exit(fno::fleet_route::run(claim)),
         Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],
@@ -1703,6 +1721,15 @@ fn main() {
             &["test-run", "builds"],
             &rest,
         )),
+        Role::DoctorHome(rest) => std::process::exit(fno::doctor::run(&rest)),
+        Role::DoctorAgentsExec(label, argv) => {
+            let action: Vec<String> = argv
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            let refs: Vec<&str> = action.iter().map(|s| s.as_str()).collect();
+            std::process::exit(fno_agents_exec(label, &refs, &[]))
+        }
         Role::DoctorSkillDiff(rest) => {
             std::process::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))
         }

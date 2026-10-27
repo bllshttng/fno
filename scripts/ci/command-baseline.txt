@@ -48,7 +48,6 @@ agents spawn !--bounded-placement !--deny-tools !--mux-session !--output-format 
 annotate
 annotate list
 approvals
-autonomy status
 backlog
 backlog advance
 backlog done
@@ -68,7 +67,7 @@ context
 cost
 delivery evaluate
 do
-doctor !--context-audit !--context-budget !--context-entry !--context-harness !--context-host
+doctor
 done
 evals
 event
@@ -91,8 +90,6 @@ lead done
 lead drain
 lead escalate
 lint
-loops
-loops resume-all
 mail
 mail send !--origin !--provider
 mux

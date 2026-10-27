@@ -61,6 +61,36 @@ def test_codex_pane_bounded_default_rides_the_rust_owner(rust_door, monkeypatch,
     ]
 
 
+# --- promoted pane order -----------------------------------------------------
+# The lead's precedence condition: an operator flag always outranks
+# the role default; no flag means the resolver applies the role default.
+
+
+@pytest.mark.dev_build
+def test_promoted_pane_launches_full_access_without_a_flag(rust_door, monkeypatch, tmp_path):
+    """A lead rank on the spawn swaps the bounded pane default for the
+    full-access bypass - the role default, answered by the same Rust owner."""
+    monkeypatch.setattr("fno.agents.mux_spawn.worker_writable_dirs", lambda *a, **k: [])
+    argv = build_pane_argv("codex", "hi", tmp_path, False, None, None, role_level=1)
+    assert "--dangerously-bypass-approvals-and-sandbox" in argv
+    assert "--sandbox" not in argv
+
+
+@pytest.mark.dev_build
+def test_promoted_pane_explicit_mode_outranks(rust_door):
+    """The operator's mode wins over the rank, in both directions of the
+    widening: a bounded mode on a promoted pane lands bounded."""
+    tokens = permission_pane_tokens("codex", "workspace-write:never", role_level=1)
+    assert tokens == [
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "never",
+        "-c",
+        "sandbox_workspace_write.network_access=true",
+    ]
+
+
 # --- the posture door: this checkout's fno-agents build -------------------
 
 

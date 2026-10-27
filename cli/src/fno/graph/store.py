@@ -1253,15 +1253,8 @@ def _finish_mutation(path: Path, outcome: dict) -> list[dict]:
 
     # The derived views (graph.md, the board targets) are the keeper's
     # settled render pass, the same for every writer: a write never waits on
-    # a render.
-    # Wake the active-backlog drain daemon: best-effort, never
-    # wedges the mutation.
-    try:
-        from fno.active_backlog import touch_nudge
-
-        touch_nudge()
-    except Exception:
-        pass
+    # a render. The keeper's publish touches the wake-nudge sentinel itself,
+    # so the Python side has no wake call to make.
     return outcome["entries"]
 
 

@@ -48,6 +48,7 @@ mod event_signals;
 pub mod event_store;
 pub mod feed_overlay;
 pub(crate) mod first_check;
+pub mod fleet_route;
 pub mod footnote_transcript;
 pub mod frame_ansi;
 pub mod frame_html;
@@ -153,6 +154,7 @@ pub mod wordmark;
 pub mod worktree_door;
 pub mod yard_overlay;
 
+pub mod doctor;
 pub mod doctor_cost;
 pub mod otel_read;
 pub mod whoami_seam;
