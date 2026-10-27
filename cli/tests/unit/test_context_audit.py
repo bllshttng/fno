@@ -19,7 +19,6 @@ from fno.context_audit import (
     compile_context,
     measure_file_source,
 )
-from fno.setup.managed_block import render_block
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -178,7 +177,7 @@ def test_required_pitfalls_reachable_for_every_harness() -> None:
 def test_external_host_counts_only_footnote_managed_instructions(
     tmp_path: Path,
 ) -> None:
-    managed = render_block()
+    managed = "<!-- fno:begin v=1 -->\n## footnote\n\nUse the pipeline.\n<!-- fno:end -->"
     (tmp_path / "AGENTS.md").write_text(
         "# User-owned rules\n\nNever count these bytes.\n\n" + managed + "\n",
         encoding="utf-8",

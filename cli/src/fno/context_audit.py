@@ -10,13 +10,40 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterable, Sequence, cast
 
-from fno.setup.cli_hooks import SESSION_START_CONTEXT_CARRIERS
-from fno.setup.managed_block import extract_block, marker_state
 
 
 SUPPORTED_HARNESSES = ("claude", "codex", "gemini")
 SUPPORTED_ENTRY_STATES = ("startup", "resume", "clear", "post_compact")
 DEFAULT_PACKET_BUDGET_BYTES = 32_768
+
+# Gemini's SessionStart carrier: the one entry script and the entry states
+# its registration fires on.
+_GEMINI_SESSION_START_SCRIPT = "hooks/session-start.sh"
+_GEMINI_SESSION_START_STATES = ("startup", "resume", "clear")
+
+# The marker fence of a footnote block in a host AGENTS.md / CLAUDE.md.
+_BLOCK_BEGIN = "<!-- fno:begin"
+_BLOCK_END = "<!-- fno:end -->"
+
+
+def marker_state(text: str) -> str:
+    """`none`, `both` for one ordered pair, or `malformed`."""
+    begin_count = text.count(_BLOCK_BEGIN)
+    end_count = text.count(_BLOCK_END)
+    if begin_count == 0 and end_count == 0:
+        return "none"
+    if begin_count == 1 and end_count == 1 and text.find(_BLOCK_BEGIN) < text.find(_BLOCK_END):
+        return "both"
+    return "malformed"
+
+
+def extract_block(text: str) -> str | None:
+    """Footnote's exact fenced block, if it is well formed."""
+    if marker_state(text) != "both":
+        return None
+    begin = text.find(_BLOCK_BEGIN)
+    return text[begin : text.find(_BLOCK_END, begin) + len(_BLOCK_END)]
+
 
 _HOST_FILES = {
     "claude": "CLAUDE.md",
@@ -777,9 +804,9 @@ def _discover_cell_sources(
                 break
             commands.extend((cmd, lifecycle) for cmd in loaded)
     else:
-        carrier = next(item for item in SESSION_START_CONTEXT_CARRIERS if item.harness == "gemini")
+        script = _GEMINI_SESSION_START_SCRIPT
         gemini_cmds = (
-            [f"${{PLUGIN_ROOT}}/{carrier.script}"] if entry_state in carrier.entry_states else []
+            [f"${{PLUGIN_ROOT}}/{script}"] if entry_state in _GEMINI_SESSION_START_STATES else []
         )
         if gemini_cmds:
             commands.extend((cmd, "session_start") for cmd in gemini_cmds)
@@ -787,12 +814,12 @@ def _discover_cell_sources(
             sources.append(
                 measure_file_source(
                     source_id="session-start-wrapper",
-                    path=plugin_root / carrier.script,
+                    path=plugin_root / script,
                     harness=harness,
                     entry_state=entry_state,
                     lifecycle="session_start",
                     layer="progressive",
-                    carrier=carrier.script,
+                    carrier=script,
                     reachability_condition="Gemini SessionStart registration",
                     ordinal=ordinal,
                     repo_root=plugin_root,
