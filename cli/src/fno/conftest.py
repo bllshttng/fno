@@ -72,6 +72,7 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ANN001
 
     pinned = os.environ.get("FNO_AGENTS_BIN") or ""
     front = os.environ.get("FNO_AGENTS_FRONT") or ""
+    binary: str | None
     if pinned and Path(pinned).is_file():
         binary = pinned
     elif front and Path(front).is_file():
