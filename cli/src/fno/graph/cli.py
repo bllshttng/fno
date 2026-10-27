@@ -889,14 +889,12 @@ def _render_external_get(id: str, field: Optional[str], ctx: typer.Context) -> N
     try:
         node, sc = _read_external_node_and_sidecar(id)
     except _TrackerNodeNotFound:
-        from fno.handoff.output import json_mode
-
         message = (
             f"fno backlog get: no node matches '{id}' "
             "(an external backend resolves exact ids; slug/bare-hex are "
             "footnote-minted)"
         )
-        if json_mode(ctx):
+        if bool(ctx.obj and ctx.obj.get("json", False)):
             typer.echo(json.dumps({"ok": False, "error": message}))
         else:
             typer.echo(message, err=True)
