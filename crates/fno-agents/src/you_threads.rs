@@ -133,11 +133,24 @@ pub(crate) fn walk(
     let mut pos: usize = 0;
     while pos < bytes.len() {
         let line_start = base + pos as u64;
-        let Some(nl) = bytes[pos..].iter().position(|&b| b == b'\n') else {
-            break; // a partial trailing line is re-read on the next advance
+        let line = match bytes[pos..].iter().position(|&b| b == b'\n') {
+            Some(nl) => {
+                let line = &raw[pos..pos + nl];
+                pos += nl + 1;
+                line
+            }
+            None => {
+                // A complete final row may lack its terminator (the last
+                // write of a closed transcript): parse it. A true partial
+                // line fails the parse and waits for the next advance.
+                let line = &raw[pos..];
+                if serde_json::from_str::<Value>(line).is_err() {
+                    break;
+                }
+                pos = bytes.len();
+                line
+            }
         };
-        let line = &raw[pos..pos + nl];
-        pos += nl + 1;
         let Ok(obj) = serde_json::from_str::<Value>(line) else {
             continue; // a row that does not parse is skipped, never fatal
         };
