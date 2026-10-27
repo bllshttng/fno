@@ -971,8 +971,11 @@ fn handoff_prepare_run(args: &[String]) -> i32 {
             "{}",
             serde_json::json!({
                 "ok": false,
+                // Plain key, never {:?}: the reason lands inside a JSON
+                // string, where a debug-quote would arrive escaped and cut
+                // every naive `grep -o '"detail":"[^"]*"'` reader short.
                 "reason": format!(
-                    "exact claim release failed: source claim {claim_key:?} is absent on disk \
+                    "exact claim release failed: source claim {claim_key} is absent on disk \
                      or held by another holder (live holder: {live_holder}); the session cannot \
                      prove it holds the node to hand off"
                 ),
