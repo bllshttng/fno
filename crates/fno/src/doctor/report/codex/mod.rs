@@ -30,7 +30,9 @@ fn plugin_verdict((err, verdict): (Option<String>, Value)) -> Value {
         "status": "unknown",
         "issue": "state-unreadable",
         "detail": err.unwrap_or_else(|| "plugin-install codex --status: not a JSON object".into()),
-        "remedy": "fno config plugin install codex --force",
+        // The plugin install runs through the same binary, so it cannot be
+        // the repair for a binary that did not answer.
+        "remedy": "fno doctor update --rust",
     })
 }
 
@@ -90,6 +92,6 @@ mod tests {
             (row["status"].as_str(), row["issue"].as_str()),
             (Some("unknown"), Some("state-unreadable"))
         );
-        assert_eq!(row["remedy"], "fno config plugin install codex --force");
+        assert_eq!(row["remedy"], "fno doctor update --rust");
     }
 }
