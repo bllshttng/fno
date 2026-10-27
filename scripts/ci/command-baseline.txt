@@ -48,7 +48,6 @@ agents spawn !--bounded-placement !--deny-tools !--mux-session !--output-format 
 annotate
 annotate list
 approvals
-autonomy status
 backlog
 backlog advance
 backlog done
@@ -91,8 +90,6 @@ lead done
 lead drain
 lead escalate
 lint
-loops
-loops resume-all
 mail
 mail send !--origin !--provider
 mux

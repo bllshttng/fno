@@ -3,7 +3,6 @@ agents adopt	T1	agents adopt	6
 agents announce	T1	agents announce	0
 agents ask	KEEP	agents ask	72	deliberate readability slack for a high-traffic distinct operation
 agents attach	T1	agents attach	13
-agents autonomy status	T1	agents autonomy status	9
 agents bash-census	T1	agents bash-census	0
 agents capabilities	T1	agents capabilities	2
 agents census	T1	agents census	0
@@ -112,7 +111,6 @@ agents wait	T1	agents wait	10
 agents watch	T1	agents watch	5
 agents watchdog	T1	agents watchdog	4
 agents whoami	T1	agents whoami	9
-agents yard	T1	agents yard	4
 annotate add	T1	annotate add	8
 annotate list	KEEP	annotate list	0	ruled KEEP: read-back half of the live annotate write path
 annotate resolve	T1	annotate resolve	5
@@ -219,10 +217,6 @@ cost	KEEP	cost	7	single-leaf group
 delivery evaluate	KEEP	delivery evaluate	7	single-leaf group
 do ci status	T1	do ci status	0
 do delivery evaluate	T1	do delivery evaluate	7
-do loops ls	T1	do loops ls	1
-do loops pause-all	T1	do loops pause-all	1
-do loops resume-all	T1	do loops resume-all	0
-do loops status	T1	do loops status	3
 do phase kill-check	T1	do phase kill-check	16
 do plan brief	T1	do plan brief	4
 do plan fidelity	T1	do plan fidelity	5
@@ -347,10 +341,6 @@ event gc	T1	event gc	5
 event push-parent	T1	event push-parent	3
 help	KEEP	help	37	single-leaf group
 lint	KEEP	lint	29	single-leaf group
-loops ls	T1	loops ls	1
-loops pause-all	T1	loops pause-all	1
-loops resume-all	KEEP	loops resume-all	0	ruled KEEP: only release for the pause-all kill switch
-loops status	T1	loops status	3
 mail ack	T1	mail ack	10
 mail drain	T1	mail drain	10
 mail drain-self	T1	mail drain-self	6

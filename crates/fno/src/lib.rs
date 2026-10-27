@@ -48,6 +48,7 @@ mod event_signals;
 pub mod event_store;
 pub mod feed_overlay;
 pub(crate) mod first_check;
+pub mod fleet_route;
 pub mod footnote_transcript;
 pub mod frame_ansi;
 pub mod frame_html;

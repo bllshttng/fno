@@ -68,11 +68,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
-    "autonomy": (
-        "fno.autonomy_cli:autonomy_app",
-        "Inspect every path that can start a session without an operator asking.",
-        {"hidden": True},
-    ),
     "lead": (
         "fno.lead.cli:lead_app",
         "The lead's board and its session manifest.",
@@ -164,11 +159,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "PR-state watcher: auto-fire /fno:ship pr check + /fno:ship pr merged for open-PR backlog nodes",
         {"hidden": True},
     ),
-    "loops": (
-        "fno.loops:loops_app",
-        "Loop level config + pause-all kill switch (pause-all/resume-all/status/ls)",
-        {"hidden": True},
-    ),
     # Individual commands (plain functions wrapped as single-command apps) -
     # `fno whoami` itself is native; this lazy row hosts the four hidden
     # leaves other families still own (fno.whoami_leaves). `status` and
@@ -236,7 +226,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "doctor": set(),
     "evals": set(),
     "event": {"emit"},
-    "loops": {"resume-all"},
     "mail": {"send"},
     "paths": set(),
     "plan": set(),
