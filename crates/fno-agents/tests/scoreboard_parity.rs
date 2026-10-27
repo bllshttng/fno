@@ -152,6 +152,7 @@ fn run_case(label: &str, argv: &[String]) -> (i32, String, String) {
         .env("FNO_AGENTS_HOME", tmp.join("state/agents"))
         .env("FNO_REPO_ROOT", tmp.join("repo"))
         .env("LC_ALL", "C")
+        .envs(fno_agents::test_run::self_owner_env())
         // The emission counter the capture's stub `fno` answered, frozen
         // here at the handoff point the door reads.
         .env(
