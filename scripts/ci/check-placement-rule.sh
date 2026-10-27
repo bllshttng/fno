@@ -311,7 +311,6 @@ cli/src/fno/agents/cli.py
 cli/src/fno/agents/discover.py
 cli/src/fno/agents/dispatch.py
 cli/src/fno/agents/format.py
-cli/src/fno/agents/orphans.py
 cli/src/fno/agents/harnesses/_claude_session_registry.py
 cli/src/fno/agents/harnesses/claude.py
 cli/src/fno/agents/model_routing.py
@@ -393,6 +392,7 @@ crates/fno-agents/src/model_env_scrub.rs
 crates/fno-agents/src/plans_path.rs
 crates/fno-agents/src/plans_dirs.rs
 crates/fno-agents/src/plans_path.rs
+crates/fno-agents/src/orphans.rs
 crates/fno-agents/src/plugin_install.rs
 crates/fno/src/uninstall.rs
 crates/fno/src/cli_hooks.rs

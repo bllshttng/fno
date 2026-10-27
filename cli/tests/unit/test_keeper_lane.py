@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from fno.agents import keeper_lane as kl
-from fno.agents.orphans import REAP_MIN_AGE_S
+from fno.agents.keeper_lane import REAP_MIN_AGE_S
 
 
 # --- fixtures for the pure table --------------------------------------------
