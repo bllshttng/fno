@@ -452,12 +452,14 @@ mod quota_signal_tests {
     const NOW: f64 = 1_789_400_000.0;
 
     struct EnvPin {
+        /// The config file's home; owned so the directory outlives the read.
+        _config_dir: Option<tempfile::TempDir>,
         saved_config: Option<OsString>,
         saved_state: Option<OsString>,
     }
 
     impl EnvPin {
-        fn pin(config: &str, state: Option<&Path>) -> (Self, PathBuf) {
+        fn pin(config: &str, state: Option<&Path>) -> Self {
             let dir = tempfile::tempdir().expect("tempdir");
             let config_path = dir.path().join("config.toml");
             fs::write(&config_path, config).expect("write config");
@@ -467,13 +469,11 @@ mod quota_signal_tests {
             if let Some(path) = state {
                 std::env::set_var("FNO_RUNTIME_STATE_PATH", path);
             }
-            (
-                Self {
-                    saved_config,
-                    saved_state,
-                },
-                dir.path().to_path_buf(),
-            )
+            Self {
+                _config_dir: Some(dir),
+                saved_config,
+                saved_state,
+            }
         }
 
         fn pin_state_only(state: Option<&Path>) -> Self {
@@ -483,6 +483,7 @@ mod quota_signal_tests {
                 std::env::set_var("FNO_RUNTIME_STATE_PATH", path);
             }
             Self {
+                _config_dir: None,
                 saved_config,
                 saved_state,
             }
