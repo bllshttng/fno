@@ -1214,8 +1214,11 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
 /// can name a copy-pasteable command.
 pub fn run_gh_budget(args: &[String]) -> i32 {
     if args == ["status"] {
-        print_status();
+        print_status_with_spenders();
         return 0;
+    }
+    if args == ["spend"] {
+        return dispatch_op(&json!({"op": "spend", "hours": 1, "github": true}));
     }
     let mut buf = String::new();
     if std::io::stdin().read_to_string(&mut buf).is_err() {
@@ -1255,10 +1258,23 @@ pub fn run_gh_budget_stdin_door() -> i32 {
 }
 
 fn print_status() {
+    println!("{}", status_value());
+}
+
+/// The bare `status` word a person types after a refusal: the ledger plus
+/// the last hour's top core spenders from the journal, so an exhausted
+/// bucket names who spent it. The `status` op stays journal-free.
+fn print_status_with_spenders() {
+    let mut v = status_value();
+    v["top_spenders_1h"] =
+        crate::gh_spend::top_spenders(&crate::gh_spend::journal_path(), now_ms(), 3);
+    v["spend_report"] = json!("fno-agents fleet-incident gh-budget spend");
+    println!("{v}");
+}
+
+fn status_value() -> Value {
     let s = snapshot(&ledger_path(), now_ms());
-    println!(
-        "{}",
-        json!({
+    json!({
             "points_60s": s.points_60s,
             "cap": s.cap,
             "backoff_remaining_s": s.backoff_remaining_s,
@@ -1269,8 +1285,7 @@ fn print_status() {
             "core_seen_age_s": s.core_seen_age_s,
             "core_reading_fresh": s.core_reading_fresh,
             "core_reserve": s.core_reserve,
-        })
-    );
+    })
 }
 
 fn dispatch_op(payload: &Value) -> i32 {

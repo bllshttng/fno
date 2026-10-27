@@ -1,0 +1,37 @@
+{
+  "argv": [
+    "spawn",
+    "hi",
+    "--argv",
+    "some",
+    "payload"
+  ],
+  "scan": {
+    "account_flag_present": false,
+    "explicit_harness": null,
+    "explicit_route": false,
+    "explicit_substrate": null,
+    "explicit_vendor": null,
+    "flag_node": null,
+    "has_effort": false,
+    "has_harness": false,
+    "has_model": false,
+    "has_permission": false,
+    "model_value": null,
+    "name": null,
+    "permission_value": null,
+    "positional_present": true,
+    "role": null,
+    "route_value": null,
+    "seed": "hi",
+    "seed_form": "positional",
+    "seed_index": 1,
+    "spawn_tokens": [
+      "hi",
+      "--argv",
+      "some",
+      "payload"
+    ],
+    "tab_flag_present": false
+  }
+}

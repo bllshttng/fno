@@ -78,6 +78,44 @@ impl RealGhProbe {
             });
         }
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        // A `--paginate --slurp` read rides the paged door: the per-head
+        // runs listing and the annotations read repeat every status tick,
+        // and an unchanged single page answers 304 for no core point. The
+        // door's answer is the slurp shape, one JSON array of pages. The
+        // path rides either before or after the two flags.
+        let paged_path = match args {
+            [api, path, p, s] | [api, p, s, path]
+                if api == "api" && p == "--paginate" && s == "--slurp" =>
+            {
+                Some(path)
+            }
+            _ => None,
+        };
+        if let Some(path) = paged_path {
+            let plain = ["api".to_string(), path.clone()];
+            if let Some(door) = crate::gh_etag::eligible(&plain) {
+                // A spawn error stays an Err, as on the plain path, so the
+                // caller keeps the bounded-read diagnostic; only a gh exit
+                // that is not success reads as Ok(false).
+                let spawn_failed = std::cell::Cell::new(false);
+                let spawn = |a: &[&str]| {
+                    Self::bounded_gh(a, cwd, admit).inspect_err(|_| spawn_failed.set(true))
+                };
+                let fetch_all = || -> Result<String, String> {
+                    let (ok, stdout, stderr) = spawn(&refs)?;
+                    if !ok {
+                        return Err(stderr);
+                    }
+                    Ok(String::from_utf8_lossy(&stdout).into_owned())
+                };
+                return match crate::gh_etag::conditional_paginated_get(cwd, door, fetch_all, &spawn)
+                {
+                    Ok(answer) => Ok(answer),
+                    Err(why) if spawn_failed.get() => Err(why),
+                    Err(stderr) => Ok((false, String::new(), stderr)),
+                };
+            }
+        }
         let (ok, stdout, stderr) = Self::bounded_gh(&refs, cwd, admit)?;
         Ok((ok, String::from_utf8_lossy(&stdout).into_owned(), stderr))
     }
