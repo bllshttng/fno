@@ -20,8 +20,23 @@
 #   STATE_DIR  - .fno/ directory for the project
 
 _observe_wake_signals() {
-    local sigs
-    sigs=$(fno-agents wake-signals --kind question --root "$REPO_ROOT" 2>/dev/null) || return 0
+    local sigs bin
+    # The test-run-guard resolution order: PATH, then the env-pinned front
+    # binary, then the checkout's own target dirs. The smoke runners build
+    # the binary and export FNO_AGENTS_FRONT rather than putting it on PATH.
+    for bin in \
+        "$(command -v fno-agents 2>/dev/null || true)" \
+        "${FNO_AGENTS_FRONT:-}" \
+        "${FNO_AGENTS_BIN:-}" \
+        "$PWD/crates/fno-agents/target/release/fno-agents" \
+        "$PWD/crates/fno-agents/target/debug/fno-agents"; do
+        [ -n "$bin" ] || continue
+        [ -x "$bin" ] && break
+        bin=""
+    done
+    [ -n "$bin" ] || return 0
+
+    sigs=$("$bin" wake-signals --kind question --root "$REPO_ROOT" 2>/dev/null) || return 0
 
     [[ "$sigs" == "[]" ]] && return 0
 
