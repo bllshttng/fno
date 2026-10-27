@@ -22,7 +22,6 @@ import os
 import shutil
 import sys
 
-import typer
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -464,6 +463,10 @@ def resolve_front_binary() -> Optional[Path]:
 def _update_signpost() -> None:
     """The no-front-door spelling: the updater is native to the Rust front
     door, so this leaf only names the one command that installs it."""
+    # Lazy: this module is imported by crates-side integration tests whose
+    # interpreter has no typer, and this leaf is its only user.
+    import typer
+
     typer.echo(
         "fno: the updater is native to the Rust front door; install it from the source checkout with "
         "`cargo install --locked --path <src>/crates/fno`, then re-run `fno doctor update`."

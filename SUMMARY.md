@@ -153,3 +153,12 @@ sibling-of-binary lookup finds no `fno-agents`, matching the capture machine.
   binary-not-found parity string. The baseline row's rs set covers it.
   The local gate reads stale until the merge lands main's tree, which is
   the scan-context divergence, not a drift.
+- **The promoted-head reds (sixth red, at 841f8ef1).** Three findings from
+  the first full in-tier run. The module-top `import typer` in
+  `rust_binary.py` broke the crates integration tests, whose interpreter
+  has no typer; the import moved into `_update_signpost`, its only user.
+  The moves table still pins the root `bundle` spelling: the hidden lazy
+  row returns, pointing at the forward's bundle signpost, so the move
+  machinery forwards and the tombstone teaches. And the baseline
+  regenerates at 93 leaves with the restored row, which also settles the
+  collapse-map projection test.

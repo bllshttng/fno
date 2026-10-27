@@ -120,6 +120,11 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
+    "bundle": (
+        "fno.doctor_forward:bundle_signpost",
+        "Skill bundle build + lint; moved to `fno doctor bundle`.",
+        {"hidden": True},
+    ),
     "claim": ("fno.claims.cli:cli", "Work-claim coordination primitive", {"hidden": True}),
     "resume": (
         "fno.resume_receipt_cli:cli",
