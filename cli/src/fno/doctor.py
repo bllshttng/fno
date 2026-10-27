@@ -3664,13 +3664,13 @@ def _stranded(m, *, cutoff, ref) -> bool:
     A US6-stamped envelope carries a per-owner ``ttl_at`` (a dead-letter's is its
     birth, so it surfaces immediately; a wake-daemon's is +6h); use it. Legacy
     mail with no ``ttl_at`` falls back to the blanket age cutoff."""
-    meta = getattr(m, "meta", None) or {}
+    meta = m.get("meta") or {}
     ttl_raw = meta.get("ttl_at")
     if ttl_raw:
         ttl = _parse_bus_ts(str(ttl_raw))
         if ttl is not None:
             return ref >= ttl
-    ts = _parse_bus_ts(getattr(m, "ts", ""))
+    ts = _parse_bus_ts(m.get("ts", ""))
     return ts is not None and ts <= cutoff
 
 
@@ -3717,27 +3717,30 @@ def _stale_dead_letters(
     carries the US6 ``owner`` so downstream surfaces can name the terminal class."""
     from datetime import datetime, timedelta, timezone
 
-    from fno.bus.cursor import scan_unread
-    from fno.bus.log import iter_messages
+    from fno import paths, rust_binary
 
     ref = now or datetime.now(tz=timezone.utc)
     cutoff = ref - timedelta(hours=max_age_hours)
 
     recips: set[str] = set()
     try:
-        for m in iter_messages(warn=False):
-            to = getattr(m, "to", "") or ""
+        live = paths.bus_dir() / "messages.jsonl"
+        rows = rust_binary.command_call(
+            ["chats", "bus-read", "rows", "--bus", str(live)], {}
+        )["rows"]
+        for m in rows:
+            to = m.get("to") or ""
             # A project broadcast is never a dead session handle, and an all-hex
             # project name matches the bare-handle shape. Only the prefixed form
             # was unambiguous, so widening the pattern makes to_kind load-bearing.
-            if getattr(m, "to_kind", "name") == "project":
+            if (m.get("to_kind") or "name") == "project":
                 continue
             # An owner-stamped durable envelope carries its own terminal class and
             # ttl_at, so sweep its recipient whatever the handle shape - a
             # registered-agent name like `alpha` is not hex but is still a real
             # addressee. The regex stays as the fallback for legacy handle mail
             # that predates the US6 stamp.
-            meta = getattr(m, "meta", None) or {}
+            meta = m.get("meta") or {}
             if meta.get("owner") or _a2a_handle_re().match(to):
                 recips.add(to)
     except Exception:  # noqa: BLE001 - a torn bus contributes no findings
@@ -3753,19 +3756,21 @@ def _stale_dead_letters(
     out: list[dict] = []
     for handle in sorted(recips):
         try:
-            unread = scan_unread(handle, warn=False)
+            unread = rust_binary.command_call(
+                ["chats", "bus-read", "unread", "--name", handle, "--bus", str(live)], {}
+            )[handle]
         except Exception:  # noqa: BLE001
             continue
         for m in unread:
-            if getattr(m, "id", "") in drained:
+            if m.get("id", "") in drained:
                 continue
             if _stranded(m, cutoff=cutoff, ref=ref):
-                meta = getattr(m, "meta", None) or {}
+                meta = m.get("meta") or {}
                 out.append(
                     {
                         "handle": handle,
-                        "msg_id": getattr(m, "id", ""),
-                        "ts": getattr(m, "ts", ""),
+                        "msg_id": m.get("id", ""),
+                        "ts": m.get("ts", ""),
                         "owner": meta.get("owner"),
                     }
                 )
