@@ -40,6 +40,10 @@ const PROMPT: &str =
     r#"Answer to your question q-ab12cd34 "what does the operator want for epic-x?": ship it"#;
 const ANSWER_CURSOR: &str = r#"{"ts":"2026-08-29T11:00:00Z","id":"q-ab12cd34","seq":2}"#;
 
+/// Serializes the env-mutating fixtures. The lib's `claims::test_env_lock`
+/// is #[cfg(test)]-gated, so an integration binary carries its own.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Restores the pins the leg's `space_dir` resolution reads through,
 /// holding the shared env lock so a parallel test's pin swap cannot flip
 /// the resolution mid-read (the lead_wake tests' guard shape).
@@ -50,9 +54,7 @@ struct PinGuard {
 
 impl PinGuard {
     fn take(base: &Path) -> Self {
-        let lock = fno_agents::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = ["FNO_SPACES_DIR", fno_agents::paths::HOME_ENV]
             .iter()
             .map(|var| (*var, std::env::var_os(var)))
@@ -275,13 +277,13 @@ impl Rec {
     }
 
     fn unread(&self) -> Vec<String> {
-        self.unread.lock().unwrap().clone()
+        self.unread_calls.lock().unwrap().clone()
     }
 }
 
 /// The seams one case runs with: recorder seams plus the case's answers.
 fn seams(
-    world: &World,
+    _world: &World,
     rows: Vec<fno_agents::state::RegistryEntry>,
     rec: &Rec,
     truth: TruthStub,
@@ -924,7 +926,7 @@ fn an_empty_board_stores_an_observation_so_its_first_node_is_a_change() {
             truth_done(),
             vec![],
             no_answers(),
-            static_entries(quiet_refill),
+            static_entries(quiet_refill.clone()),
             scope_of(&quiet_refill),
         ),
     );
@@ -983,7 +985,7 @@ fn a_refused_board_change_keeps_the_old_hash_so_it_stays_a_trigger() {
             truth_done(),
             vec![],
             no_answers(),
-            static_entries(board_b),
+            static_entries(board_b.clone()),
             scope_of(&board_b),
         ),
     );
@@ -1055,7 +1057,7 @@ fn first_observation_seeds_the_cursor_and_the_board_hash() {
             truth_done(),
             vec![],
             no_answers(),
-            static_entries(quiet),
+            static_entries(quiet.clone()),
             scope_of(&quiet),
         ),
     );
