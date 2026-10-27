@@ -1096,6 +1096,11 @@ pub async fn run_command(args: &[String]) -> i32 {
         let cause_only = args.iter().any(|arg| arg == "--cause");
         return crate::footprint_cause::footprint_command(json_flag, cause_only);
     }
+    // The lanes reading rides the same census op: how many more lanes fit.
+    if args.iter().any(|arg| arg == "--lanes") {
+        let json_flag = args.iter().any(|arg| arg == "--json" || arg == "-J");
+        return crate::fleet_lanes::lanes_command(json_flag);
+    }
     if args.iter().any(|arg| arg == "--ps") {
         // The 1 s window is opt-in: the spawn gate reads this table on
         // every admission and must not wait on it.

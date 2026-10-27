@@ -211,6 +211,7 @@ pub mod footnote_harness;
 pub mod footnote_transcript;
 pub(crate) mod footprint_cache;
 pub mod footprint_cause;
+pub mod fleet_lanes;
 pub mod friction;
 pub mod gate_probes;
 pub mod gc;

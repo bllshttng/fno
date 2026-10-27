@@ -36,19 +36,7 @@ pub enum Claim {
 
 /// The leaves this classifier never claims: their families port in their
 /// own children and the wheel keeps answering them.
-const FOREIGN_LEAVES: &[&str] = &[
-    "codemap",
-    "evals",
-    "test",
-    "scratch",
-    "footprint",
-    "lanes",
-    "bash-census",
-    "reclaim",
-    "route",
-    "observer",
-    "fanout",
-];
+const FOREIGN_LEAVES: &[&str] = &["codemap", "evals", "test", "route", "observer", "fanout"];
 
 pub fn classify(args: &[OsString]) -> Option<Claim> {
     if args.first()?.to_str()? != "doctor" {
@@ -106,6 +94,70 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
                 }
             }
             Some(Claim::AgentsExec("fno doctor harness-matrix", argv))
+        }
+        // The diag-family leaves: pure transports onto the census op
+        // (shrink law d-fe66560a: no new fno-agents client action).
+        Some("footprint") => {
+            let mut argv = vec![OsString::from("census"), OsString::from("--footprint")];
+            for a in &args[2..] {
+                match a.to_str() {
+                    Some("--json") | Some("-J") => argv.push(a.clone()),
+                    Some("--cause-only") => argv.push(OsString::from("--cause")),
+                    _ => return None,
+                }
+            }
+            Some(Claim::AgentsExec("fno doctor footprint", argv))
+        }
+        Some("lanes") => {
+            let mut argv = vec![OsString::from("census"), OsString::from("--lanes")];
+            for a in &args[2..] {
+                match a.to_str() {
+                    Some("--json") | Some("-J") => argv.push(a.clone()),
+                    _ => return None,
+                    _ => return None,
+                }
+            }
+            // The lanes door never prints a lane number past a dark sensor:
+            // the census arm owns that refusal (exit 3).
+            Some(Claim::AgentsExec("fno doctor lanes", argv))
+        }
+        // Pure transports: the Rust side already owns these verbs; the
+        // deleted Python legs only resolved the binary and copied flags.
+        Some("bash-census") => {
+            let mut argv = vec![OsString::from("bash-census")];
+            for a in &args[2..] {
+                match a.to_str() {
+                    Some("--allow") | Some("--json") | Some("-J") => argv.push(a.clone()),
+                    Some(w) if w.starts_with("--days") || w.starts_with("--cwd") => {
+                        argv.push(a.clone())
+                    }
+                    _ => return None,
+                }
+            }
+            Some(Claim::AgentsExec("fno doctor bash-census", argv))
+        }
+        Some("reclaim") => {
+            let mut argv = vec![OsString::from("reclaim")];
+            for a in &args[2..] {
+                match a.to_str() {
+                    Some("--apply") | Some("-v") => argv.push(a.clone()),
+                    Some("--verbose") => argv.push(OsString::from("-v")),
+                    _ => return None,
+                }
+            }
+            Some(Claim::AgentsExec("fno doctor reclaim", argv))
+        }
+        // `scratch sweep|report ...`: identical flag spellings on the Rust
+        // side; the subcommand word routes and everything else passes
+        // through byte-verbatim.
+        Some("scratch") => {
+            match args.get(2).and_then(|a| a.to_str()) {
+                Some("sweep") | Some("report") => {}
+                _ => return None,
+            }
+            let mut argv = vec![OsString::from("scratch")];
+            argv.extend(args[2..].iter().cloned());
+            Some(Claim::AgentsExec("fno doctor scratch", argv))
         }
         // A leading flag: native unless the context-audit family rides along.
         Some(word) if word.starts_with('-') => {
