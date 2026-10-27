@@ -24,12 +24,12 @@ const SETTINGS: &str = "settings.yaml";
 const MANAGED_BLOCKS: [&str; 3] = ["paths", "obsidian", "project"];
 const MANAGED_SCALARS: [&str; 2] = ["state_dir", "plans_dir"];
 
-/// The state root: `$FNO_STATE_DIR`, else `$HOME/.fno`.
+/// The state root as `fno.paths.state_dir()` resolves it: `$FNO_STATE_DIR`,
+/// else the configured `state_dir`, else `~/.fno/`.
 fn state_root() -> Option<PathBuf> {
-    std::env::var_os("FNO_STATE_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno")))
+    std::env::var_os("HOME")?;
+    let settings = crate::config_doctor::Settings::load();
+    Some(crate::config_doctor::state_dir(&settings))
 }
 
 /// The front-door hook: run the migration once, never fail the command.
@@ -37,6 +37,14 @@ pub fn run_if_needed() {
     if std::env::var("FNO_SKIP_MIGRATION").as_deref() == Ok("1")
         || std::env::var_os("PYTEST_CURRENT_TEST").is_some()
     {
+        return;
+    }
+    // The common case answers from one stat, before the config read spawns git.
+    let default_root = std::env::var_os("FNO_STATE_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno")));
+    if default_root.is_some_and(|root| root.join(SENTINEL).exists()) {
         return;
     }
     let Some(root) = state_root() else {
