@@ -42,15 +42,11 @@ fn run_register(
         )
         .env("FNO_MUX_DIR", root.join("empty-mux"))
         // The launcher stamp pair pins the harness ahead of the host's
-        // process ancestry: a CI runner has no claude above the test, so a
-        // mint would find no identity.
+        // process ancestry, so a run inside a harness and a CI run agree.
         .env("FNO_SESSION_HARNESS", "claude")
         .env("FNO_SESSION_PID", std::process::id().to_string())
         .envs(fno_agents::test_run::self_owner_env())
         .current_dir(root);
-    for (key, value) in env {
-        cmd.env(key, value);
-    }
     for key in [
         "CLAUDE_CODE_SESSION_ID",
         "CODEX_THREAD_ID",
@@ -58,6 +54,9 @@ fn run_register(
         "FNO_AGENT_ROW_PENDING",
     ] {
         cmd.env_remove(key);
+    }
+    for (key, value) in env {
+        cmd.env(key, value);
     }
     cmd.args(["status", "--register"]);
     for a in args {
