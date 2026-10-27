@@ -86,7 +86,7 @@ The 2026-09-27 sweep found 71 undocumented top-level entries on one real root. T
 | `stable-bin/` | the operator, by hand: a stable-channel binary copy (`bin/`, `src/`) | operator-managed |
 | `internal/` | the operator, by hand: vault-adjacent exports (`etl.json`, `fno.json`) | operator-managed |
 | `handoff-evidence/` | the rank goldens capture (`crates/fno-agents/src/backlog/rank_cli.rs` names the goldens) | permanent evidence for the rank CLI |
-| `repro-isolated/` | `cli/src/fno/observer/isolation.py`: the observer's isolated repro root | repro residue; safe to delete once a run ends |
+| `repro-isolated/` | `crates/fno-agents/src/observer/isolation.rs`: the observer's isolated repro root | repro residue; safe to delete once a run ends |
 | `.codegraph/` | codegraph (foreign tool): its index beside the state root | tool-managed; never swept |
 | `.gitignore` | the operator, by hand | permanent |
 

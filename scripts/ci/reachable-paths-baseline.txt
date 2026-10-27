@@ -239,7 +239,6 @@ A	provider unknown, non-anthropic, or keyless	py=cli/src/fno/agents/cli.py;rs=cr
 A	route requires auth=api_key	py=cli/src/fno/adapters/providers/model.py;rs=crates/fno-agents/src/accounts/records.rs	# CLASSIFY msg-twin: the account records port keeps the Python loader's refusal text and reserved keys until the adapters package is deleted
 A	silence_deadline_seconds	py=cli/src/fno/adapters/providers/loader.py|cli/src/fno/agents/sweep.py;rs=crates/fno-agents/src/accounts/records.rs	# CLASSIFY msg-twin: the account records port keeps the Python loader's refusal text and reserved keys until the adapters package is deleted
 A	the shared ~/.claude slot	py=cli/src/fno/adapters/providers/binding.py;rs=crates/fno-agents/src/accounts/binding.rs	# CLASSIFY msg-twin: the identity binding port keeps the Python receipts until the adapters package is deleted
-A	we looked and found nothing	py=cli/src/fno/observer/fold.py;rs=crates/fno-agents/src/ledger_axes.rs	# CLASSIFY protocol|msg-twin|data the shared unresolved-sentinel sentence
 A	postmortem_corrections_log	py=cli/src/fno/hermetic.py;rs=crates/fno-agents/src/finalize.rs|crates/fno-agents/src/finalize_pointer_tests.rs	# CLASSIFY protocol|msg-twin|data
 A	pr #{first_pr_number}: no merged evidence	py=cli/src/fno/graph/_reconcile.py|cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/merge_evidence.rs	# CLASSIFY protocol|msg-twin|data
 A	pr number must be positive	py=cli/src/fno/target_cli.py;rs=crates/fno-agents/src/pr_info.rs	# CLASSIFY protocol|msg-twin|data the walk facts reader and the pr-info op refuse the same malformed selector on their own legs
@@ -300,7 +299,9 @@ A	tick in flight (pid {pid}); bounce deferred	py=cli/src/fno/pr_watch/_install.p
 A	torn final line (mid-write)	py=cli/src/fno/provenance/observed.py;rs=crates/fno-agents/src/backlog/session_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	truth-live-inject-failed	py=cli/src/fno/agents/harnesses/claude.py;rs=crates/fno-agents/src/claude_ask.rs	# CLASSIFY protocol|msg-twin|data
 A	unknown (plan unreadable: {exc})	py=cli/src/fno/plan/reconcile.py;rs=crates/fno-agents/src/target_orient.rs	# CLASSIFY protocol|msg-twin|data byte-matched orient render vocabulary; the python status command still renders it until that port lands
-A	unresolved:no-harness-session	py=cli/src/fno/observer/fold.py;rs=crates/fno-agents/src/ledger_axes.rs|crates/fno-agents/src/ledger_register.rs|crates/fno/src/agents_history.rs	# CLASSIFY protocol|msg-twin|data
+A	unsupported strategy has executable data	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
+A	usage: fno agents mail send --to-lead <scope> <message>	py=cli/src/fno/mail/cli.py;rs=crates/fno-agents/src/mail_cli/send/lanes.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
+A	warning: force flag set on advisory node {task_id} (reason: {reason}); no pr refs to check.	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
 A	unsupported strategy has executable data	py=cli/src/fno/agents/harness_map.py;rs=crates/fno-agents/src/harness_capabilities.rs	# CLASSIFY protocol|msg-twin|data
 A	usage: fno agents mail send --to-lead <scope> <message>	py=cli/src/fno/mail/cli.py;rs=crates/fno-agents/src/mail_cli/send/lanes.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
 A	warning: force flag set on advisory node {task_id} (reason: {reason}); no pr refs to check.	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
