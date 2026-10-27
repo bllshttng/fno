@@ -193,8 +193,9 @@ fn pr_operand(tail: &[String]) -> Option<u64> {
         .and_then(|arg| arg.parse().ok())
 }
 
-/// `--name value` / `--name=value` off the tail.
-fn option_value(tail: &[String], name: &str) -> Option<String> {
+/// `--name value` / `--name=value` off the tail. Shared with ci_front, so
+/// two front modules never drift on flag parsing.
+pub(crate) fn option_value(tail: &[String], name: &str) -> Option<String> {
     for (index, arg) in tail.iter().enumerate() {
         if arg == name {
             return tail.get(index + 1).cloned();

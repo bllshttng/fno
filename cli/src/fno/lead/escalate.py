@@ -28,11 +28,13 @@ def _render(
     verdict: "str | None" = None,
     scope: "str | None" = None,
     session_id: "str | None" = None,
+    route_cwd: "str | None" = None,
 ) -> dict:
     """One round-trip with the crate renderer (d-b6cc1a2a: new code in
     ``crates/``). ``ok: false`` is a REFUSAL, not a failure: the caller must
     raise, never fall back to Python text - the fallback is the defect.
-    ``verdict`` (first word = verdict name) and ``scope`` ride along.
+    ``verdict`` (first word = verdict name), ``scope``, and ``route_cwd``
+    (the repo root the route knob reads) ride along.
     Naming ``session_id`` scopes the answer's ``marker`` to that lead.
     """
     from fno.rust_binary import command_call
@@ -48,6 +50,7 @@ def _render(
             "verdict": verdict,
             "scope": scope,
             "session_id": session_id,
+            "route_cwd": route_cwd,
         },
     )
 
@@ -56,10 +59,11 @@ def escalate(stalled_ids: "list[str]", reason: str, root: Path, session_id: "str
              cwd: Path, *, live: "bool | None" = None,
              unknown_reason: "str | None" = None,
              verdict: "str | None" = None,
-             scope: "str | None" = None) -> "tuple[str, str]":
+             scope: "str | None" = None) -> "tuple[str, str, bool, str | None]":
     """Record one operator question for this stalled set.
 
-    Returns ``(outcome, question_id)``; raises rather than failing quiet.
+    Returns ``(outcome, question_id, mail_relay, nudge)``; raises rather than
+    failing quiet. ``mail_relay`` is False under the direct default.
     """
     from fno.agents.stale_escalate import dedupe_key, reconcile_channel
     from fno.harness_identity import canonical_handle
@@ -73,6 +77,7 @@ def escalate(stalled_ids: "list[str]", reason: str, root: Path, session_id: "str
     answer = _render(
         ids, key, reason, live=live, unknown_reason=unknown_reason,
         verdict=verdict, scope=scope, session_id=session_id,
+        route_cwd=str(cwd),
     )
     if not answer.get("ok"):
         raise ValueError(answer.get("message", "lead escalation refused"))
@@ -94,7 +99,8 @@ def escalate(stalled_ids: "list[str]", reason: str, root: Path, session_id: "str
         # an asker-less row can only ever be answered into the void.
         asker=canonical_handle(session_id) if session_id else None,
     )
-    return ("recorded", qid) if outcome == "asked" else (outcome, qid)
+    outcome = "recorded" if outcome == "asked" else outcome
+    return outcome, qid, bool(answer.get("mail_relay")), answer.get("nudge")
 
 
 def resolve_presiding_lead(session_id: "str | None") -> "dict | None":

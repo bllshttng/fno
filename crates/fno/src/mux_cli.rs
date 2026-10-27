@@ -1999,7 +1999,7 @@ fn paneless_route_hint(command: &str, row: &crate::agents_view::RegistryAgent) -
         // its own (agents_view.rs's own doc comment on attach_id) - an
         // exited Drive-tier row falls through to the plain follow hint.
         crate::proto::Reach::Drive if !row.exited => format!(
-            "{command}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents peek {name} --follow, or drive it: fno agents attach {name}"
+            "{command}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents session peek {name} --follow, or drive it: fno agents attach {name}"
         ),
         // Locate never has a transcript reader (that's the whole reason it's
         // Locate, not Follow) - a peek --follow hint here is a route
@@ -2008,7 +2008,7 @@ fn paneless_route_hint(command: &str, row: &crate::agents_view::RegistryAgent) -
             "{command}: {name} hosts no live pane (fno_id_state: {state}); open it with: fno agents attach {name}"
         ),
         _ => format!(
-            "{command}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents peek {name} --follow"
+            "{command}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents session peek {name} --follow"
         ),
     }
 }

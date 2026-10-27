@@ -1,9 +1,8 @@
-"""Row -> session-process resolution, tree RSS, and its census/roster
+"""Row -> session-process resolution, tree RSS, and its roster
 joins. A bg row's recorded pid names the PTY HOST; the rv socket farm names the
 process that IS the session."""
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -78,39 +77,8 @@ def test_resolve_session_pid_falls_back_on_miss():
 
 
 # ---------------------------------------------------------------------------
-# the joins: census rows and roster discovery carry the resolved pid
+# roster discovery carries the resolved pid
 # ---------------------------------------------------------------------------
-
-
-def test_census_bg_row_resolves_to_session_pid(tmp_path, monkeypatch):
-    """The specimen: a live registry row whose pid is the PTY HOST gets the
-    socket-holder pid, while `pid` keeps the recorded host pid."""
-    import fno.agents.session_procs as sp
-    from fno.agents.registry import AgentEntry
-    from fno.agents.spawn_gate import census
-
-    daemon = tmp_path / "daemon"
-    daemon.mkdir()
-    monkeypatch.setenv("FNO_CLAUDE_DAEMON_DIR", str(daemon))
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
-    monkeypatch.setattr(sp, "bg_socket_pid_map", lambda root=None: {"55f9847a": 37355})
-    rows = [
-        AgentEntry(
-            name="t-xb57a-glm",
-            harness="claude",
-            cwd="/tmp",
-            log_path="/tmp/l",
-            status="live",
-            # The host pid must itself be alive or the row reads dead; a live
-            # host pid here stands in for the live PTY HOST of the specimen.
-            pid=os.getpid(),
-            short_id="55f9847a",
-        )
-    ]
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-    w = next(w for w in census().workers if w.name == "t-xb57a-glm")
-    assert w.pid == os.getpid()  # recorded, kept
-    assert w.session_pid == 37355  # the process that IS the session
 
 
 def test_codex_rollout_pid_map_joins_session_meta_to_holder(monkeypatch):
