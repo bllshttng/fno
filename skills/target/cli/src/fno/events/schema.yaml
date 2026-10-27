@@ -6051,7 +6051,7 @@ event_types:
           description: "The resolved provider record id the launch proceeded on."
         reason:
           type: string
-          description: "QuotaSignal.reason: why headroom could not be resolved."
+          description: "The route signal's reason: why headroom could not be resolved."
         snapshot_age_s:
           type: number
           description: "Age in seconds of the usage snapshot at decision time; absent when none exists."

@@ -32,7 +32,7 @@ _CLI_SRC = _SKILLS_DIR.parents[1] / "cli" / "src"
 if str(_CLI_SRC) not in sys.path:
     sys.path.insert(0, str(_CLI_SRC))
 
-from fno import dispatch_flags, harness_names  # noqa: E402  (path set above)
+from fno import harness_identity, harness_names  # noqa: E402  (path set above)
 
 
 # PRODUCT.md validation thresholds (mirrors /impeccable's loader contract)
@@ -149,12 +149,12 @@ def resolve_invoking_harness(
     ``"env-marker"`` or ``"env-default"``. An explicit value wins and is
     validated against :data:`fno.harness_names.KNOWN_HARNESSES` (the L0 roster
     every other caller shares); with no explicit value the ambient identity is
-    resolved through :func:`fno.dispatch_flags.infer_invoking_harness`, which
-    maps ``CODEX_THREAD_ID`` to codex and ``OPENCODE_SESSION_ID`` to opencode
-    and answers None when markers disagree. ``"env-default"`` (claude) is
-    distinguishable from ``"env-marker"``, so a caller that requires a
-    positively identified harness can refuse on the difference. The value is a
-    harness, never a model vendor.
+    resolved through :func:`fno.harness_identity.resolve_harness_identity`,
+    which maps ``CODEX_THREAD_ID`` to codex and ``OPENCODE_SESSION_ID`` to
+    opencode and answers None when markers disagree. ``"env-default"``
+    (claude) is distinguishable from ``"env-marker"``, so a caller that
+    requires a positively identified harness can refuse on the difference.
+    The value is a harness, never a model vendor.
     """
     if explicit is not None and explicit.strip():
         h = explicit.strip().lower()
@@ -164,7 +164,7 @@ def resolve_invoking_harness(
                 f"{', '.join(harness_names.KNOWN_HARNESSES)}"
             )
         return h, "explicit"
-    inferred = dispatch_flags.infer_invoking_harness(env)
+    inferred = harness_identity.resolve_harness_identity(env).harness
     if inferred:
         return inferred, "env-marker"
     return "claude", "env-default"

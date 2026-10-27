@@ -1577,7 +1577,9 @@ def resolve_dispatch(
     }
 
 
-def _load_dispatch_cfg(settings: object, command: Optional[str] = None) -> dict:
+def _load_dispatch_cfg(
+    settings: object, command: Optional[str] = None, cwd: Optional[str] = None
+) -> dict:
     """Read the dispatch config rung as a plain dict: the stage-table harness
     (with the deprecated ``dispatch.harness`` folded beneath it) plus
     ``config.dispatch`` substrate/command and the ``config.auto_merge.grant``
@@ -1599,11 +1601,24 @@ def _load_dispatch_cfg(settings: object, command: Optional[str] = None) -> dict:
             return {}
     # One home for the harness axis (the stage table) with the deprecated
     # dispatch.harness folded beneath it; the note names the losing spelling
-    # when both were set and disagreed.
-    from fno.dispatch_flags import configured_dispatch_harness, configured_dispatch_route
+    # when both were set and disagreed. The rung answers through route-slot's
+    # configured mode now; the auto_merge grant below still reads the
+    # caller's settings object, so a stub keeps resolving its grant.
+    from fno.rust_binary import CommandUnavailable, command_call
 
-    harness_value, harness_note = configured_dispatch_harness(settings, command=command or "target")
-    route_value = configured_dispatch_route(settings, command=command or "target")
+    try:
+        payload: dict = {"mode": "configured", "command": command or "target"}
+        # A caller holding a foreign repo's settings (the /think worker
+        # targeting another project) names that root, so the rung reads the
+        # node's stage table, never the parent process's.
+        if cwd:
+            payload["cwd"] = cwd
+        answer = command_call("route-slot", payload)
+    except CommandUnavailable:
+        answer = {}
+    harness_value = answer.get("harness")
+    harness_note = answer.get("note")
+    route_value = answer.get("route") or ""
     d = getattr(settings, "dispatch", None)
     # The grant lives in config.auto_merge, NOT under dispatch, so it
     # is read before the dispatch-block gate: a settings object carrying an

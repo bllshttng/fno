@@ -236,7 +236,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SKIP_MIGRATION` | py | unclear: cli/src/fno/cli.py:402 |
 | `FNO_SOURCE` | rs | unclear: crates/fno/src/doctor_update.rs:388 |
 | `FNO_SPACES_DIR` | py+rs | unclear: cli/src/fno/paths.py:299 |
-| `FNO_SPAWN_GATE` | py+rs | unclear: cli/src/fno/agents/spawn_gate.py:1554 |
+| `FNO_SPAWN_GATE` | rs | unclear: crates/fno-agents/src/backlog/dispatch_resolve.rs:911 |
 | `FNO_SPAWN_ORIGIN` | py+rs | Explicit dispatch-origin JSON the spawn door validates onto the request; malformed refuses. |
 | `FNO_SPAWN_OWNER` | py+rs | Explicit dispatch-owner JSON the spawn door validates onto the request; must be exported together with FNO_SPAWN_ORIGIN. |
 | `FNO_SPAWN_SHOW_ROW` | rs | Set to `1` by the front door's `fno agents spawn --mux`. The headless claude lane then keeps the run's registry row, so the one-shot shows in the mux while it runs. Never passed on to the child. |

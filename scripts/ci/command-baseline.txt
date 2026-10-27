@@ -93,7 +93,6 @@ paths
 plan
 pr-watch
 resume
-route
 scoreboard
 status-fanout tick
 test

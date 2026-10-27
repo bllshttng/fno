@@ -756,10 +756,6 @@ def cmd_spawn(
         message = read_text_arg(message or None, prompt_file, what="the prompt") or ""
 
     from fno.agents.dispatch import DispatchAskError, SpawnResult, dispatch_spawn
-    from fno.dispatch_flags import (
-        DispatchFlagError,
-        resolve_dispatch_harness,
-    )
 
     workdir = _resolve_dispatch_workdir(cwd, fresh, here)
     # `-c` is `--cwd` on spawn: codex's own `-c key=value` config spelling
@@ -786,11 +782,23 @@ def cmd_spawn(
     # --model, --effort and --permission-mode are the harness's own flags: the
     # pre-pass moves them behind the fence, so this leg never reads them.
     model = effort = permission_mode = None
+    from fno.rust_binary import CommandUnavailable, command_call
+
     try:
-        harness, harness_source = resolve_dispatch_harness(harness)
-    except DispatchFlagError as exc:
-        print(str(exc), file=sys.stderr)
-        raise typer.Exit(code=2) from exc
+        answer = command_call(
+            "route-slot",
+            {"mode": "resolve", "explicit": harness, "env": dict(os.environ)},
+        )
+    except CommandUnavailable:
+        # No binary: the explicit flag stands alone and inference stands
+        # down, so the spawn reaches the gate's own fail-closed refusal
+        # (87, gate_unavailable) instead of dying here.
+        answer = {}
+    if "refusal" in answer:
+        print(answer["refusal"], file=sys.stderr)
+        raise typer.Exit(code=2)
+    harness = answer.get("harness") or harness
+    harness_source = answer.get("source")
     # Provenance rides the pane receipt's harness_source field below - it is
     # the HARNESS axis's provenance, not the vendor's. The bg/once stdout
     # receipts stay byte-parity-locked with the Rust client, so they skip it.
@@ -798,7 +806,7 @@ def cmd_spawn(
     # The substrate axis: an empty value resolves to the built-in default
     # (thread where seated).
     from fno.agents.harness_map import DispatchResolveError, fence_uncarried, thread_seatable
-    uncarried = fence_uncarried(harness, passthrough)
+    uncarried = fence_uncarried(harness or "", passthrough)
     if passthrough and message.startswith("-"):
         # A seed written after the fence lands here: the fence's first token
         # fills the prompt slot, so `-- -m X 'seed'` seeds the worker with `-m`.
@@ -820,7 +828,7 @@ def cmd_spawn(
     # refuses and names the flag instead of opening a pane by surprise.
     if substrate == "thread":
         try:
-            seatable = thread_seatable(harness)
+            seatable = thread_seatable(harness or "")
         except DispatchResolveError:  # an undeclared harness seats no thread
             seatable = False
         why = f"has no carrier for {uncarried}" if uncarried else ""
@@ -854,13 +862,18 @@ def cmd_spawn(
         node_seed_env = seed.env
         node_seed_receipt = seed.receipt
         if cwd is None and not here:
-            ensured = seed.ensure_launch_workdir(harness)
+            ensured = seed.ensure_launch_workdir(harness or "")
             if ensured is None:
                 raise typer.Exit(code=2)
             workdir = ensured.resolve()
             _moved_cwd = str(workdir) if workdir != Path(os.getcwd()).resolve() else None
 
     from fno.agents.spawn_defaults import resolve_spawn_gates, seedless_thread_refusal
+
+    # From here down the transport reads the unset harness as the empty
+    # default: the seed path needed the None distinction (unset resolves its
+    # own config rung), the transport layer does not.
+    harness = harness or ""
 
     # Retired spellings bind the same options; name the replacement when the
     # argv used one. The process argv is exact for the real door; a test

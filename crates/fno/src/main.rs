@@ -24,6 +24,8 @@ use std::path::{Path, PathBuf};
 
 use fno::{bootstrap, cli_args, mux_cli, proto};
 
+mod config_route_cli;
+
 /// Commands removed from the mux front, and what replaced each one.
 ///
 /// A removed command that lands on the bare usage banner makes the caller re-read
@@ -68,6 +70,7 @@ enum Role {
     /// `config setup run` composes on. Native, so the inventory answers
     /// beside the setup command that reads it.
     ConfigDefaults(Vec<OsString>),
+    ConfigRoute(Vec<OsString>),
     ConfigSchema(Vec<String>),
     /// The native read-side `config` doors (get, history, build-dir,
     /// assert-subagent-budget, status-sinks, active-backlog, plugin install).
@@ -191,8 +194,10 @@ enum Role {
     DoctorCost(Vec<OsString>),
     /// `fno doctor skill-diff tick|reconcile` and the deprecated root `fno
     /// skill-diff`: the whole command execs the native `fno-agents loops`
-    /// skill-diff ops. The tail (op word + flags) rides byte-verbatim; a
-    /// bare command or --help answers native help inside the op door.
+    /// skill-diff ops. The op word maps to the loops door's name (`tick` ->
+    /// `skill-diff-tick`, `reconcile` -> `skill-diff-reconcile`); the flags
+    /// ride byte-verbatim. A bare command or --help answers native help
+    /// inside the op door.
     DoctorSkillDiff(Vec<OsString>),
     /// `fno doctor observer <op>`: the observer family (sweep | judge |
     /// replay) execs the native `fno-agents spawn-overlay observer` ops
@@ -650,7 +655,7 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
 }
 
 /// `fno doctor observer ...` and the deprecated root `fno observer ...`: the
-/// tail rides verbatim to the native ops door, as skill-diff's does.
+/// tail rides verbatim to the native ops door.
 fn classify_observer(args: &[OsString]) -> Option<Vec<OsString>> {
     let rest: &[OsString] = match args.first()?.to_str()? {
         "doctor" if args.get(1)?.to_str()? == "observer" => &args[2..],
@@ -661,8 +666,10 @@ fn classify_observer(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// `fno doctor skill-diff ...` and the deprecated root `fno skill-diff ...`:
-/// the tail (op word + flags) rides byte-verbatim to the native ops door.
-/// A bare command and --help claim too (the Python leg dies in this port); an
+/// the tail execs to the native ops door. The user-facing op word maps to
+/// the name the loops door routes (a bare `tick`/`reconcile` exec'd verbatim
+/// is its "unknown action" refusal); flags ride byte-verbatim. A bare
+/// command and --help claim too (the Python leg dies in this port); an
 /// unknown op word refuses inside the op door.
 fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
     let rest: &[OsString] = match args.first()?.to_str()? {
@@ -670,7 +677,17 @@ fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
         "skill-diff" => &args[1..],
         _ => return None,
     };
-    Some(rest.to_vec())
+    let mapped = match rest.first().and_then(|a| a.to_str()) {
+        Some("tick") => Some("skill-diff-tick"),
+        Some("reconcile") => Some("skill-diff-reconcile"),
+        _ => None,
+    };
+    Some(match mapped {
+        Some(op) => std::iter::once(OsString::from(op))
+            .chain(rest[1..].iter().cloned())
+            .collect(),
+        None => rest.to_vec(),
+    })
 }
 
 /// The leaves still owned by other families' Python legs: `fno whoami
@@ -1376,6 +1393,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::config_defaults::classify(args) {
         return Role::ConfigDefaults(rest);
     }
+    if let Some(rest) = config_route_cli::classify(args) {
+        return Role::ConfigRoute(rest);
+    }
     if let Some(rest) = fno::config_schema::classify(args) {
         return Role::ConfigSchema(rest);
     }
@@ -1638,6 +1658,7 @@ fn main() {
         Role::Uninstall(opts) => std::process::exit(fno::uninstall::run_uninstall(opts)),
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
+        Role::ConfigRoute(rest) => std::process::exit(config_route_cli::run(&rest)),
         Role::ConfigSchema(rest) => std::process::exit(fno::config_schema::run(&rest)),
         Role::ConfigCli(door) => std::process::exit(match door {
             fno::config_cli::Door::Get(rest) => fno::config_cli::get::run(&rest),
@@ -2432,6 +2453,42 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["config", "setup", "plan", "--advanced"]), false),
             Role::SetupCmd(fno::setup_cmds::Cmd::Plan(os(&["--advanced"])))
+        );
+    }
+
+    #[test]
+    fn skill_diff_ops_map_to_the_loops_door_names() {
+        // The user-facing op words must arrive at the loops door under the
+        // names it routes to skill_diff::run; a bare `reconcile` exec'd
+        // verbatim is the "unknown action" refusal that broke the
+        // post-merge ritual step on every merge.
+        assert_eq!(
+            decide_role(
+                &os(&["doctor", "skill-diff", "reconcile", "--pr-number", "5"]),
+                false
+            ),
+            Role::DoctorSkillDiff(os(&["skill-diff-reconcile", "--pr-number", "5"]))
+        );
+        assert_eq!(
+            decide_role(
+                &os(&["doctor", "skill-diff", "tick", "--skill", "mail"]),
+                false
+            ),
+            Role::DoctorSkillDiff(os(&["skill-diff-tick", "--skill", "mail"]))
+        );
+        // The deprecated root spelling maps the same way.
+        assert_eq!(
+            decide_role(&os(&["skill-diff", "reconcile"]), false),
+            Role::DoctorSkillDiff(os(&["skill-diff-reconcile"]))
+        );
+        // Bare and --help keep riding verbatim: the loops door answers usage.
+        assert_eq!(
+            decide_role(&os(&["doctor", "skill-diff", "--help"]), false),
+            Role::DoctorSkillDiff(os(&["--help"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["doctor", "skill-diff"]), false),
+            Role::DoctorSkillDiff(os(&[]))
         );
     }
 
