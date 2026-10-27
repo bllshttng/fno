@@ -825,6 +825,13 @@ impl View {
                 if let DisplayRow::CardMetrics(a) = drow {
                     self.paint_card_activity(cells, r, cols, text_w, a, card_indent + depth * 2);
                 }
+                // The card passes recolor spans; the cursor card keeps one pair.
+                if driven {
+                    let (fg, bg, flags) = crate::theme::focus_style(&self.theme);
+                    for cell in &mut cells[r * cols..r * cols + text_w] {
+                        (cell.fg, cell.bg, cell.flags) = (fg, bg, flags);
+                    }
+                }
             }
         }
         // The density button, painted LAST over the sideline's top row.
