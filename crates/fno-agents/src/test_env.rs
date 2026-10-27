@@ -476,17 +476,17 @@ mod tests {
         let poisoned = poison(&clean, &fixtures).unwrap();
         let a = neutralise(&clean, &sandbox).unwrap();
         let b = neutralise(&poisoned, &sandbox).unwrap();
-        let a_keys: Vec<_> = a.keys().collect();
-        let b_keys: Vec<_> = b.keys().collect();
+        let a_keys: Vec<String> = a.keys().cloned().collect();
+        let b_keys: Vec<String> = b.keys().cloned().collect();
         for k in &a_keys {
             assert_eq!(a[k], b[k], "lane skew on {k}");
         }
         // The canary is the ONE deliberate survivor: nothing scrubs it, so the
         // poisoned lane alone carries it. That residue is the positive control
         // the dirty lane reads, not skew.
-        let extra: Vec<_> = b_keys
+        let extra: Vec<String> = b_keys
             .iter()
-            .filter(|k| !a.contains_key(**k))
+            .filter(|k| !a.contains_key(k.as_str()))
             .cloned()
             .collect();
         assert_eq!(extra, [ambient_leak_canary().to_string()]);
