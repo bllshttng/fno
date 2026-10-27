@@ -864,7 +864,9 @@ mod tests {
         let hit = last_flag_value(&args, "-j", "-j", None).unwrap();
         assert_eq!(hit, (3, "short", 4));
         let hit = last_flag_value(&args, "--test-threads", "", None).unwrap();
-        assert_eq!(hit, (1, "eq", 5));
+        // The index is the token's own position: clamp_flag rewrites
+        // args[index] for the eq form, and the eq token here sits at 2.
+        assert_eq!(hit, (2, "eq", 5));
     }
 
     #[test]
