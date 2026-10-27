@@ -88,6 +88,10 @@ fn spawn_op(root: &Path, env: &[(String, String)], args: &[String]) -> std::proc
     cmd.args(args).current_dir(root);
     cmd.env_clear();
     cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    // The child is this test's own spawn: the owner marker keeps a
+    // concurrent keeper/reaper from reaping it mid-run, the same
+    // declaration every other bin-spawning test file carries.
+    cmd.envs(fno_agents::test_run::self_owner_env());
     cmd.output().expect("the fno-agents binary spawns")
 }
 

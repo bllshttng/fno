@@ -62,6 +62,10 @@ fn run_ratio(root: &Path, spaces: &Path, extra: &[&str]) -> (i32, String) {
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str())),
         )
+        // The child is this test's own spawn: the owner marker keeps a
+        // concurrent keeper/reaper from reaping it mid-run, the same
+        // declaration every other bin-spawning test file carries.
+        .envs(fno_agents::test_run::self_owner_env())
         .output()
         .expect("the fno-agents binary spawns");
     (
