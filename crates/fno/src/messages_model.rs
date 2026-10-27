@@ -70,16 +70,19 @@ pub fn store_fingerprint() -> Option<(usize, u64, u64)> {
 /// `fno-agents claude_drive::claude_projects_dir`; the mirror lives here for
 /// the same reason the chats-dir one does.
 fn transcript_facts() -> Option<(usize, u64, u64)> {
-    let root = if let Some(v) = std::env::var_os("FNO_CLAUDE_PROJECTS_DIR") {
-        std::path::PathBuf::from(v)
-    } else if let Some(v) = std::env::var_os("CLAUDE_CONFIG_DIR") {
-        std::path::PathBuf::from(v).join("projects")
-    } else {
-        let home = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_default();
-        home.join(".claude").join("projects")
-    };
+    let root = std::env::var_os("FNO_CLAUDE_PROJECTS_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("CLAUDE_CONFIG_DIR")
+                .map(|v| std::path::PathBuf::from(v).join("projects"))
+        })
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default()
+                .join(".claude")
+                .join("projects")
+        });
     let rd = std::fs::read_dir(&root).ok()?;
     let mut count = 0usize;
     let mut total_len = 0u64;

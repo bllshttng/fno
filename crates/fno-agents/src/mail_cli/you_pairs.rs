@@ -34,24 +34,16 @@ pub(crate) fn run(json_out: bool) -> i32 {
     if persist {
         store.save();
     }
-    if items.is_empty() {
-        if json_out {
-            let doc = serde_json::to_string(&serde_json::json!({
-                "session_id": sid,
-                "items": [],
-            }));
-            println!("{}", doc.unwrap_or_default());
-        } else {
-            println!("no You pairs yet: type in this session and the replies pair up");
-        }
-        return 0;
-    }
     if json_out {
         let doc = serde_json::to_string(&serde_json::json!({
-            "session_id": sid.clone(),
+            "session_id": sid,
             "items": items,
         }));
         println!("{}", doc.unwrap_or_default());
+        return 0;
+    }
+    if items.is_empty() {
+        println!("no You pairs yet: type in this session and the replies pair up");
         return 0;
     }
     println!("You pairs for {sid}, oldest first:");

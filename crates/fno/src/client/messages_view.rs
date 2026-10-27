@@ -368,6 +368,19 @@ impl MessagesBoard {
     /// per session whose transcript carries typed turns, the System tab one
     /// entry per system arm, and the Archive tab the threads whose other
     /// party is reaped.
+    /// The active chat tab's rows: the You tab is session-wide (no column-1
+    /// selection gates it), the others read the selected agent's.
+    pub(crate) fn active_chat_rows(&self) -> Vec<ChatRow> {
+        match self.col2 {
+            ChatTab::You => self.chat_rows(""),
+            _ => self
+                .sel_agent
+                .as_deref()
+                .map(|a| self.chat_rows(a))
+                .unwrap_or_default(),
+        }
+    }
+
     pub(crate) fn chat_rows(&self, agent: &str) -> Vec<ChatRow> {
         let proj = self.projection();
         match self.col2 {
@@ -635,37 +648,14 @@ impl MessagesBoard {
             tab_seg("Archive", self.col2 == ChatTab::Archive, focused),
         ]);
         let mut lines = vec![strip, BLine::meta("")];
-        if self.col2 == ChatTab::You {
-            // The You tab is session-wide: no column-1 selection gates it.
-            let rows = self.chat_rows("");
-            if rows.is_empty() {
-                lines.extend(BLine::meta("(no You threads)").wrap(wrap_w));
+        // The You tab is session-wide: no column-1 selection gates it.
+        if self.col2 != ChatTab::You {
+            if self.sel_agent.is_none() {
+                lines.extend(BLine::meta("(select an agent in column 1)").wrap(wrap_w));
                 return lines;
             }
-            for (i, row) in rows.iter().enumerate() {
-                let mut line = match row {
-                    ChatRow::YouThread {
-                        name,
-                        last_ts,
-                        unread,
-                        ..
-                    } => BLine::of(&[
-                        seg(if *unread { "*" } else { " " }, BRole::Meta),
-                        seg(name.clone(), BRole::Body),
-                        seg(format!(" \u{b7} {}", Self::ts_time(last_ts)), BRole::Meta),
-                    ]),
-                    _ => continue,
-                };
-                line.band = i == self.cursors[1];
-                lines.push(line);
-            }
-            return lines;
         }
-        let Some(agent) = self.sel_agent.as_deref() else {
-            lines.extend(BLine::meta("(select an agent in column 1)").wrap(wrap_w));
-            return lines;
-        };
-        let rows = self.chat_rows(agent);
+        let rows = self.active_chat_rows();
         if rows.is_empty() {
             let empty = match self.col2 {
                 ChatTab::Chats => "(no chats)",
@@ -691,7 +681,16 @@ impl MessagesBoard {
                     seg(partner.clone(), BRole::Body),
                     seg(format!(" \u{b7} {last}"), BRole::Meta),
                 ]),
-                ChatRow::YouThread { .. } => continue,
+                ChatRow::YouThread {
+                    name,
+                    last_ts,
+                    unread,
+                    ..
+                } => BLine::of(&[
+                    seg(if *unread { "*" } else { " " }, BRole::Meta),
+                    seg(name.clone(), BRole::Body),
+                    seg(format!(" \u{b7} {}", Self::ts_time(last_ts)), BRole::Meta),
+                ]),
             };
             line.band = i == self.cursors[1];
             lines.push(line);
@@ -726,14 +725,8 @@ impl MessagesBoard {
         };
         if let Some(sid) = sel.strip_prefix("you:") {
             let name = self
-                .projection()
-                .and_then(|p| p.get("you"))
-                .and_then(Value::as_array)
-                .and_then(|rows| {
-                    rows.iter()
-                        .find(|t| text_of(t, "session_id") == sid)
-                        .map(|t| text_of(t, "name").to_string())
-                })
+                .you_row(sid)
+                .map(|t| text_of(t, "name").to_string())
                 .unwrap_or_else(|| sid.get(..8).unwrap_or(sid).to_string());
             let name_role = if self.col == Col::Thread {
                 BRole::Head
@@ -1441,15 +1434,7 @@ pub(crate) async fn keys(
 fn column_len(b: &MessagesBoard) -> usize {
     match b.col {
         Col::Tree => b.tree_rows().len(),
-        Col::Chats => match b.col2 {
-            // The You tab is session-wide: no column-1 selection gates it.
-            ChatTab::You => b.chat_rows("").len(),
-            _ => b
-                .sel_agent
-                .as_deref()
-                .map(|a| b.chat_rows(a).len())
-                .unwrap_or(0),
-        },
+        Col::Chats => b.active_chat_rows().len(),
         Col::Thread => thread_len(b),
     }
 }
@@ -1491,29 +1476,9 @@ async fn act(
             }
         }
         Col::Chats => {
-            if b.col2 == ChatTab::You {
-                // The You tab is session-wide: no column-1 selection gates it.
-                let rows = b.chat_rows("");
-                let Some(ChatRow::YouThread {
-                    session_id,
-                    last_ts,
-                    ..
-                }) = rows.get(b.cursors[1])
-                else {
-                    return Ok(());
-                };
-                let chat_id = format!("you:{session_id}");
-                crate::view_store::save_messages_read_mark(&chat_id, last_ts);
-                b.sel_thread = Some(chat_id);
-                // The You detail's cursor: one index per item bubble.
-                b.cursors[2] = b.you_items(session_id).len().saturating_sub(1);
-                b.col = Col::Thread;
-                return Ok(());
-            }
-            let Some(agent) = b.sel_agent.clone() else {
-                return Ok(());
-            };
-            let rows = b.chat_rows(&agent);
+            // Enter resolves through active_chat_rows: the You tab's rows
+            // and the agent tabs' share one path.
+            let rows = b.active_chat_rows();
             let Some(row) = rows.get(b.cursors[1]) else {
                 return Ok(());
             };
@@ -1523,7 +1488,19 @@ async fn act(
                     b.cursors[2] = b.conversation_rows().len().saturating_sub(1);
                     b.col = Col::Thread;
                 }
-                ChatRow::YouThread { .. } => {}
+                ChatRow::YouThread {
+                    session_id,
+                    last_ts,
+                    ..
+                } => {
+                    crate::view_store::save_messages_read_mark(
+                        &format!("you:{session_id}"),
+                        last_ts,
+                    );
+                    b.sel_thread = Some(format!("you:{session_id}"));
+                    b.cursors[2] = b.you_items(session_id).len().saturating_sub(1);
+                    b.col = Col::Thread;
+                }
                 ChatRow::Thread { chat_id, ts, .. } => {
                     crate::view_store::save_messages_read_mark(chat_id, ts);
                     b.sel_thread = Some(chat_id.clone());
@@ -1819,14 +1796,7 @@ pub(crate) async fn mouse(
             let Some(board) = view.messages_board.as_ref() else {
                 return Ok(());
             };
-            let rows_len = match board.col2 {
-                ChatTab::You => board.chat_rows("").len(),
-                _ => board
-                    .sel_agent
-                    .as_deref()
-                    .map(|a| board.chat_rows(a).len())
-                    .unwrap_or(0),
-            };
+            let rows_len = board.active_chat_rows().len();
             let lines = board.chats_column(part_w);
             let start_line = lines.len().saturating_sub(rows_len);
             let (scroll, _) = column_rect(lines.len(), body_h, start_line + board.cursors[1]);
@@ -1875,14 +1845,7 @@ pub(crate) async fn mouse(
     };
     let in_range = match col {
         Col::Tree => index.is_some_and(|i| i < b.tree_rows().len()),
-        Col::Chats => index.is_some_and(|i| match b.col2 {
-            ChatTab::You => i < b.chat_rows("").len(),
-            _ => b
-                .sel_agent
-                .as_deref()
-                .map(|a| i < b.chat_rows(a).len())
-                .unwrap_or(false),
-        }),
+        Col::Chats => index.is_some_and(|i| i < b.active_chat_rows().len()),
         Col::Thread => index.is_some_and(|i| i < thread_len(b)),
     };
     if !in_range {

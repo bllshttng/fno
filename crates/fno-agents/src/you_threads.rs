@@ -247,12 +247,6 @@ pub(crate) fn walk(
     }
 }
 
-/// The items only, oldest first: the trailing open item rides in as the
-/// last element with the reply gathered so far.
-pub(crate) fn split_you_items(raw: &str, bus: &BusIndex, session: &str) -> Vec<YouItem> {
-    walk(raw, 0, bus, session, None).items
-}
-
 /// Classify one non-meta user row. `None` for shapes that never touch the
 /// walk: tool results (a turn's own plumbing) and rows with no text.
 fn classify_user_row(obj: &Value, bus: &BusIndex, session: &str) -> Option<Provenance> {
@@ -610,7 +604,7 @@ mod tests {
             assistant_row("Opening the PR.", "2026-10-27T00:00:10Z"),
         ]
         .join("\n");
-        let items = split_you_items(&raw, &BusIndex::empty(), "sess");
+        let items = walk(&raw, 0, &BusIndex::empty(), "sess", None).items;
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].typed_text, "why did the gate refuse?");
         assert_eq!(
@@ -650,7 +644,7 @@ mod tests {
             assistant_row("Relay ack text.", "2026-10-27T00:00:08Z"),
         ]
         .join("\n");
-        let items = split_you_items(&raw, &bus, "sess");
+        let items = walk(&raw, 0, &bus, "sess", None).items;
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].typed_text, "before the digest");
         assert_eq!(items[0].reply_text, "");
@@ -672,7 +666,7 @@ mod tests {
             assistant_row("Answered.", "2026-10-27T00:00:03Z"),
         ]
         .join("\n");
-        let items = split_you_items(&raw, &BusIndex::empty(), "sess");
+        let items = walk(&raw, 0, &BusIndex::empty(), "sess", None).items;
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].typed_text, "still counts");
         assert_eq!(items[0].reply_text, "Answered.");

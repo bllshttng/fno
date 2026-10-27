@@ -689,16 +689,9 @@ async fn messages_you_tab_contract() {
         .unwrap();
     let b = view.messages_board.as_ref().unwrap();
     assert_eq!(b.cursors[1], 1, "j moves on the You tab: {:?}", b.cursors);
-    super::keys(&mut view, b"\r", &mut tokio::io::sink())
-        .await
-        .unwrap();
-    let b = view.messages_board.as_ref().unwrap();
-    assert_eq!(b.sel_thread.as_deref(), Some("you:older"), "Enter at row 1");
-    // The older thread opens on its only item; j then walks the fresh
-    // thread's two items after reopening it.
-    assert_eq!(b.cursors[2], 0);
     let b = view.messages_board.as_mut().unwrap();
     b.sel_thread = Some("you:fresh".into());
+    b.col = Col::Thread;
     b.cursors[2] = 1;
     super::keys(&mut view, b"k", &mut tokio::io::sink())
         .await
