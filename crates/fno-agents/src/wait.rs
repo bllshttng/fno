@@ -431,7 +431,9 @@ mod tests {
     #[test]
     fn no_blocked_producer_row_merges_a_fresh_screen_blocked_over_the_leg() {
         let e = entry(json!({
-            "provider": "codex",
+            // `harness`, not `provider`: harness_name() reads harness then
+            // legacy_provider, and from_value skips the load-time backfill.
+            "harness": "codex",
             "inside_leg": live_leg("working"),
             "screen_state": {"state": "blocked", "rule": "question_prompt",
                              "seq": 1, "at": "2026-01-01T00:00:00Z"},
