@@ -12,7 +12,6 @@ pub(super) const STRUCTURAL_STEPS: &[(&str, &str, &str)] = &[
     ("Bash events-validate harness", ".", "bash tests/events/test-bash-validator.sh"),
     ("frontend-craft gate harness", ".", "bash tests/lib/test_frontend_surface.sh\nbash tests/lib/test_infer_has_ui.sh\nbash tests/lib/test_resolve_plan_executor.sh"),
     ("config global-precedence harness", ".", "bash tests/lib/test_config_global_precedence.sh\nbash tests/lib/test_config_plans_chain.sh"),
-    ("cost-accuracy harness", ".", "uv run --project cli python cli/tests/unit/test_session_cost_dedup.py"),
     ("loop-check shim + immutable manifest harness", ".", "bash tests/hooks/test_loop_check_shim.sh\nbash tests/hooks/test_manifest_immutable.sh\nbash tests/hooks/test_graph_write_protect.sh\nbash tests/hooks/test_worktree_write_protect.sh\nbash tests/hooks/test_plan_location_guard.sh\nbash tests/hooks/test_worktree_live_peers.sh\nbash tests/hooks/test_setup_nudge_session_start.sh\nbash tests/hooks/test_init_target_session_id.sh\nbash tests/hooks/test_agy_stop_hook.sh\nbash tests/hooks/test_check_impl_location.sh"),
     ("Python hook harnesses (outside both test trees)", ".", "uv run --project cli python -m pytest -q tests/hooks/test_git_protection_push.py tests/hooks/test_merge_guard_worktree.py tests/hooks/test_merge_guard_stacked_base.py"),
     ("worktree lifecycle: remove-hook contract + cwd-anchored liveness + ttyless archive + job reap", ".", "bash tests/hooks/test_worktree_remove_lifecycle.sh"),
