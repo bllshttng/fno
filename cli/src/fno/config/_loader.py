@@ -191,7 +191,7 @@ def _load_settings_at(key: _SettingsKey) -> "SettingsModel":
     import importlib
 
     if not _json_surface():
-        problems = importlib.import_module("fno.config_readback").unknown_key_problems(layers)
+        problems = importlib.import_module("fno.config._readback").unknown_key_problems(layers)
         for line in problems[:_UNKNOWN_WARN_CAP]:
             print(f"fno config: {line}", file=sys.stderr)
         if len(problems) > _UNKNOWN_WARN_CAP:
@@ -206,5 +206,5 @@ def _load_settings_at(key: _SettingsKey) -> "SettingsModel":
         return SettingsModel.model_validate(raw)
     except ValidationError as exc:
         # importlib hop, same mypy-SCC reason as warn_unknown_keys above.
-        describe = importlib.import_module("fno.config_readback").describe_config_failure
+        describe = importlib.import_module("fno.config._readback").describe_config_failure
         raise SettingsRefused(describe(exc, layers)) from exc

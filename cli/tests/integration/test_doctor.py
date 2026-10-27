@@ -157,7 +157,7 @@ def test_a_typod_per_project_key_is_flagged(
     compare by edit distance. check_unknown_keys walks the same list-of-models
     from the schema, so the typo is caught without a second copy of the keys.
     """
-    from fno.config_readback import check_unknown_keys
+    from fno.config._readback import check_unknown_keys
 
     f = tmp_path / "config.toml"
     f.write_text(
