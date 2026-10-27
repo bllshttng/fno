@@ -712,13 +712,10 @@ pub(crate) fn default_skill_version(skill_id: &str, ts_raw: Option<&Value>) -> S
         .map(|(_, dir)| *dir)
         .unwrap_or(name);
     let rel = format!("skills/{name}/SKILL.md");
-    // `resolve_repo_root()` answered from the process cwd on the Python leg.
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let root = crate::paths::worktree_repo_root(&cwd);
-    let root = if root.as_os_str().is_empty() {
-        return "unknown".to_string();
-    } else {
-        root
+    // Python `resolve_repo_root()`: `FNO_REPO_ROOT` env first, then git.
+    let root = match crate::paths_cli::repo_root() {
+        Some(root) => root,
+        None => return "unknown".to_string(),
     };
     if !root.join(&rel).exists() {
         return "unknown".to_string();
