@@ -99,7 +99,7 @@ def test_post_merge_verdict_is_ready_seam():
     """Regression: the tick reads `post_merge_readiness(...).is_ready`; a real
     verdict must expose that boolean (the missing property raised AttributeError
     every tick and silently forced merge_ready=False)."""
-    from fno.config_cli import PostMergeVerdict
+    from fno.setup.config_doctor import PostMergeVerdict
 
     ready = PostMergeVerdict(status="ready", enabled=True, activity=True)
     assert ready.is_ready is True

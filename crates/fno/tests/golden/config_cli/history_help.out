@@ -1,0 +1,13 @@
+Usage: fno config history [OPTIONS] [KEY]
+
+  Read config-write receipts from the global and project journals.
+
+Arguments:
+  [KEY]  Exact config key or dotted prefix to filter.
+
+Options:
+  --limit INTEGER RANGE         Maximum rows to print.  [default: 50; x>=1]
+  -J, --json                    Emit matching rows as JSONL.
+  --scope [global|project|all]  Limit rows by the config scope that was written.
+                                [default: all]
+  --help                        Show this message and exit.

@@ -244,6 +244,18 @@
 #     transcript WRITES moved to ${FNO_HOME}/saved-sessions, and its only remaining
 #     reference is the legitimate READ of Claude Code's own statusline sidecar.
 #
+#      The native doctor family (the 2026-10 port of the deleted
+#      cli/src/fno/doctor.py) reads the harness's own surfaces in three
+#      files. report.rs detects Claude Code's own plugin-cache layout
+#      (`/.claude/plugins/cache/`) to answer "is the deployed plugin stale";
+#      read-only string comparison and path-segment parsing, no writes.
+#      report/advisors.rs counts auto_merge-armed manifests under the
+#      repo's harness-native `.claude/worktrees` placement; read-only
+#      manifest reads, footnote state never lands there. report/ops.rs
+#      joins ~/.claude/projects for the find-transcript op, the same
+#      own-transcript store its deleted Python twin walked at doctor.py:887;
+#      read-only. Footnote stores nothing in any of them.
+#
 # A file not on this list that starts referencing .claude/ must be a
 # conscious addition: either it's another instance of (1)-(3) above (add it
 # to the list here, in the same PR), or it's a genuine new footnote-state
@@ -319,6 +331,9 @@ cli/src/fno/agents/rust_runtime.py
 cli/src/fno/agents/self_stamp.py
 cli/src/fno/agents/spawn_gate.py
 cli/src/fno/agents/whoami.py
+crates/fno/src/doctor/report.rs
+crates/fno/src/doctor/report/advisors.rs
+crates/fno/src/doctor/report/ops.rs
 crates/fno/src/doctor_update.rs
 crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/backlog/session_cli.rs
@@ -341,7 +356,6 @@ crates/fno-agents/src/review_capability.rs
 cli/src/fno/backlog/batch.py
 cli/src/fno/claims/session_pid.py
 cli/src/fno/context_audit.py
-cli/src/fno/doctor.py
 cli/src/fno/graph/cli.py
 cli/src/fno/inbox/drain.py
 crates/fno-agents/src/observer/fold.rs
@@ -353,8 +367,6 @@ cli/src/fno/review/confidence_scorer.py
 cli/src/fno/review/runners/agents_spawn_runner.py
 cli/src/fno/review/runners/claude_runner.py
 cli/src/fno/review/scorers/__init__.py
-cli/src/fno/runtime/cli.py
-cli/src/fno/runtime/worktree.py
 cli/src/fno/scoreboard/fold.py
 cli/src/fno/setup/doctor.py
 cli/src/fno/setup/integration.py
@@ -362,11 +374,7 @@ crates/fno/src/setup_autowire.rs
 crates/fno/src/setup_autowire_tests.rs
 cli/src/fno/target_cli.py
 cli/src/fno/test_dispatch_target.py
-cli/src/fno/test_worktree_paths.py
 cli/src/fno/wake/detect.py
-cli/src/fno/worktree_cli/cli.py
-cli/src/fno/worktree_paths.py
-cli/src/fno/worktree.py
 crates/fno-agents/src/claude_adopt.rs
 crates/fno-agents/src/claude_ask.rs
 crates/fno-agents/src/claude_config_tmp.rs
@@ -406,8 +414,11 @@ crates/fno-agents/src/session_start_bytes.rs
 crates/fno-agents/src/state.rs
 crates/fno-agents/src/stream_worker.rs
 crates/fno-agents/src/test_run.rs
+crates/fno-agents/src/worktree/ensure.rs
+crates/fno-agents/src/worktree/status.rs
 crates/fno-agents/src/worktree_reapable.rs
 crates/fno-agents/src/bin/client.rs
+crates/fno/src/worktree_door.rs
 crates/fno-agents/tests/claude_ask_dispatch.rs
 crates/fno-agents/tests/claude_ask_parity.rs
 crates/fno-agents/src/mail_cli/reply.rs

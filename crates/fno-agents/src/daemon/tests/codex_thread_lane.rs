@@ -1160,12 +1160,15 @@ async fn poll_thread_row(
 /// land in the `thread/start` config map with TOML-typed values, `--add-dir`
 /// rides the state-root grant onto every turn, the spawn-request effort rides
 /// `turn/start`, and the row stores the raw tokens for startup recovery
-/// (AC2-HP, AC3-HP). The same door carries the role (x-c5db): the request's
-/// role half-pair lands on the row AT MINT - grantor read off the request's
-/// parent edge, never caller-supplied - so the seed turn enqueued below can
-/// never submit to an unpromoted row. A scope a non-terminal row already
-/// terms mints UNPROMOTED (succession is the Python settle's write, never a
-/// second live role), and a lone half refuses with no row written.
+/// (AC2-HP, AC3-HP). The request stays UNPROMOTED on purpose: the bounded
+/// posture is what carries the `writableRoots` grant this test asserts, and
+/// the role door has its own tests below (the request's role half-pair lands
+/// on the row AT MINT - grantor read off the request's parent edge, never
+/// caller-supplied - so the seed turn can never submit to an unpromoted row;
+/// a scope a non-terminal row already terms mints UNPROMOTED, and a lone half
+/// refuses with no row written). A promoted spawn now widens to full access,
+/// whose turn policy echoes without roots - that shape is the order tests'
+/// contract, not this one.
 #[tokio::test(flavor = "current_thread")]
 async fn codex_thread_spawn_carries_harness_args_config_add_dir_and_effort() {
     let behavior = crate::codex_fake_daemon::Behavior::quick();
@@ -1185,8 +1188,6 @@ async fn codex_thread_spawn_carries_harness_args_config_add_dir_and_effort() {
                 "cwd": worktree.to_string_lossy(),
                 "message": "seed turn",
                 "effort": "high",
-                "role_level": 2,
-                "role_scope": "x-aaaa",
                 "spawned_by_session": "parent-session-uuid",
                 "harness_args": [
                     "-c", "sandbox_workspace_write.network_access=true",
@@ -1259,17 +1260,10 @@ async fn codex_thread_spawn_carries_harness_args_config_add_dir_and_effort() {
             ),
             "the row stores the fenced tokens verbatim"
         );
-        let promoted = registry.find("t").unwrap();
-        assert_eq!(
-            promoted.role_level,
-            Some(2),
-            "promoted at mint: {promoted:?}"
-        );
-        assert_eq!(promoted.role_scope.as_deref(), Some("x-aaaa"));
-        assert_eq!(
-            promoted.role_grantor.as_deref(),
-            Some("parent-session-uuid")
-        );
+        // The mint door's own asserts live in the phases below, whose
+        // requests carry the role pair; this phase's request stays
+        // unpromoted so the bounded writableRoots grant above keeps its
+        // shape.
         ctx.codex_threads.lock().await.remove("t");
         std::fs::remove_dir_all(home.root()).ok();
 

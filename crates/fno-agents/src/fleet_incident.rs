@@ -1139,6 +1139,13 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
         return 2;
     };
     let rest = &args[1..];
+    // The fleet-sweep watermark ops ride this action as arguments (law
+    // d-fe66560a allows no new client action; gh-budget and cutover are the
+    // precedent): `fleet-incident fleet-state <op> ...` (see fleet_state.rs).
+    // A watermark must be writable when the daemon itself is the thing wedged.
+    if action.as_str() == "fleet-state" {
+        return crate::fleet_state::run(rest);
+    }
     if matches!(action.as_str(), "-h" | "--help" | "help")
         || rest
             .iter()

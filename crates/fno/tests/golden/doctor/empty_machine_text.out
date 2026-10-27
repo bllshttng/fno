@@ -1,0 +1,12 @@
+fno doctor: review invocations: no event journal; no sent attempt to lose
+fno doctor: status unknown (no source checkout to compare against).
+fno doctor: rust fno-agents binary: not found (cargo leg not applicable).
+fno doctor: mux front door: crates/fno not cargo-installed; bare `fno` will not launch the mux. Run `fno doctor update` (or cargo install --path crates/fno).
+fno doctor: control-plane arms readout unknown (fno-agents binary not found); staleness is unmeasured.
+fno doctor: post-merge sync UNKNOWN - could not read merge state (gh unavailable or unauthenticated); run `gh auth status`.
+fno doctor: evals UNKNOWN (no eval history); run `fno doctor evals run --tier regression -y`.
+fno doctor: LaunchAgent health: not applicable (no launchctl on this host).
+fno doctor: think_spawn.enabled is OFF (idle); nothing is happening. Run `fno config set think_spawn.enabled true` to enable.
+fno doctor: plugin stage freshness unknown (no cargo fno-agents binary to run the stage check).
+fno doctor: plugin hook probe skipped ($SHELL unset).
+fno doctor: codex app-server daemon not running (no daemon listening on its control socket); live mail to codex sessions demotes to durable. Start it BEFORE the codex TUI: `codex app-server daemon start` (or `codex app-server daemon bootstrap` for durable SSH-driven use). A session launched before the daemon cannot receive live mail without a restart.

@@ -539,7 +539,7 @@ def tick() -> None:
     """
     import time
 
-    from fno.config_cli import post_merge_readiness
+    from fno.setup.config_doctor import post_merge_readiness
     from fno.pr_watch._dispatch import (
         current_tick_phase,
         phase_seconds_left,
@@ -800,11 +800,16 @@ def tick() -> None:
                 # ticks instead.
                 if _fleet_swept:
                     try:
-                        from fno.fleet_state import write_heartbeat
+                        from fno.rust_binary import command_call
 
-                        write_heartbeat(
-                            candidates=_fleet_candidates, refused=_fleet_refused,
-                            silent=_fleet_silent,
+                        command_call(
+                            ["fleet-incident", "fleet-state", "heartbeat"],
+                            {
+                                "candidates": _fleet_candidates,
+                                "refused": _fleet_refused,
+                                "silent": _fleet_silent,
+                            },
+                            timeout=5,
                         )
                     except Exception as exc:  # noqa: BLE001 - never fatal to the PR legs
                         log.warning("pr-watch: fleet heartbeat write failed: %s", exc)
@@ -1404,7 +1409,7 @@ def tick() -> None:
                         "a stranded sweep costs"
                     )
                 from fno.branch_provenance_cache import write_cache
-                from fno.worktree_stranded import STRANDED, UNKNOWN, apply_sweep, sweep
+                from fno.rust_binary import call_binary_json
 
                 wake = lane_armed and _wd_wake_armed(settings)
                 changed, stranded_n, unknown_n, acted_n, failed_n, roots_done = False, 0, 0, 0, 0, 0
@@ -1433,14 +1438,26 @@ def tick() -> None:
                         )
                         break
                     try:
-                        stranded_rows = sweep(repo=root)
+                        door_args = ["--repo", str(root), "--json", "--apply"]
+                        if not wake:
+                            # The report posture still records UNKNOWN rows;
+                            # only the STRANDED push+file waits for the arm.
+                            door_args.append("--no-wake")
+                        door_err, payload = call_binary_json(
+                            "worktree-stranded", door_args, timeout=120
+                        )
+                        if door_err is not None or not isinstance(payload, dict):
+                            raise RuntimeError(
+                                f"worktree-stranded door failed: {door_err}"
+                            )
+                        stranded_rows = payload.get("rows") or []
+                        outcomes = payload.get("outcomes") or []
                         changed |= write_cache(root, stranded_rows)
-                        outcomes = apply_sweep(stranded_rows, wake=wake)
                     except Exception as exc:  # noqa: BLE001 - one bad repo never stops the rest
                         log.warning("pr-watch: stranded sweep failed for %s: %s", root, exc)
                         continue
-                    stranded_n += sum(1 for r in stranded_rows if r.klass == STRANDED)
-                    unknown_n += sum(1 for r in stranded_rows if r.klass == UNKNOWN)
+                    stranded_n += sum(1 for r in stranded_rows if r.get("class") == "STRANDED")
+                    unknown_n += sum(1 for r in stranded_rows if r.get("class") == "UNKNOWN")
                     acted_n += len(outcomes)
                     failed_n += sum(1 for o in outcomes if o["stopped_at"])
                     roots_done += 1

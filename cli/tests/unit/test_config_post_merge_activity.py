@@ -7,7 +7,7 @@ from __future__ import annotations
 
 
 
-from fno import config_cli
+from fno.setup import config_doctor as config_cli
 
 
 def test_backend_visible_node_reads_active(tmp_path, monkeypatch):
