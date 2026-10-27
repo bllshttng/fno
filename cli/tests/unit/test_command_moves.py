@@ -190,14 +190,18 @@ def test_every_moved_spelling_is_hidden():
         # an intercept that never reaches it. `observer` joined the same way:
         # the front door claims both spellings and execs the native ops.
         # `lead` joined when the lead family ported: the front door claims
-        # `lead <command>` and prints the move notice itself. Every OTHER moved
+        # `lead <command>` and prints the move notice itself. `scoreboard`
+        # joined when the scoreboard family ported: the front door claims the
+        # root spelling, prints the move notice, and execs the native
+        # scoreboard door, so a python registration would sit behind an
+        # intercept that never reaches it. Every OTHER moved
         # spelling keeps a one-release registration, and any registration
         # that exists must be hidden: an advertised moved name teaches a
         # doomed spelling.
         if name in (
             "decide", "yard", "review", "pr", "retro", "restart", "project", "skill-diff",
             "mcp", "setup", "route", "research", "think", "workspace", "worktree",
-            "autonomy", "loops", "observer", "lead",
+            "autonomy", "loops", "observer", "lead", "scoreboard",
         ):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue
