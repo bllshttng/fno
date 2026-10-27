@@ -344,7 +344,7 @@ cli/src/fno/context_audit.py
 cli/src/fno/doctor.py
 cli/src/fno/graph/cli.py
 cli/src/fno/inbox/drain.py
-cli/src/fno/observer/isolation.py
+crates/fno-agents/src/observer/fold.rs
 cli/src/fno/paths.py
 cli/src/fno/scratch_cli.py
 cli/src/fno/provenance/resolver.py
