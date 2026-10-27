@@ -1,4 +1,3 @@
-A	$(fno config paths shell-stub)	py=cli/src/fno/setup/migrate_paths.py;rs=crates/fno-agents/src/paths_cli.rs	# CLASSIFY protocol|msg-twin|data
 A	, transcript age unknown	py=cli/src/fno/mail/receipts.py;rs=crates/fno-agents/src/mail_cli/send/verify.rs	# the port froze the golden wording; the python twin is the reply command kept helper (AC1-EDGE)
 A	--- source-transcript tail ({harness} {short}, near created_at) ---	py=cli/src/fno/provenance/autobrief.py;rs=crates/fno-agents/src/backlog/autobrief.rs	# CLASSIFY protocol|msg-twin|data advance.py port in flight: byte-matched twins, the python leg deletes when the port lands
 A	--at needs --as pane (a thread has no calling pane)	py=cli/src/fno/agents/spawn_defaults.py;rs=crates/fno-agents/src/bin/client.rs	# CLASSIFY protocol|msg-twin|data

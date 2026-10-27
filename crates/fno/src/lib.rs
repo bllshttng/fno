@@ -89,6 +89,10 @@ pub mod pane_argv;
 pub mod pane_border;
 pub mod pane_cwd;
 mod pane_send_audit;
+pub mod path_migration;
+#[cfg(test)]
+#[path = "path_migration_tests.rs"]
+mod path_migration_tests;
 pub mod paths_route;
 pub mod popup;
 pub mod process_admission;

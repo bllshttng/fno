@@ -292,39 +292,6 @@ def _warn_deprecated_alias_if_needed() -> None:
     return
 
 
-def _check_migration() -> None:
-    """Fast-path stat check; runs migration on first invocation post-upgrade.
-
-    The try/except Exception: pass is intentional - this migration is a
-    best-effort startup convenience, not load-bearing.
-
-    Guarded by FNO_SKIP_MIGRATION=1 (explicit opt-out) or PYTEST_CURRENT_TEST
-    (pytest sets this automatically in all test processes) for isolation.
-    """
-    if os.environ.get("FNO_SKIP_MIGRATION") == "1":
-        return
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        return
-    try:
-        from fno import paths as _paths
-
-        sentinel = _paths.state_dir() / ".path-migration-done"
-        if sentinel.exists():
-            return
-        # Stale .tmp cleanup is intentionally NOT done here (Finding F /
-        # round 5+6 on the original migration PR). Deleting .tmp files
-        # outside the lock creates a race: process A cleans stale tmps,
-        # process B deletes A's in-flight tmp, then A's os.replace() fails.
-        # run_migration() performs the cleanup INSIDE its FileLock, which
-        # serializes it.
-        from fno.setup.migrate_paths import run_migration
-
-        run_migration(settings_root=_paths.state_dir())
-    except Exception:  # noqa: BLE001
-        # Never block normal fno commands on migration failure - silent fallback.
-        pass
-
-
 # ---------------------------------------------------------------------------
 # App definition
 # ---------------------------------------------------------------------------
@@ -413,7 +380,6 @@ def callback(
     json_output: bool = typer.Option(False, "--json", "-J", help="output JSON where supported"),
     version: bool = typer.Option(False, "--version", help="show version and exit", is_eager=True),
 ) -> None:
-    _check_migration()
     _warn_deprecated_alias_if_needed()
     ctx.ensure_object(dict)
     ctx.obj["json"] = json_output

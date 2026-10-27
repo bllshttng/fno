@@ -1636,6 +1636,7 @@ fn exec_real(real: &Path, args: &[OsString]) -> BootErr {
     // __init__ bytecode before its body runs, and a .pyc written while
     // `uv tool install` replaces the venv fails it (os error 66).
     command.env("PYTHONDONTWRITEBYTECODE", "1");
+    crate::path_migration::run_if_needed();
     crate::gh_proxy::protect(&mut command);
     let err = crate::process_admission::bootstrap_exec(&mut command);
     BootErr::new(
