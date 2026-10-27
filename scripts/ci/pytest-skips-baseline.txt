@@ -12,7 +12,6 @@ cli/tests/agents/test_codex_thread_effort_journey.py::<module>::mark.skipif  # o
 cli/tests/agents/test_role.py::_prepare_role_cli::pytest.skip  # the team commands need a fno-agents dev build for the lock-time identity match; the smoke pytest lanes delete the build by design (same contract as native_backlog_door)
 cli/tests/agents/test_grok_spawn_journey.py::test_grok_spawn_journey_public_surface_reaches_a_live_row::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_harness_capability_parity.py::test_resolved_rows_match_between_readers::pytest.skip  # on main before this ratchet
-cli/tests/agents/test_lead_drain_cache.py::graph::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_lane_b_thread_spawn.py::_rust_posture_door::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_lane_b_thread_spawn.py::test_lane_b_journey_real_keeper_hosts_the_thread::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_pi_journey.py::test_AC10_HP_live_a_stopped_pi_session_resumes_by_id_and_cwd::mark.skipif  # on main before this ratchet
@@ -63,14 +62,14 @@ cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_apply_salv
 cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_apply_salvages_untracked_pins_detached_and_keeps_branch::pytest.skip  # on main before this ratchet
 cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_salvage_failure_keeps_tree::marker.requires_gate  # on main before this ratchet
 cli/tests/integration/test_worktree_cleanup_merged.py::test_aggressive_salvages_the_tracked_diff_to_a_ref_then_prunes::marker.requires_gate  # the sweep under test needs the fno-agents gate binary; CI builders without it skip rather than fail
-cli/tests/integration/test_worktree_ensure.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_backlog_single_flight.py::iso::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_blueprint_batching_rule.py::test_behavioral_dispatch_plan_batches_the_shape_pair::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_claim_rebind.py::test_rebind_live_different_pid_refuses_concurrent_writer::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::TestSessionWitnessVerdicts.test_status_live_session_never_reads_stale::marker.requires_rust  # on main before this ratchet
+cli/tests/unit/test_dispatch_undeclared_repo.py::<module>::mark.skipif  # the module's requires_rust detector: the seam test drives the compiled fno-agents binary, which the smoke-pytest shard deletes by design
+cli/tests/unit/test_dispatch_undeclared_repo.py::test_rust_seam_returns_pin_for_foreign_cwd::marker.requires_rust  # the dispatch-pin decision itself is characterized in Rust by the dispatch_pin goldens; the Python test covers the real binary end-to-end where a build exists
 cli/tests/unit/test_events_schema.py::_require_schema_loaded::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_hooks_json_validity.py::test_every_manifest_hook_is_wired_and_pretooluse_launches::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_keeper_lane.py::_build_worker_bin::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_keeper_lane.py::test_apply_all_kills_through_the_real_command::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_keeper_lane.py::test_control_live_listener_survives_both::mark.skipif  # on main before this ratchet

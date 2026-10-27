@@ -870,3 +870,83 @@ fn header_hint_takes_only_the_gap_the_fit_left_over() {
     assert_eq!(tight, header_band_text("sq", &rollup, 12));
     assert_eq!(header_band::folder_hint(""), "(no folder)");
 }
+
+fn top_row(v: &View) -> String {
+    let f = v.compose();
+    f.cells[..v.panel_w() as usize]
+        .iter()
+        .map(|c| c.c)
+        .collect()
+}
+
+#[test]
+fn agents_tab_strip_counts_rows_that_need_input() {
+    let mk = |name: &str, pane: u64, b: AgentBadge| agent_row(name, pane, Some(b), false);
+    let mut far = mk("b2", 6, AgentBadge::Blocked);
+    far.cwd_base = Some("/tmp/other".into());
+    let v = wide_view(vec![
+        mk("b1", 4, AgentBadge::Blocked),
+        far,
+        mk("d1", 5, AgentBadge::Done),
+    ]);
+    let row = top_row(&v);
+    assert!(row.starts_with(" 2 need input"), "{row:?}");
+    let rollup = section_rollup(v.layout.agents.iter().map(agent_lattice_state));
+    assert_eq!(rollup.first(), Some(&(LatticeState::Blocked, 2)));
+
+    // No Blocked row: no count, and the view words sit where they sat.
+    let calm = wide_view(vec![mk("d1", 5, AgentBadge::Done)]);
+    let row = top_row(&calm);
+    let start = calm.top_row_spans()[0].0;
+    assert!(row.chars().take(start).all(|c| c == ' '), "{row:?}");
+}
+
+#[tokio::test]
+async fn agents_tab_ctrl_t_pins_like_dot() {
+    let mk = |name: &str, pane: u64| agent_row(name, pane, Some(AgentBadge::Working), false);
+    let mut v = wide_view(vec![mk("a", 4), mk("b", 5)]);
+    let at = v
+        .display_rows()
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == "b"))
+        .unwrap();
+    v.selector = Some(at);
+    let mut buf: Vec<u8> = Vec::new();
+    selector_keys(&mut v, &[0x14], &mut buf).await.unwrap();
+    assert_eq!(v.pinned_agents, vec!["b".to_string()]);
+    let at = v
+        .display_rows()
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == "b"))
+        .unwrap();
+    v.selector = Some(at);
+    selector_keys(&mut v, &[0x14], &mut buf).await.unwrap();
+    assert!(v.pinned_agents.is_empty(), "a second ctrl+t unpins");
+
+    // A non-agent row notices why and persists nothing.
+    let band = v
+        .display_rows()
+        .iter()
+        .position(|r| !matches!(r, DisplayRow::Agent(_)))
+        .unwrap();
+    v.selector = Some(band);
+    selector_keys(&mut v, &[0x14], &mut buf).await.unwrap();
+    assert!(v.pinned_agents.is_empty());
+    assert!(v
+        .notice
+        .as_ref()
+        .is_some_and(|(n, _)| n == "pin works on an agent row"));
+}
+
+#[test]
+fn agents_tab_selector_hint_names_pin_and_move() {
+    let hint = crate::keys::selector_hint();
+    for word in [
+        "space peek",
+        ". or ctrl+t pin",
+        "shift+up/down move",
+        "r rename",
+    ] {
+        assert!(hint.contains(word), "missing {word}: {hint}");
+    }
+}

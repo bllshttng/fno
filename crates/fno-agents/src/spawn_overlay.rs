@@ -25,6 +25,9 @@
 //! - kind `team-rescope`: the role re-scope's team-name effect
 //!   (`team_rescope::resolve`), the promote-side carry that keeps a lead's
 //!   recorded name across an `org promote` scope move.
+//! - kind `lead`: the lead manifest, wake-ledger and scope ops
+//!   (`lead_ops::overlay_kind`) the PR watcher's lead wake and the role
+//!   commands read.
 //! - kind `roles-discover`: layered business-role discovery
 //!   (`roles::registry::discover_kind`), the records the Python roles
 //!   package reads back. The roles commands ride the same command as argv ops,
@@ -120,6 +123,12 @@ pub fn run_spawn_overlay(args: &[String]) -> i32 {
     // (crate::project::run).
     if args.first().map(String::as_str) == Some("project") {
         return crate::project::run(&args[1..]);
+    }
+    // The `fno agents admit autonomy` spawner table nests here the same way
+    // (crate::autonomy_status): the spawn seam's introspection, adding no
+    // fno-agents root action (shrink law d-fe66560a).
+    if args.first().map(String::as_str) == Some("autonomy") {
+        return crate::autonomy_status::run(&args[1..]);
     }
     let mut payload = String::new();
     let read = if let Some(path) = args.iter().find_map(|a| a.strip_prefix("--payload-file=")) {
@@ -218,6 +227,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("team-rivals") => crate::org_rivals::resolve(&payload),
         Some("team-rescope") => crate::team_rescope::resolve(&payload),
         Some("spawn-team") => crate::team_spawn::resolve(&payload),
+        Some("lead") => crate::lead_ops::overlay_kind(&payload),
         Some("roles-discover") => crate::roles::registry::discover_kind(&payload),
         Some("credentials") => crate::accounts::credentials::compose_kind(&payload),
         Some("state-root-seal") => crate::accounts::credentials::seal_kind(&payload),
@@ -227,7 +237,7 @@ pub fn resolve(payload: Value) -> Result<Value, String> {
         Some("roles-resolve") => crate::roles::resolver::resolve_kind(&payload),
         Some("business-role") => crate::roles::routing::business_role_kind(&payload),
         other => Err(format!(
-            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-resolve|role-grant|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team|roles-discover|credentials|state-root-seal|account-overlay|dispatch-account|account-for-env|login-present|roles-resolve|business-role"
+            "spawn-overlay: unknown kind {other:?}; expected overlay|compat|compose|lane-vendor|link-meta|pane-group|fallback|codex-route|claude-route|providers|print|write-settings|launch|team-settle|team-identity|team-widen|role-resolve|role-grant|role-settle|role-identity|role-widen|team-rivals|team-rescope|spawn-team|lead|roles-discover|credentials|state-root-seal|account-overlay|dispatch-account|account-for-env|login-present|roles-resolve|business-role"
         )),
     }
 }

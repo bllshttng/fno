@@ -24,6 +24,8 @@ use std::path::{Path, PathBuf};
 
 use fno::{bootstrap, cli_args, mux_cli, proto};
 
+mod config_route_cli;
+
 /// Commands removed from the mux front, and what replaced each one.
 ///
 /// A removed command that lands on the bare usage banner makes the caller re-read
@@ -68,7 +70,14 @@ enum Role {
     /// `config setup run` composes on. Native, so the inventory answers
     /// beside the setup command that reads it.
     ConfigDefaults(Vec<OsString>),
+    ConfigRoute(Vec<OsString>),
     ConfigSchema(Vec<String>),
+    /// The native read-side `config` doors (get, history, build-dir,
+    /// assert-subagent-budget, status-sinks, active-backlog, plugin install).
+    /// One classify, bodies in `config_cli::`; the writer stays with the
+    /// config hub's write surface and the doctor command beside the setup
+    /// family's engine.
+    ConfigCli(fno::config_cli::Door),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
@@ -185,8 +194,10 @@ enum Role {
     DoctorCost(Vec<OsString>),
     /// `fno doctor skill-diff tick|reconcile` and the deprecated root `fno
     /// skill-diff`: the whole command execs the native `fno-agents loops`
-    /// skill-diff ops. The tail (op word + flags) rides byte-verbatim; a
-    /// bare command or --help answers native help inside the op door.
+    /// skill-diff ops. The op word maps to the loops door's name (`tick` ->
+    /// `skill-diff-tick`, `reconcile` -> `skill-diff-reconcile`); the flags
+    /// ride byte-verbatim. A bare command or --help answers native help
+    /// inside the op door.
     DoctorSkillDiff(Vec<OsString>),
     /// `fno doctor observer <op>`: the observer family (sweep | judge |
     /// replay) execs the native `fno-agents spawn-overlay observer` ops
@@ -297,6 +308,8 @@ enum Role {
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
+    DoctorHome(Vec<OsString>),
+    DoctorAgentsExec(&'static str, Vec<OsString>),
     /// `fno agents mail show ...`: the native one-message reader, lexically
     /// classified beside agents_history. The Python CLI keeps the rest of
     /// the mail tree; the carried tail runs `fno-agents chats show`.
@@ -369,6 +382,11 @@ enum Role {
     /// worker's --mcp-exec lane with the tail byte-verbatim. The bool is the
     /// root spelling, whose move notice prints before the same exec.
     AgentsMcpRoot(bool, Vec<OsString>),
+    /// The fleet family's claimed command spellings (`fno do loops`, `fno
+    /// agents yard`, `fno agents autonomy`, and their deprecated root
+    /// forms): the ported fleet doors, exec'd with the tail byte-verbatim.
+    /// The struct carries the door, the root-alias flag, and the tail.
+    Fleet(fno::fleet_route::FleetClaim),
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
@@ -633,7 +651,7 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
 }
 
 /// `fno doctor observer ...` and the deprecated root `fno observer ...`: the
-/// tail rides verbatim to the native ops door, as skill-diff's does.
+/// tail rides verbatim to the native ops door.
 fn classify_observer(args: &[OsString]) -> Option<Vec<OsString>> {
     let rest: &[OsString] = match args.first()?.to_str()? {
         "doctor" if args.get(1)?.to_str()? == "observer" => &args[2..],
@@ -644,8 +662,10 @@ fn classify_observer(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// `fno doctor skill-diff ...` and the deprecated root `fno skill-diff ...`:
-/// the tail (op word + flags) rides byte-verbatim to the native ops door.
-/// A bare command and --help claim too (the Python leg dies in this port); an
+/// the tail execs to the native ops door. The user-facing op word maps to
+/// the name the loops door routes (a bare `tick`/`reconcile` exec'd verbatim
+/// is its "unknown action" refusal); flags ride byte-verbatim. A bare
+/// command and --help claim too (the Python leg dies in this port); an
 /// unknown op word refuses inside the op door.
 fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
     let rest: &[OsString] = match args.first()?.to_str()? {
@@ -653,7 +673,17 @@ fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
         "skill-diff" => &args[1..],
         _ => return None,
     };
-    Some(rest.to_vec())
+    let mapped = match rest.first().and_then(|a| a.to_str()) {
+        Some("tick") => Some("skill-diff-tick"),
+        Some("reconcile") => Some("skill-diff-reconcile"),
+        _ => None,
+    };
+    Some(match mapped {
+        Some(op) => std::iter::once(OsString::from(op))
+            .chain(rest[1..].iter().cloned())
+            .collect(),
+        None => rest.to_vec(),
+    })
 }
 
 /// The leaves still owned by other families' Python legs: `fno whoami
@@ -997,6 +1027,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some((root_alias, rest)) = fno::agents_mcp_route::classify(args) {
         return Role::AgentsMcpRoot(root_alias, rest);
     }
+    if let Some(claim) = fno::fleet_route::classify(args) {
+        return Role::Fleet(claim);
+    }
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
     }
@@ -1017,6 +1050,13 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_group_command(args, "doctor", "builds") {
         return Role::DoctorBuilds(rest);
+    }
+    match fno::doctor::classify(args) {
+        Some(fno::doctor::Claim::Home(rest)) => return Role::DoctorHome(rest),
+        Some(fno::doctor::Claim::AgentsExec(label, argv)) => {
+            return Role::DoctorAgentsExec(label, argv)
+        }
+        None => {}
     }
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
@@ -1197,8 +1237,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::config_defaults::classify(args) {
         return Role::ConfigDefaults(rest);
     }
+    if let Some(rest) = config_route_cli::classify(args) {
+        return Role::ConfigRoute(rest);
+    }
     if let Some(rest) = fno::config_schema::classify(args) {
         return Role::ConfigSchema(rest);
+    }
+    if let Some(door) = fno::config_cli::classify(args) {
+        return Role::ConfigCli(door);
     }
     match cli_args::classify(args) {
         FrontDoor::Forward => Role::Forward,
@@ -1339,6 +1385,12 @@ fn main() {
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let env_session = mux_cli::env_server();
     let mut args = args;
+    // The worktree family's door claims before any forwarding: the Python
+    // mounts die with the family port, so these argv shapes must answer
+    // natively or not at all.
+    if let Some(launch) = fno::worktree_door::classify(&args) {
+        std::process::exit(launch.run());
+    }
     // The agents menu claims first: a nested spelling rewrites to the argv
     // that answers today, so every door below still sees the spelling it
     // owns. The cross-machine `org promote <name@host>` hand-off is left for
@@ -1450,7 +1502,23 @@ fn main() {
         Role::Uninstall(opts) => std::process::exit(fno::uninstall::run_uninstall(opts)),
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
+        Role::ConfigRoute(rest) => std::process::exit(config_route_cli::run(&rest)),
         Role::ConfigSchema(rest) => std::process::exit(fno::config_schema::run(&rest)),
+        Role::ConfigCli(door) => std::process::exit(match door {
+            fno::config_cli::Door::Get(rest) => fno::config_cli::get::run(&rest),
+            fno::config_cli::Door::History(rest) => fno::config_cli::history::run(&rest),
+            fno::config_cli::Door::BuildDir => fno::config_cli::leaves::run_build_dir(&[]),
+            fno::config_cli::Door::Budget(rest) => fno::config_cli::leaves::run_budget(&rest),
+            fno::config_cli::Door::StatusSinks(rest) => {
+                fno::config_cli::leaves::run_status_sinks(&rest)
+            }
+            fno::config_cli::Door::ActiveBacklog => {
+                fno::config_cli::leaves::run_active_backlog(&[])
+            }
+            fno::config_cli::Door::PluginInstall(rest) => {
+                fno::config_cli::plugin_install::run(&rest)
+            }
+        }),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
         Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
@@ -1494,6 +1562,7 @@ fn main() {
         Role::AgentsMcpRoot(root_alias, rest) => {
             std::process::exit(fno::agents_mcp_route::run(root_alias, &rest))
         }
+        Role::Fleet(claim) => std::process::exit(fno::fleet_route::run(claim)),
         Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],
@@ -1640,6 +1709,15 @@ fn main() {
             &["test-run", "builds"],
             &rest,
         )),
+        Role::DoctorHome(rest) => std::process::exit(fno::doctor::run(&rest)),
+        Role::DoctorAgentsExec(label, argv) => {
+            let action: Vec<String> = argv
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            let refs: Vec<&str> = action.iter().map(|s| s.as_str()).collect();
+            std::process::exit(fno_agents_exec(label, &refs, &[]))
+        }
         Role::DoctorSkillDiff(rest) => {
             std::process::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))
         }
@@ -1986,7 +2064,7 @@ mod tests {
             Role::Forward
         );
         // The canon-refresh door claims the front's rewrite exactly; the
-        // sibling lead commands stay on the compat leg.
+        // sibling lead commands answer through the lead route.
         assert_eq!(
             decide_role(&os(&["agents", "lead", "refresh-canon"]), false),
             Role::AgentsLeadRefreshCanon(os(&[]))
@@ -1995,10 +2073,10 @@ mod tests {
             decide_role(&os(&["agents", "lead", "refresh-canon", "--extra"]), false),
             Role::AgentsLeadRefreshCanon(os(&["--extra"]))
         );
-        assert_eq!(
+        assert!(matches!(
             decide_role(&os(&["agents", "lead", "done"]), false),
-            Role::Forward
-        );
+            Role::Lead(_)
+        ));
         // The mail reader claims its command and refuses the renamed one by
         // name; the send port claims local sends, while @host and plain
         // names stay the relay's.
@@ -2158,6 +2236,42 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["config", "setup", "plan", "--advanced"]), false),
             Role::SetupCmd(fno::setup_cmds::Cmd::Plan(os(&["--advanced"])))
+        );
+    }
+
+    #[test]
+    fn skill_diff_ops_map_to_the_loops_door_names() {
+        // The user-facing op words must arrive at the loops door under the
+        // names it routes to skill_diff::run; a bare `reconcile` exec'd
+        // verbatim is the "unknown action" refusal that broke the
+        // post-merge ritual step on every merge.
+        assert_eq!(
+            decide_role(
+                &os(&["doctor", "skill-diff", "reconcile", "--pr-number", "5"]),
+                false
+            ),
+            Role::DoctorSkillDiff(os(&["skill-diff-reconcile", "--pr-number", "5"]))
+        );
+        assert_eq!(
+            decide_role(
+                &os(&["doctor", "skill-diff", "tick", "--skill", "mail"]),
+                false
+            ),
+            Role::DoctorSkillDiff(os(&["skill-diff-tick", "--skill", "mail"]))
+        );
+        // The deprecated root spelling maps the same way.
+        assert_eq!(
+            decide_role(&os(&["skill-diff", "reconcile"]), false),
+            Role::DoctorSkillDiff(os(&["skill-diff-reconcile"]))
+        );
+        // Bare and --help keep riding verbatim: the loops door answers usage.
+        assert_eq!(
+            decide_role(&os(&["doctor", "skill-diff", "--help"]), false),
+            Role::DoctorSkillDiff(os(&["--help"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["doctor", "skill-diff"]), false),
+            Role::DoctorSkillDiff(os(&[]))
         );
     }
 

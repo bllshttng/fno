@@ -62,7 +62,6 @@ K1	cli/tests/test_import_time_env_reads.py	py	3
 K1	cli/tests/test_lazy_imports.py	py	38
 K1	cli/tests/unit/test_agent_cli.py	py	17
 K1	cli/tests/unit/test_agent_integration.py	py	2
-K1	cli/tests/unit/test_autonomous_route.py	py	20
 K1	cli/tests/unit/test_cargo_job_trigger_paths.py	py	2
 K1	cli/tests/unit/test_cli_hooks.py	py	33
 K1	cli/tests/unit/test_cli_v2_config_flag.py	py	1

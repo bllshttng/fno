@@ -48,7 +48,6 @@ agents spawn !--bounded-placement !--deny-tools !--mux-session !--output-format 
 annotate
 annotate list
 approvals
-autonomy status
 backlog
 backlog advance
 backlog done
@@ -68,7 +67,7 @@ context
 cost
 delivery evaluate
 do
-doctor !--context-audit !--context-budget !--context-entry !--context-harness !--context-host
+doctor
 done
 evals
 event
@@ -78,7 +77,6 @@ help
 inbox approvals decide
 inbox approvals ls
 inbox approvals show
-inbox board
 inbox notify
 inbox operator ack
 inbox operator list
@@ -86,13 +84,7 @@ inbox operator status
 inbox user ack
 inbox user list
 inbox user status
-lead board
-lead done
-lead drain
-lead escalate
 lint
-loops
-loops resume-all
 mail
 mail send !--origin !--provider
 mux
@@ -102,7 +94,6 @@ phase kill-check
 plan
 pr-watch
 resume
-route
 scoreboard
 state
 status-fanout tick
@@ -116,15 +107,3 @@ whoami context
 whoami cost
 whoami ledger
 whoami scoreboard
-workspace reap
-workspace register-worker
-workspace worktree archive
-workspace worktree cleanup !--kill-orphans
-workspace worktree ensure
-workspace worktree overlap-record
-workspace worktree overlaps
-workspace worktree policy
-workspace worktree reapable
-workspace worktree status
-workspace worktree stranded
-worktree

@@ -1,0 +1,1 @@
+{"key": "review.max_rounds", "value": 5, "source": "<FIXTURE>/project/.fno/config.toml", "overrides": [], "root": "<FIXTURE>/project", "searched": ["<FIXTURE>/project/.fno/config.toml", "<FIXTURE>/project/.fno/settings.yaml", "<FIXTURE>/fake_home/.fno/config.toml", "<FIXTURE>/fake_home/.fno/settings.yaml"]}

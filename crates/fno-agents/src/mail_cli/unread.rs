@@ -16,16 +16,18 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use crate::announce::read_bus_segments;
-use crate::mail_control_drain::{deliverable, withdrawn_ids};
+use crate::mail_control_drain::{deliverable, read_cursor_file, withdrawn_ids};
 
 const HELP: &str = "\
-usage: fno-agents mail unread [--name NAME] [-n NAME] [--json] [-J] [--help]
+usage: fno-agents mail unread [--name NAME] [-n NAME] [--mine] [--json] [-J] [--help]
 
 Show unread bus messages addressed to NAME (cursor-filtered): the bus log
-scanned oldest-first, rows addressed to NAME after its ack cursor.
+scanned oldest-first, rows addressed to NAME after its ack cursor. With
+--mine, print this session's You pairs instead (typed turn + reply).
 
 options:
   -n, --name NAME  whose inbox to read (registry name or project; default fno)
+  --mine           print this session's You pairs (typed + reply) instead
   -J, --json       emit JSON regardless of TTY
   -h, --help       print this help
 ";
@@ -33,6 +35,7 @@ options:
 pub fn run(args: &[String]) -> i32 {
     let mut name = String::from("fno");
     let mut json_out = false;
+    let mut mine_only = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         if let Some(value) = arg.strip_prefix("--name=") {
@@ -51,12 +54,18 @@ pub fn run(args: &[String]) -> i32 {
                     return 2;
                 }
             },
+            "--mine" => {
+                mine_only = true;
+            }
             "--json" | "-J" => json_out = true,
             other => {
                 eprintln!("unread: unknown argument {other:?}");
                 return 2;
             }
         }
+    }
+    if mine_only {
+        return super::you_pairs::run(json_out);
     }
     if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." {
         eprintln!("unread: invalid cursor name: {name:?}");
@@ -65,7 +74,7 @@ pub fn run(args: &[String]) -> i32 {
 
     let bus = bus_dir();
     let msgs = read_bus_segments(&bus.join("messages.jsonl"));
-    let (cursor, warnings) = read_cursor(&bus.join("cursors").join(format!("{name}.json")));
+    let (cursor, warnings) = read_cursor_file(&bus.join("cursors").join(format!("{name}.json")));
     for warning in &warnings {
         eprintln!("{warning}");
     }
@@ -219,51 +228,4 @@ fn json_array(rows: &[&Value]) -> String {
     }
     let inner: Vec<String> = rows.iter().map(|m| row_json(m)).collect();
     format!("[{}]", inner.join(", "))
-}
-
-/// The consumer's cursor, plus any stderr warnings. Absent file: a silent
-/// `None` (full rescan). Unreadable or unparseable file: the oracle's warning
-/// verbatim, naming the Python exception class in the `{type}` slot. A
-/// non-object cursor reads as no cursor (`Value::get` answers `None`), and
-/// the truthiness gate mirrors the oracle: empty string and numeric zero
-/// advance nothing.
-fn read_cursor(path: &std::path::Path) -> (Option<String>, Vec<String>) {
-    let file_name = path
-        .file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or_default()
-        .to_string();
-    if !path.exists() {
-        return (None, Vec::new());
-    }
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(_) => {
-            return (
-                None,
-                vec![format!(
-                    "bus cursor: ignoring corrupt cursor {file_name} (OSError); rescanning retained segments"
-                )],
-            )
-        }
-    };
-    let parsed: Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(_) => {
-            return (
-                None,
-                vec![format!(
-                    "bus cursor: ignoring corrupt cursor {file_name} (JSONDecodeError); rescanning retained segments"
-                )],
-            )
-        }
-    };
-    let cursor = match parsed.get("last_seen_id") {
-        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
-        Some(Value::Number(n)) if n.as_f64().map(|f| f != 0.0).unwrap_or(false) => {
-            Some(n.to_string())
-        }
-        _ => None,
-    };
-    (cursor, Vec::new())
 }

@@ -23,6 +23,11 @@ const REPLY_WAIT: Duration = Duration::from_secs(15);
 const KEY: &str = "store.remote_url";
 const ADDRS_KEY: &str = "store.remote_addrs";
 const UNREACHABLE: &str = "is unreachable";
+/// The primary took the request and sent nothing back in time. Callers
+/// still fail closed on it, but the words must not say "unreachable": the
+/// host answers, and the cure is on the primary, not the network.
+const QUIET: &str = "did not answer";
+const NO_REPLY: &str = "no reply within";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SqlValue {
@@ -44,6 +49,13 @@ impl SqlValue {
     pub fn integer(&self) -> Option<i64> {
         match self {
             SqlValue::Integer(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    pub fn real(&self) -> Option<f64> {
+        match self {
+            SqlValue::Real(value) => Some(*value),
             _ => None,
         }
     }
@@ -363,10 +375,14 @@ impl Remote {
     }
 
     fn unreachable(&self, error: &str) -> String {
+        let verdict = if error.starts_with(NO_REPLY) {
+            QUIET
+        } else {
+            UNREACHABLE
+        };
         format!(
-            "remote store {} ({KEY}) {UNREACHABLE}: {error}. Nothing was written locally. \
-             A request that timed out can still have reached the primary. \
-             Unset {KEY} in the global config to use the local store.",
+            "remote store {} ({KEY}) {verdict}: {error}. Nothing was written locally. \
+             A request that timed out can still have reached the primary.",
             self.url
         )
     }
@@ -438,9 +454,10 @@ impl Remote {
     }
 }
 
-/// Is this error the fail-closed refusal of an unreachable primary?
+/// Is this error the fail-closed refusal of a primary that could not be
+/// reached or did not answer in time?
 pub fn is_unreachable(error: &str) -> bool {
-    error.starts_with("remote store ") && error.contains(UNREACHABLE)
+    error.starts_with("remote store ") && (error.contains(UNREACHABLE) || error.contains(QUIET))
 }
 
 /// A read error in words. A read that hit [`REPLY_WAIT`] says so: macOS
@@ -450,7 +467,8 @@ pub fn is_unreachable(error: &str) -> bool {
 fn io_error(error: std::io::Error) -> String {
     match error.kind() {
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => format!(
-            "no reply within {}s (the primary took the request and went quiet)",
+            "{NO_REPLY} {}s (the primary took the request and went quiet; \
+             `fno agents claim backlog probe` times one read and one write)",
             REPLY_WAIT.as_secs()
         ),
         _ => error.to_string(),
@@ -816,5 +834,28 @@ mod tests {
         let remote = Remote::parse("http://r2d2:18080", None).unwrap();
         let error = remote.with_fallbacks(&["r2d2.lan".into()]).unwrap_err();
         assert!(error.contains(ADDRS_KEY), "{error}");
+    }
+
+    #[test]
+    fn a_reply_timeout_says_the_primary_did_not_answer_and_still_fails_closed() {
+        let remote = Remote::parse("http://r2d2:18080", None).unwrap();
+        let quiet = remote.unreachable(&io_error(std::io::ErrorKind::WouldBlock.into()));
+        assert!(
+            quiet.contains("did not answer: no reply within 15s"),
+            "{quiet}"
+        );
+        assert!(
+            !quiet.contains(UNREACHABLE) && is_unreachable(&quiet),
+            "{quiet}"
+        );
+        // The local-store advice predates the share: a local write today
+        // splits the claim store, so the text must never send a reader there.
+        assert!(!quiet.contains("local store"), "{quiet}");
+        let refused = remote.unreachable("connect 1.2.3.4:18080: refused");
+        assert!(
+            refused.contains(UNREACHABLE) && is_unreachable(&refused),
+            "{refused}"
+        );
+        assert!(!refused.contains("local store"), "{refused}");
     }
 }

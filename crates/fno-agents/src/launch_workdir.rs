@@ -384,3 +384,15 @@ mod tests {
         );
     }
 }
+
+/// The bin client's dispatch site for this module's op: the arm body and its
+/// contract note live here so client.rs stays under the 5,000-line budget.
+/// Transport-only: registers no client action; Python's
+/// `ensure_launch_workdir` reaches it through command_call, and a `hold`
+/// answer is a valid exit-0 answer the caller renders.
+pub fn client_dispatch(args: &[String]) -> Option<i32> {
+    match args.first().map(String::as_str) {
+        Some("launch-workdir") => Some(run_launch_workdir(&args[1..])),
+        _ => None,
+    }
+}

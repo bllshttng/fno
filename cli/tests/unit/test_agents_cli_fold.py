@@ -20,37 +20,27 @@ def _commands(app) -> set[str]:
     return set(command.list_commands(click.Context(command)))
 
 
-def test_agents_registers_the_four_folded_roots() -> None:
+def test_agents_registers_the_folded_roots() -> None:
     # One launch command, and it is spawn. `restart` answers at the Rust front
     # door, so it is no folded root. The worker family port retired `worker`;
     # its answers live at `fno do pr`, `fno backlog reconcile`, and spawn.
-    # mcp left the fold: the family is native and the front's agents-mcp route
-    # answers the send command. The roles port moved its last callers onto the
-    # native door.
+    # mcp and lead left the fold: both families are native and the front
+    # door answers them (the front's agents-mcp route answers the send
+    # command). The roles port moved its last callers onto the native door.
+    # The fleet family port retired `autonomy`: the front's fleet route
+    # claims the spelling and the native spawn-overlay door answers it.
     from fno.agents.cli import agents_app
 
     assert {
-        "autonomy",
         "claim",
-        "lead",
         "mail",
     } <= _commands(agents_app)
 
 
-def test_agents_lead_excludes_board_while_inbox_keeps_it() -> None:
-    from fno.inbox.cli import inbox_app
-    from fno.lead.cli import agents_lead_app
-
-    assert "board" not in _commands(agents_lead_app)
-    assert "board" in _commands(inbox_app)
-
-
 def test_importing_agents_cli_does_not_import_folded_subgroups() -> None:
     modules = {
-        "fno.autonomy_cli",
         "fno.claims.cli",
         "fno.dispatch",
-        "fno.lead.cli",
         "fno.mail.cli",
     }
     script = (

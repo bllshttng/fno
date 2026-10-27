@@ -134,7 +134,6 @@ LAYERS = (
             # the scan skips unmapped modules entirely, so relocating code
             # without adding it here would clear a finding while leaving the
             # dependency in place.
-            "fno.dispatch_flags",
             "fno.drive_authority",
             "fno.harness_identity",
             "fno.harness_names",

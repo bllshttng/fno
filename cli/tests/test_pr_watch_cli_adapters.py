@@ -461,14 +461,14 @@ def test_phase_caps_fit_ceiling():
     # cover the read bound plus one attempt at the drain's floor.
     from fno.pr_watch.cli import _GRANT_QUEUE_READ_TIMEOUT_S
 
-    merge_room = ceiling - sum(_EVERY_TICK_CAP_S[k] for k in ("settings", "lead_wake"))
+    merge_room = ceiling - sum(_EVERY_TICK_CAP_S[k] for k in ("settings",))
     merge_cap = _PHASE_CAP_S["merge"]
     assert 0 < merge_cap <= merge_room - _EVERY_TICK_CAP_S["sweep"]
     tight_ceiling = _resolve_tick_deadline(
         SimpleNamespace(tick_timeout_seconds=480, interval_seconds=600)
     )
     tight_merge_room = tight_ceiling - sum(
-        _EVERY_TICK_CAP_S[k] for k in ("settings", "lead_wake", "sweep")
+        _EVERY_TICK_CAP_S[k] for k in ("settings", "sweep")
     )
     assert merge_cap <= tight_merge_room and merge_cap >= (
         _MERGE_FLOOR_S + _GRANT_QUEUE_READ_TIMEOUT_S

@@ -756,10 +756,6 @@ def cmd_spawn(
         message = read_text_arg(message or None, prompt_file, what="the prompt") or ""
 
     from fno.agents.dispatch import DispatchAskError, SpawnResult, dispatch_spawn
-    from fno.dispatch_flags import (
-        DispatchFlagError,
-        resolve_dispatch_harness,
-    )
 
     workdir = _resolve_dispatch_workdir(cwd, fresh, here)
     # `-c` is `--cwd` on spawn: codex's own `-c key=value` config spelling
@@ -786,11 +782,23 @@ def cmd_spawn(
     # --model, --effort and --permission-mode are the harness's own flags: the
     # pre-pass moves them behind the fence, so this leg never reads them.
     model = effort = permission_mode = None
+    from fno.rust_binary import CommandUnavailable, command_call
+
     try:
-        harness, harness_source = resolve_dispatch_harness(harness)
-    except DispatchFlagError as exc:
-        print(str(exc), file=sys.stderr)
-        raise typer.Exit(code=2) from exc
+        answer = command_call(
+            "route-slot",
+            {"mode": "resolve", "explicit": harness, "env": dict(os.environ)},
+        )
+    except CommandUnavailable:
+        # No binary: the explicit flag stands alone and inference stands
+        # down, so the spawn reaches the gate's own fail-closed refusal
+        # (87, gate_unavailable) instead of dying here.
+        answer = {}
+    if "refusal" in answer:
+        print(answer["refusal"], file=sys.stderr)
+        raise typer.Exit(code=2)
+    harness = answer.get("harness") or harness
+    harness_source = answer.get("source")
     # Provenance rides the pane receipt's harness_source field below - it is
     # the HARNESS axis's provenance, not the vendor's. The bg/once stdout
     # receipts stay byte-parity-locked with the Rust client, so they skip it.
@@ -798,7 +806,7 @@ def cmd_spawn(
     # The substrate axis: an empty value resolves to the built-in default
     # (thread where seated).
     from fno.agents.harness_map import DispatchResolveError, fence_uncarried, thread_seatable
-    uncarried = fence_uncarried(harness, passthrough)
+    uncarried = fence_uncarried(harness or "", passthrough)
     if passthrough and message.startswith("-"):
         # A seed written after the fence lands here: the fence's first token
         # fills the prompt slot, so `-- -m X 'seed'` seeds the worker with `-m`.
@@ -820,7 +828,7 @@ def cmd_spawn(
     # refuses and names the flag instead of opening a pane by surprise.
     if substrate == "thread":
         try:
-            seatable = thread_seatable(harness)
+            seatable = thread_seatable(harness or "")
         except DispatchResolveError:  # an undeclared harness seats no thread
             seatable = False
         why = f"has no carrier for {uncarried}" if uncarried else ""
@@ -854,13 +862,18 @@ def cmd_spawn(
         node_seed_env = seed.env
         node_seed_receipt = seed.receipt
         if cwd is None and not here:
-            ensured = seed.ensure_launch_workdir(harness)
+            ensured = seed.ensure_launch_workdir(harness or "")
             if ensured is None:
                 raise typer.Exit(code=2)
             workdir = ensured.resolve()
             _moved_cwd = str(workdir) if workdir != Path(os.getcwd()).resolve() else None
 
     from fno.agents.spawn_defaults import resolve_spawn_gates, seedless_thread_refusal
+
+    # From here down the transport reads the unset harness as the empty
+    # default: the seed path needed the None distinction (unset resolves its
+    # own config rung), the transport layer does not.
+    harness = harness or ""
 
     # Retired spellings bind the same options; name the replacement when the
     # argv used one. The process argv is exact for the real door; a test
@@ -1212,15 +1225,28 @@ def cmd_spawn(
     # An undeclared FOREIGN target (explicit --cwd only) pins `never`; an
     # explicit ambient override rides the same overlay, else the pane wrapper
     # strips what the operator set.
-    from fno.worktree_paths import UNDECLARED_REPO_RECEIPT, undeclared_dispatch_pin
+    from fno.rust_binary import call_binary_json
 
-    _pin = (
-        undeclared_dispatch_pin(workdir, Path(os.getcwd()), harness) if cwd else {}
-    )
+    _pin: dict = {}
+    _receipt = None
+    if cwd:
+        _err, _payload = call_binary_json(
+            "worktree-dispatch-pin",
+            [
+                "--target", str(workdir),
+                "--caller", str(Path(os.getcwd())),
+                "--harness", harness or "",
+            ],
+            timeout=30,
+        )
+        if _err is None and isinstance(_payload, dict):
+            _pin = _payload.get("pin") or {}
+            _receipt = _payload.get("receipt")
     if _pin:
         prov_env = dict(prov_env) if prov_env is not None else {}
         prov_env.update(_pin)
-        print(UNDECLARED_REPO_RECEIPT, file=sys.stderr)
+        if _receipt:
+            print(_receipt, file=sys.stderr)
     elif os.environ.get("FNO_WORKTREE_POLICY"):
         prov_env = dict(prov_env) if prov_env is not None else {}
         prov_env["FNO_WORKTREE_POLICY"] = os.environ["FNO_WORKTREE_POLICY"]
@@ -2639,121 +2665,15 @@ def cmd_register(
 ) -> None:
     """Join THIS session to the mesh roster so peers can `fno agents mail send` to it.
 
-    The self-service seam behind ``/fno-me``: a session a human started by hand
-    has no spawn-created roster row. This resolves the ambient harness identity
-    (CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID / ...) and writes an ``idle`` row
-    named by the canonical bare ``<shortid>`` handle, the same string the
-    session self-stamps and drains, so a durable ``fno agents mail send`` to it lands.
-    ``fno agents whoami`` then reports ``registered: true`` via its session-id
-    fallback, no ``FNO_AGENT_SELF`` env needed.
-
-    The handle is ALWAYS the canonical one (no custom-name override): a custom
-    alias would not be drained by ``mail drain-self`` (which scans only the
-    canonical handle), so mail to it would silently strand.
-
-    Idempotent (re-running refreshes the row). Exit 3 for a session with no
-    ambient harness identity (nothing addressable to register).
+    The Rust client command owns register (the owned-identity ladder plus the row
+    mint under the shared registry lock); with an installed binary the runtime
+    router execs it before this function runs. There is no Python register
+    left: a missing binary is refused here.
     """
-    from fno.agents import events
-    from fno.agents.registry import register_existing_session
-    from fno.agents.self_stamp import IdentityAmbiguousError, require_self_identity
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    if delivery_policy is not None and delivery_policy not in ("bus-only", "off"):
-        sys.stderr.write(
-            f"error: --delivery-policy accepts 'bus-only' or 'off', "
-            f"got {delivery_policy!r}\n"
-        )
-        raise typer.Exit(code=2)
-
-    try:
-        ident = require_self_identity()
-    except IdentityAmbiguousError as exc:
-        sys.stderr.write(f"cannot register: {exc}\n")
-        raise typer.Exit(code=4) from exc
-    session_id = ident.session_id
-    harness = ident.harness or ("claude" if session_id else None)
-    if not session_id or not harness:
-        sys.stderr.write(
-            "no ambient harness identity - nothing to register "
-            "(run /fno-me inside a claude/codex session)\n"
-        )
-        raise typer.Exit(code=3)
-
-    try:
-        entry = register_existing_session(
-            harness=harness, session_id=session_id, cwd=os.getcwd(),
-            origin="operator",
-            delivery_policy=delivery_policy,
-        )
-    except Exception as exc:  # a deliberate manual join reports failure (unlike the fail-open hook)
-        sys.stderr.write(f"register failed: {exc}\n")
-        raise typer.Exit(code=1) from exc
-
-    # `origin` is write-once, so a human taking over a pane footnote spawned
-    # keeps `spawned` and this call cannot change it. Silence there reads as
-    # success: the operator believes they are registered as attended, while
-    # mail still treats them as unattended. The refusal is deliberate - a
-    # birth fact is not a claim a later caller gets to revise - so this says
-    # it rather than hiding it.
-    if entry.origin is not None and entry.origin != "operator":
-        sys.stderr.write(
-            f"note: origin stays {entry.origin!r}; it records what created this "
-            "row and is written once. Mail escalation reads it, so this "
-            f"session is still treated as {entry.origin!r}.\n"
-        )
-
-    #: record a clock saying "no expiry" beside a hand-stamped policy.
-    # Not for enforcement - an absent clock already never lapses. This is what
-    # lets the DND column on `fno agents list` say "held" for this row instead
-    # of leaving the operator to guess from a blank cell.
-    if delivery_policy is not None:
-        from fno.harness_identity import session_identity_key
-        from fno.mail.hold import _hold_transport
-
-        # Clock key is the collision-free identity key; the name-keyed clear removes a pre-migration clock.
-        clock_key = session_identity_key(session_id)
-        # Both stamps are the ABSENCE of a clock beside the flag: the native
-        # door's --clear drops any standing clock either way, and the policy
-        # flip also drops a pre-migration name-keyed one.
-        _hold_transport(["--clear", clock_key])
-        if delivery_policy != "bus-only":
-            _hold_transport(["--clear", entry.name])
-        else:
-            # Best effort: the row is already stamped, and an older
-            # fno-agents without --record-stamp must not fail the register.
-            try:
-                _hold_transport(["--record-stamp", session_id])
-            except Exception:  # noqa: BLE001 - the journal never fails the register
-                pass
-
-    events.emit(
-        "session_registered",
-        provider=entry.harness,
-        name=entry.name,
-        session_id=session_id,
-        cwd=entry.cwd,
-    )
-    if json_out or not bool(getattr(sys.stdout, "isatty", lambda: False)()):
-        import json as _json
-
-        sys.stdout.write(
-            _json.dumps({
-                "registered": True,
-                "name": entry.name,
-                "harness": entry.harness,
-                "delivery_policy": entry.delivery_policy,
-            }) + "\n"
-        )
-    else:
-        policy_note = (
-            " [bus-only: mail to this session queues durable, never injects]"
-            if getattr(entry, "delivery_policy", None) == "bus-only"
-            else ""
-        )
-        sys.stdout.write(
-            f"joined the mesh as {entry.name}{policy_note} - peers can now reach you with "
-            f"`fno agents mail send {entry.name} \"...\"`\n"
-        )
+    _ = delivery_policy
+    refuse_without_binary("register")
 
 
 @agents_app.command("top", hidden=True)
@@ -3876,58 +3796,6 @@ agents_app.command("resume")(_cmd_resume)
 # ledger. `fno whoami ledger` stays as its hidden alias.
 agents_app.command("history")(history_command)
 agents_app.command("transcript", hidden=True)(transcript_command)
-
-
-@agents_app.command(
-    "yard",
-    hidden=True,
-    help=(
-        "The yard identity fold: species, rarity tier, role, and first-sighting "
-        "per registry citizen.\n\n"
-        "Read-only over the agent registry and the graph archive. Consumed by "
-        "the mux yard overlay (fail-open shell-out); `--json` is the machine "
-        "surface, the text mode is a one-line-per-citizen summary. Outcome "
-        "only - never the rank, the frequency, or the boundary."
-    ),
-)
-def yard(
-    as_json: bool = typer.Option(False, "--json", "-J", help="Emit the fold as JSON."),
-) -> None:
-    """Fold the fleet into yard citizens (the f[no]nimals)."""
-    import json as _json
-
-    from fno import paths
-    from fno.agents.registry import load_registry
-    from fno.graph.store import GraphUnreadableError, read_graph_strict
-    from fno.yard import RARITY_TIERS, fold
-
-    rows = load_registry()
-    archive_path = paths.graph_archive_json()
-    # Strict on purpose: this is a truth-bound fold, not a browse command. The
-    # lenient reader turns a corrupt archive into [], which would mark every
-    # citizen a first-sighting - fabricated outcome on the machine surface the
-    # mux renders. Unreadable history fails the fold so the overlay degrades.
-    try:
-        archive = read_graph_strict(archive_path) if archive_path.exists() else []
-    except GraphUnreadableError as exc:
-        typer.secho(f"agents yard: archive unreadable, fold refused: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    citizens = fold(rows, archive)
-
-    if as_json:
-        typer.echo(_json.dumps({"citizens": citizens}, indent=2))
-        return
-    if not citizens:
-        typer.echo("the yard is empty (no registry rows)")
-        return
-    for c in citizens:
-        mark = " NEW" if c["first_sighting"] else ""
-        role = f" role {c['role_level']}" if c["role_level"] else ""
-        typer.echo(
-            f"{c['name']:<24} species {c['species']:>2}  {c['rarity']:<9}{role}{mark}"
-        )
-    n_new = sum(1 for c in citizens if c["first_sighting"])
-    typer.echo(f"{len(citizens)} citizens, {n_new} first sighting(s); tiers: {'/'.join(RARITY_TIERS)}")
 
 
 #: instruments over the capability table. `probe` measures the live

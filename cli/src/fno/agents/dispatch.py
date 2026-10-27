@@ -1794,7 +1794,7 @@ def _claude_create_path(
                 )
                 role_declined = True
         if entry.role_level is not None and entry.role_scope:
-            from fno.lead.state import arm_lead_manifest
+            from fno.agents.role import arm_lead_manifest
 
             try:
                 lead_loop_armed = arm_lead_manifest(
@@ -5215,19 +5215,18 @@ def _mux_recipient_transcript(entry: "AgentEntry") -> Optional[Path]:
     """Locate the mux recipient's OWN claude transcript by session uuid, the
     confirm target for :func:`_mux_pane_send`'s ``confirm`` mode (node).
 
-    Reuses the resolver `fno.doctor._find_transcript_for` already used for the
-    self-diagnostic surface rather than writing a second transcript-by-uuid
-    walk (the Rust control.sock lane's own mirror is `find_transcript` in
-    `crates/fno-agents/src/claude_drive.rs`). None when the entry carries no
-    resolvable full session uuid, or no matching transcript file exists --
-    both fail the confirm closed, never open.
+    Reads through :func:`fno.rust_binary.find_transcript`, the native doctor
+    op door (`fno doctor --find-transcript`), the same resolver the Rust
+    control.sock lane mirrors as `find_transcript` in claude_drive.rs. None
+    when the entry carries no resolvable full session uuid, or no matching
+    transcript file exists -- both fail the confirm closed, never open.
     """
-    from fno.doctor import _find_transcript_for
+    from fno.rust_binary import find_transcript
 
     session_id = entry.harness_session_id or entry.session_id
     if not session_id:
         return None
-    return _find_transcript_for(session_id)
+    return find_transcript(session_id)
 
 
 def _mux_content_confirm(
@@ -6592,6 +6591,7 @@ def dispatch_send(
         name=name, message=message, from_name=from_name, name_is_address=True
     )
 
+    from fno import paths
     from fno.time_budget import validate_timeout_budget
 
     validate_timeout_budget(
@@ -6880,14 +6880,10 @@ def dispatch_send(
                 family1_attemptable = family1_live or family1_state == "unknown" or (
                     existing.harness == "claude" and not existing.mux)
 
-                # W3 write-ahead: a recipient we will not attempt live is asleep,
-                # so it cannot drain during a live window, and there is no live
-                # window to crash in. Write its durable placeholder BEFORE
-                # anything else so a sender crash before the recipient wakes does
-                # not lose the message. A recipient we WILL attempt live gets its
-                # body row staged just before the inject (stage_before_live
-                # below): the bus row is the body's only home. A drain firing
-                # mid-inject can print a duplicate; a duplicate beats a drop.
+                # W3 write-ahead: a recipient we will not attempt live is asleep, so a
+                # sender crash before it wakes must not lose the message; its durable
+                # placeholder writes first. The live lane stages its row before the inject
+                # (the bus row is the body's only home): a duplicate beats a drop.
                 if durable_recipient is not None and not family1_attemptable:
                     _write_durable()
                 delivery = "durable"
@@ -6902,7 +6898,6 @@ def dispatch_send(
                     live_miss_reason = f"transcript-{family1_state}"
                 if family1_attemptable:
                     from fno import rust_binary
-                    from fno.bus.log import record_hosted_delivery, stage_before_live
                     from fno.mail.envelope import wrap_fno_mail
 
                     record: dict[str, Any] = dict(
@@ -6921,11 +6916,12 @@ def dispatch_send(
                         word_count=rust_binary.style_word_count(message),
                         subject=mail_ctx.subject,
                     )
-                    # Stage before the inject; a staging failure demotes to the
-                    # durable floor. An empty recipient (mcp-only row) stages nothing.
+                    bus_live = str(paths.bus_dir() / "messages.jsonl")
+                    staged_fields = {k: v for k, v in record.items() if v is not None}
+                    # Stage before the inject: a staging failure demotes to the durable floor; an mcp-only row stages nothing.
                     try:
                         if record["recipient"]:
-                            stage_before_live(**record)
+                            rust_binary.chats_command(["stage", bus_live], staged_fields)
                     except Exception as exc:  # noqa: BLE001 - demote to durable
                         print(f"body row not staged; skipping live delivery: {exc}", file=sys.stderr)
                         live_miss_reason = "stage-failed"
@@ -6943,7 +6939,9 @@ def dispatch_send(
                         if _live_delivered:
                             delivery = "hosted"
                             try:
-                                record_hosted_delivery(**record)
+                                rust_binary.chats_command(
+                                    ["stage", bus_live, "--delivery", "hosted"], staged_fields,
+                                )
                             except Exception as exc:  # noqa: BLE001 - delivery already succeeded
                                 print(f"delivery succeeded; receipt row failed; the staged bus row holds the body; do not retry: {exc}", file=sys.stderr)
                         else:

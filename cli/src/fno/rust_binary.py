@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -458,6 +459,20 @@ def resolve_front_binary() -> Optional[Path]:
             return root / profile / "fno"
     return Path(found) if (found := shutil.which("fno")) else None
 
+
+def _update_signpost() -> None:
+    """The no-front-door spelling: the updater is native to the Rust front
+    door, so this leaf only names the one command that installs it."""
+    # Lazy: this module is imported by crates-side integration tests whose
+    # interpreter has no typer, and this leaf is its only user.
+    import typer
+
+    typer.echo(
+        "fno: the updater is native to the Rust front door; install it from the source checkout with "
+        "`cargo install --locked --path <src>/crates/fno`, then re-run `fno doctor update`."
+    )
+    raise typer.Exit(code=2)
+
 class FrontTimeout(CommandUnavailable):
     """The law door gave no answer in time. A retry meets the same wait."""
 
@@ -505,3 +520,36 @@ def call_front_json(payload: dict, *, timeout: Optional[float] = None) -> dict:
     if done.returncode != 0:
         raise CommandUnavailable(f"fno inbox law match exited {done.returncode}: {done.stderr.strip()}")
     return json.loads(done.stdout)
+
+
+def find_transcript(session_id: str) -> Optional[Path]:
+    """The native doctor op door's transcript-by-uuid answer; None when absent.
+
+    The deleted Python leg's own walk and the door share one resolver, so the
+    confirm target for `_mux_recipient_transcript` reads through the same
+    surface the self-diagnostic uses: a missing binary, non-zero exit,
+    timeout, or a null path all fail the confirm closed.
+    """
+    import json
+    import subprocess
+
+    binary = resolve_front_binary()
+    if binary is None:
+        return None
+    try:
+        done = subprocess.run(
+            [str(binary), "doctor", "--find-transcript", session_id],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    try:
+        payload = json.loads(done.stdout)
+    except ValueError:
+        return None
+    found = payload.get("path")
+    return Path(found) if isinstance(found, str) and found else None

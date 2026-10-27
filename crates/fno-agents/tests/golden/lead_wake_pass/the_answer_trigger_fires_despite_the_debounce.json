@@ -1,0 +1,58 @@
+{
+ "label": "the answer trigger fires despite the debounce",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [
+    [
+     "epic-x",
+     "escalation_answered",
+     null,
+     "Answer to your question q-ab12cd34 \"what does the operator want for epic-x?\": ship it. The answer was also delivered as mail addressed to 11111111-2222-3333-4444-555555555555: run `fno agents mail unread --name 11111111-2222-3333-4444-555555555555` and drain it, then advance the cursor with `fno agents mail ack <id> --name 11111111-2222-3333-4444-555555555555`."
+    ]
+   ],
+   "events": [
+    [
+     "lead_woken",
+     {
+      "address": null,
+      "ceiling": 32,
+      "reason": "escalation_answered",
+      "scope": "epic-x",
+      "successor": false,
+      "window_count": 2
+     }
+    ]
+   ],
+   "sidecar": {
+    "answered_cursor": "{\"ts\":\"2026-08-29T11:00:00Z\",\"id\":\"q-ab12cd34\",\"seq\":1}"
+   },
+   "successor_flags": [
+    false
+   ],
+   "summary": {
+    "armed": true,
+    "evaluated": 1,
+    "note": "",
+    "refused": [],
+    "roles": 1,
+    "team_incomplete": false,
+    "truth_reads": 1,
+    "woke": [
+     {
+      "address": null,
+      "reason": "escalation_answered",
+      "scope": "epic-x",
+      "successor": false
+     }
+    ]
+   },
+   "unread_calls": [],
+   "wake_times": [
+    "2026-08-29T11:58:00Z",
+    "2026-08-29T12:00:00Z"
+   ]
+  }
+ ]
+}

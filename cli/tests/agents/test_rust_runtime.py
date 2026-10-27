@@ -409,6 +409,10 @@ def test_python_agent_commands_match_registered_commands() -> None:
         # client-side dispatch shape). The Python command stays registered as
         # the FNO_AGENTS_RUNTIME=python / no-binary refusal.
         "registry-json",
+        # register joins the same shape: a daemon-free client command with
+        # goldens and a parity test in the fno-agents crate; the Python
+        # registration stays as the no-binary refusal.
+        "register",
         # Task 1.2: spawn gains a Python implementation (--once / claude plain
         # spawn) but stays in RUST_CLIENT_COMMANDS + AUTO_ROUTE_COMMANDS so the
         # daemon PTY worker path (codex/gemini without --once) still auto-routes

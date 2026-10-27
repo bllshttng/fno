@@ -914,6 +914,15 @@ pub fn run_loops(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("table") {
         return run_loops_table(json_out, args.iter().any(|arg| arg == "--markdown"));
     }
+    // `loops ls` + `loops level <name>`: the config reads behind `fno do
+    // loops ls` (see loops_config.rs). Direct dispatch inside the group
+    // door; the pause commands keep their arm below.
+    if args.first().map(String::as_str) == Some("ls") {
+        return crate::loops_config::run(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("level") {
+        return crate::loops_config::run_level(&args[1..]);
+    }
     // The skill-diff proposer loop: tick and its reconcile closer, ported
     // from cli/src/fno/skill_diff/. They manage their own output and exit.
     if matches!(

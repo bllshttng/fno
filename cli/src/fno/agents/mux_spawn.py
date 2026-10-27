@@ -514,7 +514,7 @@ def claude_argv_is_interactive(argv: list[str]) -> bool:
 _UNDECLARED_HARNESS_TOKEN = re.compile(r"[a-z][a-z0-9._-]{0,31}")
 
 
-def permission_pane_tokens(provider: str, mode: str) -> list[str]:
+def permission_pane_tokens(provider: str, mode: str, role_level: Optional[int] = None) -> list[str]:
     """Map a ``--permission-mode`` value to provider-native pane argv tokens.
 
     Fail-closed (Locked Decision 1): an unmappable (provider, value) pair raises
@@ -522,12 +522,18 @@ def permission_pane_tokens(provider: str, mode: str) -> list[str]:
     downgrade. The vocabulary lives in Rust (crates/fno-agents/src/codex_posture.rs),
     so this is a transport bridge: one subprocess round-trip.
     agy ``skip`` maps to ``[]`` because its argv already carries
-    ``--dangerously-skip-permissions`` unconditionally. An empty mode is
-    refused by the owner (the same literal, one source)."""
-    from fno.rust_binary import CommandUnavailable, command_call
+    ``--dangerously-skip-permissions`` unconditionally. An empty mode with a
+    ``role_level`` asks the owner's role-aware pane default (a promoted pane
+    launches full access); an empty mode without one is refused by the owner
+    (the same literal, one source)."""
+    from fno.rust_binary import command_call
+    from fno.rust_binary import CommandUnavailable
 
+    payload: dict = {"provider": provider, "mode": mode}
+    if role_level is not None:
+        payload["role_level"] = role_level
     try:
-        answer = command_call("permission-tokens", {"provider": provider, "mode": mode}, CommandUnavailable)
+        answer = command_call("permission-tokens", payload, CommandUnavailable)
     except CommandUnavailable as exc:
         raise DispatchAskError(
             f"the permission vocabulary owner (fno-agents) is unavailable: {exc}",
@@ -867,6 +873,7 @@ def build_pane_argv(
     name: Optional[str] = None,
     passthrough: Optional[Sequence[str]] = None,
     computed_dirs: Optional[Sequence[str]] = None,
+    role_level: Optional[int] = None,
 ) -> list[str]:
     """The interactive PANE argv for ``provider`` - the bare-TUI form a mux
     pane hosts. This is DISTINCT from each provider's Rust ``create_argv``
@@ -944,8 +951,15 @@ def build_pane_argv(
         # The bounded default is the thread lane's own CodexPosture::bounded()
         # pair, routed through the Rust owner so pane and thread cannot
         # disagree about what "bounded" means. The mode axis is retired; the
-        # lane default is the only answer left.
-        argv += permission_pane_tokens("codex", "workspace-write:never")
+        # lane default is the only answer left. A promoted pane (a lead rank
+        # on the spawn) launches at the role-aware default instead - full
+        # access, because a lead must write the state root; the
+        # owner answers both through one vocabulary.
+        argv += permission_pane_tokens(
+            "codex",
+            "" if role_level is not None else "workspace-write:never",
+            role_level=role_level,
+        )
         # Codex 0.148 parks a pane on a `Hooks need review` modal for a new or
         # changed hook, and no posture clears it. Sandbox and approval stay.
         argv += codex_hook_trust_args()
@@ -3496,6 +3510,7 @@ def dispatch_spawn_pane(
         name=name,
         passthrough=passthrough,
         computed_dirs=computed_writable_dirs,
+        role_level=role_level,
     )
     codex_seed = ""
     fence = len(argv) > 1 and argv[-2] == "--"
@@ -4458,7 +4473,7 @@ def dispatch_spawn_pane(
                     account_record_id=account_record_id,
                 )
             if entry.role_level is not None and entry.role_scope:
-                from fno.lead.state import arm_lead_manifest
+                from fno.agents.role import arm_lead_manifest
 
                 try:
                     lead_loop_armed = arm_lead_manifest(
