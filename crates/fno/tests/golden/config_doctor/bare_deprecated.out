@@ -1,0 +1,38 @@
+[doctor] settings source: <FIXTURE>/project/.fno/config.toml, <FIXTURE>/fake_home/.fno/config.toml
+[doctor] schema_version: 1
+[doctor] state_dir: <FIXTURE>/state
+[doctor] space_dir: <FIXTURE>/state/spaces/<FIXTURE_SLUG>-project  worktree: <FIXTURE>/state/spaces/<FIXTURE_SLUG>-project
+[doctor]   state_dir: <FIXTURE>/state  (config.state_dir default)
+[doctor]   graph_json: <FIXTURE>/state/db/graph.json  (config.paths.graph_json default)
+[doctor]   ledger_json: <FIXTURE>/state/ledger.json  (config.paths.ledger_json default)
+[doctor]   briefs_dir: <FIXTURE>/state/briefs  (config.paths.briefs_dir default)
+[doctor]   fleet_dir: <FIXTURE>/state/fleet  (config.paths.fleet_dir default)
+[doctor]   postmortems_dir: <FIXTURE>/state/postmortems  (config.paths.postmortems_dir default)
+[doctor]   worktrees_base: <FIXTURE>/state/worktrees  (config.paths.worktrees_base default)
+[doctor]   memory_dir: <FIXTURE>/state/memory  (config.paths.memory_dir default)
+[doctor]   hook_logs_dir: <FIXTURE>/state/hook-logs  (config.paths.hook_logs_dir default)
+
+[doctor] OK; no suspicious paths detected.
+[doctor] post-merge: dormant (no fno activity in this repo)
+
+state roots:
+  class    file             root                                            selector
+  OPERATOR ledger.json      <FIXTURE>/state/ledger.json config.paths.ledger_json, else config.state_dir
+  OPERATOR registry.json    <FIXTURE>/fake_home/.fno/agents/registry.json FNO_AGENTS_HOME, else config.state_dir (Rust runtime home)
+  OPERATOR claims           <FIXTURE>/fake_home/.fno/claims FNO_CLAIMS_ROOT, else $HOME
+  OPERATOR messages.jsonl   <FIXTURE>/state/bus FNO_BUS_DIR, else config.paths.bus_dir, else config.state_dir
+  OPERATOR briefs           <FIXTURE>/state/briefs config.paths.briefs_dir, else config.state_dir
+  PROJECT  events.jsonl     <FIXTURE>/state/spaces/<FIXTURE_SLUG>-project/events.jsonl FNO_EVENTS_PATH, else config.paths.spaces_dir, else state_dir
+  PROJECT  target-state.md  <FIXTURE>/state/spaces/<FIXTURE_SLUG>-project/target-state.md worktree slice of the space
+warn: <FIXTURE>/fake_home/.fno/config.toml sets the deprecated `dispatch.auto_merge`.
+      It reads as `auto_merge.grant = "dispatch"` for one release.
+      Migrate: fno config set auto_merge.grant dispatch && fno config unset dispatch.auto_merge
+warn: <FIXTURE>/project/.fno/config.toml sets the deprecated `dispatch.harness`.
+      It reads as the fallback harness rung for one release, below the stage table.
+      Migrate: fno config set agents.profiles.target.provider codex --local && fno config unset dispatch.harness --local
+warn: <FIXTURE>/project/.fno/config.toml sets `active_backlog.mission`, which the mission-scoped drain IGNORES (missions are per-epic graph state, not config).
+      Live axis: `fno backlog advance --epic <id>` activates a mission; `--stop` retires it.
+      Remove the ignored key: fno config unset active_backlog.mission --local
+band routing inactive: config.routing.models declares 0 row(s), and no command slot has a lane that resolves: think, blueprint, target, review, role
+      The built-in rows keep a tier request answerable: none
+      Declare [[routing.models]] rows plus [agents.profiles.<command>] lanes to activate (docs/architecture/role-based-model-routing.md)

@@ -1,0 +1,4 @@
+Usage: fno config doctor [OPTIONS]
+Try 'fno config doctor --help' for help.
+
+Error: No such option: --bogus
