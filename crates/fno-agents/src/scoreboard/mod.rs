@@ -447,8 +447,11 @@ fn survival(
     if !by_node.values().any(|c| c["delivered"] == true) {
         return json!({"available": false, "reason": "no shipped nodes in window"});
     }
-    let Some(now_secs) = now.and_then(iso_secs) else {
-        return json!({"available": false, "reason": "no usable now"});
+    // The Python fold always handed survival a now (`--now` or the wall
+    // clock), so an absent argv degrades to the clock, never to n/a.
+    let now_secs = match now.and_then(iso_secs) {
+        Some(secs) => secs,
+        None => chrono::Local::now().timestamp(),
     };
     let window = followup_days * 86400;
     let mut mature: Vec<(&String, &Map<String, Value>, i64)> = Vec::new();
