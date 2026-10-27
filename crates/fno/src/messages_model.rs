@@ -66,23 +66,11 @@ pub fn store_fingerprint() -> Option<(usize, u64, u64)> {
 
 /// The claude projects dir's transcript facts as `(count, total len, newest
 /// mtime)`: a depth-2 walk, one level of project slugs and their `*.jsonl`
-/// session files. `None` when the dir does not resolve. The ladder mirrors
-/// `fno-agents claude_drive::claude_projects_dir`; the mirror lives here for
-/// the same reason the chats-dir one does.
+/// session files. `None` when the dir does not resolve. The base dir comes
+/// from `transcript_tail`'s accessor, the crate's one mirror of the
+/// fno-agents ladder.
 fn transcript_facts() -> Option<(usize, u64, u64)> {
-    let root = std::env::var_os("FNO_CLAUDE_PROJECTS_DIR")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("CLAUDE_CONFIG_DIR")
-                .map(|v| std::path::PathBuf::from(v).join("projects"))
-        })
-        .unwrap_or_else(|| {
-            std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_default()
-                .join(".claude")
-                .join("projects")
-        });
+    let root = crate::transcript_tail::claude_projects_dir();
     let rd = std::fs::read_dir(&root).ok()?;
     let mut count = 0usize;
     let mut total_len = 0u64;
