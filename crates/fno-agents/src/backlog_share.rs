@@ -646,7 +646,7 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
 
 /// The operator-facing refusal line: the raw primary error plus a hint,
 /// with the CAS guard's opaque SQLite text said in words instead. That text
-/// was read as a timestamp or schema CHECK (the fn-0735 bind refusal,
+/// was read as a timestamp or schema CHECK (a live 2026-10-27 bind refusal,
 /// 2026-10-27), so a refused row names its table.
 fn refusal_message(error: &str, changes: &[Change], change: Option<usize>) -> String {
     let hint = if unseeded(error) {

@@ -3061,7 +3061,8 @@ pub fn read_rows(path: &Path) -> Result<Vec<Value>, StoreError> {
 /// The whole-graph write read: stored statuses only, no readiness overlay.
 /// A publish must ship the statuses it mutated, never the overlay's answer
 /// for an open blocker; two machines publishing at different blocker
-/// visibility is what flipped stored statuses back and forth (x-36f2).
+/// visibility is what flipped stored statuses back and forth on the shared
+/// primary.
 pub(crate) fn read_rows_for_write(path: &Path) -> Result<Vec<Value>, StoreError> {
     crate::backlog::read_entries_where_defaulted_no_overlay(
         path,
