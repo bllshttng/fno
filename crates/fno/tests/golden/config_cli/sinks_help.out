@@ -1,0 +1,12 @@
+Usage: fno config status-sinks [OPTIONS]
+
+  Resolve which projects the status-fanout supervisor should tick.
+
+  A project is a target when it has >=1 enabled ``status_sinks`` entry -
+  INDEPENDENT of ``config.active_backlog``. The daemon shells this to discover
+  its fanout loops. Read-only and best-effort: a malformed config yields an
+  empty list, never an error.
+
+Options:
+  -J, --json  Emit a JSON list of fanout targets for the daemon.
+  --help      Show this message and exit.

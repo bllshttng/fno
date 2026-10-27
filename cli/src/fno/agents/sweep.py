@@ -206,9 +206,12 @@ def run_sweep(
     seen: set = set()
     if dedup:
         try:
-            from fno import fleet_state
+            from fno.rust_binary import command_call
 
-            seen = fleet_state.silent_seen()
+            answer = command_call(
+                ["fleet-incident", "fleet-state", "silent-seen"], {}, timeout=5
+            )
+            seen = set(answer)
         except Exception:  # noqa: BLE001 - no memory means report, never suppress
             seen = set()
 
@@ -232,13 +235,17 @@ def run_sweep(
 
     if dedup:
         try:
-            from fno import fleet_state
+            from fno.rust_binary import command_call
 
             # Only rows the sweep actually READ can leave the set. An unread
             # row (past the budget) keeps its memo, or a truncated sweep would
             # re-report every worker it did not reach next tick.
             unread = {r.handle for r in rows if r.unread}
-            fleet_state.set_silent_seen(now_silent | (seen & unread))
+            command_call(
+                ["fleet-incident", "fleet-state", "set-silent-seen"],
+                {"handles": sorted(now_silent | (seen & unread))},
+                timeout=5,
+            )
         except Exception:  # noqa: BLE001 - a lost memo costs one repeat report
             pass
     return rows, silent

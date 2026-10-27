@@ -1212,15 +1212,28 @@ def cmd_spawn(
     # An undeclared FOREIGN target (explicit --cwd only) pins `never`; an
     # explicit ambient override rides the same overlay, else the pane wrapper
     # strips what the operator set.
-    from fno.worktree_paths import UNDECLARED_REPO_RECEIPT, undeclared_dispatch_pin
+    from fno.rust_binary import call_binary_json
 
-    _pin = (
-        undeclared_dispatch_pin(workdir, Path(os.getcwd()), harness) if cwd else {}
-    )
+    _pin: dict = {}
+    _receipt = None
+    if cwd:
+        _err, _payload = call_binary_json(
+            "worktree-dispatch-pin",
+            [
+                "--target", str(workdir),
+                "--caller", str(Path(os.getcwd())),
+                "--harness", harness or "",
+            ],
+            timeout=30,
+        )
+        if _err is None and isinstance(_payload, dict):
+            _pin = _payload.get("pin") or {}
+            _receipt = _payload.get("receipt")
     if _pin:
         prov_env = dict(prov_env) if prov_env is not None else {}
         prov_env.update(_pin)
-        print(UNDECLARED_REPO_RECEIPT, file=sys.stderr)
+        if _receipt:
+            print(_receipt, file=sys.stderr)
     elif os.environ.get("FNO_WORKTREE_POLICY"):
         prov_env = dict(prov_env) if prov_env is not None else {}
         prov_env["FNO_WORKTREE_POLICY"] = os.environ["FNO_WORKTREE_POLICY"]
@@ -3876,58 +3889,6 @@ agents_app.command("resume")(_cmd_resume)
 # ledger. `fno whoami ledger` stays as its hidden alias.
 agents_app.command("history")(history_command)
 agents_app.command("transcript", hidden=True)(transcript_command)
-
-
-@agents_app.command(
-    "yard",
-    hidden=True,
-    help=(
-        "The yard identity fold: species, rarity tier, role, and first-sighting "
-        "per registry citizen.\n\n"
-        "Read-only over the agent registry and the graph archive. Consumed by "
-        "the mux yard overlay (fail-open shell-out); `--json` is the machine "
-        "surface, the text mode is a one-line-per-citizen summary. Outcome "
-        "only - never the rank, the frequency, or the boundary."
-    ),
-)
-def yard(
-    as_json: bool = typer.Option(False, "--json", "-J", help="Emit the fold as JSON."),
-) -> None:
-    """Fold the fleet into yard citizens (the f[no]nimals)."""
-    import json as _json
-
-    from fno import paths
-    from fno.agents.registry import load_registry
-    from fno.graph.store import GraphUnreadableError, read_graph_strict
-    from fno.yard import RARITY_TIERS, fold
-
-    rows = load_registry()
-    archive_path = paths.graph_archive_json()
-    # Strict on purpose: this is a truth-bound fold, not a browse command. The
-    # lenient reader turns a corrupt archive into [], which would mark every
-    # citizen a first-sighting - fabricated outcome on the machine surface the
-    # mux renders. Unreadable history fails the fold so the overlay degrades.
-    try:
-        archive = read_graph_strict(archive_path) if archive_path.exists() else []
-    except GraphUnreadableError as exc:
-        typer.secho(f"agents yard: archive unreadable, fold refused: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    citizens = fold(rows, archive)
-
-    if as_json:
-        typer.echo(_json.dumps({"citizens": citizens}, indent=2))
-        return
-    if not citizens:
-        typer.echo("the yard is empty (no registry rows)")
-        return
-    for c in citizens:
-        mark = " NEW" if c["first_sighting"] else ""
-        role = f" role {c['role_level']}" if c["role_level"] else ""
-        typer.echo(
-            f"{c['name']:<24} species {c['species']:>2}  {c['rarity']:<9}{role}{mark}"
-        )
-    n_new = sum(1 for c in citizens if c["first_sighting"])
-    typer.echo(f"{len(citizens)} citizens, {n_new} first sighting(s); tiers: {'/'.join(RARITY_TIERS)}")
 
 
 #: instruments over the capability table. `probe` measures the live

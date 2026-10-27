@@ -84,12 +84,16 @@ def _default_worktree_roots(repo_root: Path) -> list[Path]:
     """
     roots = [repo_root]
     try:
-        from fno.runtime.worktree import list_worktrees
+        from fno.rust_binary import call_binary_json
 
-        for wt in list_worktrees(repo_root=repo_root):
-            p = wt.get("worktree_path")
-            if p:
-                roots.append(Path(p))
+        err, payload = call_binary_json(
+            "worktree-list", ["--repo-root", str(repo_root)], timeout=60
+        )
+        if err is None and isinstance(payload, list):
+            for wt in payload:
+                p = wt.get("worktree_path")
+                if p:
+                    roots.append(Path(p))
     except Exception:  # noqa: BLE001 - git unavailable -> canonical only
         pass
     # Dedup, preserve order.

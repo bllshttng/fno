@@ -180,14 +180,21 @@ def test_every_moved_spelling_is_hidden():
         # joined when the research family ported native. `target`, `state`,
         # and `phase` joined when the target family ported native: the front
         # door claims the bare spelling, prints the move notice, and execs
-        # the native doors itself. `observer` joined the same way: the front
+        # the native doors itself. `workspace` and `worktree` joined when
+        # the worktree family did. `loops` and `autonomy` joined when the
+        # fleet family ported: the front's fleet route claims both spellings
+        # of each (root and group form), prints the move notice, and execs
+        # the fno-agents doors (`loops`, `census yard`, `spawn-overlay
+        # autonomy`), so a python registration would sit behind an intercept
+        # that never reaches it. `observer` joined the same way: the front
         # door claims both spellings and execs the native ops. Every OTHER moved
         # spelling keeps a one-release registration, and any registration
         # that exists must be hidden: an advertised moved name teaches a
         # doomed spelling.
         if name in (
             "decide", "yard", "review", "pr", "retro", "restart", "project", "skill-diff",
-            "mcp", "setup", "research", "think", "target", "state", "phase", "observer",
+            "mcp", "setup", "research", "think", "target", "state", "phase",
+            "workspace", "worktree", "autonomy", "loops", "observer",
         ):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue

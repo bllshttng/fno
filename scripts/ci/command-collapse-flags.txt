@@ -1,5 +1,4 @@
 # Hidden options on argument-dispatched actions, one per line.
-agents workspace worktree cleanup !--kill-orphans
 agents ask !--provider
 agents discovered-json !--provider
 agents rm !--audit-actor
@@ -19,7 +18,6 @@ agents spawn !--output-format
 agents spawn !--bounded-placement
 agents spawn !--recorded-provider
 agents spawn !--mux-session
-worktree cleanup !--kill-orphans
 do resume receipt validate !--session
 do resume receipt write !--session
 doctor footprint !--cause-only

@@ -462,10 +462,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # shell-out cycle. No Rust client port, never auto-routes.
     "stale-escalate",
     "friction-escalate",
-    # The citizen-yard read (folded under agents from the retired root command).
-    # Pure Python: reads the registry + graph archive; no Rust client port, so
-    # it must never auto-route to the daemon.
-    "yard",
     # The provider-cap relay: argv passthrough to the Rust client's
     # provider-cap commands (status/decide). No parsing in Python; the Rust side
     # owns the snapshot, the decision ladder and the journal. Hidden on the
@@ -657,6 +653,13 @@ def _is_bounded_codex_code_spawn(args: Sequence[str]) -> bool:
         args,
         short="-Y",
         longs=("--yolo", "--dangerously-bypass-approvals-and-sandbox"),
+    ):
+        return False
+    # A promoted spawn (a --promote scope, or a complete role pair) launches
+    # full access, so the bounded preflight's git-grant and sandbox-probe
+    # refusals answer a posture this spawn will not run under.
+    if _has_flag(args, longs=("--promote",)) or (
+        _spawn_flag_value(args, "--role-level") and _spawn_flag_value(args, "--role-scope")
     ):
         return False
     headless_spawn = _has_flag(args, longs=("--once",)) or (
@@ -914,18 +917,28 @@ def _worktree_policy_pin_at_seam(args: "Sequence[str]") -> dict:
     try:
         if os.environ.get("FNO_WORKTREE_POLICY"):
             return {}
-        from pathlib import Path
-
         from fno.agents.spawn_defaults import _flag_value
-        from fno.worktree_paths import UNDECLARED_REPO_RECEIPT, undeclared_dispatch_pin
+        from fno.rust_binary import call_binary_json
 
         cwd = _flag_value(list(args), "--cwd", "-c")
         if not cwd:
             return {}
         harness = _flag_value(list(args), "--harness", "-H") or None
-        pin = undeclared_dispatch_pin(Path(cwd), Path(os.getcwd()), harness)
-        if pin:
-            print(UNDECLARED_REPO_RECEIPT, file=sys.stderr)
+        err, payload = call_binary_json(
+            "worktree-dispatch-pin",
+            [
+                "--target", cwd,
+                "--caller", os.getcwd(),
+                "--harness", harness or "",
+            ],
+            timeout=30,
+        )
+        if err is not None or not isinstance(payload, dict):
+            return {}
+        pin = payload.get("pin") or {}
+        receipt = payload.get("receipt")
+        if pin and receipt:
+            print(receipt, file=sys.stderr)
         return pin
     except Exception:
         return {}  # ponytail: a pin we cannot compute must never block the spawn

@@ -18,6 +18,23 @@ from typing import Optional
 import pytest
 
 
+def _quiet_stranded_door(rows):
+    """Stand in for the fno-agents ``worktree-stranded`` door.
+
+    The sweep runs in the binary since the worktree-family port; these tests
+    exercise the Python leg around it, so the door answers the staged rows
+    and refuses every other command (which reads as an empty leg, the same
+    posture the deleted modules' stubs produced).
+    """
+
+    def _door(command, args, timeout=None):
+        if command != "worktree-stranded":
+            return ("stubbed door", None)
+        return None, {"rows": list(rows), "outcomes": []}
+
+    return _door
+
+
 @pytest.fixture(autouse=True)
 def _sandbox_bounce_receipts(tmp_path, monkeypatch):
     """Bounce receipts and pr_watch_bounce reads land in a tmp state dir,
@@ -64,14 +81,6 @@ def _hermetic_post_merge(monkeypatch):
         }
 
     monkeypatch.setattr(rb, "command_call", _stub)
-
-
-@pytest.fixture(autouse=True)
-def _unpaused_loop_gate(monkeypatch):
-    """Keep dispatch-composition tests on the normal, unpaused path."""
-    from fno import loops
-
-    monkeypatch.setattr(loops, "loops_paused", lambda: False)
 
 
 @pytest.fixture(autouse=True)
@@ -1400,8 +1409,7 @@ class TestTickRecordsAndDeadline:
         # The stranded leg now WRITES (the branch-provenance cache); its root
         # loop must see the fixture roots, never the sidecar-derived real ones.
         monkeypatch.setattr(prcli, "_catchup_roots", lambda: list(roots))
-        monkeypatch.setattr("fno.worktree_stranded.sweep", lambda **kw: [])
-        monkeypatch.setattr("fno.worktree_stranded.apply_sweep", lambda *a, **kw: [])
+        monkeypatch.setattr("fno.rust_binary.call_binary_json", _quiet_stranded_door([]))
 
         from fno.agents import unfinished_work as uw
 
@@ -1553,7 +1561,6 @@ class TestTickRecordsAndDeadline:
         from fno.agents import watchdog
         from fno.branch_provenance_cache import read_cache
         from fno.pr_watch import cli as prcli
-        from fno.worktree_stranded import STRANDED, Row
 
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -1561,34 +1568,36 @@ class TestTickRecordsAndDeadline:
         monkeypatch.setenv("FNO_PR_WATCH_TICK_TIMEOUT", "600")
         monkeypatch.setattr(prcli, "_catchup_roots", lambda: [repo])
         monkeypatch.setattr(watchdog, "lane_armed", lambda s: False)
-        applied = []
-        monkeypatch.setattr(
-            "fno.worktree_stranded.apply_sweep",
-            lambda rows, *, wake: applied.append(wake) or [],
-        )
+        # The sweep runs in the binary; the leg's own contract is the door
+        # call. Report posture travels as --no-wake in the argv, and the
+        # returned rows still reach the provenance cache.
+        stranded_row = {
+            "class": "STRANDED",
+            "node": "x-beef",
+            "unpushed": 4,
+            "age": "2 hours ago",
+            "facts": {"path": "/wt/d", "branch": "feature/x-beef",
+                      "has_remote": False, "pr_number": None, "live": False},
+        }
+        door = _quiet_stranded_door([stranded_row])
+        seen = []
+
+        def _recording_door(command, args, timeout=None):
+            seen.append((command, list(args)))
+            return door(command, args, timeout=timeout)
+
+        monkeypatch.setattr("fno.rust_binary.call_binary_json", _recording_door)
         monkeypatch.setattr(prcli, "_replay_views", lambda: None)
-        monkeypatch.setattr(
-            "fno.worktree_stranded.sweep",
-            lambda **kw: [
-                Row(
-                    STRANDED,
-                    "x-beef",
-                    4,
-                    "2 hours ago",
-                    {"path": "/wt/d", "branch": "feature/x-beef",
-                     "has_remote": False, "pr_number": None, "live": False},
-                )
-            ],
-        )
 
         app = typer.Typer()
         app.command()(prcli.tick)
         result = CliRunner().invoke(app, [])
 
         assert result.exit_code == 0, (result.output, lines)
+        assert seen and seen[0][0] == "worktree-stranded"
+        assert "--no-wake" in seen[0][1], "report posture must never act"
         cached = read_cache(repo)
         assert [r["node"] for r in cached] == ["x-beef"], f"cache said: {cached}"
-        assert applied == [False], "report posture must never act"
         assert "report" in result.output
 
     def test_watchdog_tick_publishes_a_refused_recovery_once(self, monkeypatch, tmp_path):
@@ -1627,8 +1636,7 @@ class TestTickRecordsAndDeadline:
         monkeypatch.setattr(prcli, "_emit_event", lambda *a, **k: True)
         monkeypatch.setattr(prcli, "_watchdog_recovery_roots", lambda: [tmp_path])
         monkeypatch.setattr(prcli, "_catchup_roots", lambda: [tmp_path])
-        monkeypatch.setattr("fno.worktree_stranded.sweep", lambda **kw: [])
-        monkeypatch.setattr("fno.worktree_stranded.apply_sweep", lambda *a, **kw: [])
+        monkeypatch.setattr("fno.rust_binary.call_binary_json", _quiet_stranded_door([]))
 
         from fno.agents import unfinished_work as uw
 
@@ -1782,16 +1790,19 @@ class TestFleetLegRunsAfterACutPRLeg:
         from typer.testing import CliRunner
         from unittest.mock import MagicMock
 
-        from fno import fleet_state as fs
         from fno.agents import sweep as agents_sweep
         from fno.pr_watch import cli as prcli
         import fno.recovery as rec
 
+        door_calls: list[list[str]] = []
+
         monkeypatch.setattr("fno.pr_watch._dispatch.tick", dispatch_tick, raising=True)
-        monkeypatch.setattr(
-            "fno.rust_binary.command_call",
-            lambda command_name, payload, **kw: {"candidates": 0, "verdicts": {}, "queue": []},
-        )
+
+        def _fake_command_call(command_name, payload, **kw):
+            door_calls.append(list(command_name))
+            return {"candidates": 0, "verdicts": {}, "queue": []}
+
+        monkeypatch.setattr("fno.rust_binary.command_call", _fake_command_call)
         monkeypatch.setattr(rec, "run_recovery_sweep", sweep_fn, raising=True)
         # The silence backstop reads the real registry and resolves every
         # worker's transcript; that is seconds of work these tests do not want.
@@ -1815,9 +1826,6 @@ class TestFleetLegRunsAfterACutPRLeg:
         if not os.environ.get("FNO_PR_WATCH_TICK_TIMEOUT"):
             monkeypatch.setenv("FNO_PR_WATCH_TICK_TIMEOUT", "60")
 
-        hb = tmp_path / "fleet-sweep-state.json"
-        monkeypatch.setattr(fs, "fleet_state_path", lambda: hb, raising=True)
-
         settings = MagicMock()
         settings.pr_watch.max_age_days = 30
         settings.pr_watch.retries = 3
@@ -1839,7 +1847,7 @@ class TestFleetLegRunsAfterACutPRLeg:
         app = typer.Typer()
         app.command()(prcli.tick)
         res = CliRunner().invoke(app, [])
-        return res, events, hb
+        return res, events, door_calls
 
     def test_ac7_edge_a_raising_fleet_leg_still_lets_the_pr_legs_run(
         self, monkeypatch, tmp_path
@@ -1855,15 +1863,16 @@ class TestFleetLegRunsAfterACutPRLeg:
         def _sweep(_cfg, **_kw):
             raise RuntimeError("registry unreadable")
 
-        res, events, hb = self._invoke(monkeypatch, tmp_path, _pr, _sweep)
+        res, events, door_calls = self._invoke(monkeypatch, tmp_path, _pr, _sweep)
 
         assert pr_ran == ["pr"]
         assert res.exit_code == 0, res.output
         ends = [d for t, d in events if t == "pr_watch_tick_end"]
         assert ends[0]["outcome"] == "ok"
-        # The leg raised BEFORE its watermark, so the watermark honestly reads
-        # stale rather than claiming a sweep that never finished.
-        assert not hb.exists()
+        # The leg raised BEFORE its watermark, so no heartbeat door call fires:
+        # the watermark honestly reads stale rather than claiming a sweep that
+        # never finished.
+        assert not any("fleet-state" in call for call in door_calls)
 
 
 # ---------------------------------------------------------------------------

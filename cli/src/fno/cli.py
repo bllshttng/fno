@@ -62,11 +62,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
-    "autonomy": (
-        "fno.autonomy_cli:autonomy_app",
-        "Inspect every path that can start a session without an operator asking.",
-        {"hidden": True},
-    ),
     "lead": (
         "fno.lead.cli:lead_app",
         "The lead's board and its session manifest.",
@@ -126,7 +121,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
         {"hidden": True},
     ),
-    "config": ("fno.config_cli:app", "Configuration management"),
+    "config": ("fno.config_writer_cli:app", "Configuration management"),
     "notify": (
         "fno.notify:notify_app",
         "OS notification helper (in-package; macOS osascript / Linux notify-send)",
@@ -134,12 +129,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     ),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
     "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
-    "worktree": ("fno.worktree_cli:app", "Worktree management", {"hidden": True}),
-    "workspace": (
-        "fno.workspace.cli:cli",
-        "Worktree lifecycle and worker registration (now `fno agents workspace`).",
-        {"hidden": True},
-    ),
     "route": (
         "fno.route_cli:route_app",
         "Provider route lanes: ls / set / unset / env (GLM build lane).",
@@ -153,11 +142,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "pr-watch": (
         "fno.pr_watch.cli:cli",
         "PR-state watcher: auto-fire /fno:ship pr check + /fno:ship pr merged for open-PR backlog nodes",
-        {"hidden": True},
-    ),
-    "loops": (
-        "fno.loops:loops_app",
-        "Loop level config + pause-all kill switch (pause-all/resume-all/status/ls)",
         {"hidden": True},
     ),
     # Individual commands (plain functions wrapped as single-command apps) -
@@ -227,14 +211,12 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "doctor": set(),
     "evals": set(),
     "event": {"emit"},
-    "loops": {"resume-all"},
     "mail": {"send"},
     "paths": set(),
     "plan": set(),
     "pr-watch": set(),
     "resume": set(),
     "route": set(),
-    "worktree": set(),
 }
 
 for _group_name, _keep in COLLAPSE_KEEP.items():

@@ -10,7 +10,9 @@ from pathlib import Path
 
 
 from fno.branch_provenance_cache import CACHE_RELPATH, read_cache, write_cache
-from fno.worktree_stranded import CLEAN, STRANDED, Row
+
+CLEAN = "CLEAN"
+STRANDED = "STRANDED"
 
 
 def cache_path(repo):
@@ -18,10 +20,12 @@ def cache_path(repo):
 
 
 def _row(klass, node, unpushed, age, **facts):
+    """A row in the native door's wire shape: the classification rides `class`
+    (the frozen stranded payload key), with the row facts nested."""
     name = node or "unmapped"
     base = {"path": f"/wt/{name}", "branch": f"feature/{name}"}
     base.update(facts)
-    return Row(klass, node, unpushed, age, base)
+    return {"class": klass, "node": node, "unpushed": unpushed, "age": age, "facts": base}
 
 
 def _stranded():
