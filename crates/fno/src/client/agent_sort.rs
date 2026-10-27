@@ -29,7 +29,7 @@ pub(super) fn toggle_pin(view: &mut View, cur: usize) {
         view.pinned_agents.push(name.clone());
         true
     };
-    view_store::save_pinned(&view.pinned_agents);
+    crate::view_store::save_pinned(&view.pinned_agents);
     let word = if pinned { "pinned" } else { "unpinned" };
     view.set_notice(format!("{word} {name}"));
 }

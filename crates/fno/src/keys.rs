@@ -1712,7 +1712,7 @@ pub fn prefix_hint() -> String {
 /// so the keys the selector answers never need discovering by accident. The
 /// words name what the selector's own handlers run (client `selector_keys`).
 pub fn selector_hint() -> &'static str {
-    " selector: enter open \u{b7} space reply \u{b7} . or ctrl+t pin \u{b7} shift+up/down move \u{b7} r rename \u{b7} x stop \u{b7} P portal \u{b7} esc close "
+    " selector: enter open \u{b7} space peek \u{b7} . or ctrl+t pin \u{b7} shift+up/down move \u{b7} r rename \u{b7} x stop \u{b7} P portal \u{b7} esc close "
 }
 
 /// Display-only pseudo-bindings the modal shows but `chord()` handles as

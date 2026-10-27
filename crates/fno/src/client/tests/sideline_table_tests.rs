@@ -995,7 +995,7 @@ fn agents_tab_lead_rows_rank_after_hand_pins() {
 fn agents_tab_selector_hint_names_pin_and_move() {
     let hint = crate::keys::selector_hint();
     for word in [
-        "space reply",
+        "space peek",
         ". or ctrl+t pin",
         "shift+up/down move",
         "r rename",
