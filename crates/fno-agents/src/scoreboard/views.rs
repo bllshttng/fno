@@ -1169,7 +1169,7 @@ pub(crate) fn percentile(values: &mut Vec<Value>, p: i64) -> Option<Value> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let n = values.len() as f64;
-    let k = std::cmp::max(1, (p as f64 / 100.0 * n).ceil()) as usize;
+    let k = std::cmp::max(1, (p as f64 / 100.0 * n).ceil() as usize);
     values.get(k - 1).cloned()
 }
 
