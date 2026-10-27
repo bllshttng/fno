@@ -146,3 +146,10 @@ sibling-of-binary lookup finds no `fno-agents`, matching the capture machine.
   by the forward's enumerated subtree), and the collapsed-menu hidden-
   option inventory dropped its two doctor-namespaced rows the collapsed
   view can no longer see.
+- **The merge-ref twin red (fifth red, at the promoted fold).** The
+  reachable-paths gate scans the PR merge ref on CI, and main's newest
+  commits (after this branch's fold was fetched) add
+  `crates/fno/src/config_cli/leaves.rs` as a carrier of the fno-agents
+  binary-not-found parity string. The baseline row's rs set covers it.
+  The local gate reads stale until the merge lands main's tree, which is
+  the scan-context divergence, not a drift.
