@@ -181,7 +181,15 @@ impl World {
     }
 }
 
+/// The registry refuses two rows with one session identity, so only
+/// `lead-x` carries the manifest's SESSION; every other lead gets its own.
 fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
+    let session = if name == "lead-x" {
+        SESSION.to_string()
+    } else {
+        let tag: String = name.bytes().map(|b| format!("{b:02x}")).collect();
+        format!("00000000-0000-4000-8000-{tag:0>12.12}")
+    };
     json!({
         "name": name,
         "status": "live",
@@ -190,7 +198,7 @@ fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
         "role_scope": scope,
         "role_level": 1,
         "created_at": "2026-08-28T12:00:00Z",
-        "harness_session_id": SESSION,
+        "harness_session_id": session,
     })
 }
 
