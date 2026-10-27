@@ -143,6 +143,11 @@ NATIVE_SERVED_LEAVES = {
     # The project family answers from the native spawn-overlay door now
     # (init/resolve/map); the config group's click tree no longer mounts it.
     "config project",
+    # `doctor test` moved with the whole test-command family: the fno-agents
+    # binary serves it natively (test-run doctor) and the click leg is gone.
+    # The map row stays; the mux menu binds the leaf and the Rust
+    # command-baseline ratchet reads the same row.
+    "doctor test",
 }
 
 # Two people hit these gates cold within an hour and both reverse-engineered the

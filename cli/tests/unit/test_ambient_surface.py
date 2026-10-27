@@ -112,7 +112,13 @@ def test_classify_agrees_with_the_scrub():
     real_bin = os.environ.get("FNO_AGENTS_BIN")
     if real_bin:
         probes["FNO_AGENTS_BIN"] = real_bin
-    out = apply_env("neutralise", probes, sandbox=sandbox)
+    try:
+        out = apply_env("neutralise", probes, sandbox=sandbox)
+    except SystemExit:
+        pytest.skip(
+            "no fno-agents here can speak the env door (stale install); "
+            "install the crate fresh or run through 'fno doctor test' in CI"
+        )
     for name in probes:
         if classify(name) == "ambient":
             assert out.get(name) != "ambient-value", (
@@ -120,20 +126,31 @@ def test_classify_agrees_with_the_scrub():
             )
 
 
-def test_a_received_env_skips_the_door_and_never_needs_the_binary(monkeypatch):
-    """The fence receipt short-circuits the door.
+def test_a_received_env_scrubs_without_the_binary(monkeypatch):
+    """The fence receipt degrades the door to a Python-side scrub.
 
     The smoke pytest legs delete the dev build on purpose so the parity
     suites skip, and the runner has already neutralised in-process - so the
-    env arrives carrying FNO_TEST_HERMETIC=1. Re-applying would refuse on
-    the missing binary and take every test in the shard down with it.
+    pins are right and no binary is needed. A marker planted after the fence
+    (the identity-scrub guard spawns exactly that child) must still die, so
+    the fallback scrubs through fno.hermetic's classifier, the same
+    vocabulary the native assembly reads, and keeps the receipt standing.
     """
     from fno import test_env_door
 
-    env = {"FNO_TEST_HERMETIC": "1", "HOME": "/anyone", "PATH": "/bin"}
+    env = {
+        "FNO_TEST_HERMETIC": "1",
+        "HOME": "/anyone",
+        "PATH": "/bin",
+        "CODEX_THREAD_ID": "planted-in-the-child",
+        "FNO_HARNESS_NAME": "planted-too",
+    }
     monkeypatch.setattr(test_env_door.shutil, "which", lambda name: None)
     out = test_env_door.apply_env("neutralise", env, sandbox=Path("/sb"))
-    assert out == env
+    assert "CODEX_THREAD_ID" not in out, "a planted marker survived the fallback"
+    assert "FNO_HARNESS_NAME" not in out, "a planted FNO_ marker survived"
+    assert out["FNO_TEST_HERMETIC"] == "1", "the receipt must survive the fallback"
+    assert out["HOME"] == "/anyone", "the fallback must not move the pins"
 
 
 def test_an_unreceived_env_still_refuses_without_the_binary(monkeypatch):

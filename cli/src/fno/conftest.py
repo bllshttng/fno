@@ -63,9 +63,17 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ANN001
     # Sweep AFTER the rmtree: the only ordering that catches the keepers
     # that were serving the just-deleted sandbox graphs. Native door, same
     # reason the env is a door: one sweep, never a second implementation.
+    # FNO_AGENTS_BIN outranks PATH (the claim-door contract): the smoke
+    # pytest legs run with the dev build scrubbed and the pin alive.
+    import os
     import subprocess
 
-    binary = shutil.which("fno-agents")
+    pinned = os.environ.get("FNO_AGENTS_BIN") or ""
+    binary = (
+        pinned
+        if pinned and Path(pinned).is_file()
+        else shutil.which("fno-agents")
+    )
     if binary is not None:
         subprocess.run([binary, "test-run", "sweep", "15.0"], check=False)
 

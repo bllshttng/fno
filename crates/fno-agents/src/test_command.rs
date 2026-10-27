@@ -232,17 +232,19 @@ pub fn build_child_env(
     ] {
         env.remove(name);
     }
-    let src = root
-        .join("cli/src")
-        .canonicalize()
-        .map_err(|e| format!("fno doctor test: cannot resolve cli/src under the root: {e}"))?;
-    let existing = env.get("PYTHONPATH").cloned().unwrap_or_default();
-    let mut pythonpath = src.to_string_lossy().to_string();
-    if !existing.is_empty() {
-        pythonpath.push(':');
-        pythonpath.push_str(&existing);
+    // The pin is best-effort: a changed run executes inside a synthetic
+    // checkout that has no cli/src (the smoke-modes harness builds one), and
+    // the steps it selects there are shell steps that never read PYTHONPATH.
+    // A real checkout pins exactly as before.
+    if let Ok(src) = root.join("cli/src").canonicalize() {
+        let existing = env.get("PYTHONPATH").cloned().unwrap_or_default();
+        let mut pythonpath = src.to_string_lossy().to_string();
+        if !existing.is_empty() {
+            pythonpath.push(':');
+            pythonpath.push_str(&existing);
+        }
+        env.insert("PYTHONPATH".into(), pythonpath);
     }
-    env.insert("PYTHONPATH".into(), pythonpath);
     // never let rtk re-wrap the child run
     env.insert("RTK_DISABLED".into(), "1".into());
     let unsets: Vec<String> = parent

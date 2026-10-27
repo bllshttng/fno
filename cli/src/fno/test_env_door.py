@@ -23,14 +23,27 @@ def native_env(mode: str, sandbox=None, fixtures=None) -> dict:
     return apply_env(mode, dict(os.environ), sandbox=sandbox, fixtures=fixtures)
 
 
+def _python_scrub(env: dict) -> dict:
+    """Scrub ambient names without the binary, keeping the receipt standing.
+
+    The classifier stays Python-side on purpose: fno.hermetic reads the same
+    vocabulary the native assembly does, so this is a scrub through the one
+    inventory, never a second neutralise. The pins are already right in a
+    received env; only a marker planted after the fence needs to die here
+    (the identity-scrub guard spawns exactly that child).
+    """
+    from fno.hermetic import ambient_names
+
+    out = dict(env)
+    for name in ambient_names(out):
+        out.pop(name, None)
+    out["FNO_TEST_HERMETIC"] = "1"
+    return out
+
+
 def apply_env(mode: str, env: dict, sandbox=None, fixtures=None) -> dict:
     """Apply the native neutralise/poison to one caller-supplied env."""
-    if env.get("FNO_TEST_HERMETIC") == "1":
-        # The fence's own receipt: the runner neutralises in-process before
-        # the pytest legs run, then deletes the dev build so the parity
-        # suites skip. The env already came through this assembly, and the
-        # binary is legitimately absent there - re-applying would refuse.
-        return dict(env)
+    received = env.get("FNO_TEST_HERMETIC") == "1"
     payload: dict = {"mode": mode, "env": dict(env)}
     if sandbox is not None:
         payload["sandbox"] = str(sandbox)
@@ -42,22 +55,30 @@ def apply_env(mode: str, env: dict, sandbox=None, fixtures=None) -> dict:
     # stays deleted.
     pinned = env.get("FNO_AGENTS_BIN") or ""
     binary = pinned if pinned and Path(pinned).is_file() else shutil.which("fno-agents")
-    if binary is None:
+    if binary is None and not received:
         sys.stderr.write(
             "conftest: fno-agents is not on PATH or FNO_AGENTS_BIN; the "
-            "hermetic env is native. Install the crate (cargo install --path "
-            "crates/fno-agents) or run the suite through 'fno doctor test'.\n"
+            "hermetic env is native. Install the crate (cargo install "
+            "--path crates/fno-agents) or run the suite through "
+            "'fno doctor test'.\n"
         )
         raise SystemExit(3)
-    proc = subprocess.run(
-        [binary, "test-run", "env", json.dumps(payload)], capture_output=True, text=True
-    )
-    if proc.returncode != 0:
-        sys.stderr.write(proc.stderr)
-        raise SystemExit(3)
-    try:
-        env = json.loads(proc.stdout)["env"]
-    except (json.JSONDecodeError, KeyError, TypeError):
-        sys.stderr.write("conftest: test-run env door printed no env object\n")
-        raise SystemExit(3)
-    return {str(k): str(v) for k, v in env.items()}
+    if binary is not None:
+        proc = subprocess.run(
+            [binary, "test-run", "env", json.dumps(payload)],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0:
+            try:
+                env = json.loads(proc.stdout)["env"]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                sys.stderr.write("conftest: test-run env door printed no env object\n")
+                raise SystemExit(3) from None
+            return {str(k): str(v) for k, v in env.items()}
+        if not received:
+            sys.stderr.write(proc.stderr)
+            raise SystemExit(3)
+        # A stale door behind an already-fenced env adds nothing the
+        # Python-side scrub doesn't; degrade instead of killing the run.
+    return _python_scrub(env)
