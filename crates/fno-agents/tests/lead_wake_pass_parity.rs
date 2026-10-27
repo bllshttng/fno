@@ -34,6 +34,10 @@ mod common;
 const NOW: i64 = 1788004800;
 const NOW_ISO: &str = "2026-08-29T12:00:00Z";
 const SESSION: &str = "11111111-2222-3333-4444-555555555555";
+/// The second lead's session: the registry store rejects two rows sharing
+/// one session identity, so a two-row world needs a second id. Single-row
+/// worlds keep SESSION, whose value the goldens pin.
+const SESSION_B: &str = "11111111-2222-3333-4444-555555555556";
 const BIRTH: &str = "2026-08-28T12:00:00Z";
 const CURSOR_SEED: &str = "2026-08-29T10:00:00Z";
 const PROMPT: &str =
@@ -192,6 +196,13 @@ fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
         "created_at": "2026-08-28T12:00:00Z",
         "harness_session_id": SESSION,
     })
+}
+
+/// The second row of a two-lead world, under its own session identity.
+fn row_b(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
+    let mut value = row(name, cwd, short_id, scope);
+    value["harness_session_id"] = json!(SESSION_B);
+    value
 }
 
 type TruthStub =
@@ -747,7 +758,7 @@ fn a_conflicted_scope_is_skipped() {
     let world = World::new();
     let rows = world.set_registry(json!([
         row("lead-a", &world.root(), "", "epic-x"),
-        row("lead-b", &world.root(), "", "epic-x"),
+        row_b("lead-b", &world.root(), "", "epic-x"),
     ]));
     let rec = Rec::default();
     let outcome = run_with(
@@ -1175,7 +1186,7 @@ fn a_blocked_truth_read_yields_the_role_and_still_wakes_the_next() {
     let world = World::new();
     let rows = world.set_registry(json!([
         row("lead-a", &world.root(), "aa11bb22", "epic-a1"),
-        row("lead-b", &world.root(), "cc22dd33", "epic-b1"),
+        row_b("lead-b", &world.root(), "cc22dd33", "epic-b1"),
     ]));
     world.manifest("epic-a1", "");
     world.manifest("epic-b1", "");
@@ -1237,7 +1248,7 @@ fn a_blocked_graph_read_degrades_and_mail_still_wakes() {
     let world = World::new();
     let rows = world.set_registry(json!([
         row("lead-a", &world.root(), "aa11bb22", "epic-a1"),
-        row("lead-b", &world.root(), "cc22dd33", "epic-b1"),
+        row_b("lead-b", &world.root(), "cc22dd33", "epic-b1"),
     ]));
     world.manifest("epic-a1", "");
     world.manifest("epic-b1", "");
