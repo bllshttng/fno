@@ -639,6 +639,7 @@ pub mod worked_nodes;
 pub mod worker_wake;
 pub mod worktree_reapable;
 pub mod write_queue;
+pub mod you_threads;
 pub mod zcode;
 pub mod zcode_ask;
 
