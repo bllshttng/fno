@@ -1,4 +1,4 @@
-"""Opt-in live positive-marker gate for the native usage verb.
+"""Opt-in live positive-marker gate for the native usage command.
 
 The refresh moved to the Rust leg (accounts/usage.rs), so this gate drives
 ``fno-agents spawn-overlay accounts usage --refresh --json`` end to end. The
