@@ -256,10 +256,6 @@ struct Rec {
 }
 
 impl Rec {
-    fn push_event(&self, kind: &str, payload: Value) {
-        self.events.lock().unwrap().push(json!([kind, payload]));
-    }
-
     fn events(&self) -> Vec<Value> {
         self.events.lock().unwrap().clone()
     }
