@@ -1635,10 +1635,8 @@ pub(super) fn run_name_lane_force(
     }
 }
 
-/// Python `resolve_or_suggest`: discovery lists LIVE sessions only. A stored
-/// session the shared transcript probe does not read live is no discovery
-/// hit, so the name lane runs its token ladder (inject probe, then wake)
-/// instead of treating an asleep session as live and queueing it.
+/// Python `resolve_or_suggest`: discovery lists LIVE sessions only, so an
+/// asleep session takes the token ladder (inject probe, then wake).
 fn live_discovery_hit(token: &str) -> Option<ReachableSession> {
     let hit = resolve_reachable(token).hit?;
     let state = crate::truth_probe::family1_truth_state(&hit.session_id)?;

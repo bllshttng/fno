@@ -998,8 +998,7 @@ pub(super) fn queue_durable_fallback(
     match write {
         Ok(_) => Ok((msg_id.to_string(), durable_recipient)),
         Err(exc) => {
-            // The msg id is already minted: the failure row carries it so a
-            // reader joins it to its agent_send_started row.
+            // The minted msg id joins this row to its agent_send_started row.
             emit_event(
                 "agent_send_failed",
                 json!({"stage": "envelope-write", "name": str_field(row, "name"), "msg_id": msg_id}),
@@ -1394,8 +1393,7 @@ pub(super) fn dispatch_send_locked(
     let mut live_attempted = false;
     let mut delivery = "durable".to_string();
     let mut demotion_notice: Option<String> = None;
-    // A skipped live lane names the reading that vetoed it; bus-only
-    // outranks it below.
+    // A vetoed live lane names the reading; bus-only outranks it below.
     let mut live_miss_reason: Option<String> =
         (!family1_attemptable).then(|| format!("transcript-{family1_state}"));
     let mut live_reasons: Vec<String> = Vec::new();
@@ -1892,22 +1890,19 @@ pub(super) fn project_id_from_settings_text(text: &str) -> Option<String> {
 
 #[cfg(test)]
 mod wake_rung_tests {
-    use super::*;
-
     // contract: "1h-non-claude-never-woken-as-claude"
-    /// The wake rung revives claude sessions only: an asleep codex session
-    /// names the unsupported harness and never reaches the resume door.
     #[test]
     fn a_non_claude_session_is_never_woken_as_claude() {
-        let codex = ReachableSession {
+        let codex = super::ReachableSession {
             session_id: "04b5621d-1111-2222-3333-444455556666".to_string(),
             source: "registry",
             agent: "codex".to_string(),
             cwd: None,
         };
-        let (delivered, woken, lane) = wake_rung(&codex, "<fno_mail>hi</fno_mail>");
-        assert!(!delivered);
-        assert_eq!(woken, None);
-        assert_eq!(lane.as_deref(), Some("wake=unsupported-harness(codex)"));
+        let lane = Some("wake=unsupported-harness(codex)".to_string());
+        assert_eq!(
+            super::wake_rung(&codex, "<fno_mail>hi</fno_mail>"),
+            (false, None, lane)
+        );
     }
 }
