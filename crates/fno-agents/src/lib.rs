@@ -2022,6 +2022,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "provider_window_closing",
     // The pre-promise review-bot quota warning (accounts/required_bot.rs).
     "quota_required_bot_exhausted",
+    // The observer's per-dimension verdict and its run close
+    // (observer/mod.rs: sweep and replay).
+    "skill_eval_finding",
+    "skill_eval_run_complete",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

@@ -141,7 +141,9 @@ fn emit_run_complete(summary: &Value, events_paths: &[PathBuf]) -> bool {
 type GhRunner<'a> = &'a dyn Fn(&[String]) -> (i32, String, String);
 
 fn default_gh(args: &[String]) -> (i32, String, String) {
-    let Ok(out) = std::process::Command::new("gh").args(args).output() else {
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(args);
+    let Ok(out) = crate::gh_budget::output(cmd) else {
         return (1, String::new(), "gh spawn failed".to_string());
     };
     (
