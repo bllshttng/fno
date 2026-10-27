@@ -52,9 +52,18 @@ def apply_env(mode: str, env: dict, sandbox=None, fixtures=None) -> dict:
     # The claim-door contract: FNO_AGENTS_BIN outranks PATH. The smoke runner
     # pins it to a preserved copy of itself before scrubbing target/, so the
     # pytest legs reach the door with a fresh binary while the parity marker
-    # stays deleted.
+    # stays deleted. FNO_AGENTS_FRONT is the CI job's declared build of the
+    # same crate (smoke-setup exports it): a gate step that runs beside the
+    # checkout has no PATH install, and the front pin is what keeps the door
+    # native there.
     pinned = env.get("FNO_AGENTS_BIN") or ""
-    binary = pinned if pinned and Path(pinned).is_file() else shutil.which("fno-agents")
+    front = env.get("FNO_AGENTS_FRONT") or ""
+    if pinned and Path(pinned).is_file():
+        binary = pinned
+    elif front and Path(front).is_file():
+        binary = front
+    else:
+        binary = shutil.which("fno-agents")
     if binary is None and not received:
         sys.stderr.write(
             "conftest: fno-agents is not on PATH or FNO_AGENTS_BIN; the "
