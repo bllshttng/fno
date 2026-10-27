@@ -112,7 +112,7 @@ Every subfolder and file below was found in the real root unnamed at the 2026-09
 | Entry | Writer | Lifetime |
 |---|---|---|
 | `state/attention/items.json` | `crates/fno-agents/src/attention_arm.rs` (the `attention` arm) | the attention projection cache plus `questions_dir`, rewritten every beat; the lead check-in reads it and refuses when it is missing or over 600 s old, safe to delete, next beat rebuilds it |
-| `state/question_bus/status.json` | `crates/fno-agents/src/question_bus.rs` (the question bus arm) | the arm's last beat (`at`, `published`, `peer_hosts`, `last_error`), rewritten every beat; safe to delete, next beat rebuilds it |
+| `state/question_bus/status.json` | `crates/fno-agents/src/question_bus.rs` (the question bus beat, inside the mail arm) | the arm's last beat (`at`, `published`, `peer_hosts`, `last_error`), rewritten every beat; safe to delete, next beat rebuilds it |
 | `state/attention/questions.json` | `crates/fno-agents/src/attention_arm.rs` | page settle state (body hashes and since-stamps); deleting it restarts every settle window and cannot double-deliver, because a page's existence proves delivery |
 | `state/attest/` | `hooks/attest-model.sh`, `hooks/review-hold.sh` | one attestation sidecar per reviewed session |
 | `agents/quiet-recovery/` | `crates/fno-agents/src/codex_watch/quiet.rs` | one episode per native session; resets on new transcript activity; retained as recovery evidence after retirement; deleting a file can repeat its nudge |

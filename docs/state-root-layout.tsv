@@ -146,7 +146,6 @@ pages	cache/pages	dir	daemon
 plugin-stage	plugin-stage	dir	daemon
 postmortems	postmortems	dir	daemon
 push-stamps	state/push-stamps	dir	daemon
-question_bus	state/question_bus	dir	daemon
 reclaim	state/reclaim	dir	daemon
 retro-pending	state/retro-pending	dir	daemon
 review-invocations	state/review-invocations	dir	daemon

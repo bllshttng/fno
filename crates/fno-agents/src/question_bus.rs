@@ -277,8 +277,7 @@ fn peer_close(qid: &str, reason: &str, host: &str) -> Value {
 /// `state/question_bus/status.json`: the done probe reads `at` and
 /// `peer_hosts`.
 fn write_status(me: &Host, outcome: &Result<Beat, String>) {
-    let dir = crate::state_layout::place_dir(&me.root, "question_bus")
-        .unwrap_or_else(|| me.root.join("state/question_bus"));
+    let dir = me.root.join("state").join("question_bus");
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -379,7 +378,7 @@ mod tests {
 
         // B closes it; the close publishes and A's copy follows.
         let close = json!({"ts": "t", "type": "operator_question_closed",
-            "data": {"question_id": "q-1", "answer": "yes"}});
+            "source": "test", "data": {"question_id": "q-1", "answer": "yes"}});
         crate::provider_cap::append_questions_row(&b.index(), &close).unwrap();
         assert_eq!(beat(remote, &b).unwrap().published, 1);
         assert_eq!(beat(remote, &a).unwrap().closed, 1);
