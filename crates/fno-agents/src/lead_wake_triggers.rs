@@ -859,10 +859,9 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
         laws: Vec::new(),
         storage_root: target.root.clone(),
         index_path: None,
-        // events-discipline:allow: the write belongs to the question-intake
-        // door; this line only names its append target, the space journal
-        // the Python leg supplied.
-        journal_path: Some(crate::paths::space_dir(&target.root).join("events.jsonl")),
+        // The write belongs to the question-intake door; this line only names
+        // its append target, the space journal the Python leg supplied.
+        journal_path: Some(crate::paths::space_dir(&target.root).join("events.jsonl")), // events-discipline:allow
         display_name: None,
         render_cap: None,
         op: Some("append".to_string()),
