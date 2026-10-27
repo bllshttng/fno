@@ -22,7 +22,8 @@ struct Fake {
     garbage: Option<String>,
     /// Whether SIGINT was held pending during the last live `plugin add`.
     sigint_held_on_live_add: Option<bool>,
-    /// List a freshly added plugin without its `marketplaceSource`.
+    /// List a plugin freshly added in the live home without its
+    /// `marketplaceSource`.
     drop_market_source: bool,
     live: PathBuf,
 }
@@ -86,7 +87,7 @@ impl Fake {
         }
         let a: Vec<&str> = argv.iter().map(String::as_str).collect();
         let release_root = self.release_root.clone();
-        let drop_source = self.drop_market_source;
+        let drop_source = self.drop_market_source && home == self.live;
         let reg = self.homes.entry(home.to_path_buf()).or_default();
         match a.as_slice() {
             ["codex", "plugin", "marketplace", "list", "--json"] => {
