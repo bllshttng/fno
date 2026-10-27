@@ -373,8 +373,11 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
     # ritual's own text) must precede the fence. Sixteen: the pi pane arm's
     # builder in pane_spawn/simple.rs, on the same probed pi reason as
     # pi_run_tail - the seed is a trailing positional after the flag block
-    # and the row-8 golden pins the unfenced form. Fifteen in all, after the
-    # hermes adapter left.
-    assert counts.get("exempt", 0) == 15, counts
+    # and the row-8 golden pins the unfenced form. The notify-send body
+    # exemption left with the notify family port: the toast body moved into
+    # the Rust dispatch (crates/fno/src/notify_dispatch.rs keeps the marker
+    # above its body push; the Rust call shape is outside the scanner's
+    # seed-push patterns). Fourteen in all, after the hermes adapter left.
+    assert counts.get("exempt", 0) == 14, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts
