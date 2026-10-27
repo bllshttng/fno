@@ -125,9 +125,9 @@ pub struct PaneContext {
     pub route: Option<String>,
     /// The `--role`: with no `--route`, the claude arm resolves its route.
     pub role: Option<String>,
-    /// The spawn carries a lead rank (`--promote <scope>` scopes, or a
-    /// `--role-level` param): the codex pane launches at the role-aware
-    /// pane default instead of the bounded one.
+    /// The spawn carries a promoted role (a `--promote <scope>` plan, or a
+    /// complete `--role-level`/`--role-scope` pair): the codex pane launches
+    /// at the role-aware pane default instead of the bounded one.
     pub promoted: bool,
     /// The resolved account overlay (`accounts::launch::pane_overlay`),
     /// sealed. The wrapper carries it under any route.
@@ -231,13 +231,15 @@ impl PaneContext {
                 .and_then(Value::as_str)
                 .map(str::to_string),
             role: opt_str("role"),
-            // A promote plan or a lead rank in the params: either names a
-            // promoted spawn, and the rank rides to the arms that need it.
+            // A promote plan, or a COMPLETE role pair, names a promoted
+            // spawn. A lone half widens nothing: the thread lane's role
+            // reader refuses an incomplete role, so the pane's widening
+            // reads the same permission boundary.
             promoted: params
                 .get("promote")
                 .and_then(Value::as_array)
                 .is_some_and(|scopes| !scopes.is_empty())
-                || params.get("role_level").is_some(),
+                || (params.get("role_level").is_some() && params.get("role_scope").is_some()),
             account_env: params
                 .get("account_env")
                 .and_then(Value::as_object)

@@ -297,8 +297,8 @@ pub(crate) fn build_wrapped(ctx: &PaneContext) -> ArmPlan {
     // The lane default posture ("the mode axis is retired; the lane default
     // is the only answer left", mux_spawn.py:952-956), routed through the
     // Rust owner so pane and thread cannot disagree. A promoted spawn
-    // (a `--promote` scope or a `--role-level` param) launches at the
-    // role-aware default instead: full access, because a lead must write
+    // (a `--promote` scope or a complete role-level/scope pair) launches at
+    // the role-aware default instead: full access, because a lead must write
     // the state root to spawn, claim and journal. An operator
     // spelling never reaches this arm - the client door refuses
     // --yolo/--permission-mode before the arm runs - so the role default

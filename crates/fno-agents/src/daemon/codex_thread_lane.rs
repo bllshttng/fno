@@ -5,8 +5,8 @@
 //! the lane moves with its body.
 
 use super::{
-    codex_thread_on_done, codex_thread_on_status, is_non_terminal, state_error_code,
-    thread_spawn_refusal, update_registry_offloaded, Ctx, WARMUP_SEED,
+    codex_thread_on_done, codex_thread_on_status, is_non_terminal, load_registry_offloaded,
+    state_error_code, thread_spawn_refusal, update_registry_offloaded, Ctx, WARMUP_SEED,
 };
 use crate::codex_thread_entry::build_codex_thread_entry;
 use crate::protocol::{ErrorCode, Request, Response};
@@ -64,6 +64,31 @@ pub(super) async fn spawn_codex_thread_lane(
         Ok(role) => role,
         Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
     };
+    // Occupancy pre-read for the widen: a scope a live row already holds
+    // widens nothing. The atomic mint below stays the truth for the row; a
+    // scope freed between this read and the mint lands the conservative
+    // direction (a bounded lead), never an unpromoted worker with full
+    // access.
+    let widen_role: Option<(u32, String)> = match &role {
+        Some((level, scope)) => {
+            let path = ctx.home.registry_json();
+            let held = load_registry_offloaded(path)
+                .await
+                .map_or(false, |registry| {
+                    registry.entries.iter().any(|existing| {
+                        existing.role_scope.as_deref() == Some(scope.as_str())
+                            && existing.role_level.is_some()
+                            && is_non_terminal(existing.status)
+                    })
+                });
+            if held {
+                None
+            } else {
+                Some((*level, scope.clone()))
+            }
+        }
+        None => None,
+    };
     // Both spellings, resolved by one reader. Reading `yolo` alone dropped
     // `permission_mode` silently and started bounded, which downgrades the very
     // posture the caller was naming; an unrecognized value is refused here
@@ -80,7 +105,7 @@ pub(super) async fn spawn_codex_thread_lane(
             .permission_mode
             .as_deref()
             .or(req.params.get("permission_mode").and_then(Value::as_str)),
-        role.as_ref().map(|(level, _)| *level),
+        widen_role.as_ref().map(|(level, _)| *level),
     ) {
         Ok(posture) => posture,
         Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
