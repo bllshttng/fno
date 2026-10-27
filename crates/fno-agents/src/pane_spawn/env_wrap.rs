@@ -4,13 +4,12 @@
 //! substrate and seed attribution ride the wrapper as assignments and the
 //! parent's own identity rides out as `-u` unsets.
 //!
-//! Scope, recorded: the role and account legs of the Python pairs are NOT
-//! ported here. Every shape that carries them is seam-carved to Python
-//! (`_is_role_bearing_spawn`) and never reaches an arm. Node provenance is
-//! ported: the spawn guard exports it and the pairs carry it. The route overlay IS: the claude arm (row 8, PR B) hands
-//! its resolved route env to this wrapper through the `overlay` param, which
-//! the pairs append after the claude extras and the unsets answer with the
-//! `accounts::credentials` scrub floor when the harness is claude.
+//! Node provenance is ported: the spawn guard exports it and the pairs carry
+//! it. The route, role and account legs arrive composed: each arm hands its
+//! overlay (the account profile under any route) through the `overlay`
+//! param, which the pairs append after the claude extras, and the unsets
+//! answer with the `accounts::credentials` scrub floor when the harness is
+//! claude.
 
 use base64::Engine as _;
 
@@ -66,10 +65,9 @@ pub const SEED_PROVENANCE_KEYS: [&str; 6] = [
 /// order is the list's order, and the goldens pin it byte-equal.
 pub use crate::accounts::credentials::SCRUB_AUTH_VARS;
 
-/// `_mesh_env_pairs` for the shapes an arm answers: no role and no account
-/// overlay (seam-carved), so the pairs reduce to identity, substrate, the
-/// pinned session, the claude extras, the caller's route overlay, the node
-/// provenance the guard exported and the seed sidecar. Returns `(unset, pairs)` in the Python
+/// `_mesh_env_pairs`: identity, substrate, the pinned session, the claude
+/// extras, the caller's composed overlay, the node provenance the guard
+/// exported and the seed sidecar. Returns `(unset, pairs)` in the Python
 /// construction order.
 pub fn mesh_env_pairs(
     name: &str,

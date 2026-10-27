@@ -188,6 +188,11 @@ enum Role {
     /// skill-diff ops. The tail (op word + flags) rides byte-verbatim; a
     /// bare command or --help answers native help inside the op door.
     DoctorSkillDiff(Vec<OsString>),
+    /// `fno doctor observer <op>`: the observer family (sweep | judge |
+    /// replay) execs the native `fno-agents spawn-overlay observer` ops
+    /// door. The tail (op word + flags) rides byte-verbatim; the op door
+    /// refuses an unknown op with usage.
+    DoctorObserver(Vec<OsString>),
     /// `fno doctor lint style ...`: the native style check, exec'd through
     /// the sibling fno-agents `style-check` command. Args from the check name
     /// onward; Python keeps every other lint check until its port.
@@ -632,6 +637,17 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
     Some(args[2..].to_vec())
 }
 
+/// `fno doctor observer ...` and the deprecated root `fno observer ...`: the
+/// tail rides verbatim to the native ops door, as skill-diff's does.
+fn classify_observer(args: &[OsString]) -> Option<Vec<OsString>> {
+    let rest: &[OsString] = match args.first()?.to_str()? {
+        "doctor" if args.get(1)?.to_str()? == "observer" => &args[2..],
+        "observer" => &args[1..],
+        _ => return None,
+    };
+    Some(rest.to_vec())
+}
+
 /// `fno doctor skill-diff ...` and the deprecated root `fno skill-diff ...`:
 /// the tail (op word + flags) rides byte-verbatim to the native ops door.
 /// A bare command and --help claim too (the Python leg dies in this port); an
@@ -1003,6 +1019,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_skill_diff(args) {
         return Role::DoctorSkillDiff(rest);
+    }
+    if let Some(rest) = classify_observer(args) {
+        return Role::DoctorObserver(rest);
     }
     if let Some(rest) = classify_group_command(args, "doctor", "builds") {
         return Role::DoctorBuilds(rest);
@@ -1633,6 +1652,11 @@ fn main() {
         Role::DoctorSkillDiff(rest) => {
             std::process::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))
         }
+        Role::DoctorObserver(rest) => std::process::exit(fno_agents_exec(
+            "fno doctor observer",
+            &["spawn-overlay", "observer"],
+            &rest,
+        )),
         Role::ClaimStore(rest) => {
             std::process::exit(fno_agents_exec("fno agents claim", &["claim"], &rest))
         }

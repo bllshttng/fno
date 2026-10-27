@@ -370,9 +370,6 @@ mail unread	T1	mail unread	16
 mail show	T1	mail show	2
 mail withdraw	T1	mail withdraw	2
 notify	KEEP	notify	18	single-leaf group
-observer replay	T1	observer replay	1
-observer sweep	T1	observer sweep	4
-observer judge	T1	observer judge	0
 paths handoff	T1	paths handoff	9
 phase kill-check	KEEP	phase kill-check	16	single-leaf group
 plan brief	T1	plan brief	4

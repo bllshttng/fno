@@ -339,6 +339,7 @@ pub mod mail_threads;
 pub mod main_ci;
 pub mod main_ci_proof;
 pub mod main_ci_transition;
+pub mod main_revert;
 pub mod manifest;
 pub mod manifest_lookup;
 pub mod mcp;
@@ -373,6 +374,7 @@ pub mod node_route;
 pub mod node_seed;
 pub mod notice_route;
 pub mod nudge;
+pub mod observer;
 pub mod occupancy_login;
 pub mod opencode_ask;
 pub mod opencode_config;
@@ -568,6 +570,7 @@ pub mod spawn_payload;
 pub mod spawn_phase;
 pub mod spawn_promote;
 pub mod spawn_remote;
+pub mod spawn_role;
 pub mod spawn_route;
 pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
@@ -1835,6 +1838,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
     "pr_push_landed",
     "ci_cadence_check",
+    // The main_revert arm's read of a red main (main_revert.rs).
+    "main_revert_check",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
@@ -2027,6 +2032,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "provider_window_closing",
     // The pre-promise review-bot quota warning (accounts/required_bot.rs).
     "quota_required_bot_exhausted",
+    // The observer's per-dimension verdict and its run close
+    // (observer/mod.rs: sweep and replay).
+    "skill_eval_finding",
+    "skill_eval_run_complete",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

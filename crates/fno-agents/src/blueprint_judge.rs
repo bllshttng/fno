@@ -902,25 +902,39 @@ fn run_calibration(
     lenses: &Lenses,
     spawn: Spawn,
 ) -> i32 {
+    match calibration_result(labels_path, split, cwd, lenses, spawn) {
+        Ok(v) => {
+            println!("{v}");
+            if v.get("controls_wrong").and_then(Value::as_u64).unwrap_or(0) > 0 {
+                1
+            } else {
+                0
+            }
+        }
+        Err(msg) => {
+            println!("{}", json!({"error": msg}));
+            1
+        }
+    }
+}
+
+/// `run_calibration`'s computation, returning the payload the observer's
+/// labels view renders (the observer port shares the judge's
+/// calibration without re-running the spawn loop twice).
+pub(crate) fn calibration_result(
+    labels_path: &Path,
+    split: &str,
+    cwd: &Path,
+    lenses: &Lenses,
+    spawn: Spawn,
+) -> Result<Value, String> {
     let text = match std::fs::read_to_string(labels_path) {
         Ok(t) => t,
-        Err(e) => {
-            println!(
-                "{}",
-                json!({"error": format!("cannot read {}: {e}", labels_path.display())})
-            );
-            return 1;
-        }
+        Err(e) => Err(format!("cannot read {}: {e}", labels_path.display()))?,
     };
     let rows: Vec<Value> = match serde_yaml_ng::from_str(&text) {
         Ok(Value::Array(v)) => v,
-        _ => {
-            println!(
-                "{}",
-                json!({"error": "labels.yaml did not parse to a list"})
-            );
-            return 1;
-        }
+        _ => return Err("labels.yaml did not parse to a list".to_string()),
     };
     let base = labels_path.parent().unwrap_or(Path::new("."));
 
@@ -1027,15 +1041,11 @@ fn run_calibration(
             )
         })
         .collect();
-    println!(
-        "{}",
-        json!({"dimensions": dimensions, "disagreements": disagreements, "controls_wrong": controls_wrong})
-    );
-    if controls_wrong > 0 {
-        1
-    } else {
-        0
-    }
+    Ok(json!({
+        "dimensions": dimensions,
+        "disagreements": disagreements,
+        "controls_wrong": controls_wrong
+    }))
 }
 
 pub fn run_judge(args: &[String]) -> i32 {

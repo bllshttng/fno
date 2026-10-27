@@ -1,0 +1,1 @@
+{"worker":[{"id":"m1","thread":"t1","from":"lead","to":"worker","kind":"send","body":"before cursor","ts":"2026-10-12T09:00:00Z"},{"id":"m2","thread":"t1","from":"lead","to":"worker","kind":"send","body":"at cursor","ts":"2026-10-12T09:05:00Z"},{"id":"m3","thread":"t1","from":"alpha","to":"worker","kind":"send","body":"from another sender","ts":"2026-10-12T09:06:00Z"}]}
