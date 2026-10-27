@@ -105,6 +105,7 @@ pub mod chats;
 pub mod check_supersession;
 pub mod ci_cadence;
 pub mod ci_front;
+pub mod ci_tier;
 pub mod claim_cli;
 pub mod claim_commands;
 pub mod claim_lanes_cli;
@@ -1850,6 +1851,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "ci_cadence_check",
     // The main_revert arm's read of a red main (main_revert.rs).
     "main_revert_check",
+    // A ci_tier arm pass that cancelled or reran runs (ci_tier.rs).
+    "ci_tier_pass",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
