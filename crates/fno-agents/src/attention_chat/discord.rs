@@ -97,7 +97,8 @@ impl ChatTransport for Discord<'_> {
             if r.status == Some(404) {
                 // The thread start failed after the message posted: this
                 // question has no thread to read, and it must not hold the
-                // other threads' replies. A leading id still answers it.
+                // other threads' replies. It stays answerable on the other
+                // lanes (page, mux, endpoint).
                 continue;
             }
             if !r.delivered() {
