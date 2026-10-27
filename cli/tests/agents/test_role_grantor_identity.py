@@ -117,23 +117,6 @@ def test_no_walk_refuses_to_guess_rather_than_stamping_a_stranger(
 # --- the names fno cannot unexport ------------------------------------------
 
 
-def test_whoami_names_the_inherited_family_it_cannot_unexport(
-    poisoned_env, monkeypatch
-):
-    """fno cannot unexport a variable from a parent that is still running, so
-    the operator gets the clearing instruction instead of silence."""
-    from fno.agent.cli import _foreign_identity_line
-
-    _walk(monkeypatch, "claude")
-    line = _foreign_identity_line()
-
-    assert line is not None
-    assert "inherited codex name" in line
-    assert "-u CODEX_THREAD_ID" in line
-    # Never offers to strip this session's own markers.
-    assert "CLAUDE_CODE_SESSION_ID" not in line
-
-
 def test_an_opencode_session_is_never_told_to_delete_its_own_marker(monkeypatch):
     """The keep-family must come from the resolver, not from `_detect_harness`.
 
@@ -141,16 +124,16 @@ def test_an_opencode_session_is_never_told_to_delete_its_own_marker(monkeypatch)
     gemini, so a cleanly resolving opencode session would be handed the command
     to unset its own OPENCODE_SESSION_ID, costing it its mail handle and its
     claims. It prints on every whoami and every SessionStart injection, so the
-    wrong advice is loud.
+    wrong advice is loud. The whoami render itself is native now; this file's
+    remaining coverage of the remedy lives with the resolver tests here.
     """
-    from fno.agent.cli import _foreign_identity_line
+    from fno.harness_identity import ambient_identity_strip_flags
 
     for name in AMBIENT_IDENTITY_ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OPENCODE_SESSION_ID", "ses_9f2a")
-    _walk(monkeypatch, "opencode")
 
-    assert _foreign_identity_line() is None
+    assert ambient_identity_strip_flags("opencode") == []
 
 
 def test_the_remedy_never_offers_to_delete_the_hermes_spawn_guard(monkeypatch):

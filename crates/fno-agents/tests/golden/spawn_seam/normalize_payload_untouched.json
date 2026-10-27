@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "spawn",
+    "--name",
+    "nimble-quartz",
+    "hi",
+    "--",
+    "codex",
+    "-m",
+    "x"
+  ],
+  "stderr": []
+}

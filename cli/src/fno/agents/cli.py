@@ -2184,6 +2184,7 @@ def cmd_list(
 ) -> None:
     """List registered agents: ROW NAME SESSION HARNESS MODEL EFFORT PR AGE
     LAST MESSAGE STATUS, JSON when stdout is not a TTY or ``--json`` is passed.
+    The JSON envelope's top-level key is ``agents``.
 
     The ``fno-agents`` client owns this command; the options above document its
     surface. There is no Python list lane left: a missing binary is refused.

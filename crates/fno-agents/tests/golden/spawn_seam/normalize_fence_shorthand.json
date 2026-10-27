@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "spawn",
+    "--name",
+    "nimble-quartz",
+    "hi",
+    "--",
+    "--model",
+    "glm-5.2"
+  ],
+  "stderr": []
+}

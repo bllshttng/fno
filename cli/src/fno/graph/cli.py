@@ -60,7 +60,10 @@ cli = typer.Typer(
     epilog=(
         "Corrections: reopen (undo done) | remove (hard delete) | unarchive | "
         "undefer | unqueue | unsupersede | unclaim. All hidden; "
-        "`fno help backlog --all` lists every command."
+        "`fno help backlog --all` lists every command. "
+        "JSON contract: `-J` sits before the command (`fno backlog -J get <id>`), "
+        "and `get` prints one JSON document on stdout - the node object on a "
+        "hit, `{\"ok\": false, \"error\": ...}` with rc 1 on a miss."
     ),
 )
 
@@ -879,19 +882,24 @@ def _read_time_status_external(
     return _external_open_status(pr_number=pr_number, plan_path=plan_path)
 
 
-def _render_external_get(id: str, field: Optional[str]) -> None:
+def _render_external_get(id: str, field: Optional[str], ctx: typer.Context) -> None:
     """`backlog get` under an external backend: exact-id tracker read plus the
     sidecar, joined FOR DISPLAY ONLY (a render, not a stored convenience
     record). Byte-compatibility binds the graph mode above, not this branch."""
     try:
         node, sc = _read_external_node_and_sidecar(id)
     except _TrackerNodeNotFound:
-        typer.echo(
+        from fno.handoff.output import json_mode
+
+        message = (
             f"fno backlog get: no node matches '{id}' "
             "(an external backend resolves exact ids; slug/bare-hex are "
-            "footnote-minted)",
-            err=True,
+            "footnote-minted)"
         )
+        if json_mode(ctx):
+            typer.echo(json.dumps({"ok": False, "error": message}))
+        else:
+            typer.echo(message, err=True)
         raise typer.Exit(code=1)
     state = str(node.get("state") or "open")
     joined: dict = {
@@ -927,6 +935,7 @@ def _echo_node_entry(e: dict, field: Optional[str], grouped: bool) -> None:
 
 @cli.command("get")
 def cmd_get(
+    ctx: typer.Context,
     ids: List[str] = typer.Argument(
         ..., help="One or more node ab-id, slug, or bare 8-hex (e.g.  | dashless-spawn | ff6f96e0)"
     ),
@@ -954,7 +963,7 @@ def cmd_get(
     # tracker fields plus the sidecar. Slug/bare-hex tiers are footnote-minted
     # metadata and refuse with the backend named rather than reporting absent.
     if active_backend_name() != "graph":
-        _render_external_get(id, field)
+        _render_external_get(id, field, ctx)
         return
 
 
@@ -1161,7 +1170,11 @@ def cmd_provenance(
     match = resolve_node(id, entries)
     if match.kind != "exact":
         from fno.graph.store import served_store_path
-        typer.echo(f"No node matching '{id}' in {served_store_path(_graph_path())}", err=True)
+        message = f"No node matching '{id}' in {served_store_path(_graph_path())}"
+        if json_out:
+            typer.echo(json.dumps({"ok": False, "error": message}))
+        else:
+            typer.echo(message, err=True)
         raise typer.Exit(code=1)
 
     e = match.candidates[0]

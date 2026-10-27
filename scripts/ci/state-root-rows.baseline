@@ -45,6 +45,7 @@ bus
 chats
 cache
 db
+fleet # pre-freeze resident: paths.fleet_dir() accessor (whoami panel, beacon markers)
 heal
 migrations
 handoffs

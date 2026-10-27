@@ -397,7 +397,6 @@ route unset	T1	route unset	1
 scoreboard	KEEP	scoreboard	13	single-leaf group
 config plugin	T1	config plugin	0
 doctor reclaim	T1	doctor reclaim	0
-status	KEEP	status	22	single-leaf group
 status-fanout tick	KEEP	status-fanout tick	4	single-leaf group
 test	KEEP	test	108	single-leaf group
 update	KEEP	update	88	single-leaf group
