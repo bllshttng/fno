@@ -1311,6 +1311,7 @@ pub fn converge(r: Runner, home: &Path, req: &Request) -> Result<Converged, Conv
         .iter()
         .filter(|m| owned_marketplace(&m.name))
         .map(keyed)
+        .chain(snapshot.config.marketplaces.keys().cloned())
         .filter(|key| LEGACY_MARKETPLACES.contains(&key.as_str()))
         .collect();
     legacy_markets.sort();

@@ -517,6 +517,23 @@ fn a_marketplace_keyed_before_the_rename_is_removed_by_its_key() {
     let config = fs::read_to_string(fake.live.join("config.toml")).unwrap();
     assert!(!config.contains("[marketplaces.footnote]"), "{config}");
     assert_eq!(inspect_with(&mut fake)["status"], "fresh");
+
+    // A legacy key beside an `fno` key with the same source still goes.
+    let src = stage.display().to_string();
+    config_marketplace(&fake.live, "footnote", Some(("local", &src)));
+    let mut legacy = fake.homes[&fake.live].marketplaces[0].clone();
+    legacy["key"] = json!("footnote");
+    fake.homes
+        .get_mut(&fake.live)
+        .unwrap()
+        .marketplaces
+        .push(legacy);
+    fake.calls.clear();
+    converge_with(&mut fake, "dev", Some(&stage), false).unwrap();
+    assert!(fake
+        .live_calls()
+        .contains(&"codex plugin marketplace remove footnote --json".to_string()));
+    assert_eq!(inspect_with(&mut fake)["status"], "fresh");
 }
 
 #[test]
