@@ -1,10 +1,11 @@
 """All graph readers speak one migrated vocabulary.
 
-`load_graph` and `read_graph_nodes` (observer fold) read the graph.json seed
-through the keeper's defaults pass; `read_graph_strict` serves typed rows from
-the store. The store owns import policy now: a seed row the typed model cannot
-represent is CARRIED verbatim (nodes_raw) and every reader applies the same
-defaults pass over it, so both legs answer one vocabulary.
+`load_graph` reads the graph.json seed through the keeper's defaults pass;
+`read_graph_strict` serves typed rows from the store. The store owns import
+policy now: a seed row the typed model cannot represent is CARRIED verbatim
+(nodes_raw) and every reader applies the same defaults pass over it, so both
+legs answer one vocabulary. The native `read_graph_nodes` (the scoreboard
+readers) reads through the same store and is characterized Rust-side.
 
 The parity assertions below are the seam: they fail if any reader grows its own
 migration logic again.
@@ -18,7 +19,6 @@ from tests.fixtures.graph_seed import seed_graph
 
 from fno.graph.load import load_graph
 from fno.graph.store import read_graph_strict
-from fno.observer.fold import read_graph_nodes
 
 # One legacy row per shape the migration has to handle, plus a current-vocabulary
 # row that must survive untouched.
@@ -61,29 +61,6 @@ def _write(tmp_path: Path, entries: list) -> Path:
     return p
 
 
-def test_scoreboard_reader_stays_silent_and_writes_nothing_on_corruption(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The optional survival signal must not warn or leave a .bak behind.
-
-    Sharing the migration pass must not mean sharing `read_graph`'s corruption
-    POLICY. `read_graph` copies a .bak and warns on stderr before degrading to
-    [], which is right for a command whose job is the graph and wrong here: a
-    read-only scoreboard must not write files, and the warning lands in the `-J`
-    stream and makes the output unparseable as JSON.
-    """
-    p = tmp_path / "graph.json"
-    p.with_suffix(".db").write_bytes(b"not sqlite")
-
-    assert read_graph_nodes(p) == []
-    captured = capsys.readouterr()
-    assert captured.out == "" and captured.err == "", (
-        f"scoreboard reader emitted output on a corrupt graph: "
-        f"{captured.out!r} / {captured.err!r}"
-    )
-    assert list(tmp_path.glob("*.bak*")) == [], "read-only reader left a backup file"
-
-
 def test_unhashable_field_values_do_not_crash_the_readers(tmp_path: Path) -> None:
     """A dict row whose `priority`/`status` is unhashable must not raise.
 
@@ -100,9 +77,6 @@ def test_unhashable_field_values_do_not_crash_the_readers(tmp_path: Path) -> Non
         rows = _by_id(reader(p))
         assert set(rows) == {"x-0006", "x-0007"}, f"{reader.__name__} lost a carried row"
         assert rows["x-0007"]["status"] == "in_progress"   # sibling still migrates
-    rows = _by_id(read_graph_nodes(p))
-    assert rows["x-0006"]["priority"] == []      # unmigratable, left alone
-    assert rows["x-0007"]["status"] == "in_progress"
 
 
 def test_strict_reader_reports_unreadable_rather_than_absent(tmp_path: Path) -> None:

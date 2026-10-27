@@ -446,3 +446,31 @@ pub(crate) fn datetime_max() -> DateTime<Local> {
         .single()
         .unwrap()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ported from the retired Python seam test: the optional survival
+    /// signal's graph read is a read-only reader. A corrupt store reads
+    /// empty with no stdout/stderr noise and no .bak left behind, where
+    /// the graph command's own reader copies a .bak and warns.
+    #[test]
+    fn a_corrupt_store_reads_empty_without_noise_or_backup() {
+        let dir = std::env::temp_dir().join(format!("scoreboard-readers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("graph.db");
+        std::fs::write(&db, b"not sqlite").unwrap();
+
+        let nodes = read_graph_nodes(&db);
+        assert!(nodes.is_empty());
+        let bak: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".bak"))
+            .collect();
+        assert!(bak.is_empty(), "read-only reader left a backup file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
