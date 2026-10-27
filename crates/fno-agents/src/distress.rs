@@ -142,7 +142,7 @@ pub(crate) fn help_distress_held(reason: String, evidence: Option<String>) -> He
 /// reads identical text outside code and nothing at all inside it. A
 /// backtick-quoted `<help>` is a worker talking about the protocol, not a
 /// distress; a fenced tag is a quotation the same way.
-fn blank_code_spans_and_fences(text: &str) -> String {
+pub(crate) fn blank_code_spans_and_fences(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_fence = false;
     for line in text.split_inclusive('\n') {
@@ -178,7 +178,7 @@ fn blank_code_spans_and_fences(text: &str) -> String {
 /// The opening tag must carry at least one `name=` attribute: the protocol
 /// block always does, and a bare `<help>` in running text is prose naming
 /// the protocol, not a distress.
-fn carries_an_attribute(tag_body: &str) -> bool {
+pub(crate) fn carries_an_attribute(tag_body: &str) -> bool {
     tag_body
         .as_bytes()
         .windows(2)

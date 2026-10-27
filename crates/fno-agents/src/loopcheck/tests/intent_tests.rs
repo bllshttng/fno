@@ -133,3 +133,61 @@ fn detect_intent_lookback_bound_holds() {
     std::fs::write(&path, content).unwrap();
     assert_eq!(detect_intent_full(&path), Intent::None);
 }
+
+#[test]
+fn quoted_and_bare_tags_are_prose_not_intent() {
+    // Same contract as the distress extractor: a tag quoted in backticks or
+    // fenced is a worker talking about the protocol, not emitting it, and a
+    // bare attribute-less tag is a mention. The real machine tags always
+    // carry attributes.
+    use super::super::intent::detect_intent_from_text;
+    assert_eq!(
+        detect_intent_from_text("not `<watching>` yet"),
+        Intent::None
+    );
+    assert_eq!(
+        detect_intent_from_text("see `<promise>fake</promise>` in the docs"),
+        Intent::None
+    );
+    assert_eq!(
+        detect_intent_from_text("```text\n<promise>x</promise>\n```"),
+        Intent::None
+    );
+    assert_eq!(
+        detect_intent_from_text("bare <watching> mention"),
+        Intent::None
+    );
+    assert_eq!(
+        detect_intent_from_text("bare <aborted> mention"),
+        Intent::None
+    );
+    assert!(matches!(
+        detect_intent_from_text("<watching reason=\"ci\" timeout=\"15m\">"),
+        Intent::Watching { .. }
+    ));
+    assert!(matches!(
+        detect_intent_from_text("<aborted reason=\"operator stop\">"),
+        Intent::Aborted { .. }
+    ));
+    assert_eq!(
+        detect_intent_from_text("<promise>MISSION COMPLETE: shipped</promise>"),
+        Intent::Promise
+    );
+}
+
+#[test]
+fn declared_help_hold_needs_a_real_distress() {
+    // The hold reads the real extractor, not a raw substring: the specimen
+    // prose that once mailed the lead an unclassified help holds nothing.
+    use crate::loopcheck::declared_recovery_hold;
+    assert_eq!(
+        declared_recovery_hold("Not `<help>`-worthy: this is the wait class with a live watcher"),
+        None
+    );
+    assert_eq!(
+        declared_recovery_hold(
+            "stuck <help reason=\"missing dependency\" evidence=\"plan 4.2\">body</help>"
+        ),
+        Some("declared_help".into())
+    );
+}

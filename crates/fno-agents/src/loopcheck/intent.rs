@@ -52,31 +52,44 @@ pub(crate) fn extract_assistant_text(val: &Value) -> String {
 /// watching outranks promise so a session that both promises and asks to idle
 /// idles (its promise is re-evaluated on the next wake).
 pub(super) fn detect_intent_from_text(text: &str) -> Intent {
+    // A tag the worker merely quotes in backticks or fences is prose, not an
+    // intent: scan the blanked copy the distress extractor scans. The real
+    // machine tags always carry attributes, so an attribute-less tag is a
+    // mention too.
+    let text = &crate::distress::blank_code_spans_and_fences(text);
     // Look for <aborted ...> tag
     if let Some(aborted_start) = text.find("<aborted") {
         // Find the closing >
         if let Some(gt) = text[aborted_start..].find('>') {
             let tag_text = &text[aborted_start..aborted_start + gt + 1];
-            let reason = parse_xml_attr(tag_text, "reason").unwrap_or_default();
-            return Intent::Aborted { reason };
+            if crate::distress::carries_an_attribute(
+                &tag_text["<aborted".len()..tag_text.len() - 1],
+            ) {
+                let reason = parse_xml_attr(tag_text, "reason").unwrap_or_default();
+                return Intent::Aborted { reason };
+            }
         }
     }
     if let Some(w_start) = text.find("<watching") {
         if let Some(gt) = text[w_start..].find('>') {
             let tag_text = &text[w_start..w_start + gt + 1];
-            let task_id = parse_xml_attr(tag_text, "task_id");
-            if task_id
-                .as_deref()
-                .is_some_and(|id| !valid_watch_task_id(id))
-            {
-                return Intent::None;
+            if crate::distress::carries_an_attribute(
+                &tag_text["<watching".len()..tag_text.len() - 1],
+            ) {
+                let task_id = parse_xml_attr(tag_text, "task_id");
+                if task_id
+                    .as_deref()
+                    .is_some_and(|id| !valid_watch_task_id(id))
+                {
+                    return Intent::None;
+                }
+                return Intent::Watching {
+                    reason: parse_xml_attr(tag_text, "reason").unwrap_or_default(),
+                    pr: parse_xml_attr(tag_text, "pr"),
+                    timeout: parse_xml_attr(tag_text, "timeout"),
+                    task_id,
+                };
             }
-            return Intent::Watching {
-                reason: parse_xml_attr(tag_text, "reason").unwrap_or_default(),
-                pr: parse_xml_attr(tag_text, "pr"),
-                timeout: parse_xml_attr(tag_text, "timeout"),
-                task_id,
-            };
         }
     }
     if text.contains("<promise>") {
@@ -98,7 +111,9 @@ pub(crate) fn declared_recovery_hold(text: &str) -> Option<String> {
         Intent::Promise => Some("mission_complete".into()),
         Intent::Aborted { .. } => Some("mission_aborted".into()),
         Intent::Watching { reason, .. } => Some(format!("{reason}_watch")),
-        Intent::None if text.contains("<help") => Some("declared_help".into()),
+        Intent::None if crate::distress::extract_help_distress(text).is_some() => {
+            Some("declared_help".into())
+        }
         Intent::None => None,
     }
 }
