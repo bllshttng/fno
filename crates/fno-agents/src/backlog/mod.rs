@@ -1448,7 +1448,7 @@ pub fn read_pr_entries(graph: &Path, pr: Option<i64>) -> Result<Vec<Value>, Stri
 
 /// The whole canonical export in store order, including raw-carried and archived rows.
 pub fn export_rows(connection: &Connection) -> Result<Vec<Value>, String> {
-    query_rows(connection, &RowQuery::default(), None)
+    query_rows(connection, &RowQuery::default(), None, true)
 }
 
 /// The light resolution index for single-node doors: id, slug, and archived
@@ -1522,7 +1522,7 @@ impl Default for RowQuery {
 /// Query rows after defaults, exact filtering, and projection. The empty query
 /// preserves the raw export; hidden blocker and child support never escapes.
 pub fn read_entries_where(graph: &Path, query: &RowQuery) -> Result<Vec<Value>, String> {
-    query_rows(&read_connection(graph)?, query, None)
+    query_rows(&read_connection(graph)?, query, None, true)
 }
 
 pub(crate) fn read_entries_where_defaulted(
@@ -1530,7 +1530,18 @@ pub(crate) fn read_entries_where_defaulted(
     query: &RowQuery,
     keep_malformed: bool,
 ) -> Result<Vec<Value>, String> {
-    query_rows(&read_connection(graph)?, query, Some(keep_malformed))
+    query_rows(&read_connection(graph)?, query, Some(keep_malformed), true)
+}
+
+/// The whole-graph writer read: defaults without the readiness overlay, so a
+/// publish stores the statuses it read, never the overlay's answer for an
+/// open blocker (the status flip). Readers that render keep the overlay.
+pub(crate) fn read_entries_where_defaulted_no_overlay(
+    graph: &Path,
+    query: &RowQuery,
+    keep_malformed: bool,
+) -> Result<Vec<Value>, String> {
+    query_rows(&read_connection(graph)?, query, Some(keep_malformed), false)
 }
 
 /// The old whole-export enumeration, without materializing any node bodies.
@@ -1555,6 +1566,7 @@ fn query_rows(
     connection: &Connection,
     query: &RowQuery,
     keep_malformed: Option<bool>,
+    readiness_overlay: bool,
 ) -> Result<Vec<Value>, String> {
     let transaction = if connection.is_autocommit() {
         Some(
@@ -1810,7 +1822,11 @@ fn query_rows(
             }
         }
     }
-    crate::graph_store::apply_defaults(&mut rows, true);
+    if readiness_overlay {
+        crate::graph_store::apply_defaults(&mut rows, true);
+    } else {
+        crate::graph_store::apply_defaults_without_readiness_overlay(&mut rows, true);
+    }
     rows.truncate(asked_count);
     if !filter.is_empty() || query.fields.is_some() {
         for row in &mut rows {

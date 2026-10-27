@@ -82,6 +82,19 @@ pub const REFUSED: &str = "backlog write refused by the shared primary";
 /// retry, not a fault.
 pub const CHANGED: &str = "changed on the primary after this machine read it";
 
+/// The SQLite text of the `backlog_cas` row-count CHECK the conditional
+/// statements rely on. Kept as data so the operator text can say what it
+/// means while the matcher tracks the engine's wording.
+const CAS_GUARD: &str = "CHECK constraint failed: n = 1";
+
+/// A stale-row refusal: the primary's CAS guard refused a statement because
+/// the row moved under this machine. The take-back and sync already ran, so
+/// a resend rebases on fresh rows; this is the one refusal a bounded resend
+/// can still land.
+pub(crate) fn is_stale_row_refusal(error: &str) -> bool {
+    error.contains(CHANGED)
+}
+
 const CURSOR: &str = "backlog_share_cursor";
 /// The last outbox id of a batch whose result never came back. The next
 /// flush resends exactly that batch, so the primary can answer that it
@@ -92,8 +105,11 @@ const WRITER: &str = "fno_backlog_writer";
 const PAGE: i64 = 200;
 pub const INTERVAL: Duration = Duration::from_secs(5);
 /// How long the primary keeps a change-log row. A replica asleep longer
-/// takes a snapshot on its next sync.
-const KEEP: Duration = Duration::from_secs(3 * 24 * 3600);
+/// takes a snapshot on its next sync. Six hours is seven times the worst
+/// cursor lag measured on the fleet (64 rows, 52 minutes, 2026-10-27); the
+/// cursor gate in the prune keeps every row a live replica has not read
+/// regardless of the window.
+const KEEP: Duration = Duration::from_secs(6 * 3600);
 /// One small prune a minute per machine: a big DELETE would hold the
 /// primary's write lock as long as the stall it exists to end.
 const PRUNE_EVERY: Duration = Duration::from_secs(60);
@@ -533,6 +549,20 @@ fn ops_json(changes: &[Change]) -> String {
     Value::Array(changes.iter().map(Change::to_json).collect()).to_string()
 }
 
+/// The process that produced this batch: pid plus the first three argv
+/// words, so a bad batch on the primary names its writer. The status flip
+/// shipped 175 stored-status reversals with no writer field anywhere.
+fn writer_stamp() -> (i64, String) {
+    let cmd: String = std::env::args()
+        .take(3)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(200)
+        .collect();
+    (i64::from(std::process::id()), cmd)
+}
+
 fn parse_ops(text: &str) -> Result<Vec<Change>, String> {
     let rows: Vec<Value> = serde_json::from_str(text).map_err(|e| e.to_string())?;
     rows.iter().map(Change::from_json).collect()
@@ -575,38 +605,78 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
         ],
     ));
     owner.push(None);
-    remote.transaction(&steps).map(drop).map_err(|(step, error)| {
-        let change = step.and_then(|s| owner.get(s).copied().flatten());
-        let hint = if unseeded(&error) {
-            " The primary holds no seeded backlog: run `fno agents claim backlog seed` on one machine first.".to_string()
-        } else if crate::store_remote::is_unreachable(&error) || landed_before(&error) {
-            String::new()
-        } else {
-            match change {
-                Some(i) if orphaned(&error) && changes[i].op == Op::Insert => format!(
-                    " The {} write names a parent row the primary does not hold. This machine kept the local row; a retry sends the same write, so report this refusal.",
-                    changes[i].table
-                ),
-                Some(i) if orphaned(&error) && changes[i].op != Op::Delete => format!(
-                    " The {} write names a parent row the primary does not hold. This machine took the primary's rows back; a retry sends the same write, so report this refusal.",
-                    changes[i].table
-                ),
-                Some(i) if changes[i].op == Op::Insert => format!(
-                    " The {} row already exists on the primary. This machine kept its own row; the refused statements are kept in backlog_refused.",
-                    changes[i].table
-                ),
-                Some(i) => format!(
-                    " The {} row {CHANGED}. This machine took the primary's rows back; retry the write.",
-                    changes[i].table
-                ),
-                None => String::new(),
+    // The writer stamp: which process produced this batch. A side table
+    // instead of new change-log columns, so a primary from before the stamp
+    // gains the table from the first new-binary publish and an old binary
+    // never reads it - no schema skew between deploy moments.
+    let (pid, cmd) = writer_stamp();
+    steps.push((
+        "CREATE TABLE IF NOT EXISTS main.backlog_writers (
+           batch TEXT PRIMARY KEY, pid INTEGER NOT NULL, cmd TEXT NOT NULL, at INTEGER NOT NULL)"
+            .to_string(),
+        Vec::new(),
+    ));
+    owner.push(None);
+    steps.push((
+        "INSERT INTO backlog_writers (batch, pid, cmd, at) VALUES (?1, ?2, ?3, ?4)".to_string(),
+        vec![
+            SqlValue::Text(batch.to_string()),
+            SqlValue::Integer(pid),
+            SqlValue::Text(cmd),
+            SqlValue::Integer(crate::backlog::now_ms() as i64),
+        ],
+    ));
+    owner.push(None);
+    remote
+        .transaction(&steps)
+        .map(drop)
+        .map_err(|(step, error)| {
+            let change = step.and_then(|s| owner.get(s).copied().flatten());
+            Refusal {
+                message: refusal_message(&error, changes, change),
+                change,
             }
-        };
-        Refusal {
-            message: format!("{REFUSED}: {error}.{hint}"),
-            change,
+        })
+}
+
+/// The operator-facing refusal line: the raw primary error plus a hint,
+/// with the CAS guard's opaque SQLite text said in words instead. That text
+/// was read as a timestamp or schema CHECK (the fn-0735 bind refusal,
+/// 2026-10-27), so a refused row names its table.
+fn refusal_message(error: &str, changes: &[Change], change: Option<usize>) -> String {
+    let hint = if unseeded(error) {
+        " The primary holds no seeded backlog: run `fno agents claim backlog seed` on one machine first.".to_string()
+    } else if crate::store_remote::is_unreachable(error) || landed_before(error) {
+        String::new()
+    } else {
+        match change {
+            Some(i) if orphaned(error) && changes[i].op == Op::Insert => format!(
+                " The {} write names a parent row the primary does not hold. This machine kept the local row; a retry sends the same write, so report this refusal.",
+                changes[i].table
+            ),
+            Some(i) if orphaned(error) && changes[i].op != Op::Delete => format!(
+                " The {} write names a parent row the primary does not hold. This machine took the primary's rows back; a retry sends the same write, so report this refusal.",
+                changes[i].table
+            ),
+            Some(i) if changes[i].op == Op::Insert => format!(
+                " The {} row already exists on the primary. This machine kept its own row; the refused statements are kept in backlog_refused.",
+                changes[i].table
+            ),
+            Some(i) => format!(
+                " The {} row {CHANGED}. This machine took the primary's rows back; retry the write.",
+                changes[i].table
+            ),
+            None => String::new(),
         }
-    })
+    };
+    let said = match change {
+        Some(i) if error.contains(CAS_GUARD) => format!(
+            "the {} row on the primary no longer matches this machine's copy",
+            changes[i].table
+        ),
+        _ => error.to_string(),
+    };
+    format!("{REFUSED}: {said}.{hint}")
 }
 
 fn unseeded(error: &str) -> bool {
@@ -1347,7 +1417,7 @@ fn report_cursor(remote: &Remote, origin: &str, seq: i64, at_ms: i64) -> Result<
 /// sent: on the shared primary it grew to 97 percent of the store, and
 /// every write paid for the size.
 fn prune(remote: &Remote, cutoff_ms: i64, rows: i64) -> Result<u64, String> {
-    Ok(remote
+    let changes = remote
         .execute(
             "DELETE FROM backlog_changes WHERE at < ?1
              AND seq <= (SELECT COALESCE(MIN(seq), 0) FROM backlog_cursors WHERE at >= ?1)
@@ -1357,7 +1427,20 @@ fn prune(remote: &Remote, cutoff_ms: i64, rows: i64) -> Result<u64, String> {
                ORDER BY seq LIMIT ?2)",
             &[SqlValue::Integer(cutoff_ms), SqlValue::Integer(rows)],
         )?
-        .affected)
+        .affected;
+    // The writer stamp rides the batch's lifetime: the stamp row goes when
+    // the change-log row goes. A primary from before the table has none, so
+    // its absence prunes nothing instead of failing the run.
+    let writers = match remote.execute(
+        "DELETE FROM backlog_writers WHERE at < ?1
+         AND batch NOT IN (SELECT batch FROM backlog_changes)",
+        &[SqlValue::Integer(cutoff_ms)],
+    ) {
+        Ok(reply) => reply.affected,
+        Err(error) if error.contains("no such table: backlog_writers") => 0,
+        Err(error) => return Err(error),
+    };
+    Ok(changes + writers)
 }
 
 /// Apply the change log past `cursor`, one page per local transaction. Each
@@ -1819,7 +1902,9 @@ pub fn probe(remote: &Remote) -> Result<Value, String> {
     let write_ms = started.elapsed().as_millis();
     let log = remote
         .execute(
-            "SELECT MIN(seq), MAX(seq), (SELECT at FROM backlog_changes ORDER BY seq LIMIT 1)
+            "SELECT MIN(seq), MAX(seq), (SELECT at FROM backlog_changes ORDER BY seq LIMIT 1),
+                    (SELECT AVG(LENGTH(ops)) FROM
+                       (SELECT ops FROM backlog_changes ORDER BY seq DESC LIMIT 100))
              FROM backlog_changes",
             &[],
         )
@@ -1827,7 +1912,14 @@ pub fn probe(remote: &Remote) -> Result<Value, String> {
         .and_then(|reply| reply.rows.into_iter().next())
         .map(|row| {
             let n = |i: usize| row.get(i).and_then(SqlValue::integer);
-            json!({"first_seq": n(0), "last_seq": n(1), "oldest_at_ms": n(2)})
+            let f = |i: usize| row.get(i).and_then(SqlValue::real);
+            json!({
+                "first_seq": n(0), "last_seq": n(1), "oldest_at_ms": n(2),
+                // The reading the stall work rides on: the newest 100
+                // batches' average size. Flip-bearing batches ran 87,688
+                // bytes against a 20,000-byte healthy line (2026-10-27).
+                "recent_avg_batch_bytes": f(3).map(|v| v as i64).or_else(|| n(3)),
+            })
         });
     Ok(json!({
         "primary": remote.url(),
@@ -2603,5 +2695,207 @@ mod tests {
             "{probed}"
         );
         assert!(probed["write_ms"].is_u64(), "{probed}");
+    }
+
+    #[test]
+    fn a_whole_graph_write_stores_no_readiness_status() {
+        // The flip defect: the writer read ran the readiness overlay, so a
+        // whole-graph write stored `blocked` for an open blocker and the
+        // next writer with a different blocker view stored the rung status
+        // back. The write path must ship the statuses it read.
+        let primary = test_primary::start();
+        let a = machine();
+        on(&primary, &a);
+        let rows = vec![
+            serde_json::json!({"id": "x-a", "title": "dependent work", "type": "feature",
+                               "status": "ready", "priority": "p2", "domain": "code",
+                               "blocked_by": ["x-b"]}),
+            serde_json::json!({"id": "x-b", "title": "the blocker", "type": "feature",
+                               "status": "idea", "priority": "p2", "domain": "code"}),
+        ];
+        crate::graph_store::seed_rows(&a.graph, &rows).unwrap();
+        seed(&a.graph).unwrap();
+        let retitle_once = |graph: &PathBuf| {
+            crate::graph_store::mutate_rows(
+                graph,
+                std::time::Duration::from_secs(5),
+                None,
+                None,
+                |working| {
+                    for row in working.iter_mut() {
+                        if row.get("id").and_then(Value::as_str) == Some("x-a") {
+                            if let Some(obj) = row.as_object_mut() {
+                                obj.insert("title".into(), Value::String("renamed".into()));
+                            }
+                        }
+                    }
+                    Ok(true)
+                },
+            )
+            .unwrap()
+        };
+        assert!(retitle_once(&a.graph).is_some(), "the write lands");
+        let connection = crate::backlog::open(&a.graph).unwrap();
+        let stored: String = connection
+            .query_row("SELECT status FROM nodes WHERE id = 'x-a'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            stored, "ready",
+            "the overlay's blocked never reaches the stored row"
+        );
+        let ops: String = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT ops FROM backlog_changes ORDER BY seq DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !ops.contains("blocked"),
+            "the shipped batch names no overlay answer: {ops}"
+        );
+        let changes: Vec<Value> = serde_json::from_str(&ops).unwrap();
+        assert!(
+            changes
+                .iter()
+                .any(|c| c.get("t").and_then(Value::as_str) == Some("nodes")
+                    && c.get("n")
+                        .map(|n| n.to_string().contains("renamed"))
+                        .unwrap_or(false)),
+            "the batch ships the title change: {changes:?}"
+        );
+        // The same write again: nothing differs, so nothing ships.
+        let before: i64 = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM backlog_changes", [], |r| r.get(0))
+            .unwrap();
+        assert!(retitle_once(&a.graph).is_some(), "the repeat write lands");
+        let after: i64 = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM backlog_changes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, before, "the identical write adds no change at all");
+        route_to_primary(None);
+    }
+
+    #[test]
+    fn a_landed_batch_stamps_its_writer() {
+        // The next flip names itself: every landed batch carries the writing
+        // process's pid and command head in backlog_writers.
+        let primary = test_primary::start();
+        let a = machine();
+        on(&primary, &a);
+        seed(&a.graph).unwrap();
+        add_node(&a, "x-w", "stamped");
+        assert_eq!(flush(&a.graph).unwrap(), 1);
+        let (pid, cmd): (i64, String) = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT pid, cmd FROM backlog_writers ORDER BY at DESC, batch DESC LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(pid, i64::from(std::process::id()), "the flush process");
+        assert!(
+            !cmd.is_empty() && cmd.len() <= 200,
+            "the command head is present and capped: {cmd}"
+        );
+        // A stamp lives exactly as long as its batch: an aged batch and its
+        // stamp prune together, and the fresh batch's change-log row is the
+        // newest, so its stamp survives the run.
+        let connection = primary.db.lock().unwrap();
+        connection
+            .execute(
+                "INSERT INTO backlog_changes (seq, origin, batch, at, ops) VALUES
+                 (1, 'o', 'old', 500, '[]')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO backlog_cursors (origin, seq, at) VALUES ('o', 1, 60000)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO backlog_writers (batch, pid, cmd, at) VALUES ('old', 1, 'old-cmd', 500)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+        prune(&primary.remote, 50_000, 100).unwrap();
+        let live: String = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT batch FROM backlog_writers", [], |r| r.get(0))
+            .unwrap();
+        assert_ne!(live, "old", "the aged stamp went with its batch");
+        let batch_of_live: i64 = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM backlog_changes WHERE batch = ?1",
+                [&live],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(batch_of_live, 1, "the surviving stamp's batch still logs");
+        route_to_primary(None);
+    }
+
+    #[test]
+    fn the_stale_row_guard_text_names_the_row_instead_of_the_check() {
+        let changes = vec![Change {
+            op: Op::Update,
+            table: "pull_requests".to_string(),
+            columns: vec!["note".to_string()],
+            old: vec![],
+            new: vec![],
+        }];
+        let message = refusal_message(
+            "remote store http://r2d2:18080: SQLite error: CHECK constraint failed: n = 1",
+            &changes,
+            Some(0),
+        );
+        assert!(message.contains("pull_requests"), "{message}");
+        assert!(!message.contains(CAS_GUARD), "{message}");
+    }
+
+    #[test]
+    fn the_probe_reads_the_recent_average_batch_size() {
+        // LENGTH counts the ops string: 3, 7 and 5 bytes average to 5.
+        let primary = test_primary::start();
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO backlog_changes (seq, origin, batch, at, ops) VALUES
+                 (1, 'o', 'a', 500, '[1]'), (2, 'o', 'b', 600, '[1,2,3]'), (3, 'o', 'c', 700, '[1,2]')",
+                [],
+            )
+            .unwrap();
+        let probed = probe(&primary.remote).unwrap();
+        assert_eq!(
+            probed["change_log"]["recent_avg_batch_bytes"],
+            serde_json::json!(5),
+            "{probed}"
+        );
+        route_to_primary(None);
     }
 }
