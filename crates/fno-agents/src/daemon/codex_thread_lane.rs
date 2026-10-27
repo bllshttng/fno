@@ -55,12 +55,23 @@ pub(super) async fn spawn_codex_thread_lane(
         Ok(carry) => carry,
         Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
     };
+    // The role rides the request so the row is fully promoted AT MINT: the
+    // seed turn below enqueues inside this lane, and a role settled by the
+    // Python caller only after the receipt lets the actor run its first
+    // turn unpromoted. Both halves or neither; the territory and
+    // succession policy stays at the Python seam.
+    let role = match role_from_params(&req.params) {
+        Ok(role) => role,
+        Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
+    };
     // Both spellings, resolved by one reader. Reading `yolo` alone dropped
     // `permission_mode` silently and started bounded, which downgrades the very
     // posture the caller was naming; an unrecognized value is refused here
     // rather than degraded, for the same reason. The posture stays TYPED from
-    // here on: both halves ride the start frame, the registry row and the
-    // resume, never a bool.
+    // here on: both halves ride the start frame, the codex_posture reader
+    // and the resume, never a bool. A promoted spawn that names NO posture
+    // launches full access; an operator spelling always outranks the role
+    // default (the order the tests pin).
     let posture = match crate::codex_thread::resolve_thread_posture(
         req.params.get("yolo").and_then(Value::as_bool),
         // A fenced flag is what the operator typed on this spawn, so it
@@ -69,6 +80,7 @@ pub(super) async fn spawn_codex_thread_lane(
             .permission_mode
             .as_deref()
             .or(req.params.get("permission_mode").and_then(Value::as_str)),
+        role.as_ref().map(|(level, _)| *level),
     ) {
         Ok(posture) => posture,
         Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
@@ -78,15 +90,6 @@ pub(super) async fn spawn_codex_thread_lane(
         .as_deref()
         .or(req.params.get("effort").and_then(Value::as_str));
     let node = req.params.get("node").and_then(Value::as_str);
-    // The role rides the request so the row is promoted AT MINT: the seed
-    // turn below enqueues inside this lane, and a role settled by the
-    // Python caller only after the receipt lets the actor run its first
-    // turn unpromoted. Both halves or neither; the territory and
-    // succession policy stays at the Python seam.
-    let role = match role_from_params(&req.params) {
-        Ok(role) => role,
-        Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
-    };
     // Hop 2 of the state-root grant. Read the roots from the REQUEST,
     // never from this process's environment. This daemon is long-lived and
     // shared across every thread on the machine, so its own env is not the
