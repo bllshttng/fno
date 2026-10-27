@@ -1,3 +1,6 @@
+//! parity-stage: characterization
+//! parity-oracle: (none - the Python legs were deleted in the same change; the goldens are the contract)
+//!
 //! Characterization replay for the target-family port. Every
 //! `tests/golden/target_family/` case plays against the native doors through
 //! the same hermetic fixture the capture driver built, with the same
