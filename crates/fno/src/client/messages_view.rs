@@ -1491,6 +1491,7 @@ async fn act(
                     b.cursors[2] = b.conversation_rows().len().saturating_sub(1);
                     b.col = Col::Thread;
                 }
+                ChatRow::YouThread { .. } => {}
                 ChatRow::Thread { chat_id, ts, .. } => {
                     crate::view_store::save_messages_read_mark(chat_id, ts);
                     b.sel_thread = Some(chat_id.clone());
@@ -1551,7 +1552,7 @@ fn open_detail(view: &mut View) {
                     .nth(b.cursors[1])
                     .and_then(|row| match row {
                         ChatRow::Thread { partner_key, .. } => Some(partner_key),
-                        ChatRow::SystemEntry { .. } => None,
+                        ChatRow::SystemEntry { .. } | ChatRow::YouThread { .. } => None,
                     })
             }),
             Col::Thread => b

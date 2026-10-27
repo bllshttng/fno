@@ -238,7 +238,6 @@ pub(crate) fn walk(
             consumed,
             ts,
             typed_text,
-            reply,
         });
     }
     WalkOut {
