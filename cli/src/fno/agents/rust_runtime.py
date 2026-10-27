@@ -132,6 +132,10 @@ RUST_CLIENT_COMMANDS = frozenset(
         "adopt",
         "attach",
         "logs",
+        # register: the /fno-me self-service join, ported to a daemon-free
+        # client command (the owned-identity ladder plus the row mint under the
+        # shared registry lock). Starts nothing.
+        "register",
         # The daemon-free revival decision the spawn path calls. Client-side
         # dispatch starts nothing.
         "revival-check",
@@ -278,7 +282,8 @@ RUST_CLIENT_COMMANDS = frozenset(
         # paths, then invokes the binary (not via `fno agents` routing).
         "lead-rundown",
         # The delivery-slot resolver: payload JSON in, the answer out; Python
-        # calls it via fno.route_slot_client (keeps the parity test in sync).
+        # calls it via fno.rust_binary.command_call (keeps the parity test
+        # in sync).
         "route-slot",
         # The harness-keyed spawn-defaults resolver: payload JSON in,
         # the answer out; Python calls it via fno.agents.spawn_overlay_client.
@@ -420,10 +425,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # peer's on-disk transcript / status events via fno.agents.peek. No Rust
     # client port, so it must never auto-route to the daemon.
     "peek",
-    # The /fno-me self-service join command: resolves ambient harness identity and
-    # writes an idle roster row (register_existing_session). Pure Python, no Rust
-    # client port, so it must never auto-route to the daemon.
-    "register",
     #: the transcript-tail supervision classifier (`fno agents truth`).
     # Read-only, pure Python (fno.agents.session_truth reads the transcript via
     # peek); no Rust client port, so it must never auto-route to the daemon.
@@ -538,7 +539,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     "evals-macro": "The macro-eval failure-pattern leaderboard fold: --events <journal.jsonl> [--events ...] [--since 30d] [--topic TYPE:LABEL] [--window 20] [--all] [--json]; invoked directly by `fno doctor evals macro`, which resolves the journal defaults.",
     "lead-checkin": "One command runs the term check-in body: --scope <scope> --events-path <events.jsonl> [--events-path ...] --graph <graph.json> --handoffs-dir <dir> [--faqs-dir <dir>] [--board-state <manifest>] [--emit-path <events.jsonl>] [--no-emit] [--json]; invoked directly by `fno agents lead checkin`, which resolves the role and the paths.",
     "lead-rundown": "The term ledger page renderer: --team-json <team.json> --graph <graph.json> --generated <ts> [--out <page>]; with no --out the command resolves the lead page through the layout table. Invoked directly by `fno agents lead ledger`, which resolves the team.",
-    "route-slot": "Delivery-slot resolver: JSON payload on stdin, the {candidate, chain} answer on stdout; invoked by fno.route_slot_client, not `fno agents` routing.",
+    "route-slot": "Delivery-slot resolver: JSON payload on stdin, the {candidate, chain} answer on stdout; its payload modes carry the folded doors - {mode: resolve, explicit, env, flag} answers {harness, source} or {refusal}, {mode: validate-model, model, flag} answers {model} or {refusal}, {mode: configured, command} answers the stage-table rung {harness, note, route}, and {mode: config-route, argv} answers the config route family's reads and write plans for `fno config route`; invoked by the spawn seam, the dispatch defaults and the front's route spellings through rust_binary.command_call, not `fno agents` routing.",
     "spawn-gate": "The ONE spawn gate: reads one stdin JSON payload, writes one {status: admitted, gate/worker keys} or {status: refused, exit_code, receipt, event} answer; gate and probe modes; invoked by the fno.agents.spawn_gate transport.",
     "spawn-overlay": "Harness-keyed spawn-defaults resolver: JSON payload on stdin, the {refusal, effective, bundle} answer on stdout; invoked by fno.agents.spawn_overlay_client, not `fno agents` routing.",
     "spawn-axes": "Spawn-seam billing axes (route/account/model): JSON payload on stdin, the {inject, applied, suppressed, messages} plan on stdout; a `node_seed` field instead answers the node-command check. Invoked by fno.agents.spawn_axes_client and the spawn seam, not `fno agents` routing.",
@@ -738,11 +739,8 @@ def _refuse_seedless_thread_spawn(args: Sequence[str]) -> None:
     substrate = _has_explicit_substrate(toks)
     if substrate is None:
         return
-    from fno.dispatch_flags import DispatchFlagError, resolve_dispatch_harness
-
-    try:
-        harness, _ = resolve_dispatch_harness(_spawn_flag_value(toks, "--harness", "-H"))
-    except DispatchFlagError:
+    harness = _spawn_harness_at_seam(toks)
+    if harness is None:
         return
     refusal = seedless_thread_refusal(
         harness,
@@ -756,6 +754,31 @@ def _refuse_seedless_thread_spawn(args: Sequence[str]) -> None:
     if refusal:
         print(f"fno agents spawn: {refusal}", file=sys.stderr)
         raise SystemExit(2)
+
+
+def _spawn_harness_at_seam(toks: "Sequence[str]") -> "Optional[str]":
+    """The spawn seam's harness answer through route-slot's resolve mode.
+
+    Returns None when the door is missing or the explicit value is empty:
+    both mean the pre-route refusal predicates stand down, exactly as the
+    deleted resolver's error did. The explicit flag rides the payload so
+    the door answers explicit > inferred > builtin in one round trip.
+    """
+    from fno.rust_binary import CommandUnavailable, command_call
+
+    try:
+        answer = command_call(
+            "route-slot",
+            {
+                "mode": "resolve",
+                "explicit": _spawn_flag_value(toks, "--harness", "-H"),
+            },
+        )
+    except CommandUnavailable:
+        return None
+    if "refusal" in answer:
+        return None
+    return answer.get("harness")
 
 
 def _node_seed_at_seam(args: "Sequence[str]") -> "tuple[list[str], Optional[str]]":
@@ -872,11 +895,8 @@ def _refuse_unfireable_seed(args: "Sequence[str]") -> None:
     seed = _seed_of(toks)
     if not seed or not is_command_seed(seed):
         return
-    from fno.dispatch_flags import DispatchFlagError, resolve_dispatch_harness
-
-    try:
-        harness, _ = resolve_dispatch_harness(_spawn_flag_value(toks, "--harness", "-H"))
-    except DispatchFlagError:
+    harness = _spawn_harness_at_seam(toks)
+    if harness is None:
         return
     refusal = cannot_fire_refusal(seed, harness)
     if refusal:
@@ -1227,6 +1247,7 @@ def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
 _STATUS_ARG_LEAVES = {
     "capabilities": "--capabilities",
     "target-family": "--target-family",
+    "register": "--register",
     "liveness": "--liveness",
 }
 

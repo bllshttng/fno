@@ -176,7 +176,11 @@ def test_every_moved_spelling_is_hidden():
         # would forward into nothing. `mcp` joined the same way: the send
         # family ported native and the front door claims both spellings.
         # `setup` joined when every setup command ported native: the front
-        # door claims the root spelling and answers it. `research` and `think`
+        # door claims the root spelling and answers it. `route` joined when
+        # the route family ported native: the front classifier claims the
+        # root spelling (route, config route, config routing, doctor route)
+        # and execs the slot resolver itself, so a python registration would
+        # sit behind an intercept that never reaches it. `research` and `think`
         # joined when the research family ported native, and `workspace` and
         # `worktree` when the worktree family did. `loops` and `autonomy`
         # joined when the fleet family ported: the front's fleet route claims
@@ -192,7 +196,7 @@ def test_every_moved_spelling_is_hidden():
         # doomed spelling.
         if name in (
             "decide", "yard", "review", "pr", "retro", "restart", "project", "skill-diff",
-            "mcp", "setup", "research", "think", "workspace", "worktree",
+            "mcp", "setup", "route", "research", "think", "workspace", "worktree",
             "autonomy", "loops", "observer", "lead",
             # `test` joined when the whole test-command family ported native:
             # the front door claims both spellings (classify_test_command),

@@ -94,7 +94,6 @@ phase kill-check
 plan
 pr-watch
 resume
-route
 scoreboard
 state
 status-fanout tick
