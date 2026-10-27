@@ -154,17 +154,34 @@ class TestSpawnSeam:
 
 
 class TestQuotaDeath:
+    @pytest.mark.dev_build  # the verdict reads through the native list verb
     def test_a_quota_death_cools_the_account_down(
         self, armed: Path
     ) -> None:
         # The snapshot can be probe_ttl_seconds stale, so without this the next
-        # pick would hand the successor the account that just died.
-        from fno.adapters.providers.runtime_state import HeadroomState, headroom
+        # pick would hand the successor the account that just died. The verdict
+        # reads through the native list verb, whose `headroom` column the
+        # account rows carry.
+        def _makers_headroom() -> str:
+            import subprocess
+
+            from fno.rust_binary import resolve_binary
+
+            binary = resolve_binary()
+            assert binary is not None, "the native read needs the fno-agents binary"
+            out = subprocess.run(
+                [str(binary), "spawn-overlay", "accounts", "list", "--json"],
+                capture_output=True,
+                text=True,
+            )
+            assert out.returncode == 0, out.stderr
+            rows = json.loads(out.stdout)
+            return next(r["headroom"] for r in rows if r["id"] == "makers")
 
         env = {"CLAUDE_CONFIG_DIR": str(armed / "claude-main")}
-        assert headroom("makers").state is not HeadroomState.EXHAUSTED
+        assert not _makers_headroom().startswith("exhausted")
         dispatch_mod.note_quota_death(env, "Error: usage limit reached for this account")
-        assert headroom("makers").state is HeadroomState.EXHAUSTED
+        assert _makers_headroom().startswith("exhausted")
 
 
 class TestRoutedSpawnsAreNotPicked:
