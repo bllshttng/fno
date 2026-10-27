@@ -105,6 +105,18 @@ fn read_cursor(bus_dir: &Path, form: &str) -> Option<String> {
 /// IS the address). An absent, corrupt or rotated-out cursor rescans the
 /// whole retained log.
 pub(crate) fn unread_messages<'a>(bus_dir: &Path, msgs: &'a [Value], name: &str) -> Vec<&'a Value> {
+    unread_messages_excluding(bus_dir, msgs, name, &[])
+}
+
+/// The same scan with `scan_unread`'s sender exclusion: a `to_kind=project`
+/// broadcast read drops rows whose `from` name or `from_session` matches, so
+/// a project member never drains its own broadcast back.
+pub(crate) fn unread_messages_excluding<'a>(
+    bus_dir: &Path,
+    msgs: &'a [Value],
+    name: &str,
+    exclude_from: &[String],
+) -> Vec<&'a Value> {
     let cursor = std::fs::read_to_string(bus_dir.join("cursors").join(format!("{name}.json")))
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
@@ -148,9 +160,24 @@ pub(crate) fn unread_messages<'a>(bus_dir: &Path, msgs: &'a [Value], name: &str)
                 && m.get("id").and_then(Value::as_str).is_some_and(|id| {
                     !id.is_empty() && !withdrawn.contains(id) && !superseded.contains(id)
                 })
+                && !excluded_sender(m, exclude_from)
         })
         .map(|(_, m)| *m)
         .collect()
+}
+
+/// The `scan_unread` exclusion: a row is dropped when its `from` name or its
+/// `from_session` matches the set (a direct address is never a self-echo, so
+/// by-name reads pass an empty set).
+fn excluded_sender(m: &Value, exclude_from: &[String]) -> bool {
+    if exclude_from.is_empty() {
+        return false;
+    }
+    let from = m.get("from").and_then(Value::as_str);
+    let session = m.get("from_session").and_then(Value::as_str);
+    exclude_from
+        .iter()
+        .any(|x| Some(x.as_str()) == from || Some(x.as_str()) == session)
 }
 
 pub(crate) fn unread_count(bus_dir: &Path, msgs: &[Value], name: &str) -> usize {
@@ -213,6 +240,82 @@ pub(crate) fn withdrawn_ids(msgs: &[Value]) -> std::collections::HashSet<String>
         }
     }
     out
+}
+
+/// Ids proven landed by a same-sender/recipient `landed` control row
+/// (`bus.log.landed_ids`): the target must exist, match on both addresses,
+/// and the acknowledging row's own id never joins.
+pub(crate) fn landed_ids(msgs: &[Value]) -> std::collections::HashSet<String> {
+    let by_id: std::collections::HashMap<&str, &Value> = msgs
+        .iter()
+        .filter_map(|m| m.get("id").and_then(Value::as_str).map(|id| (id, m)))
+        .collect();
+    let mut out = std::collections::HashSet::new();
+    for m in msgs {
+        if m.get("kind").and_then(Value::as_str) != Some(LANDED_KIND) {
+            continue;
+        }
+        let target = m
+            .get("meta")
+            .and_then(|meta| meta.get("landed"))
+            .and_then(Value::as_str)
+            .and_then(|t| by_id.get(t));
+        let Some(target) = target else { continue };
+        if target.get("from").and_then(Value::as_str) == m.get("from").and_then(Value::as_str)
+            && target.get("to").and_then(Value::as_str) == m.get("to").and_then(Value::as_str)
+        {
+            if let Some(t) = target.get("id").and_then(Value::as_str) {
+                out.insert(t.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// A consumer's cursor file read with the oracle's warnings: absent file is a
+/// silent `None` (full rescan); unreadable or unparseable returns `None` plus
+/// the stderr warning naming the Python exception class. A non-object cursor
+/// reads as no cursor, and the truthiness gate mirrors the oracle: empty
+/// string and numeric zero advance nothing.
+pub(crate) fn read_cursor_file(path: &std::path::Path) -> (Option<String>, Vec<String>) {
+    let file_name = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default()
+        .to_string();
+    if !path.exists() {
+        return (None, Vec::new());
+    }
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(_) => {
+            return (
+                None,
+                vec![format!(
+                    "bus cursor: ignoring corrupt cursor {file_name} (OSError); rescanning retained segments"
+                )],
+            )
+        }
+    };
+    let parsed: Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                None,
+                vec![format!(
+                    "bus cursor: ignoring corrupt cursor {file_name} (JSONDecodeError); rescanning retained segments"
+                )],
+            )
+        }
+    };
+    let cursor = match parsed.get("last_seen_id") {
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::Number(n)) if n.as_f64().map(|f| f != 0.0).unwrap_or(false) => {
+            Some(n.to_string())
+        }
+        _ => None,
+    };
+    (cursor, Vec::new())
 }
 
 /// Every delivered-mail id in the session's own transcript - the middle

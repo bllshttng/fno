@@ -686,10 +686,10 @@ STATE_FILES: tuple[StateFile, ...] = (
     ),
     StateFile(
         filename="messages.jsonl",
-        resolver="fno.bus.log.bus_log_path",
+        resolver="fno.paths.bus_dir",
         root_class="OPERATOR",
         selector="FNO_BUS_DIR, else config.paths.bus_dir, else config.state_dir",
-        owning_modules=("cli/src/fno/paths.py", "cli/src/fno/bus/log.py"),
+        owning_modules=("cli/src/fno/paths.py", "crates/fno-agents/src/intel.rs"),
     ),
     StateFile(
         filename="briefs",

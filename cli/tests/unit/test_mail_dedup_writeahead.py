@@ -50,7 +50,7 @@ def test_writeahead_writes_durable_for_asleep_recipient(runner, tmp_path, monkey
     writes the durable placeholder ahead. The recipient cannot drain during a
     live window (there is none), and a sender crash before it wakes leaves the
     message on the bus, drainable exactly once."""
-    from fno.bus.cursor import scan_unread
+    from tests.fixtures.bus_rows import scan_unread
     from fno.cli import app
 
     use_tmpdir(monkeypatch, tmp_path)
@@ -72,14 +72,13 @@ def test_writeahead_writes_durable_for_asleep_recipient(runner, tmp_path, monkey
 
     unread = scan_unread(recipient)
     assert unread, "the write-ahead placeholder did not land on the bus"
-    assert all(m.kind != "withdraw" for m in unread)
+    assert all(m["kind"] != "withdraw" for m in unread)
 
 
 def test_staged_row_rescues_a_missed_live_inject(runner, tmp_path, monkeypatch):
     """A missed inject leaves the staged body row and the durable fallback under
     one id; the drain surface shows the message exactly once, body intact."""
-    from fno.bus.cursor import scan_unread
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows, scan_unread
     from fno.cli import app
 
     use_tmpdir(monkeypatch, tmp_path)
@@ -92,10 +91,10 @@ def test_staged_row_rescues_a_missed_live_inject(runner, tmp_path, monkeypatch):
     res = runner.invoke(app, ["agents", "mail", "send", "red", "hi", "--from-name", "web"])
     assert res.exit_code == 14, f"exit={res.exit_code} out={res.output!r}"
 
-    rows = [m for m in iter_messages() if m.to == recipient]
+    rows = [m for m in read_rows() if m["to"] == recipient]
     assert len(rows) == 2, "expected the staged row and its durable fallback"
-    assert len({m.id for m in rows}) == 1, "the twins stopped sharing an id"
-    assert all("hi" in m.body for m in rows)
+    assert len({m["id"] for m in rows}) == 1, "the twins stopped sharing an id"
+    assert all("hi" in m.get("body", "") for m in rows)
     unread = scan_unread(recipient)
     assert len(unread) == 1, "one id surfaced twice to the drain"
-    assert "hi" in unread[0].body
+    assert "hi" in unread[0].get("body", "")

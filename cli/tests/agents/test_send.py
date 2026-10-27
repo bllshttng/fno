@@ -49,9 +49,13 @@ def _no_real_mail_inject(monkeypatch):
 
 def _queued(to: str) -> list:
     """Durable bus rows addressed to ``to``, one per message id."""
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
-    rows = {m.id: m for m in iter_messages() if m.to == to and m.delivery != "hosted"}
+    rows = {
+        m["id"]: m
+        for m in read_rows()
+        if m["to"] == to and m.get("delivery") != "hosted"
+    }
     return list(rows.values())
 
 
@@ -235,8 +239,8 @@ def test_dispatch_send_durable_fallback_preserves_sender_provenance(
 
     from fno.agents import dispatch as dispatch_mod
     from fno.agents.registry import AgentEntry, write_registry
-    from fno.bus.log import iter_messages
     from fno.harness_identity import canonical_handle
+    from tests.fixtures.bus_rows import read_rows
 
     write_registry(
         [
@@ -282,11 +286,11 @@ def test_dispatch_send_durable_fallback_preserves_sender_provenance(
     )
 
     assert result.delivery == "durable"
-    record = next(message for message in iter_messages() if message.id == result.msg_id)
+    record = next(message for message in read_rows() if message["id"] == result.msg_id)
     # The header names the resolved sender row; the harness rides the durable
     # record's provenance fields, no longer the text.
-    assert record.body.splitlines()[0].startswith("`@sender-worker · fmail-")
-    assert record.from_harness == sender_harness
+    assert record.get("body", "").splitlines()[0].startswith("`@sender-worker · fmail-")
+    assert record.get("from_harness") == sender_harness
 
 
 def test_dispatch_send_unresolvable_sender_miss_goes_loud(
@@ -631,7 +635,7 @@ def test_dispatch_send_demotion_preserves_envelope(tmp_path: Path, monkeypatch) 
     # Envelope is in the store (survived the failed inject)
     threads = _queued("abcd1234")
     assert len(threads) == 1, f"Envelope must survive inject failure; got {len(threads)} threads"
-    assert "important message" in threads[0].body
+    assert "important message" in threads[0]["body"]
 
 
 # ---------------------------------------------------------------------------
@@ -900,8 +904,8 @@ def test_dispatch_send_queues_to_selected_session_when_live_miss_restamps(
     assert len(original_threads) == 1
     # The durable body is the delivered shape (header line, then the body),
     # and it lives under the ORIGINAL session's thread, not the replacement.
-    assert original_threads[0].body.endswith("\nsecret for A")
-    assert original_threads[0].body.startswith("`@lead · ")
+    assert original_threads[0]["body"].endswith("\nsecret for A")
+    assert original_threads[0]["body"].startswith("`@lead · ")
     assert _queued(canonical_handle(replacement_id)) == []
     assert _queued("victim") == []
     row = registry_mod.load_registry()[0]
@@ -1000,18 +1004,21 @@ def test_cmd_send_real_bus_lock_timeout_has_no_success_receipt(
     monkeypatch,
     runner: CliRunner,
 ) -> None:
-    """The command boundary preserves the real canonical-lock failure."""
+    """A locked bus door must not mint a success receipt.
+
+    `mail send` execs the native leaf, so only a real lock reaches it: the
+    test holds the door's own sidecar flock and shortens the door's wait.
+    """
     use_tmpdir(monkeypatch, tmp_path)
     _register_claude_peer()
 
     from fno.agents import dispatch as dispatch_mod
-    from fno.bus import log as bus_log
     from fno.mail.cli import mail_app
+    from tests.fixtures.bus_rows import bus_log_path
 
     monkeypatch.setattr(dispatch_mod, "_deliver_live", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(bus_log, "_LOCK_TIMEOUT_SECONDS", 0.05)
-    monkeypatch.setattr(bus_log, "_LOCK_POLL_SECONDS", 0.005)
-    lock_path = bus_log._lock_path()
+    monkeypatch.setenv("FNO_BUS_LOCK_TIMEOUT_SECS", "0.05")
+    lock_path = bus_log_path().with_name("messages.jsonl.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     holder = open(lock_path, "w")
     fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
@@ -1027,7 +1034,7 @@ def test_cmd_send_real_bus_lock_timeout_has_no_success_receipt(
     assert "no durable envelope was written" in output
     assert "delivered" not in result.stdout
     assert "queued (durable)" not in result.stdout
-    assert not bus_log.bus_log_path().exists()
+    assert not bus_log_path().exists()
     assert _queued("abcd1234") == []
 
 
@@ -1039,7 +1046,7 @@ def test_dispatch_send_rejects_nonterminating_agent_lock_timeout(
     _register_claude_peer()
 
     from fno.agents import dispatch as dispatch_mod
-    from fno.bus.log import bus_log_path
+    from tests.fixtures.bus_rows import bus_log_path
 
     delivered: list[bool] = []
     monkeypatch.setattr(
@@ -1172,7 +1179,7 @@ def test_dispatch_send_agent_lock_timeout_queues_durable(
 
     threads = _queued("abcd1234")
     assert len(threads) == 1, f"the message must survive the timeout: {threads}"
-    assert "hello" in threads[0].body
+    assert "hello" in threads[0]["body"]
 
 
 def test_dispatch_send_control_refusal_clears_dispatch_context(
@@ -1244,7 +1251,7 @@ def test_dispatch_send_agent_lock_timeout_without_durable_address_says_so(
     from fno import paths
     from fno.agents.dispatch import DispatchAskError, dispatch_send
     from fno.agents.registry import _agent_lock_path
-    from fno.bus.log import bus_log_path
+    from tests.fixtures.bus_rows import bus_log_path
 
     lock_path = _agent_lock_path("red", paths.agents_registry_path())
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1278,7 +1285,7 @@ def test_dispatch_send_lock_timeout_refuses_provider_mismatch_before_queuing(
     from fno import paths
     from fno.agents.dispatch import DispatchAskError, dispatch_send
     from fno.agents.registry import _agent_lock_path
-    from fno.bus.log import bus_log_path
+    from tests.fixtures.bus_rows import bus_log_path
 
     lock_path = _agent_lock_path("red", paths.agents_registry_path())
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1352,7 +1359,7 @@ def test_dispatch_send_lock_timeout_refuses_when_lock_never_frees(
     from fno.agents import dispatch as dispatch_mod
     from fno.agents.dispatch import DispatchAskError, dispatch_send
     from fno.agents.registry import _agent_lock_path
-    from fno.bus.log import bus_log_path
+    from tests.fixtures.bus_rows import bus_log_path
 
     monkeypatch.setattr(dispatch_mod, "_LOCK_TIMEOUT_QUEUE_GRACE_SECONDS", 0.2)
 
