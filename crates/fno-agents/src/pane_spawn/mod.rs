@@ -1205,6 +1205,9 @@ pub fn write_pane_row(
     };
     let pid_start_time = pane.child_pid.and_then(process_start_time);
     let entry_log_path = resolvable_handle_log_fallback(home, name, pane, &session_id);
+    let stamp: std::collections::BTreeMap<String, String> =
+        crate::accounts::launch::pane_stamp().into_iter().collect();
+    let launch_account = stamp.get(crate::state::LAUNCH_ACCOUNT_ENV_KEY).cloned();
     let entry = RegistryEntry {
         name: name.to_string(),
         harness: Some(ctx.provider.clone()),
@@ -1229,6 +1232,11 @@ pub fn write_pane_row(
         origin: Some("spawn".to_string()),
         substrate: Some("pane".to_string()),
         spawn_trigger: spawn_trigger.clone(),
+        launch_account_source: stamp
+            .get(crate::state::LAUNCH_ACCOUNT_SOURCE_ENV_KEY)
+            .cloned(),
+        account_record_id: launch_account.clone(),
+        launch_account,
         ..RegistryEntry::new(None, Lineage::captured((None, None, None)))
     };
     write_pane_row_txn(home, name, entry, replacing)

@@ -321,7 +321,7 @@ pub fn seam_exit(
         // secret vars leave this env, and the launch layers the route.
         if route.contains_key("ANTHROPIC_AUTH_TOKEN") || route.contains_key("ANTHROPIC_API_KEY") {
             for var in credentials::SECRET_ROUTE_VARS {
-                if !route.contains_key(*var) {
+                if !route.contains_key(var) {
                     std::env::remove_var(var);
                 }
             }
@@ -340,6 +340,24 @@ pub fn seam_exit(
 /// not this process's, so the overlay rides the env wrapper instead.
 pub fn pane_overlay(params: &Value, provider: &str) -> Result<Option<Applied>, i32> {
     resolve(params, provider)
+}
+
+/// The launch-account pair a pane carries, set only when the account step
+/// applied one: the row stamps it, and the wrapper hands it to the worker a
+/// thread child would inherit it as. An unaccounted pane keeps no stamp.
+pub fn pane_stamp() -> Vec<(String, String)> {
+    let applied = std::env::var(crate::state::LAUNCH_ACCOUNT_ENV_KEY).is_ok_and(|v| !v.is_empty());
+    if !applied {
+        return Vec::new();
+    }
+    let (account, source) = crate::state::launch_provenance_from_env();
+    [
+        (crate::state::LAUNCH_ACCOUNT_ENV_KEY, account),
+        (crate::state::LAUNCH_ACCOUNT_SOURCE_ENV_KEY, source),
+    ]
+    .into_iter()
+    .filter_map(|(k, v)| v.map(|v| (k.to_string(), v)))
+    .collect()
 }
 
 fn payload_cwd(payload: &Value) -> std::path::PathBuf {

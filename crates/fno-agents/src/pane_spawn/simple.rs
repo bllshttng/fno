@@ -299,6 +299,7 @@ pub(crate) fn make_plan(arm: &SimpleArm, ctx: &PaneContext) -> Result<ArmPlan, P
             .account_env
             .iter()
             .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
+            .chain(crate::accounts::launch::pane_stamp())
             .collect();
         mesh_env_wrapper(
             &ctx.worker_name,

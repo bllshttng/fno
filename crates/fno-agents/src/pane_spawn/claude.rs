@@ -93,9 +93,7 @@ const MONITOR_COMPLETE_GOLDEN: &str =
 fn resolve_route(ctx: &PaneContext) -> Result<Option<Target>, PaneRefusal> {
     let env_get = |k: &str| std::env::var(k).ok();
     let resolved = match (ctx.route.as_deref(), ctx.role.as_deref()) {
-        (Some(route), _) => {
-            crate::spawn_route::resolve_target(route, &ctx.cwd, &env_get).map(Some)
-        }
+        (Some(route), _) => crate::spawn_route::resolve_target(route, &ctx.cwd, &env_get).map(Some),
         (None, Some(role)) => crate::spawn_route::role_target(role, &ctx.cwd, &env_get),
         (None, None) => Ok(None),
     };
@@ -380,7 +378,8 @@ pub(crate) fn make_claude_plan(ctx: &PaneContext) -> Result<ArmPlan, PaneRefusal
     // carries it into happy's own environment, which happy merges into the
     // claude child); the scrub unsets ride with it, so the route wins over
     // anything inherited.
-    let overlay = overlay_for(ctx, route);
+    let mut overlay = overlay_for(ctx, route);
+    overlay.extend(crate::accounts::launch::pane_stamp());
     let seed_prov = seed_provenance_env(&seed);
     let qos_argv = qos_wrap_for(ctx, argv);
     let wrapped = mesh_env_wrapper(
