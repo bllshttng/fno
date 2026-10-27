@@ -1441,12 +1441,25 @@ pub(crate) async fn keys(
 fn column_len(b: &MessagesBoard) -> usize {
     match b.col {
         Col::Tree => b.tree_rows().len(),
-        Col::Chats => b
-            .sel_agent
-            .as_deref()
-            .map(|a| b.chat_rows(a).len())
-            .unwrap_or(0),
-        Col::Thread => b.conversation_rows().len(),
+        Col::Chats => match b.col2 {
+            // The You tab is session-wide: no column-1 selection gates it.
+            ChatTab::You => b.chat_rows("").len(),
+            _ => b
+                .sel_agent
+                .as_deref()
+                .map(|a| b.chat_rows(a).len())
+                .unwrap_or(0),
+        },
+        Col::Thread => thread_len(b),
+    }
+}
+
+/// The Thread column's navigable length: a You thread's items, else the
+/// conversation rows.
+fn thread_len(b: &MessagesBoard) -> usize {
+    match b.sel_thread.as_deref().and_then(|s| s.strip_prefix("you:")) {
+        Some(sid) => b.you_items(sid).len(),
+        None => b.conversation_rows().len(),
     }
 }
 
@@ -1478,6 +1491,25 @@ async fn act(
             }
         }
         Col::Chats => {
+            if b.col2 == ChatTab::You {
+                // The You tab is session-wide: no column-1 selection gates it.
+                let rows = b.chat_rows("");
+                let Some(ChatRow::YouThread {
+                    session_id,
+                    last_ts,
+                    ..
+                }) = rows.get(b.cursors[1])
+                else {
+                    return Ok(());
+                };
+                let chat_id = format!("you:{session_id}");
+                crate::view_store::save_messages_read_mark(&chat_id, last_ts);
+                b.sel_thread = Some(chat_id);
+                // The You detail's cursor: one index per item bubble.
+                b.cursors[2] = b.you_items(session_id).len().saturating_sub(1);
+                b.col = Col::Thread;
+                return Ok(());
+            }
             let Some(agent) = b.sel_agent.clone() else {
                 return Ok(());
             };
@@ -1496,30 +1528,6 @@ async fn act(
                     crate::view_store::save_messages_read_mark(chat_id, ts);
                     b.sel_thread = Some(chat_id.clone());
                     b.cursors[2] = b.conversation_rows().len().saturating_sub(1);
-                    b.col = Col::Thread;
-                }
-                ChatRow::YouThread {
-                    session_id,
-                    last_ts,
-                    ..
-                } => {
-                    let chat_id = format!("you:{session_id}");
-                    crate::view_store::save_messages_read_mark(&chat_id, last_ts);
-                    b.sel_thread = Some(chat_id);
-                    // The You detail's rows: one owner index per item bubble.
-                    let items = b
-                        .projection()
-                        .and_then(|p| p.get("you"))
-                        .and_then(Value::as_array)
-                        .map(|rows| {
-                            rows.iter()
-                                .find(|t| {
-                                    Some(text_of(t, "session_id")) == Some(session_id.as_str())
-                                })
-                                .and_then(|t| t.get("items").and_then(Value::as_array).cloned())
-                        })
-                        .unwrap_or_default();
-                    b.cursors[2] = items.len().saturating_sub(1);
                     b.col = Col::Thread;
                 }
             }
@@ -1605,11 +1613,33 @@ fn open_chat_popup(view: &mut View) {
     }
 }
 
-/// `y` copies the selected bubble's fmail id; `Y` copies its whole body.
+/// `y` copies the selected bubble's fmail id; `Y` copies its whole body. On
+/// a You thread it copies the typed message, or the typed-and-reply pair.
 fn copy_bubble(view: &mut View, whole_body: bool) {
     let Some(b) = view.messages_board.as_ref() else {
         return;
     };
+    if let Some(sid) = b.sel_thread.as_deref().and_then(|s| s.strip_prefix("you:")) {
+        let items = b.you_items(sid);
+        let Some(item) = items.get(b.cursors[2]) else {
+            return;
+        };
+        let typed = text_of(item, "typed_text").to_string();
+        let value = if whole_body {
+            let reply = text_of(item, "reply_text").to_string();
+            if reply.is_empty() {
+                typed
+            } else {
+                format!("{typed}\n\n{reply}")
+            }
+        } else {
+            typed
+        };
+        if !value.is_empty() {
+            super::feed_detail::copy_value(view, value);
+        }
+        return;
+    }
     let row = b
         .conversation_rows()
         .get(b.cursors[2])
@@ -1789,11 +1819,14 @@ pub(crate) async fn mouse(
             let Some(board) = view.messages_board.as_ref() else {
                 return Ok(());
             };
-            let agent = board.sel_agent.clone();
-            let rows_len = agent
-                .as_deref()
-                .map(|a| board.chat_rows(a).len())
-                .unwrap_or(0);
+            let rows_len = match board.col2 {
+                ChatTab::You => board.chat_rows("").len(),
+                _ => board
+                    .sel_agent
+                    .as_deref()
+                    .map(|a| board.chat_rows(a).len())
+                    .unwrap_or(0),
+            };
             let lines = board.chats_column(part_w);
             let start_line = lines.len().saturating_sub(rows_len);
             let (scroll, _) = column_rect(lines.len(), body_h, start_line + board.cursors[1]);
@@ -1842,13 +1875,15 @@ pub(crate) async fn mouse(
     };
     let in_range = match col {
         Col::Tree => index.is_some_and(|i| i < b.tree_rows().len()),
-        Col::Chats => index.is_some_and(|i| {
-            b.sel_agent
+        Col::Chats => index.is_some_and(|i| match b.col2 {
+            ChatTab::You => i < b.chat_rows("").len(),
+            _ => b
+                .sel_agent
                 .as_deref()
                 .map(|a| i < b.chat_rows(a).len())
-                .unwrap_or(false)
+                .unwrap_or(false),
         }),
-        Col::Thread => index.is_some_and(|i| i < b.conversation_rows().len()),
+        Col::Thread => index.is_some_and(|i| i < thread_len(b)),
     };
     if !in_range {
         return Ok(());

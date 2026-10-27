@@ -352,7 +352,20 @@ impl YouStore {
             let e = entry.expect("checked");
             let start = e.open.as_ref().map(|t| t.item_start).unwrap_or(e.offset);
             match read_range(path, start, size) {
-                Ok(text) => walk(&text, start, bus, session, e.open.clone()),
+                // A resumed walk sees only the suffix, so the cached items
+                // stay the prefix: drop exactly the open one it rebuilds,
+                // or none when the previous entry closed cleanly.
+                Ok(text) => {
+                    let out = walk(&text, start, bus, session, e.open.clone());
+                    let keep = e.items.len().saturating_sub(usize::from(e.open.is_some()));
+                    let mut items = e.items[..keep].to_vec();
+                    items.extend(out.items);
+                    WalkOut {
+                        items,
+                        tail: out.tail,
+                        consumed: out.consumed,
+                    }
+                }
                 Err(_) => full_walk(path, bus, session),
             }
         } else {

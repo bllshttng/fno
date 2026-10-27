@@ -28,7 +28,10 @@ pub(crate) fn remember(projection: &Value) {
 
 /// The mail store's change signal (item 1): the chats dir's entry count and
 /// its messages.jsonl files' total length and newest mtime, read every 5s by
-/// the open board. No change, no re-read.
+/// the open board. No change, no re-read. The claude transcripts the You
+/// threads read ride in the same terms: the projects dir's `*.jsonl` files
+/// fold their count, total length and newest mtime in, so a growing session
+/// re-gathers the tab even when no chat moved.
 ///
 /// The dir resolves through the same ladder `fno-agents chats::chats_dir`
 /// applies (a `paths.chats` config override, else `<state>/chats`); the
@@ -52,6 +55,60 @@ pub fn store_fingerprint() -> Option<(usize, u64, u64)> {
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
         );
+    }
+    if let Some(transcripts) = transcript_facts() {
+        count += transcripts.0;
+        total_len += transcripts.1;
+        newest = newest.max(transcripts.2);
+    }
+    Some((count, total_len, newest))
+}
+
+/// The claude projects dir's transcript facts as `(count, total len, newest
+/// mtime)`: a depth-2 walk, one level of project slugs and their `*.jsonl`
+/// session files. `None` when the dir does not resolve. The ladder mirrors
+/// `fno-agents claude_drive::claude_projects_dir`; the mirror lives here for
+/// the same reason the chats-dir one does.
+fn transcript_facts() -> Option<(usize, u64, u64)> {
+    let root = if let Some(v) = std::env::var_os("FNO_CLAUDE_PROJECTS_DIR") {
+        std::path::PathBuf::from(v)
+    } else if let Some(v) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        std::path::PathBuf::from(v).join("projects")
+    } else {
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        home.join(".claude").join("projects")
+    };
+    let rd = std::fs::read_dir(&root).ok()?;
+    let mut count = 0usize;
+    let mut total_len = 0u64;
+    let mut newest = 0u64;
+    for slug in rd.flatten() {
+        let Ok(files) = std::fs::read_dir(slug.path()) else {
+            continue;
+        };
+        for f in files.flatten() {
+            let path = f.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Ok(meta) = f.metadata() else {
+                continue;
+            };
+            if !meta.is_file() {
+                continue;
+            }
+            count += 1;
+            total_len += meta.len();
+            newest = newest.max(
+                meta.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            );
+        }
     }
     Some((count, total_len, newest))
 }

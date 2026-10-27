@@ -636,7 +636,10 @@ async fn messages_you_tab_contract() {
             {"session_id":"older","name":"older-worker","last_ts":"2026-10-01T09:00:00Z",
              "items":[{"ts":"2026-10-01T09:00:00Z","typed_text":"earlier question","reply_text":""}]},
             {"session_id":"fresh","name":"gavin","last_ts":"2026-10-01T10:00:00Z",
-             "items":[{"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."}]},
+             "items":[
+                {"ts":"2026-10-01T09:30:00Z","typed_text":"mid-turn follow-up","reply_text":"Working on it."},
+                {"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."},
+             ]},
         ],
     }));
     b.col2 = ChatTab::You;
@@ -674,5 +677,36 @@ async fn messages_you_tab_contract() {
             .find(|t| t.as_str() == "Because the base was stale."),
         Some(&"Because the base was stale.".to_string()),
         "reply starts at column 0: {texts:?}"
+    );
+    // Navigation needs no column-1 selection: the You tab is session-wide,
+    // and the detail's j/k walks the item bubbles, not conversation rows.
+    let b = view.messages_board.as_mut().unwrap();
+    b.sel_agent = None;
+    b.col = Col::Chats;
+    b.cursors[1] = 0;
+    super::keys(&mut view, b"j", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    let b = view.messages_board.as_ref().unwrap();
+    assert_eq!(b.cursors[1], 1, "j moves on the You tab: {:?}", b.cursors);
+    super::keys(&mut view, b"\r", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    let b = view.messages_board.as_ref().unwrap();
+    assert_eq!(b.sel_thread.as_deref(), Some("you:older"), "Enter at row 1");
+    // The older thread opens on its only item; j then walks the fresh
+    // thread's two items after reopening it.
+    assert_eq!(b.cursors[2], 0);
+    let b = view.messages_board.as_mut().unwrap();
+    b.sel_thread = Some("you:fresh".into());
+    b.cursors[2] = 1;
+    super::keys(&mut view, b"k", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    let b = view.messages_board.as_ref().unwrap();
+    assert_eq!(
+        b.cursors[2], 0,
+        "k walks the You thread's items: {:?}",
+        b.cursors
     );
 }
