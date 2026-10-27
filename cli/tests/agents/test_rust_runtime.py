@@ -846,12 +846,11 @@ def test_is_resume_bearing_spawn_predicate() -> None:
     assert not rr._is_resume_bearing_spawn("ask", ["ask", "w", "--resume", uuid])
 
 
-def test_pane_spawn_routes_to_the_binary(monkeypatch, tmp_path) -> None:
-    """Every pane harness seats a Rust arm, so an explicit --as pane spawn
-    routes to the binary for any harness. The old member-set carve-out is
-    gone; the Python pane back half answers only FNO_AGENTS_RUNTIME=python.
-    A bare spawn is NOT this shape: its default substrate still resolves in
-    the Python door (see test_default_substrate_spawn_stays_python)."""
+@pytest.mark.parametrize("lane", [["--as", "pane"], []], ids=["pane", "bare"])
+def test_spawn_routes_to_the_binary(monkeypatch, tmp_path, lane) -> None:
+    """An explicit --as pane spawn and a bare spawn both route to the binary,
+    which resolves the default substrate itself. The Python cmd_spawn answers
+    only FNO_AGENTS_RUNTIME=python."""
     from fno.cli import app
 
     binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
@@ -866,31 +865,11 @@ def test_pane_spawn_routes_to_the_binary(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(rr, "route_to_rust", fake_route)
     result = CliRunner().invoke(
         app,
-        ["agents", "spawn", "--name", "w", "--as", "pane", "-H", "claude", "do x"],
+        ["agents", "spawn", "--name", "w", *lane, "-H", "claude", "do x"],
     )
     assert result.exit_code == 99
-    assert captured, "a pane spawn must route to the binary"
+    assert captured, "the spawn must route to the binary"
     assert captured[0][0] == "spawn"
-    assert "--as" in captured[0]
-
-
-def test_default_substrate_spawn_stays_python() -> None:
-    """A bare spawn's default substrate (thread, with the thread-seatable
-    refusal and the keeper thread lanes behind it) still resolves in the
-    Python door. Only an explicit --as pane names the shape the binary's
-    pane spine answers; the scan stops at --argv and the -- fence, and the
-    --once headless spelling opts out."""
-    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "seed"])
-    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w"])
-    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "pane"])
-    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as=pane"])
-    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "thread"])
-    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "headless"])
-    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--once"])
-    # A fenced or payload token is the child's, never fno's routing flag.
-    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--", "--as", "pane"])
-    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--argv", "--as=pane"])
-    assert not rr._is_default_substrate_spawn("ask", ["ask", "w", "--as", "pane"])
 
 
 def test_routing_predicates_stop_at_argv_boundary() -> None:
