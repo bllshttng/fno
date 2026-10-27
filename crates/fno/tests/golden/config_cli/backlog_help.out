@@ -1,0 +1,9 @@
+Usage: fno config active-backlog [OPTIONS]
+
+  Print the active-backlog drain reading. Full contract:
+  docs/architecture/coordination.md#per-territory-team-cap
+
+  JSON readers call the binary door directly: fno-agents active-backlog-receipt
+
+Options:
+  --help  Show this message and exit.

@@ -976,8 +976,22 @@ fn cached_snapshot(state: &StoreState) -> Result<(String, Arc<Vec<Value>>), Stor
 }
 
 /// A publish drops the read cache; the next SQLite read fills it again.
+/// The publish is also the wake nudge: the drain daemon watches the
+/// sentinel's mtime, and a backlog mutation touches it to wake the drain
+/// loop sooner than the poll floor (a latency optimization - the poll floor
+/// is the correctness guarantee). Best-effort, never wedges the mutation.
 fn refresh_cache_after_publish(state: &StoreState, _outcome: &graph_store::MutateOutcome) {
     *state.cache.write().unwrap_or_else(|e| e.into_inner()) = None;
+    let path = crate::active_backlog::nudge_sentinel_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::File::options()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .and_then(|f| f.set_modified(std::time::SystemTime::now()))
+        .ok();
 }
 
 fn serve_client(

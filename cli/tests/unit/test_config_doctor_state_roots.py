@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 import typer
 
-from fno.config_cli import _report_state_roots
+from fno.setup.config_doctor import _report_state_roots
 
 
 def _capture(monkeypatch: pytest.MonkeyPatch) -> list[str]:

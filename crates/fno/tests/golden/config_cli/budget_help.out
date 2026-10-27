@@ -1,0 +1,14 @@
+Usage: fno config assert-subagent-budget [OPTIONS]
+
+  Refuse a declared fan-out wider than the provider's subagent budget.
+
+  Prints the verdict's reason and exits 0 on a permit, 1 on a refusal. Fails
+  open: no stamp, no budget entry or an unreadable config permits, with the
+  reason saying so. This is the seam skill text calls before declaring a panel
+  width (Locked Decision 7).
+
+Options:
+  -w, --width INTEGER  The fan-out width the caller declares.  [required]
+  -P, --provider TEXT  Provider whose budget applies; defaults to the
+                       FNO_ROUTE_PROVIDER stamp.
+  --help               Show this message and exit.

@@ -31,10 +31,12 @@ has() { if printf '%s' "$2" | grep -qF "$3"; then PASS=$((PASS+1)); else FAIL=$(
 no()  { if printf '%s' "$2" | grep -qF "$3"; then FAIL=$((FAIL+1)); printf 'FAIL: %s (%q UNEXPECTEDLY in %q)\n' "$1" "$3" "$2"; else PASS=$((PASS+1)); fi; }
 
 # --- stub fno: claim/agents probes pass, spawn emits a valid 8-hex receipt.
-# `worktree ensure` (x-73ca) mirrors the real command's contract (cli/src/fno/
-# worktree_cli/cli.py): path on stdout + exit 0 on success, NOTHING on failure,
+# `worktree ensure` mirrors the real command's contract (the Rust family:
+# crates/fno/src/worktree_door.rs + crates/fno-agents/src/worktree/ensure.rs):
+# path on stdout + exit 0 on success, NOTHING on failure,
 # so spawn.sh reads $wt empty and falls back to repo root. The mechanism itself
-# (origin/main base, branch reuse) is tested in test_worktree_ensure.py; this
+# (origin/main base, branch reuse) is characterized by the worktree parity
+# goldens (crates/fno-agents/tests/worktree_parity.rs); this
 # hermetic stub only needs the happy path + the two fail-safe branches the
 # caller's logic depends on (stray-dir refusal, idempotent reuse). ----------
 STUBDIR="$TMP/bin"; mkdir -p "$STUBDIR"

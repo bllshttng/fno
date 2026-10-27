@@ -1,0 +1,1 @@
+worktree ensure: checkout feature/switched in <ROOT>/e1/.claude/worktrees/zz-fixture-ensure-fresh failed: error: pathspec 'feature/switched' did not match any file(s) known to git

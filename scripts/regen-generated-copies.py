@@ -163,7 +163,9 @@ def byte_copy_rows():
         if line.startswith("#") or not line.strip():
             continue
         cols = line.rstrip("\n").split("\t")
-        if len(cols) == 3 and cols[2] == REGEN_NEEDLE and cols[1] in BYTE_COPY_SOURCES:
+        # The TSV's regen cell may carry env prefixes (FNO_SYNC_EVENTS_SCHEMA=1
+        # cargo build ...); match on the command so those rows still mirror.
+        if len(cols) == 3 and cols[2].endswith(REGEN_NEEDLE) and cols[1] in BYTE_COPY_SOURCES:
             yield cols[0], cols[1]
 
 

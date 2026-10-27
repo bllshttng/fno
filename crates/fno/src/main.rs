@@ -69,6 +69,12 @@ enum Role {
     /// beside the setup command that reads it.
     ConfigDefaults(Vec<OsString>),
     ConfigSchema(Vec<String>),
+    /// The native read-side `config` doors (get, history, build-dir,
+    /// assert-subagent-budget, status-sinks, active-backlog, plugin install).
+    /// One classify, bodies in `config_cli::`; the writer stays with the
+    /// config hub's write surface and the doctor command beside the setup
+    /// family's engine.
+    ConfigCli(fno::config_cli::Door),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
@@ -374,6 +380,11 @@ enum Role {
     /// worker's --mcp-exec lane with the tail byte-verbatim. The bool is the
     /// root spelling, whose move notice prints before the same exec.
     AgentsMcpRoot(bool, Vec<OsString>),
+    /// The fleet family's claimed command spellings (`fno do loops`, `fno
+    /// agents yard`, `fno agents autonomy`, and their deprecated root
+    /// forms): the ported fleet doors, exec'd with the tail byte-verbatim.
+    /// The struct carries the door, the root-alias flag, and the tail.
+    Fleet(fno::fleet_route::FleetClaim),
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
@@ -1015,6 +1026,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some((root_alias, rest)) = fno::agents_mcp_route::classify(args) {
         return Role::AgentsMcpRoot(root_alias, rest);
     }
+    if let Some(claim) = fno::fleet_route::classify(args) {
+        return Role::Fleet(claim);
+    }
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
     }
@@ -1221,6 +1235,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::config_schema::classify(args) {
         return Role::ConfigSchema(rest);
     }
+    if let Some(door) = fno::config_cli::classify(args) {
+        return Role::ConfigCli(door);
+    }
     match cli_args::classify(args) {
         FrontDoor::Forward => Role::Forward,
         FrontDoor::Usage { message } => {
@@ -1360,6 +1377,12 @@ fn main() {
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let env_session = mux_cli::env_server();
     let mut args = args;
+    // The worktree family's door claims before any forwarding: the Python
+    // mounts die with the family port, so these argv shapes must answer
+    // natively or not at all.
+    if let Some(launch) = fno::worktree_door::classify(&args) {
+        std::process::exit(launch.run());
+    }
     // The agents menu claims first: a nested spelling rewrites to the argv
     // that answers today, so every door below still sees the spelling it
     // owns. The cross-machine `org promote <name@host>` hand-off is left for
@@ -1472,6 +1495,21 @@ fn main() {
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
         Role::ConfigSchema(rest) => std::process::exit(fno::config_schema::run(&rest)),
+        Role::ConfigCli(door) => std::process::exit(match door {
+            fno::config_cli::Door::Get(rest) => fno::config_cli::get::run(&rest),
+            fno::config_cli::Door::History(rest) => fno::config_cli::history::run(&rest),
+            fno::config_cli::Door::BuildDir => fno::config_cli::leaves::run_build_dir(&[]),
+            fno::config_cli::Door::Budget(rest) => fno::config_cli::leaves::run_budget(&rest),
+            fno::config_cli::Door::StatusSinks(rest) => {
+                fno::config_cli::leaves::run_status_sinks(&rest)
+            }
+            fno::config_cli::Door::ActiveBacklog => {
+                fno::config_cli::leaves::run_active_backlog(&[])
+            }
+            fno::config_cli::Door::PluginInstall(rest) => {
+                fno::config_cli::plugin_install::run(&rest)
+            }
+        }),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
         Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
@@ -1515,6 +1553,7 @@ fn main() {
         Role::AgentsMcpRoot(root_alias, rest) => {
             std::process::exit(fno::agents_mcp_route::run(root_alias, &rest))
         }
+        Role::Fleet(claim) => std::process::exit(fno::fleet_route::run(claim)),
         Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],
