@@ -44,7 +44,6 @@ Issues = "https://github.com/bllshttng/fno/issues"
 # user - they type `fno`, which routes. See crates/fno/src/bootstrap.rs::forward.
 [project.scripts]
 fno-py = "fno.cli:main"
-fno-footprint-cause = "fno.doctor_footprint:cause_main"
 
 [tool.hatch.version]
 path = "src/fno/__init__.py"

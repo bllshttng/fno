@@ -1085,6 +1085,17 @@ pub async fn run_command(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some("--workers") {
         return crate::agents_top::run(&args[1..]);
     }
+    // The diag family's reading, riding the census op (shrink law d-fe66560a:
+    // no new client action). `--cause` is the gate's bounded payload; the
+    // full `fno doctor footprint` command behavior rides `--footprint`.
+    if args
+        .iter()
+        .any(|arg| arg == "--cause" || arg == "--footprint")
+    {
+        let json_flag = args.iter().any(|arg| arg == "--json" || arg == "-J");
+        let cause_only = args.iter().any(|arg| arg == "--cause");
+        return crate::footprint_cause::footprint_command(json_flag, cause_only);
+    }
     if args.iter().any(|arg| arg == "--ps") {
         // The 1 s window is opt-in: the spawn gate reads this table on
         // every admission and must not wait on it.

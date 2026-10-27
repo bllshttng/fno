@@ -3813,7 +3813,7 @@ async fn read_worker_snapshot(sock: &std::path::Path) -> Option<String> {
 /// minutes. Mirrors `session_truth.STALE_ATTENTION_S` and the mux client's
 /// constant - the three cannot share code (the crates do not link), so the
 /// shared fixture in schemas/ is what pins them together.
-const STALE_ATTENTION_S: f64 = 600.0;
+pub(crate) const STALE_ATTENTION_S: f64 = 600.0;
 
 const LIST_PROJECTION_OMISSIONS: [&str; 0] = [];
 
