@@ -353,7 +353,15 @@ fn adapter_case(sb: &Sandbox, label: &str, sink: SinkConfig, post: &mut Recordin
     std::fs::write(sb.state.join(format!("{}.cursor", sink.name)), cursor).unwrap();
     let journal = fno_agents::paths::events_path(&sb.root);
     std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
-    std::fs::write(&journal, format!("{ev}\n")).unwrap();
+    // The capture driver froze the tick over its two-event fixture (the ok
+    // event the caller built, plus the fail event at 00:00:05Z), so every
+    // adapter golden carries both calls byte-identically.
+    let ev2 = jline(
+        "2026-01-01T00:00:05Z",
+        "task_done",
+        json!({"run": "r1", "node": "ab-12", "outcome": "fail"}),
+    );
+    std::fs::write(&journal, format!("{ev}\n{ev2}\n")).unwrap();
     let mut dispatch_seam: Box<DispatchFn> =
         Box::new(|_sink, _event| ("delivered".to_string(), String::new()));
     let _ = run_tick(
