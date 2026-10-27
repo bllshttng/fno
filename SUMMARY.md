@@ -94,3 +94,25 @@ sibling-of-binary lookup finds no `fno-agents`, matching the capture machine.
   lands (expired binds now report the last observed pane aliveness, a port
   bug the deny-warnings gate surfaced); the pytest skip-site ratchet drops
   the row the test_hooks_json_validity path fix un-skipped.
+
+## Round 2 (the inline review lane, level high)
+
+- **The config ladder.** `config_candidates` walked cwd ancestors, so a
+  worktree doctor never read the canonical checkout's layer, the
+  `$FNO_CONFIG` sole override, or the `FNO_NO_CANONICAL_CONFIG` suppression.
+  It now reuses `digest_overlay`'s `config_roots` + `global_config_toml`,
+  the same ladder the mux keymap reads and the same merge order the Python
+  loader uses (repo over canonical over global). `read_review_keys` takes
+  the same ladder, so the review-gap keys read what
+  `load_settings_for_repo` reads.
+- **evals.stale_days.** The reader walked the ladder lowest-first and
+  returned on the first hit, so a global value beat the repo layer, and a
+  falsy 0 fell through to a lower layer where the Python `or 7` reads the
+  door default. It walks highest-first now and a falsy winner reads 7.
+- **Docs.** The bounded-command capture names the pipe-buffer bound its
+  callers must respect; the rival-tool comment stops citing a term gate
+  that does not exist.
+- Parity spot checks: the `--find-transcript` and `--codex-app-server`
+  arms are registered and dispatched; the fnh-taught
+  `fno doctor update --rust` parses at `crates/fno/src/doctor_update.rs:126`;
+  the `pr_watch` stale-days idiom is the Python twin of the fixed read.
