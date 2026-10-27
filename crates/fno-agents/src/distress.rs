@@ -138,10 +138,10 @@ pub(crate) fn help_distress_held(reason: String, evidence: Option<String>) -> He
 }
 
 /// Copy `text` with every byte inside fenced code blocks and inline code
-/// spans replaced by a space. Offsets never move, so the scan that follows
-/// reads identical text outside code and nothing at all inside it. A
-/// backtick-quoted `<help>` is a worker talking about the protocol, not a
-/// distress; a fenced tag is a quotation the same way.
+/// spans replaced by a space, so the scan that follows reads identical text
+/// outside code and nothing at all inside it. A backtick-quoted `<help>` is
+/// a worker talking about the protocol, not a distress; a fenced tag is a
+/// quotation the same way.
 pub(crate) fn blank_code_spans_and_fences(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_fence = false;
@@ -157,15 +157,29 @@ pub(crate) fn blank_code_spans_and_fences(text: &str) -> String {
             }
             continue;
         }
-        // Inline spans never cross a line in the markdown the transcripts
-        // carry, so the span state resets per line: one stray backtick
-        // blanks only to the end of its line.
-        let mut in_span = false;
-        for c in line.chars() {
+        // A maximal run of n backticks is one inline-code delimiter, and the
+        // next run of exactly n closes it, so a double-backtick span does
+        // not cancel itself out. A run never crosses a line in the markdown
+        // the transcripts carry, so the span state resets per line: one
+        // unclosed run blanks only to the end of its line.
+        let mut open_len = 0usize;
+        let mut it = line.chars().peekable();
+        while let Some(c) = it.next() {
             if c == '`' {
-                in_span = !in_span;
-                out.push('`');
-            } else if in_span && c != '\n' {
+                let mut run = 1usize;
+                while it.peek() == Some(&'`') {
+                    it.next();
+                    run += 1;
+                }
+                if open_len == 0 {
+                    open_len = run;
+                } else if run == open_len {
+                    open_len = 0;
+                }
+                for _ in 0..run {
+                    out.push('`');
+                }
+            } else if open_len > 0 && c != '\n' {
                 out.push(' ');
             } else {
                 out.push(c);
@@ -910,6 +924,12 @@ mod tests {
         // A classed tag inside a fenced block is a quotation, not a distress.
         assert_eq!(
             extract_help_distress("```yaml\n<help class=\"wait\" reason=\"ci\">\n```"),
+            None
+        );
+        // A double-backtick span blanks as one span: the run of two is one
+        // delimiter, not two toggles cancelling out.
+        assert_eq!(
+            extract_help_distress("see ``<help reason=\"example\">`` here"),
             None
         );
         // Typographic and single quotes delimit values like ASCII double quotes.

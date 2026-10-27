@@ -57,40 +57,43 @@ pub(super) fn detect_intent_from_text(text: &str) -> Intent {
     // machine tags always carry attributes, so an attribute-less tag is a
     // mention too.
     let text = &crate::distress::blank_code_spans_and_fences(text);
-    // Look for <aborted ...> tag
+    // Look for <aborted ...> tag. The engine deliberately emits a bare
+    // `<aborted>` when a kill criterion fires with no reason (the stop hook
+    // logs the WARN), so the bare tag is signal, not prose.
     if let Some(aborted_start) = text.find("<aborted") {
         // Find the closing >
         if let Some(gt) = text[aborted_start..].find('>') {
             let tag_text = &text[aborted_start..aborted_start + gt + 1];
-            if crate::distress::carries_an_attribute(
-                &tag_text["<aborted".len()..tag_text.len() - 1],
-            ) {
-                let reason = parse_xml_attr(tag_text, "reason").unwrap_or_default();
-                return Intent::Aborted { reason };
-            }
+            let reason = parse_xml_attr(tag_text, "reason").unwrap_or_default();
+            return Intent::Aborted { reason };
         }
     }
-    if let Some(w_start) = text.find("<watching") {
-        if let Some(gt) = text[w_start..].find('>') {
-            let tag_text = &text[w_start..w_start + gt + 1];
-            if crate::distress::carries_an_attribute(
-                &tag_text["<watching".len()..tag_text.len() - 1],
-            ) {
-                let task_id = parse_xml_attr(tag_text, "task_id");
-                if task_id
-                    .as_deref()
-                    .is_some_and(|id| !valid_watch_task_id(id))
-                {
-                    return Intent::None;
-                }
-                return Intent::Watching {
-                    reason: parse_xml_attr(tag_text, "reason").unwrap_or_default(),
-                    pr: parse_xml_attr(tag_text, "pr"),
-                    timeout: parse_xml_attr(tag_text, "timeout"),
-                    task_id,
-                };
+    // A bare attribute-less mention is prose, but it must not hide a real
+    // attributed watch tag later in the message, so the scan continues past
+    // one.
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find("<watching") {
+        let w_start = from + rel;
+        let Some(gt) = text[w_start..].find('>') else {
+            break;
+        };
+        let tag_text = &text[w_start..w_start + gt + 1];
+        if crate::distress::carries_an_attribute(&tag_text["<watching".len()..tag_text.len() - 1]) {
+            let task_id = parse_xml_attr(tag_text, "task_id");
+            if task_id
+                .as_deref()
+                .is_some_and(|id| !valid_watch_task_id(id))
+            {
+                return Intent::None;
             }
+            return Intent::Watching {
+                reason: parse_xml_attr(tag_text, "reason").unwrap_or_default(),
+                pr: parse_xml_attr(tag_text, "pr"),
+                timeout: parse_xml_attr(tag_text, "timeout"),
+                task_id,
+            };
         }
+        from = w_start + "<watching".len();
     }
     // The promise is the one attribute-less tag, so the closer is the
     // discriminator: a real promise ships its closing tag, and prose

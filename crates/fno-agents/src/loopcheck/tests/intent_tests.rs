@@ -138,8 +138,9 @@ fn detect_intent_lookback_bound_holds() {
 fn quoted_and_bare_tags_are_prose_not_intent() {
     // Same contract as the distress extractor: a tag quoted in backticks or
     // fenced is a worker talking about the protocol, not emitting it, and a
-    // bare attribute-less tag is a mention. The real machine tags always
-    // carry attributes.
+    // bare attribute-less tag is a mention. One exception is machine signal:
+    // the engine emits a bare aborted tag when a kill criterion fires with
+    // no reason.
     use super::super::intent::detect_intent_from_text;
     assert_eq!(
         detect_intent_from_text("not `<watching>` yet"),
@@ -157,9 +158,26 @@ fn quoted_and_bare_tags_are_prose_not_intent() {
         detect_intent_from_text("bare <watching> mention"),
         Intent::None
     );
+    // The bare aborted tag is machine signal, not prose: the engine emits it
+    // deliberately when a kill criterion fires with no reason.
+    assert!(matches!(
+        detect_intent_from_text("<aborted>"),
+        Intent::Aborted { .. }
+    ));
+    // A double-backtick span blanks as one span, and the scan continues past
+    // a bare mention to a real attributed tag later in the message.
     assert_eq!(
-        detect_intent_from_text("bare <aborted> mention"),
+        detect_intent_from_text("see ``<watching reason=\"ci\" timeout=\"15m\">`` here"),
         Intent::None
+    );
+    assert_eq!(
+        detect_intent_from_text("bare <watching> then <watching reason=\"ci\" timeout=\"15m\">"),
+        Intent::Watching {
+            reason: "ci".into(),
+            pr: None,
+            timeout: Some("15m".into()),
+            task_id: None,
+        }
     );
     assert_eq!(
         detect_intent_from_text("I still owe the <promise>MISSION COMPLETE summary"),
