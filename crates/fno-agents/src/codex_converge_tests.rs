@@ -22,6 +22,8 @@ struct Fake {
     garbage: Option<String>,
     /// Whether SIGINT was held pending during the last live `plugin add`.
     sigint_held_on_live_add: Option<bool>,
+    /// List a freshly added plugin without its `marketplaceSource`.
+    drop_market_source: bool,
     live: PathBuf,
 }
 
@@ -52,6 +54,7 @@ impl Fake {
             fail: None,
             garbage: None,
             sigint_held_on_live_add: None,
+            drop_market_source: false,
             live: tmp.join("codex-home"),
         }
     }
@@ -83,10 +86,20 @@ impl Fake {
         }
         let a: Vec<&str> = argv.iter().map(String::as_str).collect();
         let release_root = self.release_root.clone();
+        let drop_source = self.drop_market_source;
         let reg = self.homes.entry(home.to_path_buf()).or_default();
         match a.as_slice() {
             ["codex", "plugin", "marketplace", "list", "--json"] => {
-                ran(0, json!({"marketplaces": reg.marketplaces}), "")
+                let rows: Vec<Value> = reg
+                    .marketplaces
+                    .iter()
+                    .map(|row| {
+                        let mut row = row.clone();
+                        row.as_object_mut().unwrap().remove("key");
+                        row
+                    })
+                    .collect();
+                ran(0, json!({"marketplaces": rows}), "")
             }
             ["codex", "plugin", "list", "--json"] => ran(0, json!({"installed": reg.plugins}), ""),
             ["codex", "plugin", "list", "--available", "--marketplace", m, "--json"] => {
@@ -121,10 +134,19 @@ impl Fake {
                     "root": root.display().to_string(),
                     "marketplaceSource": {"sourceType": kind, "source": src},
                 }));
+                config_marketplace(home, name, Some((kind, src)));
                 ran(0, json!({}), "")
             }
-            ["codex", "plugin", "marketplace", "remove", name, "--json"] => {
-                reg.marketplaces.retain(|row| row["name"] != *name);
+            // Codex removes by config key: the listed name, unless the
+            // marketplace was added under another name.
+            ["codex", "plugin", "marketplace", "remove", key, "--json"] => {
+                let before = reg.marketplaces.len();
+                reg.marketplaces.retain(|row| row_key(row) != *key);
+                if reg.marketplaces.len() == before {
+                    let err = format!("Error: marketplace `{key}` is not configured or installed");
+                    return ran(1, json!({}), &err);
+                }
+                config_marketplace(home, key, None);
                 ran(0, json!({}), "")
             }
             ["codex", "plugin", "marketplace", "upgrade", ..] => ran(0, json!({}), ""),
@@ -148,14 +170,19 @@ impl Fake {
                     &root,
                     &cache_dir(home, market_name).join(PLUGIN_DIR).join(&version),
                 );
-                reg.plugins.push(json!({
+                let mut row = json!({
                     "pluginId": id,
                     "marketplaceName": market_name,
                     "version": version,
                     "installed": true,
                     "enabled": true,
-                    "marketplaceSource": market["marketplaceSource"],
-                }));
+                });
+                // Codex omits the source of a marketplace keyed under
+                // another name.
+                if row_key(&market) == market_name && !drop_source {
+                    row["marketplaceSource"] = market["marketplaceSource"].clone();
+                }
+                reg.plugins.push(row);
                 ran(0, json!({}), "")
             }
             _ => ran(1, json!({}), &format!("unexpected {joined}")),
@@ -169,6 +196,40 @@ impl Fake {
             .map(|(_, argv)| argv.join(" "))
             .collect()
     }
+}
+
+fn row_key(row: &Value) -> &str {
+    row.get("key")
+        .or_else(|| row.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+/// Keep `config.toml`'s marketplace table in step with the registry, as
+/// Codex does.
+fn config_marketplace(home: &Path, key: &str, source: Option<(&str, &str)>) {
+    let path = home.join("config.toml");
+    let mut doc: toml::Table = fs::read_to_string(&path)
+        .map(|t| t.parse().unwrap())
+        .unwrap_or_default();
+    let table = doc
+        .entry("marketplaces")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .unwrap();
+    match source {
+        Some((kind, src)) => {
+            let mut row = toml::Table::new();
+            row.insert("source_type".into(), kind.into());
+            row.insert("source".into(), src.into());
+            table.insert(key.into(), toml::Value::Table(row));
+        }
+        None => {
+            table.remove(key);
+        }
+    }
+    fs::create_dir_all(home).unwrap();
+    fs::write(&path, toml::to_string(&doc).unwrap()).unwrap();
 }
 
 fn plugin_source(root: &Path, version: &str) -> PathBuf {
@@ -411,6 +472,83 @@ fn a_failed_rollback_is_persisted_and_named_first() {
         "installed"
     );
     assert!(!receipt_path(&fake.live).exists());
+}
+
+/// A machine whose dev marketplace was added as `footnote` before the rename:
+/// config keys it `footnote`, but the stage manifest now names it `fno`, so
+/// Codex lists it as `fno`.
+fn pre_rename_dev_machine(fake: &mut Fake, stage: &Path) -> String {
+    let src = stage.display().to_string();
+    let config = format!(
+        "# a user comment survives\n[marketplaces.footnote]\nsource = \"{src}\"\nsource_type = \"local\"\n"
+    );
+    fs::create_dir_all(owned_dir(&fake.live)).unwrap();
+    fs::write(fake.live.join("config.toml"), &config).unwrap();
+    let marker = json!({"channel": "dev", "marketplace": "footnote", "ref": null, "source": src});
+    fs::write(marker_path(&fake.live), format!("{marker}\n")).unwrap();
+    fake.homes
+        .entry(fake.live.clone())
+        .or_default()
+        .marketplaces = vec![json!({
+        "name": MARKETPLACE,
+        "key": "footnote",
+        "root": src,
+        "marketplaceSource": {"sourceType": "local", "source": src},
+    })];
+    config
+}
+
+#[test]
+fn a_marketplace_keyed_before_the_rename_is_removed_by_its_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut fake = Fake::new(tmp.path());
+    let stage = plugin_source(&tmp.path().join("stage"), "0.3.0");
+    pre_rename_dev_machine(&mut fake, &stage);
+
+    let done = converge_with(&mut fake, "dev", Some(&stage), false).unwrap();
+    assert_eq!(
+        (done.action, done.plugin_id.as_str()),
+        ("installed", PLUGIN_ID)
+    );
+    let calls = fake.live_calls();
+    assert!(calls.contains(&"codex plugin marketplace remove footnote --json".to_string()));
+    assert!(!calls.contains(&"codex plugin marketplace remove fno --json".to_string()));
+    assert!(!receipt_path(&fake.live).exists());
+    let config = fs::read_to_string(fake.live.join("config.toml")).unwrap();
+    assert!(!config.contains("[marketplaces.footnote]"), "{config}");
+    assert_eq!(inspect_with(&mut fake)["status"], "fresh");
+}
+
+#[test]
+fn a_failed_final_verify_names_sources_and_rolls_back_by_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut fake = Fake::new(tmp.path());
+    let stage = plugin_source(&tmp.path().join("stage"), "0.3.0");
+    let config = pre_rename_dev_machine(&mut fake, &stage);
+    let marker = fs::read(marker_path(&fake.live)).unwrap();
+    let before = fingerprint(&fake.homes[&fake.live].clone().into_state());
+
+    fake.drop_market_source = true;
+    let err = converge_with(&mut fake, "dev", Some(&stage), false).unwrap_err();
+    assert_eq!(err.stage, "final-verify", "{err}");
+    let resolved = resolved(&stage).display().to_string();
+    assert!(
+        err.detail.contains("enabled=[fno@fno(:)]")
+            && err
+                .detail
+                .contains(&format!("marketplaces=[fno(local:{resolved})]")),
+        "{err}"
+    );
+    assert!(!receipt_path(&fake.live).exists());
+    assert_eq!(fs::read(marker_path(&fake.live)).unwrap(), marker);
+    assert_eq!(
+        fs::read_to_string(fake.live.join("config.toml")).unwrap(),
+        config
+    );
+    assert_eq!(
+        fingerprint(&fake.homes[&fake.live].clone().into_state()),
+        before
+    );
 }
 
 #[test]
