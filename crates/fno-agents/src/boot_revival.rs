@@ -79,15 +79,7 @@ pub(crate) fn start(home: &AgentsHome) {
         return;
     }
     let (closed, merged) = closed_and_merged_nodes();
-    let deliberate = deliberate_stops(home);
-    let (leads, workers, mut rows) = plan(
-        &registry.entries,
-        &listing,
-        &closed,
-        &merged,
-        &deliberate,
-        boot,
-    );
+    let (leads, workers, mut rows) = plan(&registry.entries, &listing, &closed, &merged, boot);
     // Stamp the boot first: a daemon that dies mid-pass must not respawn the
     // fleet again on its next start. The tap is the fallback for a row the
     // pass never reached.
@@ -323,7 +315,6 @@ pub(crate) fn plan(
     listing: &ClaudeAgentsSnapshot,
     closed_nodes: &HashSet<String>,
     merged_nodes: &HashSet<String>,
-    deliberate_stops: &HashSet<String>,
     boot: u64,
 ) -> (Vec<String>, Vec<String>, Vec<ReceiptRow>) {
     let mut leads = Vec::new();
@@ -367,7 +358,7 @@ pub(crate) fn plan(
                     .node
                     .as_deref()
                     .filter(|n| merged_nodes.contains(*n))
-                    .filter(|_| deliberate_stop(e, deliberate_stops))
+                    .filter(|_| deliberate_stop(e))
                 {
                     skipped.push(ReceiptRow::new(
                         &e.name,
@@ -421,52 +412,23 @@ fn revive(home: &AgentsHome, name: &str) -> ReceiptRow {
 
 /// The nodes a revival must leave alone: done or superseded. A merged PR
 /// under a live node is a multi-ship node mid-flight; its worker comes back
-/// UNLESS someone stopped it through fno (a deliberate stop, proven by a
-/// `StopRecord` or an `agent_stopped` event): a worker whose work delivered
-/// is never revived, whoever stopped it. The node's own status stays the
-/// authority for closure - the primary PR's merge state once read a
-/// multi-ship node closed and left its worker down during the 2026-10-10
+/// UNLESS a stop someone ran through fno still stands on the row (an Exited
+/// row carrying its `StopRecord`): a worker whose work delivered and whose
+/// stop was never resumed past is never revived. The node's own status
+/// stays the authority for closure - the primary PR's merge state once read
+/// a multi-ship node closed and left its worker down during the 2026-10-10
 /// reboot.
 fn closed_row(row: &Value) -> bool {
     crate::graph_store::is_terminal_entry(row)
 }
 
-/// True when the row proves a stop someone ran through fno: a `StopRecord`
-/// on the row, or an `agent_stopped` event naming it. A reboot death
-/// carries neither, which is what keeps the multi-ship worker coming back.
-fn deliberate_stop(e: &RegistryEntry, evidence: &HashSet<String>) -> bool {
-    e.stop.is_some() || evidence.contains(&e.name)
-}
-
-/// Every name an `agent_stopped` event ever carried, ageless: the stop
-/// evidence is durable-class (never auto-expires), so the whole store
-/// answers. A failed read empties the set and says so - the pass proceeds
-/// and only the merged-PR skip loses its proof.
-fn deliberate_stops(home: &AgentsHome) -> HashSet<String> {
-    let query = crate::event_store::EventQuery::of_types(&["agent_stopped"]);
-    let rows = match crate::event_store::query_events(
-        &crate::daemon::global_events_path(home),
-        &query,
-    ) {
-        Ok(rows) => rows,
-        Err(error) => {
-            eprintln!(
-                "boot revival: agent_stopped read failed ({error}); merged-PR skips lose their stop proof"
-            );
-            return Default::default();
-        }
-    };
-    rows.into_iter()
-        .filter_map(|row| {
-            let value: Value = serde_json::from_str(&row.line).ok()?;
-            value
-                .get("data")
-                .unwrap_or(&value)
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect()
+/// True when a stop someone ran through fno STILL STANDS on this row: the
+/// row reads Exited and carries the `StopRecord` that stop stamped. A row
+/// that reads live resumed after any older stop, so its record is stale and
+/// says nothing about the death this pass is deciding on - which is what
+/// keeps a rebooted multi-ship worker coming back.
+fn deliberate_stop(e: &RegistryEntry) -> bool {
+    matches!(e.status, crate::AgentStatus::Exited) && e.stop.is_some()
 }
 
 /// The closed and merged sets for this boot's pass.
@@ -610,7 +572,6 @@ mod tests {
             &listing,
             &closed,
             &HashSet::new(),
-            &HashSet::new(),
             boot,
         );
         assert_eq!(leads, vec!["quill"]);
@@ -624,45 +585,43 @@ mod tests {
 
     #[test]
     fn a_deliberately_stopped_worker_on_a_merged_node_stays_down() {
-        let mut stopped_by_record = row("kestrel", "11112222-bbbb", AgentStatus::Live);
-        stopped_by_record.node = Some("x-merged".into());
-        crate::state::record_stop(&mut stopped_by_record, "lead", None);
-        let mut stopped_by_event = row("quill", "9999aaaa-aaaa", AgentStatus::Live);
-        stopped_by_event.node = Some("x-merged".into());
+        let mut standing_stop = row("kestrel", "11112222-bbbb", AgentStatus::Exited);
+        standing_stop.node = Some("x-merged".into());
+        crate::state::record_stop(&mut standing_stop, "lead", None);
+        // Exited inside this boot's window, so the candidate filter lets the
+        // row through and the stop is this boot's news.
+        standing_stop.exited_at = Some("2026-09-26T01:01:00Z".into());
+        let mut stale_stop = row("quill", "9999aaaa-aaaa", AgentStatus::Live);
+        stale_stop.node = Some("x-merged".into());
+        crate::state::record_stop(&mut stale_stop, "lead", None);
         let mut reboot_death = row("folio", "33334444-cccc", AgentStatus::Live);
         reboot_death.node = Some("x-merged".into());
-        let mut lead = row("lead-quill", "aaaa1111-lead", AgentStatus::Live);
-        lead.role_level = Some(1);
-        lead.node = Some("x-merged".into());
-        crate::state::record_stop(&mut lead, "operator", None);
         let listing = ClaudeAgentsSnapshot::known(vec![
             ClaudeAgentRow::new("11112222", Some("stopped")),
             ClaudeAgentRow::new("9999aaaa", Some("stopped")),
             ClaudeAgentRow::new("33334444", Some("stopped")),
-            ClaudeAgentRow::new("aaaa1111", Some("stopped")),
         ]);
         let merged = HashSet::from(["x-merged".to_string()]);
-        let evidence = HashSet::from(["quill".to_string()]);
         let (leads, workers, skipped) = plan(
-            &[stopped_by_record, stopped_by_event, reboot_death, lead],
+            &[standing_stop, stale_stop, reboot_death],
             &listing,
             &HashSet::new(),
             &merged,
-            &evidence,
             BOOT,
         );
-        assert_eq!(leads, vec!["lead-quill"], "a lead comes back regardless");
+        assert!(
+            leads.is_empty(),
+            "a standing-stop worker is not a lead; nothing revives here"
+        );
         assert_eq!(
             workers,
-            vec!["folio"],
-            "no stop proof reads as a reboot death: the worker comes back"
+            vec!["quill", "folio"],
+            "a resumed-after stop and a bare reboot death both come back"
         );
         let names: Vec<_> = skipped.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, vec!["kestrel", "quill"], "{skipped:?}");
+        assert_eq!(names, vec!["kestrel"], "{skipped:?}");
         assert!(
-            skipped
-                .iter()
-                .all(|r| r.reason.contains("merged") && r.reason.contains("never revived")),
+            skipped[0].reason.contains("merged") && skipped[0].reason.contains("never revived"),
             "{skipped:?}"
         );
     }
