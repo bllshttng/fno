@@ -764,14 +764,25 @@ struct ParsedFlags {
 }
 
 /// Extract `--stream` and `--log[=]PATH` (the token is ours: pytest's
-/// passthrough has no bare `--log`) ahead of the first bare `--`; everything
-/// else keeps its order.
+/// passthrough has no bare `--log`) ahead of the first bare `--`; the
+/// separator itself and everything after it keep their order untouched, so a
+/// suite's own `--log` stays the suite's.
 fn parse_command_flags(args: &[String]) -> ParsedFlags {
     let mut stream = false;
     let mut log: Option<String> = None;
     let mut rest: Vec<String> = Vec::new();
     let mut pending_log = false;
+    let mut past_separator = false;
     for a in args {
+        if past_separator {
+            rest.push(a.clone());
+            continue;
+        }
+        if a == "--" {
+            past_separator = true;
+            rest.push(a.clone());
+            continue;
+        }
         if pending_log {
             log = Some(a.clone());
             pending_log = false;
