@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-from fno.adapters.providers import loader
 from fno.adapters.providers.model import ProviderRecord
 from fno.adapters.providers.runtime_state import (
     read_state,
