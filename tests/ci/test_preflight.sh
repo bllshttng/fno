@@ -182,7 +182,21 @@ esac
 if [[ -f POISON ]]; then echo "smoke: POISON step failed"; exit 1; fi
 echo "smoke: all green (stub)"; exit 0
 EOF
-chmod +x "$BIN/fno" "$BIN/cargo" "$BIN/cargo-audit" "$BIN/rustup" "$BIN/mkdir" "$BIN/uv"
+cat > "$BIN/fno-agents" <<'EOF'
+#!/usr/bin/env bash
+# preflight invokes the native runner directly since the test-command family
+# ported (`test-run doctor smoke --changed`): route the smoke tail through the
+# uv stub so the scenario sentinel files keep working, and answer the claim
+# queue reads with silence (an absent queue reads as 0 waiters).
+case " $* " in
+  *" smoke "*)
+    shift 3
+    exec "$(dirname "$0")/uv" "$@" ;;
+  *" claim queue "*) exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$BIN/fno" "$BIN/fno-agents" "$BIN/cargo" "$BIN/cargo-audit" "$BIN/rustup" "$BIN/mkdir" "$BIN/uv"
 export PATH="$BIN:$PATH"
 
 # --- build the fixture repo -------------------------------------------------
