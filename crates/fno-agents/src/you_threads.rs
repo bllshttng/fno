@@ -302,13 +302,6 @@ pub(crate) struct YouStore {
 }
 
 impl YouStore {
-    /// The production cache path, beside intel's rollups.json. `None` when
-    /// no agents home is declared (tests run without a cache at all).
-    pub(crate) fn default_path() -> Option<PathBuf> {
-        crate::paths::AgentsHome::from_env_opt()
-            .map(|home| home.root().join("intel").join("you-threads.json"))
-    }
-
     pub(crate) fn open(path: PathBuf, persist: bool) -> Self {
         let cache = std::fs::read_to_string(&path)
             .ok()
