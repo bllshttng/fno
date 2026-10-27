@@ -237,7 +237,11 @@ pub(crate) fn ensure_node_workdir(
         "node": node,
         "harness": harness,
     });
-    let (answer, _receipt) = decide(&payload);
+    let (answer, receipt) = decide(&payload);
+    // The resumed-tree line the seam command prints to its own stderr.
+    if let Some(line) = receipt {
+        eprintln!("{line}");
+    }
     if let Some(hold) = answer.get("hold").and_then(Value::as_str) {
         return Err(hold.to_string());
     }

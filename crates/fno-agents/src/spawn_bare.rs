@@ -483,7 +483,7 @@ fn print_line(params: &Value, harness: &str, name: &str, route: Option<&Route>, 
         "effort": route.and_then(|r| r.effort.as_deref()).unwrap_or(""),
         "permission_mode": "",
         "route_env": route_env,
-        "account_env": {},
+        "account_env": account_env(params, harness),
         "cwd": cwd.to_string_lossy(),
     });
     match crate::spawn_overlay::resolve(ask) {
@@ -505,6 +505,15 @@ fn print_line(params: &Value, harness: &str, name: &str, route: Option<&Route>, 
             eprintln!("fno-agents spawn-overlay exited 2: spawn-overlay: {msg}");
             2
         }
+    }
+}
+
+/// The spawn's account overlay, as the account seam resolved it before the
+/// gate (a refusal already exited there).
+fn account_env(params: &Value, harness: &str) -> Map<String, Value> {
+    match crate::accounts::launch::pane_overlay(params, harness) {
+        Ok(Some(applied)) => applied.env,
+        _ => Map::new(),
     }
 }
 
@@ -542,7 +551,7 @@ pub fn native_lane(params: &Value, name: &str, route: Option<&Route>, cwd: &Path
         "name": name,
         "payload": message,
         "route_env": route.env,
-        "account_env": {},
+        "account_env": account_env(params, "claude"),
         "sandbox": params.get("sandbox").cloned().unwrap_or(Value::Null),
         "model": route.model,
         "effort": "",
