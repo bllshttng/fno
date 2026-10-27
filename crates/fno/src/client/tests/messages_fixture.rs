@@ -600,3 +600,79 @@ fn fixture_projection() -> serde_json::Value {
         "unreadable": 0,
     })
 }
+
+/// The You tab (node x-cecf): rows read the projection's `you` array
+/// (newest first, one per session, unread off the chat-id read marks) and
+/// the detail paints the typed turn right, the reply left, per item.
+#[tokio::test]
+async fn messages_you_tab_contract() {
+    use super::super::LayoutView;
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    check_fixture(&mut view);
+    let prefs = tempfile::tempdir().unwrap();
+    crate::view_store::set_test_path(prefs.path());
+    let b = view.messages_board.as_mut().expect("open");
+    b.snapshot.apply(json!({
+        "participants": [],
+        "threads": [],
+        "system": {},
+        "channels": [],
+        "announcements": [],
+        "unreadable": 0,
+        "you": [
+            {"session_id":"older","name":"older-worker","last_ts":"2026-10-01T09:00:00Z",
+             "items":[{"ts":"2026-10-01T09:00:00Z","typed_text":"earlier question","reply_text":""}]},
+            {"session_id":"fresh","name":"gavin","last_ts":"2026-10-01T10:00:00Z",
+             "items":[{"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."}]},
+        ],
+    }));
+    b.col2 = ChatTab::You;
+    let rows = b.chat_rows("");
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(
+        matches!(&rows[0], ChatRow::YouThread { name, unread, .. } if name == "gavin" && *unread),
+        "{rows:?}"
+    );
+    b.cursors[1] = 0;
+    b.col = Col::Chats;
+    // Enter opens the thread: sel_thread you:<sid>, the read mark saves.
+    super::keys(&mut view, b"\r", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    let b = view.messages_board.as_ref().unwrap();
+    assert_eq!(b.sel_thread.as_deref(), Some("you:fresh"));
+    let marks = crate::view_store::load_messages_read_marks();
+    assert_eq!(
+        marks.get("you:fresh"),
+        Some(&"2026-10-01T10:00:00Z".to_string())
+    );
+    // The detail: typed right-aligned, reply left-aligned, title names it.
+    let (lines3, _) = b.thread_lines(50);
+    let texts: Vec<String> = lines3.iter().map(|l| l.text.clone()).collect();
+    assert!(texts[0].starts_with("gavin"), "{texts:?}");
+    let typed_i = texts
+        .iter()
+        .position(|t| t.ends_with("why did the gate refuse?"))
+        .expect("typed bubble");
+    assert_eq!(texts[typed_i].chars().count(), 49, "right edge: {texts:?}");
+    assert_eq!(
+        texts
+            .iter()
+            .find(|t| t.as_str() == "Because the base was stale."),
+        Some(&"Because the base was stale.".to_string()),
+        "reply starts at column 0: {texts:?}"
+    );
+}
