@@ -1562,15 +1562,11 @@ async fn run(args: Vec<String>) -> i32 {
             });
         }
         // An --account spawn is decided inside maybe_run_spawn: the seam's
-        // stamp names the account it applied; anything else re-execs Python.
+        // stamp names the account it applied; a spawn no arm takes falls
+        // through to the daemon RPC below.
         let promoted = promotion.as_ref();
-        if let Some(code) = maybe_run_spawn(
-            &home,
-            &params,
-            &agent_name,
-            &mut spawn_hold,
-            promoted,
-        ) {
+        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name, &mut spawn_hold, promoted)
+        {
             fno_agents::spawn_guard::settle(&mut spawn_hold, code, &agent_name);
             let code = fno_agents::spawn_promote::settle(promoted, code, &agent_name);
             if code == 0 {
