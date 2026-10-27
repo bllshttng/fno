@@ -527,7 +527,7 @@ pub fn permission_pane_tokens(provider: &str, mode: &str) -> Result<Vec<String>,
 /// stays one decision.
 pub fn codex_pane_default_tokens(role_level: Option<u32>) -> Result<Vec<String>, String> {
     if role_level.is_some() {
-        return Ok(vec!["--dangerously-bypass-approvals-and-sandbox".into()]);
+        return permission_pane_tokens("codex", "yolo");
     }
     permission_pane_tokens("codex", "workspace-write:never")
 }
@@ -691,28 +691,6 @@ pub fn run_permission_tokens(args: &[String]) -> i32 {
     };
     let provider = parsed.get("provider").and_then(Value::as_str).unwrap_or("");
     let mode = parsed.get("mode").and_then(Value::as_str).unwrap_or("");
-    // An empty mode with a lead rank asks for the pane lane's role-aware
-    // default; a non-empty mode is an operator spelling and wins verbatim.
-    if mode.is_empty() {
-        if let Some(level) = parsed
-            .get("role_level")
-            .and_then(Value::as_u64)
-            .and_then(|l| u32::try_from(l).ok())
-        {
-            if provider == "codex" {
-                match codex_pane_default_tokens(Some(level)) {
-                    Ok(tokens) => {
-                        println!("{}", serde_json::json!({"tokens": tokens, "refusal": null}));
-                        return 0;
-                    }
-                    Err(reason) => {
-                        println!("{}", serde_json::json!({"tokens": [], "refusal": reason}));
-                        return 0;
-                    }
-                }
-            }
-        }
-    }
     if let Some(substrate) = parsed.get("substrate").and_then(Value::as_str) {
         return match permission_mappable(provider, mode, substrate) {
             Ok(mappable) => {
@@ -730,6 +708,29 @@ pub fn run_permission_tokens(args: &[String]) -> i32 {
                 0
             }
         };
+    }
+    // An empty mode with a lead rank asks for the pane lane's role-aware
+    // default; a non-empty mode is an operator spelling and wins verbatim.
+    // After the substrate door, so a mappability ask keeps its answer shape.
+    if mode.is_empty() {
+        if let Some(level) = parsed
+            .get("role_level")
+            .and_then(Value::as_u64)
+            .and_then(|l| u32::try_from(l).ok())
+        {
+            if provider == "codex" {
+                return match codex_pane_default_tokens(Some(level)) {
+                    Ok(tokens) => {
+                        println!("{}", serde_json::json!({"tokens": tokens, "refusal": null}));
+                        0
+                    }
+                    Err(reason) => {
+                        println!("{}", serde_json::json!({"tokens": [], "refusal": reason}));
+                        0
+                    }
+                };
+            }
+        }
     }
     match permission_pane_tokens(provider, mode) {
         Ok(tokens) => {
