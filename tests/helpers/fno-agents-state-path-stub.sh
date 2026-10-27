@@ -31,6 +31,22 @@ if [[ "${1:-} ${2:-}" == "state mint-id" ]]; then
   exit 0
 fi
 
+# FNO_TEST_GATES_GREEN=1 answers the target-family gates green without the
+# real binary: a harness whose subject is NOT the gates (claim-wait, say)
+# still needs them quiet, and the real hold gate would read the ambient graph
+# store and refuse on a sandbox that has none. resolve-owned-identity answers
+# the same KEY=value block the old fno stub canned.
+if [[ "${FNO_TEST_GATES_GREEN:-}" == "1" ]]; then
+  case "${1:-} ${2:-}" in
+    "target-gates check-review-gate"|"target-gates check-dispatch-hold"|"target-gates check-contained")
+      exit 0 ;;
+    "target-gates resolve-owned-identity")
+      printf 'HARNESS=claude\nSESSION_ID=%s\nDISPOSITION=proven\nCOLLISION=\n' \
+        "${CLAUDE_CODE_SESSION_ID:-}"
+      exit 0 ;;
+  esac
+fi
+
 _self_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 _self="${BASH_SOURCE[0]:-$0}"
 _oldifs="$IFS"
