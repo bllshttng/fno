@@ -135,12 +135,23 @@ class TestSilenceReportsOnTheTransition:
     """
 
     def _run(self, monkeypatch, tmp_path, rows, ages, seen_store):
-        from fno import fleet_state
+        # The silent-seen memo lives behind the native door now, so the
+        # seam is a fake command_call over a store the two ticks share.
+        store = getattr(self, "_seen_store", None)
+        if store is None:
+            store = {}
+            self._seen_store = store
 
-        monkeypatch.setattr(
-            fleet_state, "fleet_state_path",
-            lambda: tmp_path / "fleet-sweep-state.json", raising=True,
-        )
+        def fake_call(command, payload, **kwargs):
+            op = command[-1]
+            if op == "silent-seen":
+                return sorted(store.get("silent_seen", []))
+            if op == "set-silent-seen":
+                store["silent_seen"] = list(payload["handles"])
+                return {"ok": True}
+            raise AssertionError(f"unexpected fleet door: {command}")
+
+        monkeypatch.setattr("fno.rust_binary.command_call", fake_call)
         events = []
         agents_sweep.run_sweep(
             emit=lambda t, d: events.append((t, dict(d))),

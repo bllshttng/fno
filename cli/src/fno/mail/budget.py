@@ -174,29 +174,34 @@ def _store(path: Path, pair: str, entries: list[dict]) -> None:
 def last_inbound(sender: str, recipient: str, *, since: float) -> Optional[tuple[str, float]]:
     """Newest bus envelope addressed from ``recipient`` to ``sender`` since ``since``.
 
-    Reads the canonical bus, which records the hosted lane as well as the durable
-    one, so a reply delivered live still counts as a reply. Before that recording
-    landed the hosted lane was invisible here and the reset would have fired only
-    for durable replies.
+    Reads the canonical bus through the native read door (`chats bus-read rows`),
+    which records the hosted lane as well as the durable one, so a reply
+    delivered live still counts as a reply. Before that recording landed the
+    hosted lane was invisible here and the reset would have fired only for
+    durable replies.
     """
-    from fno.bus.log import iter_messages
+    from fno import paths, rust_binary
     from fno.mail.kinds import is_authored_mail_kind
 
     if sender == recipient:
         return None
+    live = paths.bus_dir() / "messages.jsonl"
+    rows = rust_binary.command_call(
+        ["chats", "bus-read", "rows", "--bus", str(live)], {}
+    )["rows"]
     newest: Optional[tuple[str, float]] = None
-    for env in iter_messages(warn=False):
+    for row in rows:
         if (
-            not is_authored_mail_kind(env.kind)
-            or env.from_ != recipient
-            or env.to != sender
+            not is_authored_mail_kind(row.get("kind", ""))
+            or row.get("from") != recipient
+            or row.get("to") != sender
         ):
             continue
-        ts = _parse_ts(env.ts)
+        ts = _parse_ts(row.get("ts", ""))
         if ts is None or ts < since:
             continue
         if newest is None or ts >= newest[1]:
-            newest = (env.id, ts)
+            newest = (row.get("id", ""), ts)
     return newest
 
 

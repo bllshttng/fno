@@ -720,25 +720,24 @@ def test_rust_only_command_no_binary_emits_install_hint(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Spawns carrying a Python-only flag (--role,
-# --dispatch-account) never route to the binary: the Rust client cannot
-# parse them. A --resume spawn DOES route: the binary's grammar knows the
-# flag and refuses it with the retired-axis line. --monitor and
-# --output-format left this list in row 9: the binary parses and
-# refuses/launches them natively. `--help` exercises the make_context
-# routing decision without running a real spawn.
+# Only a spawn with no --as stays on the Python door now: --role, --route
+# with an account flag and an account-bearing pane run in the client. A
+# --resume spawn routes too, and the binary refuses it with the retired-axis
+# line. `--help` exercises the make_context routing decision without
+# running a real spawn.
 # --------------------------------------------------------------------------- #
 
 
-def test_role_bearing_spawn_not_routed_in_forced_rust_mode(monkeypatch, tmp_path) -> None:
-    """Even FNO_AGENTS_RUNTIME=rust must not route a --role spawn to the binary."""
+def test_role_bearing_spawn_routes_in_forced_rust_mode(monkeypatch, tmp_path) -> None:
+    """A --role spawn with an explicit substrate crosses to the binary, which
+    resolves the role route itself (spawn_route::role_seam)."""
     from fno.cli import app
 
     called: list = []
     monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
     monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
-    CliRunner().invoke(app, ["agents", "spawn", "--role=tidy", "--help"])
-    assert called == []
+    CliRunner().invoke(app, ["agents", "spawn", "--as", "thread", "--role=tidy", "--help", "check the role"])
+    assert called and "--role=tidy" in called[0]
 
 
 def test_monitor_bearing_spawn_routes_in_rust_mode(monkeypatch) -> None:

@@ -129,7 +129,8 @@ if [[ -n "$ADDED" ]]; then
   printf '  %s\n' $ADDED >&2
   echo "  Add each to scripts/ci/autonomy-registry-baseline.txt naming the" >&2
   echo "  fno agents admit autonomy status spawner it belongs to, add a status row via" >&2
-  echo "  cli/src/fno/autonomy_cli.py if it is a genuinely new spawner, or" >&2
+  echo "  crates/fno-agents/src/autonomy_status.rs (fno agents admit autonomy status)" >&2
+  echo "  if it is a genuinely new spawner, or" >&2
   echo "  record why it is not autonomous (an explicit operator command)." >&2
 fi
 if [[ -n "$REMOVED" ]]; then

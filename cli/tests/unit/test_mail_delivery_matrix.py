@@ -280,7 +280,7 @@ def test_cell6b_retired_form_read_off_a_stored_record_is_migrated(
     The reply path first shipped this as a refusal -- the same wall class as this
     node's root cause -- and was reversed on PR #491.
     """
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
     from fno.inbox.store import write_new_thread
 
     _seed_asleep_transcript(monkeypatch, tmp_path, session_id=LIVE_SID)
@@ -303,14 +303,14 @@ def test_cell6b_retired_form_read_off_a_stored_record_is_migrated(
     )
 
     assert result.exit_code == 14, result.output
-    replies = [m for m in iter_messages() if m.in_reply_to == inbound]
+    replies = [m for m in read_rows() if m.get("in_reply_to") == inbound]
     # The write-ahead stage row and the durable recovery row share one id.
     assert len(replies) == 2
-    assert replies[0].id == replies[-1].id
-    assert replies[0].delivery is None
-    assert replies[-1].to == LIVE_HANDLE
+    assert replies[0]["id"] == replies[-1]["id"]
+    assert replies[0].get("delivery") is None
+    assert replies[-1]["to"] == LIVE_HANDLE
     drained = _drain_as(runner, monkeypatch, LIVE_SID)
-    assert any(message["id"] == replies[-1].id for message in drained)
+    assert any(message["id"] == replies[-1]["id"] for message in drained)
 
 
 # ---------------------------------------------------------------------------

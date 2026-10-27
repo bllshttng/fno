@@ -1,0 +1,1 @@
+{"worker":[{"id":"m3","thread":"t1","from":"alpha","to":"worker","kind":"send","body":"from another sender","ts":"2026-10-12T09:06:00Z"}]}

@@ -1,0 +1,1 @@
+source: <FIXTURE>/project/.fno/config.toml (overrides <FIXTURE>/fake_home/.fno/config.toml) (root: <FIXTURE>/project; searched: <FIXTURE>/project/.fno/config.toml, <FIXTURE>/project/.fno/settings.yaml, <FIXTURE>/fake_home/.fno/config.toml, <FIXTURE>/fake_home/.fno/settings.yaml)

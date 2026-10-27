@@ -23,7 +23,6 @@ _NON_STATE_CACHE_REASONS = {
     ("fno.agents.naming", "_codes"): "cache key is the binary-served vocabulary table (name-codes), not fno state",
     ("fno.rust_binary", "delivered_terminals"): "cache key is the binary-served delivered-terminal vocabulary, not fno state",
     ("fno.harness_identity", "_legacy_handle_re"): "cache key is the binary-served harness roster, not fno state",
-    ("fno.autonomy_cli", "_provenance_by_spawner"): "cache key is the binary-served vocabulary table, not fno state",
     ("fno.config._loader", "_load_settings_at"): "cache key is the full declaration plus a stat fingerprint of the settings candidates (_settings_key), which carries the state root and the file contents",
 }
 

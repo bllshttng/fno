@@ -25,7 +25,7 @@ const SCCACHE_DIR_KEY: &str = "SCCACHE_DIR";
 const RECLAIM_ON_INSTALL: [&str; 2] = ["--apply", "--no-uv-prune"];
 const RC_MARK: &str = "# fno: cargo build-dir";
 
-/// Same shape as the Python gate in cli/src/fno/hook_config.py:29.
+/// Same shape as the Python gate's `_PLUGIN_ROOT_RE` in cli/src/fno/lint_cli.py.
 const HOOK_REF_PATTERN: &str =
     r#"\$\{(?:CLAUDE_PLUGIN_ROOT|CODEX_PLUGIN_ROOT|PLUGIN_ROOT)\}/([^\s"'\\]+)"#;
 

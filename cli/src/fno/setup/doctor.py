@@ -374,7 +374,7 @@ def run_doctor() -> int:
     # module forms a mypy SCC in which graph._constants' lazy __getattr__
     # re-exports degrade to Optional[Path] and fail unrelated modules. The same
     # edge fno.config._revoke_unbacked_optouts keeps out of the import graph.
-    from fno.config_readback import (
+    from fno.config._readback import (
         check_config_files_read,
         check_enabled_with_empty_population,
         check_unknown_keys,

@@ -987,7 +987,12 @@ pub fn run_territory_rows(args: &[String]) -> i32 {
 /// print as an empty list. Invoked by the `fno config active-backlog`
 /// passthrough and rank's dispatcher note.
 pub fn run_active_backlog_receipt(args: &[String]) -> i32 {
-    let _ = args;
+    // The status-fanout target resolver nests here as an argv op
+    // (crate::status_sinks), so it adds no fno-agents root action (shrink
+    // law d-fe66560a): receipt and fanout are the drain family.
+    if args.first().map(String::as_str) == Some("status-sinks") {
+        return crate::status_sinks::run(&args[1..]);
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let registry = AgentsHome::from_env().registry_json();
     let report = crate::active_backlog::resolve_targets_report(&cwd, &registry);

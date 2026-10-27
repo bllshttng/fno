@@ -1,0 +1,1 @@
+source: default (no config file sets this key) (root: <FIXTURE>/project; searched: <FIXTURE>/project/.fno/config.toml, <FIXTURE>/project/.fno/settings.yaml, <FIXTURE>/fake_home/.fno/config.toml, <FIXTURE>/fake_home/.fno/settings.yaml)

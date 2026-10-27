@@ -48,7 +48,6 @@ agents spawn !--bounded-placement !--deny-tools !--mux-session !--output-format 
 annotate
 annotate list
 approvals
-autonomy status
 backlog
 backlog advance
 backlog done
@@ -91,13 +90,10 @@ lead done
 lead drain
 lead escalate
 lint
-loops
-loops resume-all
 mail
 mail send !--origin !--provider
 mux
 notify
-observer
 paths
 phase kill-check
 plan
@@ -117,15 +113,3 @@ whoami context
 whoami cost
 whoami ledger
 whoami scoreboard
-workspace reap
-workspace register-worker
-workspace worktree archive
-workspace worktree cleanup !--kill-orphans
-workspace worktree ensure
-workspace worktree overlap-record
-workspace worktree overlaps
-workspace worktree policy
-workspace worktree reapable
-workspace worktree status
-workspace worktree stranded
-worktree
