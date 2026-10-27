@@ -600,9 +600,10 @@ pub fn aliased_layers(repo_root: &Path) -> Vec<(PathBuf, Value)> {
             continue;
         }
         if let Some(mut raw) = parse_config_file(&candidate) {
-            // The alias pass runs on the RAW parsed shape, before any unwrap
-            // lifts the config block - the loader's exact order.
+            // The alias pass runs on the RAW parsed shape, before the unwrap
+            // lifts the legacy `config:` block - the loader's exact order.
             alias_legacy_keys(&mut raw);
+            let raw = unwrap_config_dict(&raw);
             layers.push((resolve_path(&candidate), raw));
         }
     }
@@ -619,6 +620,7 @@ pub fn aliased_layers_at(root: &Path) -> Vec<(PathBuf, Value)> {
         }
         if let Some(mut raw) = parse_config_file(&candidate) {
             alias_legacy_keys(&mut raw);
+            let raw = unwrap_config_dict(&raw);
             layers.push((resolve_path(&candidate), raw));
         }
     }
