@@ -425,8 +425,8 @@ pub(crate) fn events_paths(ledger_path: &Path) -> Vec<PathBuf> {
         .map(Path::to_path_buf)
         .unwrap_or_default();
     vec![
-        parent.join("events.jsonl"),
-        parent.join("events.jsonl.ephemeral"),
+        parent.join("events.jsonl"), // events-discipline:allow: a read-only path lister, not a journal writer
+        parent.join("events.jsonl.ephemeral"), // events-discipline:allow: same lister, the ephemeral sibling
     ]
 }
 
