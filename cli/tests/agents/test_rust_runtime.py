@@ -801,9 +801,9 @@ def test_output_format_spawn_routes_to_installed_rust(monkeypatch, tmp_path) -> 
     assert len(called) == 1 and "--output-format" in called[0]
 
 
-def test_plain_spawn_stays_python_bg_spawn_auto_routes(monkeypatch, tmp_path) -> None:
-    """A plain spawn resolves its lane in the Python body and must NOT route to
-    the binary; a --once spawn still auto-routes."""
+def test_once_spawn_auto_routes_with_the_seam_marker(monkeypatch, tmp_path) -> None:
+    """A --once spawn auto-routes to the binary. The seam marker rides straight
+    after the command: it asserts the crossing upstream."""
     from fno.cli import app
 
     binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
@@ -816,14 +816,6 @@ def test_plain_spawn_stays_python_bg_spawn_auto_routes(monkeypatch, tmp_path) ->
     monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
     monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: binary)
     monkeypatch.setattr(rr, "route_to_rust", fake_route)
-
-    # Plain spawn: stays Python (the pane back half). It will fail inside the
-    # Python dispatch (no mux in this test env), but must never exec the binary.
-    CliRunner().invoke(app, ["agents", "spawn", "--name", "worker", "--harness", "claude"])
-    assert captured == [], "a pane-substrate spawn must not route to the binary"
-
-    # --once: still the binary's lane. The seam marker rides straight after
-    # the command: it asserts the crossing upstream.
     result = CliRunner().invoke(
         app,
         ["agents", "spawn", "--name", "worker", "--harness", "claude", "--once", "hello"],
