@@ -31,6 +31,7 @@ pub mod cli_args;
 pub mod cli_hooks;
 pub mod client;
 pub mod clipboard;
+pub mod config_cli;
 pub mod config_defaults;
 pub mod config_schema;
 pub mod connections_view;

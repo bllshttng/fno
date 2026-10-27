@@ -236,7 +236,7 @@ The cap refuses (never queues) at `territory_cap`. It stays enforced under `--fo
 
 A node counts for the deepest live role whose scope holds it, then the lowest canonical scope on a tie (`territory::node_owners`). A node that no live role holds counts for its project's loose territory. The org's owned counts read the same rule. A spawn refusal and the org readout can never disagree about whose node a worker is on. Where the L1 fno role and live L2 roles coexist, an L2 node's worker counts for that L2 territory. It never counts for the fno root.
 
-Two CLI commands read the same Rust territory projection so no two surfaces disagree. `fno config active-backlog` (`config_cli.py`) passes through the `active-backlog-receipt` binary call: territories resolved from the graph, the role registry, the workspace map, and `config.active_backlog`. It is read-only and exit 1 names the unreadable source. `fno config active-backlog-territories` (hidden) passes through `territory-rows`: one row per scope, with its missions, lead or leadless state, and live count against the cap. Both commands are read-only.
+Two CLI commands read the same Rust territory projection so no two surfaces disagree. `fno config active-backlog` (native door in `crates/fno/src/config_cli/leaves.rs`) renders the `active-backlog-receipt` binary call: territories resolved from the graph, the role registry, the workspace map, and `config.active_backlog`. It is read-only and exit 1 names the unreadable source. `fno config active-backlog-territories` (hidden) passes through `territory-rows`: one row per scope, with its missions, lead or leadless state, and live count against the cap. Both commands are read-only.
 
 ## A dispatch outcome is dispatched, skipped, or failed
 

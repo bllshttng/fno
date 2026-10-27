@@ -1666,6 +1666,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "codex_turn_error",
     "quiet_worker_nudge",
     "quiet_worker_recovery",
+    // Quiet-recovery's revival-rule skip: a deliberately stopped worker on a
+    // delivered node, recorded instead of revived (codex_watch/quiet.rs).
+    "quiet_worker_skip",
     // Who stamped a row bus-only (mail_hold.rs record_stamp).
     "mail_hold_stamped",
     "quiet_worker_error",

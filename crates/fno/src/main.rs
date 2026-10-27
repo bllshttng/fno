@@ -69,6 +69,12 @@ enum Role {
     /// beside the setup command that reads it.
     ConfigDefaults(Vec<OsString>),
     ConfigSchema(Vec<String>),
+    /// The native read-side `config` doors (get, history, build-dir,
+    /// assert-subagent-budget, status-sinks, active-backlog, plugin install).
+    /// One classify, bodies in `config_cli::`; the writer stays with the
+    /// config hub's write surface and the doctor command beside the setup
+    /// family's engine.
+    ConfigCli(fno::config_cli::Door),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
@@ -1208,6 +1214,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::config_schema::classify(args) {
         return Role::ConfigSchema(rest);
     }
+    if let Some(door) = fno::config_cli::classify(args) {
+        return Role::ConfigCli(door);
+    }
     match cli_args::classify(args) {
         FrontDoor::Forward => Role::Forward,
         FrontDoor::Usage { message } => {
@@ -1459,6 +1468,21 @@ fn main() {
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
         Role::ConfigSchema(rest) => std::process::exit(fno::config_schema::run(&rest)),
+        Role::ConfigCli(door) => std::process::exit(match door {
+            fno::config_cli::Door::Get(rest) => fno::config_cli::get::run(&rest),
+            fno::config_cli::Door::History(rest) => fno::config_cli::history::run(&rest),
+            fno::config_cli::Door::BuildDir => fno::config_cli::leaves::run_build_dir(&[]),
+            fno::config_cli::Door::Budget(rest) => fno::config_cli::leaves::run_budget(&rest),
+            fno::config_cli::Door::StatusSinks(rest) => {
+                fno::config_cli::leaves::run_status_sinks(&rest)
+            }
+            fno::config_cli::Door::ActiveBacklog => {
+                fno::config_cli::leaves::run_active_backlog(&[])
+            }
+            fno::config_cli::Door::PluginInstall(rest) => {
+                fno::config_cli::plugin_install::run(&rest)
+            }
+        }),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
         Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
