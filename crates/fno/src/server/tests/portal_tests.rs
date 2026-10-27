@@ -3046,7 +3046,7 @@ fn a_vanishing_portal_says_so_and_names_its_row() {
     core.close_pane_reasoned(b_seat, "closed by operator");
     let loss = collect_until_portal_closed(&mut rx, "portal 1").expect("the loss notice arrived");
     assert!(
-        loss.contains("deadbee2") && loss.contains("closed by operator"),
+        loss.contains("target-b") && loss.contains("closed by operator"),
         "the notice names the row and the reason: {loss:?}"
     );
 
