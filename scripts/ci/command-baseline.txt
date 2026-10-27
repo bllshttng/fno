@@ -95,7 +95,6 @@ loops resume-all
 mail
 mail send !--origin !--provider
 mux
-observer
 paths
 phase kill-check
 plan

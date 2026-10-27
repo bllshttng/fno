@@ -1576,16 +1576,11 @@ async fn run(args: Vec<String>) -> i32 {
             });
         }
         // An --account spawn is decided inside maybe_run_spawn: the seam's
-        // stamp names the account it applied; anything else re-execs Python.
+        // stamp names the account it applied; a spawn no arm takes falls
+        // through to the daemon RPC below.
         let promoted = promotion.as_ref();
-        if let Some(code) = maybe_run_spawn(
-            &home,
-            &params,
-            &agent_name,
-            &args,
-            &mut spawn_hold,
-            promoted,
-        ) {
+        if let Some(code) = maybe_run_spawn(&home, &params, &agent_name, &mut spawn_hold, promoted)
+        {
             fno_agents::spawn_guard::settle(&mut spawn_hold, code, &agent_name);
             let code = fno_agents::spawn_promote::settle(promoted, code, &agent_name);
             if code == 0 {
@@ -2202,25 +2197,10 @@ fn exec_python_front(args: &[String]) -> std::io::Error {
     err
 }
 
-/// The Python-lane bounce: strip --defaults-applied (the Python CLI has no
-/// such flag) and re-exec the front door; on exec failure the arm's only
-/// decision path is gone and the caller returns the 127.
-fn bounce_to_python(args: &[String], why: &str, remedy: &str) -> i32 {
-    let stripped: Vec<String> = args
-        .iter()
-        .filter(|a| !a.starts_with("--defaults-applied"))
-        .cloned()
-        .collect();
-    let err = exec_python_front(&stripped);
-    eprintln!("fno-agents: {why}, but exec of 'fno agents spawn' failed: {err}. {remedy}");
-    127
-}
-
 fn maybe_run_spawn(
     home: &AgentsHome,
     params: &Value,
     name: &str,
-    args: &[String],
     hold: &mut Option<fno_agents::spawn_guard::SpawnHold>,
     promotion: Option<&fno_agents::spawn_promote::Promotion>,
 ) -> Option<i32> {
@@ -2333,31 +2313,25 @@ fn maybe_run_spawn(
         }
     };
 
-    // The account arm: both account flags resolve here, before the gate.
-    if let Some(code) = fno_agents::accounts::launch::seam_exit(params, provider) {
-        return Some(code);
-    }
-
-    // The route arm: resolved before the gate, so a refusal takes no slot.
+    // The route arm, then the role arm (an explicit route wins): resolved
+    // before the gate, so a refusal takes no slot, and before the account
+    // scrub, which can remove the var a vendor key lives in.
+    let env_get = |k: &str| std::env::var(k).ok();
+    let text = |k: &str| params.get(k).and_then(Value::as_str);
     let route = match fno_agents::spawn_route::route_seam(
-        params.get("route").and_then(Value::as_str),
-        params
-            .get("account")
-            .or(params.get("dispatch_account"))
-            .and_then(Value::as_str),
+        text("route"),
         provider,
         public_substrate,
         &cwd,
-        &|k| std::env::var(k).ok(),
+        &env_get,
     ) {
-        fno_agents::spawn_route::RouteSeam::None => None,
-        fno_agents::spawn_route::RouteSeam::Python(why) => {
-            return Some(bounce_to_python(
-                args,
-                why,
-                "Run `fno agents spawn ...` directly.",
-            ));
+        fno_agents::spawn_route::RouteSeam::None => {
+            fno_agents::spawn_route::role_seam(text("role"), provider, &cwd, &env_get)
         }
+        seam => seam,
+    };
+    let route = match route {
+        fno_agents::spawn_route::RouteSeam::None => None,
         fno_agents::spawn_route::RouteSeam::Refuse(line) => {
             eprintln!("{line}");
             return Some(2);
@@ -2367,6 +2341,11 @@ fn maybe_run_spawn(
             Some(route)
         }
     };
+    // The account arm: both account flags resolve here, before the gate.
+    let route_env = route.as_ref().map(|r| &r.env);
+    if let Some(code) = fno_agents::accounts::launch::seam_exit(params, provider, route_env) {
+        return Some(code);
+    }
 
     // R3, the state-root grant gate. Placed HERE because every non-pane spawn
     // passes through this function exactly once, including the codex thread
@@ -2666,6 +2645,7 @@ fn maybe_run_spawn(
                 None,
                 output_format.as_deref(),
                 claude_flags,
+                &route_env,
             ))
         }
 
@@ -3688,6 +3668,7 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
         "--output-format",
         "--monitor",
         "--dispatch-account",
+        "--role",
     ];
     let mut normalized: Vec<String> = Vec::with_capacity(rest.len());
     let mut rest_iter = rest.iter();
@@ -3966,6 +3947,10 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
             // and substrate are both known.
             "--output-format" | "--monitor" | "--dispatch-account" if command == "spawn" => {
                 fno_agents::spawn_axes::insert_spawn_flag(&a, &mut it, &mut params)?;
+            }
+            "--role" if command == "spawn" => {
+                // Resolved by spawn_route::role_seam in the spawn arm.
+                params.insert("role".into(), str_arg(&mut it, "--role")?);
             }
             "--account" => {
                 // Resolved by accounts::launch in the spawn arm.

@@ -7,7 +7,7 @@
 //! what that line is counting, never a differently-scoped set.
 
 use crate::claude_drive::claude_projects_dir;
-use crate::mail_control_drain::withdrawn_ids;
+use crate::mail_control_drain::{landed_ids, withdrawn_ids};
 use crate::mail_header::ids_in_text;
 use crate::paths::AgentsHome;
 use crate::spawn_context::resolve_self_identity;
@@ -444,36 +444,6 @@ fn codex_sessions_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     home.join(".codex").join("sessions")
-}
-
-/// Ids proven landed by a same-sender/recipient `landed` record. The control
-/// row's own id is never added: the acknowledged message stays visible to its
-/// recipient and the acknowledging row is control traffic.
-fn landed_ids(msgs: &[Value]) -> HashSet<String> {
-    let by_id: HashMap<&str, &Value> = msgs
-        .iter()
-        .filter_map(|m| m.get("id").and_then(Value::as_str).map(|id| (id, m)))
-        .collect();
-    let mut out = HashSet::new();
-    for m in msgs {
-        if m.get("kind").and_then(Value::as_str) != Some(LANDED_KIND) {
-            continue;
-        }
-        let target = m
-            .get("meta")
-            .and_then(|meta| meta.get("landed"))
-            .and_then(Value::as_str)
-            .and_then(|t| by_id.get(t));
-        let Some(target) = target else { continue };
-        if target.get("from").and_then(Value::as_str) == m.get("from").and_then(Value::as_str)
-            && target.get("to").and_then(Value::as_str) == m.get("to").and_then(Value::as_str)
-        {
-            if let Some(t) = target.get("id").and_then(Value::as_str) {
-                out.insert(t.to_string());
-            }
-        }
-    }
-    out
 }
 
 /// Persist a landing so later scans skip the transcript read. Uses the
