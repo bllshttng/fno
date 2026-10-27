@@ -1048,20 +1048,6 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::operator_notice::run_notify_watch_command(&args[1..]);
     }
 
-    // `status-fanout`: the status-sink dispatcher's tick op, read from the
-    // front door's `fno doctor event fanout tick` claim. Same `==` treatment
-    // as `board`: a hidden op, not a routable `fno agents` command.
-    if command == "status-fanout" {
-        return fno_agents::status_fanout::run_tick_command(&args[1..]);
-    }
-
-    // `wake-signals`: the wake signal read, hidden op beside `status-fanout`.
-    // The fanout family's only surviving wake surface: `scripts/lib/
-    // wake-signals.sh` reads the question signals through here.
-    if command == "wake-signals" {
-        return fno_agents::wake_read::run_wake_signals(&args[1..]);
-    }
-
     // `verify-evidence`: Rust port of scripts/lib/verify-event-evidence.sh
     // (see verify_evidence.rs doc). Direct dispatch.
     if command == "verify-evidence" {
@@ -1271,6 +1257,26 @@ async fn run(args: Vec<String>) -> i32 {
                 .cloned()
                 .collect();
             return fno_agents::liveness_cmd::run(&sub, &AgentsHome::from_env());
+        }
+        // The notify port's two ops ride `status` as arguments, the same
+        // group-action shape as --liveness: the front door's
+        // `fno doctor event fanout tick` execs `status --fanout`, and
+        // scripts/lib/wake-signals.sh execs `status --wake-signals`.
+        if rest.iter().any(|a| a.as_str() == "--fanout") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--fanout")
+                .cloned()
+                .collect();
+            return fno_agents::status_fanout::run_tick_command(&sub);
+        }
+        if rest.iter().any(|a| a.as_str() == "--wake-signals") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--wake-signals")
+                .cloned()
+                .collect();
+            return fno_agents::wake_read::run_wake_signals(&sub);
         }
         if has_family {
             let sub: Vec<String> = rest

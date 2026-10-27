@@ -553,12 +553,6 @@ def test_rust_client_commands_match_client_rs() -> None:
             "team-fold",
             "team-orphans",
             "term-ledger",
-            # The notify port's two hidden ops: the front binary's native
-            # event door execs `status-fanout` and the shell wake observer
-            # execs `wake-signals`, both through resolve_binary, never
-            # `fno agents` routing - the same shape as board above.
-            "status-fanout",
-            "wake-signals",
         }
     )
 

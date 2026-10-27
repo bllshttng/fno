@@ -90,7 +90,8 @@ pub fn run(args: &[OsString]) -> i32 {
 fn run_fanout(rest: &[OsString]) -> i32 {
     let bin = crate::digest_overlay::fno_agents_bin();
     let mut cmd = std::process::Command::new(bin);
-    cmd.arg("status-fanout");
+    cmd.arg("status");
+    cmd.arg("--fanout");
     cmd.args(rest);
     match cmd.status() {
         Ok(status) => status.code().unwrap_or(1),

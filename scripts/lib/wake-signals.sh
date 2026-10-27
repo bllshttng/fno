@@ -36,7 +36,7 @@ _observe_wake_signals() {
     done
     [ -n "$bin" ] || return 0
 
-    sigs=$("$bin" wake-signals --kind question --root "$REPO_ROOT" 2>/dev/null) || return 0
+    sigs=$("$bin" status --wake-signals --kind question --root "$REPO_ROOT" 2>/dev/null) || return 0
 
     [[ "$sigs" == "[]" ]] && return 0
 

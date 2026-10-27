@@ -735,7 +735,7 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
     // process that owns it.
     let bin = env!("CARGO_BIN_EXE_fno-agents");
     let out = std::process::Command::new(bin)
-        .args(["status-fanout", "tick", "--dry-run"])
+        .args(["status", "--fanout", "tick", "--dry-run"])
         .current_dir(&sb.root)
         .env("FNO_CONFIG", sb.root.join("no-config.toml"))
         .envs(fno_agents::test_run::self_owner_env())
