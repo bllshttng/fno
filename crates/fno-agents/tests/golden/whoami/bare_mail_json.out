@@ -1,0 +1,36 @@
+{
+  "detected_paths": [
+    "<FIXTURE>/project/.fno/target-state.md"
+  ],
+  "fleet": null,
+  "harness": "claude",
+  "harness_session_id": "879d8d26-2505-4977-9b87-000000000000",
+  "mail_handle": "879d8d26",
+  "model": null,
+  "project_root": "<FIXTURE>/project",
+  "session": {
+    "kind": "target",
+    "path": "<FIXTURE>/project/.fno/target-state.md",
+    "phase": "review",
+    "pr_number": 1234,
+    "raw": {
+      "artifact_shipped": false,
+      "current_phase": "review",
+      "iteration": 3,
+      "output_validated": false,
+      "pr_number": 1234,
+      "provenance_nonce": "deadbeefcafef00d",
+      "quality_check_passed": true,
+      "session_id": "20260512T010101Z-99999-fixaaa",
+      "status": "IN_PROGRESS"
+    },
+    "session_id": "20260512T010101Z-99999-fixaaa",
+    "status": "IN_PROGRESS"
+  },
+  "visitor": null,
+  "walker": null,
+  "warnings": [
+    "not a git repo, using cwd"
+  ],
+  "worker_name": "879d8d26-2505-4977-9b87-000000000000"
+}

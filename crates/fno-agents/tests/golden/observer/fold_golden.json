@@ -1,0 +1,189 @@
+{
+ "build_corpus": {
+  "attributed": 1,
+  "items": [
+   {
+    "attribution_class": null,
+    "graph_node_id": "x-1",
+    "judgeable": false,
+    "method": "phase-proxy",
+    "outcome": null,
+    "plan_path": null,
+    "session_id": "s1",
+    "shipped": false,
+    "skill_id": "fno:blueprint",
+    "skill_version": "unknown",
+    "termination_reason": "DonePRGreen"
+   }
+  ],
+  "total_rows": 2
+ },
+ "classify_postmortem": [
+  "plan-attributable",
+  "execution-attributable",
+  null,
+  null
+ ],
+ "run_summary_insufficient": {
+  "n": 3,
+  "need": 10,
+  "state": "insufficient"
+ },
+ "run_summary_ok": {
+  "corpus_size": 12,
+  "coverage_pct": 83,
+  "degraded_count": 1,
+  "fail_count": 2,
+  "failure_ranking": [
+   {
+    "dimension": "collision_free",
+    "fail_count": 1
+   },
+   {
+    "dimension": "surface_fit",
+    "fail_count": 1
+   }
+  ],
+  "pass_count": 1,
+  "run_id": "obs-fno:blueprint-x",
+  "skill_id": "fno:blueprint",
+  "skill_ref": "abc1234",
+  "skill_version": "abc1234",
+  "state": "ok"
+ },
+ "score_blueprint": {
+  "exec_bounce": {
+   "collision_free": "fail",
+   "shipped_outcome": "degraded"
+  },
+  "plan_bounce": {
+   "collision_free": "fail",
+   "shipped_outcome": "fail"
+  },
+  "unjudgeable": {
+   "collision_free": null,
+   "shipped_outcome": null
+  }
+ },
+ "surface_collisions_colliding": [
+  "parallel tasks share surface 'b.py': 1.1, 1.2"
+ ],
+ "surface_collisions_plain": null,
+ "target_corpus": {
+  "coverage": {
+   "attributed": 2,
+   "no_pr_attempts": 1,
+   "no_pr_stop_cause": {
+    "NoProgress": 1
+   },
+   "prs_total": 3,
+   "unattributed_pr": 1
+  },
+  "items": [
+   {
+    "attribution_class": null,
+    "graph_node_id": "x-a",
+    "judgeable": true,
+    "merged": true,
+    "outcome": "merged_clean",
+    "pr_number": 10,
+    "pr_url": "https://github.com/o/r/pull/10",
+    "repo": "o/r",
+    "session_ids": [
+     "sa"
+    ],
+    "signals": {
+     "ci_reds": 0,
+     "duration_minutes": null,
+     "loop_fires": 1,
+     "promises": 1,
+     "terminal_reasons": [
+      "DonePRGreen"
+     ],
+     "tokens_total": null,
+     "toolcalls": null,
+     "turns": null
+    },
+    "terminal_reasons": [
+     "DonePRGreen"
+    ]
+   },
+   {
+    "attribution_class": null,
+    "graph_node_id": "x-b",
+    "judgeable": true,
+    "merged": true,
+    "outcome": "bounced",
+    "pr_number": 11,
+    "pr_url": "https://github.com/o/r/pull/11",
+    "repo": "o/r",
+    "session_ids": [
+     "sb"
+    ],
+    "signals": {
+     "ci_reds": 1,
+     "duration_minutes": null,
+     "loop_fires": 2,
+     "promises": 1,
+     "terminal_reasons": [],
+     "tokens_total": null,
+     "toolcalls": null,
+     "turns": null
+    },
+    "terminal_reasons": []
+   }
+  ],
+  "no_pr": [
+   {
+    "graph_node_id": null,
+    "session_ids": [
+     "snope"
+    ],
+    "termination_reason": "NoProgress"
+   }
+  ],
+  "unattributed": [
+   {
+    "graph_node_id": null,
+    "merged": true,
+    "pr_number": 12,
+    "pr_url": "https://github.com/o/r/pull/12",
+    "repo": "o/r"
+   }
+  ]
+ },
+ "target_gc": {
+  "scores": {
+   "converged": null,
+   "first_try_green": null,
+   "shipped_outcome": "pass"
+  },
+  "signals": {
+   "ci_reds": null,
+   "duration_minutes": null,
+   "loop_fires": null,
+   "promises": null,
+   "terminal_reasons": [],
+   "tokens_total": null,
+   "toolcalls": null,
+   "turns": null
+  }
+ },
+ "target_no_w4_scores": {
+  "converged": null,
+  "first_try_green": null,
+  "shipped_outcome": null
+ },
+ "target_scores": {
+  "x-a": {
+   "converged": "pass",
+   "first_try_green": "pass",
+   "shipped_outcome": "pass"
+  },
+  "x-b": {
+   "converged": null,
+   "first_try_green": "fail",
+   "shipped_outcome": "degraded"
+  }
+ }
+}

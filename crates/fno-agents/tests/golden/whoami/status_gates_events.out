@@ -1,0 +1,9 @@
+project:  <FIXTURE>/project
+session:  20260512T010101Z-99999-fixaaa phase=review status=IN_PROGRESS
+gates:
+  [n] artifact_shipped: False
+  [n] output_validated: False
+  [y] quality_check_passed: True
+events (last 2):
+  - T1 phase_init
+  - T2 phase_transition

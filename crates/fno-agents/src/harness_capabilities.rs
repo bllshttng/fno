@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,37 @@ use serde::{Deserialize, Serialize};
 /// rust-ci generated-copies dirty-tree step catches a hand-edited
 /// generated copy committed without a rebuild.
 pub const CAPABILITY_TOML: &str = include_str!("harness_capabilities.toml");
+
+/// True when the harness's session-state wiring names no blocked producer
+/// (`blocked = "none"`): its hook lane can report working/done but has no
+/// event that states blocked, so the screen manifest owns that rung for the
+/// harness's rows. The daemon sweep keeps scraping such rows (scrape.rs) and
+/// the badge readers merge a fresh screen `blocked` over the leg. Computed
+/// once per process off the bundled table; unknown harness, non-supported
+/// job, unwired or event-named wiring all read false.
+pub fn session_state_names_no_blocked_producer(harness: &str) -> bool {
+    static NO_PRODUCER: OnceLock<BTreeSet<String>> = OnceLock::new();
+    let set = NO_PRODUCER.get_or_init(|| {
+        let Ok(contract) = HarnessContract::packaged() else {
+            return BTreeSet::new();
+        };
+        contract
+            .harness
+            .keys()
+            .filter(|name| {
+                contract
+                    .hook_job(name, "session_state")
+                    .and_then(|job| job.wiring.as_ref())
+                    .is_some_and(|w| w.blocked == "none")
+                    && contract
+                        .hook_job(name, "session_state")
+                        .is_some_and(|job| job.state == "supported")
+            })
+            .cloned()
+            .collect()
+    });
+    set.contains(harness)
+}
 
 const SESSION_LANES: [&str; 5] = [
     "interactive_create",

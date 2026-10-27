@@ -1,0 +1,5 @@
+project:  <FIXTURE>/project
+fleet:    fleet-fixture-001 (Fixture mission) - wave 2/4
+walker:   20260512T000000Z-88888-walkbb phase=dispatching - 3 in-flight, 1 done
+run:      20260512T010101Z-99999-fixaaa (target) phase=review status=IN_PROGRESS (ledger/run id - not a mail handle)
+harness:  claude
