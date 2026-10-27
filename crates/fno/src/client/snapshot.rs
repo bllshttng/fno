@@ -934,6 +934,8 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         | Some(ViewKind::MessagesThread)
         | Some(ViewKind::MessagesSystem)
         | Some(ViewKind::MessagesArchive)
+        | Some(ViewKind::MessagesYou)
+        | Some(ViewKind::MessagesYouThread)
         | None => {}
     }
     crate::lattice::freeze_spin();
