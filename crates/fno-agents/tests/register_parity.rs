@@ -114,7 +114,9 @@ fn assert_golden(label: &str, exit: i32, out: &str, err: &str) {
 }
 
 fn read_rows(home: &PathBuf) -> Vec<Value> {
-    let text = std::fs::read_to_string(home.join("registry.json")).unwrap();
+    // The register's first write imports the table and turns registry.json
+    // into the fence directory, so rows read back through the store door.
+    let text = fno_agents::registry_store::read_raw(&home.join("registry.json"));
     let parsed: Value = serde_json::from_str(&text).unwrap();
     parsed
         .get("agents")
