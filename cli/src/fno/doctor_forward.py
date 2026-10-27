@@ -60,7 +60,6 @@ from fno.doctor_footprint import footprint_command  # noqa: E402
 from fno.doctor_lanes import lanes_command  # noqa: E402
 from fno.doctor_reclaim import reclaim_command  # noqa: E402
 from fno.lint_cli import lint  # noqa: E402
-from fno.route_cli import inventory_cmd  # noqa: E402
 
 doctor_app.add_typer(codemap_app, name="codemap")
 doctor_app.add_typer(evals_app, name="evals")
@@ -72,9 +71,6 @@ doctor_event_app.add_typer(status_fanout_app, name="fanout")
 doctor_app.add_typer(doctor_event_app, name="event")
 doctor_app.add_typer(scratch_app, name="scratch")
 doctor_app.command("lint")(lint)
-# The reachability read the deleted doctor_cli mounted (its :150); the leaf
-# itself is route_cli's and stays Python.
-doctor_app.command("route", hidden=True)(inventory_cmd)
 doctor_app.command("reclaim", hidden=True)(reclaim_command)
 doctor_app.command("footprint", hidden=True)(footprint_command)
 doctor_app.command("bash-census", hidden=True)(bash_census_command)
