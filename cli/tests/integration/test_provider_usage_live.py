@@ -8,9 +8,7 @@ fno/adapters/providers/test_usage.py.
 """
 from __future__ import annotations
 
-import json
 import os
-import subprocess
 import time
 from pathlib import Path
 
@@ -42,7 +40,7 @@ def test_live_provider_usage_has_numeric_usage_and_future_resets(
     monkeypatch.setenv("USERPROFILE", str(real_home))
 
     from fno.adapters.providers.loader import load_providers
-    from fno.rust_binary import resolve_binary
+    from fno.rust_binary import call_binary_json
 
     # Avoid the repository's project-local accounts block shadowing the
     # operator's global machine records used by this opt-in test.
@@ -52,19 +50,14 @@ def test_live_provider_usage_has_numeric_usage_and_future_resets(
     missing = [account_id for account_id in required if account_id not in records]
     assert not missing, f"live account records missing: {missing}"
 
-    binary = resolve_binary()
-    assert binary is not None, "the live gate needs the fno-agents binary"
     now = time.time()
     observations = {}
     for account_id in required:
-        out = subprocess.run(
-            [str(binary), "spawn-overlay", "accounts", "usage", "--refresh", "--json"],
-            capture_output=True,
-            text=True,
+        err, rows = call_binary_json(
+            "spawn-overlay", ("accounts", "usage", "--refresh", "--json")
         )
-        assert out.returncode == 0, out.stderr
-        rows = json.loads(out.stdout)
-        row = next(r for r in rows if r["id"] == account_id)
+        assert err is None, err
+        row = rows[account_id]
         assert row.get("windows"), (
             f"{account_id}: live probe did not produce a positive marker "
             f"({row.get('reason')})"

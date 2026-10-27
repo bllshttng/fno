@@ -163,19 +163,12 @@ class TestQuotaDeath:
         # reads through the native list verb, whose `headroom` column the
         # account rows carry.
         def _makers_headroom() -> str:
-            import subprocess
+            from fno.rust_binary import call_binary_json
 
-            from fno.rust_binary import resolve_binary
-
-            binary = resolve_binary()
-            assert binary is not None, "the native read needs the fno-agents binary"
-            out = subprocess.run(
-                [str(binary), "spawn-overlay", "accounts", "list", "--json"],
-                capture_output=True,
-                text=True,
+            err, rows = call_binary_json(
+                "spawn-overlay", ("accounts", "list", "--json")
             )
-            assert out.returncode == 0, out.stderr
-            rows = json.loads(out.stdout)
+            assert err is None, err
             return next(r["headroom"] for r in rows if r["id"] == "makers")
 
         env = {"CLAUDE_CONFIG_DIR": str(armed / "claude-main")}

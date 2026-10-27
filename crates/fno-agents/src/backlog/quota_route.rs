@@ -432,3 +432,184 @@ pub fn select_autonomous_route(
         defer_fallback: false,
     }
 }
+
+#[cfg(test)]
+mod quota_signal_tests {
+    //! The observe/defer split, pinned where it now lives. The deleted Python
+    //! suite held these six shapes; the verdicts are read off ONE probe here
+    //! exactly as there: looking is `observe`, acting is `defer_dispatch`,
+    //! and neither may fire the other's behavior.
+
+    use super::*;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+
+    /// The env pins are process-global, so the config-gated tests serialize.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const NOW: f64 = 1_789_400_000.0;
+
+    struct EnvPin {
+        saved_config: Option<OsString>,
+        saved_state: Option<OsString>,
+    }
+
+    impl EnvPin {
+        fn pin(config: &str, state: Option<&Path>) -> (Self, PathBuf) {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let config_path = dir.path().join("config.toml");
+            fs::write(&config_path, config).expect("write config");
+            let saved_config = std::env::var_os("FNO_CONFIG");
+            let saved_state = std::env::var_os("FNO_RUNTIME_STATE_PATH");
+            std::env::set_var("FNO_CONFIG", &config_path);
+            if let Some(path) = state {
+                std::env::set_var("FNO_RUNTIME_STATE_PATH", path);
+            }
+            (
+                Self {
+                    saved_config,
+                    saved_state,
+                },
+                dir.path().to_path_buf(),
+            )
+        }
+
+        fn pin_state_only(state: Option<&Path>) -> Self {
+            let saved_config = std::env::var_os("FNO_CONFIG");
+            let saved_state = std::env::var_os("FNO_RUNTIME_STATE_PATH");
+            if let Some(path) = state {
+                std::env::set_var("FNO_RUNTIME_STATE_PATH", path);
+            }
+            Self {
+                saved_config,
+                saved_state,
+            }
+        }
+    }
+
+    impl Drop for EnvPin {
+        fn drop(&mut self) {
+            match &self.saved_config {
+                Some(v) => std::env::set_var("FNO_CONFIG", v),
+                None => std::env::remove_var("FNO_CONFIG"),
+            }
+            match &self.saved_state {
+                Some(v) => std::env::set_var("FNO_RUNTIME_STATE_PATH", v),
+                None => std::env::remove_var("FNO_RUNTIME_STATE_PATH"),
+            }
+        }
+    }
+
+    fn quota_config(observe: bool, defer_dispatch: bool) -> String {
+        format!(
+            "[providers.quota]\nobserve = {observe}\ndefer_dispatch = {defer_dispatch}\n\
+             defer_threshold_pct = 90.0\nprobe_ttl_seconds = 300.0\n\
+             defer_horizon_minutes = 10.0\n"
+        )
+    }
+
+    /// One fresh usage row for `p1`, as the runtime-state writer leaves it.
+    fn state_file(dir: &Path, used_pct: f64, resets_at: f64) -> PathBuf {
+        let path = dir.join("runtime-state.json");
+        let body = format!(
+            r#"{{"usage": {{"p1": {{"probed_at": {}, "source": "t", "windows": [{{"label": "5h", "used_pct": {}, "resets_at": {}}}]}}}}}}"#,
+            NOW - 10.0,
+            used_pct,
+            resets_at
+        );
+        fs::write(&path, body).expect("write state");
+        path
+    }
+
+    #[test]
+    fn observation_off_short_circuits_before_any_probe() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env = EnvPin::pin(&quota_config(false, false), None);
+        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Unknown);
+        assert!(!sig.defer && !sig.cutover);
+        assert_eq!(sig.reason, "quota-observation-off");
+    }
+
+    #[test]
+    fn p0_is_exempt_when_observation_is_armed() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env = EnvPin::pin(&quota_config(true, true), None);
+        let sig = evaluate_quota_signal("p1", Some("p0"), 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Unknown);
+        assert!(!sig.defer && !sig.cutover);
+        assert_eq!(sig.reason, "p0-exempt");
+    }
+
+    #[test]
+    fn observe_only_without_a_snapshot_stays_unknown_and_does_not_act() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env = EnvPin::pin(&quota_config(true, false), None);
+        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Unknown);
+        assert!(!sig.defer && !sig.cutover);
+        assert_eq!(sig.reason, "probe-unavailable-native");
+    }
+
+    #[test]
+    fn observe_only_reports_the_verdict_a_fresh_snapshot_gives() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = state_file(&dir.path(), 32.0, NOW + 3600.0);
+        let _env = EnvPin::pin(&quota_config(true, false), Some(&state));
+        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Ok);
+        assert!(!sig.defer && !sig.cutover);
+        assert_eq!(sig.reason, "observed");
+    }
+
+    #[test]
+    fn exhaustion_defers_and_cutovers() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = state_file(&dir.path(), 100.0, NOW + 3600.0);
+        let _env = EnvPin::pin(&quota_config(true, true), Some(&state));
+        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Exhausted);
+        assert!(sig.defer && sig.cutover);
+        assert_eq!(sig.reason, "probed");
+    }
+
+    #[test]
+    fn low_near_reset_defers_without_cutover() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = state_file(&dir.path(), 95.0, NOW + 60.0);
+        let _env = EnvPin::pin(&quota_config(true, true), Some(&state));
+        let sig = evaluate_quota_signal("p1", None, 30.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Low);
+        assert!(sig.defer);
+        assert!(!sig.cutover);
+    }
+
+    #[test]
+    fn low_far_reset_cutovers_when_the_knob_is_on() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = state_file(&dir.path(), 95.0, NOW + 7200.0);
+        let _env = EnvPin::pin(&quota_config(true, true), Some(&state));
+        let sig = evaluate_quota_signal("p1", None, 30.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Low);
+        assert!(!sig.defer);
+        assert!(sig.cutover);
+    }
+
+    #[test]
+    fn unreadable_state_stays_unknown_and_eligible() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("absent.json");
+        let _env = EnvPin::pin_state_only(Some(&missing));
+        let sig = evaluate_quota_signal("p1", None, 0.0, None, NOW);
+        assert_eq!(sig.state, HeadroomState::Unknown);
+        assert!(!sig.defer && !sig.cutover);
+        assert_eq!(sig.reason, "probe-unavailable-native");
+    }
+}
