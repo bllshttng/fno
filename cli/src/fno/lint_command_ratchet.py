@@ -105,6 +105,14 @@ NATIVE_SERVED_LEAVES = {
     "config routing",
     "doctor route",
     "config schema",
+    # The observer family (sweep | judge | replay) answers from the native
+    # spawn-overlay door now; the doctor group's typer tree no longer mounts it.
+    "doctor observer judge",
+    "doctor observer replay",
+    "doctor observer sweep",
+    # The ci namespace answers through the native front door (the same
+    # classifier handover as the pr spellings below); it has no click child.
+    "do ci status",
     "do review resolve-level",
     "do review post-dispositions",
     "do review classify",

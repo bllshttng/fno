@@ -100,21 +100,17 @@ def _arm_clock(hold_dir, *, seconds_out, window_s=2, clock_kind="idle"):
 
 def _send_to_held_session(body, *, sender="worker", ts):
     """Put one durable message on the bus addressed to the held session."""
-    from fno.bus.log import Envelope, append, new_msg_id
+    from tests.fixtures.bus_rows import append_row
 
-    msg_id = new_msg_id()
-    append(
-        Envelope(
-            id=msg_id,
-            thread=msg_id,
-            from_=sender,
-            to=HANDLE,
-            kind="send",
-            body=body,
-            ts=ts,
-        )
+    return append_row(
+        {
+            "from": sender,
+            "to": HANDLE,
+            "kind": "send",
+            "body": body,
+            "ts": ts,
+        }
     )
-    return msg_id
 
 
 def test_a_held_message_lands_after_expiry_with_no_operator_input(state, tmp_path):

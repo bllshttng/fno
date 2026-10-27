@@ -32,29 +32,12 @@ def test_durable_thread_round_trips_origin(tmp_path, monkeypatch):
         "hello",
         origin="recovery",
     )
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
-    assert list(iter_messages())[0].origin == "recovery"
+    assert read_rows()[0].get("origin") == "recovery"
 
 
-def test_bus_envelope_carries_origin_with_legacy_meta_fallback():
-    from fno.bus.log import Envelope, from_json_line, to_json_line
-
-    env = Envelope.new(from_="a", to="b", kind="send", body="x", origin="operator")
-    assert env.origin == "operator"
-    line = to_json_line(env)
-    assert '"origin":"operator"' in line
-    assert from_json_line(line).origin == "operator"
-    # A row written before the field existed carried origin only inside meta;
-    # the parser falls back so old lines keep their provenance.
-    legacy = to_json_line(
-        Envelope.new(from_="a", to="b", kind="send", body="x", meta={"origin": "recovery"})
-    )
-    import json as _json
-
-    assert "origin" not in _json.loads(legacy)
-    parsed = from_json_line(legacy)
-    assert parsed.origin == "recovery"
+# The legacy meta.origin parse fallback rode the deleted Python parser; the read door returns rows raw and the row shape is frozen by crates/fno-agents/tests/bus_read_parity.rs.
 
 
 def test_unreadable_registry_never_grants_sender_standing(tmp_path, monkeypatch):

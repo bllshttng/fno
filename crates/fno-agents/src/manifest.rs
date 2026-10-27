@@ -1524,6 +1524,52 @@ mod tests {
         assert_eq!(ans.options[2].keystroke, b"3");
     }
 
+    // The codex request_user_input dialog (plan mode) is blocked and
+    // answerable. Screen shaped after the live openharness capture
+    // (cli/src/lib/__fixtures__/question-codex.txt): a Question N/M block
+    // over marked numbered rows, closed by the option header and the
+    // `enter to submit answer` footer.
+    #[test]
+    fn xd27e_bundled_codex_question_prompt_is_blocked_and_answerable() {
+        let m = bundled("codex");
+        let screen = "  Question 1/1 (1 unanswered)\n\
+            Which colour should the demo use?\n\
+            \u{203a} 1. Red    Creates a bold, high-contrast\n\
+                        accent.\n\
+              2. Green  Creates a fresh, success-\n\
+              option 1/4 | tab to add notes\n\
+              enter to submit answer | esc to interrupt";
+        let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
+        assert_eq!(v.rule_id, "question_prompt");
+        assert_eq!(v.state, "blocked");
+        let ans = ans.expect("codex question dialog is answerable");
+        assert_eq!(ans.options.len(), 2);
+        assert_eq!(ans.options[0].label, "Red    Creates a bold, high-contrast");
+        assert_eq!(ans.options[0].keystroke, b"1");
+        assert_eq!(ans.options[1].idx, "2");
+    }
+
+    // A model reply that PRINTS the footer phrase over a plain numbered list
+    // must not fire: the gate also requires the `option N/M` header or the
+    // `tab to add notes` hint, which only a live dialog draws.
+    #[test]
+    fn xd27e_codex_question_prompt_prose_footer_is_not_a_dialog() {
+        let m = bundled("codex");
+        let screen = "Plan draft:\n\
+            \u{203a} 1. Ship the parser\n\
+              2. Ship the renderer\n\
+            When the form is complete press enter to submit answer";
+        // No rule matching at all is the expected outcome; any rule that
+        // does match must not be question_prompt or carry an answer.
+        if let Some((v, ans)) = m.evaluate_answerable(&view(screen)) {
+            assert_ne!(
+                v.rule_id, "question_prompt",
+                "a printed footer phrase without the option markers must not fire"
+            );
+            assert!(ans.is_none(), "no live dialog -> not answerable");
+        }
+    }
+
     // agy's trust prompt is ARROW-ONLY ("> Yes … / No, exit" +
     // "↑/↓ Navigate") - no numbered options. No agy rule matches it, so it stays
     // focus-only (the documented Open Q1 no-op), never a fabricated grammar.

@@ -24,7 +24,7 @@ One global append-only log is the system of record. The per-recipient markdown t
 
 ### The envelope (versioned)
 
-One JSON object per line (`fno.bus.log.Envelope`):
+One JSON object per line (the envelope contract the chats doors mint and read):
 
 ```json
 {"v":1,"id":"msg-3f8f96","ts":"2026-06-07T19:51:32Z","thread":"msg-3f8f96","from":"alice","to":"bob","kind":"send","from_harness":"claude","to_harness":"codex","in_reply_to":"...","delivery":"hosted","word_count":17,"meta":{...},"body":"..."}
@@ -199,10 +199,10 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 
 | Concern | Location |
 | :--- | :--- |
-| Envelope + locked writer + rotation + reader | `cli/src/fno/bus/log.py` |
-| Per-agent cursors + sender-exclusion (`exclude_from`) | `cli/src/fno/bus/cursor.py` |
+| Envelope + locked writer + rotation (`chats bus-append`, `chats stage`) | `crates/fno-agents/src/chats.rs`, `crates/fno-agents/src/announce.rs` |
+| Reader: rows, unread scan, control sets, cursors (`chats bus-read`) | `crates/fno-agents/src/chats.rs`, `crates/fno-agents/src/mail_control_drain.rs` |
 | Loop-boundary addressed drain + self-name resolver | `cli/src/fno/agents/nudge.py` |
-| `bus_dir` resolver | `cli/src/fno/paths.py`, `config.paths.bus_dir` |
+| `bus_dir` resolver | `cli/src/fno/paths.py`, `config.paths.bus_dir`, `crates/fno-agents/src/intel.rs` |
 | Store bus write | `cli/src/fno/inbox/store.py` |
 | `--to-project` resolver + dispatch | `cli/src/fno/agents/dispatch.py` |
 | `inbox` / `ack` / `send --to-project` commands | `cli/src/fno/agents/cli.py` |

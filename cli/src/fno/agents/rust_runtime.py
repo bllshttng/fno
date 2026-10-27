@@ -436,10 +436,10 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # the file it repairs is the one the daemon reads, and it is a hand-run
     # recovery command, not a daemon operation.
     "registry-repair",
-    # The orphan sweep (`fno agents orphans`). Pure Python: it plants its own
-    # probe processes and reads the machine through psutil, and the SessionStart
-    # hook calls it synchronously. Routing it to the daemon would make a sweep
-    # for stray processes lazy-start a process. No Rust client port.
+    # The orphan sweep. The registered Python command is a shim that execs
+    # `fno-agents census --orphans` (crates/fno-agents/src/orphans.rs); the
+    # body routes in every runtime mode, and `orphans` is no client action, so
+    # it must never auto-route.
     "orphans",
     #: the pane/registry identity cross-check. Pure Python (one pane ls
     # subprocess + load_registry + a ps probe); a mismatch is a READING, never
@@ -536,7 +536,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     "rename": "Rename a registry row's label: <worker> --name <new-label>; the old label keeps resolving as an alias.",
     "bash-census": "Bash-call compound/cd/heredoc shares and top command/command tables over recent transcripts; invoked directly by `fno doctor bash-census`.",
     "session-start-bytes": "Session-start preamble byte total; invoked directly by `fno doctor`'s session-start byte report.",
-    "judge": "Blueprint judge: grade a plan against the five product questions, --budget <secs> to bound the whole pass (default 600s), or --labels/--split to calibrate against evals/blueprint-judge/labels.yaml; invoked by fno.observer.cli's judge_cmd/sweep through its own subprocess round-trip (_judge_via_rust), not `fno agents` routing.",
+    "judge": "Blueprint judge: grade a plan against the five product questions, --budget <secs> to bound the whole pass (default 600s), or --labels/--split to calibrate against evals/blueprint-judge/labels.yaml; invoked by the observer ops door (crate observer mod.rs) through its own subprocess round-trip (judge_via_rust), not `fno agents` routing.",
     "org-vacancies": "Roles whose registry row is gone but whose manifest holds them: --root <spaces-root> --held <scope> (repeatable, one flag per scope); invoked directly by `fno agents team`, not `fno agents` routing.",
     "org-fold": "The role scope fold: --graph <graph.json> --promotes-json <roles> --claims-dir <dir> --format json; invoked directly by `fno agents team`, not `fno agents` routing.",
     "lead-history": "The role-scope lead_checkin readback: --scope <scope> --events-path <events.jsonl> [--events-path ...] [--json]; --verdict selects the term tenure verdict read (assembles its own inputs natively: role, manifest, config, graph scope, window, delivery split); exec'd by the front door for `fno agents org history` and `verdict`, which resolve their own journals natively; escalate's verdict relay invokes it directly.",
@@ -549,7 +549,7 @@ RUST_ONLY_COMMAND_HELP: dict[str, str] = {
     "spawn-axes": "Spawn-seam billing axes (route/account/model): JSON payload on stdin, the {inject, applied, suppressed, messages} plan on stdout; a `node_seed` field instead answers the node-command check. Invoked by fno.agents.spawn_axes_client and the spawn seam, not `fno agents` routing.",
     "fallback-chain": "Failover chain walk: JSON payload on stdin, the {eligible} answer on stdout; invoked by fno.recovery, not `fno agents` routing.",
     "authorized-merge": "The one authorized merge operation: JSON payload on stdin, one receipt (merged|armed|authorized|held|refused|head_changed|unknown|failed) on stdout; invoked by fno.rust_binary.command_call from the merge and verify commands, not `fno agents` routing.",
-    "census": "One JSON row per long-lived process (daemon, keepers, mux servers) with its build-drift verdict; invoked by the native updater (crates/fno/src/doctor_update.rs), not `fno agents` routing. --workers [--json] [--subagents] [--pane-stats] answers `fno agents top`.",
+    "census": "One JSON row per long-lived process (daemon, keepers, mux servers) with its build-drift verdict; invoked by the native updater (crates/fno/src/doctor_update.rs), not `fno agents` routing. --workers [--json] [--subagents] [--pane-stats] answers `fno agents top`. --orphans [--reap] [--quiet-unless-new] [--json] is the orphan sweep (`fno agents orphans`).",
     "fleet-incident": "Durable fleet incident breaker: stop --reason T / clear --reason T write the machine-wide record; reserve stream|edit [--for 2h] arms a time-boxed preset on it; status [--json] reads it with its typed holds/admits reach (exit 0 clear, 1 stopped or unavailable); check [--scope spawns|tests|merges] is one scope's admission verdict (exit 0 clear, 90 stopped, 91 unavailable). The public surface is `fno agents incident`; the spawn/test/daemon gates read the file before their bypass branches, and the merge primitive refuses while merges are held. The fleet GitHub request budget rides this action as its gh-budget argument (one JSON payload on stdin, {op: admit|refused|status}; ledger in the machine locks folder; called via fno.rust_binary.command_call from pr/_quota.py).",
     "announce": "Fleet announcements: send --scope S [--subject T] [--expires 24h] [--urgent] reads the body on stdin and appends ONE kind=announce bus line (operator or promoted agent, 6/hour); read --session-id ID --boundary B renders unseen standing announcements once per session; status ID [--json] reads the sender's receipts. The public surface is `fno agents mail team`; hooks call the binary directly.",
     "compaction": "Compaction stamps: mark --session <id> writes the PreCompact stamp the provider-cap actor reads (best-effort, always exits 0); status --session <id> reads the stamp against the transcript's own boundary. The hook calls the binary directly.",
@@ -994,17 +994,10 @@ def _args_before_argv(args: Sequence[str]) -> Sequence[str]:
 
 
 def _is_role_bearing_spawn(command: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` carrying ``--role``.
+    """True for a ``spawn`` carrying ``--role`` (long form only).
 
-    Role-based model routing is implemented only in the Python spawn path
-    (``cmd_spawn`` -> ``bg_create`` resolves the per-spawn env). The Rust
-    client does not parse ``--role``, so a ``spawn ... --role <r>`` that
-    auto-routed to the binary would exit with ``unknown flag: --role``.
-    Detecting it here lets the call fall through to the Python runtime, which
-    owns the single source of truth for the routing policy.
-
-    ``-r`` is NOT a role alias anymore;
-    role is long-form only here.
+    The client resolves the role route (``spawn_route::role_seam``); the
+    seam's account pick reads this to leave a role spawn unpicked.
     """
     if command != "spawn":
         return False
@@ -1080,25 +1073,6 @@ def _gate_rm_at_seam(args: Sequence[str]) -> bool:
         return True
 
 
-def _is_promotion_bearing_spawn(command: str, args: Sequence[str]) -> bool:
-    """Keep grant-at-spawn on the Python path that owns promotion."""
-    return command == "spawn" and _has_flag(args, longs=("--promote",))
-
-
-def _is_account_bearing_pane(command: str, args: Sequence[str]) -> bool:
-    """True for an explicit ``--as pane`` spawn carrying an account flag.
-
-    The binary's pane spine runs before the account seam and assumes no
-    account axis on its requests, so an account-bearing pane spawn keeps the
-    Python mux arm, whose pane transports compose the overlay.
-    """
-    if command != "spawn":
-        return False
-    if _spawn_flag_value(args, "--account", "--dispatch-account") is None:
-        return False
-    return _spawn_flag_value(args, "--as") == "pane"
-
-
 def _is_resume_bearing_spawn(command: str, args: Sequence[str]) -> bool:
     """True for a ``spawn`` carrying ``--resume`` / ``-r``.
 
@@ -1114,14 +1088,9 @@ def _is_resume_bearing_spawn(command: str, args: Sequence[str]) -> bool:
 
 
 def _is_route_bearing_spawn(command: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` carrying ``--route`` or its decomposed
-    spelling ``--provider``/``-P`` (the model-vendor axis, which ``cmd_spawn``
-    folds into the same route with ``--model``).
-
-    Routing is parsed only by the Python spawn path (``cmd_spawn`` resolves +
-    fail-closes it via ``resolve_explicit_route``). The Rust client does not
-    materialize a route, so a routed spawn auto-routed to the binary would either
-    exit ``unknown flag: --route`` or silently launch on the primary model."""
+    """True for a ``spawn`` carrying ``--route`` or its retired spelling
+    ``--provider``/``-P``. The client resolves the route; the seam's account
+    pick reads this to leave a routed spawn unpicked."""
     if command != "spawn":
         return False
     return _has_flag(args, "-P", ("--route", "--provider"))
@@ -1247,41 +1216,6 @@ def _scrub_ambient_identity_at_exec(command: str) -> None:
     from fno.harness_identity import scrub_ambient_identity
 
     scrub_ambient_identity()
-
-
-#: The spawn axis flags retired at the door: each spelling routes the spawn to
-#: the Python parse, where the per-flag stub refuses naming the native form.
-#: The binary's own parser refuses the same set (cli_args.rs SpawnAxes::scan
-#: and the client loop arms), so a direct fno-agents call cannot carry one
-#: either. Only tokens before the --argv payload boundary count, so a fenced
-#: seed naming a flag is prompt text, never a routed spawn.
-_RETIRED_AXIS_LONGS = (
-    "--provider",
-    "--substrate",
-    "--yolo",
-    "--resume",
-    "--deny-tools",
-)
-
-
-def _is_retired_axis_spawn(command: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` carrying a retired axis flag in any spelling.
-
-    Each retired axis refuses at the Python door (``cmd_spawn``'s stub
-    callbacks name the native form), so a spawn that auto-routed to the binary
-    would either launch on the axis (the binary's legacy arms) or refuse with
-    another door's line. Routing the argv here keeps every refusal on one door
-    with one message shape. ``-r`` is deliberately absent: the short is the
-    standalone resume command's, never spawn's.
-    """
-    if command != "spawn":
-        return False
-    head = _args_before_argv(args)
-    return any(
-        a == flag or a.startswith(flag + "=")
-        for a in head
-        for flag in _RETIRED_AXIS_LONGS
-    )
 
 
 def _footnote_headless_as_once(args: Sequence[str]) -> list[str]:
@@ -1543,14 +1477,7 @@ def make_agents_group_cls() -> type:
                         raise SystemExit(RM_DECLINED_EXIT)
 
                 mode = runtime_mode()
-                py_spawn = (
-                    _is_role_bearing_spawn(command, args)
-                    or _is_promotion_bearing_spawn(command, args)
-                    or (_is_route_bearing_spawn(command, args) and _spawn_flag_value(args, "--account", "--dispatch-account") is not None)
-                    or _is_account_bearing_pane(command, args)
-                    or _is_default_substrate_spawn(command, args)
-                    or _is_retired_axis_spawn(command, args)
-                )
+                py_spawn = _is_default_substrate_spawn(command, args)
                 if mode == "rust" and not py_spawn:
                     _pin = _worktree_policy_pin_at_seam(args)
                     _scrub_ambient_identity_at_exec(command)

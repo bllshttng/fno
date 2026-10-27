@@ -491,7 +491,7 @@ def _forced_pane_send(
     # keystroke and the typed receipt after confirmation. The bus row is the
     # body's only home, so a staging failure types nothing -- typing into an
     # id whose row never landed is the dangling-Read-line bug this prevents.
-    from fno.bus.log import record_typed_delivery, stage_before_live
+    from fno import paths, rust_binary
 
     record: dict[str, Any] = dict(
         msg_id=msg_id,
@@ -507,8 +507,14 @@ def _forced_pane_send(
         word_count=authored_words,
         subject=subject,
     )
+    live = str(paths.bus_dir() / "messages.jsonl")
+    staged_fields = {k: v for k, v in record.items() if v is not None}
+
+    def _stage(fields: dict) -> None:
+        rust_binary.chats_command(["stage", live], fields)
+
     try:
-        stage_before_live(**record)
+        _stage(staged_fields)
     except Exception as exc:  # noqa: BLE001 - nothing typed, nothing confirmed
         _release_budget(reservation)
         print(
@@ -536,10 +542,16 @@ def _forced_pane_send(
         raise typer.Exit(code=1)
 
     try:
-        record_typed_delivery(
-            **record,
-            pane_id=str(pane_id),
-            mux_session=str(mux_session) if mux_session else None,
+        rust_binary.chats_command(
+            [
+                "stage", live,
+                "--delivery", "typed",
+                "--pane-id", str(pane_id),
+                "--mux-session", str(mux_session),
+            ]
+            if mux_session
+            else ["stage", live, "--delivery", "typed", "--pane-id", str(pane_id)],
+            staged_fields,
         )
     except Exception as exc:  # noqa: BLE001 - the bytes are already typed
         print(
@@ -831,13 +843,14 @@ def _name_lane_send(
         )
         return
 
-    from fno.bus.log import record_hosted_delivery, stage_before_live
+    from fno import paths, rust_binary
 
     record: dict[str, Any] = dict(
         msg_id=msg_id, sender=sender, recipient=recipient, body=wrapped,
         from_harness=sender_harness, in_reply_to=reply_to, from_session=sender_session,
         from_model=sender_model, to_kind="name", word_count=authored_words, subject=subject,
     )
+    bus_live = str(paths.bus_dir() / "messages.jsonl")
     # Stage the body row first for a known recipient: the bus row is the body's
     # only home, so it must be on the bus before the inject can confirm. A token
     # no store knows exits 16 having sent nothing, so it gets no staged row. A
@@ -847,7 +860,10 @@ def _name_lane_send(
     staged = False
     if not self_send and (resolved is not None or (token and token_reachable)):
         try:
-            stage_before_live(**record)
+            rust_binary.chats_command(
+                ["stage", bus_live],
+                {k: v for k, v in record.items() if v is not None},
+            )
             staged = True
         except Exception as exc:  # noqa: BLE001 - demote to durable
             print(f"body row not staged; skipping live delivery: {exc}", file=sys.stderr)
@@ -1024,8 +1040,19 @@ def _name_lane_send(
     if injected:
         try:
             # The lane-refined `to_harness` is the harness actually injected
-            # into, more truthful than the routing token's `provider`.
-            record_hosted_delivery(**record, to_harness=to_harness, to_session=to_session)
+            # into, more truthful than the routing token's `provider`. The
+            # receipt shares the staged row's id; the meta copy rides to
+            # the landed check.
+            receipt_fields = {
+                k: v for k, v in record.items() if v is not None and k != "to_session"
+            }
+            if to_session:
+                receipt_fields["to_session"] = to_session
+            if to_harness:
+                receipt_fields["to_harness"] = to_harness
+            rust_binary.chats_command(
+                ["stage", bus_live, "--delivery", "hosted"], receipt_fields,
+            )
         except Exception as exc:  # noqa: BLE001 - delivery already succeeded
             print(
                 "delivery succeeded; receipt row failed; the staged bus row "

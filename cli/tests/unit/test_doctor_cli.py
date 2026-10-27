@@ -27,7 +27,6 @@ def test_doctor_lists_direct_actions() -> None:
         "intel",
         "lanes",
         "lint",
-        "observer",
         "plugin-file",
         "reclaim",
         "scratch",

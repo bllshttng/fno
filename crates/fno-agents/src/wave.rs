@@ -473,7 +473,7 @@ fn missing_verify_path(command: &str, surfaces: &[String], root: &Path) -> Optio
     None
 }
 
-fn check_plan(plan: &Path, root: &Path) -> Result<Vec<String>, String> {
+pub(crate) fn check_plan(plan: &Path, root: &Path) -> Result<Vec<String>, String> {
     let strategy = parse_strategy(plan)?;
     let files = repository_files(root)?;
     let mut lines = Vec::new();

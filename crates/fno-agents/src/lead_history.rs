@@ -653,6 +653,9 @@ pub(crate) struct VerdictReadings {
     pub terminations: Vec<(String, u64)>,
     pub inherited_undelivered: u64,
     pub inherited_closed_in_window: u64,
+    /// In-window closes on rows another session filed; the lead's own
+    /// filings' closes reach neither counter (the `scope_split` guard).
+    pub filed_closed_in_window: u64,
     /// True when the team began before the stores' coverage epoch: every
     /// count read is a lower bound, and an under-ceiling bound reads
     /// unmeasured instead of within.
@@ -786,7 +789,7 @@ pub(crate) fn verdict(r: &VerdictReadings) -> (Verdict, Vec<BoundRow>) {
         Verdict::Unknown
     } else if r.last_actionable == Some(0)
         && r.inherited_undelivered > 0
-        && r.inherited_closed_in_window == 0
+        && r.inherited_closed_in_window + r.filed_closed_in_window == 0
     {
         Verdict::Stalled
     } else {
@@ -1144,6 +1147,7 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
     readings.compactions_measurable = !harness_session_id.is_empty();
     readings.inherited_undelivered = inputs.inherited_undelivered;
     readings.inherited_closed_in_window = inputs.inherited_closed_in_window;
+    readings.filed_closed_in_window = inputs.filed_closed_in_window;
     let (v, bounds) = verdict(&readings);
     let summary = bound_summary(v, &bounds);
     if let Some(note) = inputs
@@ -1169,6 +1173,7 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
         "inherited_undelivered": inputs.inherited_undelivered,
         "filed_undelivered": inputs.filed_undelivered,
         "inherited_closed_in_window": inputs.inherited_closed_in_window,
+        "filed_closed_in_window": inputs.filed_closed_in_window,
         "generation_start": inputs.generation_start,
         "generation_start_source": inputs.generation_start_source,
         "hygiene": hygiene,
@@ -1417,8 +1422,10 @@ fn render_verdict(payload: &Value) -> String {
         };
         lines.push(format!("  {}: {}", b["name"].as_str().unwrap_or(""), body));
     }
+    let closed_in_window = payload["inherited_closed_in_window"].as_u64().unwrap_or(0)
+        + payload["filed_closed_in_window"].as_u64().unwrap_or(0);
     lines.push(format!(
-        "readings: {} fire(s), loop check-ins {} (expected: {}, stale: {}), compactions {} ({}), inherited undelivered {}, closed in window {}, scanned {} rows across {} journal(s)",
+        "readings: {} fire(s), loop check-ins {} (expected: {}, stale: {}), compactions {} ({}), inherited undelivered {}, closed in window {} (inherited {} + other-filed {}), scanned {} rows across {} journal(s)",
         payload["fires"],
         payload["checkins"],
         payload["checkins_expected"],
@@ -1426,7 +1433,9 @@ fn render_verdict(payload: &Value) -> String {
         payload["compactions"],
         payload["compactions_source"].as_str().unwrap_or(""),
         payload["inherited_undelivered"],
+        closed_in_window,
         payload["inherited_closed_in_window"],
+        payload["filed_closed_in_window"],
         payload["scanned"],
         payload["journals"].as_array().map(|a| a.len()).unwrap_or(0),
     ));
@@ -1572,6 +1581,7 @@ mod verdict_tests {
             terminations: Vec::new(),
             inherited_undelivered: 0,
             inherited_closed_in_window: 0,
+            filed_closed_in_window: 0,
             lifetime_partial: false,
         }
     }
@@ -1671,6 +1681,22 @@ mod verdict_tests {
         r.last_actionable = Some(0);
         r.inherited_undelivered = 5;
         r.inherited_closed_in_window = 1;
+        let (v, _) = verdict(&r);
+        assert_eq!(v, Verdict::Converging);
+    }
+
+    #[test]
+    fn an_other_session_filed_close_reads_converging() {
+        // The delivery side (lead ruling, 2026-10-26): one in-window close on
+        // a row another session filed is progress, so the quiet-board stalled
+        // test cannot fire. The guard side - the lead's own filings never
+        // reaching a counter - lives in scope_split's tests; at this layer it
+        // is ac3's both-counters-zero reading.
+        let mut r = readings();
+        r.last_actionable = Some(0);
+        r.inherited_undelivered = 5;
+        r.inherited_closed_in_window = 0;
+        r.filed_closed_in_window = 1;
         let (v, _) = verdict(&r);
         assert_eq!(v, Verdict::Converging);
     }
@@ -2246,6 +2272,7 @@ mod tests {
             "compactions_error": null,
             "inherited_undelivered": 0,
             "inherited_closed_in_window": 0,
+            "filed_closed_in_window": 0,
             "scanned": 0,
             "journals": [],
             "term": {

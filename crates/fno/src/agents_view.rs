@@ -224,7 +224,7 @@ pub enum Liveness {
     Unmeasured,
 }
 
-/// The harnesses whose transcripts `fno agents peek` can tail: the
+/// The harnesses whose transcripts `fno agents session peek` can tail: the
 /// reader arms registered in `recent_records` (cli/src/fno/agents/peek.py).
 /// A static mirror of a Python seam; `thread_reach_mirrors_the_peek_reader_seam`
 /// pins it against that file so the two cannot drift (Rust checked against
@@ -445,7 +445,7 @@ fn declared_form(lane: FormLane, harness: &str) -> Option<AttachForm> {
 /// file, a missing `harness` table and a rejected block each skip rather
 /// than clearing what was already there, so a typo in one harness's block
 /// cannot un-attach a working harness.
-fn resolved_rows() -> &'static std::collections::BTreeMap<String, toml::Value> {
+pub(crate) fn resolved_rows() -> &'static std::collections::BTreeMap<String, toml::Value> {
     static ROWS: std::sync::OnceLock<std::collections::BTreeMap<String, toml::Value>> =
         std::sync::OnceLock::new();
     ROWS.get_or_init(|| {
@@ -1201,7 +1201,7 @@ pub fn registry_text() -> std::io::Result<String> {
 /// Hinnant days-from-civil; the mux reads the FILE contract, not the crate).
 /// Any other shape is `None`, so a malformed stamp ages the badge out (fails
 /// closed) rather than pinning a stale `working`.
-fn rfc3339_like_to_secs(s: &str) -> Option<u64> {
+pub(crate) fn rfc3339_like_to_secs(s: &str) -> Option<u64> {
     let b = s.as_bytes();
     if b.len() != 20
         || b[4] != b'-'
@@ -1242,7 +1242,7 @@ fn rfc3339_like_to_secs(s: &str) -> Option<u64> {
 /// True while an inside-leg report is authoritative at `now_secs` (contract
 /// v2 / AC-X2-2): no `ttl_ms` never self-ages; a TTL'd report expires once
 /// `received_at + ttl_ms` passes; an unparseable `received_at` is expired.
-fn report_is_live(received_at: &str, ttl_ms: Option<u64>, now_secs: u64) -> bool {
+pub(crate) fn report_is_live(received_at: &str, ttl_ms: Option<u64>, now_secs: u64) -> bool {
     let Some(ttl_ms) = ttl_ms else { return true };
     match rfc3339_like_to_secs(received_at) {
         Some(recv) => now_secs.saturating_sub(recv).saturating_mul(1000) <= ttl_ms,
@@ -1980,80 +1980,15 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_string);
+        // The hook rung (inside_leg) owns the row wherever a leg exists;
+        // the leg-less row falls to the screen-manifest rung. Both mappings
+        // and the one merge (a no-blocked-producer harness's fresh screen
+        // `blocked` outranks the leg) live in blocked_rung.
         let (badge, reason, answerable) = match inside_leg {
-            Some(leg) if !leg.is_null() => {
-                let live = report_is_live(
-                    leg.get("received_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(""),
-                    leg.get("ttl_ms").and_then(|v| v.as_u64()),
-                    now_secs,
-                );
-                if live {
-                    let badge = match leg.get("state").and_then(|v| v.as_str()) {
-                        Some("working") => Some(AgentBadge::Working),
-                        Some("blocked") => Some(AgentBadge::Blocked),
-                        Some("done") => Some(AgentBadge::Done),
-                        _ => None,
-                    };
-                    let reason = leg
-                        .get("reason")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string);
-                    // Hook-badged blocks carry no answer payload in v1 (the
-                    // grammar is a scrape-rung concern); focus-only.
-                    (badge, reason, None)
-                } else {
-                    (None, None, None) // TTL lapsed -> liveness-only (AC2-ERR)
-                }
+            Some(leg) if !leg.is_null() => crate::blocked_rung::merged_badge(leg, row, now_secs),
+            _ => {
+                crate::blocked_rung::screen_rung_badge(row, now_secs).unwrap_or((None, None, None))
             }
-            // Screen-manifest rung (v7): consulted ONLY when no inside_leg
-            // report exists at all - a hook-capable row (even TTL-lapsed)
-            // never falls through to a scrape verdict (per-capability
-            // arbitration; the writer clears screen_state on the flip, this
-            // is the reader-side defense in depth).
-            _ => match row.get("screen_state") {
-                Some(ss) if !ss.is_null() => {
-                    let live = report_is_live(
-                        ss.get("at").and_then(|v| v.as_str()).unwrap_or(""),
-                        ss.get("ttl_ms").and_then(|v| v.as_u64()),
-                        now_secs,
-                    );
-                    if live {
-                        // Manifest vocabulary is working|idle|blocked. `idle`
-                        // maps to no badge (a plain live row): AgentBadge has
-                        // no Idle variant and adding one is a proto bump,
-                        // serialized behind the v7 wire work. Anything
-                        // malformed fails badge-closed.
-                        let badge = match ss.get("state").and_then(|v| v.as_str()) {
-                            Some("working") => Some(AgentBadge::Working),
-                            Some("blocked") => Some(AgentBadge::Blocked),
-                            _ => None,
-                        };
-                        // The matched rule doubles as the human hint, the way
-                        // an inside-leg reason does.
-                        let reason = badge
-                            .is_some()
-                            .then(|| ss.get("rule").and_then(|v| v.as_str()).map(str::to_string))
-                            .flatten();
-                        // Answer payload only for a live `blocked` scrape verdict
-                        // that carried one; a malformed payload degrades to
-                        // focus-only (extraction is additive - never blanks the
-                        // badge). from_value tolerates the missing/extra field.
-                        let answerable = if badge == Some(AgentBadge::Blocked) {
-                            ss.get("answerable").filter(|v| !v.is_null()).and_then(|v| {
-                                serde_json::from_value::<AnswerablePrompt>(v.clone()).ok()
-                            })
-                        } else {
-                            None
-                        };
-                        (badge, reason, answerable)
-                    } else {
-                        (None, None, None) // TTL lapsed -> liveness-only
-                    }
-                }
-                _ => (None, None, None),
-            },
         };
         // The row's durable identity, provider-agnostic (both are
         // read unscoped: `where` resolves against either spelling).
@@ -2484,6 +2419,27 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
     }
     drop(reg_ids); // release the borrow of `out` before extending it
 
+    // A claude row that lost its cached short id (a mux restart drops it)
+    // still names its job: the jobId is the session uuid's leading 8 hex, the
+    // re-entry planner's own derivation, so a tap reaches Drive instead of a
+    // transcript tail. Only after the join: a roster worker answering the row
+    // by name holds the real job id, and a derived one would shadow it.
+    let roster_names: HashSet<&str> = roster.iter().map(|w| w.name.as_str()).collect();
+    for r in &mut out {
+        if r.attach_id.is_some()
+            || r.harness.as_deref() != Some("claude")
+            || roster_names.contains(r.name.as_str())
+        {
+            continue;
+        }
+        r.attach_id = r
+            .harness_session_id
+            .as_deref()
+            .or(r.claude_session_uuid.as_deref())
+            .map(attach_job_id)
+            .filter(|id| id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
     // A PARKED fork id renders as a lineage child of its
     // primary while the roster still lists it live. The second uuid a fork
     // minted under unknown evidence is addressable but owns no registry row
@@ -2732,6 +2688,7 @@ mod tests {
     mod roster_join_tests;
     mod spawned_by_name_tests;
     mod thread_row_status_tests;
+    mod uuid_attach_tests;
     fn reg(rows: &str) -> String {
         format!(r#"{{"schema_version": 6, "agents": [{rows}]}}"#)
     }
@@ -2982,50 +2939,6 @@ mod tests {
         assert_eq!(
             attach_job_id("too-long-hexstring-abcdef12"),
             "too-long-hexstring-abcdef12"
-        );
-    }
-
-    #[test]
-    fn agent_rows_screen_state_rung_badges_only_hookless_rows() {
-        // The screen-manifest rung (v7): a hook-less row with a fresh scrape
-        // verdict badges (blocked/working); `idle` renders as a plain live
-        // row (no AgentBadge::Idle until the next proto bump); a lapsed or
-        // malformed verdict ages to liveness-only; and ANY inside_leg report
-        // - even TTL-lapsed - keeps a leftover verdict from badging (the hook
-        // is unconditionally senior).
-        let raw = reg(&format!(
-            r#"{{"name":"scraped-blocked","cwd":"/w","status":"live",
-                 "screen_state":{{"state":"blocked","rule":"permission_prompt",
-                                  "seq":2,"at":"{recent}","ttl_ms":120000}}}},
-               {{"name":"scraped-idle","cwd":"/w","status":"live",
-                 "screen_state":{{"state":"idle","rule":"idle_prompt",
-                                  "seq":1,"at":"{recent}","ttl_ms":120000}}}},
-               {{"name":"scraped-lapsed","cwd":"/w","status":"live",
-                 "screen_state":{{"state":"working","rule":"busy","seq":1,
-                                  "at":"2020-01-01T00:00:00Z","ttl_ms":120000}}}},
-               {{"name":"scraped-corrupt","cwd":"/w","status":"live",
-                 "screen_state":{{"state":"working","rule":"busy","seq":1,
-                                  "at":"garbage","ttl_ms":120000}}}},
-               {{"name":"hook-wins","cwd":"/w","status":"live",
-                 "inside_leg":{{"state":"working","seq":9,
-                                "received_at":"2020-01-01T00:00:00Z","ttl_ms":60000}},
-                 "screen_state":{{"state":"blocked","rule":"leftover","seq":1,
-                                  "at":"{recent}","ttl_ms":120000}}}}"#,
-            recent = "2027-01-15T07:59:30Z",
-        ));
-        let now = rfc3339_like_to_secs("2027-01-15T08:00:00Z").unwrap();
-        let rows = derive_rows(&raw, now).unwrap();
-        let get = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
-        let blocked = get("scraped-blocked");
-        assert_eq!(blocked.badge, Some(AgentBadge::Blocked));
-        assert_eq!(blocked.reason.as_deref(), Some("permission_prompt"));
-        assert_eq!(get("scraped-idle").badge, None, "idle = plain live row");
-        assert_eq!(get("scraped-lapsed").badge, None, "TTL lapse ages out");
-        assert_eq!(get("scraped-corrupt").badge, None, "corrupt stamp closed");
-        assert_eq!(
-            get("hook-wins").badge,
-            None,
-            "a hook-capable row (even lapsed) never badges from a scrape verdict"
         );
     }
 

@@ -101,7 +101,7 @@ Read that exit code directly. Never through a `| tail`. A tail reports its own s
 
 Read the printed line too, not only the code. A deployed `fno` older than this command answers `No such command 'orphans'` and exits 2, which is the same code a failing arm uses. All three commands above then look like the falsifier working. The healthy run is what separates them: it exits 0 on a current binary and 2 on a stale one. `fno doctor` names the staleness, and `fno doctor --fix` updates it.
 
-**What the live control does not prove**, stated so nobody reads it as covering more than it does. Three arms stay unproven: the uid test, the census exclusion, and the reap age gate. The probe is ours, is not a census row, and is seconds old. Unit tests cover those three against a fabricated process table in `cli/tests/agents/test_orphans.py`.
+**What the live control does not prove**, stated so nobody reads it as covering more than it does. Three arms stay unproven: the uid test, the census exclusion, and the reap age gate. The probe is ours, is not a census row, and is seconds old. Unit tests cover those three against a fabricated process table in `crates/fno-agents/src/orphans.rs` (the Rust tests beside the sweep).
 
 ## Reaping, and why naming is the precondition
 

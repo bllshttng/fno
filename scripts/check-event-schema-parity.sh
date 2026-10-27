@@ -500,6 +500,10 @@ dual_owner_kinds = {
     "attention_delivery",
     "day_boundary",
     "legacy_journal_retired",
+    # The observer family port: the skill-eval sweep now emits these from
+    # Rust (observer/mod.rs). schema.yaml keeps the rows for the validator.
+    "skill_eval_finding",
+    "skill_eval_run_complete",
 }
 collisions -= dual_owner_kinds
 if collisions:

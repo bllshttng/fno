@@ -23,6 +23,11 @@ const REPLY_WAIT: Duration = Duration::from_secs(15);
 const KEY: &str = "store.remote_url";
 const ADDRS_KEY: &str = "store.remote_addrs";
 const UNREACHABLE: &str = "is unreachable";
+/// The primary took the request and sent nothing back in time. Callers
+/// still fail closed on it, but the words must not say "unreachable": the
+/// host answers, and the cure is on the primary, not the network.
+const QUIET: &str = "did not answer";
+const NO_REPLY: &str = "no reply within";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SqlValue {
@@ -363,8 +368,13 @@ impl Remote {
     }
 
     fn unreachable(&self, error: &str) -> String {
+        let verdict = if error.starts_with(NO_REPLY) {
+            QUIET
+        } else {
+            UNREACHABLE
+        };
         format!(
-            "remote store {} ({KEY}) {UNREACHABLE}: {error}. Nothing was written locally. \
+            "remote store {} ({KEY}) {verdict}: {error}. Nothing was written locally. \
              A request that timed out can still have reached the primary. \
              Unset {KEY} in the global config to use the local store.",
             self.url
@@ -438,9 +448,10 @@ impl Remote {
     }
 }
 
-/// Is this error the fail-closed refusal of an unreachable primary?
+/// Is this error the fail-closed refusal of a primary that could not be
+/// reached or did not answer in time?
 pub fn is_unreachable(error: &str) -> bool {
-    error.starts_with("remote store ") && error.contains(UNREACHABLE)
+    error.starts_with("remote store ") && (error.contains(UNREACHABLE) || error.contains(QUIET))
 }
 
 /// A read error in words. A read that hit [`REPLY_WAIT`] says so: macOS
@@ -450,7 +461,8 @@ pub fn is_unreachable(error: &str) -> bool {
 fn io_error(error: std::io::Error) -> String {
     match error.kind() {
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => format!(
-            "no reply within {}s (the primary took the request and went quiet)",
+            "{NO_REPLY} {}s (the primary took the request and went quiet; \
+             `fno agents claim backlog probe` times one read and one write)",
             REPLY_WAIT.as_secs()
         ),
         _ => error.to_string(),
@@ -583,12 +595,31 @@ pub(crate) mod test_primary {
     use super::*;
     use std::io::Read;
     use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     pub(crate) struct Primary {
         pub remote: Remote,
         pub db: Arc<Mutex<rusqlite::Connection>>,
+        /// A statement reply over this many bytes is refused, the way sqld
+        /// refuses one over its response size limit. Unlimited by default.
+        pub cap: Arc<AtomicUsize>,
         _dir: tempfile::TempDir,
+    }
+
+    impl Primary {
+        /// The bytes of the reply `sql` would get, measured the way the cap is.
+        pub(crate) fn reply_len(&self, sql: &str, args: &[SqlValue]) -> usize {
+            let args: Vec<Value> = args.iter().map(SqlValue::to_hrana).collect();
+            statement(&self.db.lock().unwrap(), &json!({"sql": sql, "args": args}))
+                .unwrap()
+                .to_string()
+                .len()
+        }
+
+        pub(crate) fn set_cap(&self, cap: usize) {
+            self.cap.store(cap, Ordering::SeqCst);
+        }
     }
 
     pub(crate) fn start() -> Primary {
@@ -602,14 +633,17 @@ pub(crate) mod test_primary {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let served = Arc::clone(&db);
+        let cap = Arc::new(AtomicUsize::new(usize::MAX));
+        let limit = Arc::clone(&cap);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                serve(stream, &served);
+                serve(stream, &served, limit.load(Ordering::SeqCst));
             }
         });
         Primary {
             remote: Remote::parse(&format!("http://127.0.0.1:{port}"), None).unwrap(),
             db,
+            cap,
             _dir: dir,
         }
     }
@@ -624,7 +658,7 @@ pub(crate) mod test_primary {
         Remote::parse(&format!("http://127.0.0.1:{port}"), None).unwrap()
     }
 
-    fn serve(stream: TcpStream, db: &Mutex<rusqlite::Connection>) {
+    fn serve(stream: TcpStream, db: &Mutex<rusqlite::Connection>, cap: usize) {
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let mut length = 0;
         loop {
@@ -645,7 +679,7 @@ pub(crate) mod test_primary {
             .as_array()
             .unwrap()
             .iter()
-            .map(|r| answer(&connection, r))
+            .map(|r| answer(&connection, r, cap))
             .collect();
         let reply = json!({"baton": null, "results": results}).to_string();
         let mut stream = stream;
@@ -741,7 +775,7 @@ pub(crate) mod test_primary {
         Ok(json!({"cols": cols, "rows": out, "affected_row_count": connection.changes()}))
     }
 
-    fn answer(connection: &rusqlite::Connection, request: &Value) -> Value {
+    fn answer(connection: &rusqlite::Connection, request: &Value, cap: usize) -> Value {
         let failed =
             |e: rusqlite::Error| json!({"type": "error", "error": {"message": e.to_string()}});
         match request["type"].as_str() {
@@ -751,6 +785,9 @@ pub(crate) mod test_primary {
                 Err(e) => failed(e),
             },
             Some("execute") => match statement(connection, &request["stmt"]) {
+                Ok(result) if result.to_string().len() > cap => {
+                    json!({"type": "error", "error": {"message": "Response is too large"}})
+                }
                 Ok(result) => {
                     json!({"type": "ok", "response": {"type": "execute", "result": result}})
                 }
@@ -791,5 +828,24 @@ mod tests {
         let remote = Remote::parse("http://r2d2:18080", None).unwrap();
         let error = remote.with_fallbacks(&["r2d2.lan".into()]).unwrap_err();
         assert!(error.contains(ADDRS_KEY), "{error}");
+    }
+
+    #[test]
+    fn a_reply_timeout_says_the_primary_did_not_answer_and_still_fails_closed() {
+        let remote = Remote::parse("http://r2d2:18080", None).unwrap();
+        let quiet = remote.unreachable(&io_error(std::io::ErrorKind::WouldBlock.into()));
+        assert!(
+            quiet.contains("did not answer: no reply within 15s"),
+            "{quiet}"
+        );
+        assert!(
+            !quiet.contains(UNREACHABLE) && is_unreachable(&quiet),
+            "{quiet}"
+        );
+        let refused = remote.unreachable("connect 1.2.3.4:18080: refused");
+        assert!(
+            refused.contains(UNREACHABLE) && is_unreachable(&refused),
+            "{refused}"
+        );
     }
 }
