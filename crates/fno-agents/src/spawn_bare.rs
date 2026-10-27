@@ -508,8 +508,9 @@ fn print_line(params: &Value, harness: &str, name: &str, route: Option<&Route>, 
     }
 }
 
-/// The spawn's account overlay, as the account seam resolved it before the
-/// gate (a refusal already exited there).
+/// The spawn's account overlay for the print ask, as the account seam
+/// resolved it before the gate (a refusal already exited there). Only the
+/// print, which launches nothing, may resolve it a second time.
 fn account_env(params: &Value, harness: &str) -> Map<String, Value> {
     match crate::accounts::launch::pane_overlay(params, harness) {
         Ok(Some(applied)) => applied.env,
@@ -551,7 +552,10 @@ pub fn native_lane(params: &Value, name: &str, route: Option<&Route>, cwd: &Path
         "name": name,
         "payload": message,
         "route_env": route.env,
-        "account_env": account_env(params, "claude"),
+        // The account seam already folded the overlay into this env, which
+        // the launch and its settings file inherit; a second resolve would
+        // drop a carrier-only spawn's launch-account stamp.
+        "account_env": {},
         "sandbox": params.get("sandbox").cloned().unwrap_or(Value::Null),
         "model": route.model,
         "effort": "",
