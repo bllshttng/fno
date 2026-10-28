@@ -392,7 +392,7 @@ function tick(alpha) {
   links.forEach((l) => { if (!inLayout(l.a) || !inLayout(l.b)) return; const dx = l.b.x - l.a.x, dy = l.b.y - l.a.y, d = Math.hypot(dx, dy) || 1, target = l.kind === "epic" ? 70 : l.kind === "axon" ? 170 : 130, k = (d - target) / d * (l.kind === "axon" ? .012 : .04) * alpha;
     l.a.vx += dx * k; l.a.vy += dy * k; if (l.b.kind !== "territory" && l.b.kind !== "host") { l.b.vx -= dx * k; l.b.vy -= dy * k; } });
   nodes.forEach((n) => { if (n.kind === "territory" || n.kind === "host") { n.x += ((n.tx ?? n.x) - n.x) * .1; n.y += ((n.ty ?? n.y) - n.y) * .1; n.vx = n.vy = 0; return; }
-    n.vy += -n.y * .002 * alpha; n.vx *= .82; n.vy *= .82; n.x += n.vx; n.y += n.vy; });
+    n.vx += -n.x * .002 * alpha; n.vy += -n.y * .002 * alpha; n.vx *= .82; n.vy *= .82; n.x += n.vx; n.y += n.vy; });
 }
 const toScreen = (n) => ({x: n.x * cam.k + cam.x + W / 2, y: n.y * cam.k + cam.y + (H + TOP) / 2});
 function star(x, y, r, host) { ctx.beginPath(); if (hosts[0] && host !== hosts[0].host) { const q = r * 1.25; ctx.moveTo(x, y - q); ctx.lineTo(x + q, y); ctx.lineTo(x, y + q); ctx.lineTo(x - q, y); ctx.closePath(); } else ctx.arc(x, y, r, 0, 7); }
