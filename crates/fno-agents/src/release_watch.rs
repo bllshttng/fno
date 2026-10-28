@@ -142,8 +142,7 @@ fn head_lead_scope() -> Option<String> {
 }
 
 /// Mail the head lead. With no head lead, or a refused send, file one fleet
-/// task instead, so the failure still lands on the lead board. True when
-/// either one landed.
+/// task instead, so it lands on the lead board. True when either landed.
 fn mail_head_lead(root: &Path, key: &str, text: &str, url: &str) -> bool {
     // Same cargo-test refusal as the operator notice: unpinned means real mail.
     if cfg!(test) && std::env::var_os("FNO_BIN").is_none() {
@@ -156,13 +155,10 @@ fn mail_head_lead(root: &Path, key: &str, text: &str, url: &str) -> bool {
             .stdin(std::process::Stdio::null());
         crate::bounded_cmd::output_with_timeout(cmd, 30).is_some_and(|o| o.status.success())
     });
-    if sent {
-        return true;
-    }
-    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
-        return false;
+    let Some(home) = crate::paths::AgentsHome::from_env_opt().filter(|_| !sent) else {
+        return sent;
     };
-    let filed = crate::fleet_task::file_once(
+    crate::fleet_task::file_once(
         &crate::provider_cap::questions_path(&home),
         LANE,
         key,
@@ -170,11 +166,9 @@ fn mail_head_lead(root: &Path, key: &str, text: &str, url: &str) -> bool {
         text,
         Some(url),
         None,
-    );
-    if let Err(e) = &filed {
-        eprintln!("release-watch: task refused: {e}");
-    }
-    filed.is_ok()
+    )
+    .map_err(|e| eprintln!("release-watch: task refused: {e}"))
+    .is_ok()
 }
 
 /// One repo's pass. Returns 1 when a page left the machine.
@@ -211,9 +205,8 @@ pub(crate) fn pass(
     let line = fetch_error_line(root, &slug, id)
         .unwrap_or_else(|| "no error annotation; open the run".to_string());
     let body = format!("{WORKFLOW} run {label} failed on {slug}: {line}");
-    // The mail rides its own mark, written only once the mail or its task
-    // landed: a page held by the rate floor must not mail the lead twice, and
-    // a lost mail must retry next pass.
+    // The mail's own mark lands only after delivery: a rate-held page never
+    // mails twice, and a lost mail retries next pass.
     if !marked(&mail_key) {
         let text =
             format!("{SENDER_LINE} {body} Read it: gh run view {id} --log-failed --repo {slug}");
