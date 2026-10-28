@@ -16,8 +16,8 @@ section{border-radius:16px;border:1px solid var(--line);background:var(--bg2);pa
 <div class="wrap">
   <header class="bar"><h1>Command</h1><span id="counts"></span><span class="age" id="age"></span></header>
   <div id="banners"></div>
+  <section aria-label="Machines"><h2>Machines</h2><div id="machines" class="machines"><p class="empty">reading the fleet</p></div></section>
   <section aria-label="Waiting on you"><h2>Waiting on you</h2><div id="waiting"></div></section>
-  <section aria-label="Machines"><h2>Machines</h2><div id="machines" class="machines"></div></section>
 </div>
 <script>
 (() => {
@@ -28,7 +28,7 @@ const el = (tag, cls, text) => {
   if (text != null) n.textContent = text;
   return n;
 };
-const ago = (s) => s == null ? "unknown" : s < 90 ? s + "s" : s < 5400 ? Math.round(s / 60) + "m" : Math.round(s / 3600) + "h";
+const ago = (s) => s == null ? "unknown" : s < 90 ? s + "s" : s < 5400 ? Math.round(s / 60) + "m" : s < 172800 ? Math.round(s / 3600) + "h" : Math.round(s / 86400) + "d";
 const since = (iso) => { const t = Date.parse(iso); return isNaN(t) ? null : Math.max(0, Math.round((Date.now() - t) / 1000)); };
 
 function header(model) {
