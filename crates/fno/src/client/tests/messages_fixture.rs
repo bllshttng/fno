@@ -73,8 +73,8 @@ async fn messages_reply_board_contracts() {
              "rows":[
                {"id":"m1","ts":"2026-10-01T09:00:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Ship it.","body":"Ship it.","system":false},
                {"id":"m2","ts":"2026-10-01T09:01:00Z","from":"first","from_key":"s1","to_key":"s-c","summary":"On it.","body":"On it.","system":false},
-               {"id":"m3","ts":"2026-10-01T09:02:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Merged.","body":"Merged.","system":false,"state":"parked"},
-               {"id":"m4","ts":"2026-10-01T09:20:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Landed.","body":"Landed.","system":false}],
+               {"id":"m3","ts":"2026-10-01T09:02:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Merged.","body":"Merged.","system":false},
+               {"id":"m4","ts":"2026-10-01T09:20:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Landed.","body":"Landed.","system":false,"state":"parked"}],
              "last_ts":"2026-10-01T09:20:00Z"},
             {"chat_id":"chat-a2","participants":["s-c","s-q"],
              "rows":[
@@ -166,8 +166,8 @@ async fn messages_reply_board_contracts() {
     );
     // The active tab is one full inverted cell, pad included; the
     // inactive cells never invert.
-    // A parked send of candor's sits mid-chat: `!` shows beside the
-    // unread `*`, never in its place.
+    // A parked send of candor's: `!` shows beside the unread `*`, never in
+    // its place.
     assert!(
         chats_lines.iter().any(|l| l.text.starts_with("!*first")),
         "{:?}",
