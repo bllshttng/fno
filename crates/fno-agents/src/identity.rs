@@ -212,10 +212,10 @@ pub(crate) fn is_sender_token(s: &str) -> bool {
 }
 
 fn login_name() -> String {
+    let set = |v: Result<String, std::env::VarError>| v.ok().filter(|u| !u.is_empty());
     // A launchd-started daemon can carry LOGNAME without USER.
-    ["USER", "LOGNAME"]
-        .iter()
-        .find_map(|k| std::env::var(k).ok().filter(|u| !u.is_empty()))
+    set(std::env::var("USER"))
+        .or_else(|| set(std::env::var("LOGNAME")))
         .unwrap_or_else(|| "unknown".into())
 }
 
