@@ -458,13 +458,12 @@ fn narrow_updates(connection: &Connection, changes: &mut [Change]) -> Result<(),
         if keep.len() == change.columns.len() {
             continue;
         }
-        let pick = |row: &Vec<SqlValue>| keep.iter().map(|&i| row[i].clone()).collect();
-        *change = Change {
-            columns: keep.iter().map(|&i| change.columns[i].clone()).collect(),
-            old: pick(&change.old),
-            new: pick(&change.new),
-            ..change.clone()
-        };
+        let full_columns = std::mem::take(&mut change.columns);
+        let old = std::mem::take(&mut change.old);
+        let new = std::mem::take(&mut change.new);
+        change.columns = keep.iter().map(|&i| full_columns[i].clone()).collect();
+        change.old = keep.iter().map(|&i| old[i].clone()).collect();
+        change.new = keep.iter().map(|&i| new[i].clone()).collect();
     }
     Ok(())
 }
