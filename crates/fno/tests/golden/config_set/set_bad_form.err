@@ -1,0 +1,1 @@
+error: expected key=value, got 'a'. Use `fno config set <key> <value>` for a single key.

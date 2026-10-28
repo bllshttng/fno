@@ -5,8 +5,7 @@
 //! parity goldens in `tests/golden/mail_withdraw` are the contract. Reader
 //! divergences from the Python leg (both follow the drain-reader idiom):
 //! malformed bus lines and corrupt cursor files are skipped silently instead
-//! of warned to stderr, and cursor filenames use the raw address, not the
-//! Python `_safe_name` spelling.
+//! of warned to stderr, and cursor filenames use the raw address.
 
 use crate::mail_control_drain::{withdrawn_ids, WITHDRAW_KIND};
 use crate::paths::AgentsHome;
@@ -15,7 +14,7 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Python `stamp_from`: an explicit `--from-name`, even the empty string,
+/// An explicit `--from-name`, even the empty string,
 /// wins verbatim; otherwise the resolved self handle, floored to the bare
 /// fleet name. Unlike hold there is no identity refusal here: an
 /// unprovable self stamps as `fno`.

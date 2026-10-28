@@ -1,0 +1,3 @@
+set obsidian.enabled = True
+set obsidian.vault = /tmp/vault
+(global: <FIXTURE>/fake_home/.fno/config.toml)

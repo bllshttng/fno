@@ -7,7 +7,7 @@
 //! live agent teamed over a set of epics may add an epic whose
 //! `source_session_id` is the agent's own session, and may drop a held
 //! epic whose graph row reads terminal (done or superseded). Every other
-//! grant still needs an attended shell or a containing team. A row's
+//! grant still needs a containing team. A row's
 //! `source_session_id` is a birth record the patch door refuses to
 //! rewrite, so the answer is verifiable by an external reader - the claim
 //! the self-team refusal guards.
@@ -189,8 +189,8 @@ pub fn resolve(payload: &Value) -> Result<Value, String> {
     if let Some(foreign) = added.iter().find(|m| !created.contains(m)) {
         return Ok(refused(Some(&format!(
             "{foreign} was not created by this session. Only an epic this session created \
-             joins its own team. An attended shell or a team that contains both grants \
-             the rest."
+             joins its own team. A team that contains both grants the rest: ask \
+             that lead."
         ))));
     }
 

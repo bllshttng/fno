@@ -138,9 +138,7 @@ def test_ac3_err_config_lock_contention_is_bounded_and_unconfirmed(
     monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "g.yaml"))
     err = _wire(monkeypatch, answer="y\n")
 
-    from fno.config import writer
-
-    target = writer._target_path("global", None)
+    target = tmp_path / "config.toml"
     target.parent.mkdir(parents=True, exist_ok=True)
     lock_path = target.with_suffix(target.suffix + ".lock")
     holder = open(lock_path, "w")

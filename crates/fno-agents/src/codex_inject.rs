@@ -1663,23 +1663,6 @@ pub fn parse_project_page(
     Ok((projects, next_cursor))
 }
 
-/// The project whose roots contain `repo_root`. Both sides canonicalize, so a
-/// symlinked repo or a `/var`-vs-`/private/var` spelling difference still
-/// matches.
-pub fn parse_project_id_for_root(raw: &str, repo_root: &Path) -> Option<String> {
-    let wanted = std::fs::canonicalize(repo_root).ok()?;
-    let (projects, _) = parse_project_page(raw).ok()?;
-    projects
-        .into_iter()
-        .find(|project| {
-            project
-                .roots
-                .iter()
-                .any(|root| std::fs::canonicalize(root).is_ok_and(|resolved| resolved == wanted))
-        })
-        .map(|project| project.id)
-}
-
 /// The `project.id` from a `project/create` or `project/update` response.
 pub fn parse_created_project_id(raw: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(raw)

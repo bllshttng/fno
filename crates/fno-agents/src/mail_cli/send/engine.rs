@@ -14,8 +14,6 @@ use super::*;
 /// and holds it, which misses the replace-mid-wait edge only.
 pub(super) struct AgentLock {
     file: std::fs::File,
-    #[allow(dead_code)]
-    path: PathBuf,
 }
 
 impl AgentLock {
@@ -45,7 +43,7 @@ impl AgentLock {
             match unsafe { libc::flock(handle.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } {
                 0 => {
                     let _ = std::fs::write(&path, holder_json());
-                    return Ok(AgentLock { file: handle, path });
+                    return Ok(AgentLock { file: handle });
                 }
                 _ => {
                     drop(handle);
@@ -130,7 +128,7 @@ pub(super) fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
-/// Python `_queue_grace_seconds`: the grace window covers the inject budget,
+/// The grace window covers the inject budget,
 /// floored at 2s and capped at the caller's timeout.
 pub(super) fn queue_grace_seconds(lock_timeout: f64) -> f64 {
     let residual = MAIL_INJECT_LIVENESS_SCALED_TIMEOUT_S + LOCK_TIMEOUT_QUEUE_GRACE_SECONDS;
@@ -141,7 +139,7 @@ pub(super) fn queue_grace_seconds(lock_timeout: f64) -> f64 {
 // Provider check and sender provenance (dispatch.py / sender_provenance.py)
 // ---------------------------------------------------------------------------
 
-/// Python `select_provider`: a --harness mismatch with the row refuses.
+/// A --harness mismatch with the row refuses.
 pub(super) fn select_provider(
     name: &str,
     requested: Option<&str>,
@@ -169,7 +167,7 @@ pub(super) fn select_provider(
     }
 }
 
-/// Python `_resolve_sender_entry`: the sender's registry row by handle.
+/// The sender's registry row by handle.
 pub(super) fn resolve_sender_entry(rows: &[Value], from_name: &str) -> Option<Value> {
     crate::client_commands::find_agent_entry(rows, from_name)
         .ok()
@@ -187,7 +185,7 @@ pub(super) fn proven_self_sender(from_name: &str) -> Option<(String, String)> {
     }
 }
 
-/// Python `_stamped_sender_provenance`: proven self, else the row's harness
+/// Proven self, else the row's harness
 /// and session id; a miss warns once and ships unproven.
 pub(super) fn stamped_sender_provenance(
     sender_row: Option<&Value>,
@@ -208,7 +206,7 @@ pub(super) fn stamped_sender_provenance(
     (from_harness, from_session)
 }
 
-/// Python `_build_mail_ctx`: the envelope's sender context.
+/// The envelope's sender context.
 #[derive(Clone, Default)]
 pub(super) struct MailCtx {
     from_: String,
@@ -321,7 +319,7 @@ pub(super) fn inject_argv(
     argv
 }
 
-/// Python `_mail_inject_claude`: control.sock inject via the mail-inject child.
+/// Control.sock inject via the mail-inject child.
 pub(super) fn mail_inject_claude(
     recipient: &str,
     wrapped: &str,
@@ -340,7 +338,7 @@ pub(super) fn mail_inject_claude(
     run_mail_inject_child(argv, wrapped, 60.0, reasons)
 }
 
-/// Python `_mail_inject_codex`: the app-server daemon thread lane.
+/// The app-server daemon thread lane.
 pub(super) fn mail_inject_codex(
     thread_id: &str,
     wrapped: &str,
@@ -358,7 +356,7 @@ pub(super) fn mail_inject_codex(
     run_mail_inject_child(argv, wrapped, 60.0, reasons)
 }
 
-/// Python `_mail_inject_keeper`: the keeper socket lane; the hosted harness
+/// The keeper socket lane; the hosted harness
 /// names the lane and the settle-delay table row.
 pub(super) fn mail_inject_keeper(
     recipient: &str,
@@ -377,7 +375,7 @@ pub(super) fn mail_inject_keeper(
     run_mail_inject_child(argv, wrapped, 60.0, reasons)
 }
 
-/// Python `_delivery_policy_refusal`: the hold gate, in-process.
+/// The hold gate, in-process.
 pub(super) fn delivery_policy_refusal(target: Option<&str>, body: Option<&str>) -> Option<String> {
     let target = target?;
     let verdict = crate::mail_hold::gate(target, body, chrono::Utc::now());
@@ -387,7 +385,7 @@ pub(super) fn delivery_policy_refusal(target: Option<&str>, body: Option<&str>) 
     Some(BUS_ONLY_POLICY.to_string())
 }
 
-/// Python `_lane_heal`: the codex pane-miss heal probe.
+/// The codex pane-miss heal probe.
 pub(super) fn lane_heal(session_id: &str) -> (String, Option<String>, Option<Value>) {
     let argv = vec![
         "mail-inject".to_string(),
@@ -529,7 +527,6 @@ fn daemon_rpc_inner(method: &str, params: Value) -> Option<Value> {
     }
 }
 
-/// Python `_switchboard_identity`.
 pub(super) fn switchboard_identity(entry: &Value) -> Value {
     json!({
         "harness": entry.get("harness"),
@@ -764,7 +761,7 @@ fn a2a_marker() -> PathBuf {
 // dispatch_send's engine (dispatch.py twins)
 // ---------------------------------------------------------------------------
 
-/// Python `_registered_family1_state`: classify a registered recipient without
+/// Classify a registered recipient without
 /// trusting its stored lifecycle.
 pub(super) fn registered_family1_state(row: &Value) -> String {
     let session_id = opt_str_field(row, "harness_session_id")
@@ -781,7 +778,7 @@ pub(super) fn registered_family1_state(row: &Value) -> String {
     }
 }
 
-/// Python `_deliver_live`: one fire-and-forget live attempt over the row's
+/// One fire-and-forget live attempt over the row's
 /// ref. The caller stages the body row and writes the durable fallback when
 /// this returns false. `wrapped` arrives already enveloped.
 pub(super) fn deliver_live(
@@ -947,7 +944,7 @@ fn deliver_answer_state(result: &Value) -> DeliveryState {
     )
 }
 
-/// Python `_queue_durable_fallback`: the durable FALLBACK envelope, the same
+/// The durable FALLBACK envelope, the same
 /// helper the lock-timeout grace queue uses. Returns (msg_id, durable_to).
 pub(super) fn queue_durable_fallback(
     row: &Value,
@@ -1119,7 +1116,7 @@ pub(super) fn recipient_identity(row: &Value) -> String {
     .join("\u{1f}")
 }
 
-/// Python `_validate_inputs` (name_is_address=True: no short-id shape check).
+/// Address-shaped names: no short-id shape check.
 pub(super) fn validate_send_inputs(
     name: &str,
     message: &str,
@@ -1786,7 +1783,7 @@ pub(super) fn project_ambiguity_error(project: &str, live_candidates: &[String])
     )
 }
 
-/// Python `resolve_to_project`: exactly one live peer delivers live, none
+/// Exactly one live peer delivers live, none
 /// queues durable to the project, many refuse unless --any breaks the tie.
 pub(super) fn resolve_to_project(
     project: &str,
@@ -1885,7 +1882,7 @@ pub(super) fn project_id_from_cwd(cwd: &str) -> Option<String> {
     None
 }
 
-/// Python `_project_id_from_settings`: the `project` key, flat or nested.
+/// The `project` key, flat or nested.
 /// Python's reader parses config.toml as TOML and a legacy settings.yaml as
 /// YAML, so the document parses under whichever grammar the suffix names.
 pub(super) fn project_id_from_settings_text(text: &str) -> Option<String> {

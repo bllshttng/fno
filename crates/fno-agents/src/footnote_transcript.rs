@@ -42,9 +42,6 @@ pub const LOG_TYPES: &[&str] = &[
     "child_session",
 ];
 
-/// A writer appends a `heartbeat` this often for as long as it lives. A
-/// reader counts the session alive while the newest is under the stale bound.
-pub const HEARTBEAT_EVERY_SECS: u64 = 30;
 pub const HEARTBEAT_STALE_SECS: u64 = 90;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

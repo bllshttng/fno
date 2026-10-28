@@ -276,6 +276,16 @@ pub fn render_page(item: &AttentionItem, routing: &Routing) -> String {
         out.push('\n');
     }
 
+    // The copies carry the question id in their names, so the bare name
+    // resolves to one file in the vault.
+    if !item.images.is_empty() {
+        out.push_str("\n## Screens\n\n");
+        for path in &item.images {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            out.push_str(&format!("![[{name}]]\n"));
+        }
+    }
+
     if !item.options.is_empty() {
         out.push_str("\n## Options\n\n");
         for option in &item.options {
@@ -759,6 +769,7 @@ mod tests {
                 rank: None,
                 live: None,
                 reach: None,
+                person: None,
             }),
             node: Some("x-bbbb".into()),
             blocked_because: Some("the ruling decides which gate ships".into()),
@@ -799,6 +810,7 @@ mod tests {
             missing: vec![],
             state: "open".into(),
             settled: false,
+            images: vec![],
         }
     }
 
@@ -861,6 +873,15 @@ mod tests {
         assert!(body.contains("Reversible: yes. Cost if wrong: one wasted release"));
         assert!(body.contains("Meanwhile: proceeds on the strict reading"));
         assert!(body.contains("<!-- Tick one option above"));
+        assert!(!body.contains("## Screens"), "no images, no heading");
+        let mut shot = item();
+        shot.images = vec!["/v/questions/screens/q-e5e5520b-1-bell.png".into()];
+        let (_, body) = parse_page(&render_page(&shot, &routing())).unwrap();
+        let screens = body.find("## Screens\n\n![[q-e5e5520b-1-bell.png]]\n");
+        assert!(
+            screens.is_some_and(|i| i < body.find("## Options").unwrap()),
+            "{body}"
+        );
 
         // The question template's own shape: each clause closes with a
         // period and the reason leads with "Option N,". The page reads the same.

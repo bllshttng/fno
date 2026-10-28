@@ -131,13 +131,36 @@ pub fn dispatch(rest: &[String]) -> i32 {
         Some("push") => run_push(&cwd),
         Some("pull") => run_pull(&rest[1..], &cwd),
         Some("retract") => run_retract(&rest[1..], &cwd),
+        Some("identity") => run_identity(),
         _ => {
             eprintln!(
-                "usage: fno-agents attest push|pull|retract [--repo <slug>]  (push reads one envelope line on stdin)"
+                "usage: fno-agents attest push|pull|retract|identity [--repo <slug>]  (push reads one envelope line on stdin)"
             );
             2
         }
     }
+}
+
+/// `fno-agents attest identity --json`: the attester this process tree
+/// proves for the caller, `{session_id, witness}`. The one ancestry walk
+/// lives here; the `fno` front door's config writer reads it through this
+/// door for its receipts and opt-out leases. A conflict names no session.
+fn run_identity() -> i32 {
+    let (id, witness) = match resolve_retractor_identity() {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let witness = witness_name(&witness);
+    let session = if witness == "conflict" {
+        String::new()
+    } else {
+        id.unwrap_or_default()
+    };
+    println!("{}", json!({"session_id": session, "witness": witness}));
+    0
 }
 
 /// The in-process mirror the commit path calls (both crates name this

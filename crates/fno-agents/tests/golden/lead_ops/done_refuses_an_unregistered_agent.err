@@ -1,1 +1,1 @@
-lead: cannot verify the caller's role: this session carries an agent identity the registry does not resolve to a row, and expiring a role requires a holder. Run /fno-me or retry, or pass --scope from an attended shell.
+lead: cannot verify the caller's role: this session carries an agent identity the registry does not resolve to a row, and expiring a role requires a holder. Run /fno-me or retry, or ask your lead to expire it.

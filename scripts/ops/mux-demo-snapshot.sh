@@ -600,10 +600,23 @@ write("chat-demo-broadcast", [
 ])
 
 # Questions journal: the feed's questions leg (operator_question,
-# operator_decision envelopes).
+# operator_decision envelopes). The first question carries one screenshot,
+# so the question page shows its screens row.
+import struct, zlib
+def png(path, w, h, rgb):
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+os.makedirs(f"{root}/screens", exist_ok=True)
+shot = f"{root}/screens/q-demo-a1-1-bell.png"
+png(shot, 160, 90, (40, 120, 200))
 qs = [
     {"ts": ts(4), "type": "operator_question", "source": "target",
-     "data": {"question_id": "q-demo-a1", "question": "Hold the 18:00 demo until the rate-limit shot lands?"}},
+     "data": {"question_id": "q-demo-a1", "question": "Hold the 18:00 demo until the rate-limit shot lands?",
+              "images": [shot]}},
     {"ts": ts(14), "type": "operator_question", "source": "target",
      "data": {"question_id": "q-demo-b2", "question": "Keep the demo root's mail store after the shot run?"}},
     {"ts": ts(26), "type": "operator_decision", "source": "target",

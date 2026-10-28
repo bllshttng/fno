@@ -427,8 +427,6 @@ pub(crate) fn response_gaps(operator_epochs: &[i64], assistant_ts: &[f64]) -> Ve
 
 #[derive(Deserialize)]
 pub(crate) struct FacetKey {
-    #[allow(dead_code)]
-    session: String,
     mtime: u64,
     size: u64,
 }

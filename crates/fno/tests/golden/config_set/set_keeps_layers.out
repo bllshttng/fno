@@ -1,0 +1,1 @@
+set post_merge.enabled = False (global: <FIXTURE>/fake_home/.fno/config.toml)

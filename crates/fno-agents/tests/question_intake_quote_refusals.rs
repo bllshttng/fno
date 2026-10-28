@@ -52,6 +52,8 @@ fn req(question: &str, root: &Path) -> IntakeRequest {
         render_cap: None,
         op: None,
         event: None,
+        images: Vec::new(),
+        screens_dir: None,
     }
 }
 

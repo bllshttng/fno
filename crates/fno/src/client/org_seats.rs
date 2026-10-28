@@ -3,6 +3,7 @@
 
 use crate::backlog_model::Inputs;
 use crate::proto::AgentRow;
+use serde::Serialize;
 use serde_json::Value;
 
 /// The status words on the wire, in the order a lead lists its seats.
@@ -14,7 +15,7 @@ pub(crate) struct FleetInputs {
     pub(crate) measured_at: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct Work {
     pub(crate) id: String,
     pub(crate) title: Option<String>,
@@ -26,7 +27,7 @@ pub(crate) struct Work {
     pub(crate) epic: Option<(String, Option<String>)>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct Seat {
     pub(crate) name: String,
     /// The short handle `fno agents session attach` takes.
@@ -47,10 +48,11 @@ pub(crate) struct Seat {
     pub(crate) work: Option<Work>,
     /// This mux's registry row, joined by full session id only. Only a
     /// joined seat takes action keys.
+    #[serde(skip)]
     pub(crate) local: Option<AgentRow>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 /// The seats on one machine that report to one lead. `name` is the lead's
 /// seat name, or [`NO_LEAD`].
 pub(crate) struct Lead {
@@ -91,7 +93,7 @@ fn lead_of(s: &Value, links: &[Link]) -> Option<String> {
     None
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct Machine {
     pub(crate) id: String,
     pub(crate) host: String,
@@ -106,7 +108,7 @@ pub(crate) struct Machine {
     pub(crate) leads: Vec<Lead>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct Fleet {
     pub(crate) machines: Vec<Machine>,
     /// fleet top's own notice (no `store.remote_url`) or its primary error.
@@ -127,11 +129,17 @@ impl Fleet {
 /// `fno agents fleet top --machines --json` beside the backlog read, each
 /// with its own failure, on the same 30 s bound the org fold had.
 pub(crate) async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> FleetInputs {
-    let (backlog, output) = tokio::join!(
-        crate::backlog_model::gather(graph, agents),
-        crate::org_model::tab_read(crate::org_model::FLEET_TOP_ARGV, Vec::new())
-    );
-    let fleet = match output {
+    let (backlog, fleet) = tokio::join!(crate::backlog_model::gather(graph, agents), read_fleet());
+    FleetInputs {
+        fleet,
+        backlog,
+        measured_at: chrono::Utc::now().timestamp().max(0) as u64,
+    }
+}
+
+/// The fleet top read, with each failure named.
+pub(crate) async fn read_fleet() -> Result<Value, String> {
+    match crate::org_model::tab_read(crate::org_model::FLEET_TOP_ARGV, Vec::new()).await {
         None => Err("fleet top timed out after 30s".into()),
         Some(Err(error)) => Err(format!("fleet top could not run: {error}")),
         Some(Ok(output)) if !output.status.success() => Err(format!(
@@ -145,11 +153,6 @@ pub(crate) async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> Fl
         )),
         Some(Ok(output)) => serde_json::from_slice(&output.stdout)
             .map_err(|e| format!("fleet top invalid JSON: {e}")),
-    };
-    FleetInputs {
-        fleet,
-        backlog,
-        measured_at: chrono::Utc::now().timestamp().max(0) as u64,
     }
 }
 

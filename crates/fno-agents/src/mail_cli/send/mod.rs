@@ -236,7 +236,7 @@ fn resolve_self_harness() -> Option<String> {
     own_identity().map(|(_, h)| h)
 }
 
-/// Python `resolve_self_model`: the sender's own model from its transcript
+/// The sender's own model from its transcript
 /// (claude: the last `message.model`; codex: the last `turn_context`
 /// payload), or "unknown" on any miss so a send never blocks on it.
 fn resolve_self_model() -> String {
@@ -312,12 +312,12 @@ fn receipt_door(args: &[&str]) -> Result<String, String> {
     Ok(captured.stdout.trim_end_matches('\n').to_string())
 }
 
-/// Python `_render` over the door: the caller owns printing.
+/// Render over the door: the caller owns printing.
 fn render_receipt(args: &[&str]) -> Result<String, String> {
     receipt_door(args)
 }
 
-/// Python `paths.state_dir`: `FNO_STATE_DIR`, then the configured state_dir,
+/// `FNO_STATE_DIR`, then the configured state_dir,
 /// then `~/.fno`. FNO_HOME never moves it.
 fn state_dir() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -487,7 +487,7 @@ fn enforce_origin_floor(origin: &str) -> &'static str {
     }
 }
 
-/// Python `classify_origin`: the sender classifies once, before a lane can
+/// The sender classifies once, before a lane can
 /// narrow behavior. `Ok(classified)` or `Err(message)` for exit 2.
 /// `pub(crate)`: the reply leaf classifies its own origin.
 pub(crate) fn classify_origin(explicit: Option<&str>) -> Result<String, String> {
@@ -520,7 +520,7 @@ pub(crate) fn classify_origin(explicit: Option<&str>) -> Result<String, String> 
     Ok(if attended { "operator" } else { "unknown" }.to_string())
 }
 
-/// Python `_record_mail_origin`: best-effort row via the native mail-record
+/// Best-effort row via the native mail-record
 /// leaf, exactly the same child the Python leg spawned.
 /// `pub(crate)`: the reply leaf records its own origin row through the same
 /// mail-record child.
@@ -727,7 +727,7 @@ fn resolve_body_text(args: &SendArgs) -> Result<Option<String>, (String, i32)> {
         .map_err(|e| (e, 1))
 }
 
-/// Python `_refuse_unsafe_short_address`: a codex head-8 is a 65-second UUIDv7
+/// A codex head-8 is a 65-second UUIDv7
 /// bucket, refused as a mail ADDRESS when the registry proves it codex.
 fn refuse_unsafe_short_address(token: Option<&str>, self_addressed: bool) -> Result<(), i32> {
     let Some(token) = token else {
@@ -795,12 +795,11 @@ const BUDGET_CONTROL_CAP: i64 = 60;
 /// Every refusal on the correction path names it.
 pub(crate) const CORRECTION_HINT: &str = "To correct an underway worker, write it on its node: `fno backlog note <node> --body-file <file>` mails the node's holder a pointer.";
 
-/// Python `budget.pair_label`.
 fn budget_pair_label(sender: &str, recipient: &str) -> String {
     format!("{sender} -> {recipient}")
 }
 
-/// Python `budget._ledger_path`: sha256(pair)[:16] under
+/// Sha256(pair)[:16] under
 /// `<bus_dir>/word-budget/`.
 fn budget_ledger_path(pair: &str) -> PathBuf {
     let digest = sha2_digest(pair);
@@ -840,7 +839,7 @@ fn lock_dir_release(lock: PathBuf) {
     let _ = std::fs::remove_dir_all(lock);
 }
 
-/// Python `budget._load`: strict entry shape; malformed is unavailable.
+/// Strict entry shape; malformed is unavailable.
 fn budget_load(path: &Path, pair: &str) -> Result<Vec<Value>, String> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -882,7 +881,7 @@ fn budget_store(path: &Path, pair: &str, entries: &[Value]) -> Result<(), String
     std::fs::rename(&tmp, path).map_err(|e| format!("ledger write failed: {e}"))
 }
 
-/// Python `budget.last_inbound`: the newest authored bus envelope addressed
+/// The newest authored bus envelope addressed
 /// from `recipient` to `sender` since `floor`. `(msg_id, ts)` on a hit.
 fn budget_last_inbound(sender: &str, recipient: &str, floor: f64) -> Option<(String, f64)> {
     let raw = std::fs::read_to_string(bus_log_path()).ok()?;
@@ -915,7 +914,7 @@ fn budget_last_inbound(sender: &str, recipient: &str, floor: f64) -> Option<(Str
     newest
 }
 
-/// Python `_parse_ts`: ISO-8601 (Z or offset) to unix seconds.
+/// ISO-8601 (Z or offset) to unix seconds.
 fn parse_iso_ts(raw: &str) -> Option<f64> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -939,7 +938,7 @@ enum BudgetOutcome {
     Unavailable(String, String),
 }
 
-/// Python `budget._reserve`: charge words to the pair over the rolling
+/// Charge words to the pair over the rolling
 /// window; the inbound reset clears the window when the recipient answered.
 fn budget_reserve(
     sender_key: &str,
@@ -1011,7 +1010,7 @@ fn now_unix() -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Python `_reserve_send_budget` / `_reserve_budget`: an ordinary body
+/// An ordinary body
 /// reserves nothing; a `control:` body charges the control ledger.
 /// `pub(crate)`: the reply leaf reserves its control-body budget here.
 pub(crate) fn reserve_send_budget(
@@ -1109,7 +1108,7 @@ pub(crate) fn release_budget_by_id(msg_id: &str) -> usize {
 // Durable write (inbox/store.py write_new_thread + bus append)
 // ---------------------------------------------------------------------------
 
-/// Python `generate_msg_id`: `fmail-` + 12 hex.
+/// `fmail-` + 12 hex.
 /// `pub(crate)`: the reply leaf mints its reply id here.
 pub(crate) fn generate_msg_id() -> String {
     crate::announce::new_msg_id()
@@ -1304,7 +1303,7 @@ fn body_refuse_bytes() -> i64 {
     cap_env_int("FNO_MAIL_BODY_REFUSE", 5000)
 }
 
-/// Python `_enforce_body_cap`: warn over WARN bytes, refuse over REFUSE.
+/// Warn over WARN bytes, refuse over REFUSE.
 fn enforce_body_cap(body: &str, usage_exit2: bool) -> Result<(), i32> {
     let warn = body_warn_bytes();
     let refuse = body_refuse_bytes();
@@ -1326,7 +1325,7 @@ fn enforce_body_cap(body: &str, usage_exit2: bool) -> Result<(), i32> {
     Ok(())
 }
 
-/// Python `_refuse_forged_envelope`: a body carrying an <fno_mail> tag is
+/// A body carrying an <fno_mail> tag is
 /// refused before it can reach the renderer. The classifier covers the close
 /// tag and case variants; a bare open-tag substring check let `</fno_mail>`
 /// through, and a close tag plus a fabricated envelope renders as two
@@ -1380,7 +1379,7 @@ fn enforce_style(body: &str, allow_reason: Option<&str>) -> Result<(), i32> {
     Err(1)
 }
 
-/// Python `_vet_body`: the three checks every outgoing body runs.
+/// The three checks every outgoing body runs.
 /// `pub(crate)`: the reply leaf vets its body through the same gate.
 pub(crate) fn vet_body(body: &str, allow_reason: Option<&str>) -> Result<(), i32> {
     refuse_forged_envelope(body)?;

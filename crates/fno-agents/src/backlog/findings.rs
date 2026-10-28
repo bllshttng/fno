@@ -194,18 +194,6 @@ pub fn load_many(
     Ok(out)
 }
 
-/// True when the id is taken by any finding on any node.
-pub fn id_exists(connection: &Connection, finding_id: &str) -> Result<bool, String> {
-    let taken: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM findings WHERE finding_id = ?1",
-            params![finding_id],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(taken > 0)
-}
-
 pub(crate) fn finding_ids_in(row: &serde_json::Value) -> Vec<String> {
     row.get("findings")
         .and_then(serde_json::Value::as_array)

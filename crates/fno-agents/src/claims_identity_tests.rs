@@ -216,3 +216,42 @@ fn ambient_parent_edge_resolves_id_harness_and_refuses_mixing() {
     let (s, h, _) = ambient_parent_edge_from(|_| None);
     assert_eq!((s, h), (None, None));
 }
+
+#[test]
+fn ambient_edge_reason_names_disposition_and_marker_set() {
+    // The native-lane downgrade must be diagnosable: the reason names the
+    // identity disposition and every present marker, never their values.
+    assert_eq!(
+        ambient_edge_reason_from(|_| None),
+        "identity disposition=absent, markers=no markers"
+    );
+    // Two vendor families: absent plus the ambiguity flag.
+    let two_families = |k: &str| match k {
+        "CLAUDE_CODE_SESSION_ID" => Some("cl".to_string()),
+        "CODEX_THREAD_ID" => Some("cx".to_string()),
+        _ => None,
+    };
+    assert_eq!(
+        ambient_edge_reason_from(two_families),
+        "identity disposition=absent+vendor-ambiguous, markers=CODEX_THREAD_ID,CLAUDE_CODE_SESSION_ID"
+    );
+    // One family, two disagreeing ids: the legacy conflict reads the same way.
+    let claude_legacy_conflict = |k: &str| match k {
+        "CLAUDE_CODE_SESSION_ID" => Some("cl-1".to_string()),
+        "CLAUDE_SESSION_ID" => Some("cl-2".to_string()),
+        _ => None,
+    };
+    assert_eq!(
+        ambient_edge_reason_from(claude_legacy_conflict),
+        "identity disposition=absent+vendor-ambiguous, markers=CLAUDE_CODE_SESSION_ID,CLAUDE_SESSION_ID"
+    );
+    // A pin with no name is the Invalid canonical: the reason says so.
+    let pinned_without_name = |k: &str| match k {
+        "FNO_HARNESS_SESSION_ID" => Some("abc".to_string()),
+        _ => None,
+    };
+    assert_eq!(
+        ambient_edge_reason_from(pinned_without_name),
+        "identity disposition=invalid, markers=FNO_HARNESS_SESSION_ID"
+    );
+}

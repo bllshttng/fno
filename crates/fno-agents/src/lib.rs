@@ -208,7 +208,6 @@ pub mod fleet_beacon;
 pub mod fleet_incident;
 pub mod fleet_law;
 pub mod fleet_load;
-pub mod fleet_page;
 pub mod fleet_state;
 pub mod fleet_task;
 pub mod flight_gate;
@@ -362,6 +361,7 @@ pub mod merge_grant;
 pub mod merge_hold;
 pub mod merge_posture;
 pub mod merge_provenance;
+pub mod merge_queue;
 pub mod merge_reap;
 #[cfg(test)]
 #[path = "mint_guard_tests.rs"]
@@ -490,6 +490,7 @@ pub mod registry_json;
 pub mod registry_read;
 pub mod registry_store;
 pub mod release_notes;
+pub mod release_record;
 pub mod release_watch;
 pub mod removals;
 pub mod rename;
@@ -665,6 +666,7 @@ pub mod tick_ledger;
 pub mod tool_activity;
 pub mod tracker;
 pub mod transcript_activity;
+pub mod transcript_turns;
 pub mod truth_probe;
 pub mod update_journal;
 pub mod usage;
@@ -1891,6 +1893,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "ci_tier_pass",
     "ci_tier_held",
     "ci_tier_wake",
+    // A PR queued in place of a merge, and the merge queue arm's acts
+    // (merge_queue.rs).
+    "merge_queue_entry",
+    "merge_queue_step",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
