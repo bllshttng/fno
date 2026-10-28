@@ -52,7 +52,9 @@ def prepare_spawn_payload(message: str) -> tuple[str, dict]:
         from fno.rust_binary import CommandUnavailable, command_call
 
         try:
-            block = command_call("fleet-law-payload", {"cwd": os.getcwd()}).get("block")
+            block = command_call(
+                "task-context-payload", {"fleet_laws": True, "cwd": os.getcwd()}
+            ).get("block")
         except CommandUnavailable:
             block = None
         if block:

@@ -115,7 +115,6 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "stop",
     "subscribe",
     "task-context-gate",
-    "fleet-law-payload",
     "task-context-payload",
     "task-context-prepare",
     "task-context-revalidate",
@@ -517,14 +516,12 @@ async fn run(args: Vec<String>) -> i32 {
             | "task-context-show"
             | "task-context-revalidate"
             | "task-context-payload"
-            | "fleet-law-payload"
     ) {
         return match command {
             "task-context-gate" => fno_agents::task_context::run_gate(&args[1..]),
             "task-context-stage" => fno_agents::task_context::run_stage(&args[1..]),
             "task-context-show" => fno_agents::task_context::run_show(&args[1..]),
             "task-context-payload" => fno_agents::task_context::run_payload(&args[1..]),
-            "fleet-law-payload" => fno_agents::fleet_law::run_payload(&args[1..]),
             _ => fno_agents::task_context::run_revalidate(&args[1..]),
         };
     }

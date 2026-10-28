@@ -7,8 +7,6 @@
 //! the records are plain local files (machine breaker, targeted holds, merge
 //! freeze) read from the agents home - no daemon, no lock, no network.
 
-use serde_json::json;
-
 use crate::fleet_incident::{self, IncidentRecord, Verdict};
 use crate::paths::AgentsHome;
 
@@ -105,30 +103,6 @@ pub fn append_fleet_laws_with(
         }
         _ => (message.to_owned(), Vec::new()),
     }
-}
-
-/// `fleet-law-payload`: the payload-side render for the Python compat shell,
-/// the `command_call` twin of `task-context-payload`. `block: null` means no
-/// active constraint - absent, never fabricated.
-pub fn run_payload(args: &[String]) -> i32 {
-    crate::task_context::run_stdin_command(
-        args,
-        "fleet-law-payload  (one JSON request on stdin: cwd? - the seated worker's dir)",
-        |req| {
-            let cwd = req
-                .get("cwd")
-                .and_then(Value::as_str)
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            let delivered = active_laws_at(&cwd);
-            let answer = json!({
-                "ok": true,
-                "block": delivered.as_ref().map(|d| d.block.clone()),
-                "subjects": delivered.map(|d| d.subjects),
-            });
-            println!("{answer}");
-        },
-    )
 }
 
 fn machine_wide_lines(home: &AgentsHome, lines: &mut Vec<String>) {

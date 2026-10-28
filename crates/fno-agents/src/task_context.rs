@@ -265,7 +265,7 @@ fn print_refusal(reason: &str) {
 
 /// Shared transport shape: request rides stdin, answer prints on stdout, a
 /// semantic refusal is data (exit 0), only an unreadable request is exit 2.
-pub(crate) fn run_stdin_command(args: &[String], usage: &str, f: impl FnOnce(Value)) -> i32 {
+fn run_stdin_command(args: &[String], usage: &str, f: impl FnOnce(Value)) -> i32 {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("usage: fno-agents {usage}");
         return 0;
@@ -454,8 +454,23 @@ pub fn payload_block(binding: &Value) -> Option<String> {
 pub fn run_payload(args: &[String]) -> i32 {
     run_stdin_command(
         args,
-        "task-context-payload  (one JSON request on stdin: path? - defaults to $FNO_TASK_CONTEXT_FILE)",
+        "task-context-payload  (one JSON request on stdin: path? - defaults to $FNO_TASK_CONTEXT_FILE; fleet_laws: true renders the fleet-law block for cwd?)",
         |req| {
+            if req.get("fleet_laws").is_some_and(|v| v.as_bool() == Some(true)) {
+                let cwd = req
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                let delivered = crate::fleet_law::active_laws_at(&cwd);
+                let answer = serde_json::json!({
+                    "ok": true,
+                    "block": delivered.as_ref().map(|d| d.block.clone()),
+                    "subjects": delivered.map(|d| d.subjects),
+                });
+                println!("{answer}");
+                return;
+            }
             let path = req
                 .get("path")
                 .and_then(Value::as_str)
