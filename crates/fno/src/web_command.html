@@ -311,7 +311,7 @@ const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const COL = Object.fromEntries(ORDER.map((st) => [st, css("--" + st)])), UI = css("--font-ui"), DATA = css("--font-data");
 const TCOL = ["#5CE1FF", "#FF7AB6", "#FFB547", "#7CF29A", "#A68CFF", "#FF8A5C"];
-let nodes = [], links = [], byId = {}, hosts = [], tcolor = {}, W = 0, H = 0, DPR = 1, layout = "constellation", hover = null, drag = null, born = performance.now(), pulses = [], lastSpark = 0;
+let nodes = [], links = [], byId = {}, hosts = [], tcolor = {}, W = 0, H = 0, TOP = 84, DPR = 1, layout = "constellation", hover = null, drag = null, born = performance.now(), pulses = [], lastSpark = 0;
 const cam = {x: 0, y: 0, k: 1, tx: 0, ty: 0, tk: 1};
 const proj = (r) => r.s.project || "unassigned";
 const epic = (r) => r.s.work && r.s.work.epic;
@@ -351,7 +351,8 @@ function graph(model) {
     resize(); cam.k = cam.tk = fitK() * .6; setTimeout(() => { cam.tk = fitK(); }, 50);
   }
 }
-function resize() { const b = cv.getBoundingClientRect(); if (!b.width) return; DPR = Math.min(2, devicePixelRatio || 1); W = b.width; H = b.height; cv.width = W * DPR; cv.height = H * DPR; }
+function capBottom() { const c = document.getElementById("lnote"); TOP = c.offsetTop + c.offsetHeight + 12; }
+function resize() { const b = cv.getBoundingClientRect(); if (!b.width) return; capBottom(); DPR = Math.min(2, devicePixelRatio || 1); W = b.width; H = b.height; cv.width = W * DPR; cv.height = H * DPR; }
 addEventListener("resize", resize);
 document.getElementById("tab-synapse").addEventListener("click", () => requestAnimationFrame(resize));
 function setTargets() {
@@ -373,7 +374,7 @@ function setTargets() {
   }
 }
 function setLayout(l) {
-  layout = l; stage.dataset.layout = l; document.getElementById("lnote").textContent = LNOTE[l]();
+  layout = l; stage.dataset.layout = l; document.getElementById("lnote").textContent = LNOTE[l](); capBottom();
   setTargets(); born = performance.now() - 900; cam.tx = cam.ty = 0; setTimeout(() => { cam.tk = fitK(); }, 450);
   stage.querySelectorAll("[data-layout]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.layout === l)));
   try { localStorage.setItem("fnoCommandLayout", l); } catch (e) {}
@@ -393,7 +394,6 @@ function tick(alpha) {
   nodes.forEach((n) => { if (n.kind === "territory" || n.kind === "host") { n.x += ((n.tx ?? n.x) - n.x) * .1; n.y += ((n.ty ?? n.y) - n.y) * .1; n.vx = n.vy = 0; return; }
     n.vy += -n.y * .002 * alpha; n.vx *= .82; n.vy *= .82; n.x += n.vx; n.y += n.vy; });
 }
-const TOP = 84;
 const toScreen = (n) => ({x: n.x * cam.k + cam.x + W / 2, y: n.y * cam.k + cam.y + (H + TOP) / 2});
 function star(x, y, r, host) { ctx.beginPath(); if (hosts[0] && host !== hosts[0].host) { const q = r * 1.25; ctx.moveTo(x, y - q); ctx.lineTo(x + q, y); ctx.lineTo(x, y + q); ctx.lineTo(x - q, y); ctx.closePath(); } else ctx.arc(x, y, r, 0, 7); }
 function pick(mx, my) { let best = null, bd = 1e9; nodes.forEach((n) => { if (!shown(n)) return; const p = toScreen(n), d = Math.hypot(p.x - mx, p.y - my); if (d < radius(n) * cam.k + 8 && d < bd) { bd = d; best = n; } }); return best; }
