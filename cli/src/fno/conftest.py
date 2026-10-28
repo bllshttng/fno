@@ -2,7 +2,7 @@
 
 This is a SEPARATE pytest root from ``cli/tests/``, which is the trap: a scrub
 applied over there protects nothing here. A targeted ``pytest cli/src/fno/...``
-reaches target_cli.py and the carveout/done/log readers with the live session's
+reaches the carveout/done/log readers with the live session's
 markers still set, and resolves the identity of the session running the tests.
 
 Both trees apply the SAME native env (the ``test-run env`` door on the

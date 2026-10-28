@@ -1,0 +1,1 @@
+target sessions must bootstrap with 'fno do target init' (records input/plan_path/owner_cwd binding); 'fno do state init' writes a stub the stop hook will archive.

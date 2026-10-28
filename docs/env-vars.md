@@ -333,10 +333,11 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `TARGET_ABORT_REASON` | rs | unclear: crates/fno-agents/src/ledger_register.rs:617 |
 | `TARGET_ALLOW_IN_REVIEW` | rs | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |
 | `TARGET_CLAIM_TTL` | rs | unclear: crates/fno-agents/src/target_start.rs:1052 |
-| `TARGET_INPUT` | py | unclear: cli/src/fno/target_cli.py:1369 |
+| `TARGET_INPUT` | rs | unclear: crates/fno-agents/src/target_gates.rs:473 |
 | `TARGET_NO_MERGE` | py+rs | unclear: cli/src/fno/agents/harness_map.py:215 |
-| `TARGET_PLAN_PATH` | py | unclear: cli/src/fno/target_cli.py:1369 |
+| `TARGET_PLAN_PATH` | rs | unclear: crates/fno-agents/src/target_gates.rs:474 |
 | `TARGET_SESSION_ID` | py+rs | Run id a driver pre-assigns its workers; init adopts it verbatim as session id and claim owner, and the decide door matches it against a live claim's `target-session:<id>` holder to say whether this caller holds the node. |
+| `TARGET_TRANSCRIPT_ID` | rs | The hook's claude session id under its transcript spelling; the owned-identity gate reads it when CLAUDE_CODE_SESSION_ID is absent. |
 | `TARGET_SIZE` | rs | Size profile the init door hands the writer. The blast read also takes it from the caller's env as an operator pin that a low-blast downgrade must not strip. Read in crates/fno-agents/src/target_init.rs `run`. |
 | `TARGET_SUMMARY_PATH` | rs | unclear: crates/fno-agents/src/ledger_register.rs:584 |
 | `TARGET_UNATTENDED` | rs | unclear: crates/fno-agents/src/target_orient.rs:329 |
