@@ -35,6 +35,13 @@ tbody tr{cursor:pointer;transition:background .2s}tbody tr:hover{background:rgba
 .dhead h2{margin:0;font-size:19px;line-height:1.3;font-weight:600}.dnode{font-family:var(--font-data);font-size:12px;color:var(--muted)}.dbody{padding:14px 18px 22px;overflow:auto;display:flex;flex-direction:column;gap:16px}.sec h3{margin:0 0 6px;font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.1em;font-weight:600}
 .kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:7px 12px;font-size:13px;margin:0}.kv dt{color:var(--muted)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.mono{font-family:var(--font-data);font-size:12px}.links{display:flex;flex-direction:column;gap:8px}a.lk{color:var(--fg);text-decoration:none}a.lk:hover{border-color:rgba(143,200,255,.5)}.lk button{border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--fg);border-radius:9px;font:500 12px var(--font-ui);padding:7px 10px;cursor:pointer;min-height:34px}
 @media (max-width:640px){.drawer{top:auto;left:8px;right:8px;bottom:8px;width:auto;height:78vh;transform:translateY(calc(100% + 30px))}.kv{grid-template-columns:96px minmax(0,1fr)}}
+.host{display:grid;grid-template-columns:120px minmax(0,1fr);gap:16px;align-items:center}.host canvas{width:120px;height:120px}.view{display:flex;flex-direction:column;gap:14px}.view[hidden]{display:none}
+.stage{position:relative;height:min(76vh,780px);min-height:420px;border-radius:22px;overflow:hidden;border:1px solid var(--line);background:radial-gradient(120% 90% at 50% 40%,#111628 0%,var(--bg) 70%)}.stage canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}.stage canvas.dragging{cursor:grabbing}
+.layouts{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:4px;padding:4px;border-radius:999px;background:rgba(10,12,20,.6);border:1px solid var(--line);backdrop-filter:blur(10px);z-index:2;max-width:calc(100% - 24px);overflow-x:auto}.layouts .chip{min-height:30px;padding:5px 12px;white-space:nowrap}.layouts .chip[aria-checked="true"]{color:var(--fg);background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.3)}.layouts .lbl{align-self:center;padding:0 4px 0 10px;font-size:12px;color:var(--muted);white-space:nowrap}
+.lnote{position:absolute;top:58px;left:50%;transform:translateX(-50%);font-size:12px;color:var(--muted);text-align:center;max-width:calc(100% - 24px);pointer-events:none;z-index:2;margin:0}
+.legend{position:absolute;left:14px;bottom:14px;display:flex;flex-wrap:wrap;gap:6px 14px;padding:8px 12px;border-radius:12px;background:rgba(10,12,20,.6);border:1px solid var(--line);font-size:12px;color:var(--muted);max-width:calc(100% - 28px);backdrop-filter:blur(10px)}.legend span{display:inline-flex;align-items:center;gap:6px}.hint{position:absolute;right:14px;bottom:14px;font-size:11.5px;color:var(--faint);pointer-events:none}
+.tip{position:absolute;pointer-events:none;min-width:220px;max-width:300px;padding:10px 12px;border-radius:14px;background:rgba(14,17,28,.88);border:1px solid rgba(160,190,255,.22);box-shadow:0 12px 40px rgba(0,0,0,.45);backdrop-filter:blur(14px);opacity:0;transform:translateY(6px) scale(.97);transition:opacity .18s,transform .3s var(--spring);font-size:12.5px;line-height:1.4}.tip.on{opacity:1;transform:none}.tip .t1{font-weight:600;font-size:13.5px;margin-bottom:4px}.tip .t2{font-family:var(--font-data);font-size:11px;color:var(--muted)}
+@media (max-width:640px){.stage{height:62vh}.hint{display:none}}@media (max-width:480px){.host{grid-template-columns:88px minmax(0,1fr)}.host canvas{width:88px;height:88px}}
 </style>
 </head>
 <body>
@@ -44,7 +51,16 @@ tbody tr{cursor:pointer;transition:background .2s}tbody tr:hover{background:rgba
   <div id="banners"></div>
   <section class="fleet" id="machines" aria-label="Machines"><p class="empty">reading the fleet</p></section>
   <div class="filters" id="chips"><label>Machine</label></div>
-  <section class="panel" id="view-synapse" aria-label="Waiting on you"><h2>Waiting on you</h2><div id="waiting"></div></section>
+  <div class="view" id="view-synapse">
+    <section class="stage" aria-label="Fleet synapse map"><canvas id="cv"></canvas>
+      <div class="layouts" role="radiogroup" aria-label="Layout"><span class="lbl">Group by</span><button class="chip" role="radio" aria-checked="true" data-layout="constellation">Projects</button><button class="chip" role="radio" aria-checked="false" data-layout="hemispheres">Machines</button><button class="chip" role="radio" aria-checked="false" data-layout="transit">Subway</button></div>
+      <p class="lnote" id="lnote"></p>
+      <div class="legend"><span><i class="dot" style="background:var(--writing)"></i>writing</span><span><i class="dot" style="background:var(--parked)"></i>parked</span><span><i class="dot" style="background:var(--quiet)"></i>quiet</span><span><i class="dot" style="border:1.5px solid var(--unknown)"></i>unknown</span><span><i class="dot" style="border:1.5px solid #F4F1FF"></i>lead</span><span><i class="dot" style="background:#fff;opacity:.5"></i>project / epic</span></div>
+      <div class="hint">Hover to fire · click for details · drag to pan · scroll to zoom</div>
+      <div class="tip" id="tip"></div>
+    </section>
+    <section class="panel" aria-label="Waiting on you"><h2>Waiting on you</h2><div id="waiting"></div></section>
+  </div>
   <section class="tablewrap" id="view-table" hidden aria-label="Seats">
     <div class="ttools"><input id="filter" type="search" placeholder="Filter by seat, node, title, model, session id" aria-label="Filter seats"><span id="rowcount"></span></div>
     <div class="tscroll"><table><thead><tr id="thead"></tr></thead><tbody id="tbody"></tbody></table></div>
@@ -77,7 +93,7 @@ function header(model) {
     if (color) {
       c.append(dot(color));
       c.setAttribute("aria-pressed", String(!hiddenStates.has(color)));
-      c.onclick = () => { hiddenStates.has(color) ? hiddenStates.delete(color) : hiddenStates.add(color); header(model); paint(); };
+      c.onclick = () => { hiddenStates.has(color) ? hiddenStates.delete(color) : hiddenStates.add(color); header(model); paint(); cam.tk = fitK(); };
     }
     c.append(el("b", null, n), " " + word);
     counts.append(c);
@@ -138,9 +154,11 @@ const track = (frac, color) => {
   t.append(i);
   return t;
 };
+let cards = [];
 function machines(model) {
   const box = document.getElementById("machines");
   box.replaceChildren();
+  cards = [];
   if (!model.machines.length) {
     box.append(el("p", "empty", "fleet not read: " + (model.fleet_error ? model.fleet_error.reason : "no machines")));
     return;
@@ -151,7 +169,7 @@ function machines(model) {
       const n = seats.filter((x) => x.status === s).length;
       if (n) { const i = el("i"); i.style.flex = n; i.style.background = "var(--" + s + ")"; mix.append(i); }
     }
-    const c = el("div", "host"), info = el("div", "hinfo"), name = el("div", "hname"), live = el("span", m.fresh ? "live" : "live stale");
+    const c = el("div", "host"), cv = el("canvas"), info = el("div", "hinfo"), name = el("div", "hname"), live = el("span", m.fresh ? "live" : "live stale");
     live.append(el("i"), (m.fresh ? "online" : "stale") + " · beat " + ago(m.age_s) + " ago");
     name.append(el("b", null, m.host), el("span", null, m.leads.length + (m.leads.length === 1 ? " lead" : " leads")), live);
     const mem = m.mem_used, cpu = m.cpu == null ? null : m.cpu / 100;
@@ -159,8 +177,11 @@ function machines(model) {
       meter("Memory", track(mem, mem > .85 ? "parked" : "ok"), mem == null ? "not sampled" : Math.round(mem * 100) + "%"),
       meter("Spawn cap", track(m.cap ? seats.length / m.cap : null, seats.length >= m.cap ? "parked" : "quiet"), m.cap == null ? "not published" : seats.length + " / " + m.cap),
       meter("CPU", track(cpu, "quiet"), cpu == null ? "not sampled" : Math.round(m.cpu) + "%"));
-    c.append(info);
+    cv.width = cv.height = 240;
+    cv.setAttribute("aria-hidden", "true");
+    c.append(cv, info);
     box.append(c);
+    cards.push({cv, h: m});
   }
 }
 
@@ -194,6 +215,7 @@ function seats(model) {
     chips.append(b);
   }
   paint();
+  graph(model);
   const again = rows.find((r) => keyOf(r) === openKey);
   if (again) openSeat(again); else if (openKey) closeSeat();
 }
@@ -282,6 +304,191 @@ function closeSeat() {
 document.getElementById("dclose").onclick = closeSeat;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSeat(); });
 document.getElementById("filter").oninput = paint;
+
+// The Synapse canvas and the machine orb, ported from the fleet-synapse mockup.
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d"), stage = cv.parentElement, tip = document.getElementById("tip");
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const COL = Object.fromEntries(ORDER.map((st) => [st, css("--" + st)])), UI = css("--font-ui"), DATA = css("--font-data");
+const TCOL = ["#5CE1FF", "#FF7AB6", "#FFB547", "#7CF29A", "#A68CFF", "#FF8A5C"];
+let nodes = [], links = [], byId = {}, hosts = [], tcolor = {}, W = 0, H = 0, DPR = 1, layout = "constellation", hover = null, drag = null, born = performance.now(), pulses = [], lastSpark = 0;
+const cam = {x: 0, y: 0, k: 1, tx: 0, ty: 0, tk: 1};
+const proj = (r) => r.s.project || "unassigned";
+const epic = (r) => r.s.work && r.s.work.epic;
+const leadName = (r) => r.s.role ? r.s.short || r.s.name : null;
+const visible = (r) => !hiddenHosts.has(r.host) && !hiddenStates.has(r.s.status);
+const hx = (host) => { const i = hosts.findIndex((h) => h.host === host), n = hosts.length; return n < 2 ? 0 : i / (n - 1) * 2 - 1; };
+const LNOTE = {constellation: () => "Each project is a galaxy. Star shape shows the machine: a circle on " + (hosts[0] ? hosts[0].host : "the first machine") + ", a diamond elsewhere.", hemispheres: () => "Each machine is a galaxy. Its colored arms are the projects it runs.", transit: () => "Each project is a subway line from a machine to the project interchange in the middle."};
+
+function graph(model) {
+  const old = byId, first = !nodes.length;
+  nodes = []; links = []; byId = {}; hosts = model.machines;
+  const add = (n) => { const o = old[n.id]; if (o) { n.x = o.x; n.y = o.y; } n.vx = n.vy = 0; byId[n.id] = n; nodes.push(n); return n; };
+  const projects = [...new Set(rows.map(proj))];
+  projects.forEach((p, i) => { tcolor[p] = TCOL[i % TCOL.length]; add({id: "P:" + p, kind: "territory", label: p, homeY: (i - (projects.length - 1) / 2) * 150}); });
+  for (const r of rows) {
+    const e = epic(r);
+    if (e && !byId["E:" + e[0]]) links.push({a: add({id: "E:" + e[0], kind: "epic", label: e[0], title: e[1], project: proj(r)}), b: byId["P:" + proj(r)], kind: "epic"});
+  }
+  for (const h of hosts) h._n = add({id: "H:" + h.host, kind: "host", h});
+  for (const r of rows) {
+    const e = epic(r), n = r._n = add({id: "S:" + keyOf(r), kind: "session", r});
+    links.push({a: n, b: e ? byId["E:" + e[0]] : byId["P:" + proj(r)], kind: "session"}, {a: n, b: byId["H:" + r.host], kind: "axon"});
+  }
+  for (const n of nodes) {
+    if (n.x != null) continue;
+    if (n.kind === "territory") { n.x = 0; n.y = n.homeY; }
+    else if (n.kind === "host") { n.x = hx(n.h.host) * 470; n.y = 0; }
+    else if (n.kind === "epic") { n.x = (Math.random() - .5) * 80; n.y = byId["P:" + n.project].homeY + (Math.random() - .5) * 60; }
+    else { n.x = hx(n.r.host) * (240 + Math.random() * 120); n.y = (Math.random() - .5) * 380; }
+  }
+  setTargets();
+  if (first) {
+    try { const l = localStorage.getItem("fnoCommandLayout"); if (LNOTE[l]) layout = l; } catch (e) {}
+    setLayout(layout);
+    nodes.forEach((n) => { if (n.tx != null && (n.kind === "territory" || n.kind === "host")) { n.x = n.tx; n.y = n.ty; } });
+    for (let i = 0; i < 320; i++) tick(1);
+    resize(); cam.k = cam.tk = fitK() * .6; setTimeout(() => { cam.tk = fitK(); }, 50);
+  }
+}
+function resize() { const b = cv.getBoundingClientRect(); if (!b.width) return; DPR = Math.min(2, devicePixelRatio || 1); W = b.width; H = b.height; cv.width = W * DPR; cv.height = H * DPR; }
+addEventListener("resize", resize);
+document.getElementById("tab-synapse").addEventListener("click", () => requestAnimationFrame(resize));
+function setTargets() {
+  const terrs = nodes.filter((n) => n.kind === "territory"), hns = nodes.filter((n) => n.kind === "host");
+  if (layout === "hemispheres") {
+    terrs.concat(nodes.filter((n) => n.kind === "epic")).forEach((n) => { n.tx = n.x; n.ty = n.y; });
+    hosts.forEach((h) => { const cx = hx(h.host) * 400, s = rows.filter((r) => r.host === h.host); let a = -Math.PI / 2; h._n.tx = cx; h._n.ty = 0; h.arms = [];
+      [...new Set(s.map(proj))].forEach((t) => { const ss = s.filter((r) => proj(r) === t).sort((x, y) => !!leadName(y) - !!leadName(x)), span = ss.length / s.length * Math.PI * 2; h.arms.push({t, a0: a, a1: a + span});
+        ss.forEach((r, k) => { const ang = a + span * (k + .5) / ss.length, R = 130 + (k % 2) * 48; r._n.tx = cx + Math.cos(ang) * R; r._n.ty = Math.sin(ang) * R; }); a += span; }); });
+  }
+  if (layout === "constellation") { terrs.forEach((n, i) => { const a = -Math.PI / 2 + i / terrs.length * Math.PI * 2; n.tx = Math.cos(a) * 360; n.ty = Math.sin(a) * 250; }); hns.forEach((n) => { n.tx = hx(n.h.host) * 70; n.ty = 0; }); }
+  if (layout === "transit") {
+    const band = (i) => (i - (terrs.length - 1) / 2) * 120;
+    terrs.forEach((n, i) => { n.tx = 0; n.ty = n.band = band(i); });
+    hns.forEach((n) => { n.tx = hx(n.h.host) * 560; n.ty = 0; });
+    terrs.forEach((t) => hosts.forEach((h) => { const s = rows.filter((r) => proj(r) === t.label && r.host === h.host).sort((a, b) => (since(a.s.started_at) || 0) - (since(b.s.started_at) || 0));
+      s.forEach((r, k) => { const f = (k + 1) / (s.length + 1); r._n.tx = hx(h.host) * (70 + f * 380); r._n.ty = t.band + Math.sin(f * Math.PI * 2 + t.band) * 18; }); }));
+    nodes.filter((n) => n.kind === "epic").forEach((n) => { const t = byId["P:" + n.project]; n.tx = 0; n.ty = (t ? t.band : 0) + 44; });
+  }
+}
+function setLayout(l) {
+  layout = l; stage.dataset.layout = l; document.getElementById("lnote").textContent = LNOTE[l]();
+  setTargets(); born = performance.now() - 900; cam.tx = cam.ty = 0; setTimeout(() => { cam.tk = fitK(); }, 450);
+  stage.querySelectorAll("[data-layout]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.layout === l)));
+  try { localStorage.setItem("fnoCommandLayout", l); } catch (e) {}
+}
+stage.querySelectorAll("[data-layout]").forEach((b) => { b.onclick = () => setLayout(b.dataset.layout); });
+const radius = (n) => n.kind === "host" ? 24 : n.kind === "territory" ? 14 : n.kind === "epic" ? 7 : leadName(n.r) ? 11 : 8;
+const inLayout = (n) => n.kind === "host" ? layout !== "constellation" : n.kind === "territory" || n.kind === "epic" ? layout !== "hemispheres" : true;
+const shown = (n) => inLayout(n) && (n.kind === "session" ? visible(n.r) : n.kind === "host" ? !hiddenHosts.has(n.h.host) : true);
+function tick(alpha) {
+  if (layout !== "constellation") { nodes.forEach((n) => { n.x += ((n.tx ?? n.x) - n.x) * .08; n.y += ((n.ty ?? n.y) - n.y) * .08; }); return; }
+  for (let i = 0; i < nodes.length; i++) { const a = nodes[i]; if (!inLayout(a)) continue;
+    for (let j = i + 1; j < nodes.length; j++) { const b = nodes[j]; if (!inLayout(b)) continue; let dx = b.x - a.x, dy = b.y - a.y; const d2 = dx * dx + dy * dy + .01, min = (radius(a) + radius(b)) * 2.6, f = 1400 / d2 * alpha;
+      dx *= f; dy *= f; a.vx -= dx; a.vy -= dy; b.vx += dx; b.vy += dy;
+      const d = Math.sqrt(d2); if (d < min) { const q = (min - d) / d * .25, ox = (b.x - a.x) * q, oy = (b.y - a.y) * q; a.x -= ox; a.y -= oy; b.x += ox; b.y += oy; } } }
+  links.forEach((l) => { if (!inLayout(l.a) || !inLayout(l.b)) return; const dx = l.b.x - l.a.x, dy = l.b.y - l.a.y, d = Math.hypot(dx, dy) || 1, target = l.kind === "epic" ? 70 : l.kind === "axon" ? 170 : 130, k = (d - target) / d * (l.kind === "axon" ? .012 : .04) * alpha;
+    l.a.vx += dx * k; l.a.vy += dy * k; if (l.b.kind !== "territory" && l.b.kind !== "host") { l.b.vx -= dx * k; l.b.vy -= dy * k; } });
+  nodes.forEach((n) => { if (n.kind === "territory" || n.kind === "host") { n.x += ((n.tx ?? n.x) - n.x) * .1; n.y += ((n.ty ?? n.y) - n.y) * .1; n.vx = n.vy = 0; return; }
+    n.vy += -n.y * .002 * alpha; n.vx *= .82; n.vy *= .82; n.x += n.vx; n.y += n.vy; });
+}
+const toScreen = (n) => ({x: n.x * cam.k + cam.x + W / 2, y: n.y * cam.k + cam.y + H / 2});
+function star(x, y, r, host) { ctx.beginPath(); if (hosts[0] && host !== hosts[0].host) { const q = r * 1.25; ctx.moveTo(x, y - q); ctx.lineTo(x + q, y); ctx.lineTo(x, y + q); ctx.lineTo(x - q, y); ctx.closePath(); } else ctx.arc(x, y, r, 0, 7); }
+function pick(mx, my) { let best = null, bd = 1e9; nodes.forEach((n) => { if (!shown(n)) return; const p = toScreen(n), d = Math.hypot(p.x - mx, p.y - my); if (d < radius(n) * cam.k + 8 && d < bd) { bd = d; best = n; } }); return best; }
+function fitK() { let mx = 1, my = 1; nodes.forEach((n) => { if (!shown(n)) return; mx = Math.max(mx, Math.abs(n.x)); my = Math.max(my, Math.abs(n.y)); }); return Math.min(1.6, Math.max(.5, Math.min((W / 2 - 60) / mx, (H / 2 - 60) / my))); }
+function tipLines(n) {
+  if (n.kind === "host") { const h = n.h; return [h.host, rows.filter((r) => r.host === h.host).length + " sessions · spawn cap " + (h.cap ?? "?") + " · memory " + Math.round((h.mem_used || 0) * 100) + "%", (h.fresh ? "online" : "stale") + " · beat " + ago(h.age_s) + " ago · " + (h.takes_work ? "takes work" : "no new work")]; }
+  if (n.kind === "territory") { const c = rows.filter((r) => proj(r) === n.label); return ["Project · " + n.label, c.length + " sessions · " + c.filter((r) => r.s.status === "writing").length + " writing"]; }
+  if (n.kind === "epic") return [n.title || n.label, "epic " + n.label + " · " + rows.filter((r) => { const e = epic(r); return e && e[0] === n.label; }).length + " sessions"];
+  const r = n.r; return [(leadName(r) ? leadName(r) + " · " : "") + (work(r, "title") || r.s.name), (work(r, "id") || "no node") + " · " + r.s.status + " · " + r.host, (model_(r) || r.s.harness || "") + " · alive " + ago(since(r.s.started_at)) + " · last msg " + ago(since(r.s.last_message_at)) + " ago"];
+}
+cv.addEventListener("pointermove", (e) => { const b = cv.getBoundingClientRect(), mx = e.clientX - b.left, my = e.clientY - b.top;
+  if (drag) { cam.tx = drag.cx + e.clientX - drag.x; cam.ty = drag.cy + e.clientY - drag.y; drag.moved = true; return; }
+  hover = pick(mx, my); cv.style.cursor = hover ? "pointer" : "grab";
+  if (!hover) { tip.classList.remove("on"); return; }
+  tip.replaceChildren(...tipLines(hover).map((t, i) => el("div", i ? "t2" : "t1", t)));
+  tip.style.left = Math.min(W - tip.offsetWidth - 10, Math.max(10, mx + 16)) + "px"; tip.style.top = Math.min(H - tip.offsetHeight - 10, Math.max(10, my + 16)) + "px"; tip.classList.add("on"); });
+cv.addEventListener("pointerleave", () => { hover = null; tip.classList.remove("on"); });
+cv.addEventListener("pointerdown", (e) => { drag = {x: e.clientX, y: e.clientY, cx: cam.tx, cy: cam.ty, moved: false}; cv.classList.add("dragging"); cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointerup", (e) => { cv.classList.remove("dragging"); const moved = drag && drag.moved; drag = null; if (moved) return;
+  const b = cv.getBoundingClientRect(), n = pick(e.clientX - b.left, e.clientY - b.top); if (n && n.kind === "session") openSeat(n.r); });
+cv.addEventListener("wheel", (e) => { e.preventDefault(); cam.tk = Math.min(3, Math.max(.45, cam.tk * Math.exp(-e.deltaY * .0015))); }, {passive: false});
+cv.addEventListener("dblclick", () => { cam.tx = cam.ty = 0; cam.tk = fitK(); });
+function arc(x, cx, cy, r, a0, a1, color, w) { x.strokeStyle = color; x.lineWidth = w; x.lineCap = "round"; x.beginPath(); x.arc(cx, cy, r, a0, a1); x.stroke(); }
+// The machine orb: a memory ring, a ring split by seat state, and, on the card, one dot per seat in orbit.
+function drawHost(x, h, cx, cy, r, now, inGraph) {
+  const t = still ? 0 : now / 1000, seats = rows.filter((q) => q.host === h.host), n = Math.max(1, seats.length), mem = h.mem_used || 0, w = Math.max(2, r * .14), s = -Math.PI / 2;
+  const g = x.createRadialGradient(cx, cy, 0, cx, cy, r * 2.6); g.addColorStop(0, "rgba(120,160,255,.35)"); g.addColorStop(1, "rgba(120,160,255,0)"); x.fillStyle = g; x.beginPath(); x.arc(cx, cy, r * 2.6, 0, 7); x.fill();
+  const core = x.createRadialGradient(cx - r * .3, cy - r * .3, 1, cx, cy, r); core.addColorStop(0, "#2A3352"); core.addColorStop(1, "#121726"); x.fillStyle = core; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.fill();
+  x.strokeStyle = "rgba(170,190,255,.35)"; x.lineWidth = 1; x.stroke();
+  arc(x, cx, cy, r + w * 1.2, 0, 7, "rgba(255,255,255,.07)", w); arc(x, cx, cy, r + w * 1.2, s, s + mem * Math.PI * 2, mem > .85 ? COL.parked : css("--ok"), w);
+  const R2 = r + w * 2.9; let a = s; arc(x, cx, cy, R2, 0, 7, "rgba(255,255,255,.05)", w);
+  for (const st of ORDER) { const k = seats.filter((q) => q.s.status === st).length; if (k) { const sw = k / n * Math.PI * 2; arc(x, cx, cy, R2, a + .04, a + sw - .04, COL[st], w); a += sw; } }
+  if (!inGraph) seats.forEach((q, i) => { const st = q.s.status, ang = t * ({writing: .9, parked: .35}[st] || .2) + i / n * Math.PI * 2, R3 = st === "writing" ? R2 + w * 2.2 : R2 + w * 3.4;
+    x.fillStyle = COL[st]; x.globalAlpha = st === "unknown" ? .5 : 1; x.beginPath(); x.arc(cx + Math.cos(ang) * R3, cy + Math.sin(ang) * R3, leadName(q) ? 2.8 : 2, 0, 7); x.fill(); x.globalAlpha = 1; });
+  x.fillStyle = "#E9ECF5"; x.textAlign = "center"; x.font = "600 " + Math.max(10, r * .42) + "px " + UI; x.fillText(seats.length, cx, cy + r * .16);
+  x.fillStyle = "#8E96AC"; x.font = "500 " + Math.max(8, r * .22) + "px " + DATA; x.fillText("sessions", cx, cy + r * .5);
+  if (inGraph) { x.fillStyle = "#E9ECF5"; x.font = "600 14px " + UI; x.fillText(h.host, cx, cy + R2 + 26); x.fillStyle = "#8E96AC"; x.font = "500 11px " + DATA; x.fillText("cap " + (h.cap ?? "?") + " · mem " + Math.round(mem * 100) + "%", cx, cy + R2 + 42); }
+}
+function lightning(x1, y1, x2, y2, disp, out) { if (disp < 4) { out.push([x2, y2]); return; } const mx = (x1 + x2) / 2 + (Math.random() - .5) * disp, my = (y1 + y2) / 2 + (Math.random() - .5) * disp; lightning(x1, y1, mx, my, disp / 2, out); lightning(mx, my, x2, y2, disp / 2, out); }
+function curve(a, b) { const p = toScreen(a), q = toScreen(b); return [p, {x: (p.x + q.x) / 2 - (q.y - p.y) * .12, y: (p.y + q.y) / 2 + (q.x - p.x) * .12}, q]; }
+function qpt(c, t) { const [p, m, q] = c, u = 1 - t; return {x: u * u * p.x + 2 * u * t * m.x + t * t * q.x, y: u * u * p.y + 2 * u * t * m.y + t * t * q.y}; }
+function related(n) { if (!n) return new Set(); const s = new Set([n]); links.forEach((l) => { if (l.a === n) s.add(l.b); if (l.b === n) s.add(l.a); }); if (n.kind !== "territory") links.forEach((l) => { if (s.has(l.b) && l.a.kind === "session") s.add(l.a); }); return s; }
+function drawTransit(now, grow, focus, rel) {
+  ctx.lineJoin = ctx.lineCap = "round";
+  nodes.filter((n) => n.kind === "territory").forEach((t, ti) => hosts.forEach((h) => { if (hiddenHosts.has(h.host)) return;
+    const st = rows.filter((r) => proj(r) === t.label && r.host === h.host && visible(r)).map((r) => r._n).sort((a, b) => Math.abs(b.x) - Math.abs(a.x)); if (!st.length) return;
+    const pts = [h._n, ...st, t].map(toScreen), hot = focus && (rel.has(t) || st.some((x) => rel.has(x))), L = Math.max(2, pts.length * Math.min(1, grow * 1.3 - ti * .08));
+    ctx.strokeStyle = tcolor[t.label]; ctx.globalAlpha = focus && !hot ? .25 : .9; ctx.lineWidth = (hot ? 7 : 5) * Math.max(.7, cam.k);
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < L && i < pts.length; i++) { const a = pts[i - 1], b = pts[i], mx = (a.x + b.x) / 2; ctx.bezierCurveTo(mx, a.y, mx, b.y, b.x, b.y); } ctx.stroke(); ctx.globalAlpha = 1;
+    if (!still && grow >= 1) { const k = (now / 2600 + ti * .3 + hosts.indexOf(h) * .5) % 1, seg = Math.floor(k * (pts.length - 1)), f = k * (pts.length - 1) - seg, a = pts[seg], b = pts[seg + 1] || a, x = a.x + (b.x - a.x) * f, y = a.y + (b.y - a.y) * f;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, 9); g.addColorStop(0, "rgba(255,255,255,.9)"); g.addColorStop(1, tcolor[t.label] + "00"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.fill(); } }));
+}
+function drawGraph(now) {
+  cam.x += (cam.tx - cam.x) * .12; cam.y += (cam.ty - cam.y) * .12; cam.k += (cam.tk - cam.k) * .1;
+  if (!still) tick(.06);
+  const grow = still ? 1 : Math.min(1, (now - born) / 1800), sel = rows.find((r) => keyOf(r) === openKey), focus = hover || (sel && sel._n) || null, rel = related(focus);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H);
+  if (layout === "transit") drawTransit(now, grow, focus, rel);
+  if (layout === "constellation") nodes.forEach((n) => { if (n.kind !== "territory") return; const c = toScreen(n), R = 200 * cam.k, g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, R); g.addColorStop(0, tcolor[n.label] + "22"); g.addColorStop(1, tcolor[n.label] + "00"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.x, c.y, R, 0, 7); ctx.fill(); });
+  if (layout === "hemispheres") hosts.forEach((h) => { if (hiddenHosts.has(h.host) || !h._n) return; const hc = toScreen(h._n), g = ctx.createRadialGradient(hc.x, hc.y, 0, hc.x, hc.y, 320 * cam.k);
+    g.addColorStop(0, "rgba(92,140,255,.10)"); g.addColorStop(1, "rgba(92,140,255,0)"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(hc.x, hc.y, 320 * cam.k, 0, 7); ctx.fill();
+    (h.arms || []).forEach((arm) => { if (arm.a1 - arm.a0 < .12) return; const col = tcolor[arm.t], m = (arm.a0 + arm.a1) / 2, cs = Math.cos(m); arc(ctx, hc.x, hc.y, 205 * cam.k, arm.a0 + .05, arm.a1 - .05, col + "99", 3 * Math.max(.7, cam.k));
+      ctx.fillStyle = col; ctx.font = "600 12px " + UI; ctx.textAlign = cs > .2 ? "left" : cs < -.2 ? "right" : "center"; ctx.fillText(arm.t, hc.x + cs * 222 * cam.k, hc.y + Math.sin(m) * 222 * cam.k + 4); }); });
+  if (layout !== "transit") links.forEach((l, i) => { if (!shown(l.a) || !shown(l.b)) return; const c = curve(l.b, l.a), local = Math.min(1, Math.max(0, grow * 1.6 - i / links.length * .6)); if (local <= 0) return;
+    const hot = focus && rel.has(l.a) && rel.has(l.b), st = l.a.kind === "session" ? l.a.r.s.status : "quiet";
+    ctx.lineWidth = (l.kind === "epic" ? 2.2 : 1.2) * Math.max(.7, cam.k) * (hot ? 1.6 : 1) * (l.kind === "axon" && !hot ? .8 : 1);
+    ctx.strokeStyle = hot ? "rgba(200,235,255,.55)" : l.kind === "axon" ? (layout === "hemispheres" ? tcolor[proj(l.a.r)] + "44" : "rgba(120,150,255,.07)") : st === "writing" ? "rgba(92,225,255,.22)" : "rgba(150,160,220,.12)";
+    ctx.beginPath(); ctx.moveTo(c[0].x, c[0].y); for (let s = 1; s <= 24 * local; s++) { const p = qpt(c, s / 24); ctx.lineTo(p.x, p.y); } ctx.stroke();
+    if (!still && grow >= 1 && st === "writing" && (l.kind !== "axon" || layout === "hemispheres") && Math.random() < .02) pulses.push({l, t: 0, sp: .006 + Math.random() * .008}); });
+  for (let i = pulses.length - 1; i >= 0; i--) { const p = pulses[i]; p.t += p.sp; if (p.t >= 1 || !nodes.includes(p.l.a)) { pulses.splice(i, 1); continue; } if (!visible(p.l.a.r)) continue;
+    const q = qpt(curve(p.l.a, p.l.b), p.t), g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, 7); g.addColorStop(0, "rgba(220,250,255,.95)"); g.addColorStop(1, "rgba(92,225,255,0)"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(q.x, q.y, 7, 0, 7); ctx.fill(); }
+  if (focus && !still) { if (now - lastSpark > 55) { lastSpark = now; focus._bolts = [...rel].filter((n) => n !== focus && shown(n)).slice(0, 14).map((n) => { const a = toScreen(focus), b = toScreen(n), pts = [[a.x, a.y]]; lightning(a.x, a.y, b.x, b.y, Math.min(60, Math.hypot(b.x - a.x, b.y - a.y) / 4), pts); return pts; }); }
+    (focus._bolts || []).forEach((pts) => { ctx.save(); ctx.shadowColor = "rgba(140,220,255,.9)"; ctx.shadowBlur = 14; ctx.strokeStyle = "rgba(235,248,255,.85)"; ctx.lineWidth = 1.3; ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.stroke(); ctx.restore(); }); }
+  nodes.forEach((n, i) => { if (!shown(n)) return; const appear = Math.min(1, Math.max(0, grow * 1.4 - i / nodes.length * .4)); if (appear <= 0) return;
+    const p = toScreen(n), r = radius(n) * Math.max(.7, cam.k) * (.4 + .6 * appear); ctx.globalAlpha = (focus && !rel.has(n) ? .28 : 1) * appear;
+    if (n.kind === "host") drawHost(ctx, n.h, p.x, p.y, r, now, true);
+    else if (n.kind === "territory" && layout === "transit") { const c = tcolor[n.label]; ctx.font = "600 13px " + UI; const tw = ctx.measureText(n.label).width + 26; ctx.fillStyle = "#0B0E17"; ctx.strokeStyle = c; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.roundRect(p.x - tw / 2, p.y - 14, tw, 28, 14); ctx.fill(); ctx.stroke(); ctx.fillStyle = c; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y + 4.5); }
+    else if (n.kind === "territory") { const tc = tcolor[n.label], g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3.2); g.addColorStop(0, "rgba(255,255,255,.95)"); g.addColorStop(.25, tc + "66"); g.addColorStop(1, tc + "00"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.2, 0, 7); ctx.fill();
+      ctx.fillStyle = "#E9ECF5"; ctx.font = "600 13px " + UI; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y + r + 20); }
+    else if (n.kind === "epic") { if (layout !== "transit") { ctx.fillStyle = "rgba(235,238,255,.85)"; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill(); ctx.strokeStyle = "rgba(255,255,255,.25)"; ctx.lineWidth = 4; ctx.stroke();
+      if (cam.k > .8 || focus && rel.has(n)) { ctx.fillStyle = "#AEB6CC"; ctx.font = "500 11px " + DATA; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y - r - 8); } } }
+    else { const st = n.r.s.status, c = COL[st], lead = leadName(n.r), breathe = st === "writing" && !still ? 1 + .18 * Math.sin(now / 380 + i) : 1;
+      if (st !== "unknown") { const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3 * breathe); g.addColorStop(0, c + "AA"); g.addColorStop(1, c + "00"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 3 * breathe, 0, 7); ctx.fill(); ctx.fillStyle = c; star(p.x, p.y, r, n.r.host); ctx.fill(); }
+      else { ctx.strokeStyle = c; ctx.lineWidth = 1.6; star(p.x, p.y, r, n.r.host); ctx.stroke(); }
+      if (lead) { ctx.strokeStyle = "rgba(244,241,255,.9)"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, r + 5, 0, 7); ctx.stroke(); ctx.fillStyle = "#F4F1FF"; ctx.font = "600 12px " + UI; ctx.textAlign = "center"; ctx.fillText(lead, p.x, p.y - r - 11); }
+      else if (focus === n || cam.k > 1.3) { ctx.fillStyle = "#C9CFE0"; ctx.font = "500 11px " + DATA; ctx.textAlign = "center"; ctx.fillText(work(n.r, "id") || n.r.s.short || n.r.s.name, p.x, p.y - r - 9); }
+      if (sel === n.r) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, r + 9 + 2 * Math.sin(now / 250), 0, 7); ctx.stroke(); } }
+    ctx.globalAlpha = 1; });
+}
+function frame(now) {
+  requestAnimationFrame(frame);
+  cards.forEach((c) => { const x = c.cv.getContext("2d"); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, 240, 240); x.setTransform(2, 0, 0, 2, 0, 0); drawHost(x, c.h, 60, 60, 22, now, false); });
+  if (W && nodes.length && !document.getElementById("view-synapse").hidden) drawGraph(now);
+}
+requestAnimationFrame(frame);
 
 const nav = document.querySelector("nav.fno-nav");
 const token = new URLSearchParams(location.search).get("t") || "";
