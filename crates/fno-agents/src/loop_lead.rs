@@ -1080,8 +1080,8 @@ mod tests {
         fs::create_dir_all(&leads).unwrap();
         fs::write(leads.join("k.md"), "---\nfno_id: k-1\nscope: epic-x\n---\n").unwrap();
         let registry = write_registry(&dir, "busy", Some("epic-x"));
-        // the mint runs `fno agents name` at construction; the stub
-        // answers it so the guard assertions stay the test's subject.
+        // the stub answers the queue's own fno calls; the walk-key mint
+        // runs in process.
         let fno_bin = write_fno_stub(&dir, "kl-th-epic-x-w00ff")
             .to_string_lossy()
             .into_owned();

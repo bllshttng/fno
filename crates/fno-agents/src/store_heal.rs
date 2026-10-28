@@ -476,6 +476,9 @@ fn collision(kind: &str, token: &str, action: &str, session_id: &str, tail: &str
 /// row in place, else mint one under the canonical handle. A failed write
 /// still returns a synthesized row, because reaching the session beats the
 /// roster row.
+///
+/// No `FNO_AGENT_SELF` refusal here: that guard stops a worker minting a
+/// second row for itself, and an adopted session is never the caller.
 fn adopt(hit: &StoreHit, registry_path: &Path, token: &str) -> Result<Value, HealError> {
     use crate::state::RegistryEntry;
     if recent_rm_tombstone(hit.harness, &hit.session_id, registry_path) {
