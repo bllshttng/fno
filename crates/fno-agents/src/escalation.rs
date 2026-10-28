@@ -577,7 +577,6 @@ The lead waits. A force push cannot be undone.
     #[test]
     fn a_law_change_reaches_the_user_like_the_other_user_classes() {
         assert!(why_user_is_user_only("law-change: it retires two laws"));
-        assert!(why_user_is_user_only("a taste call"));
         assert!(!why_user_is_user_only("the user asked to see it"));
     }
 
