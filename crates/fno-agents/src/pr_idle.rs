@@ -130,7 +130,8 @@ pub(crate) fn run_repo(
         }
         let text = notice(slug, read.pr, age, level);
         let before = seen.clone();
-        for lead in leads.iter().filter(|l| !seen.told.contains(*l)) {
+        let pending: Vec<&String> = leads.iter().filter(|l| !seen.told.contains(*l)).collect();
+        for lead in pending {
             match crate::first_check::send_mail(&mut *runner, SENDER, lead, &text) {
                 Ok(()) => seen.told.push(lead.clone()),
                 Err(e) => {
