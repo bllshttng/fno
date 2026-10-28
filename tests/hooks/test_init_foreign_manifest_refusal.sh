@@ -117,8 +117,8 @@ echo "$OUT_B" | grep -q "runA-20260901T000000Z-cl111-aaaaaa" \
   || fail "T1b: refusal does not name the manifest's fno_id"
 echo "$OUT_B" | grep -q "runB-20260906T000000Z-cl222-bbbbbb" \
   || fail "T1c: refusal does not name this run's id"
-echo "$OUT_B" | grep -q "state archive" \
-  || fail "T1d: refusal does not name 'state archive' as the repair"
+echo "$OUT_B" | grep -q "state-cli archive" \
+  || fail "T1d: refusal does not name 'state-cli archive' as the repair"
 pass "T1b-d: refusal names both ids and the repair"
 
 [[ "$BEFORE_SHA" == "$AFTER_SHA" ]] \

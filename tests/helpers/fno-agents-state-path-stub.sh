@@ -36,13 +36,35 @@ fi
 # still needs them quiet, and the real hold gate would read the ambient graph
 # store and refuse on a sandbox that has none. resolve-owned-identity answers
 # the same KEY=value block the old fno stub canned.
-if [[ "${FNO_TEST_GATES_GREEN:-}" == "1" ]]; then
-  case "${1:-} ${2:-}" in
-    "target-gates check-review-gate"|"target-gates check-dispatch-hold"|"target-gates check-contained")
+#
+# The gates are the stub's OWN answers by default (same green), because every
+# harness that copies this double runs under the smoke runner's job-wide
+# FNO_AGENTS_BIN pin: delegating target-gates would hand the real gate a
+# sandbox with no graph store. A harness whose subject IS a gate contract
+# opts out with FNO_TEST_GATE_RC_FILE (the rc for check-review-gate, logged
+# to FNO_TEST_GATE_CALL_LOG when set).
+if [[ "${1:-}" == "target-gates" ]]; then
+  case "${2:-}" in
+    check-review-gate)
+      if [[ -n "${FNO_TEST_GATE_CALL_LOG:-}" ]]; then
+        printf 'gate-called\n' >> "$FNO_TEST_GATE_CALL_LOG"
+      fi
+      if [[ -n "${FNO_TEST_GATE_RC_FILE:-}" && -f "$FNO_TEST_GATE_RC_FILE" ]]; then
+        echo "stub refusal: config.review.github_apps names a bot" >&2
+        exit "$(cat "$FNO_TEST_GATE_RC_FILE")"
+      fi
       exit 0 ;;
-    "target-gates resolve-owned-identity")
-      printf 'HARNESS=claude\nSESSION_ID=%s\nDISPOSITION=proven\nCOLLISION=\n' \
-        "${CLAUDE_CODE_SESSION_ID:-}"
+    check-dispatch-hold|check-contained)
+      exit 0 ;;
+    resolve-owned-identity)
+      # Canned only on opt-in: the old fno stubs answered this verb with
+      # nothing and the helper degraded to its own provider detection, which
+      # is the fiction harnesses like the session-id orphan case pin. A
+      # harness that wants the proven block sets FNO_TEST_OWNED_IDENTITY_CANNED.
+      if [[ "${FNO_TEST_OWNED_IDENTITY_CANNED:-}" == "1" ]]; then
+        printf 'HARNESS=claude\nSESSION_ID=%s\nDISPOSITION=proven\nCOLLISION=\n' \
+          "${CLAUDE_CODE_SESSION_ID:-}"
+      fi
       exit 0 ;;
   esac
 fi
