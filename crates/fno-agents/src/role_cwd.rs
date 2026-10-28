@@ -46,6 +46,11 @@ pub fn decide(command: &str, session_id: &str, entries: &[RegistryEntry], cwd: &
     let root = PathBuf::from(root);
     let scope = row.role_scope.as_deref().unwrap_or_default();
     if !root.is_dir() {
+        // A stale root (a pruned worktree the row fell back to) must not lock
+        // out a lead whose shell already sits in a checkout.
+        if worktree_repo_root(cwd).join(".git").exists() {
+            return Decision::Stay;
+        }
         return Decision::Refuse(format!(
             "{command}: cwd {} is outside role {scope}'s project {}, and that project does not exist; fix the role row's project_root",
             cwd.display(),
@@ -137,5 +142,9 @@ mod tests {
             }
             other => panic!("expected a refusal, got {other:?}"),
         }
+        assert_eq!(
+            decide("checkin", "sess-lead", &gone, &project),
+            Decision::Stay
+        );
     }
 }
