@@ -270,6 +270,9 @@ fn heal_role(
 
 /// A user-ruling law row at `role-grant:<scope>` whose decision names this
 /// row's handle, short id or session. The scope resolves to its level.
+/// The user's words are stored, not checked against a transcript: the same
+/// limit `law set --rationale` and the freeze lift carry (lead ruling C). A
+/// live rival holder still refuses the stamp in `stamp_role`.
 fn chat_grant(
     grants: &Grants,
     session: &str,
