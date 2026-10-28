@@ -1,14 +1,7 @@
-# The names the fno front door answers. One fact, one writer: the front door
-# refuses a root word no `live` row lists, and `fno doctor lint menu-caps`
-# counts the `live` rows, so a name cannot answer without being counted.
-#
-# Columns: path, state (live|retired), replacement (a path, or - for none),
-# note. A retired root word exits 2 with `fno <path> is now fno <replacement>`,
-# or, with no replacement, `fno <path> was removed: <note>`.
-#
-# The root is owned here in full. Rows below the root are the names a Rust
-# classifier claims that no other inventory the guard reads lists; they are
-# counted, and the group's own dispatcher still refuses its unknown words.
+# The names the fno front door answers: path, live|retired, replacement (- for
+# none), note. The front door refuses a root word no live row lists, and
+# fno doctor lint menu-caps counts the live rows. Rows below the root name what
+# a Rust classifier claims; the group's own dispatcher refuses the rest.
 agents	live	-	sessions, mail, roles and the loop that drives them
 backlog	live	-	the backlog graph
 config	live	-	configuration
