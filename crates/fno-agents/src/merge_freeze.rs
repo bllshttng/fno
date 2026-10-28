@@ -681,6 +681,33 @@ fn check_in(store: &Store, payload: &Value, laws: Laws) -> String {
     }
 }
 
+/// Moves a live freeze's sha to `sha` when the release record pins it.
+/// `Ok(None)` is no freeze. Only `pin.sha` changes: the sha admits no PR,
+/// so the move never widens the freeze, and the new pin key gives a new
+/// lift subject, so a lifted freeze re-arms.
+pub(crate) fn repin_sha(sha: &str) -> Result<Option<String>, String> {
+    repin_sha_in(&Store::from_env()?, sha)
+}
+
+fn repin_sha_in(store: &Store, sha: &str) -> Result<Option<String>, String> {
+    let Some((text, path)) = store.read_text()? else {
+        return Ok(None);
+    };
+    let mut v: Value = serde_json::from_str(&text).map_err(|e| format!("parse {path}: {e}"))?;
+    if v.get("version").and_then(Value::as_u64) != Some(u64::from(STATE_VERSION)) {
+        return Err(format!(
+            "{path} is not a version-{STATE_VERSION} freeze; it has no sha pin"
+        ));
+    }
+    v["pin"]["sha"] = json!(sha);
+    store.write(&format!("{v}\n"))?;
+    let record = read_record(store)?.ok_or("the freeze vanished after the repin")?;
+    if record.sha.as_deref() != Some(sha) {
+        return Err("freeze readback did not match the new sha".to_string());
+    }
+    Ok(Some(record.lift_subject()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -902,6 +929,30 @@ mod tests {
         assert!(matches!(
             probe_outcome(gone, &facts, &|_| {}),
             ProbeOutcome::Inconclusive(_)
+        ));
+    }
+
+    #[test]
+    fn release_record_repin_moves_the_freeze_sha() {
+        let (_dir, home) = home("repin");
+        let empty = store(vec![]);
+        let moved = "def456def456def456def456def456def456def4";
+        assert_eq!(repin_sha_in(&home, moved), Ok(None));
+        assert_eq!(set(&home, SHA, &empty)["outcome"], "frozen");
+        let old_lift = format!("merge-freeze:o/r@sha:{},prs:7", &SHA[..12]);
+
+        // AC3: the freeze reads B, admits the same PRs, and the old lift no
+        // longer clears it.
+        let new_lift = format!("merge-freeze:o/r@sha:{},prs:7", &moved[..12]);
+        assert_eq!(repin_sha_in(&home, moved), Ok(Some(new_lift)));
+        let record = read_record(&home).unwrap().unwrap();
+        assert_eq!(record.sha.as_deref(), Some(moved));
+        assert_eq!(record.prs, vec![7]);
+        assert_eq!(verdict_for_in(&home, Some(7), Some("o/r"), &empty), Verdict::Clear);
+        let old = store(vec![row("d-1", &old_lift, "operator")]);
+        assert!(matches!(
+            verdict_for_in(&home, Some(8), Some("o/r"), &old),
+            Verdict::Frozen { .. }
         ));
     }
 
