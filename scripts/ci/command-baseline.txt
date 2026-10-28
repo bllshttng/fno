@@ -88,14 +88,10 @@ mail
 mail send !--origin !--provider
 mux
 paths
-phase kill-check
 plan
 pr-watch
 resume
 scoreboard
-state
-stub-manifest
-target
 test
 uninstall
 update

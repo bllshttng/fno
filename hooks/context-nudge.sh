@@ -542,8 +542,8 @@ if [[ "$FIRE_CTX" -eq 1 && ! -f "$CTX_LATCH" ]]; then
         # for wording (not gating) keeps the arm-handoff invariant intact: a lead
         # pass, which has no such manifest, still fires on real pressure above.
         PLAN_PATH=""
-        if command -v fno >/dev/null 2>&1; then
-            PLAN_PATH=$(with_timeout "$NUDGE_BUDGET" fno do state show --type target --field plan_path 2>/dev/null | head -1 || true)
+        if command -v "$CONTEXT_RUNNER" >/dev/null 2>&1; then
+            PLAN_PATH=$(with_timeout "$NUDGE_BUDGET" "$CONTEXT_RUNNER" state-cli show --type target --field plan_path 2>/dev/null | head -1 || true)
         fi
         if [[ "$COMPACTION_PREPARATION" -eq 1 ]]; then
             _compact_core="context: ${USED_PCT}% used (${USED_TOKENS:-?} of ${WINDOW_TOKENS:-?} tokens). The Astra preparation band is active. Preserve volatile decisions and continue; the provider compact action waits for the action band. ${_compact_ask}"

@@ -101,7 +101,6 @@ COMMAND_MOVES: dict[str, Move] = {
     "setup": Move(kind="deprecated", to="config setup"),
     "status": Move(kind="deprecated", to="whoami status"),
     "state": Move(kind="deprecated", to="do state"),
-    "stub-manifest": Move(kind="deprecated", to="do pr stub-manifest"),
     "skill-diff": Move(kind="deprecated", to="doctor skill-diff"),
     "target": Move(kind="deprecated", to="do target"),
     "test": Move(kind="deprecated", to="doctor test"),
