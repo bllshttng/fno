@@ -265,7 +265,7 @@ function openSeat(r) {
   };
   row("Attach the terminal" + (r.local ? "" : " on " + r.host), s.attach);
   if (s.plan_uri && s.plan_uri.startsWith("obsidian://")) row("Open the plan in Obsidian", work(r, "plan") || "plan", s.plan_uri);
-  else row("Plan", work(r, "plan") || "no plan");
+  else if (work(r, "plan")) row("Plan", work(r, "plan"));
   const sec = (title, body) => { const d = el("div", "sec"); d.append(el("h3", null, title), body); return d; };
   document.getElementById("dbody").replaceChildren(sec("Session", kv), sec("Open", links));
   if (!drawer.classList.contains("on")) {
