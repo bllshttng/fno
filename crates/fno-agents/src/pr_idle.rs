@@ -35,7 +35,10 @@ struct Seen {
     ready_since_ms: i64,
     /// The highest alarm level fully delivered: 0 none, 1 at 2h, 2 at 6h.
     raised: u8,
-    /// The leads the current level reached, so a retry mails only the rest.
+    /// The level `told` and `phoned` belong to. A delivery still pending when
+    /// the next level comes due starts over for that level.
+    pending: u8,
+    /// The leads the pending level reached, so a retry mails only the rest.
     told: Vec<String>,
     phoned: bool,
 }
@@ -130,6 +133,11 @@ pub(crate) fn run_repo(
         }
         let text = notice(slug, read.pr, age, level);
         let before = seen.clone();
+        if seen.pending != level {
+            seen.pending = level;
+            seen.told.clear();
+            seen.phoned = false;
+        }
         let pending: Vec<&String> = leads.iter().filter(|l| !seen.told.contains(*l)).collect();
         for lead in pending {
             match crate::first_check::send_mail(&mut *runner, SENDER, lead, &text) {
@@ -150,8 +158,6 @@ pub(crate) fn run_repo(
         }
         if seen.phoned && leads.iter().all(|l| seen.told.contains(l)) {
             seen.raised = level;
-            seen.told.clear();
-            seen.phoned = false;
         }
         if seen != before {
             state::write_json_atomic(&path, &seen).map_err(|e| e.to_string())?;
@@ -220,15 +226,16 @@ pub(crate) fn run_pass(home: &AgentsHome, now: i64) -> Result<(), String> {
                 continue;
             }
         };
+        // A draft is not open for merging: leaving it out of the set drops its
+        // clock, so a PR back from draft starts a fresh one.
         let open: HashSet<u64> = pulls
-            .iter()
-            .filter_map(|p| p.get("number").and_then(Value::as_u64))
-            .collect();
-        let reads: Vec<Read> = pulls
             .iter()
             .filter(|p| p.get("draft").and_then(Value::as_bool) != Some(true))
             .filter_map(|p| p.get("number").and_then(Value::as_u64))
-            .filter_map(|pr| status_read(root, pr))
+            .collect();
+        let reads: Vec<Read> = open
+            .iter()
+            .filter_map(|pr| status_read(root, *pr))
             .collect();
         let mut phone = crate::operator_notice::notify_operator;
         if let Err(e) = run_repo(
@@ -423,9 +430,11 @@ mod tests {
         let reads = [ready(7, "abc")];
         let mut ok = |_: &str, _: &str, _: Option<&str>| true;
         let mut quiet = |_: &[String], _: &str| (0, "delivered (hosted)".into(), String::new());
+        // The clock reads 0 as unset, so the passes start past it.
+        let t0 = 1_000;
         run_repo(
             &home,
-            0,
+            t0,
             "o/r",
             Some(&open),
             &reads,
@@ -448,7 +457,7 @@ mod tests {
             *phones.borrow_mut() += 1;
             true
         };
-        let at = RAISE_AFTER_MS;
+        let at = t0 + RAISE_AFTER_MS;
         assert!(run_repo(
             &home,
             at,
@@ -488,5 +497,26 @@ mod tests {
         .unwrap();
         assert_eq!(sent.borrow().as_slice(), ["lead-a", "lead-b"]);
         assert_eq!(*phones.borrow(), 1, "the phone notice sent once");
+        // A 2h delivery still pending at 6h starts over: lead-a hears the
+        // second alarm even though it heard the first.
+        let nine: HashSet<u64> = [9].into();
+        let reads = [ready(9, "def")];
+        let mut run = |now: i64, runner: crate::burn_watch::Runner<'_>| {
+            run_repo(
+                &home,
+                now,
+                "o/r",
+                Some(&nine),
+                &reads,
+                &leads,
+                runner,
+                &mut phone,
+            )
+        };
+        run(t0, &mut all_up).unwrap();
+        sent.borrow_mut().clear();
+        assert!(run(t0 + RAISE_AFTER_MS, &mut b_down).is_err());
+        assert!(run(t0 + RERAISE_AFTER_MS, &mut b_down).is_err());
+        assert_eq!(sent.borrow().as_slice(), ["lead-a", "lead-a"]);
     }
 }
