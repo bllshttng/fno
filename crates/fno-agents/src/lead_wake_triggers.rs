@@ -1319,7 +1319,7 @@ pub(crate) fn birth_cursor(manifest: &Path) -> String {
     match chrono::NaiveDateTime::parse_from_str(&raw, "%Y-%m-%dT%H:%M:%SZ") {
         Ok(stamp) => stamp
             .and_utc()
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         Err(_) => String::new(),
     }
 }
