@@ -282,7 +282,8 @@ pub(crate) fn push_hold(cwd: &Path, branch: &str) -> Option<String> {
 /// Wake each held push once, when its hold clears against `pass_row`. A
 /// wake covers every older hold of the same branch.
 fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(), String> {
-    let since = now_ms - DAY_MS;
+    // A hold can outlast a day below a full tier.
+    let since = now_ms - 7 * DAY_MS;
     let key = |r: &Value| {
         (
             word(r, "/data/branch").to_string(),
@@ -310,19 +311,36 @@ fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(
         }
         due.insert(branch, (ts, row));
     }
+    let data = &pass_row["data"];
+    let ranked: Vec<&str> = data["ranked"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| word(p, "/branch"))
+        .collect();
+    let active = data["active"].as_array().map_or(0, Vec::len);
+    let slots = data["slots"].as_u64().unwrap_or(0) as usize;
+    // Every woken session pushes before the next pass, so wake in rank
+    // order and only as many as the free slots, at least one.
+    let mut budget = slots.saturating_sub(active).max(1);
+    let mut order: Vec<_> = due.into_iter().collect();
+    order.sort_by_key(|(b, _)| ranked.iter().position(|r| r == b));
     let emitter = crate::events::EventEmitter::new(path.to_path_buf(), "daemon");
-    for (branch, (held_ms, held)) in due {
+    for (branch, (held_ms, held)) in order {
         if hold_reason(pass_row, &branch, now_ms).is_some() {
             continue;
         }
+        let open = ranked.contains(&branch.as_str());
+        if open && budget == 0 {
+            continue;
+        }
         let pr = held.pointer("/data/pr").cloned().unwrap_or(Value::Null);
-        let mut row = json!({"slug": slug, "branch": branch, "pr": pr, "held_ms": held_ms});
-        let ranked = pass_row.pointer("/data/ranked").and_then(Value::as_array);
-        let open = ranked.is_some_and(|r| r.iter().any(|p| word(p, "/branch") == branch));
         // A closed PR clears its hold too; its session has nothing to push.
-        row["closed"] = json!(!open);
+        let mut row = json!({"slug": slug, "branch": branch, "pr": pr, "held_ms": held_ms,
+            "closed": !open});
         let sid = held.pointer("/data/session_id").and_then(Value::as_str);
         if let Some(sid) = sid.filter(|_| open) {
+            budget -= 1;
             let text = format!(
                 "The CI tier has a free slot for PR #{pr} ({branch}). Run fno do pr push again \
                  to push the commits it held."
@@ -330,8 +348,12 @@ fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(
             let mut runner = crate::burn_watch::run_command;
             let (delivered, via) =
                 crate::burn_watch::wake_with_text(sid, false, &text, "ci-tier", &mut runner);
+            if !delivered && via != "durable" {
+                // No wake row, so the next pass retries this hold.
+                eprintln!("ci-tier: {slug}: wake for {branch} failed via {via}");
+                continue;
+            }
             row["session_id"] = json!(sid);
-            row["delivered"] = json!(delivered);
             row["via"] = json!(via);
         }
         emitter
