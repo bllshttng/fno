@@ -165,6 +165,7 @@ pub(crate) enum Remedy {
     /// no verdict, so rerunning it IS reaching a verdict. `--failed` reruns
     /// only `failure` conclusions; a cancelled run has none. At most once per
     /// (head sha, run id); a second red verdict on the same pair escalates.
+    /// A confirmed Actions incident holds the issuance (see `apply_rerun`).
     Rerun { run_id: String },
     /// `gh run rerun <id> --failed` for a rerunnable escalation (a
     /// test-shaped or unknown red): only the failed jobs rerun. Same
@@ -2171,8 +2172,8 @@ fn apply_rerun(a: &Args, findings: &mut [Finding], head: &str) -> Vec<String> {
             continue;
         }
         // A cancelled run during a live Actions incident never reached a
-        // runner, so rerunning it feeds the dead queue (2026-10-05, x-cca9):
-        // hold the row with the incident line. Both reads fail open - no
+        // runner, so rerunning it feeds the dead queue (2026-10-05): hold
+        // the row with the incident line. Both reads fail open - no
         // casualty shape, no live page, no hold.
         if was_cancelled {
             if let Some(hold) = incident_hold(a, &run_id) {
