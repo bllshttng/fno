@@ -2200,13 +2200,19 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
         import_all(&live).map_err(|e| format!("stray import for {}: {e}", live.display()))?;
     }
     if !store.is_file() {
-        if routed && !live.exists() {
-            // No raw file and no store: empty, and nothing is created.
-            return Ok(String::new());
+        if routed {
+            if !live.exists() {
+                // No raw file and no store: empty, and nothing is created.
+                return Ok(String::new());
+            }
+            // A stray that is not a readable file (a directory parked on the
+            // name) reads as the refusal it is.
+            return read_journal_text_direct(journal, &live);
         }
-        // A missing non-routed journal, or a stray that is not a readable
-        // file (a directory parked on the name), reads as the refusal it is.
-        return read_journal_text_direct(journal, &live);
+        // No store: answer from the whole family, never the named file
+        // alone - a live-only answer is how a rotated legacy chain read as
+        // zero verdicts.
+        return Ok(family_fallback_text(&live));
     }
     let conn = open_read(&store)?;
     if !store_has_events(&conn)? {
@@ -2220,9 +2226,9 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
         // A store path that exists but holds no events table (a 0-byte stub
         // some writer created) can never serve the query: prepare would fail
         // with "no such table" and route every read through the caller's
-        // Err fallback, which re-reads the whole live file. The direct read
-        // is the honest shape for a store that never was one.
-        return read_journal_text_direct(journal, &live);
+        // Err fallback. The family read is the honest shape for a store that
+        // never was one: the raw journal bytes are the only order of record.
+        return Ok(family_fallback_text(&live));
     }
     let recovery = has_recovery_history(&conn)?;
     let (sql, args) = q.build_sql(recovery);
@@ -2253,28 +2259,20 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("{}: {e}", store.display()))?;
     let mut text = String::new();
-    for line in rows {
-        text.push_str(&line);
-        text.push('\n');
-    }
-    // The ingest cursor records how far import_file ingested this inode.
-    // Every complete line before `offset` is committed knowledge - it sits in
-    // events or event_observation_pending, the two tables the dedupe probe
-    // consults - so the read pulls the tail past the cursor alone: head hash
-    // from a bounded 256 KB head read, tail bytes by seek, never the whole
-    // journal (the whole-file slurp cost 118 MB of reads per read on the live
-    // store). A stale cursor (the head line changed, the file shrank) or an
-    // absent one falls back to the full-file scan, the pre-cursor behavior.
-    // A routed state-root journal stops at the committed rows: its raw file
-    // is a stray a writer recreated after the retire, never an order of
-    // record.
     if routed {
+        for line in rows {
+            text.push_str(&line);
+            text.push('\n');
+        }
         return Ok(text);
     }
-    // Un-ingested bytes of every rotated generation join the union before
-    // the live tail (commit order): the tail read covered the live file
-    // alone, so a rotation hid un-ingested bytes and a lagging store answered
-    // zero verdicts where one read earlier had seen the chain.
+    // Un-ingested bytes of every rotated generation join the union BEFORE
+    // the committed rows: they are older than anything the store holds (they
+    // predate the sync that could have taken them), and the review pass scan
+    // reads the LAST line as the latest verdict, so a legacy generation
+    // pushed after the store rows would out-vote a newer pass with a stale
+    // one. The live tail stays after the store rows: those bytes are newer
+    // than the last sync.
     let tail_allowed = if q.types.is_empty() {
         None
     } else {
@@ -2289,6 +2287,10 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
             tail_allowed.as_deref(),
             tail_typeless_ok,
         )?;
+    }
+    for line in rows {
+        text.push_str(&line);
+        text.push('\n');
     }
     append_uningested_lines(
         &mut text,
