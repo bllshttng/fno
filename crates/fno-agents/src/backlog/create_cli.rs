@@ -1897,37 +1897,6 @@ pub fn parse_idea(tail: &[String]) -> ParsedIdea {
     }
 }
 
-/// Read --details from a file ("-" = stdin) when --details-file names one.
-/// The refusal texts are the shared seam's (fno/text_or_file.py), which the
-/// intake and capture commands still serve: the twin must stay byte-equal.
-fn read_text_arg(
-    details: &Option<String>,
-    details_file: &Option<String>,
-) -> Result<Option<String>, Refusal> {
-    if details_file.is_none() {
-        return Ok(details.clone());
-    }
-    if details.is_some() {
-        return Err(refused(
-            "error: provide the details once - inline or as a file, not both",
-            1,
-        ));
-    }
-    let path = details_file.clone().expect("checked");
-    let body = if path == "-" {
-        use std::io::Read;
-        let mut buf = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buf)
-            .map_err(|e| refused(format!("error: cannot read -: {e}"), 1))?;
-        buf
-    } else {
-        std::fs::read_to_string(&path)
-            .map_err(|e| refused(format!("error: cannot read {path}: {e}"), 1))?
-    };
-    Ok(Some(body))
-}
-
 /// shlex.quote: wrap in single quotes when the token is not shell-safe.
 fn shlex_quote(token: &str) -> String {
     if !token.is_empty()
@@ -2608,7 +2577,12 @@ fn wave_normalize_difficulty(raw: &str) -> Result<String, Refusal> {
 fn idea_create(idea: &IdeaArgs) -> Result<(), Refusal> {
     refuse_tracker_owned("idea")?;
     let add = &idea.add;
-    let details = read_text_arg(&add.details, &idea.details_file)?;
+    let details = crate::text_or_file::read_text_arg(
+        add.details.as_deref(),
+        idea.details_file.as_deref(),
+        "the details",
+    )
+    .map_err(|e| refused(e, 1))?;
     let wave_body: Option<String> = details.clone().or_else(|| add.description.clone());
 
     if let Some(wave_of) = &idea.wave_of {
