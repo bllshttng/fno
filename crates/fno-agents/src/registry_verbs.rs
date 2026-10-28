@@ -492,7 +492,12 @@ fn repair(target: &Path, to: i64, apply: bool) -> Result<String, String> {
             row
         })
         .collect();
-    let repaired = serde_json::json!({"schema_version": to, "agents": rows});
+    // Only the version and the rows change; every other top-level key stays.
+    let mut repaired = raw.clone();
+    if let Some(fields) = repaired.as_object_mut() {
+        fields.insert("schema_version".to_string(), Value::from(to));
+        fields.insert("agents".to_string(), Value::Array(rows));
+    }
     // The stored document is AHEAD of this writer by definition, so the
     // repaired document is judged alone, as the registry-commit replace does.
     crate::state::validate_registry_document_change(&absolute, &repaired, &repaired)

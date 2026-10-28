@@ -88,10 +88,7 @@ fn codex_sessions_dir() -> PathBuf {
     }
     if let Some(codex_home) = env_dir("CODEX_HOME") {
         let raw = codex_home.to_string_lossy().into_owned();
-        let expanded = match raw.strip_prefix("~/") {
-            Some(rest) => home_dir().join(rest),
-            None => codex_home,
-        };
+        let expanded = crate::plans_path::expanduser(&crate::plans_path::expandvars(&raw));
         return expanded.join("sessions");
     }
     home_dir().join(".codex").join("sessions")
