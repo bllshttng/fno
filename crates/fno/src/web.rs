@@ -158,7 +158,8 @@ struct AppState {
     /// /rundown then never republishes through the fallback path, so a
     /// project-isolated bridge cannot overwrite the global page.
     rundown_republish: bool,
-    fleet_html: PathBuf,
+    /// The `/command/model.json` fold and its refresh flag.
+    command: Arc<crate::web_command::CommandCache>,
     /// True when the bound address is loopback, so the backlog page may act.
     /// Computed from the bound address, never from `--bind` text.
     writable: bool,
@@ -195,22 +196,6 @@ fn rundown_html_path() -> (PathBuf, bool) {
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
         (crate::state_layout::place(&root, "rundown.html"), true)
-    }
-}
-
-fn fleet_html_path_from_state_root(state_root: &Path) -> PathBuf {
-    crate::state_layout::place(state_root, "fleet.html")
-}
-
-fn fleet_html_path() -> PathBuf {
-    #[cfg(not(test))]
-    {
-        fleet_html_path_from_state_root(&crate::proto::mux_sidecar_root())
-    }
-    #[cfg(test)]
-    {
-        let graph = crate::backlog_view::graph_path();
-        fleet_html_path_from_state_root(graph.parent().unwrap_or_else(|| Path::new(".")))
     }
 }
 
@@ -775,7 +760,7 @@ async fn run(args: WebArgs, socket: PathBuf) -> i32 {
         token,
         rundown_html,
         rundown_republish,
-        fleet_html: fleet_html_path(),
+        command: Default::default(),
         writable,
         model: Default::default(),
         shutdown: shutdown_rx,
@@ -820,7 +805,7 @@ fn router(state: AppState) -> Router {
         .route("/backlog/act", post(backlog_act))
         .route("/rundown", get(team))
         .route("/team", get(team))
-        .route("/fleet", get(fleet))
+        .route("/command/model.json", get(command_model))
         .route("/ws", get(ws_handler))
         .with_state(state)
 }
@@ -1090,15 +1075,33 @@ async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response 
     .await
 }
 
-async fn fleet(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
-    private_page_response(
-        &st.fleet_html,
-        q.t.as_deref(),
-        &st.token,
-        "the fno-agents daemon; its fleet_page arm writes fleet.html every 30 minutes, or run fno-agents intel --fleet --html",
-        NavPage::Fleet,
-    )
-    .await
+/// `GET /command/model.json`: the org view's fleet fold behind the token.
+/// The first read waits for one fleet read; later reads answer from the
+/// cache and start one background refresh once it is stale.
+async fn command_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
+    if !token_ok(q.t.as_deref(), &st.token) {
+        return unauthorized();
+    }
+    st.command
+        .first
+        .get_or_init(|| refresh_command(st.clone()))
+        .await;
+    if st.command.claim_refresh().await {
+        tokio::spawn(refresh_command(st.clone()));
+    }
+    json_response(&st.command.model().await)
+}
+
+async fn refresh_command(st: AppState) {
+    let inputs = model_inputs(&st).await;
+    let (fleet, questions) = tokio::join!(
+        crate::client::org_seats::read_fleet(),
+        crate::needs_overlay::questions_now()
+    );
+    let measured_at = chrono::Utc::now().timestamp().max(0) as u64;
+    st.command
+        .record(fleet, questions, &inputs, measured_at)
+        .await;
 }
 
 /// `GET /backlog/model.json`: the whole board as JSON behind the token.
@@ -1477,7 +1480,6 @@ enum NavPage {
     Live,
     Backlog,
     Team,
-    Fleet,
 }
 
 fn token_ok(supplied: Option<&str>, expected: &str) -> bool {
@@ -1588,7 +1590,6 @@ fn nav_fragment(current: NavPage) -> String {
         NavPage::Live => "live",
         NavPage::Backlog => "backlog",
         NavPage::Team => "rundown",
-        NavPage::Fleet => "fleet",
     };
     let link = |p: NavPage| {
         if p == current {
@@ -1619,7 +1620,7 @@ fn nav_fragment(current: NavPage) -> String {
          min-height:30px;padding:0 4px;border-bottom:2px solid transparent}}\
          nav.fno-nav a[aria-current=\"page\"]{{color:#fff;border-bottom-color:#c99b45}}\
          nav.fno-nav a:hover{{color:#fff}}{controls}</style>\
-         {}{}{}{}\
+         {}{}{}\
          <script>(function(){{var nav=document.querySelector(\"nav.fno-nav\");if(!nav)return;\
          var p=location.pathname,base;\
          if(nav.dataset.current===\"live\"){{base=p.endsWith(\"/\")?p:p+\"/\";}}\
@@ -1634,7 +1635,6 @@ fn nav_fragment(current: NavPage) -> String {
         link(NavPage::Live),
         link(NavPage::Backlog),
         link(NavPage::Team),
-        link(NavPage::Fleet),
     )
 }
 
@@ -1882,7 +1882,7 @@ mod tests {
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            fleet_html: dir.join("fleet.html"),
+            command: Default::default(),
             writable: true,
             model: Default::default(),
             shutdown,
@@ -2167,7 +2167,7 @@ mod tests {
 
         assert!(!PAGE.contains("\"/backlog?t="));
         assert!(!PAGE.contains("\"/team?t="));
-        assert!(!PAGE.contains("\"/fleet?t="));
+        assert!(!PAGE.contains("\"/command?t="));
         assert!(!PAGE.contains("${location.host}/ws"));
         assert!(PAGE.contains("<!--fno-nav-->"));
         assert!(PAGE.contains("const base = document.querySelector(\"nav.fno-nav\").dataset.base;"));
@@ -2364,7 +2364,7 @@ console.log("evictedRowCount: 18 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            fleet_html: dir.join("fleet.html"),
+            command: Default::default(),
             writable: true,
             model: Default::default(),
             shutdown,
@@ -2854,7 +2854,6 @@ console.log("recent searches: 12 cases ok");
             (NavPage::Live, "live"),
             (NavPage::Backlog, "backlog"),
             (NavPage::Team, "rundown"),
-            (NavPage::Fleet, "fleet"),
         ] {
             let frag = nav_fragment(page);
             // The CSS selector also names the attribute; count the link tags.
@@ -2880,7 +2879,6 @@ console.log("recent searches: 12 cases ok");
         assert!(nav_fragment(NavPage::Backlog).contains(".controls{top:var(--fno-nav-h)}"));
         assert!(!nav_fragment(NavPage::Live).contains(".controls"));
         assert!(!nav_fragment(NavPage::Team).contains(".controls"));
-        assert!(!nav_fragment(NavPage::Fleet).contains(".controls"));
     }
 
     #[tokio::test]
@@ -3007,7 +3005,7 @@ console.log("recent searches: 12 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: false,
-            fleet_html: dir.join("fleet.html"),
+            command: Default::default(),
             writable: true,
             model: Default::default(),
             shutdown,
@@ -3040,55 +3038,31 @@ console.log("recent searches: 12 cases ok");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn fleet_html_follows_state_root_beside_graph_json() {
-        let state = Path::new("/configured/state");
-        assert_eq!(
-            fleet_html_path_from_state_root(state),
-            PathBuf::from("/configured/state/cache/pages/fleet.html")
-        );
-    }
-
     #[tokio::test]
-    async fn missing_fleet_names_the_daemon_arm() {
-        let dir =
-            std::env::temp_dir().join(format!("fno-web-fleet-{}-missing", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let response = private_page_response(
-            &dir.join("fleet.html"),
-            Some("right"),
-            "right",
-            "the fno-agents daemon; its fleet_page arm writes fleet.html every 30 minutes",
-            NavPage::Fleet,
-        )
-        .await;
-        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("fleet_page"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[tokio::test]
-    async fn router_serves_fleet_with_token_and_shared_nav() {
+    async fn router_gates_command_model_on_the_token_and_drops_fleet() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let dir = std::env::temp_dir().join(format!("fno-web-fleet-{}-route", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let fleet_path = dir.join("fleet.html");
-        std::fs::write(&fleet_path, "<html><body>FLEET-MARKER</body></html>").unwrap();
         let (tx, _) = broadcast::channel(4);
         let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+        let command = Arc::new(crate::web_command::CommandCache::default());
+        // A recorded read and a spent first read: the route answers from the
+        // cache and spawns no fleet read.
+        command
+            .record(
+                Ok(serde_json::json!({"machines": [{"host": "bb16", "sessions": []}]})),
+                Err("not read in tests".into()),
+                &backlog_model::Inputs::default(),
+                1,
+            )
+            .await;
+        command.first.set(()).unwrap();
         let state = AppState {
             tx,
             snap: Arc::new(Mutex::new(Snapshot::default())),
             token: Arc::<str>::from("right"),
-            rundown_html: dir.join("lead.html"),
-            rundown_republish: true,
-            fleet_html: fleet_path,
+            rundown_html: std::env::temp_dir().join("fno-web-command-lead.html"),
+            rundown_republish: false,
+            command,
             writable: true,
             model: Default::default(),
             shutdown,
@@ -3098,21 +3072,28 @@ console.log("recent searches: 12 cases ok");
         let server = tokio::spawn(async move {
             axum::serve(listener, router(state)).await.unwrap();
         });
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        stream
-            .write_all(
-                b"GET /fleet?t=right HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-            )
-            .await
-            .unwrap();
-        let mut reply = String::new();
-        stream.read_to_string(&mut reply).await.unwrap();
+        let ask = |path: &'static str| async move {
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req =
+                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            stream.write_all(req.as_bytes()).await.unwrap();
+            let mut reply = String::new();
+            stream.read_to_string(&mut reply).await.unwrap();
+            reply
+        };
+        let reply = ask("/command/model.json").await;
+        assert!(reply.starts_with("HTTP/1.1 401"), "{reply}");
+        let reply = ask("/command/model.json?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         assert!(reply.contains("cache-control: no-store"), "{reply}");
-        assert!(reply.contains("data-current=\"fleet\""), "{reply}");
-        assert!(reply.contains("FLEET-MARKER"), "{reply}");
+        assert!(reply.contains("\"host\":\"bb16\""), "{reply}");
+        assert!(
+            reply.contains("\"questions_error\":\"not read in tests\""),
+            "{reply}"
+        );
+        let reply = ask("/fleet?t=right").await;
+        assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
         server.abort();
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn tiny_frame() -> proto::Frame {
@@ -3467,7 +3448,7 @@ console.log("recent searches: 12 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            fleet_html: dir.join("fleet.html"),
+            command: Default::default(),
             writable: true,
             model: Default::default(),
             shutdown,
@@ -3559,7 +3540,7 @@ console.log("recent searches: 12 cases ok");
             token: Arc::<str>::from("right"),
             rundown_html: dir.join("lead.html"),
             rundown_republish: true,
-            fleet_html: dir.join("fleet.html"),
+            command: Default::default(),
             writable: true,
             model: Default::default(),
             shutdown,

@@ -1,0 +1,267 @@
+//! `/command/model.json`: the org view's fleet fold, served as JSON by the
+//! web bridge. The bridge keeps the last good read and refreshes it off the
+//! request path, so a slow fleet read never holds a request.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+
+use crate::backlog_model::Inputs;
+use crate::client::org_seats::{self, Fleet};
+use crate::needs_overlay::QuestionsFold;
+
+/// A model older than this starts one background refresh on the next read.
+pub(crate) const REFRESH_AFTER: Duration = Duration::from_secs(60);
+
+#[derive(Default)]
+pub(crate) struct CommandCache {
+    state: tokio::sync::Mutex<Cached>,
+    /// Set while a background refresh runs, so a burst of reads starts one.
+    refreshing: AtomicBool,
+    /// The first read: every request before it waits on the same one.
+    pub(crate) first: tokio::sync::OnceCell<()>,
+}
+
+#[derive(Default)]
+struct Cached {
+    good: Option<(Fleet, Instant)>,
+    failure: Option<(String, Instant)>,
+    questions: Option<Result<Vec<Value>, String>>,
+    prs: Vec<Value>,
+    read_at: Option<Instant>,
+}
+
+impl CommandCache {
+    /// True when the caller should start the one background refresh.
+    pub(crate) async fn claim_refresh(&self) -> bool {
+        let stale = self
+            .state
+            .lock()
+            .await
+            .read_at
+            .is_none_or(|at| at.elapsed() >= REFRESH_AFTER);
+        stale
+            && self
+                .refreshing
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+    }
+
+    /// Store one refresh. A failed fleet read keeps the last good fold.
+    pub(crate) async fn record(
+        &self,
+        fleet: Result<Value, String>,
+        questions: Result<QuestionsFold, String>,
+        backlog: &Inputs,
+        measured_at: u64,
+    ) {
+        let now = Instant::now();
+        let mut st = self.state.lock().await;
+        match fleet {
+            Ok(map) => {
+                st.good = Some((org_seats::fold(&map, backlog, &[], measured_at), now));
+                st.failure = None;
+            }
+            Err(reason) => st.failure = Some((reason, now)),
+        }
+        st.questions = Some(questions.map(|fold| {
+            fold.items
+                .iter()
+                .filter(|q| !q.settled)
+                .map(|q| {
+                    json!({
+                        "id": q.id,
+                        "kind": q.kind,
+                        "title": q.title,
+                        "node": q.node,
+                        "host": q.host,
+                        "created_at": q.created_at,
+                        "priority": q.priority,
+                    })
+                })
+                .collect()
+        }));
+        st.prs = open_prs(backlog);
+        st.read_at = Some(now);
+        self.refreshing.store(false, Ordering::Release);
+    }
+
+    pub(crate) async fn model(&self) -> Value {
+        let st = self.state.lock().await;
+        let mut waiting = json!({ "prs": st.prs });
+        match &st.questions {
+            Some(Ok(items)) => waiting["questions"] = json!(items),
+            Some(Err(reason)) => waiting["questions_error"] = json!(reason),
+            None => waiting["questions_error"] = json!("not read yet"),
+        }
+        let fleet = st.good.as_ref().map(|(f, _)| f);
+        let fleet_error = match (&st.failure, &st.good) {
+            (Some((reason, at)), _) => json!({
+                "reason": reason,
+                "failed_age_s": at.elapsed().as_secs(),
+            }),
+            (None, None) => json!({ "reason": "fleet not read yet", "failed_age_s": null }),
+            (None, Some(_)) => Value::Null,
+        };
+        json!({
+            "schema": 1,
+            "measured_at": fleet.map(|f| f.measured_at),
+            "age_s": st.good.as_ref().map(|(_, at)| at.elapsed().as_secs()),
+            "notice": fleet.and_then(|f| f.notice.clone()),
+            "seat_error": fleet.and_then(|f| f.seat_error.clone()),
+            "fleet_error": fleet_error,
+            "machines": fleet.map(|f| json!(f.machines)).unwrap_or_else(|| json!([])),
+            "waiting": waiting,
+        })
+    }
+}
+
+/// PRs on nodes in review that the store has not seen merged or closed. The
+/// store records no review or conflict state, so `status` is the node's
+/// status word and `merge_status` the store's, or null when unset.
+fn open_prs(backlog: &Inputs) -> Vec<Value> {
+    backlog
+        .rows
+        .iter()
+        .filter(|row| row.get("status").and_then(Value::as_str) == Some("in_review"))
+        .filter_map(|row| {
+            let number = row.get("pr_number").and_then(Value::as_u64)?;
+            let merge = row
+                .get("merge_status")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty());
+            if matches!(merge, Some("merged" | "closed")) {
+                return None;
+            }
+            Some(json!({
+                "node": row.get("id"),
+                "title": row.get("title"),
+                "number": number,
+                "url": row.get("pr_url"),
+                "status": "in_review",
+                "merge_status": merge,
+            }))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::needs_overlay::QuestionItem;
+
+    fn two_machines() -> Value {
+        json!({"machines": [
+            {"host": "bb16", "local": true, "fresh": true, "sessions": [
+                {"name": "kara", "session_id": "976b7b64", "harness": "claude", "role": "lead"},
+                {"name": "t-one", "session_id": "aaaa1111", "parent": "976b", "harness": "claude",
+                 "node": "x-1", "status": "writing"}
+            ]},
+            {"host": "iMac2D2", "fresh": false, "age_s": 900, "sessions": [
+                {"name": "t-two", "harness": "codex"}
+            ]}
+        ]})
+    }
+
+    fn questions(hosts: &[Option<&str>]) -> QuestionsFold {
+        QuestionsFold {
+            items: hosts
+                .iter()
+                .enumerate()
+                .map(|(i, h)| QuestionItem {
+                    id: format!("q-{i}"),
+                    host: h.map(str::to_string),
+                    ..QuestionItem::default()
+                })
+                .collect(),
+            ..QuestionsFold::default()
+        }
+    }
+
+    fn backlog() -> Inputs {
+        Inputs {
+            rows: vec![
+                json!({"id": "x-1", "status": "in_review", "pr_number": 7, "merge_status": ""}),
+                json!({"id": "x-2", "status": "in_review", "pr_number": 8, "merge_status": "merged"}),
+            ],
+            ..Inputs::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn two_machine_fold_serializes_every_seat_and_question_host() {
+        let cache = CommandCache::default();
+        let qs = questions(&[None, Some("iMac2D2"), Some("iMac2D2")]);
+        cache
+            .record(Ok(two_machines()), Ok(qs), &backlog(), 100)
+            .await;
+        let m = cache.model().await;
+        assert_eq!(m["machines"].as_array().unwrap().len(), 2);
+        let seats: usize = m["machines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|mc| mc["leads"].as_array().unwrap())
+            .map(|l| l["seats"].as_array().unwrap().len())
+            .sum();
+        assert_eq!(seats, 3);
+        assert!(m["machines"][0]["leads"][0]["seats"][0]
+            .get("local")
+            .is_none());
+        assert_eq!(m["waiting"]["questions"][1]["host"], "iMac2D2");
+        assert_eq!(m["waiting"]["questions"].as_array().unwrap().len(), 3);
+        assert_eq!(m["waiting"]["prs"].as_array().unwrap().len(), 1);
+        assert_eq!(m["measured_at"], 100);
+        assert!(m["fleet_error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_keeps_the_good_fold_and_names_the_failure() {
+        let cache = CommandCache::default();
+        cache
+            .record(Ok(two_machines()), Ok(questions(&[])), &backlog(), 100)
+            .await;
+        cache
+            .record(
+                Err("fleet top timed out after 30s".into()),
+                Ok(questions(&[])),
+                &backlog(),
+                200,
+            )
+            .await;
+        let m = cache.model().await;
+        assert_eq!(m["machines"].as_array().unwrap().len(), 2);
+        assert_eq!(m["measured_at"], 100);
+        assert_eq!(m["fleet_error"]["reason"], "fleet top timed out after 30s");
+        assert!(m["age_s"].is_u64());
+    }
+
+    #[tokio::test]
+    async fn no_good_read_still_carries_the_questions_and_a_failed_question_read_says_why() {
+        let cache = CommandCache::default();
+        cache
+            .record(
+                Err("fleet top exited 1: no primary".into()),
+                Ok(questions(&[None])),
+                &backlog(),
+                1,
+            )
+            .await;
+        let m = cache.model().await;
+        assert_eq!(m["machines"], json!([]));
+        assert_eq!(m["fleet_error"]["reason"], "fleet top exited 1: no primary");
+        assert_eq!(m["waiting"]["questions"].as_array().unwrap().len(), 1);
+        cache
+            .record(
+                Ok(two_machines()),
+                Err("timed out after 5000ms".into()),
+                &backlog(),
+                2,
+            )
+            .await;
+        let m = cache.model().await;
+        assert!(m["waiting"].get("questions").is_none());
+        assert_eq!(m["waiting"]["questions_error"], "timed out after 5000ms");
+    }
+}

@@ -1831,7 +1831,7 @@ pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, pee
 mod messages_view;
 mod org_board;
 mod org_pages;
-mod org_seats;
+pub(crate) mod org_seats;
 mod org_tabs;
 mod overlay_paint;
 mod release_check;
