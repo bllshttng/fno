@@ -1492,11 +1492,16 @@ stops
         // node closes nothing.
         let home = tmp_home("supersede");
         let root = tmp_root("supersede");
+        // A visual-approval ask carries its screens.
+        let shot = root.join("paint.png");
+        std::fs::write(&shot, b"\x89PNG\r\n\x1a\n").unwrap();
         let ask = |subject: &str, node: &str| {
             let mut r = req("does the paint look right?", &root);
             r.subject = Some(subject.to_string());
             r.node = Some(node.to_string());
             r.ask = Some("approve the paint at this head".to_string());
+            r.images = vec![shot.clone()];
+            r.screens_dir = Some(root.join("screens"));
             run_intake(&r, &home)
         };
         let first = ask("visual approval PR 7 at 1111111a", "x-aaaa");
