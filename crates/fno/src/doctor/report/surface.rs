@@ -14,7 +14,7 @@ pub(crate) fn harness_surface_report() -> Value {
     }
     let codex_gate = which("codex").is_some() || codex_plugin_state_exists(&codex_home());
     if codex_gate {
-        report["codex_plugin"] = super::codex::inspect_codex_plugin_freshness();
+        report["codex_plugin"] = super::codex::codex_plugin_report();
     }
     let dual = super::codex::codex_hooks_dual_and_foreign();
     if dual.0 {
