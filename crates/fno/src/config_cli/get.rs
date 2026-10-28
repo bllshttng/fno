@@ -281,6 +281,22 @@ fn walk(key: &str) -> Result<(Node, Option<Value>, bool), ()> {
     Ok((node, raw, descended))
 }
 
+/// The validated value at a dotted key, spelled the way `walk` reads it.
+fn validated_at(validated: &Value, key: &str) -> Option<Value> {
+    let mut parts: Vec<&str> = key.split('.').collect();
+    if parts.first() == Some(&"config") {
+        parts.remove(0);
+    }
+    if parts.first() == Some(&"providers") {
+        parts[0] = "accounts";
+    }
+    let mut node = validated;
+    for part in parts {
+        node = node.as_object()?.get(part)?;
+    }
+    Some(node.clone())
+}
+
 fn merged_for_cwd() -> Value {
     super::merged_config(&repo_root())
 }
@@ -403,8 +419,21 @@ fn get_value(key: &str, json_out: bool) -> i32 {
     // repo would name files that did not decide the key.
     let searched = candidate_paths(&root);
 
+    // The loader validates the whole config on every get, as the Python
+    // door's load_settings did: a refused value exits 1 with the refusal,
+    // and a leaf or block reads its coerced, validator-normalized value.
+    let validated = match super::model::load_validated(&root) {
+        Ok(validated) => validated,
+        Err(refusal) => {
+            eprintln!("Error: {refusal}");
+            return 1;
+        }
+    };
     let is_leaf = !matches!(node, Node::Model(_) | Node::DictOf(_));
-    let value = resolve_value(&node, raw.as_ref());
+    let value = match (!descended, validated_at(&validated, key)) {
+        (true, Some(coerced)) => coerced,
+        _ => resolve_value(&node, raw.as_ref()),
+    };
 
     let mut source: Option<(PathBuf, Vec<PathBuf>)> = None;
     if is_leaf {
