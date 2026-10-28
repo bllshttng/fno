@@ -319,4 +319,44 @@ _HOLDER_F="$(HOME="${TMP_F}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   || fail "(f): claim holder changed to '${_HOLDER_F}'; a published non-handover holder must never be taken over"
 pass "(f): resident non-handover claim untouched (holder=${_HOLDER_F})"
 
+# ── (h) a launch window that outlived its launcher: the recorded pid is the
+# spawner's and the probe proves it gone (suspect + pid-absent), so the named
+# worker never reached init. The builder dispatched for the node adopts the
+# window through the takeover door. The bystander control (g) stays the
+# boundary: its pid-unavailable shape proves nothing and is never taken.
+log "(h): foreign-named window + launcher pid proven dead => builder adopts via takeover"
+
+make_repo TMP_H
+_ALL_TMPS+=("$TMP_H")
+seed_graph "${TMP_H}/home/.fno/graph.json" <<'JSON'
+{"entries":[{"id":"tst-deadbe1","title":"dead-launcher adoption node","session_id":null}]}
+JSON
+
+HOME="${TMP_H}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  fno agents claim acquire "node:tst-deadbe1" \
+  --holder "spawn-handover:bp-dead-launcher" --ttl 15m --pid 999999999 \
+  --reason "dead launcher stage" >/dev/null 2>&1 \
+  || fail "(h): staging the dead-launcher window claim failed"
+
+(cd "$TMP_H" && \
+  HOME="${TMP_H}/home" \
+  PATH="${TMP_H}/bin:$PATH" \
+  FNO_AGENTS_BIN="${TMP_H}/bin/fno-agents" \
+  FNO_TEST_SPACE="${TMP_H}/space" \
+  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  FNO_TARGET_INIT_GATED=1 \
+  FNO_WORKER_NAME="this-builder" \
+  TARGET_START=1 \
+  TARGET_INPUT="tst-deadbe1" \
+  TARGET_LOCATION_OK="main-acknowledged" \
+  bash "$INIT" >/dev/null 2>&1) \
+  || fail "(h): init exited non-zero"
+
+_HOLDER_H="$(HOME="${TMP_H}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  fno agents claim status "node:tst-deadbe1" --json 2>/dev/null \
+  | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+[[ "$_HOLDER_H" == target-session:* ]] \
+  || fail "(h): claim holder is '${_HOLDER_H}'; a proven-dead launch window must land on the node's own builder"
+pass "(h): dead launch window adopted (holder=${_HOLDER_H})"
+
 log "All init-claim scenarios passed"
