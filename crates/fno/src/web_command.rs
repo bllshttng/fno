@@ -138,12 +138,7 @@ mod tests {
                 .map(|(i, h)| QuestionItem {
                     id: format!("q-{i}"),
                     host: h.map(str::to_string),
-                    state: (if h == &Some("answered") {
-                        "answered"
-                    } else {
-                        "open"
-                    })
-                    .into(),
+                    state: ["open", "answered"][usize::from(*h == Some("answered"))].into(),
                     ..QuestionItem::default()
                 })
                 .collect(),
