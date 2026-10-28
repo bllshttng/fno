@@ -7,7 +7,7 @@ set -uo pipefail
 
 STATE_FILE="${1:-.fno/target-state.md}"
 [[ -f "$STATE_FILE" ]] || exit 0
-command -v fno >/dev/null 2>&1 || exit 0
+command -v "${FNO_AGENTS_BIN:-fno-agents}" >/dev/null 2>&1 || exit 0
 
 # jq is a hard dep of session-start.sh (it exits early when jq is absent), so
 # parse the JSON robustly rather than with a format-fragile grep.
