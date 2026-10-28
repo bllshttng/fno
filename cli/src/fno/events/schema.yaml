@@ -2138,7 +2138,7 @@ event_types:
     consumers: [fno agents workspace worktree overlaps]
 
   - name: config_write
-    description: "One config key changed on disk. Emitted by the fno.config.writer choke point after the atomic replace lands, once per changed leaf key. Answers when a key changed, from what to what, in which resolved root, and which session made the change, with no transcript search."
+    description: "One config key changed on disk. Emitted by the native config writer (fno config set, unset, rm) after the atomic replace lands, once per changed leaf key. Answers when a key changed, from what to what, in which resolved root, and which session made the change, with no transcript search."
     sources: [config]
     data:
       required: [key, scope, root_kind, config_path, present_before, present_after, attester_session_id, attester_witness]
