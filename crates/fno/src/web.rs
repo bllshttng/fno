@@ -3045,9 +3045,7 @@ console.log("recent searches: 12 cases ok");
         // A recorded, spent first read: the route spawns no fleet read.
         let fleet = serde_json::json!({"machines": [{"host": "bb16", "sessions": []}]});
         let none = backlog_model::Inputs::default();
-        command
-            .record(Ok(fleet), Err("unread".into()), &none, 1)
-            .await;
+        command.record(Ok(fleet), Err("x".into()), &none, 1).await;
         command.first.set(()).unwrap();
         let state = AppState {
             tx,
@@ -3080,7 +3078,7 @@ console.log("recent searches: 12 cases ok");
         assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
         assert!(reply.contains("cache-control: no-store"), "{reply}");
         assert!(reply.contains("\"host\":\"bb16\""), "{reply}");
-        assert!(reply.contains("\"questions_error\":\"unread\""), "{reply}");
+        assert!(reply.contains("\"questions_error\":\"x\""), "{reply}");
         let reply = ask("/fleet?t=right").await;
         assert!(reply.starts_with("HTTP/1.1 404"), "{reply}");
         server.abort();
