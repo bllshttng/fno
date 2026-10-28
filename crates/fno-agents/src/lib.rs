@@ -1871,8 +1871,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "ci_cadence_check",
     // The main_revert arm's read of a red main (main_revert.rs).
     "main_revert_check",
-    // A ci_tier arm pass that cancelled or reran runs (ci_tier.rs).
+    // A ci_tier arm pass, a push it held, and the wake when a slot freed
+    // (ci_tier.rs).
     "ci_tier_pass",
+    "ci_tier_held",
+    "ci_tier_wake",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.

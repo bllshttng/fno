@@ -1372,6 +1372,12 @@ pub fn run_push(argv: &[String]) -> i32 {
         }
     };
 
+    // (2c) A PR below a full CI tier waits for a slot (ci_tier.rs).
+    if let Some(refusal) = crate::ci_tier::push_hold(&cwd, &target) {
+        eprintln!("pr-push: {refusal}");
+        return 3;
+    }
+
     // (3) behind-before.
     let before = behind(&git, &cwd);
 
