@@ -620,7 +620,18 @@ pub fn normalize(
             flag_value(head, &["--slug"]).as_deref(),
             &names,
         );
-        let name = match minted {
+        // A promoted spawn makes a lead, and a lead carries a person name.
+        let promoted = head
+            .iter()
+            .any(|t| t == "--promote" || t.starts_with("--promote="));
+        let person = || {
+            let home = crate::paths::AgentsHome::from_env_opt()?;
+            crate::name_draw::pick_free_name(&home.team_names_json(), &home.registry_json()).ok()
+        };
+        let name = match minted
+            .filter(|_| !promoted)
+            .or_else(|| promoted.then(person).flatten())
+        {
             Some(n) => n,
             None => match mint_slug(&names) {
                 Ok(n) => n,

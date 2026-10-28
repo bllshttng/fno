@@ -52,6 +52,8 @@ EOF
             HOME="$tmp/home" \
             PATH="$tmp/bin:$PATH" \
             FNO_AGENTS_BIN="$tmp/bin/fno-agents" \
+            FNO_TEST_GATES_GREEN=1 \
+            FNO_TEST_OWNED_IDENTITY_CANNED=1 \
             FNO_TEST_SPACE="$tmp/space" \
             TARGET_START=1 \
             TARGET_INPUT="test" \

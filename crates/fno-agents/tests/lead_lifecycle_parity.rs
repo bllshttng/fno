@@ -118,11 +118,33 @@ fn space(root: &Path) -> PathBuf {
         .join(slug(&fs::canonicalize(root.join("repo")).unwrap()))
 }
 
-/// Arm the scope manifest a promoted lead over epic-y holds.
+/// Arm the scope manifest a promoted lead over epic-y holds. The fixture's
+/// baked `created_at` ages against the `span:96h` default term: four days
+/// after the capture date the undeclared default reads Reached and the
+/// declare case refuses, so the copy is stamped to now. Nothing the goldens
+/// see carries the stamp: this suite's outputs print no manifest timestamps.
 fn arm_manifest(root: &Path) {
     let leads = space(root).join("leads");
     fs::create_dir_all(&leads).unwrap();
-    fs::copy(fixture("manifest-epic-y.md"), leads.join("epic-y.md")).unwrap();
+    let source = fs::read_to_string(fixture("manifest-epic-y.md")).unwrap();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let stamped = source
+        .lines()
+        .map(|line| {
+            if line.starts_with("created_at: ") {
+                format!("created_at: {now}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let stamped = if source.ends_with('\n') {
+        format!("{stamped}\n")
+    } else {
+        stamped
+    };
+    fs::write(leads.join("epic-y.md"), stamped).unwrap();
 }
 
 /// Move every registry row's cwd into this world's repo, so the role's
@@ -244,17 +266,17 @@ fn term_matches_the_python_goldens() {
     // cwd, never the process cwd.
     rows_live_in_the_repo(p);
     arm_manifest(p);
-    // The fixture's fixed created_at would age past the default term and
-    // flip this case to the reached refusal; a team minted now stays within.
-    let path = space(p).join("leads/epic-y.md");
-    let minted = fs::read_to_string(&path).unwrap().replace(
+    // The fixture's fixed created_at ages past the default term, which turns
+    // this declaration into a replacement refusal; the lead is born now.
+    let manifest_path = space(p).join("leads/epic-y.md");
+    let born = fs::read_to_string(&manifest_path).unwrap().replace(
         "created_at: 2026-10-24T08:55:00Z",
         &format!(
             "created_at: {}",
             chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
         ),
     );
-    fs::write(&path, minted).unwrap();
+    fs::write(&manifest_path, born).unwrap();
     case_in(
         "term declares the holder's own term",
         p,

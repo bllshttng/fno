@@ -108,6 +108,15 @@ exit 0
 STUB
   chmod +x "${_dir}/bin/fno"
 
+  # The target-family gates ride fno-agents since the port; the old python
+  # doors this stub's catch-all answered are gone. Without a stub here the
+  # runner's job-wide FNO_AGENTS_BIN would hand the REAL gate a sandbox with
+  # no graph store, whose rc-1 refusal is the degraded state this suite does
+  # not test. The shared double answers the gates green and leaves every
+  # other command to the join fiction above.
+  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
+  chmod 755 "${_dir}/bin/fno-agents"
+
   # Other init paths may resolve Python; they must stay inside the fixture.
   cat > "${_dir}/bin/fakepython" << STUB
 #!/usr/bin/env bash
@@ -122,6 +131,7 @@ run_init() {
     "${_SCRUB_ENV[@]}" \
     PATH="${_dir}/bin:${PATH}" \
     HOME="${_dir}/home" \
+    FNO_AGENTS_BIN="${_dir}/bin/fno-agents" \
     FNO_PYTHON="${_dir}/bin/fakepython" \
     TARGET_START=1 \
     TARGET_INPUT="x-d4ab" \
