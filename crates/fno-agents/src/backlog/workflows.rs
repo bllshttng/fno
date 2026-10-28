@@ -270,21 +270,41 @@ fn parse_iso(value: Option<&Value>) -> Option<chrono::DateTime<chrono::FixedOffs
 
 /// Every child closed, and at least one really shipped (the
 /// children_all_closed twin). A child superseded BY this parent never counts
-/// closed against it.
+/// closed against it. A returnable deferral is parked work, so it holds the
+/// parent open. No deferral counts as shipped: a parent whose only child is
+/// deferred has built nothing.
 pub(crate) fn children_all_closed(parent: &Value, kids: &[&Value]) -> bool {
     let pid = text_at(parent, "id").unwrap_or("");
     if kids.is_empty() {
         return false;
     }
     for k in kids {
+        if is_returnable_deferral(k) {
+            return false;
+        }
         if !is_live(k) || text_at(k, "superseded_by") == Some(pid) {
             continue;
         }
         return false;
     }
     kids.iter().any(|k| {
-        text_at(k, "status") != Some("superseded") && text_at(k, "superseded_by").is_none()
+        !is_deferred(k)
+            && truthy_field(k, "completed_at")
+            && text_at(k, "status") != Some("superseded")
+            && text_at(k, "superseded_by").is_none()
     })
+}
+
+fn is_deferred(row: &Value) -> bool {
+    truthy_field(row, "deferred_at")
+        || text_at(row, "status") == Some("deferred")
+        || text_at(row, "completed_at").is_some_and(|c| c.starts_with("deferred:"))
+}
+
+fn is_returnable_deferral(row: &Value) -> bool {
+    is_deferred(row)
+        && !text_at(row, "deferred_kind")
+            .is_some_and(|kind| graph_store::CLOSING_DEFER_KINDS.contains(&kind))
 }
 
 /// True when a deliberate reopen postdates every child's close (the
@@ -3147,6 +3167,21 @@ mod tests {
             text_at(epic, "completion_note"),
             Some("auto-closed: all children complete")
         );
+    }
+
+    #[test]
+    fn a_deferred_child_never_closes_its_parent() {
+        let parent = json!({"id": "ab-ffffffff", "status": "in_progress"});
+        let later = json!({"id": "ab-aaaaaaaa", "status": "deferred",
+            "deferred_at": "2026-10-27T00:00:00+00:00", "deferred_kind": "later"});
+        let wont = json!({"id": "ab-bbbbbbbb", "status": "deferred",
+            "deferred_at": "2026-10-27T00:00:00+00:00", "deferred_kind": "wont_do"});
+        let done = json!({"id": "ab-cccccccc", "status": "done",
+            "completed_at": "2026-10-27T00:00:00+00:00"});
+        assert!(!children_all_closed(&parent, &[&later]));
+        assert!(!children_all_closed(&parent, &[&wont]));
+        assert!(!children_all_closed(&parent, &[&later, &done]));
+        assert!(children_all_closed(&parent, &[&wont, &done]));
     }
 
     #[test]
