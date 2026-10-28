@@ -30,10 +30,9 @@ const el = (tag, cls, text) => {
 };
 const ago = (s) => s == null ? "unknown" : s < 90 ? s + "s" : s < 5400 ? Math.round(s / 60) + "m" : Math.round(s / 3600) + "h";
 const since = (iso) => { const t = Date.parse(iso); return isNaN(t) ? null : Math.max(0, Math.round((Date.now() - t) / 1000)); };
-const seats = (m) => m.leads.flatMap((l) => l.seats);
 
 function header(model) {
-  const all = model.machines.flatMap(seats);
+  const all = model.machines.flatMap((m) => m.leads.flatMap((l) => l.seats));
   const counts = document.getElementById("counts");
   counts.replaceChildren();
   const q = model.waiting.questions;
