@@ -312,7 +312,7 @@ const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n
 const COL = Object.fromEntries(ORDER.map((st) => [st, css("--" + st)])), UI = css("--font-ui"), DATA = css("--font-data");
 const TCOL = ["#5CE1FF", "#FF7AB6", "#FFB547", "#7CF29A", "#A68CFF", "#FF8A5C"];
 let nodes = [], links = [], byId = {}, hosts = [], tcolor = {}, W = 0, H = 0, TOP = 84, DPR = 1, layout = "constellation", hover = null, drag = null, born = performance.now(), pulses = [], lastSpark = 0;
-const cam = {x: 0, y: 0, k: 1, tx: 0, ty: 0, tk: 1};
+const cam = {x: 0, y: 0, k: 1, tx: 0, ty: 0, tk: 1, auto: true};
 const proj = (r) => r.s.project || "unassigned";
 const epic = (r) => r.s.work && r.s.work.epic;
 const leadName = (r) => r.s.role ? r.s.short || r.s.name : null;
@@ -375,7 +375,7 @@ function setTargets() {
 }
 function setLayout(l) {
   layout = l; stage.dataset.layout = l; document.getElementById("lnote").textContent = LNOTE[l](); capBottom();
-  setTargets(); born = performance.now() - 900; cam.tx = cam.ty = 0; setTimeout(() => { cam.tk = fitK(); }, 450);
+  setTargets(); born = performance.now() - 900; cam.tx = cam.ty = 0; cam.auto = true;
   stage.querySelectorAll("[data-layout]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.layout === l)));
   try { localStorage.setItem("fnoCommandLayout", l); } catch (e) {}
 }
@@ -397,7 +397,8 @@ function tick(alpha) {
 const toScreen = (n) => ({x: n.x * cam.k + cam.x + W / 2, y: n.y * cam.k + cam.y + (H + TOP) / 2});
 function star(x, y, r, host) { ctx.beginPath(); if (hosts[0] && host !== hosts[0].host) { const q = r * 1.25; ctx.moveTo(x, y - q); ctx.lineTo(x + q, y); ctx.lineTo(x, y + q); ctx.lineTo(x - q, y); ctx.closePath(); } else ctx.arc(x, y, r, 0, 7); }
 function pick(mx, my) { let best = null, bd = 1e9; nodes.forEach((n) => { if (!shown(n)) return; const p = toScreen(n), d = Math.hypot(p.x - mx, p.y - my); if (d < radius(n) * cam.k + 8 && d < bd) { bd = d; best = n; } }); return best; }
-function fitK() { let mx = 1, my = 1; nodes.forEach((n) => { if (!shown(n)) return; mx = Math.max(mx, Math.abs(n.x)); my = Math.max(my, Math.abs(n.y)); }); return Math.min(1.6, Math.max(.1, Math.min((W / 2 - Math.min(110, W * .08)) / mx, ((H - TOP) / 2 - 70) / my))); }
+function fitK() { let mx = 1, my = 1; const xs = [], ys = []; nodes.forEach((n) => { if (!shown(n)) return; if (n.kind !== "session" || leadName(n.r)) { mx = Math.max(mx, Math.abs(n.x)); my = Math.max(my, Math.abs(n.y)); } else { xs.push(Math.abs(n.x)); ys.push(Math.abs(n.y)); } });
+  const p90 = (a) => a.length ? a.sort((u, v) => u - v)[Math.floor(a.length * .9)] : 0; mx = Math.max(mx, p90(xs)); my = Math.max(my, p90(ys)); return Math.min(1.6, Math.max(.1, Math.min((W / 2 - Math.min(110, W * .08)) / mx, ((H - TOP) / 2 - 70) / my))); }
 function tipLines(n) {
   if (n.kind === "host") { const h = n.h; return [h.host, rows.filter((r) => r.host === h.host).length + " sessions · spawn cap " + (h.cap ?? "?") + " · memory " + Math.round((h.mem_used || 0) * 100) + "%", (h.fresh ? "online" : "stale") + " · beat " + ago(h.age_s) + " ago · " + (h.takes_work ? "takes work" : "no new work")]; }
   if (n.kind === "territory") { const c = rows.filter((r) => proj(r) === n.label); return ["Project · " + n.label, c.length + " sessions · " + c.filter((r) => r.s.status === "writing").length + " writing"]; }
@@ -414,8 +415,8 @@ cv.addEventListener("pointerleave", () => { hover = null; tip.classList.remove("
 cv.addEventListener("pointerdown", (e) => { drag = {x: e.clientX, y: e.clientY, cx: cam.tx, cy: cam.ty, moved: false}; cv.classList.add("dragging"); cv.setPointerCapture(e.pointerId); });
 cv.addEventListener("pointerup", (e) => { cv.classList.remove("dragging"); const moved = drag && drag.moved; drag = null; if (moved) return;
   const b = cv.getBoundingClientRect(), n = pick(e.clientX - b.left, e.clientY - b.top); if (n && n.kind === "session") openSeat(n.r); });
-cv.addEventListener("wheel", (e) => { e.preventDefault(); cam.tk = Math.min(3, Math.max(.1, cam.tk * Math.exp(-e.deltaY * .0015))); }, {passive: false});
-cv.addEventListener("dblclick", () => { cam.tx = cam.ty = 0; cam.tk = fitK(); });
+cv.addEventListener("wheel", (e) => { e.preventDefault(); cam.auto = false; cam.tk = Math.min(3, Math.max(.1, cam.tk * Math.exp(-e.deltaY * .0015))); }, {passive: false});
+cv.addEventListener("dblclick", () => { cam.tx = cam.ty = 0; cam.auto = true; });
 function arc(x, cx, cy, r, a0, a1, color, w) { x.strokeStyle = color; x.lineWidth = w; x.lineCap = "round"; x.beginPath(); x.arc(cx, cy, r, a0, a1); x.stroke(); }
 // The machine orb: a memory ring, a ring split by seat state, and, on the card, one dot per seat in orbit.
 function drawHost(x, h, cx, cy, r, now, inGraph) {
@@ -447,7 +448,7 @@ function drawTransit(now, grow, focus, rel) {
       const g = ctx.createRadialGradient(x, y, 0, x, y, 9); g.addColorStop(0, "rgba(255,255,255,.9)"); g.addColorStop(1, tcolor[t.label] + "00"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, 9, 0, 7); ctx.fill(); } }));
 }
 function drawGraph(now) {
-  cam.x += (cam.tx - cam.x) * .12; cam.y += (cam.ty - cam.y) * .12; cam.k += (cam.tk - cam.k) * .1;
+  if (cam.auto) cam.tk = fitK(); cam.x += (cam.tx - cam.x) * .12; cam.y += (cam.ty - cam.y) * .12; cam.k += (cam.tk - cam.k) * .1;
   if (!still) tick(.06);
   const grow = still ? 1 : Math.min(1, (now - born) / 1800), sel = rows.find((r) => keyOf(r) === openKey), focus = hover || (sel && sel._n) || null, rel = related(focus);
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H);
