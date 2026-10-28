@@ -219,12 +219,15 @@ pub(crate) async fn run_stop_leg(
     {
         return Ok(None);
     }
-    let short = entry.transport_short().map(str::to_string).or_else(|| {
+    let short = match entry.transport_short().map(str::to_string).or_else(|| {
         entry
             .harness_session_id
             .clone()
             .filter(|session_id| !session_id.trim().is_empty())
-    })?;
+    }) {
+        Some(short) => short,
+        None => return Ok(None),
+    };
     let name = entry.name.clone();
     let session_id = entry.harness_session_id.clone();
     let leg = off_executor(move || claude_stop(&short, session_id.as_deref()));

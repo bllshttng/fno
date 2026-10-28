@@ -5113,7 +5113,7 @@ async fn handle_rm_with(
         Ok(r) => r,
         Err(e) => return registry_read_failed(req.id, e),
     };
-    let entry =
+    let mut entry =
         match entry_for_lifecycle(&registry, &requested_name, &ctx.home.registry_json(), false)
             .await
         {
