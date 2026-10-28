@@ -329,6 +329,14 @@ pub fn run_scoreboard(args: &[String]) -> i32 {
     let (touch, coverage) = read(&["human_touch"]);
     let mut sb =
         super::views::build_scoreboard(&inputs, &touch, parsed.since_days, chrono::Local::now());
+    // The Python project view handed survival no `now`: its frozen answer is
+    // the gate ladder ending at the n/a on an unusable now, never the
+    // clock-driven rate the unscoped main view ships.
+    if project_mode {
+        if let Some(ps) = inputs.classified.get("project_survival") {
+            sb["survival"] = ps.clone();
+        }
+    }
     sb["event_coverage"] = coverage;
     sb["emission_failures"] = emission_failures_snapshot();
     return finish(&mut sb, R::Main);

@@ -448,8 +448,10 @@ fn survival(
     if !by_node.values().any(|c| c["delivered"] == true) {
         return json!({"available": false, "reason": "no shipped nodes in window"});
     }
-    // The Python fold always handed survival a now (`--now` or the wall
-    // clock), so an absent argv degrades to the clock, never to n/a.
+    // The main view's caller always hands a now (`--now` or the wall
+    // clock), so an absent argv degrades to the clock, never to n/a; the
+    // project view's caller hands None and gets the n/a ladder instead
+    // (computed separately as `project_survival` in the fold).
     let now_secs = match now.and_then(iso_secs) {
         Some(secs) => secs,
         None => chrono::Local::now().timestamp(),
@@ -722,16 +724,22 @@ pub fn classify(params: &Value) -> Result<Value, String> {
                 .map(|s| !s.is_empty())
                 .unwrap_or(false)
     });
+    let followup_days = params
+        .get("followup_days")
+        .and_then(Value::as_i64)
+        .unwrap_or(14);
     let survival = survival(
         &by_node,
         &by_id,
         params.get("now").and_then(Value::as_str),
-        params
-            .get("followup_days")
-            .and_then(Value::as_i64)
-            .unwrap_or(14),
+        followup_days,
         w4_available,
     );
+    // The Python project view handed survival NO now, so its frozen answer
+    // is this same ladder ending at the n/a on an unusable now, never a
+    // clock-driven rate. The project door serves this field; the main view
+    // keeps the clock-driven one above.
+    let project_survival = survival(&by_node, &by_id, None, followup_days, w4_available);
     let vocab_terms: Vec<&str> = doc
         .iter()
         .chain(delivery.iter())
@@ -758,6 +766,7 @@ pub fn classify(params: &Value) -> Result<Value, String> {
             "inferred_nodes": inferred,
         },
         "survival": survival,
+        "project_survival": project_survival,
         "flow": flow,
     });
     if let Some(scope) = scope {
