@@ -516,6 +516,14 @@ fn text(v: &SqlValue) -> Option<String> {
     v.text().map(str::to_string)
 }
 
+/// The machine a side-table row belongs to, when the row's beat is still
+/// that machine's newest. A row from an older beat attaches to nothing.
+fn current(machines: &[Machine], id: &Option<String>, beat: Option<i64>) -> Option<usize> {
+    machines
+        .iter()
+        .position(|m| Some(&m.machine_id) == id.as_ref() && Some(m.beat_at) == beat)
+}
+
 /// What [`read`] answers: every machine, every session with its seat facts
 /// joined on, and why the seat read failed when it did.
 pub struct Fleet {
@@ -585,10 +593,7 @@ pub fn read(remote: &Remote) -> Result<Fleet, String> {
         Ok(reply) => {
             for r in &reply.rows {
                 let (machine_id, name) = (text(&r[0]), text(&r[1]));
-                let current = fleet.machines.iter().any(|m| {
-                    Some(&m.machine_id) == machine_id.as_ref() && Some(m.beat_at) == r[11].integer()
-                });
-                if !current {
+                if current(&fleet.machines, &machine_id, r[11].integer()).is_none() {
                     continue;
                 }
                 let Some(s) = fleet.sessions.iter_mut().find(|s| {
@@ -609,11 +614,6 @@ pub fn read(remote: &Remote) -> Result<Fleet, String> {
         }
         Err(error) => fleet.seat_error = Some(error),
     }
-    let current = |machines: &[Machine], id: &Option<String>, beat: Option<i64>| {
-        machines
-            .iter()
-            .position(|m| Some(&m.machine_id) == id.as_ref() && Some(m.beat_at) == beat)
-    };
     let mut errors = Vec::new();
     match remote.execute(
         &format!("SELECT {FACTS_COLUMNS} FROM fleet_machine_facts"),
