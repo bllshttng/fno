@@ -236,10 +236,6 @@ struct StoreFile {
     /// absent = empty (everything sorts by name at the manual column).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     manual_order: Option<serde_json::Value>,
-    /// Pinned agent names, in pin order; they lead every sort. Default
-    /// absent = none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pinned: Option<serde_json::Value>,
 }
 
 /// Which view the sideline column paints. `Agents` is the agent list the
@@ -926,23 +922,6 @@ pub fn load_manual_order() -> Vec<String> {
 pub fn save_manual_order(order: &[String]) {
     mutate(|file| {
         file.manual_order = serde_json::to_value(order).ok();
-    });
-}
-
-pub fn load_pinned() -> Vec<String> {
-    #[cfg(test)]
-    if TEST_PATH.with(|c| c.borrow().is_none()) {
-        return Vec::new();
-    }
-    read_raw()
-        .pinned
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default()
-}
-
-pub fn save_pinned(pins: &[String]) {
-    mutate(|file| {
-        file.pinned = serde_json::to_value(pins).ok();
     });
 }
 

@@ -986,18 +986,22 @@ impl View {
                 } else {
                     format!("{mark} ")
                 };
-                let mut suffix = if a.dnd {
+                // The pin leads the marks: it is the user's own word that
+                // no reaper removes this session.
+                let mut suffix = String::new();
+                if a.pinned {
+                    suffix.push_str(" [PIN]");
+                }
+                if a.dnd {
                     // A machine-armed hold reads as its own state; a
                     // lead seeing [DND] thinks it armed the hold and invents
                     // a reason.
-                    if a.held_conversation {
-                        " [HELD]".to_string()
+                    suffix.push_str(if a.held_conversation {
+                        " [HELD]"
                     } else {
-                        " [DND]".to_string()
-                    }
-                } else {
-                    String::new()
-                };
+                        " [DND]"
+                    });
+                }
                 // A card names its model on line 2; the token is the list's.
                 if let Some(tok) =
                     sideline_color::deviation_token(a.harness.as_deref(), a.model.as_deref())
