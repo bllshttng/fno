@@ -1,24 +1,15 @@
 """The Python side of the doctor forward: the foreign leaves only.
 
 The native front door claims the doctor family (report, bundle, plugin-file,
-update); this module serves the leaves whose families have not ported, so
-``fno doctor test`` (the repo's documented runner) and the CI spellings keep
-answering through the wheel. Bare ``doctor``, the family's own leaves, and
-any unknown word print the front-door teaching and exit 2. Each row here
-dies in the PR whose family ports its leaf.
+update, test); this module serves the leaves whose families have not ported,
+so the CI spellings keep answering through the wheel. Bare ``doctor``, the
+family's own leaves, and any unknown word print the front-door teaching and
+exit 2. Each row here dies in the PR whose family ports its leaf.
 """
 
 from __future__ import annotations
 
 import typer
-
-class _TestGroup(typer.core.TyperGroup):
-    """The test command is Click-based; add it outside the typer decorator."""
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.add_command(test_command, name="test")
-
 
 doctor_app = typer.Typer(
     name="doctor",
@@ -27,7 +18,6 @@ doctor_app = typer.Typer(
     no_args_is_help=False,
     add_completion=False,
     hidden=True,
-    cls=_TestGroup,
 )
 
 @doctor_app.callback(invoke_without_command=True)
@@ -52,7 +42,6 @@ def _signpost(spelling: str) -> None:
 from fno.codemap_cli import app as codemap_app  # noqa: E402
 from fno.evals_cli import evals_app  # noqa: E402
 from fno.events.cli import cli as event_app  # noqa: E402
-from fno.test_cmd import test_command  # noqa: E402
 from fno.lint_cli import lint  # noqa: E402
 
 doctor_app.add_typer(codemap_app, name="codemap")
@@ -94,6 +83,15 @@ def bundle_signpost(ctx: typer.Context) -> None:
 )
 def plugin_file_signpost(ctx: typer.Context) -> None:
     _signpost("fno doctor plugin-file")
+
+
+@doctor_app.command(
+    "test",
+    hidden=True,
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
+def test_signpost(ctx: typer.Context) -> None:
+    _signpost("fno doctor test")
 
 
 # Transport leaves: thin argv rewriters onto the fno-agents binary ----------
