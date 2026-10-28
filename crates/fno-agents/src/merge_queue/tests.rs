@@ -109,7 +109,7 @@ fn a_batch_builds_in_queue_order_with_a_repair_entry_first_and_alone() {
 #[test]
 fn two_green_prs_whose_combination_fails_land_only_one() {
     let entry_rows = [entry_row(1, "h1", NOW), entry_row(2, "h2", NOW + 1)];
-    let mut open = HashMap::from([(1, "h1".to_string()), (2, "h2".to_string())]);
+    let open = HashMap::from([(1, "h1".to_string()), (2, "h2".to_string())]);
     let (mut steps, mut on_main): (Vec<Value>, Vec<u64>) = (Vec::new(), Vec::new());
     let flakes = HashSet::new();
     for tick in 0..20 {
@@ -155,11 +155,12 @@ fn two_green_prs_whose_combination_fails_land_only_one() {
                     .as_ref()
                     .map(|b| b.prs.clone())
                     .unwrap_or_default();
-                for pr in &prs {
-                    open.remove(pr);
-                }
+                // GitHub may still list a landed PR as open: the pinned head
+                // in the land row is what keeps it out of the next batch.
+                let heads: Vec<(u64, String)> =
+                    prs.iter().map(|pr| (*pr, format!("h{pr}"))).collect();
                 on_main.extend(&prs);
-                json!({"step": "land", "batch": id, "prs": prs})
+                json!({"step": "land", "batch": id, "prs": prs, "heads": heads})
             }
             Step::Split { left, right } => {
                 json!({"step": "split", "batch": id, "left": left, "right": right})

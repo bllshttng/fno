@@ -19,7 +19,9 @@ use serde_json::{json, Map, Value};
 use crate::paths::AgentsHome;
 
 const INTERVAL: Duration = Duration::from_secs(120);
-const WINDOW_MS: i64 = 3 * 24 * 3_600_000;
+/// How far back the step rows reach. Entry rows have no window: an entry
+/// stays queued until a landing, an ejection, or its PR closing retires it.
+const STEP_WINDOW_MS: i64 = 30 * 24 * 3_600_000;
 /// A gate run not listed yet this soon after its dispatch is still starting.
 const DISPATCH_GRACE_MS: i64 = 5 * 60_000;
 /// Rebuilds in a row, each because main moved, before the queue holds.
@@ -83,7 +85,7 @@ pub(crate) struct State {
     /// Main's sha when the queue held because main kept moving.
     pub hold_main: Option<String>,
     ejected: HashSet<(u64, String)>,
-    landed: HashSet<u64>,
+    landed: HashSet<(u64, String)>,
 }
 
 pub(crate) struct View<'a> {
@@ -243,7 +245,12 @@ pub(crate) fn fold(steps: &[Value], max_batch: usize) -> State {
                 }
             }
             "land" => {
-                state.landed.extend(numbers(row, "/data/prs"));
+                let heads = row.pointer("/data/heads").and_then(Value::as_array);
+                for pair in heads.into_iter().flatten() {
+                    if let (Some(pr), Some(head)) = (pair[0].as_u64(), pair[1].as_str()) {
+                        state.landed.insert((pr, head.to_string()));
+                    }
+                }
                 state.active = None;
                 state.next.clear();
                 state.rebuilds = 0;
@@ -295,7 +302,7 @@ pub(crate) fn live_entries(
         };
         let head = text(row, "/data/head");
         if open.get(&pr) != Some(&head)
-            || state.landed.contains(&pr)
+            || state.landed.contains(&(pr, head.clone()))
             || state.ejected.contains(&(pr, head.clone()))
             || !seen.insert((pr, head.clone()))
         {
@@ -333,10 +340,11 @@ fn events_path() -> Option<std::path::PathBuf> {
     AgentsHome::from_env_opt().map(|home| crate::daemon::global_events_path(&home))
 }
 
-/// This repo's rows of one kind in the queue window, oldest first.
+/// This repo's rows of one kind, oldest first; step rows within their window.
 fn rows_of(path: &Path, kind: &str, slug: &str, now_ms: i64) -> Result<Vec<Value>, String> {
+    let window = (kind == STEP_EVENT).then(|| now_ms.saturating_sub(STEP_WINDOW_MS));
     let query = crate::event_store::EventQuery {
-        since_ms: Some(now_ms.saturating_sub(WINDOW_MS)),
+        since_ms: window,
         ..crate::event_store::EventQuery::of_types(&[kind])
     };
     let text = crate::event_store::journal_text_checked(path, &query)?;
@@ -595,6 +603,23 @@ fn apply(
             ));
         }
         Step::Land { sha } => {
+            let prs = active.map(|b| b.prs.clone()).unwrap_or_default();
+            let pins: Vec<(u64, String)> = prs
+                .iter()
+                .filter_map(|pr| view.entries.iter().find(|e| e.pr == *pr))
+                .map(|e| (e.pr, e.head.clone()))
+                .collect();
+            // A push since this tick's read would land a head nobody tested.
+            let open = open_heads(root)?;
+            if pins.len() != prs.len() || pins.iter().any(|(pr, head)| open.get(pr) != Some(head)) {
+                emit(step_row(
+                    "rebuild",
+                    &id,
+                    json!({"main_moved": false, "reason": "a PR head moved before landing"}),
+                ));
+                delete_ref(root, &id);
+                return Ok(());
+            }
             let path = format!("repos/{{owner}}/{{repo}}/git/refs/heads/{QUEUE_BASE}");
             let field = format!("sha={sha}");
             match gh(
@@ -602,10 +627,11 @@ fn apply(
                 &path,
                 &["-X", "PATCH", "-f", &field, "-F", "force=false"],
             ) {
-                Ok(_) => {
-                    let prs = active.map(|b| b.prs.clone()).unwrap_or_default();
-                    emit(step_row("land", &id, json!({"prs": prs, "sha": sha})));
-                }
+                Ok(_) => emit(step_row(
+                    "land",
+                    &id,
+                    json!({"prs": prs, "heads": pins, "sha": sha}),
+                )),
                 // A refused fast-forward over a moved main rebuilds. Any other
                 // refusal keeps the green batch, and the next tick lands again.
                 Err(e) if main_sha(root).is_ok_and(|now| now != view.main) => emit(step_row(

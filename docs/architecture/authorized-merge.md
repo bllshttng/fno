@@ -182,7 +182,7 @@ On a red gate:
 - A red batch of several PRs splits. The next batch takes only the left half, and the right half follows on top of it.
 - A red batch of one PR ejects it. The arm comments on the PR with the failing checks. A new push queues it again.
 
-When main moves under a built batch, the arm drops the batch and builds again. After 3 rebuilds in a row it holds with `main_moving` until main stays still for one tick. A PR whose head moved, or that closed, drops out. While main is red, only a `main-repair` entry builds. Each act writes one `merge_queue_step` row, so a daemon restart resumes the batch.
+When main moves under a built batch, the arm drops the batch and builds again. After 3 rebuilds in a row it holds with `main_moving` until main stays still for one tick. A PR whose head moved, or that closed, drops out. The arm reads the heads again just before it moves main, so a push during the gate run rebuilds the batch. An entry has no expiry. It stays queued until it lands, is ejected, or its PR closes. While main is red, only a `main-repair` entry builds. Each act writes one `merge_queue_step` row, so a daemon restart resumes the batch.
 
 The queue lands merge commits and ignores `auto_merge.merge_strategy`. A PR reads merged on GitHub once main contains its head. A squash drops that head. It does not cover a break that only the full suite finds. The revert lane above catches that on main. A human merge from the web button bypasses the queue, and the batch then rebuilds. The CI tier never cancels a `merge-queue-gate` run.
 
