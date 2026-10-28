@@ -213,7 +213,10 @@ pub fn run(args: &[OsString]) -> i32 {
 fn account_ids(scope: &str) -> BTreeSet<String> {
     let layers: Vec<Value> = if scope == "global" {
         let dir = super::global_dir();
-        let toml = dir.join("config.toml");
+        let toml = std::env::var_os("FNO_CONFIG")
+            .filter(|pin| !pin.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| dir.join("config.toml"));
         let path = if toml.is_file() {
             toml
         } else {

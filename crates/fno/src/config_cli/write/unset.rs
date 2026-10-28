@@ -112,7 +112,37 @@ pub fn unset_value(key: &str, scope: &str) -> Res<UnsetResult> {
     })
 }
 
+/// `unset --restore-optout <claim-json>`: the claim reaper's restore door.
+/// fno-agents cannot link this crate, so it shells here with the reaped
+/// record (`key`, `metadata`). A failure is one stderr line the reaper folds.
+fn run_restore(args: &[OsString]) -> i32 {
+    let record = match args {
+        [one] => serde_json::from_str::<Value>(&one.to_string_lossy()).ok(),
+        _ => None,
+    };
+    let Some(record) = record else {
+        eprintln!("opt-out restore failed: expected one claim record JSON");
+        return 2;
+    };
+    let key = record.get("key").and_then(Value::as_str).unwrap_or("");
+    let empty = serde_json::Map::new();
+    let metadata = record
+        .get("metadata")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    match super::restore_reaped_optout(key, metadata) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("opt-out restore failed: {e}");
+            1
+        }
+    }
+}
+
 pub fn run(verb: &str, args: &[OsString]) -> i32 {
+    if verb == "unset" && args.first().is_some_and(|a| a == "--restore-optout") {
+        return run_restore(&args[1..]);
+    }
     let help = if verb == "rm" { HELP_RM } else { HELP_UNSET };
     let (positionals, local) = match parse_argv(verb, "KEY", help, args) {
         Parsed::Exit(code) => return code,
