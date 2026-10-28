@@ -838,7 +838,10 @@ fn run_locked(
                 let reason = if status == DROPPED {
                     detail
                 } else {
-                    format!("unknown dispatch status {status:?}")
+                    // The Python oracle quoted the raw status with single
+                    // quotes ({:?} would wrap it in double quotes); the
+                    // captured parity goldens freeze that shape.
+                    format!("unknown dispatch status '{status}'")
                 };
                 log_error(
                     state,

@@ -16,14 +16,18 @@ use common::{assert_golden, Golden};
 use fno_agents::wake_read::{python_json_default, read_signals};
 use serde_json::{json, Value};
 
-/// The capture scrub: realpath first, then the raw root, then the slug.
+/// The capture scrub: realpath first, then the raw root, then the slug. The
+/// capture driver replaced the slug WITHOUT its leading dash (the record's
+/// own `-` survives, so the golden reads `-<SLUG>-wakeproj`), hence
+/// `strip_prefix` on the slug.
 fn scrub(text: String, sandbox: &std::path::Path) -> String {
     let real = std::fs::canonicalize(sandbox).unwrap_or_else(|_| sandbox.to_path_buf());
     let real_str = real.display().to_string();
     let slug = real_str.replace('/', "-");
+    let mid = slug.strip_prefix('-').unwrap_or(&slug);
     text.replace(&real_str, "<ROOT>")
         .replace(&sandbox.display().to_string(), "<ROOT>")
-        .replace(&slug, "<SLUG>")
+        .replace(mid, "<SLUG>")
 }
 
 fn seed(dir: &std::path::Path) {
