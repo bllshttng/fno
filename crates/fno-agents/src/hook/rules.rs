@@ -1,11 +1,11 @@
 //! `fno-agents hook rules --event prompt|skill|pre-tool`: the hook decision
-//! points. Each fire builds one `fno::rules::Event` from the payload, asks
+//! points. Each fire builds one `crate::rules::Event` from the payload, asks
 //! `rules_source::rule`, and prints the harness shape: a PreToolUse deny for
 //! block, `additionalContext` for warn and inject, `{}` for allow. A fire
 //! never fails the tool on its own error: a garbage payload allows, and an
 //! unreadable source rides the context as an `Unread:` line.
 
-use fno::rules::{Decision, Event};
+use crate::rules::{Decision, Event};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn a_warn_renders_context_and_a_block_renders_the_deny() {
         let rule = |action: &str| {
-            fno::rules::parse_file(&format!(
+            crate::rules::parse_file(&format!(
                 "[[rule]]\nid = \"local-build-freeze\"\naction = \"{action}\"\nwhy = \"local cargo builds are frozen\"\n[rule.when]\nevents = [\"pre-tool\"]\ntools = [\"Bash\"]\ncommands = [\"cargo build*\"]\n"
             ))
             .unwrap()
@@ -216,7 +216,7 @@ mod tests {
             ..Event::default()
         };
         let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
-        let warn = fno::rules::decide(&rule("warn"), &ev, today);
+        let warn = crate::rules::decide(&rule("warn"), &ev, today);
         let Rendered::Context(out) = render(&ev, &warn, &[], "PreToolUse") else {
             panic!("a warn renders context");
         };
@@ -224,18 +224,23 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(text.contains("local-build-freeze"), "{text}");
-        let block = fno::rules::decide(&rule("block"), &ev, today);
+        let block = crate::rules::decide(&rule("block"), &ev, today);
         let Rendered::Block(reason) = render(&ev, &block, &[], "PreToolUse") else {
             panic!("an uncapped block denies");
         };
         assert!(reason.contains("local-build-freeze"), "{reason}");
         assert!(matches!(
-            render(&ev, &fno::rules::decide(&[], &ev, today), &[], "PreToolUse"),
+            render(
+                &ev,
+                &crate::rules::decide(&[], &ev, today),
+                &[],
+                "PreToolUse"
+            ),
             Rendered::Allow
         ));
         let unread = render(
             &ev,
-            &fno::rules::decide(&[], &ev, today),
+            &crate::rules::decide(&[], &ev, today),
             &["the rule set (x)".into()],
             "",
         );

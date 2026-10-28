@@ -16,7 +16,7 @@ use std::io::Read;
 /// `14c8`, `cf6a`), and the stop set. A hex word with no digit (`added`,
 /// `face`) survives. Moved to the fno crate with the rule matcher; this
 /// re-export keeps the law-side scorers on the one implementation.
-pub use fno::rules::tokens;
+pub use crate::rules::tokens;
 
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
@@ -677,7 +677,7 @@ fn short_law_line(full: &str) -> Option<String> {
     Some(format!("- {head}): fno backlog decisions {id}"))
 }
 
-/// The stage answer, backed by `fno::rules::decide` on a skill event. A
+/// The stage answer, backed by `crate::rules::decide` on a skill event. A
 /// law fire renders as its law line; the block keeps the
 /// `- <id> (<subject>):` lines validate-plan.sh parses. A readable set with
 /// no fire renders nothing (`hook_output: null`); a failed read is a report,
@@ -709,7 +709,7 @@ fn stage_answer(req: StageRequest) -> Value {
             unread.push(format!("the node's project ({reason})"));
             None
         }
-        _ => match resolve_project(Some(&cwd), &settings_sources()) {
+        _ => match resolve_project(Some(cwd.as_path()), &settings_sources()) {
             Ok(slug) => Some(slug),
             Err(reason) if node.is_some() => {
                 unread.push(format!("the node's project ({reason}; scope filter open)"));
@@ -724,7 +724,7 @@ fn stage_answer(req: StageRequest) -> Value {
         .next()
         .unwrap_or("")
         .to_string();
-    let ev = fno::rules::Event {
+    let ev = crate::rules::Event {
         kind: "skill".into(),
         skill: Some(skill),
         text: Some(text),
@@ -755,7 +755,7 @@ fn stage_answer(req: StageRequest) -> Value {
     };
     unread.extend(set.unread.iter().cloned());
     let today = chrono::Local::now().date_naive();
-    let decision = fno::rules::decide(&set.rules, &ev, today);
+    let decision = crate::rules::decide(&set.rules, &ev, today);
     let mut matching: Vec<String> = decision
         .fires
         .iter()
@@ -2644,12 +2644,12 @@ pub fn run_law_match_str(input: &str) -> i32 {
             return crate::backlog::decisions_cli::run(&r.argv);
         }
         MatchRequest::RulesCheck(r) => {
-            serde_json::to_string(&rules_answer(&r.file, crate::rules::check_answer))
+            serde_json::to_string(&rules_answer(&r.file, crate::rules_check::check_answer))
                 .expect("serializes")
         }
         MatchRequest::RulesMeasure(r) => {
             serde_json::to_string(&rules_answer(&r.cases, |text, laws| {
-                crate::rules::measure_answer(text, laws)
+                crate::rules_check::measure_answer(text, laws)
             }))
             .expect("serializes")
         }

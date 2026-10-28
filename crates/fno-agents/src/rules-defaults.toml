@@ -1,5 +1,5 @@
 # The shipped default rule table (docs/architecture/event-rules.md). Every
-# [[rule]] row is one rule in the shared rule schema (crates/fno/src/rules.rs);
+# [[rule]] row is one rule in the shared rule schema (crates/fno-agents/src/rules.rs);
 # the shape follows how codex and opencode define rules (ruling d-6fb65dbc):
 # a structural pattern in, one decision verb out, no prose tiers. These rows
 # are project-neutral: every install gets them. `default` is the state with

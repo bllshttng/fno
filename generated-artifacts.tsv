@@ -30,6 +30,8 @@ crates/fno/config.example.toml	crates/fno/config_schema.json	fno config schema -
 docs/loops.md	crates/fno-agents/src/tick_ledger.rs KNOWN_ARMS	cargo run --manifest-path crates/fno-agents/Cargo.toml -- loops table --markdown > docs/loops.md
 crates/fno/src/otel_read.rs	crates/fno-agents/src/otel_read.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/registry_read.rs	crates/fno-agents/src/registry_read.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/rules.rs	crates/fno-agents/src/rules.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/glob.rs	crates/fno-agents/src/glob.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 docs/reference/otel-schema.md	crates/fno-agents/src/otel_schema.sql	python3 scripts/docs/generate-otel-schema.py
 crates/fno/src/role_migration.rs	crates/fno-agents/src/role_migration.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 docs/architecture/help-routing.md	crates/fno-agents/src/help_router.rs	cargo test -p fno-agents help_router -- --ignored bless_help_routing

@@ -236,6 +236,7 @@ pub mod gh_spend;
 pub mod git_paths;
 #[cfg(test)]
 mod git_test_helpers;
+pub mod glob;
 pub mod graph_get;
 pub mod graph_keeper;
 pub mod graph_store;
@@ -533,6 +534,7 @@ pub mod route_slot;
 pub mod row_truth;
 pub mod row_verdict;
 pub mod rules;
+pub mod rules_check;
 pub mod rules_source;
 pub mod run_outcome;
 pub mod run_state;

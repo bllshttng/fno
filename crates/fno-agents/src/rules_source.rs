@@ -6,7 +6,7 @@
 //! lines, never zero-rule silence.
 
 use crate::decision_index;
-use fno::rules::{parse_file, Rule};
+use crate::rules::{parse_file, Rule};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -86,7 +86,7 @@ pub fn assemble(
         for file in files {
             match std::fs::read_to_string(&file)
                 .map_err(|e| e.to_string())
-                .and_then(|text| fno::rules::parse_table(&text))
+                .and_then(|text| crate::rules::parse_table(&text))
             {
                 Ok(mut r) => rules.append(&mut r),
                 Err(e) => unread.push(format!("{} ({e})", file.display())),
@@ -166,18 +166,18 @@ pub fn assemble(
 /// that could not be read. Rules never fail a door closed: an unreadable
 /// rule set answers allow, and the reason rides `unread`.
 pub struct Ruling {
-    pub decision: fno::rules::Decision,
+    pub decision: crate::rules::Decision,
     pub unread: Vec<String>,
 }
 
 /// Build the set, decide one event, and log every fire as a `rule`
 /// decision span. The one call every decision point makes.
-pub fn rule(cwd: &Path, ev: &fno::rules::Event) -> Ruling {
+pub fn rule(cwd: &Path, ev: &crate::rules::Event) -> Ruling {
     let today = chrono::Local::now().date_naive();
     let (decision, unread) = match rule_set_fast(cwd) {
-        Ok(set) => (fno::rules::decide(&set.rules, ev, today), set.unread),
+        Ok(set) => (crate::rules::decide(&set.rules, ev, today), set.unread),
         Err(reason) => (
-            fno::rules::decide(&[], ev, today),
+            crate::rules::decide(&[], ev, today),
             vec![format!("the rule set ({reason})")],
         ),
     };
@@ -187,7 +187,7 @@ pub fn rule(cwd: &Path, ev: &fno::rules::Event) -> Ruling {
 
 /// One `decision_span` per fire, `span_kind = "rule"`: the rows the
 /// rules report reads. Best-effort; a lost row never changes the answer.
-fn log_fires(ev: &fno::rules::Event, decision: &fno::rules::Decision) {
+fn log_fires(ev: &crate::rules::Event, decision: &crate::rules::Decision) {
     if decision.fires.is_empty() {
         return;
     }
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn the_shipped_defaults_parse_and_validate() {
-        let rules = fno::rules::parse_table(SHIPPED).expect("the shipped table validates");
+        let rules = crate::rules::parse_table(SHIPPED).expect("the shipped table validates");
         assert!(!rules.is_empty());
         assert!(rules.iter().all(|r| r.problems().is_empty()));
     }

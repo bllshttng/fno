@@ -58,7 +58,7 @@ Two modes on `fno inbox law match` read a rule file. `{"mode":"rules-check","fil
 
 ## decide(event)
 
-`fno::rules::decide(rules, event, today)` answers one decision point. It is pure, so the hooks, the doors and the fnh harness reach the same answer. The answer carries `verdict`, `fires`, `reasons` and `unevaluated`.
+`fno::rules::decide(rules, event, today)` answers one decision point. It is pure, so the hooks, the doors and the fnh harness reach the same answer. fno-agents owns `src/rules.rs`, and its build copies the module into the `fno` crate, as it does for the other shared twins. The answer carries `verdict`, `fires`, `reasons` and `unevaluated`.
 
 - If its scope fits the event and its `expires` date has not passed, a rule takes part. A rule with `predicates` belongs to the Stop engine and never takes part.
 - Tier 0 runs `matches`. Tier 1 runs only at `prompt` and `skill` events. It ranks the tier-1 `retrieval` texts against the event text with BM25. At most three fire, each with a score of at least `TIER1_FLOOR`. Tier 2 is listed in `unevaluated` and never decided.

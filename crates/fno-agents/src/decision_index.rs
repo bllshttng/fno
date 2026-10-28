@@ -296,7 +296,11 @@ pub fn read_law_triggers(jsonl: &Path) -> Result<BTreeMap<String, Value>, String
         let Some(data) = env.get("data").cloned() else {
             continue;
         };
-        let Some(id) = data.get("decision_id").and_then(Value::as_str) else {
+        let Some(id) = data
+            .get("decision_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
             continue;
         };
         if id.is_empty() {
@@ -308,9 +312,8 @@ pub fn read_law_triggers(jsonl: &Path) -> Result<BTreeMap<String, Value>, String
             .unwrap_or("")
             .to_string();
         let rank = (ts, i);
-        let entry = best.entry(id.to_string()).or_insert((rank.clone(), data));
-        if entry.0 < rank {
-            *entry = (rank, data);
+        if best.get(&id).is_none_or(|(seen, _)| *seen < rank) {
+            best.insert(id, (rank, data));
         }
     }
     Ok(best.into_iter().map(|(k, (_, v))| (k, v)).collect())

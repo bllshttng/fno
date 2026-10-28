@@ -222,7 +222,7 @@ fn tail(text: &str) -> String {
 // The glob matcher moved to the fno crate (crates/fno/src/glob.rs) so the
 // rule triggers match on the same fnmatch everywhere; the wave.rs callers
 // keep this path.
-pub(crate) use fno::glob::fnmatch;
+pub(crate) use crate::glob::fnmatch;
 
 fn write_marker(marker: &Path, stderr: &mut Vec<String>) {
     // Best-effort: the sync already ran, so a marker failure only makes the
