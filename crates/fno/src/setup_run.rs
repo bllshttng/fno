@@ -1936,14 +1936,16 @@ pub(crate) fn list_json() -> serde_json::Value {
                 "effect": s.effect,
             });
             if s.id == "messaging" {
-                let states = crate::setup_messaging::channel_states(
-                    &crate::setup_messaging::sink_rows(),
-                    &crate::setup_messaging::machine(),
-                );
-                v["channels"] = states
-                    .iter()
-                    .map(|(kind, on)| json!({"type": kind, "configured": on}))
-                    .collect();
+                match crate::setup_messaging::sink_rows() {
+                    Ok(rows) => {
+                        let me = crate::setup_messaging::machine();
+                        v["channels"] = crate::setup_messaging::channel_states(&rows, &me)
+                            .iter()
+                            .map(|(kind, on)| json!({"type": kind, "configured": on}))
+                            .collect();
+                    }
+                    Err(e) => v["error"] = json!(e),
+                }
             }
             v
         })
@@ -1955,13 +1957,22 @@ pub(crate) fn list_json() -> serde_json::Value {
 /// line naming the re-entry command. `picked` carries the wizard's picks.
 fn step_messaging(exe: &Path, prompting: bool, picked: Option<&[&str]>, rep: &mut Report) {
     use crate::setup_messaging as m;
+    let rows = match m::sink_rows() {
+        Ok(rows) => rows,
+        Err(e) => {
+            let message = format!("messaging: {e}");
+            rep.rows
+                .push(row("needs_human", "messaging_unfinished", message.clone()));
+            rep.needs_human.push(message);
+            return;
+        }
+    };
     if !prompting {
-        rep.skipped
-            .push(m::summary_line(&m::sink_rows(), &m::machine()));
+        rep.skipped.push(m::summary_line(&rows, &m::machine()));
         return;
     }
     let set = |value: &str| config_set(exe, &[("attention.sinks", value)], false);
-    let out = m::step(picked, &mut m::TermAsk::new(), &set);
+    let out = m::step(rows, picked, &mut m::TermAsk::new(), &set);
     rep.done.extend(out.done);
     rep.skipped.extend(out.skipped);
     rep.paths.extend(out.paths);
