@@ -79,7 +79,7 @@ Direct edits are blocked by `hooks/write-gate.sh`.
 <HARD-GATE>
 NEVER hand-edit `.fno/target-state.md` after init via Edit/Write/Bash.
 
-The manifest is WRITE-ONCE for agent tools: `fno do target init` writes it at session start. Two native writes stay legal: the plan_path first-fill via `fno do state set --field plan_path`, and the claim-handover refresh. When a `--handover-from` acquire lands for this node, the refresh drops the stale line and appends the real claim lines. Any other field write exits 5.
+The manifest is WRITE-ONCE for agent tools: `fno do target init` writes it at session start. Three native writes stay legal: the plan_path first-fill via `fno do state set --field plan_path`, the claim-handover refresh, and the child rebind. The child rebind fires on the fork receipt's remedy (`fno do target start <child>`). It lands the child claim in the parent's worktree and re-points the node lines at the child. When a `--handover-from` acquire lands for this node, the refresh drops the stale line and appends the real claim lines. Any other field write exits 5.
 
 There are NO gate booleans, NO `current_phase`, NO `status` field, NO `quality_check_passed` or similar. Do not attempt to write them.
 </HARD-GATE>
@@ -95,7 +95,7 @@ Environment-specific traps that defy reasonable assumptions. Read these before y
 - **`fno doctor test`, not bare `pytest`.** `fno doctor test [paths...]` pins the worktree `PYTHONPATH`, bypasses the rtk tee wrapper, and returns the real exit code. Bare `pytest` in a worktree imports the wrong `fno` and can report a false green; `cmd | tail` masks the real `$?`.
 - **Read the RESOLVED `auto_merge_approved` from the manifest, never `fno config get auto_merge`.** Init folds config with this run's modifiers. `/target bg` injects `--no-merge` by default. The raw config tells you to merge against an explicit per-run prohibition.
 - **`git checkout -- <file>` destroys uncommitted work** and is NOT stash-recoverable. In a stale-base worktree, `git add -A` can revert an unmerged merge - stage named files, never `-A`.
-- **The manifest is write-once for agent tools.** Two native writes stay legal: the plan_path first-fill and the claim-handover refresh. The refresh fires on a completed `--handover-from` acquire for the manifest's node. It drops the stale blocked line. Any other field write exits 5.
+- **The manifest is write-once for agent tools.** The legal native writes: plan_path first-fill, claim-handover refresh, child rebind. The child rebind lands the forked child's claim in the parent's worktree and re-points the node lines. The refresh fires on a completed `--handover-from` acquire for the manifest's node. It drops the stale blocked line. Any other field write exits 5.
 - **A `bg` worker is unsupervised, NOT headless.** `/target bg` dispatches and continues without blocking, but the worker is not invisible: it registers an agent-view row and keeps an attachable pane, so it stays observable and drivable after launch (`fno agents session logs <name>`, or attach). "Fire-and-forget" describes only the dispatching session's non-blocking stance, never the worker's nature.
 
 ## When another node costs you time
