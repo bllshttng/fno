@@ -788,21 +788,16 @@ fn global_dir() -> PathBuf {
 
 /// The file this scope writes. A legacy `settings.yaml` beside it converts
 /// to a flat `config.toml` first, so an unmigrated install is converted,
-/// never lost. A `FNO_CONFIG` pin names the global file outright and is
+/// never lost. A `.toml` `FNO_CONFIG` pin names the global file outright and is
 /// never migrated, the way the loader reads it.
 pub(crate) fn target_path(scope: &str) -> Res<PathBuf> {
     if scope == "global" {
-        if let Some(pin) = std::env::var_os("FNO_CONFIG").filter(|p| !p.is_empty()) {
-            let pin = PathBuf::from(pin);
-            if pin.extension().and_then(|e| e.to_str()) != Some("toml") {
-                return Err(Refusal::new(
-                    format!(
-                        "FNO_CONFIG pins {}, which is not a .toml file; fno config set writes TOML only",
-                        pin.display()
-                    ),
-                    2,
-                ));
-            }
+        // A legacy yaml pin stays a read-only declaration for the loader; the
+        // write then lands in the default global file, as it always did.
+        if let Some(pin) = std::env::var_os("FNO_CONFIG")
+            .map(PathBuf::from)
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("toml"))
+        {
             return Ok(pin);
         }
     }

@@ -18,7 +18,7 @@
 //! - a malformed file's parse message is tomllib's wording on the Python
 //!   leg and toml_edit's on the native one; the text after `is malformed: `
 //!   folds.
-//! - `FNO_CONFIG` now names the global file a set writes (it used to be
+//! - a `.toml` `FNO_CONFIG` pin now names the global file a set writes (it used to be
 //!   ignored); no golden pins it, because the old leg wrote the wrong file.
 //! - the legacy settings.yaml convert is ported, not refused (ruling
 //!   d-f3485d21); `set_yaml_convert` freezes it.

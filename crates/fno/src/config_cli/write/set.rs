@@ -221,8 +221,8 @@ fn account_ids(scope: &str) -> BTreeSet<String> {
     let layers: Vec<Value> = if scope == "global" {
         let dir = super::global_dir();
         let toml = std::env::var_os("FNO_CONFIG")
-            .filter(|pin| !pin.is_empty())
             .map(PathBuf::from)
+            .filter(|pin| pin.extension().and_then(|e| e.to_str()) == Some("toml"))
             .unwrap_or_else(|| dir.join("config.toml"));
         let path = if toml.is_file() {
             toml
