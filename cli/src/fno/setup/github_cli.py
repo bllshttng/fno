@@ -55,9 +55,35 @@ def _shim_binary() -> Optional[Path]:
     return binary
 
 
+#: Every temp root a fixture or a fallback shim can live under, fixed at
+#: import so the verdict cannot drift with the calling process's env: a
+#: driver or daemon exec'd with a scrubbed env floors tempfile.gettempdir()
+#: to /tmp while the fixture sits under the OS temp root, and one misread
+#: then wrote the durable shim a temp sweep deletes (2026-10-28: every gh
+#: call on the machine failed for minutes).
+_TEMP_BASES = (
+    os.path.realpath(tempfile.gettempdir()),
+    tempfile.gettempdir(),
+    "/tmp",
+    "/private/tmp",
+    "/var/tmp",
+    "/private/var/tmp",
+    "/var/folders",
+    "/private/var/folders",
+)
+
+
 def _in_temp(path: Path) -> bool:
-    temp = os.path.realpath(tempfile.gettempdir())
-    return os.path.realpath(path).startswith(temp + os.sep)
+    # Judge the path itself, in raw and resolved spellings: realpath answers
+    # a missing path lexically (resolving /var to /private/var) while the
+    # raw form carries the spelling the writer saw, and a strictly-under
+    # test keeps a sibling that shares the prefix string out.
+    spellings = (str(path), os.path.realpath(path))
+    return any(
+        spelling.startswith(base + os.sep)
+        for spelling in spellings
+        for base in _TEMP_BASES
+    )
 
 
 def _read_text(path: Path) -> Optional[str]:
@@ -96,6 +122,11 @@ def ensure_proxy(
         # No fno-agents to exec, so the shim would strand every gh call.
         # Degrade: leave the real gh unswrapped and let the quota policy
         # stand down for this process tree.
+        return InstallResult(proxy=resolved, delegate=resolved, changed=False)
+    if not (binary.is_file() and os.access(binary, os.X_OK)):
+        # resolve_binary checked runnable, but a sweep can delete the file
+        # between resolve and install, and a shim that execs a missing
+        # binary breaks every gh call on the machine.
         return InstallResult(proxy=resolved, delegate=resolved, changed=False)
     root = directory or github_cli_proxy_dir()
     if _in_temp(binary) and not _in_temp(root):

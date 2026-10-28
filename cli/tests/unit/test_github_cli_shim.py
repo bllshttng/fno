@@ -48,3 +48,28 @@ def test_a_worker_refreshes_an_inherited_old_shim_in_place(tmp_path, monkeypatch
 
     assert env["FNO_GH_PROXY_DIR"] == str(root.resolve())
     assert (root / "gh").read_text() == f"#!/bin/sh\nexec {agents} gh \"$@\"\n"
+
+
+def test_in_temp_judges_the_path_not_the_callers_tempdir():
+    # Specimen 2026-10-28: a parity driver stripped TMPDIR from its own env,
+    # so the writer's gettempdir() fell to /tmp, the /var/folders fixture
+    # fake read as non-temp, and the durable shim was rewritten to exec it.
+    # The verdict must ride the path's own spellings, never the caller's env.
+    fixture = Path("/var/folders/x5/T/tmp.ABCDEF/fake_bin/fno-agents")
+    assert github_cli._in_temp(fixture)
+    assert github_cli._in_temp(fixture.as_posix().replace("/var/", "/private/var/", 1))
+    assert not github_cli._in_temp(Path("/tmpextra/fake_bin/fno-agents"))
+    assert not github_cli._in_temp(Path("/Users/bb/repo/target/debug/fno-agents"))
+
+
+def test_ensure_proxy_refuses_a_binary_that_no_longer_exists(tmp_path, monkeypatch):
+    root = tmp_path / "github-cli"
+    real_gh = _exe(tmp_path / "real" / "gh", "#!/bin/sh\nexit 0\n")
+    agents = _exe(tmp_path / "fake_bin" / "fno-agents", "#!/bin/sh\nexit 0\n")
+    monkeypatch.setattr(github_cli, "resolve_binary", lambda: agents)
+    agents.unlink()
+
+    result = github_cli.ensure_proxy(directory=root, real_gh=real_gh)
+
+    assert not result.changed
+    assert not (root / "gh").exists()
