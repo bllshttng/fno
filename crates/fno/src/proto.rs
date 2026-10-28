@@ -396,7 +396,7 @@ fn default_true() -> bool {
 /// prefix+PgUp) and `Frame.history_lines` (serde default), the scroll-mode
 /// readout's denominator; floor stays 58.
 /// v119: `AgentRow.pinned` (serde default), the user's keep mark behind the
-/// sideline's `[PIN]` mark and pin-first order; floor stays 58.
+/// sideline's pin star and pin-first order; floor stays 58.
 pub const PROTO_VERSION: u32 = 119;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or

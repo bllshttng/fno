@@ -905,11 +905,24 @@ async fn agents_tab_ctrl_t_pins_the_session_and_the_row_shows_it() {
         .as_ref()
         .is_some_and(|(n, _)| n == "a has no session id to pin yet"));
 
-    // A pinned row wears the mark, and its menu offers Unpin.
+    // A pinned row wears one accent star; no row did before the pin. Its
+    // menu offers Unpin.
+    v.selector = None;
+    let stars = |v: &View| {
+        let f = v.compose();
+        f.cells
+            .iter()
+            .filter(|c| c.c == sideline::PIN_STAR)
+            .map(|c| c.fg)
+            .collect::<Vec<_>>()
+    };
+    assert!(stars(&v).is_empty(), "an unpinned row paints nothing");
     v.layout.agents[1] = pinned_b.clone();
-    let frame = v.compose();
-    let text: String = frame.cells.iter().map(|c| c.c).collect();
-    assert!(text.contains("[PIN]"), "the pinned row shows its mark");
+    assert_eq!(
+        stars(&v),
+        vec![v.theme.brand],
+        "the pinned row shows its star"
+    );
     let menu = row_menu::build_row_menu(&pinned_b, Anchor::Center);
     assert!(menu.actions.contains(&MenuAction::TogglePin));
 }
