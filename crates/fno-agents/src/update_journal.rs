@@ -264,7 +264,6 @@ pub fn run_update_journal(args: &[String]) -> i32 {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     fn held_row(events: &Path, bin: &Path, rev: &str) -> i32 {
         let args: Vec<String> = [
@@ -292,10 +291,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let events = dir.path().join("events.jsonl");
         let log = dir.path().join("mail.log");
-        let bin = dir.path().join("mail-stub");
         let script = format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display());
-        std::fs::write(&bin, script).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let bin = crate::write_exec_stub(dir.path(), "mail-stub", &script);
 
         assert_eq!(held_row(&events, &bin, "aaaaaaaa1111"), 0);
         assert_eq!(held_row(&events, &bin, "aaaaaaaa1111"), 0);
@@ -325,9 +322,7 @@ mod tests {
 
         // A send that exits nonzero records no `paged`, so the next hold at
         // that rev pages again.
-        let broken = dir.path().join("fno-broken");
-        std::fs::write(&broken, "#!/bin/sh\nexit 1\n").unwrap();
-        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let broken = crate::write_exec_stub(dir.path(), "mail-broken", "#!/bin/sh\nexit 1\n");
         assert_eq!(held_row(&events, &broken, "cccccccc3333"), 0);
         assert_eq!(held_row(&events, &bin, "cccccccc3333"), 0);
         let sent = std::fs::read_to_string(&log).unwrap();
