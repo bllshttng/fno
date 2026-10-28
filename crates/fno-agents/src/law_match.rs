@@ -2818,13 +2818,13 @@ pub(crate) mod tests {
         );
 
         let mut rows = vec![format!(
-            "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-10T00:00:00Z\",\
+            "{{\"type\":\"operator_decision\",\"source\":\"backlog\",\"ts\":\"2026-09-10T00:00:00Z\",\
              \"data\":{{\"decision_id\":\"d-0fa92eb9\",\"subject\":\"review-rounds-sufficient\",\
              \"decision\":\"Review rounds are capped at two.\",\"authority_source\":\"operator\"}}}}"
         )];
         for i in 0..10 {
             rows.push(format!(
-                "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-11T00:00:{i:02}Z\",\
+                "{{\"type\":\"operator_decision\",\"source\":\"backlog\",\"ts\":\"2026-09-11T00:00:{i:02}Z\",\
                  \"data\":{{\"decision_id\":\"d-5fff69{i:02}\",\"subject\":\"file-budget-exception\",\
                  \"decision\":\"shrink round stands for file {i}\",\"authority_source\":\"operator\"}}}}"
             ));

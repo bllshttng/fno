@@ -201,7 +201,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_capped_law_warns_and_an_uncapped_rule_denies() {
+    fn a_warn_renders_context_and_a_block_renders_the_deny() {
         let rule = |action: &str| {
             fno::rules::parse_file(&format!(
                 "[[rule]]\nid = \"local-build-freeze\"\naction = \"{action}\"\nwhy = \"local cargo builds are frozen\"\n[rule.when]\nevents = [\"pre-tool\"]\ntools = [\"Bash\"]\ncommands = [\"cargo build*\"]\n"

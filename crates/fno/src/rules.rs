@@ -436,8 +436,9 @@ pub fn bm25_rank(docs: &[(String, String)], query: &str, k: usize) -> Vec<(Strin
     scored
 }
 
-/// The lowest BM25 score a tier-1 rule needs to fire. Set from the tier-1
-/// case measurement in `docs/architecture/event-rules.md`.
+/// The lowest BM25 score a tier-1 rule needs to fire. Not yet measured
+/// against labeled cases: 2.0 keeps a single term shared by many rules
+/// under the floor while one rare shared term clears it.
 pub const TIER1_FLOOR: f64 = 2.0;
 /// A tier-1 match fires for the best three ranks at most.
 const TIER1_TOP: usize = 3;
@@ -473,7 +474,9 @@ fn scope_fits(scope: Option<&str>, ev: &Event) -> bool {
     let Some(scope) = scope else { return true };
     let is = |want: &Option<String>, rest: &str| want.as_deref() == Some(rest);
     if let Some(p) = scope.strip_prefix("project:") {
-        is(&ev.project, p)
+        // An event with no resolved project fails open: a missing law is
+        // worse than one that does not apply.
+        ev.project.is_none() || is(&ev.project, p)
     } else if let Some(n) = scope.strip_prefix("node:") {
         is(&ev.node, n)
     } else if let Some(s) = scope.strip_prefix("session:") {
@@ -676,12 +679,20 @@ mod tests {
             rule("id = \"bp\"\naction = \"inform\"\n[rule.when]\nskills = [\"fno:blueprint\"]\n"),
             rule("id = \"old\"\naction = \"block\"\nexpires = \"2026-01-01\"\n[rule.when]\ncommands = [\"git tag*\"]\n"),
         ];
-        let ev = Event {
+        let mut ev = Event {
             kind: "pre-tool".into(),
             tool: Some("Bash".into()),
             command: Some("git tag v0.5.0".into()),
             ..Event::default()
         };
+        let scoped = rule("id = \"fnh-only\"\naction = \"warn\"\nscope = \"project:fnh\"\n[rule.when]\ncommands = [\"git tag*\"]\n");
+        assert_eq!(
+            decide(std::slice::from_ref(&scoped), &ev, day()).verdict,
+            "warn",
+            "an unresolved project fails open"
+        );
+        ev.project = Some("fno".into());
+        assert_eq!(decide(&[scoped], &ev, day()).verdict, "allow");
         let d = decide(&rules, &ev, day());
         assert_eq!(d.verdict, "block");
         let ids: Vec<&str> = d.fires.iter().map(|f| f.rule.as_str()).collect();
