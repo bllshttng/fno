@@ -450,7 +450,6 @@ pub fn run_notify_watch(
 
     // Release lane: the newest finished release.yml run per repo. A failure
     // pages once per run and mails the head lead; a pass clears the signal.
-    // A missing gh reads as an unreadable repo there.
     if signals.iter().any(|s| s == "release_run") {
         for root in roots {
             acted += crate::release_watch::pass(root, &path, now, min_interval_s, &mut notes);
