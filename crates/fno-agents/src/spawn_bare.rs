@@ -539,6 +539,10 @@ pub fn native_lane(params: &Value, name: &str, route: Option<&Route>, cwd: &Path
     let (session, harness, launcher_cwd) = crate::claims::ambient_parent_edge();
     let Some(session) = session else {
         eprintln!("spawn: the native lane needs this session's own identity (the launch record names the parent); a spawn from outside any session keeps the dispatcher path.");
+        eprintln!(
+            "parent edge NOT recorded ({})",
+            crate::claims::ambient_edge_reason()
+        );
         return None;
     };
     let permission = if crate::spawn_admission::is_command_seed(Some(message)) {
