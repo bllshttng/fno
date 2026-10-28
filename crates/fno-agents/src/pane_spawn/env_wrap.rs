@@ -247,12 +247,6 @@ fn generate_msg_id() -> String {
     format!("fmail-{hex}")
 }
 
-/// `enrich_spawn_payload` (`spawn_payload.py:21`) lives in
-/// `crate::spawn_payload` - the one payload entry this crate's pane lane
-/// calls through `seed_text`. The inline copy that stood here was a third
-/// spelling of the brevity block and is gone.
-pub use crate::spawn_payload::enrich_spawn_payload;
-
 /// `is_command_seed` (`config/_dispatch_commands.py:60`): position 0 is
 /// load-bearing - only a leading command token may be rewritten.
 pub fn is_command_seed(seed: &str) -> bool {
