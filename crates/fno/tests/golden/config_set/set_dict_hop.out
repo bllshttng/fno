@@ -1,0 +1,1 @@
+set loops.nightly.level = assisted (global: <FIXTURE>/fake_home/.fno/config.toml)
