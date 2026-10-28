@@ -756,20 +756,20 @@ fn journal_text_serves_a_rotated_generation_the_store_never_ingested() {
     // legacy `fail` rides the un-ingested generation, the committed `pass`
     // rides the store.
     let legacy = attestation("2026-09-17T12:00:00Z", "h1", "fail");
-    append(
-        &live,
-        &[serde_json::from_str::<serde_json::Value>(&legacy).unwrap()],
-    );
-    // One store-committed row, then the rotation: the legacy bytes move to
-    // the `.1` generation with no cursor for their inode and the live file
-    // restarts empty. Neither the store nor the live tail holds the chain.
+    // One store-committed row, then the retired-rotation shape: the legacy
+    // bytes sit in the `.1` generation with no cursor for their inode and
+    // the live file restarts empty. Neither the store nor the live tail
+    // holds the chain.
     append_envelope(
         &live,
         &attestation("2026-09-17T12:01:00Z", "h1", "pass"),
         None,
     )
     .unwrap();
-    std::fs::rename(&live, dir.path().join("events.jsonl.1")).unwrap();
+    append(
+        &dir.path().join("events.jsonl.1"),
+        &[serde_json::from_str::<serde_json::Value>(&legacy).unwrap()],
+    );
     std::fs::write(&live, b"").unwrap();
     let text = journal_text(&live, &["review_attestation"]);
     let lines: Vec<&str> = text.lines().collect();
