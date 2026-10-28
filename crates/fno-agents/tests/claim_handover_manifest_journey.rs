@@ -94,7 +94,7 @@ impl Drop for Sandbox {
     }
 }
 
-/// Run `claim <verb>` in the sandbox repo with the harness-marker set
+/// Run a `claim` command in the sandbox repo with the harness-marker set
 /// scrubbed, so ambient resolution never reads the invoking shell.
 fn run(sandbox: &Sandbox, args: &[&str]) -> (i32, String, String) {
     let out = Command::new(binary_path())
