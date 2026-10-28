@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 /// The shipped default table, beside `event_rules.toml`. Project-neutral
 /// rows every install gets; the shape follows how codex and opencode define
-/// rules (ruling d-6fb65dbc): structural pattern in, one decision verb out.
+/// rules (ruling d-6fb65dbc): structural pattern in, one decision word out.
 /// `event_rules.<id>` config flips any row, the Stop table's namespace.
 pub(crate) const SHIPPED: &str = include_str!("rules-defaults.toml");
 
