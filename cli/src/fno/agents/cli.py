@@ -1773,7 +1773,8 @@ def cmd_spawn(
                 from fno.config._dispatch_commands import is_command_seed
 
                 if not launcher_session:
-                    print(f"spawn: the native lane needs this session's own identity (the launch record names the parent); a spawn from outside any session keeps the dispatcher path. parent edge NOT recorded ({_lineage_reason(launcher_session)}).", file=sys.stderr)
+                    print("spawn: the native lane needs this session's own identity (the launch record names the parent); a spawn from outside any session keeps the dispatcher path.", file=sys.stderr)
+                    print(f"parent edge NOT recorded ({_lineage_reason(launcher_session)}).", file=sys.stderr)
                 else:
                     from fno.rust_binary import resolve_binary
                     import subprocess as _subprocess
