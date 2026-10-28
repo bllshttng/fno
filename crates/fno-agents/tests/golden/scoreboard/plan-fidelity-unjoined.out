@@ -1,0 +1,41 @@
+{
+  "state": "ok",
+  "since_days": 20000,
+  "results": [
+    {
+      "session_id": "s-plan",
+      "plan_path": "<CASE>/repo/plans/p1.md",
+      "status": "unjoined"
+    }
+  ],
+  "coverage": {
+    "planned_rows": 1,
+    "joined_pct": 0
+  },
+  "event_coverage": {
+    "complete": true,
+    "malformed_lines": 0,
+    "unreadable_paths": 0,
+    "paths": [
+      {
+        "path": "<CASE>/state/events.jsonl",
+        "status": "ok",
+        "malformed_lines": 0
+      },
+      {
+        "path": "<CASE>/state/events.jsonl.ephemeral",
+        "status": "missing",
+        "malformed_lines": 0
+      },
+      {
+        "path": "<CASE>/state/spaces/<SPACEREPO>/events.jsonl",
+        "status": "missing",
+        "malformed_lines": 0
+      }
+    ]
+  },
+  "context_comparison": {
+    "label": "rejected",
+    "reason": "comparison_not_predeclared"
+  }
+}

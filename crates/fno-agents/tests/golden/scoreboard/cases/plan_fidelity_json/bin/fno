@@ -1,0 +1,27 @@
+#!/bin/sh
+# Answers the two by-name calls the fold makes: the mux stats snapshot, and
+# the event store-path probe (whose answer names a store db that never
+# exists, so both legs read the raw journal). Any other argv refuses loudly
+# so a new by-name call cannot silently read live machine state in a golden.
+if [ "$1" = "mux" ] && [ "$2" = "stats" ] && [ "$3" = "--json" ]; then
+  printf '%s\n' '{"touch_emit_failures": 2, "started_at": "2026-10-20T10:00:00Z", "measured_at": "2026-10-25T10:00:00Z"}'
+  exit 0
+fi
+if [ "$1" = "doctor" ] && [ "$2" = "event" ] && [ "$3" = "rows" ]; then
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "--events" ]; then
+      printf '%s\n' "{\"store\": \"$a.store.db\"}"
+      exit 0
+    fi
+    prev="$a"
+  done
+fi
+if [ "$1" = "doctor" ] && [ "$2" = "event" ] && [ "$3" = "emit-envelope" ]; then
+  # The store's judge is the one owner; the fixture's context_snapshot is
+  # written to pass the real judge, so the stub's blanket pass agrees.
+  cat > /dev/null
+  exit 0
+fi
+echo "stub fno: unexpected argv: $*" >&2
+exit 99
