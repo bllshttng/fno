@@ -1544,7 +1544,7 @@ mod tests {
 
     #[test]
     fn a_node_thread_row_resets_the_untouched_clock_but_not_the_budget_arm() {
-        // The x-5542 incident: the node row sat 129h stale and the branch
+        // The measured incident: the node row sat 129h stale and the branch
         // was flat, but the hold-acknowledgment notes landed minutes ago.
         // The notice's own remedy (fno backlog note) must stand the age
         // arm down, while a spend that still grows keeps waking.
