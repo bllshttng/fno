@@ -310,23 +310,28 @@ fn read_carveouts(root: &Path) -> Result<(u64, Vec<(String, u64)>, Option<String
     Ok((total, by_kind, oldest))
 }
 
+/// Neither the event store nor the journal file exists for `index`.
+fn index_missing(index: &Path) -> bool {
+    let store_present = crate::event_store::try_store_path(index)
+        .map(|s| s.is_file())
+        .unwrap_or(false);
+    !store_present
+        && matches!(std::fs::symlink_metadata(index), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
 /// Fold `operator_question` minus `operator_question_closed` from the
-/// machine-wide index. A missing index reads as no questions with a recovery
-/// hint on stderr; an unreadable one is an error naming it.
+/// machine-wide index. A missing index reads as no questions (the command,
+/// not this reader, prints the recovery hint: the board reads it in-process);
+/// an unreadable one is an error naming it.
 pub fn read_open_questions(index: &Path) -> Result<Vec<Question>, String> {
+    if index_missing(index) {
+        return Ok(Vec::new());
+    }
     let store_present = crate::event_store::try_store_path(index)
         .map(|s| s.is_file())
         .unwrap_or(false);
     if !store_present {
         match std::fs::symlink_metadata(index) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!(
-                    "outstanding: question index {} is missing; run \
-`fno inbox outstanding reindex` to recover project questions.",
-                    index.display()
-                );
-                return Ok(Vec::new());
-            }
             Err(e) => {
                 return Err(format!(
                     "cannot read question index {}: {e}",
@@ -1155,6 +1160,13 @@ pub fn run_outstanding(args: &[String]) -> i32 {
             return 1;
         }
     };
+    if index_missing(Path::new(&o.questions_store)) {
+        eprintln!(
+            "outstanding: question index {} is missing; run \
+`fno inbox outstanding reindex` to recover project questions.",
+            o.questions_store
+        );
+    }
     let mut out = std::io::stdout().lock();
     if as_json {
         let _ = writeln!(out, "{}", o.as_json());
