@@ -25,6 +25,9 @@ codemap	retired	-	codegraph answers code-map questions now
 context	retired	whoami context	-
 cost	retired	whoami cost	-
 decide	retired	inbox decide	-
+decide list	retired	backlog decisions	-
+decide reindex	retired	backlog decide-reindex	-
+decide retract	retired	backlog decide-retract	-
 delivery	retired	do delivery	-
 done	retired	backlog done	-
 evals	retired	doctor evals	-
@@ -32,6 +35,7 @@ event	retired	doctor event	-
 help	retired	--help	-
 law	retired	inbox law	-
 lead	retired	agents org	-
+lead board	retired	inbox board	-
 lint	retired	doctor lint	-
 loops	retired	agents loop control	-
 mail	retired	agents mail	-

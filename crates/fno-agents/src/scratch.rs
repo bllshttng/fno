@@ -268,7 +268,7 @@ const REMEDIES: &[Remedy] = &[
         "existing: agents spawn --wait; hidden agents gate-status", "low", report_only),
     remedy!("liveness", "Is this worker alive",
         "no command today: fno agents liveness <handle> -J with transcript mtime + pid and a self-row positive control (rank 2)", "medium",
-        ["agents", "fleet", "--help"], r"(?im)^\s*liveness\s"),
+        ["agents", "admit", "--help"], r"(?im)^\s*liveness\s"),
     remedy!("transcript", "Transcript search and tail",
         "existing: agents peek --grep with -A/--all", "low", report_only),
     remedy!("events", "Events journal query",
