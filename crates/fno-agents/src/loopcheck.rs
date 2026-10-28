@@ -838,39 +838,88 @@ pub(crate) fn decide_with_payload(
     // REST read, which is the pre-existing behavior (fail-open).
     if !manifest.batched && !manifest.planned && !manifest.advisory && !manifest.no_ship {
         if let Some(pr_number) = node_done_pr_merged(&cwd, node_id.as_deref()) {
-            let reason = format!(
-                "node {node} done and PR #{n} recorded merged in the graph store; retiring the fire without the REST read",
-                node = node_id.as_deref().unwrap_or(""),
-                n = pr_number
-            );
-            emit(
-                "loop_check_merged_stamp",
-                serde_json::json!({
-                    "session_id": session_id,
-                    "node": node_id,
-                    "pr_number": pr_number,
-                    "decision": "allow",
-                    "reason": "DonePRGreen"
-                }),
-            );
-            emit(
-                "termination",
-                serde_json::json!({
-                    "session_id": session_id,
-                    "reason": "DonePRGreen",
-                    "message": reason
-                }),
-            );
-            return (
-                0,
-                allow_output(
-                    "allow",
-                    Some(TerminationReason::DonePRGreen),
-                    &reason,
+            // The shortcut must not outrank the terminal gates that ride the
+            // full done() read: an open operator finding holds every success
+            // terminal, unshipped local work is not delivered work, and a red
+            // done_probe is the final DonePRGreen conjunct. Each one falls
+            // through to the full gate, which blocks with its own reason.
+            // Plan fidelity rides the node itself: the done stamp is
+            // reconcile's own all-ships-landed verdict.
+            let held_by_findings = match node_id.as_deref() {
+                Some(n) => {
+                    let (open_findings, findings_read_error) =
+                        open_findings_from_store(&crate::graph_get::default_graph_path(), n);
+                    !open_findings.is_empty() || findings_read_error.is_some()
+                }
+                None => false,
+            };
+            let git_bin = &parsed.git_bin;
+            let local_output = |args: &[&str]| {
+                git_bounded(git_bin.as_ref(), args, &cwd)
+                    .filter(|out| out.status.success())
+                    .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            };
+            let unshipped_or_dirty = match (
+                local_output(&["rev-parse", "HEAD"]),
+                local_output(&["rev-parse", "@{push}"]),
+                local_output(&["status", "--porcelain"]),
+            ) {
+                (Some(head), Some(upstream), Some(status)) => {
+                    head != upstream || !status.is_empty()
+                }
+                // An unreadable checkout says nothing about what shipped, so
+                // it keeps the REST read.
+                _ => true,
+            };
+            let mut shortcut_holds = !held_by_findings && !unshipped_or_dirty;
+            if shortcut_holds {
+                shortcut_holds = !matches!(
+                    evaluate_done_probes(
+                        manifest.plan_path.as_deref(),
+                        settings.done_probes.as_ref(),
+                        &cwd,
+                        &project_events,
+                        &session_id,
+                        PROBE_TIMEOUT,
+                    ),
+                    ProbeGate::Fail { .. }
+                );
+            }
+            if shortcut_holds {
+                let reason = format!(
+                    "node {node} done and PR #{n} recorded merged in the graph store; retiring the fire without the REST read",
+                    node = node_id.as_deref().unwrap_or(""),
+                    n = pr_number
+                );
+                emit(
+                    "loop_check_merged_stamp",
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "node": node_id,
+                        "pr_number": pr_number,
+                        "decision": "allow",
+                        "reason": "DonePRGreen"
+                    }),
+                );
+                emit(
+                    "termination",
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "reason": "DonePRGreen",
+                        "message": reason
+                    }),
+                );
+                return (
                     0,
-                    None,
-                ),
-            );
+                    allow_output(
+                        "allow",
+                        Some(TerminationReason::DonePRGreen),
+                        &reason,
+                        0,
+                        None,
+                    ),
+                );
+            }
         }
     }
     // ── Check gh binary availability ──────────────────────────────────────────
