@@ -2340,27 +2340,28 @@ fn append_uningested_lines(
     tail_allowed: Option<&[String]>,
     tail_typeless_ok: bool,
 ) -> Result<(), String> {
-    let meta = match std::fs::metadata(path) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
-    };
-    let start: u64 = {
-        let cursor = conn
-            .query_row(
-                "SELECT head_hash, \"offset\" FROM ingest_cursor WHERE dev = ?1 AND ino = ?2",
-                params![meta.dev(), meta.ino()],
-                |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)),
-            )
-            .ok();
-        match (read_head_hash(path), cursor) {
-            (Some(hash), Some((head, offset)))
-                if head == hash && offset >= 0 && offset as u64 <= meta.len() =>
-            {
-                offset as u64
+    let start: u64 = match std::fs::metadata(path) {
+        Ok(meta) => {
+            let cursor = conn
+                .query_row(
+                    "SELECT head_hash, \"offset\" FROM ingest_cursor WHERE dev = ?1 AND ino = ?2",
+                    params![meta.dev(), meta.ino()],
+                    |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)),
+                )
+                .ok();
+            match (read_head_hash(path), cursor) {
+                (Some(hash), Some((head, offset)))
+                    if head == hash && offset >= 0 && offset as u64 <= meta.len() =>
+                {
+                    offset as u64
+                }
+                _ => 0,
             }
-            _ => 0,
         }
+        // A failed stat (absent file, permission wedge) reads as the
+        // full-scan fallback the inline tail always took; read_range then
+        // answers a NotFound as empty.
+        Err(_) => 0,
     };
     let tail = match read_range(path, start) {
         Ok(tail) => tail,
@@ -2368,13 +2369,12 @@ fn append_uningested_lines(
         Err(err) => return Err(format!("{}: {err}", path.display())),
     };
     let complete_end = tail.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
-    let held = conn
+    let mut held = conn
         .prepare(
             "SELECT EXISTS(SELECT 1 FROM events WHERE row_hash = ?1)
          OR EXISTS(SELECT 1 FROM event_observation_pending WHERE row_hash = ?1)",
         )
         .map_err(|e| format!("{}: held probe: {e}", path.display()))?;
-    let mut held = held;
     for line_bytes in tail[..complete_end].split(|&b| b == b'\n') {
         let line_bytes = line_bytes.strip_suffix(b"\r").unwrap_or(line_bytes);
         if line_bytes.is_empty() {
