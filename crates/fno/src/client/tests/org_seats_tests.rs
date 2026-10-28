@@ -55,8 +55,21 @@ fn fold_groups_each_seat_under_the_lead_it_reports_to() {
     // A seat with no published project takes its node's graph project.
     map["machines"][0]["sessions"][0]["project"] = Value::Null;
     map["machines"][0]["sessions"][0]["node"] = json!("x-1");
+    // The turn facts and the lanes ride through; a seat with none reads null.
+    for (k, v) in [
+        ("last_message", json!("Done.")),
+        ("last_prompt", json!("ship it")),
+        ("user_turns", json!(4)),
+        ("progress", json!("advancing")),
+        ("rss_mb", json!(918.0)),
+    ] {
+        map["machines"][0]["sessions"][0][k] = v;
+    }
+    map["machines"][0]["display_name"] = json!("iMac");
+    map["machines"][0]["lanes"] =
+        json!([{"provider": "anthropic", "cap": 4, "count": 6, "full": true}]);
     let backlog = crate::backlog_model::fixture(vec![
-        json!({"id": "x-1", "status": "in_progress", "title": "Seat work", "project": "fno-books"}),
+        json!({"id": "x-1", "status": "in_progress", "title": "Seat work", "project": "fno-books", "details": "Phase 1."}),
     ]);
     let fleet = fold(&map, &backlog, &[], 7);
     let hosts: Vec<&str> = fleet.machines.iter().map(|m| m.host.as_str()).collect();
@@ -91,6 +104,41 @@ fn fold_groups_each_seat_under_the_lead_it_reports_to() {
         Some("Seat work")
     );
     assert_eq!(moved.short, "00000064");
+    assert_eq!(
+        moved.work.as_ref().unwrap().details.as_deref(),
+        Some("Phase 1.")
+    );
+    assert_eq!(
+        (
+            moved.last_message.as_deref(),
+            moved.last_prompt.as_deref(),
+            moved.user_turns,
+            moved.progress.as_deref(),
+            moved.rss_mb
+        ),
+        (
+            Some("Done."),
+            Some("ship it"),
+            Some(4),
+            Some("advancing"),
+            Some(918.0)
+        )
+    );
+    let bare = fleet.seats().find(|s| s.name == "im-1").unwrap();
+    assert_eq!(
+        (bare.last_message.as_deref(), bare.user_turns),
+        (None, None)
+    );
+    let imac = &fleet.machines[1];
+    assert_eq!(imac.display_name.as_deref(), Some("iMac"));
+    let lane = Lane {
+        provider: "anthropic".into(),
+        cap: Some(4),
+        count: Some(6),
+        full: true,
+    };
+    assert_eq!(imac.lanes, [lane]);
+    assert!(fleet.machines[0].lanes.is_empty() && fleet.machines[0].display_name.is_none());
 }
 
 #[test]

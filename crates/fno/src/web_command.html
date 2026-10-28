@@ -42,7 +42,7 @@ tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--b
 .drawer{position:fixed;top:calc(var(--fno-nav-h,0px) + 8px);right:8px;bottom:8px;width:min(440px,calc(100vw - 16px));z-index:20;background:var(--mantle);border:1px solid var(--surface1);transform:translateX(calc(100% + 16px));visibility:hidden;transition:transform .2s ease-out,visibility .2s;display:flex;flex-direction:column;overflow:hidden}.drawer.on{transform:none;visibility:visible}
 .dhead{padding:12px 14px 10px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--surface0)}.dtop{display:flex;align-items:center;gap:8px}.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;font-size:11.5px;font-weight:700;border:1px solid var(--surface1)}.x{margin-left:auto;width:26px;height:26px;border:1px solid var(--surface1);background:var(--base);color:var(--subtext0);cursor:pointer;font:inherit;font-size:14px;line-height:1}.x:hover{color:var(--text);border-color:var(--text)}
 .dhead h2{margin:0;font-size:14px;line-height:1.35;font-weight:700}.dnode{font-size:11.5px;color:var(--overlay1)}.dbody{padding:10px 14px 18px;overflow:auto;display:flex;flex-direction:column;gap:14px}.sec h3{margin:0 0 6px;font-size:11px;color:var(--overlay1);font-weight:700}.sec h3::before{content:"## "}
-.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;font-size:12px;margin:0}.kv dt{color:var(--overlay1)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.mono{font-size:11.5px}.links{display:flex;flex-direction:column;gap:6px}a.lk{color:var(--text);text-decoration:none}a.lk:hover{border-color:var(--text)}.lk button{border:1px solid var(--surface1);background:var(--mantle);color:var(--subtext0);font:inherit;font-size:11px;padding:2px 8px;cursor:pointer;min-height:24px}.lk button:hover{color:var(--text);border-color:var(--text)}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;font-size:12px;margin:0}.kv dt{color:var(--overlay1)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.mono{font-size:11.5px}.dbox{margin:0;border:1px solid var(--surface0);background:var(--base);padding:8px 10px;font:inherit;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto}.dbox.none{color:var(--overlay1)}.sec:first-child .dbox{max-height:170px}.links{display:flex;flex-direction:column;gap:6px}a.lk{color:var(--text);text-decoration:none}a.lk:hover{border-color:var(--text)}.lk button{border:1px solid var(--surface1);background:var(--mantle);color:var(--subtext0);font:inherit;font-size:11px;padding:2px 8px;cursor:pointer;min-height:24px}.lk button:hover{color:var(--text);border-color:var(--text)}
 @media (max-width:640px){.drawer{top:auto;left:8px;right:8px;bottom:8px;width:auto;height:78vh;transform:translateY(calc(100% + 16px))}.kv{grid-template-columns:96px minmax(0,1fr)}}
 </style>
 </head>
@@ -175,11 +175,13 @@ function machines(model) {
     }
     const c = el("div", "host"), cv = el("canvas"), info = el("div", "hinfo"), name = el("div", "hname"), live = el("span", m.fresh ? "live" : "live stale");
     live.append(el("i"), (m.fresh ? "online" : "stale") + " · beat " + ago(m.age_s) + " ago");
-    name.append(el("b", null, m.host), el("span", null, m.leads.length + (m.leads.length === 1 ? " lead" : " leads")), live);
+    name.append(el("b", null, m.display_name || m.host), el("span", null, (m.display_name ? m.host + " · " : "") + m.leads.length + (m.leads.length === 1 ? " lead" : " leads")), live);
     const mem = m.mem_used, cpu = m.cpu == null ? null : m.cpu / 100;
     info.append(name, meter("Sessions", mix, seats.length),
       meter("Memory", track(mem, mem > .85 ? "parked" : "ok"), mem == null ? "not sampled" : Math.round(mem * 100) + "%"),
-      meter("Spawn cap", track(m.cap ? seats.length / m.cap : null, seats.length >= m.cap ? "parked" : "quiet"), m.cap == null ? "not published" : seats.length + " / " + m.cap),
+      meter("Spawn cap", track(m.cap ? seats.length / m.cap : null, seats.length >= m.cap ? "parked" : "quiet"), m.cap == null ? "not published" : seats.length + " / " + m.cap + (seats.length >= m.cap ? " · at cap" : "")),
+      ...(m.lanes || []).map((l) => meter(l.provider, track(l.cap ? (l.count || 0) / l.cap : null, l.full ? "parked" : "quiet"),
+        l.count == null ? "not read" : l.cap == null ? l.count + " · no cap" : l.count + " / " + l.cap + (l.full ? " · full" : ""))),
       meter("CPU", track(cpu, "quiet"), cpu == null ? "not sampled" : Math.round(m.cpu) + "%"));
     cv.width = cv.height = 240;
     cv.setAttribute("aria-hidden", "true");
@@ -209,7 +211,7 @@ for (const [id, view] of [["tab-synapse", "view-synapse"], ["tab-table", "view-t
 }
 
 function seats(model) {
-  rows = model.machines.flatMap((m) => m.leads.flatMap((l) => l.seats.map((s) => ({host: m.host, local: m.local, lead: l.name, s}))));
+  rows = model.machines.flatMap((m) => m.leads.flatMap((l) => l.seats.map((s) => ({host: m.host, machine: m.display_name || m.host, local: m.local, lead: l.name, s}))));
   const chips = document.getElementById("chips");
   chips.replaceChildren(el("label", null, "Machine"));
   for (const m of model.machines) {
@@ -264,36 +266,47 @@ function paint() {
 
 const drawer = document.getElementById("drawer");
 function openSeat(r) {
-  const s = r.s, at = (iso) => iso ? iso + " (" + ago(since(iso)) + " ago)" : "not published";
+  const s = r.s, w = s.work || {}, none = "not published";
   openKey = keyOf(r);
   document.getElementById("dstate").replaceChildren(dot(s.status), s.status);
-  document.getElementById("dhost").textContent = r.host + " · " + r.lead;
-  document.getElementById("dtitle").textContent = (s.work && s.work.title) || s.name;
-  document.getElementById("dnode").textContent = s.work ? [s.work.id, s.work.status].filter(Boolean).join(" · ") : "no node";
+  document.getElementById("dhost").textContent = r.machine + " · " + (r.lead === "no lead" ? "no lead" : "lead " + r.lead);
+  document.getElementById("dtitle").textContent = w.title || s.name;
+  document.getElementById("dnode").textContent = w.id ? [w.id, w.status, w.priority, w.difficulty, s.project].filter(Boolean).join(" · ") : ["no node", s.project].filter(Boolean).join(" · ");
+  const box = (text) => el("pre", text ? "dbox" : "dbox none", text || none);
   const kv = el("dl", "kv");
-  for (const [k, v] of [
-    ["seat", s.name], ["session id", s.session_id], ["harness", s.harness], ["model", model_(r)], ["started", at(s.started_at)],
-    ["cwd", s.cwd], ["project", s.project], ["role", s.role], ["context", s.context_pct == null ? null : s.context_pct + "% used"], ["PR", work(r, "pr") ? "#" + work(r, "pr") : "none"],
-    ["last message", "not published" + (s.last_message_at ? " · stamped " + at(s.last_message_at) : "")],
-  ]) kv.append(el("dt", null, k), el("dd", k === "session id" || k === "cwd" ? "mono" : null, v == null ? "not published" : v));
+  for (const [k, v, mono] of [
+    ["Session id", s.session_id, 1], ["Handle", s.short || s.name], ["Harness", s.harness], ["Model", model_(r), 1],
+    ["Alive", s.started_at ? ago(since(s.started_at)) + " since " + s.started_at : null],
+    ["Status", s.status + (s.status_age_s == null ? "" : " for " + ago(s.status_age_s)) + " · progress " + (s.progress || "unknown")],
+    ["Memory", s.rss_mb == null ? null : Math.round(s.rss_mb) + " MB"], ["User turns", s.user_turns],
+    ["Context", s.context_pct == null ? null : s.context_pct + "% used"],
+    ["Epic", w.epic ? w.epic[0] + (w.epic[1] ? " · " + w.epic[1] : "") : "none"], ["Working dir", s.cwd, 1],
+  ]) kv.append(el("dt", null, k), el("dd", mono ? "mono" : null, v == null ? none : String(v)));
   const links = el("div", "links");
-  const row = (title, code, href) => {
+  const row = (title, code, href, copy) => {
     const a = el(href ? "a" : "div", "lk"), t = el("span", "lt");
     if (href) a.href = href;
     t.append(el("b", null, title), el("code", null, code));
     a.append(t);
-    if (!href) {
+    if (copy) {
       const b = el("button", null, "Copy");
-      b.onclick = () => navigator.clipboard.writeText(code).then(() => { b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1300); }, () => {});
+      b.onclick = (e) => { e.preventDefault(); navigator.clipboard.writeText(copy).then(() => { b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1300); }, () => {}); };
       a.append(b);
     }
     links.append(a);
   };
-  row("Attach the terminal" + (r.local ? "" : " on " + r.host), s.attach);
-  if (s.plan_uri && s.plan_uri.startsWith("obsidian://")) row("Open the plan in Obsidian", work(r, "plan") || "plan", s.plan_uri);
-  else if (work(r, "plan")) row("Plan", work(r, "plan"));
+  if (s.plan_uri && s.plan_uri.startsWith("obsidian://")) row("Plan in Obsidian", w.plan, s.plan_uri);
+  else if (w.plan) row("Plan", w.plan, null, w.plan);
+  else if (w.id) row("Plan", "no plan_path on " + w.id);
+  if (w.pr) row("Pull request #" + w.pr, "fno do pr status " + w.pr, null, "fno do pr status " + w.pr);
+  if (s.attach) row("Attach in the mux" + (r.local ? "" : " on " + r.machine), s.attach, null, s.attach);
+  row("Peek without attaching", "fno agents session peek " + (s.short || s.name), null, "fno agents session peek " + (s.short || s.name));
+  if (w.id) row("Node in the backlog", "fno backlog get " + w.id, null, "fno backlog get " + w.id);
   const sec = (title, body) => { const d = el("div", "sec"); d.append(el("h3", null, title), body); return d; };
-  document.getElementById("dbody").replaceChildren(sec("Session", kv), sec("Open", links));
+  const msgAge = s.last_message_at ? " · " + ago(since(s.last_message_at)) + " ago" : "";
+  document.getElementById("dbody").replaceChildren(...[
+    w.id && sec("Node description", box(w.details)), sec("Session", kv), sec("Last message" + msgAge, box(s.last_message)),
+    sec("Last prompt it received", box(s.last_prompt)), sec("Open", links)].filter(Boolean));
   if (!drawer.classList.contains("on")) {
     drawer.classList.add("on");
     drawer.setAttribute("aria-hidden", "false");
@@ -459,7 +472,7 @@ function drawHost(x, h, cx, cy, r, now, inGraph) {
   x.fillStyle = T.text; x.textAlign = "center"; x.font = "600 " + Math.max(10, r * .42) + "px " + UI; x.fillText(seats.length, cx, cy + r * .16);
   x.fillStyle = T.overlay1; x.font = "500 " + Math.max(8, r * .22) + "px " + DATA; x.fillText("sessions", cx, cy + r * .5);
   // On the Subway ring a machine above the middle puts its label above the orb, clear of the lines that leave it downward.
-  if (inGraph) { const up = layout === "transit" && h._n && h._n.y < -1, ly = up ? cy - R2 - 30 : cy + R2 + 26; x.fillStyle = T.text; x.font = "600 14px " + UI; x.fillText(h.host, cx, ly); x.fillStyle = T.overlay1; x.font = "500 11px " + DATA; x.fillText("cap " + (h.cap ?? "?") + " · mem " + Math.round(mem * 100) + "%", cx, ly + 16); }
+  if (inGraph) { const up = layout === "transit" && h._n && h._n.y < -1, ly = up ? cy - R2 - 30 : cy + R2 + 26; x.fillStyle = T.text; x.font = "600 14px " + UI; x.fillText(h.display_name || h.host, cx, ly); x.fillStyle = T.overlay1; x.font = "500 11px " + DATA; x.fillText("cap " + (h.cap ?? "?") + " · mem " + Math.round(mem * 100) + "%", cx, ly + 16); }
 }
 function lightning(x1, y1, x2, y2, disp, out) { if (disp < 4) { out.push([x2, y2]); return; } const mx = (x1 + x2) / 2 + (Math.random() - .5) * disp, my = (y1 + y2) / 2 + (Math.random() - .5) * disp; lightning(x1, y1, mx, my, disp / 2, out); lightning(mx, my, x2, y2, disp / 2, out); }
 function curve(a, b) { const p = toScreen(a), q = toScreen(b); return [p, {x: (p.x + q.x) / 2 - (q.y - p.y) * .12, y: (p.y + q.y) / 2 + (q.x - p.x) * .12}, q]; }
