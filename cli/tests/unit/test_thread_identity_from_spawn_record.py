@@ -247,27 +247,18 @@ def test_resolve_owned_identity_command_stamps_the_spawn_record(tmp_path, monkey
     """The production path end to end: init's manifest stamper command answers
     HARNESS=codex SESSION_ID=<row id> for a thread worker standing in its own
     worktree - the answer whose absence stamped harness=unknown and refused
-    the worker's node claim."""
-    from typer.testing import CliRunner
-
-    from fno.cli import app
-
+    the worker's node claim. The command itself is native now (the front door
+    execs it through the same resolver this file tests), so the command-level
+    contract rides the resolver here and the door parity goldens elsewhere."""
     rows, cwd_a, cwd_b, sid_a, sid_b = _two_worker_rows(tmp_path)
     _write_registry(tmp_path, monkeypatch, rows)
     _scrub_env(monkeypatch)
 
     monkeypatch.chdir(cwd_a)
-    result = CliRunner().invoke(app, ["do", "target", "resolve-owned-identity"])
-    assert result.exit_code == 0, result.output
-    fields = {
-        line.split("=", 1)[0]: line.split("=", 1)[1]
-        for line in result.stdout.splitlines()
-        if "=" in line
-    }
-    assert fields["HARNESS"] == "codex"
-    assert fields["SESSION_ID"] == sid_a
-    assert fields["DISPOSITION"] == "spawn_record"
-    assert fields["COLLISION"] == ""
+    ident_a = resolve_self_identity()
+    assert ident_a.harness == "codex"
+    assert ident_a.session_id == sid_a
+    assert ident_a.disposition == "spawn_record"
 
     # One shared app-server pid, two thread workers: each cwd resolves to its
     # OWN row, never the first match.

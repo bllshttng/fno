@@ -1,0 +1,6 @@
+fno do target: dispatch held by plan NODE-HEX
+  reason: fixture hold
+  set_by: capture
+  release_when: never
+  review_on: <DATE>
+Remove dispatch_hold only after the release condition is confirmed. Nothing was claimed.

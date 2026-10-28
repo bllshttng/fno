@@ -1,0 +1,1 @@
+{"base_branch":"main","branch":"main","head_sha":"SHA40","outcome":"refused","payload":"/fno:review <level> main HEAD SHA40 against origin/main","pr":null,"reason":"refused: could not resolve 'HEX8-1111-2222-3333-444455556666' to a registered agent","transport":"claude"}

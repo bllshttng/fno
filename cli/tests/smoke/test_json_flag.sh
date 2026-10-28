@@ -3,20 +3,21 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)/cli"
 uv sync --quiet
 
-# Create a minimal state file in a temp dir for the test
+# The `do state show` probe died with the target-family port. The root
+# --json contract now rides the `event gc` leaf: a dry run over a temp
+# journal honors the root flag and prints parseable JSON on stdout (the
+# bare-spelling move notice goes to stderr).
 TMPDIR_STATE=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_STATE"' EXIT
 
-cat > "$TMPDIR_STATE/target-state.md" << 'EOF'
----
-status: IN_PROGRESS
-iteration: 1
----
-# Target Session State
-EOF
+: > "$TMPDIR_STATE/events.jsonl"
 
-out=$(uv run fno-py --json do state show --path "$TMPDIR_STATE/target-state.md" 2>&1)
-echo "$out" | python3 -m json.tool > /dev/null || {
-  echo "FAIL: --json state show did not produce parseable JSON"; echo "$out"; exit 1;
+err=$(mktemp)
+out=$(uv run fno-py --json event gc --events "$TMPDIR_STATE/events.jsonl" --dry-run 2>"$err") || {
+  echo "FAIL: --json event gc exited non-zero"; echo "$out"; cat "$err"; rm -f "$err"; exit 1;
 }
+printf '%s' "$out" | python3 -m json.tool > /dev/null || {
+  echo "FAIL: --json event gc did not produce parseable JSON"; echo "$out"; cat "$err"; rm -f "$err"; exit 1;
+}
+rm -f "$err"
 echo "PASS: --json flag produces parseable JSON"

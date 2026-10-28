@@ -38,7 +38,7 @@ if [[ $have_jq -eq 1 && -s "$cache" ]]; then
         # This session's own questions: the asker's session id is the target
         # manifest id the session already carries. No manifest means a session
         # asked nothing.
-        session_id="$(fno do state show 2>/dev/null | awk '/^session_id:/ {print $2}')"
+        session_id="$("${FNO_AGENTS_BIN:-fno-agents}" state-cli show --type target --field session_id 2>/dev/null | head -1)"
         if [[ -n "$session_id" ]]; then
             own=$(jq -r --arg s "$session_id" \
                 '[.items[] | select(.kind != "mine" and .ready == true and .asker.session_id == $s)] | .[] | "- \(.kind): \(.title)"' \
