@@ -96,6 +96,11 @@ fn case_env(root: &Path, stamps: &Value) -> Vec<(String, String)> {
         ),
         ("FNO_AGENTS_BIN".to_string(), at("fake_bin/fno-agents")),
     ];
+    for name in ["TMPDIR", "TEMPDIR"] {
+        if let Some(value) = std::env::var_os(name) {
+            env.push((name.to_string(), value.to_string_lossy().to_string()));
+        }
+    }
     for (key, value) in stamps.as_object().into_iter().flatten() {
         env.push((key.clone(), value.as_str().unwrap_or_default().to_string()));
     }

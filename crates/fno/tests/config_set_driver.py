@@ -209,6 +209,12 @@ def scrubbed_env(root: Path, case_env: dict[str, str]) -> dict[str, str]:
         "FNO_EVENTS_PATH": str(root / "state" / "project-events.jsonl"),
         "FNO_AGENTS_BIN": str(root / "fake_bin" / "fno-agents"),
     }
+    # The temp dir rides through: without it the CLI's temp guard reads the
+    # fixture's fake fno-agents as a durable path and points the real gh
+    # shim at it.
+    for name in ("TMPDIR", "TEMPDIR"):
+        if name in os.environ:
+            env[name] = os.environ[name]
     env.update(case_env)
     return env
 
