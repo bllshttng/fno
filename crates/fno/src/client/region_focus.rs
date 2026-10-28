@@ -549,7 +549,11 @@ pub(super) async fn mouse_pre_pass(
                         // resolves to a different source (or None), so the gesture
                         // cancels rather than acting on the wrong agent.
                         None => {
-                            if still_on_row {
+                            if let Some(a) =
+                                view.pin_star_at(rep.row, rep.col).filter(|_| still_on_row)
+                            {
+                                super::agent_sort::pin_agent(view, &a);
+                            } else if still_on_row {
                                 if let Some(hit) = view.chrome_hit(rep.row, rep.col) {
                                     apply_hit(view, hit, sock_w).await?;
                                 }

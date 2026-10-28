@@ -917,6 +917,20 @@ async fn agents_tab_ctrl_t_pins_the_session_and_the_row_shows_it() {
             .collect::<Vec<_>>()
     };
     assert!(stars(&v).is_empty(), "an unpinned row paints nothing");
+    // Hover offers an outline star, and a click on it hits that row.
+    v.hover_row = v
+        .display_rows()
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Agent(a) if a.name == "b"));
+    let f = v.compose();
+    let o = f
+        .cells
+        .iter()
+        .position(|c| c.c == '\u{2606}')
+        .expect("outline");
+    let (r, c) = ((o / f.cols as usize) as u16, (o % f.cols as usize) as u16);
+    assert_eq!(v.pin_star_at(r, c).map(|a| a.name), Some("b".into()));
+    v.hover_row = None;
     v.layout.agents[1] = pinned_b.clone();
     assert_eq!(
         stars(&v),
