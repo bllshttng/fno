@@ -143,7 +143,7 @@ pub fn enforce(pre: &[Value], post: &[Value], cap: Option<usize>) -> Result<(), 
              new epic to its own team: fno agents org promote <its handle> --scope <each epic \
              it \
              holds> --scope '<new-epic-id>'. That works for an epic the lead's own session \
-             created. Any other epic needs an attended shell or a team that contains both."
+             created. Any other epic needs a team that contains both: ask that lead."
         ));
     }
     Ok(())
