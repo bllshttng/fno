@@ -612,7 +612,7 @@ fn an_unreadable_question_source_blocks_a_clean_board() {
     let bin_dir = TempDir::new().unwrap();
     let spec = org_board_bin(bin_dir.path(), BOARD_CLEAN, 0);
     lead_prepare_fixture(cwd, bin_dir.path(), &spec);
-    make_questions_unreadable(bin_dir.path());
+    make_questions_unreadable(cwd);
 
     let (code, d) = lead_spawn(&state, cwd, &events, bin_dir.path());
 
@@ -628,14 +628,11 @@ fn an_unreadable_question_source_blocks_a_clean_board() {
     );
 }
 
-/// The question index every unreadable-questions test needs: a dangling
-/// symlink, which the in-process read refuses rather than reading as empty.
-fn make_questions_unreadable(bin_dir: &Path) {
-    std::os::unix::fs::symlink(
-        bin_dir.join("questions-target-missing"),
-        bin_dir.join("questions.jsonl"),
-    )
-    .unwrap();
+/// What every unreadable-questions test needs: the outstanding read fails
+/// whole on a carve-out ledger it cannot read, and a directory at the
+/// ledger path stays unreadable across fires (no fire recreates it).
+fn make_questions_unreadable(cwd: &Path) {
+    fs::create_dir_all(cwd.join(".fno").join("carveouts.jsonl")).unwrap();
 }
 
 #[test]
@@ -1498,7 +1495,7 @@ fn an_unreadable_question_source_is_bounded_not_eternal() {
     let bin_dir = TempDir::new().unwrap();
     let spec = org_board_bin(bin_dir.path(), BOARD_CLEAN, 0);
     lead_prepare_fixture(cwd, bin_dir.path(), &spec);
-    make_questions_unreadable(bin_dir.path());
+    make_questions_unreadable(cwd);
 
     let mut last = (0, serde_json::Value::Null);
     for _ in 0..3 {
