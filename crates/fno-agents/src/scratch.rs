@@ -283,7 +283,7 @@ const REMEDIES: &[Remedy] = &[
     remedy!("pr_state", "PR state for several PRs",
         "existing: fno do pr info and fno do pr list already answer this (cause two)", "low", report_only),
     remedy!("graph", "Graph read: subtree walk or batch status",
-        "existing: fno backlog list in:<id> -s:done -J walks the whole subtree; fno backlog list n:<a>,<b> -J reads batch status", "low",
+        "existing: fno backlog list in:\"<id>\" -s:done -J walks the whole subtree; fno backlog list n:\"<a>\",\"<b>\" -J reads batch status (quote ids: a bare value is a prefix match)", "low",
         ["backlog", "list", "--help"], r"(?m)^\s*in:"),
     remedy!("fno_internal", "Import fno internals to probe one function",
         "none: one-off probe targeting code under change", "medium", report_only),
