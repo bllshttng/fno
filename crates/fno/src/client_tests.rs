@@ -517,7 +517,7 @@ fn xf331_rows() {
     view.set_squad_view(1, SectionView::Expanded);
     let frame = view.compose();
     let cols = frame.cols as usize;
-    let cell = frame.cells[2 * cols]; // display row 1: the exited focus row
+    let cell = frame.cells[2 * cols + 1]; // display row 1 after the pin gutter: the exited focus row
     assert_eq!(
         cell.flags & cell_flags::INVERSE,
         0,
@@ -6961,13 +6961,13 @@ fn external_live_row_is_dim_and_distinct_from_exited_and_fno_live() {
     // is a word now) + DIM flag.
     let probe = |needle: &str| -> (String, bool) {
         let r = lines.iter().position(|l| l.contains(needle)).unwrap();
-        let status: String = frame.cells[r * cols..r * cols + 5]
+        let status: String = frame.cells[r * cols + 1..r * cols + 6]
             .iter()
             .map(|c| c.c)
             .collect();
         (
             status,
-            frame.cells[r * cols].flags & cell_flags::DIM == cell_flags::DIM,
+            frame.cells[r * cols + 1].flags & cell_flags::DIM == cell_flags::DIM,
         )
     };
     // A badgeless reading-less row paints `Idle` + DIM (the 2026-10-06
