@@ -5083,9 +5083,6 @@ async fn handle_rm_with(
     let name = entry.name.clone();
     let audit = RemovalAuditContext::from_request(req, &entry);
     if let Some(held) = audit.pin_hold(&ctx.home, &entry) {
-        let _ = ctx
-            .emitter
-            .emit("rm_kept", &json!({"name": name, "reason": audit.reason}));
         return Response::err(req.id, ErrorCode::InvalidStatus, held);
     }
     // Computed once (self-review finding): every other reference in this
