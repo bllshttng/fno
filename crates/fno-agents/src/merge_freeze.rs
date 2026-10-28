@@ -768,6 +768,15 @@ mod tests {
             verdict_for_in(&home, Some(8), Some("o/r"), &lifted),
             Verdict::Clear
         );
+
+        // The spawn-time seed line: a frozen repo renders it with its pin, a
+        // lifted one renders none, and another repo sees none either.
+        let line = active_freeze_line_in(&home, Some("o/r"), &empty)
+            .expect("a frozen repo renders the seed line");
+        assert!(line.contains("rc (merge freeze, set_by team)"), "{line}");
+        assert!(line.contains(&format!("pinned at {lift}")), "{line}");
+        assert!(active_freeze_line_in(&home, Some("o/r"), &lifted).is_none());
+        assert!(active_freeze_line_in(&home, Some("p/q"), &empty).is_none());
         // Any harness session can mint a chat_attested row, so it holds.
         let chat = store(vec![row("d-4", &lift, "chat_attested")]);
         assert!(matches!(
