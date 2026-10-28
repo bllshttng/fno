@@ -25,24 +25,31 @@ pub(crate) enum Pins {
 
 /// Each root, and where it lands under the sandbox. The layout mirrors the
 /// live one: the claims root is a home, the state dir its `.fno`, and the
-/// agents home `.fno/agents`, whose parent the spaces root derives from.
-const ROOTS: [(&str, &str); 3] = [
+/// agents home `.fno/agents`. The spaces root is pinned too: a set
+/// `FNO_SPACES_DIR` outranks the agents home it would otherwise derive from.
+const ROOTS: [(&str, &str); 4] = [
     ("FNO_CLAIMS_ROOT", ""),
     ("FNO_STATE_DIR", ".fno"),
     ("FNO_AGENTS_HOME", ".fno/agents"),
+    ("FNO_SPACES_DIR", ".fno/spaces"),
 ];
 
-/// Decide the pins. `declared` is a set `FNO_TEST_HERMETIC`: `1` came through
-/// `fno doctor test`, which already sandboxed `HOME`, and `0` is an ambient
-/// run on purpose. Either way the door adds nothing. A set-but-empty root is
+/// Decide the pins from `FNO_TEST_HERMETIC`. `0` is an ambient run on
+/// purpose, so the door adds nothing. `1` is a claim, not a proof: it skips
+/// the pins only when `HOME` really sits under the temp dir, the sandbox
+/// `fno doctor test` builds. A bare `FNO_TEST_HERMETIC=1 cargo test` keeps the
+/// real `HOME` and is pinned like any other run. A set-but-empty root is
 /// unset, as everywhere else in this crate.
 pub(crate) fn decide(
-    declared: bool,
+    hermetic: Option<&str>,
     home: Option<&Path>,
     env: impl Fn(&str) -> Option<OsString>,
 ) -> Pins {
-    if declared {
-        return Pins::Set(Vec::new());
+    let sandboxed = || home.is_some_and(crate::paths::under_temp_dir);
+    match hermetic {
+        Some("0") => return Pins::Set(Vec::new()),
+        Some("1") if sandboxed() => return Pins::Set(Vec::new()),
+        _ => {}
     }
     let mut pins = Vec::new();
     for (key, rel) in ROOTS {
@@ -101,13 +108,14 @@ mod tests {
     #[test]
     fn an_unpinned_test_binary_gets_every_root_in_the_sandbox() {
         let home = tempfile::TempDir::new().unwrap();
-        let pins = decide(false, Some(home.path()), env_of(&[]));
+        let pins = decide(None, Some(home.path()), env_of(&[]));
         assert_eq!(
             pins,
             Pins::Set(vec![
                 ("FNO_CLAIMS_ROOT", ""),
                 ("FNO_STATE_DIR", ".fno"),
                 ("FNO_AGENTS_HOME", ".fno/agents"),
+                ("FNO_SPACES_DIR", ".fno/spaces"),
             ])
         );
     }
@@ -122,7 +130,7 @@ mod tests {
         let elsewhere = tempfile::TempDir::new().unwrap();
 
         let refused = decide(
-            false,
+            None,
             Some(home.path()),
             env_of(&[("FNO_AGENTS_HOME", &live)]),
         );
@@ -133,7 +141,7 @@ mod tests {
         assert!(line.contains("FNO_TEST_HERMETIC=0"), "{line}");
 
         let claims_at_home = decide(
-            false,
+            None,
             Some(home.path()),
             env_of(&[("FNO_CLAIMS_ROOT", home.path())]),
         );
@@ -143,7 +151,7 @@ mod tests {
         );
 
         let kept = decide(
-            false,
+            None,
             Some(home.path()),
             env_of(&[("FNO_STATE_DIR", elsewhere.path())]),
         );
@@ -153,13 +161,27 @@ mod tests {
         assert!(pins.iter().all(|(k, _)| *k != "FNO_STATE_DIR"), "{pins:?}");
     }
 
-    /// A declared run (`fno doctor test`, or ambient on purpose) gets no
-    /// pins and no refusal, even with a live root set.
+    /// `0` gets no pins and no refusal, even with a live root set. `1` gets
+    /// none only inside a real temp-dir `HOME`: a bare `FNO_TEST_HERMETIC=1`
+    /// run on the operator's `HOME` is pinned like any other.
     #[test]
-    fn a_declared_run_gets_nothing() {
+    fn only_an_ambient_or_proven_sandbox_run_skips_the_pins() {
         let home = tempfile::TempDir::new().unwrap();
         let live = home.path().join(".fno");
-        let pins = decide(true, Some(home.path()), env_of(&[("FNO_STATE_DIR", &live)]));
-        assert_eq!(pins, Pins::Set(Vec::new()));
+        let ambient = decide(
+            Some("0"),
+            Some(home.path()),
+            env_of(&[("FNO_STATE_DIR", &live)]),
+        );
+        assert_eq!(ambient, Pins::Set(Vec::new()));
+
+        let sandboxed = decide(Some("1"), Some(home.path()), env_of(&[]));
+        assert_eq!(sandboxed, Pins::Set(Vec::new()));
+
+        let real_home = Path::new("/nonexistent-operator-home");
+        let Pins::Set(pins) = decide(Some("1"), Some(real_home), env_of(&[])) else {
+            panic!("an unproven sandbox claim with no live root set must pin, not refuse");
+        };
+        assert_eq!(pins.len(), ROOTS.len(), "{pins:?}");
     }
 }

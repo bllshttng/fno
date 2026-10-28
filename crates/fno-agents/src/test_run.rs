@@ -1886,11 +1886,13 @@ fn run_run_admit(args: &[String]) -> i32 {
 /// refusal line.
 fn test_run_pins_for_this_process() -> Result<Vec<(&'static str, PathBuf)>, String> {
     use crate::test_run_pins::{decide, make_sandbox, Pins};
-    let declared = crate::paths::test_root_declared();
+    let hermetic = std::env::var("FNO_TEST_HERMETIC").ok();
     let home = std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(PathBuf::from);
-    let pins = match decide(declared, home.as_deref(), |k| std::env::var_os(k)) {
+    let pins = match decide(hermetic.as_deref(), home.as_deref(), |k| {
+        std::env::var_os(k)
+    }) {
         Pins::Refused(line) => return Err(line),
         Pins::Set(pins) if pins.is_empty() => return Ok(Vec::new()),
         Pins::Set(pins) => pins,
