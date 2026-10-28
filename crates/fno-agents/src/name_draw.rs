@@ -500,14 +500,59 @@ pub fn settle_draw(payload: &Value, answer: &mut Value, store: &std::path::Path)
         .get("succession")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if !succession || answer.get("outcome").and_then(Value::as_str) != Some("succeeded") {
-        return;
-    }
     let registry = store.with_file_name("registry.json");
     let claims_root = payload
         .get("claims_root")
         .and_then(Value::as_str)
         .map(PathBuf::from);
+    let scope = payload.get("scope").and_then(Value::as_str).unwrap_or("");
+    let redraw = payload
+        .get("redraw")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let outcome = answer.get("outcome").and_then(Value::as_str);
+    if !succession && !payload.get("take_over").is_some_and(Value::is_object) {
+        // A fresh grant: `--name redraw` draws the new lead's name, and a
+        // retired `--name` refusal names a fresh draw to retry with.
+        let retired = answer.get("retired").and_then(Value::as_str).is_some();
+        let wants =
+            (redraw && outcome == Some("granted")) || (retired && outcome == Some("declined"));
+        if !wants {
+            return;
+        }
+        let drawn = draw_successor_name(
+            store,
+            &registry,
+            scope,
+            None,
+            true,
+            claims_root.as_deref(),
+            &[],
+        );
+        match (drawn, retired) {
+            (Ok(drawn), false) => answer["draw"] = json!({"name": drawn}),
+            (Ok(drawn), true) => {
+                let refusal = answer["refusal"].as_str().unwrap_or("").to_string();
+                answer["refusal"] = json!(format!(
+                    "{refusal}. The machine drew {drawn}: retry with --name {drawn}"
+                ));
+            }
+            (Err(refusal), false) => {
+                answer["outcome"] = json!("declined");
+                answer["refusal"] = json!(refusal);
+            }
+            (Err(e), true) => {
+                let refusal = answer["refusal"].as_str().unwrap_or("").to_string();
+                answer["refusal"] = json!(format!(
+                    "{refusal}. The machine could not draw a fresh name ({e}); retry with --name redraw"
+                ));
+            }
+        }
+        return;
+    }
+    if !succession || outcome != Some("succeeded") {
+        return;
+    }
     // The plan answer names the holders this succession vacates.
     let outgoing: Vec<String> = answer
         .get("holders")
@@ -523,15 +568,12 @@ pub fn settle_draw(payload: &Value, answer: &mut Value, store: &std::path::Path)
     match draw_successor_name(
         store,
         &registry,
-        payload.get("scope").and_then(Value::as_str).unwrap_or(""),
+        scope,
         payload
             .get("proposed_name")
             .and_then(Value::as_str)
             .filter(|p| !p.trim().is_empty()),
-        payload
-            .get("redraw")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        redraw,
         claims_root.as_deref(),
         &outgoing,
     ) {
@@ -687,5 +729,48 @@ mod tests {
         settle_draw(&payload, &mut answer, &store);
         assert_eq!(answer["outcome"], "succeeded");
         assert!(answer.get("draw").is_none());
+    }
+
+    /// A fresh grant draws only when asked: `--name redraw` names the new
+    /// lead, and a retired `--name` refusal names a fresh name to retry with.
+    #[test]
+    fn a_fresh_grant_draws_on_redraw_and_names_a_draw_in_a_retired_refusal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("team_names.json");
+        crate::registry_store::seed_raw(
+            &tmp.path().join("registry.json"),
+            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
+                .to_string(),
+        );
+        let root = tmp.path().to_str().unwrap();
+        let mut answer = json!({"outcome": "granted"});
+        settle_draw(
+            &json!({"scope": "x-aaaa", "claims_root": root}),
+            &mut answer,
+            &store,
+        );
+        assert!(answer.get("draw").is_none(), "{answer}");
+        settle_draw(
+            &json!({"scope": "x-aaaa", "redraw": true, "claims_root": root}),
+            &mut answer,
+            &store,
+        );
+        let drawn = answer["draw"]["name"].as_str().unwrap().to_string();
+        assert_eq!(
+            crate::team_names::pending_draw(&store, "x-aaaa").unwrap(),
+            Some(drawn.to_ascii_lowercase())
+        );
+        let mut answer = json!({"outcome": "declined", "retired": "Rowan",
+            "refusal": "--promote --name requires a fresh person name: Rowan is retired"});
+        settle_draw(
+            &json!({"scope": "x-bbbb", "proposed_name": "Rowan", "claims_root": root}),
+            &mut answer,
+            &store,
+        );
+        let refusal = answer["refusal"].as_str().unwrap();
+        let fresh = refusal.rsplit("--name ").next().unwrap();
+        assert!(refusal.contains("The machine drew"), "{refusal}");
+        assert_ne!(fresh, drawn, "{refusal}");
+        assert_eq!(answer["outcome"], "declined");
     }
 }

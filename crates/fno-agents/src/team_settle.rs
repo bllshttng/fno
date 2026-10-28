@@ -322,17 +322,30 @@ fn holder_ids(holders: &[Holder]) -> Vec<Value> {
         .collect()
 }
 
-/// The refusal for a proposed lead name any machine already drew or bound,
-/// naming who used it and when; `None` when it is fresh. Fail closed: an
-/// unreadable history refuses the ask, never reads the name as fresh. No
-/// declared agents home (a unit test) reads no store.
-fn retired_name_refusal(proposed: &str, door: &str) -> Result<Option<String>, String> {
-    let Some(store_path) = crate::paths::AgentsHome::from_env_opt().map(|h| h.team_names_json())
-    else {
+/// The refusal for a proposed lead name already used anywhere the draw
+/// looks (history, store, registry, bus, handoffs, peer claims), naming who
+/// used it and when; `None` when it is fresh. `draw_scope` accepts the
+/// machine's pending draw over that scope, which the draw itself just made
+/// used. Fail closed: an unreadable source refuses the ask, never reads the
+/// name as fresh. No declared agents home (a unit test) reads no store.
+fn retired_name_refusal(
+    proposed: &str,
+    door: &str,
+    draw_scope: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
         return Ok(None);
     };
-    let used = crate::team_names::history_names(&store_path)
-        .map_err(|e| format!("{door} cannot read the name history: {e}"))?;
+    let store_path = home.team_names_json();
+    if let Some(scope) = draw_scope {
+        let pending = crate::team_names::pending_draw(&store_path, scope)
+            .map_err(|e| format!("{door} cannot read the name history: {e}"))?;
+        if pending.is_some_and(|p| p.eq_ignore_ascii_case(proposed)) {
+            return Ok(None);
+        }
+    }
+    let used = crate::team_names::used_names(&store_path, &home.registry_json())
+        .map_err(|e| format!("{door} cannot read the used names: {e}"))?;
     if !used.contains(&proposed.to_ascii_lowercase()) {
         return Ok(None);
     }
@@ -464,14 +477,18 @@ fn plan_with_projects(
         && crate::team_names::valid_person_name(proposed_name)
         && !exclude_name.is_some_and(|n| n.eq_ignore_ascii_case(proposed_name))
     {
-        if let Some(refusal) = retired_name_refusal(proposed_name, "--promote --name")? {
-            return Ok(plan_answer(
+        if let Some(refusal) = retired_name_refusal(proposed_name, "--promote --name", Some(scope))?
+        {
+            // `retired` asks the settle draw to name a fresh one.
+            let mut answer = plan_answer(
                 "declined",
                 occupancy,
                 Vec::new(),
                 json!(refusal),
                 caller_value,
-            ));
+            );
+            answer["retired"] = json!(proposed_name);
+            return Ok(answer);
         }
     }
 
@@ -580,7 +597,7 @@ fn plan_with_projects(
         // registry move would still commit, and a carry error skips both the
         // journal row and the mail, leaving the team moved unjournaled. A
         // take-over has no draw, so the pending-draw accept never applies.
-        if let Some(refusal) = retired_name_refusal(proposed_name, "--take-over")? {
+        if let Some(refusal) = retired_name_refusal(proposed_name, "--take-over", None)? {
             return Ok(plan_answer(
                 "declined",
                 occupancy,
