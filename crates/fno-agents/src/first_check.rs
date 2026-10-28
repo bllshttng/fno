@@ -223,7 +223,7 @@ fn transfer_birth_claim(row: &RegistryEntry, born_at: i64) -> Result<(), String>
         reason: Some("spawn claim transfer".into()),
         ..Default::default()
     };
-    transfer(&path, parent, &holder, &opts, Some(born_at)).map(|_| ())
+    transfer(&path, parent, &holder, &opts, Some(born_at), true).map(|_| ())
 }
 
 fn transfer(
@@ -232,13 +232,27 @@ fn transfer(
     holder: &str,
     opts: &AcquireOpts,
     born_at: Option<i64>,
+    allow_holder_proof: bool,
 ) -> Result<Option<ClaimRecord>, String> {
     {
         let Some(observed) = crate::claim_store::read_at_path(path)? else {
             return Ok(None);
         };
         let mut claim = observed.clone();
-        if claim.session_id.as_deref() != Some(parent) || claim.holder == holder {
+        // Two successorship proofs. The session match covers the normal mint,
+        // whose identity stamp is the spawning lead's. The launch-window
+        // holder prefix covers the collision case (measured live on a
+        // back-to-back same-slug spawn pair): the second spawn's window claim
+        // can stamp a SIBLING worker's session on this node, and the prefix
+        // is then the only proof this is the birth this row owns. The adopt
+        // paths keep the session proof; their parent IS the claim's session
+        // by construction.
+        let session_proven = claim.session_id.as_deref() == Some(parent);
+        let holder_proven = allow_holder_proof
+            && claim
+                .holder
+                .starts_with(crate::claim_commands::HANDOVER_HOLDER_PREFIX);
+        if (!session_proven && !holder_proven) || claim.holder == holder {
             return Ok(None);
         }
         let now = claims::now_ms();
@@ -301,6 +315,7 @@ pub(crate) fn take_parent_claim(
             holder,
             &parent_opts,
             None,
+            false,
         );
     }
     if holder != format!("target-session:{sid}") {
@@ -327,6 +342,7 @@ pub(crate) fn take_parent_claim(
         holder,
         &child_opts,
         None,
+        false,
     )
 }
 
@@ -742,5 +758,168 @@ mod tests {
             .unwrap();
         run_pass(&home, rearmed, &mut failed).unwrap();
         assert!(read_check().finished, "observed tools suppress the notice");
+    }
+
+    /// The demanded collision test: two back-to-back same-slug spawns mint
+    /// window claims on different nodes, and the second claim's ambient
+    /// identity stamp can carry the FIRST worker's session (measured live
+    /// 2026-10-26). Each node's birth transfer must still bind the claim to
+    /// its own row's session.
+    #[test]
+    fn spawn_handover_window_claims_transfer_after_a_name_collision() {
+        let _lock = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (key, value) in &self.0 {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+        let _restore = Restore(
+            ["FNO_AGENTS_HOME", "FNO_CLAIMS_ROOT", "FNO_CONFIG"]
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect(),
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(temp.path().join("agents"));
+        std::env::set_var("FNO_AGENTS_HOME", home.root());
+        std::env::set_var("FNO_CLAIMS_ROOT", temp.path());
+        let config = temp.path().join("config.toml");
+        std::fs::write(&config, "[agents]\nfirst_check_minutes = 5\n").unwrap();
+        std::env::set_var("FNO_CONFIG", &config);
+
+        let lead = "0f0e7865-86b8-4a9e-8d99-6bd94b0ea9c9";
+        let sibling = "11111111-2222-4333-8444-555555555555";
+        let worker_a = "30a22982-fbc8-4e64-b848-4b82c68a17b3";
+        let worker_b = "47bd9c0e-5a1f-4c2e-9d3a-6e8f0a1b2c3d";
+        let opts = |sid: &str| AcquireOpts {
+            root: None,
+            pid: Some(std::process::id()),
+            ttl_ms: Some(900_000),
+            identity: Some((sid.into(), "claude".into())),
+            ..Default::default()
+        };
+        for (node, sid) in [("x-col-a", lead), ("x-col-b", sibling)] {
+            let key = format!("node:{node}");
+            assert!(matches!(
+                claims::acquire(&key, "spawn-handover:t-dup", opts(sid)),
+                claims::AcquireOutcome::Acquired(_)
+            ));
+        }
+
+        let row = |sid: &str, name: &str, node: &str| {
+            let mut r = RegistryEntry::new(
+                Some(sid.into()),
+                Lineage::captured((
+                    Some(lead.into()),
+                    Some("claude".into()),
+                    Some("/tmp/collision-transfer-test".into()),
+                )),
+            );
+            r.name = name.into();
+            r.harness = Some("claude".into());
+            r.origin = Some("spawn".into());
+            r.status = crate::AgentStatus::Busy;
+            r.node = Some(node.into());
+            r
+        };
+
+        transfer_birth_claim(&row(worker_a, "t-dup", "x-col-a"), 1_000).unwrap();
+        transfer_birth_claim(&row(worker_b, "t-dup-2", "x-col-b"), 1_001).unwrap();
+
+        let (_, a) = claims::status("node:x-col-a", None);
+        let a = a.unwrap();
+        assert_eq!(a.holder, format!("target-session:{worker_a}"));
+        assert_eq!(a.session_id.as_deref(), Some(worker_a));
+        let (_, b) = claims::status("node:x-col-b", None);
+        let b = b.unwrap();
+        assert_eq!(b.holder, format!("target-session:{worker_b}"));
+        assert_eq!(b.session_id.as_deref(), Some(worker_b));
+    }
+
+    /// An already-transferred window claim is a no-op for a second birth
+    /// pass, a claim on a node with no row birth is left for the TTL, and a
+    /// foreign holder is never stolen.
+    #[test]
+    fn spawn_handover_birth_transfer_is_idempotent_and_spares_foreign_holders() {
+        let _lock = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (key, value) in &self.0 {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+        let _restore = Restore(
+            ["FNO_AGENTS_HOME", "FNO_CLAIMS_ROOT", "FNO_CONFIG"]
+                .into_iter()
+                .map(|key| (key, std::env::var_os(key)))
+                .collect(),
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(temp.path().join("agents"));
+        std::env::set_var("FNO_AGENTS_HOME", home.root());
+        std::env::set_var("FNO_CLAIMS_ROOT", temp.path());
+        let config = temp.path().join("config.toml");
+        std::fs::write(&config, "[agents]\nfirst_check_minutes = 5\n").unwrap();
+        std::env::set_var("FNO_CONFIG", &config);
+
+        let lead = "0f0e7865-86b8-4a9e-8d99-6bd94b0ea9c9";
+        let worker = "30a22982-fbc8-4e64-b848-4b82c68a17b3";
+        let mut row = RegistryEntry::new(
+            Some(worker.into()),
+            Lineage::captured((
+                Some(lead.into()),
+                Some("claude".into()),
+                Some("/tmp/collision-transfer-test".into()),
+            )),
+        );
+        row.name = "t-dup".into();
+        row.harness = Some("claude".into());
+        row.origin = Some("spawn".into());
+        row.status = crate::AgentStatus::Busy;
+        row.node = Some("x-col-idem".into());
+
+        // No claim on the node: the transfer is a nothing, not an error.
+        transfer_birth_claim(&row, 1_000).unwrap();
+
+        let opts = AcquireOpts {
+            root: None,
+            pid: Some(std::process::id()),
+            ttl_ms: Some(900_000),
+            identity: Some((
+                "77777777-8888-4999-8aaa-bbbbbbbbbbbb".into(),
+                "claude".into(),
+            )),
+            ..Default::default()
+        };
+        assert!(matches!(
+            claims::acquire("node:x-col-idem", "spawn-handover:t-dup", opts),
+            claims::AcquireOutcome::Acquired(_)
+        ));
+        transfer_birth_claim(&row, 1_001).unwrap();
+        let (_, claim) = claims::status("node:x-col-idem", None);
+        let claim = claim.unwrap();
+        assert_eq!(claim.holder, format!("target-session:{worker}"));
+
+        // Second pass: the claim already reads target-session:<worker>, so
+        // the transfer re-observes and writes nothing.
+        let before = claim.clone();
+        transfer_birth_claim(&row, 1_002).unwrap();
+        let (_, again) = claims::status("node:x-col-idem", None);
+        assert_eq!(again.unwrap(), before);
     }
 }

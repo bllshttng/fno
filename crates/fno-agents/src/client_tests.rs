@@ -1607,7 +1607,7 @@ fn status_rows() {
     failing.failing = true;
     let rows = vec![unobserved, fresh_no_op, stale, failing];
 
-    let payload = degraded_status_payload(&rows);
+    let payload = fno_agents::status_render::degraded_status_payload(&rows);
     assert_eq!(payload["schema_version"], 1);
     assert!(payload["daemon"].is_null());
     assert_eq!(payload["arms"].as_array().map(Vec::len), Some(4));
@@ -1622,7 +1622,7 @@ fn status_rows() {
     assert!(attention.contains(&"a_stale"), "{attention:?}");
     assert!(attention.contains(&"a_failing"), "{attention:?}");
 
-    let payload = degraded_status_payload(&[]);
+    let payload = fno_agents::status_render::degraded_status_payload(&[]);
     let stuck = &payload["stuck_work"];
     assert!(stuck.is_object(), "{stuck}");
     if let Some(err) = stuck.get("error").and_then(|e| e.as_str()) {

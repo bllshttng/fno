@@ -22,7 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from fno.hermetic import classify, neutralise
+from fno.hermetic import classify
+from fno.test_env_door import apply_env
 
 TESTS_ROOT = Path(__file__).resolve().parent
 
@@ -133,8 +134,9 @@ def test_no_test_module_reads_an_ambient_env_at_import():
             "shared conftest swaps os.environ before any test module loads, so "
             "each read always sees the name unset:\n"
             + "\n".join(lines)
-            + "\n\nFix each one: either name the var in hermetic._RUNNER_PASSTHROUGH "
-            "(an operator opt-in that must survive the sandbox) or read it at "
+            + "\n\nFix each one: either name the var in the shared vocabulary's "
+            "runner_passthrough (an operator opt-in that must survive the "
+            "sandbox) or read it at "
             "test time through the conftest seam that caught it before the swap.",
             pytrace=False,
         )
@@ -143,9 +145,21 @@ def test_no_test_module_reads_an_ambient_env_at_import():
 def test_opt_in_live_flags_survive_the_sandbox():
     """The live journey stays runnable for whoever sets their flag, while
     the session-marker strip stands."""
-    out = neutralise(
-        {"FNO_CODEX_LIVE": "1", "CLAUDE_CODE_SESSION_ID": "sess-1"},
-        Path(tempfile.mkdtemp()),
-    )
+    import os
+
+    probes = {"FNO_CODEX_LIVE": "1", "CLAUDE_CODE_SESSION_ID": "sess-1"}
+    # The door resolves the binary from this very dict; keep a real
+    # FNO_AGENTS_BIN pin so the native assembly runs at all. It is
+    # environment-class, so neither assertion below reads it.
+    real_bin = os.environ.get("FNO_AGENTS_BIN")
+    if real_bin:
+        probes["FNO_AGENTS_BIN"] = real_bin
+    try:
+        out = apply_env("neutralise", probes, sandbox=Path(tempfile.mkdtemp()))
+    except SystemExit:
+        pytest.skip(
+            "no fno-agents here can speak the env door (stale install); "
+            "install the crate fresh or run through 'fno doctor test' in CI"
+        )
     assert out.get("FNO_CODEX_LIVE") == "1"
     assert "CLAUDE_CODE_SESSION_ID" not in out

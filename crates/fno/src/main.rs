@@ -312,6 +312,11 @@ enum Role {
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
+    /// `fno doctor test ...` and the deprecated hidden root `fno test`: the
+    /// whole test command (pytest/rust/smoke/changed/census), exec'd as
+    /// `fno-agents test`. The tail rides byte-verbatim; --help answers native
+    /// help inside the command.
+    DoctorTest(Vec<OsString>),
     DoctorHome(Vec<OsString>),
     DoctorAgentsExec(&'static str, Vec<OsString>),
     /// `fno agents mail show ...`: the native one-message reader, lexically
@@ -435,6 +440,18 @@ enum Role {
     /// `fno inbox day start|end`: the native day boundary; the carried tail
     /// is the `fno-agents day` argv.
     InboxDay(Vec<OsString>),
+    /// `fno inbox notify TITLE MESSAGE [--pointer P]`: the operator-notice
+    /// command, answered in-process by `notify_dispatch` (the Python wheel's app
+    /// for this spelling is deleted). Also serves `fno notify` after the
+    /// deprecated-move line.
+    InboxNotify(Vec<OsString>),
+    /// `fno notify ...`: the deprecated root spelling; the dispatch prints the
+    /// one stderr move line, then answers as `inbox notify`.
+    NotifyDeprecated(Vec<OsString>),
+    /// `fno status-fanout ...`: the deprecated root spelling of
+    /// `fno doctor event fanout`; the dispatch prints the one stderr move
+    /// line, then runs the fanout door with the remaining args.
+    StatusFanoutDeprecated(Vec<OsString>),
     /// `fno board-render`: the local board's snapshot writer, a native front
     /// command because the page and the read model both live in this crate.
     BoardRender(Vec<String>),
@@ -652,6 +669,19 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
         return None;
     }
     Some(args[2..].to_vec())
+}
+
+/// `fno doctor test ...` and the deprecated hidden root `fno test`: the whole
+/// command claims itself lexically, the tail byte-verbatim. A bare command and
+/// --help claim too (the Python leg dies in this port); the native command owns
+/// its help and its refusals.
+fn classify_test_command(args: &[OsString]) -> Option<Vec<OsString>> {
+    let rest: &[OsString] = match args.first()?.to_str()? {
+        "doctor" if args.get(1)?.to_str()? == "test" => &args[2..],
+        "test" => &args[1..],
+        _ => return None,
+    };
+    Some(rest.to_vec())
 }
 
 /// `fno doctor observer ...` and the deprecated root `fno observer ...`: the
@@ -1201,6 +1231,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_group_command(args, "doctor", "builds") {
         return Role::DoctorBuilds(rest);
     }
+    if let Some(rest) = classify_test_command(args) {
+        return Role::DoctorTest(rest);
+    }
     match fno::doctor::classify(args) {
         Some(fno::doctor::Claim::Home(rest)) => return Role::DoctorHome(rest),
         Some(fno::doctor::Claim::AgentsExec(label, argv)) => {
@@ -1354,6 +1387,17 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
+    }
+    if let Some(rest) = fno::notify_dispatch::classify_inbox_notify(args) {
+        return Role::InboxNotify(rest);
+    }
+    if let Some(rest) = fno::notify_dispatch::classify_root_notify(args) {
+        return Role::NotifyDeprecated(rest);
+    }
+    // `fno status-fanout ...`: the deprecated root spelling, moved to
+    // `fno doctor event fanout`. Lexical claim: only the bare first token.
+    if args.first().and_then(|a| a.to_str()) == Some("status-fanout") {
+        return Role::StatusFanoutDeprecated(args.split_first().unwrap().1.to_vec());
     }
     if let Some(rest) = fno::backlog_snapshot::classify(args) {
         return Role::BoardRender(rest);
@@ -1865,6 +1909,9 @@ fn main() {
             &["test-run", "builds"],
             &rest,
         )),
+        Role::DoctorTest(rest) => {
+            std::process::exit(fno_agents_exec("fno doctor test", &["test"], &rest))
+        }
         Role::DoctorHome(rest) => std::process::exit(fno::doctor::run(&rest)),
         Role::DoctorAgentsExec(label, argv) => {
             let action: Vec<String> = argv
@@ -2002,6 +2049,17 @@ fn main() {
         Role::InboxDecide(rest) => std::process::exit(fno::law_cli::run_decide(&rest)),
         Role::InboxUser(argv) => {
             std::process::exit(fno_agents_exec("fno inbox", &["compaction"], &argv))
+        }
+        Role::InboxNotify(rest) => std::process::exit(fno::notify_dispatch::run(&rest)),
+        Role::NotifyDeprecated(rest) => {
+            eprintln!("{}", fno::notify_dispatch::DEPRECATED_MOVE_LINE);
+            std::process::exit(fno::notify_dispatch::run(&rest))
+        }
+        Role::StatusFanoutDeprecated(rest) => {
+            eprintln!("fno status-fanout is now fno doctor event fanout");
+            let mut argv: Vec<OsString> = vec!["fanout".into()];
+            argv.extend(rest);
+            std::process::exit(fno::event_cli::run(&argv))
         }
         Role::InboxOutstanding(rest) => std::process::exit(fno_agents_exec(
             "fno inbox outstanding",

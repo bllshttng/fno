@@ -7,7 +7,7 @@
 # from "the instrument never ran".
 #
 # So this asserts both halves against the canary, which reads a channel
-# fno/hermetic.py deliberately does not scrub:
+# the env builder deliberately does not scrub:
 #
 #   clean lane -> canary unset  -> the canary test PASSES
 #   dirty lane -> canary leaks  -> the canary test FAILS
@@ -31,16 +31,17 @@ CANARY_TEST="cli/tests/unit/test_ambient_canary.py"
 PY="$REPO_ROOT/cli/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"
 
-# Run the canary through fno's own child-env builder, in one lane, and report
-# the pytest exit code. Going through _child_env is the point: that is the
+# Run the canary through the native test-env door, in one lane, and report
+# the pytest exit code. Going through the door is the point: that is the
 # boundary the real smoke run uses, so this exercises the shipped path rather
 # than a re-implementation of it.
 run_lane() {
   local mode="$1"
   PYTHONPATH="$REPO_ROOT/cli/src" "$PY" - "$mode" "$CANARY_TEST" <<'PYEOF' >/dev/null 2>&1
-import os, subprocess, sys
+import json, os, subprocess, sys, tempfile
 from pathlib import Path
-import fno.test_cmd as tc
+
+from fno.test_env_door import apply_env
 from fno.hermetic import AMBIENT_LEAK_CANARY
 
 mode, test_path = sys.argv[1], sys.argv[2]
@@ -49,15 +50,19 @@ root = Path.cwd()
 # The clean lane has to be clean BY CONSTRUCTION, not by assuming this
 # process's own parent was. When the whole smoke runs under `--ambient dirty`,
 # THIS script is itself a poisoned child: the canary is in its environment by
-# design (it is the one thing neutralise deliberately lets through), so a
-# clean sub-lane built from os.environ inherits it and the clean half fails.
-#
-# That is the same defect the suite is being checked for, in the checker. Drop
-# it explicitly; the dirty lane gets it back from poison() a line later.
+# design (it is the one thing the env builder deliberately lets through), so
+# a clean sub-lane built from os.environ inherits it and the clean half
+# fails. That is the same defect the suite is being checked for, in the
+# checker. Drop it explicitly; the dirty lane gets it back from the poison
+# door a line later.
 os.environ.pop(AMBIENT_LEAK_CANARY, None)
 
-tc._AMBIENT_MODE = mode
-env = tc._child_env(root)
+sandbox = Path(tempfile.mkdtemp(prefix="fno-lane-sandbox-"))
+env = apply_env("neutralise", dict(os.environ), sandbox=sandbox)
+if mode == "dirty":
+    env = apply_env(
+        "poison", env, fixtures=str(Path("cli/tests/fixtures/ambient-poison").resolve())
+    )
 sys.exit(subprocess.run(
     [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", test_path],
     env=env, cwd=root,

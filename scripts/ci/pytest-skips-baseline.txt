@@ -58,7 +58,9 @@ cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_apply_salv
 cli/tests/integration/test_worktree_cleanup_merged.py::test_done_node_salvage_failure_keeps_tree::marker.requires_gate  # on main before this ratchet
 cli/tests/integration/test_worktree_cleanup_merged.py::test_aggressive_salvages_the_tracked_diff_to_a_ref_then_prunes::marker.requires_gate  # the sweep under test needs the fno-agents gate binary; CI builders without it skip rather than fail
 cli/tests/unit/test_backlog_single_flight.py::iso::pytest.skip  # on main before this ratchet
+cli/tests/unit/test_ambient_surface.py::test_classify_agrees_with_the_scrub::pytest.skip  # the scrub agreement needs a binary that speaks the env door; a stale install cannot verify it and CI's fresh pinned copy proves it
 cli/tests/unit/test_blueprint_batching_rule.py::test_behavioral_dispatch_plan_batches_the_shape_pair::mark.skipif  # on main before this ratchet
+cli/tests/test_import_time_env_reads.py::test_opt_in_live_flags_survive_the_sandbox::pytest.skip  # the passthrough proof needs a binary that speaks the env door; a stale install cannot verify it and CI's fresh pinned copy proves it
 cli/tests/unit/test_claim_rebind.py::test_rebind_live_different_pid_refuses_concurrent_writer::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_claims_core.py::TestSessionWitnessVerdicts.test_status_live_session_never_reads_stale::marker.requires_rust  # on main before this ratchet

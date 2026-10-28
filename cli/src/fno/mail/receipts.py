@@ -485,11 +485,11 @@ def _escalate_to_human(
     # send_notification returns (code, err) and a nonzero code means no OS
     # notifier (a headless host), so the human was NOT notified.
     try:
-        from fno.notify._impl import send_notification
+        from fno.rust_binary import notify_operator
 
         one_line = summary.split("\n", 1)[0][:120]
         label = "missed you" if reason in ("attended-miss", "reachable-miss") else "question"
-        code, _err = send_notification(
+        code, _err = notify_operator(
             f"fno agents mail: {label} from {sender}",
             f"{one_line} - run `fno agents mail drain-self`",
         )
