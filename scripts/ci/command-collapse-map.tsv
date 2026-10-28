@@ -363,20 +363,6 @@ scoreboard	KEEP	scoreboard	13	single-leaf group
 config plugin	T1	config plugin	0
 doctor reclaim	T1	doctor reclaim	0
 status-fanout tick	KEEP	status-fanout tick	4	single-leaf group
-stub-manifest reconcile-finalize	T1	stub-manifest reconcile-finalize	1
-stub-manifest reconcile-validate	T1	stub-manifest reconcile-validate	2
-stub-manifest write	T1	stub-manifest write	2
-target blast-check	T1	target blast-check	3
-target check-contained	T1	target check-contained	4
-target check-dispatch-hold	T1	target check-dispatch-hold	2
-target check-review-gate	T1	target check-review-gate	4
-target denominator-ratio	T1	target denominator-ratio	2
-target request-self-review	T1	target request-self-review	12
-target resolve-model	T1	target resolve-model	2
-target resolve-owned-identity	T1	target resolve-owned-identity	3
-target review-invocation	T1	target review-invocation	4
-target status	T1	target status	8
->>>>>>> origin/main
 update	KEEP	update	88	single-leaf group
 version	KEEP	version	15	single-leaf group
 agents stale-escalate	T1	agents stale-escalate	6
