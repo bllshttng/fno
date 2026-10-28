@@ -352,6 +352,28 @@ fn is_image_file(path: &Path) -> bool {
         || (head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP"))
 }
 
+/// A png `fno mux serve --snapshot` stamped: its frame painted an image with
+/// no image protocol, so it shows the half-block path and never the kitty
+/// one. The stamp is a `tEXt` chunk, `fno-snapshot` / `no-image-protocol`.
+fn snapshot_without_image_protocol(path: &Path) -> bool {
+    let Ok(png) = std::fs::read(path) else {
+        return false;
+    };
+    let mut at = 8;
+    while let Some(head) = png.get(at..at + 8) {
+        let len = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+        let Some(data) = png.get(at + 8..at + 8 + len) else {
+            return false;
+        };
+        match &head[4..8] {
+            b"tEXt" if data == b"fno-snapshot\0no-image-protocol" => return true,
+            b"IDAT" | b"IEND" => return false,
+            _ => at += 12 + len,
+        }
+    }
+    false
+}
+
 /// Copy each screenshot to `<dir>/<qid>-<n>-<name>`, so the vault holds it
 /// next to the page and Obsidian's `![[name]]` resolves it by its unique
 /// name. Returns the copies' absolute paths.
@@ -745,12 +767,28 @@ call - name it with why_user: in the question file (law-change for a law)."
         answer.exit_code = 2;
         return answer;
     }
-    if req.images.is_empty()
-        && asks_visual_approval(
-            req.subject.as_deref(),
-            &title_of(&req.question, &parsed.title),
-        )
+    let visual = asks_visual_approval(
+        req.subject.as_deref(),
+        &title_of(&req.question, &parsed.title),
+    );
+    if visual
+        && !req.images.is_empty()
+        && req
+            .images
+            .iter()
+            .all(|p| snapshot_without_image_protocol(p))
     {
+        answer.lines.push(
+            "outstanding: refused: every shot is an fno mux snapshot of an image view. The \
+snapshot has no image protocol, so it shows half-blocks and never the kitty image. Add a \
+capture from a real terminal (Ghostty, kitty or WezTerm) with --image."
+                .to_string(),
+        );
+        answer.refusal = Some("screens_protocol".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+    if req.images.is_empty() && visual {
         answer.lines.push(
             "outstanding: refused: a visual-approval question carries the screens the user \
 judges. Pass each screenshot with --image <path>; the page embeds them under ## Screens."
@@ -1316,6 +1354,19 @@ stops
             run_intake(&r, &home).refusal.as_deref(),
             Some("image"),
             "a renamed text file is no image"
+        );
+        // A snapshot of an image view carries the stamp: alone it cannot show
+        // the kitty image, so the ask is refused.
+        let text = b"fno-snapshot\0no-image-protocol";
+        let mut stamped = b"\x89PNG\r\n\x1a\n".to_vec();
+        stamped.extend_from_slice(&(text.len() as u32).to_be_bytes());
+        stamped.extend_from_slice(b"tEXt");
+        stamped.extend_from_slice(text);
+        stamped.extend_from_slice(&[0; 4]);
+        std::fs::write(&shot, &stamped).unwrap();
+        assert_eq!(
+            run_intake(&r, &home).refusal.as_deref(),
+            Some("screens_protocol")
         );
         let png = b"\x89PNG\r\n\x1a\n-pixels";
         std::fs::write(&shot, png).unwrap();
