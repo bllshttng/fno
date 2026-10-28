@@ -1,5 +1,5 @@
-"""The synthetic fleet for x-f434: idle glm/opus rows the wake lane must list,
-and missing-identity rows the outage collector must attribute by model.
+"""The synthetic idle fleet: idle glm/opus rows the wake lane must list, and
+missing-identity rows the outage collector must attribute by model.
 
 Registry shape mirrors the 2026-10-27 measurement: 38 of 45 rows carry no
 route_provider_id/account_record_id, while 32 of 37 transcripts name the model
