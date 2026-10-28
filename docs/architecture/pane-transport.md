@@ -46,18 +46,23 @@ There are THREE cases here and only two flags, which is how one of them got lost
 
 ## Receipt vocabulary
 
-Four words now, and they are not interchangeable.
+A live send reports one of six states, in this order. A send reaches an accepted state only when the receiving harness's own turn record holds the envelope id. A turn that started is not that proof: it may be an earlier queued prompt, with our message still behind it. Text in the composer is a draft, not a delivery.
 
-| Receipt | What it asserts | What it does not assert |
-|---------|-----------------|-------------------------|
-| `delivered (hosted)` | The injector confirmed the payload was accepted at send time | That it reached the recipient's turn, or anything about what the recipient did with it |
-| `landed` | The message id is present in the recipient's own transcript | That the agent read it or acted on it |
-| `typed (pane <id>)` | Bytes were written into that pane | That anyone read them, or that the turn was taken |
-| `queued (durable) [<reason>]` | A durable envelope exists and the named live lane missed | That the recipient is gone. `live-miss` today cannot tell a busy peer from an absent one |
+| State | What it asserts | What it does not assert |
+|-------|-----------------|-------------------------|
+| `queued` | A durable copy is on the bus. No live lane reached the recipient | That the recipient is gone. A busy peer and an absent one look the same here |
+| `injected` | Bytes were written, or an RPC was sent, and no turn record holds the envelope yet | That the harness took it. A harness with no local record (cursor-agent, agy, a claude cloud row) stops here |
+| `parked (composer)` | The body sits typed in the input box and was not submitted | That it will ever run. Someone must submit or clear it |
+| `parked (harness-queue)` | The harness took the body into its own queue behind the running turn | That a turn has read it yet |
+| `accepted-new-turn` | The harness's turn record holds the envelope id, as its own turn | That the agent acted on it |
+| `accepted-steer` | The same record, folded into the turn that was running at send | That the agent acted on it. A steer means it was read mid-turn |
+| `failed (<reason>)` | Nothing sits with the recipient: a refusal before any byte, or a typed line withdrawn on silence | Anything about the recipient's health. The bus copy stays drainable |
 
-`delivered (hosted)` used to be read as proof the recipient's turn was reached. One message disproved that. It printed `delivered (hosted)`. It reached its recipient only because the operator pressed ESC to interrupt a busy loop. The send had confirmed nothing beyond its own injection. `landed` is the row that grew out of that gap. It is proven by grepping the recipient's own transcript for the bare message id (`fno agents mail admin sent --json`). It is a strictly weaker claim than the old wording implied.
+Each lane reads its own proof source. A claude pane or thread reads the session transcript: a `user` record is a new turn, a `queued_command` attachment is a steer, and a `queue-operation` row alone is the harness queue. A codex pane or thread reads the rollout: the user message item carries a `turn_id`, and that id equal to the turn running at send is a steer (measured on codex 0.164.0: the rollout holds a busy-turn submit within a second). An ACP host (footnote) writes `accepted-new-turn` when its queued prompt starts as `session/prompt`; ACP has no steer. A Muse thread reports the state its MSP events fold to. opencode serve has no steer read, so it reports `accepted-new-turn` for both.
 
-`typed` is deliberately not `delivered`. Bytes written to a PTY is not delivery and is certainly not action. A full payload can arrive, render, and be discarded while the return selects a prompt's default. The confirmation a pane send cannot give is the recipient's own transcript showing the text.
+The bus keeps the history as append-only `kind: state` rows (`meta.of` names the message, `meta.state` the word). Readers fold them with `mail_delivery_state::newest_state`: an accepted row is terminal, so a retry never lowers it. A row from before the states reads through its `delivery` mark: `hosted` reads `accepted-new-turn`, `typed` reads `injected`, and no mark reads `queued`. `fno agents mail admin sent` prints the state of every message you sent, and its `--json` rows carry `state`. The mux Messages tab prints the state under each sent message and marks a chat whose last message is parked or failed with `!`.
+
+The words replace `delivered (...)`. That receipt only ever meant a lane returned Ok. A codex `turn/start` printed it on any turn id, without reading the rollout, and a pane paste printed it with no submit at all. One message printed it and reached its recipient only because the operator pressed ESC to interrupt a busy loop. `landed` stays as the after-the-fact transcript match, and it now folds into `accepted-new-turn`.
 
 The same rule now governs the keeper-hosted threads. A send confirms only from the hosted harness's own accepted-turn record, read past the byte boundary captured before the paste. On pi that record is the session file materialized at the first turn attempt, matched on the full envelope line. Composer echo and scrollback repaint are typing progress, never evidence. A harness with no local record (cursor-agent, agy) types the message and stays unconfirmed for the whole confirm budget. The durable floor then writes the recovery copy. A paint match on a truncated marker prefix once reported delivered for a draft that was never submitted, so the prefix matcher is gone.
 

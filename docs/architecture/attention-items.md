@@ -193,7 +193,7 @@ Discord needs Message Content Intent turned on for the bot. Without it Discord r
 
 The arm's mux pass runs on every beat beside the pages. Every unsuperseded `attention_answer` row, whatever its sink, drives one reply ladder from the persisted state at `~/.fno/state/attention/replies.json`. First the clear: while the item is still open, the arm runs `fno inbox outstanding clear` (the same retry cap as the file lane, five). A note item skips the clear, because no door closes a note. Then the rungs, in order:
 
-1. `mail` - the clear's mail leg. The posture line decides: `delivered (hosted)` is the end, `rung: mail, outcome: landed`.
+1. `mail` - the clear's mail leg. The posture line decides: a receipt whose bytes reached the recipient (`injected`, `parked`, or `accepted-*`) is the end, `rung: mail, outcome: landed`.
 2. `resume` - a durable park under an idle asker. When the asker has a session id, the arm runs `fno agents session resume <session_id> --message <answer>`. This is the one resume door, with a 30 s bound and stdin closed. The message carries the question id and a dedupe line. A later beat looks for the question id in the asker's transcript, after the byte offset the resume saved. Seeing it confirms delivery (`rung: resume, outcome: confirmed`).
 3. `role` - an exit-17 resume, a nonzero exit, a missing transcript, or five unconfirmed minutes. The arm mails the answer, wrapped, to the live role whose territory names the asker's node (`rung: role, outcome: sent`). With no role, the row reads `rung: none, outcome: failed` and the evidence names why.
 
