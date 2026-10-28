@@ -7,6 +7,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::Path;
 
 /// One `operator_question_closed` fold row: the last close per question id.
 #[derive(Debug, Clone, PartialEq)]
@@ -441,11 +442,21 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
                 .map(str::to_string),
         })
     });
+    // A question asked on another machine names that machine's vault; a
+    // path missing here re-roots onto this machine's synced copy.
     let images: Vec<String> = arr_field(row, "images")
         .map(|a| {
             a.iter()
                 .filter_map(Value::as_str)
-                .map(str::to_string)
+                .map(|p| {
+                    if Path::new(p).exists() {
+                        return p.to_string();
+                    }
+                    let cwd = std::env::current_dir().unwrap_or_default();
+                    crate::escalation::rebase_vault_path(p, &cwd)
+                        .filter(|local| local.exists())
+                        .map_or_else(|| p.to_string(), |l| l.to_string_lossy().into_owned())
+                })
                 .collect()
         })
         .unwrap_or_default();

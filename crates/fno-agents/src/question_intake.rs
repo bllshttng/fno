@@ -325,16 +325,31 @@ fn names_a_pr(lower: &str) -> bool {
     })
 }
 
-/// An image the viewer and Obsidian both show, judged by extension.
+/// An image the viewer and Obsidian both show: a png, jpg, gif or webp
+/// extension, and a regular file whose first bytes carry that format's
+/// signature. A renamed text file would satisfy the screens refusal and
+/// still show nothing.
 fn is_image_file(path: &Path) -> bool {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase);
-    matches!(
+    if !matches!(
         ext.as_deref(),
         Some("png" | "jpg" | "jpeg" | "gif" | "webp")
-    ) && path.is_file()
+    ) || !path.is_file()
+    {
+        return false;
+    }
+    let mut head = [0u8; 12];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .unwrap_or(0);
+    let head = &head[..n];
+    head.starts_with(b"\x89PNG\r\n\x1a\n")
+        || head.starts_with(b"\xff\xd8\xff")
+        || head.starts_with(b"GIF8")
+        || (head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP"))
 }
 
 /// Copy each screenshot to `<dir>/<qid>-<n>-<name>`, so the vault holds it
@@ -1277,13 +1292,20 @@ stops
 
         let shot = root.join("bell.png");
         std::fs::write(&shot, b"png").unwrap();
-        r.images = vec![shot];
+        r.images = vec![shot.clone()];
+        assert_eq!(
+            run_intake(&r, &home).refusal.as_deref(),
+            Some("image"),
+            "a renamed text file is no image"
+        );
+        let png = b"\x89PNG\r\n\x1a\n-pixels";
+        std::fs::write(&shot, png).unwrap();
         r.screens_dir = Some(root.join("questions/screens"));
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 0, "{:?}", answer.lines);
         let qid = answer.qid.unwrap();
         let copy = root.join(format!("questions/screens/{qid}-1-bell.png"));
-        assert_eq!(std::fs::read(&copy).unwrap(), b"png");
+        assert_eq!(std::fs::read(&copy).unwrap(), png);
         let row: Value = serde_json::from_str(journal_text(&root).lines().last().unwrap()).unwrap();
         let images = row["data"]["images"].as_array().unwrap();
         assert_eq!(images.len(), 1);
