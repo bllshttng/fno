@@ -6550,7 +6550,7 @@ event_types:
           description: "Wall-clock seconds from tick entry to this record."
         phase:
           type: string
-          description: "Last stage marker reached: one of entry, settings, lock, discover, sweep, dispatch, recovery, watchdog, lead_wake, heal, stranded, catchup."
+          description: "Last stage marker reached: one of entry, settings, lock, discover, sweep, dispatch, recovery, watchdog, heal, stranded, catchup."
         why:
           type: string
           enum: [deadline_exceeded, slice_starved, self_killed, killed]

@@ -755,8 +755,8 @@ def _run_tick(
     # backend has no equivalent yet, so this tick degrades to "nothing to
     # sweep" rather than reading the wrong store (mirrors _catchup_roots'
     # existing no-graph degrade for the same daemon). graph_entries is the
-    # tick's one ident-keyed memo: sweep discovery and lead_wake share a
-    # single real read of the 15 MB store instead of queueing on it twice.
+    # tick's one ident-keyed memo: a single real read of the 15 MB store
+    # per unchanged graph.
     entries = graph_entries(gpath)
     candidates = discover_fn(entries)
 

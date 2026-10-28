@@ -145,7 +145,7 @@ pub fn run_last_run(args: &[String]) -> i32 {
 
 /// The graph rows the drain reads. Strict: an unreadable graph is an
 /// error, never an empty scope a walk would read as drained.
-fn scope_rows(cwd: &Path) -> Result<Vec<Value>, String> {
+pub(crate) fn scope_rows(cwd: &Path) -> Result<Vec<Value>, String> {
     let path = crate::org_board::scope::graph_json_path(cwd);
     crate::graph_store::read_rows_where_strict(
         &path,
@@ -183,7 +183,7 @@ pub(crate) fn scope_ids(scope: &str, rows: &[Value], cwd: &Path) -> Result<Vec<S
 
 /// Scope nodes not closed for good, over ids already compiled. Closure is
 /// `is_terminal_entry`, never a bare completed_at test.
-fn undelivered_of(ids: &[String], rows: &[Value]) -> i64 {
+pub(crate) fn undelivered_of(ids: &[String], rows: &[Value]) -> i64 {
     let ids: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
     rows.iter()
         .filter(|row| {
@@ -356,7 +356,7 @@ fn manifest_int(fields: &Map<String, Value>, key: &str, default: i64) -> i64 {
 }
 
 /// `(at_ceiling, ceiling)`: the respawn budget with the Rust walk's defaults.
-fn respawn_budget(fields: &Map<String, Value>) -> (bool, i64) {
+pub(crate) fn respawn_budget(fields: &Map<String, Value>) -> (bool, i64) {
     let ceiling = manifest_int(fields, "respawn_ceiling", DEFAULT_RESPAWN_CEILING);
     (
         ceiling > 0 && manifest_int(fields, "respawn_count", 0) >= ceiling,
@@ -366,7 +366,7 @@ fn respawn_budget(fields: &Map<String, Value>) -> (bool, i64) {
 
 /// The stamps inside the trailing 24h, oldest first. An unparseable stamp
 /// is dropped.
-fn read_wakes(path: &Path, now: i64) -> Vec<i64> {
+pub(crate) fn read_wakes(path: &Path, now: i64) -> Vec<i64> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
@@ -417,7 +417,7 @@ fn rewrite_wake_times(path: &Path, stamps: &[i64]) -> Result<(), String> {
 /// Decide AND bill one wake under the manifest lock, so two overlapping
 /// ticks cannot both dispatch: `(refusal, count)`, refusal empty on allow.
 /// A ceiling of 0 is the unbounded spelling.
-fn admit_wake(
+pub(crate) fn admit_wake(
     path: &Path,
     now: i64,
     ceiling: i64,
@@ -510,7 +510,7 @@ fn manifest_for_session(root: &Path, session: &str) -> Option<Map<String, Value>
 /// Merge `fields` into a JSON sidecar under the manifest-lock helper, so two
 /// overlapping ticks never lose each other's key. A corrupt sidecar reads
 /// as empty.
-fn update_sidecar(path: &Path, fields: &Map<String, Value>) -> Result<(), String> {
+pub(crate) fn update_sidecar(path: &Path, fields: &Map<String, Value>) -> Result<(), String> {
     crate::lead_state::with_manifest_lock(path, || {
         let mut data: Map<String, Value> = std::fs::read_to_string(path)
             .ok()
