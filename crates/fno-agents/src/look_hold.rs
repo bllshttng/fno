@@ -14,8 +14,8 @@ use crate::ci_tier::{word, Head};
 use crate::paths::AgentsHome;
 
 const INTERVAL: Duration = Duration::from_secs(120);
-// A look can wait days for the user.
-const WINDOW_MS: i64 = 7 * 24 * 3_600_000;
+// A look can wait weeks; GitHub reruns a run only for 30 days.
+const WINDOW_MS: i64 = 30 * 24 * 3_600_000;
 pub(crate) const CANCEL_EVENT: &str = "look_hold_cancel";
 pub(crate) const RELEASE_EVENT: &str = "look_hold_release";
 /// The workflow a held head keeps when `merge.visual_shot_workflows` is
