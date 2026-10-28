@@ -55,29 +55,21 @@ def _shim_binary() -> Optional[Path]:
     return binary
 
 
-#: Every temp root a fixture or a fallback shim can live under, fixed at
-#: import so the verdict cannot drift with the calling process's env: a
-#: driver or daemon exec'd with a scrubbed env floors tempfile.gettempdir()
-#: to /tmp while the fixture sits under the OS temp root, and one misread
-#: then wrote the durable shim a temp sweep deletes (2026-10-28: every gh
-#: call on the machine failed for minutes).
+# Temp roots a fixture or a fallback shim can live under, fixed at import so
+# the verdict cannot drift with the caller's env: a scrubbed-env driver
+# floors tempfile.gettempdir() to /tmp while the fixture sits under the OS
+# temp root, and one misread wrote the durable shim a sweep deletes.
 _TEMP_BASES = (
-    os.path.realpath(tempfile.gettempdir()),
-    tempfile.gettempdir(),
-    "/tmp",
-    "/private/tmp",
-    "/var/tmp",
-    "/private/var/tmp",
-    "/var/folders",
-    "/private/var/folders",
+    os.path.realpath(tempfile.gettempdir()), tempfile.gettempdir(),
+    "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp",
+    "/var/folders", "/private/var/folders",
 )
 
 
 def _in_temp(path: Path) -> bool:
-    # Judge the path itself, in raw and resolved spellings: realpath answers
-    # a missing path lexically (resolving /var to /private/var) while the
-    # raw form carries the spelling the writer saw, and a strictly-under
-    # test keeps a sibling that shares the prefix string out.
+    # The path's own spellings, raw and resolved, strictly under a base: the
+    # caller's tempdir need not be the binary's, and a sibling sharing the
+    # prefix string is not under it.
     spellings = (str(path), os.path.realpath(path))
     return any(
         spelling.startswith(base + os.sep)

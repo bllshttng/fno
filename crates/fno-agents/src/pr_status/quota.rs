@@ -74,17 +74,15 @@ fn resolve_lenient(path: &Path) -> PathBuf {
 /// The spelling-stable key for a proxy dir. macOS owns both `/var/folders/...`
 /// (raw, what a PATH part or a not-yet-created dir carries) and
 /// `/private/var/folders/...` (what canonicalize answers), so equality folds
-/// the `/private` prefix and trailing slashes away; `/tmp` and `/private/tmp`
-/// collapse the same way.
+/// the `private` component away and keeps the root slash; `/tmp` and
+/// `/private/tmp` collapse the same way.
 fn dir_key(path: &Path) -> String {
     let key = resolve_lenient(path).to_string_lossy().into_owned();
-    let key = key.strip_prefix("/private/").unwrap_or(&key);
-    key.trim_end_matches('/').to_string()
-}
-
-/// Dir equality that survives the spelling split [`dir_key`] folds.
-fn same_dir(a: &Path, b: &Path) -> bool {
-    dir_key(a) == dir_key(b)
+    let folded = match key.strip_prefix("/private/") {
+        Some(rest) => format!("/{rest}"),
+        None => key,
+    };
+    folded.trim_end_matches('/').to_string()
 }
 
 /// Is this `gh` our own broker shim, judged by content rather than location?
@@ -869,18 +867,18 @@ mod tests {
         // canonicalize answers /private/var/... while a PATH part or a
         // not-yet-created dir carries the raw /var/... spelling; a
         // prefix-string sibling is never equal.
-        assert!(same_dir(
-            Path::new("/var/folders/ab/T/fno/uid/github-cli"),
-            Path::new("/private/var/folders/ab/T/fno/uid/github-cli"),
-        ));
-        assert!(same_dir(
-            Path::new("/private/tmp/fno-501/github-cli"),
-            Path::new("/tmp/fno-501/github-cli/"),
-        ));
-        assert!(!same_dir(
-            Path::new("/tmpextra/fno-501/github-cli"),
-            Path::new("/tmp/fno-501/github-cli"),
-        ));
+        assert_eq!(
+            dir_key(Path::new("/var/folders/ab/T/fno/uid/github-cli")),
+            dir_key(Path::new("/private/var/folders/ab/T/fno/uid/github-cli")),
+        );
+        assert_eq!(
+            dir_key(Path::new("/private/tmp/fno-501/github-cli")),
+            dir_key(Path::new("/tmp/fno-501/github-cli/")),
+        );
+        assert_ne!(
+            dir_key(Path::new("/tmpextra/fno-501/github-cli")),
+            dir_key(Path::new("/tmp/fno-501/github-cli")),
+        );
     }
 
     #[test]
