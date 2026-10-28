@@ -2206,7 +2206,9 @@ fn apply_rerun(a: &Args, findings: &mut [Finding], head: &str) -> Vec<String> {
         if was_cancelled {
             if let Some(hold) = incident_hold(a, &run_id) {
                 f.remedy = Remedy::Escalate { repro: hold };
-                let fields = serde_json::json!({"key": key, "run_id": run_id});
+                let mut fields = serde_json::Map::new();
+                fields.insert("key".to_string(), serde_json::json!(key));
+                fields.insert("run_id".to_string(), serde_json::json!(run_id));
                 if let Err(e) = crate::events::EventEmitter::new(journal_path(a), "pr-heal")
                     .emit_fields("pr_heal_hold", fields)
                 {
