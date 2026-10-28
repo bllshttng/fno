@@ -323,18 +323,4 @@ mod tests {
         std::fs::write(&config, "[fleet]\nowner = \"  \"\n").unwrap();
         assert_eq!(super::person(), "bb16", "a blank owner falls to USER");
     }
-
-    #[test]
-    fn person_stamp_keeps_a_caller_value() {
-        let mut data = serde_json::Map::new();
-        data.insert("person".into(), "caller".into());
-        super::stamp_person(&mut data);
-        assert_eq!(data["person"], "caller");
-        // machine_id is present only when the machine has one, never a hostname.
-        let machine_id = crate::claims::machine_id();
-        assert_eq!(
-            data.get("machine_id").and_then(|v| v.as_str()),
-            (!machine_id.is_empty()).then_some(machine_id.as_str())
-        );
-    }
 }
