@@ -149,17 +149,20 @@ pub(super) fn prove_target(
 ) -> Result<Vec<(u32, u64)>, String> {
     let short = short.to_string();
     let session_id = session_id.map(str::to_string);
-    off_executor(move || {
-        let roster = ClaudeRoster::load_default().map_err(|e| format!("roster unreadable: {e}"))?;
-        let (table, _) = crate::census::process_table();
-        capture_target(
-            &roster,
-            &short,
-            session_id.as_deref(),
-            &table,
-            &process_start_time,
-        )
-    })
+    off_executor(move || prove_target_blocking(&short, session_id.as_deref()))
+}
+
+/// The same proof for a caller that already runs OFF the executor (rm's
+/// stop leg, whose seam executes under `off_executor`): the identical
+/// blocking reads, run directly so the leg never re-enters
+/// `off_executor` from blocking context.
+pub(super) fn prove_target_blocking(
+    short: &str,
+    session_id: Option<&str>,
+) -> Result<Vec<(u32, u64)>, String> {
+    let roster = ClaudeRoster::load_default().map_err(|e| format!("roster unreadable: {e}"))?;
+    let (table, _) = crate::census::process_table();
+    capture_target(&roster, short, session_id, &table, &process_start_time)
 }
 
 /// End whatever survived the ask. The grace phase runs against the whole
