@@ -926,7 +926,7 @@ async fn agents_tab_ctrl_t_pins_the_session_and_the_row_shows_it() {
     let o = f
         .cells
         .iter()
-        .position(|c| c.c == '\u{2606}')
+        .position(|c| c.c == sideline::PIN_OUTLINE)
         .expect("outline");
     let (r, c) = ((o / f.cols as usize) as u16, (o % f.cols as usize) as u16);
     assert_eq!(v.pin_star_at(r, c).map(|a| a.name), Some("b".into()));

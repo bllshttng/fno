@@ -24,6 +24,7 @@ const SIDELINE_RIGHT_SLOT_W: u16 = 6;
 /// card, theme-dim on a resting one.
 const CARD_EDGE_BAR: char = '\u{258e}';
 pub(super) const PIN_STAR: char = '\u{2605}';
+pub(super) const PIN_OUTLINE: char = '\u{2606}';
 /// The cell a row's pin star sits in: a card's line 2 under the status
 /// mark, else the list gutter. Paint and click both read it.
 fn pin_star_cell<'a>(
@@ -879,7 +880,7 @@ impl View {
             if let Some((col, a)) = pin_star_cell(drow, &rects, card, density) {
                 if col < text_w && (a.pinned || driven || hovered) {
                     let cell = &mut cells[r * cols + col];
-                    cell.c = if a.pinned { PIN_STAR } else { '\u{2606}' };
+                    cell.c = if a.pinned { PIN_STAR } else { PIN_OUTLINE };
                     if cell.bg == Color::Default {
                         cell.fg = if a.pinned {
                             self.theme.brand
