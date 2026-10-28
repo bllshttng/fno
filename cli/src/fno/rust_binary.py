@@ -553,3 +553,29 @@ def find_transcript(session_id: str) -> Optional[Path]:
         return None
     found = payload.get("path")
     return Path(found) if isinstance(found, str) and found else None
+
+
+def notify_operator(title: str, body: str, pointer: str = "") -> tuple[int, str]:
+    """One operator notice through the native front door: ``(code, err)``.
+
+    The dispatch (mux clients, OS toast, sink lane) answers in-process in the
+    Rust command; this Python seam only carries the argv, so the notify decision
+    table has one owner. ``err`` is the command's one-line degrade message when
+    the code is non-zero, else empty.
+    """
+    import subprocess
+
+    binary = resolve_front_binary()
+    if binary is None:
+        return 1, "fno inbox notify: the native fno binary was not found"
+    argv = [str(binary), "inbox", "notify"]
+    if pointer:
+        argv += ["--pointer", pointer]
+    argv += ["--", title, body]
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=15.0)
+    except subprocess.TimeoutExpired:
+        return 1, "fno inbox notify: no answer in 15s"
+    except OSError as exc:
+        return 1, str(exc)[:200]
+    return done.returncode, (done.stderr or "").strip()

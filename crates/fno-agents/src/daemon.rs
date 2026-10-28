@@ -5042,7 +5042,7 @@ async fn handle_rm(ctx: &Ctx, req: &Request) -> Response {
         req,
         &crate::claude_roster::read_all_agents_union,
         &run_claude_rm,
-        &rm_teardown::claude_stop_confirmed,
+        &rm_teardown::confirmed_claude_stop,
         &run_mux_pane_kill,
         &run_mux_pane_probe,
     )
@@ -5096,7 +5096,7 @@ async fn handle_rm_with(
     req: &Request,
     read_claude_agents: &(dyn Fn() -> crate::claude_roster::ClaudeAgentsSnapshot + Sync),
     claude_rm: &(dyn Fn(&str) -> Result<(), String> + Sync),
-    claude_stop: &(dyn Fn(&str) -> bool + Sync),
+    claude_stop: &(dyn Fn(&str, Option<&str>) -> rm_teardown::StopLeg + Sync),
     mux_pane_kill: &(dyn Fn(&str, u64) -> Result<bool, String> + Sync),
     mux_pane_probe: &(dyn Fn(&str, u64) -> PaneProbe + Sync),
 ) -> Response {
@@ -5113,7 +5113,7 @@ async fn handle_rm_with(
         Ok(r) => r,
         Err(e) => return registry_read_failed(req.id, e),
     };
-    let entry =
+    let mut entry =
         match entry_for_lifecycle(&registry, &requested_name, &ctx.home.registry_json(), false)
             .await
         {
@@ -5155,28 +5155,28 @@ async fn handle_rm_with(
         || claude_row_provably_absent(claude_agents.as_ref(), harness_row_id.as_deref())
         || off_executor(|| pane_provably_absent(entry.mux.as_ref(), mux_pane_probe));
     // Law d-81c6da7e: remove needs no prior stop. rm owns the one exception's
-    // stop - the claude background thread - itself: run the bounded `claude
-    // stop`, then re-read the roster and recompute the death verdict. Every
+    // stop - the claude background thread - itself: ask, and end the proven
+    // process set when the ask does not (the glm escalation). Every
     // other live row is ended by the arms below; no caller composes a stop
     // leg in front of this command anymore.
-    if entry.status == AgentStatus::Live
-        && !force
-        && !provably_gone
-        && crate::gc_native::stop_precedes_removal(&entry)
+    match rm_teardown::run_stop_leg(
+        ctx,
+        req,
+        &mut entry,
+        force,
+        provably_gone,
+        claude_stop,
+        read_claude_agents,
+        harness_row_id.as_deref(),
+    )
+    .await
     {
-        let short = entry.transport_short().map(str::to_string).or_else(|| {
-            entry
-                .harness_session_id
-                .clone()
-                .filter(|session_id| !session_id.trim().is_empty())
-        });
-        if let Some(short) = short {
-            let _ = off_executor(|| claude_stop(&short));
-            let snapshot = off_executor(read_claude_agents);
-            provably_gone = row_death_reason(&entry, &snapshot).is_some()
-                || claude_row_provably_absent(Some(&snapshot), harness_row_id.as_deref());
-            claude_agents = Some(snapshot);
+        Ok(Some(result)) => {
+            provably_gone = result.provably_gone;
+            claude_agents = Some(result.snapshot);
         }
+        Ok(None) => {}
+        Err(response) => return response,
     }
     // Only a claude background thread can still be refused here: every other
     // live row falls through to the arms that end its process.
