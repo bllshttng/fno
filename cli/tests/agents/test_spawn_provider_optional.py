@@ -1,7 +1,7 @@
 """End-to-end Typer wiring for the optional ``--provider`` on ``fno agents spawn``.
 
-The resolver's precedence/validation is unit-tested in
-``test_dispatch_flags.py``; this pins the CLI wiring: an omitted
+The resolver's precedence/validation is unit-tested in the
+dispatch-flags resolver tests; this pins the CLI wiring: an omitted
 ``--provider`` defaults through the resolver to the pane receipt (AC2-HP), and an
 empty ``--model`` is rejected before anything spawns (AC2-ERR).
 """
