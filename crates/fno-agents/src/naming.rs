@@ -777,6 +777,32 @@ pub fn run_name_mint(args: &[String]) -> i32 {
     }
 }
 
+/// The shell dispatchers' bridge model: `$FNO_AGENTS_NAME_MODEL`, never a
+/// flag, so a dispatcher carries it as cheaply as any env var.
+pub fn name_model_from_env() -> Option<String> {
+    std::env::var("FNO_AGENTS_NAME_MODEL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// `fno agents name [prefix] <node>`: the routed bridge, the same mint as
+/// `name-mint` with the model read from the env. Exit 3 (never 2) is the
+/// naming refusal; 2 is a usage error, which a stale install also returns.
+pub fn run_agents_name(args: &[String]) -> i32 {
+    if positionals(args).is_empty() {
+        eprintln!("error: a node id is required: fno agents name [prefix] <node-id>");
+        return 2;
+    }
+    let mut argv = args.to_vec();
+    if value_of(args, "--model").is_none() {
+        if let Some(model) = name_model_from_env() {
+            argv.extend(["--model".to_string(), model]);
+        }
+    }
+    run_name_mint(&argv)
+}
+
 /// `fno-agents name-parse` reads one name per line on stdin and prints one
 /// JSON object per line: {name, source, verb, node, tail} or {name, null} (verb-wording: allow, wire key).
 pub fn run_name_parse() -> i32 {

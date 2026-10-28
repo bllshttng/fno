@@ -284,7 +284,11 @@ fn run_mail_hold(argv: &[&str]) -> i32 {
 /// id) match: a token MINTED from a session id is taken only by the SAME
 /// session, and a first-eight overlap with a different session is read-side
 /// ambiguity, not a registration wall.
-fn address_taken(entries: &[RegistryEntry], token: &str, same_session_only: bool) -> bool {
+pub(crate) fn address_taken(
+    entries: &[RegistryEntry],
+    token: &str,
+    same_session_only: bool,
+) -> bool {
     entries.iter().any(|row| {
         if !same_session_only && (row.name == token || row.short_id == token) {
             return true;
@@ -359,6 +363,11 @@ fn parse_manifest(path: &Path) -> Option<std::collections::BTreeMap<String, Stri
     Some(fields)
 }
 
+/// Stamp the lead manifest's role onto a row the session at `cwd` owns.
+pub(crate) fn apply_session_manifest_role(row: &mut RegistryEntry, session_id: &str, cwd: &str) {
+    apply_manifest_role(row, manifest_role_for_session(session_id, cwd).as_ref());
+}
+
 fn apply_manifest_role(row: &mut RegistryEntry, role: Option<&ManifestRole>) {
     let Some(role) = role else { return };
     if row.role_scope.is_none() {
@@ -375,7 +384,7 @@ fn apply_manifest_role(row: &mut RegistryEntry, role: Option<&ManifestRole>) {
 /// disposition (two ids of one harness, or a contradicted only marker) has
 /// no foreign family to strip, so the section is omitted entirely rather
 /// than printing a header with no command under it.
-fn ambiguity_message(ident: &crate::spawn_context::OwnedIdentity) -> String {
+pub(crate) fn ambiguity_message(ident: &crate::spawn_context::OwnedIdentity) -> String {
     let markers = ident
         .markers_present
         .iter()

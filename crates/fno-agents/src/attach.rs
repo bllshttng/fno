@@ -13,7 +13,7 @@ use crate::claude_ask::ClaudeHome;
 use crate::claude_resume::claude_attach_pointer;
 use crate::client_commands::{
     append_agents_event, echo_extra, is_codex_thread_row, py_repr_str, read_registry_entries,
-    resolve_entry_with_heal_scoped, trace_events_path, validate_lifecycle_name, which_on_path,
+    resolve_entry_with_heal, trace_events_path, validate_lifecycle_name, which_on_path,
 };
 use crate::paths::AgentsHome;
 
@@ -541,7 +541,7 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
             return 12;
         }
     };
-    let entry = match resolve_entry_with_heal_scoped(&entries, &name, &home.registry_json(), None) {
+    let entry = match resolve_entry_with_heal(&entries, &name, &home.registry_json()) {
         Ok(e) => e,
         Err(err) => {
             eprintln!("{}", err.message());

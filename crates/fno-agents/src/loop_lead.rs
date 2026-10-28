@@ -54,7 +54,6 @@
 //! plan to stamp and no node to graduate, so there is nothing left for a
 //! close to do.
 
-use crate::loop_dispatch::retry_etxtbsy;
 use crate::loop_runtime::{CloseOutcome, Evidence, LoopError, Queue, Unit};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -209,7 +208,7 @@ impl LeadQueue {
         }
         // the walk identity is minted through the canonical bridge; a
         // failed mint refuses the walk before anything dispatches.
-        let walk_key = mint_walk_key(&fno_bin, repo_root, &scope)?;
+        let walk_key = mint_walk_key(&scope)?;
         Ok(Self {
             walk_key,
             fno_id: manifest.fno_id,
@@ -439,51 +438,30 @@ fn mint_walk_discriminator() -> String {
     format!("w{:012x}{:08x}", nanos % (1u128 << 48), suffix)
 }
 
-/// `kl-th-<scope>-<walk-discriminator>`, minted through the canonical
-/// `fno agents name` bridge: the kl source names the lead loop as the
+/// `kl-th-<scope>-<walk-discriminator>`, minted in process by the canonical
+/// name bridge: the kl source names the lead loop as the
 /// spawner, th the think-class walk command, and the scope the team it belongs
 /// to so a journal read by a human says which lead spawned the unit. A failed
 /// mint REFUSES the walk (Err) rather than falling back to an uncoded key.
-pub(crate) fn mint_walk_key(fno_bin: &str, cwd: &Path, scope: &str) -> Result<String, LoopError> {
+pub(crate) fn mint_walk_key(scope: &str) -> Result<String, LoopError> {
     let discriminator = mint_walk_discriminator();
-    // `agents name` is a Python-only command: an ambient FNO_AGENTS_RUNTIME=rust
-    // routes the whole group to this binary, which has no name port.
-    let out = retry_etxtbsy(|| {
-        std::process::Command::new(fno_bin)
-            .args([
-                "agents",
-                "name",
-                "--source",
-                "kl",
-                "--command",
-                "th",
-                scope,
-                "--discriminator",
-                &discriminator,
-            ])
-            .current_dir(cwd)
-            .env("FNO_AGENTS_RUNTIME", "python")
-            .output()
+    let model = crate::naming::name_model_from_env();
+    crate::naming::bridge_name(
+        None,
+        scope,
+        None,
+        None,
+        Some(&discriminator),
+        Some("kl"),
+        Some("th"),
+        model.as_deref(),
+    )
+    .map_err(|error| {
+        LoopError::Queue(format!(
+            "walk-name mint refused: {}",
+            error.to_string().chars().take(200).collect::<String>()
+        ))
     })
-    .map_err(|error| LoopError::Queue(format!("walk-name mint failed to spawn fno: {error}")))?;
-    if !out.status.success() {
-        return Err(LoopError::Queue(format!(
-            "walk-name mint refused ({}): {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr)
-                .trim()
-                .chars()
-                .take(200)
-                .collect::<String>()
-        )));
-    }
-    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if name.is_empty() {
-        return Err(LoopError::Queue(
-            "walk-name mint produced no name".to_string(),
-        ));
-    }
-    Ok(name)
 }
 
 /// The env var carrying [`LeadQueue::walk_key`] into the dispatched session.
@@ -955,23 +933,12 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_mint_refuses_the_walk() {
-        // A stub that exits 1 stands in for a stale fno / naming refusal: the
-        // walk refuses (Err) instead of dispatching under an uncoded key.
-        let dir = tempfile::tempdir().unwrap();
-        let p = crate::write_exec_stub(dir.path(), "fno", "#!/bin/sh\nexit 1\n");
-        let out = mint_walk_key(p.to_str().unwrap(), dir.path(), "epic-x");
-        assert!(out.is_err(), "a failed mint must refuse the walk");
-    }
-
-    #[test]
     fn a_prior_terminal_under_the_bare_fno_id_cannot_close_a_walk_unit() {
         // The original defect, pinned at the seam it lived at: the unit key is
         // not the manifest fno_id, so a termination written under fno_id by
         // either lead arm matches no walk unit's session_key.
-        let dir = tempfile::tempdir().unwrap();
-        let fno = write_fno_stub(dir.path(), "kl-th-epic-x-w00ff");
-        let key = mint_walk_key(fno.to_str().unwrap(), dir.path(), "epic-x").expect("stub mint");
+        let key = mint_walk_key("epic-x").expect("bridge mint");
+        assert!(key.starts_with("kl-th-epic-x-"), "{key}");
         assert_ne!(key, "k-1");
         assert!(!key.contains('\n'));
     }
