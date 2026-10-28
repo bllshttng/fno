@@ -283,9 +283,24 @@ fn run_context_probe(args: &[String]) -> i32 {
             }
         }
     }
-    let Some(transcript) = transcript else {
-        eprintln!("context-run --probe: --transcript is required");
-        return 2;
+    let transcript = match transcript {
+        Some(t) => t.to_string(),
+        None => {
+            // The deleted leg self-resolved the caller's transcript when the
+            // flag was omitted (self_stamp's resolve_own_transcript): the
+            // bare `fno context` form answers from the live session.
+            let harness =
+                crate::spawn_context::resolve_session_harness_ambient().unwrap_or_default();
+            match session_transcript(&session, harness) {
+                Some(path) => path.to_string_lossy().into_owned(),
+                None => {
+                    eprintln!(
+                        "context-run --probe: --transcript is required (no own transcript resolved)"
+                    );
+                    return 2;
+                }
+            }
+        }
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let payload = match transcript_reading(Path::new(transcript), &session, &cwd) {

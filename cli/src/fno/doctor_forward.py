@@ -65,9 +65,6 @@ doctor_event_app.registered_groups.extend(event_app.registered_groups)
 doctor_event_app.add_typer(status_fanout_app, name="fanout")
 doctor_app.add_typer(doctor_event_app, name="event")
 doctor_app.command("lint")(lint)
-# The reachability read the deleted doctor_cli mounted (its :150); the leaf
-# itself is route_cli's and stays Python.
-doctor_app.command("route", hidden=True)(inventory_cmd)
 
 
 # The family's own leaves: registered so the teaching, not a generic

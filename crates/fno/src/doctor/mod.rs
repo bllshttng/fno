@@ -113,7 +113,6 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
                 match a.to_str() {
                     Some("--json") | Some("-J") => argv.push(a.clone()),
                     _ => return None,
-                    _ => return None,
                 }
             }
             // The lanes door never prints a lane number past a dark sensor:
@@ -124,14 +123,22 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
         // deleted Python legs only resolved the binary and copied flags.
         Some("bash-census") => {
             let mut argv = vec![OsString::from("bash-census")];
-            for a in &args[2..] {
-                match a.to_str() {
-                    Some("--allow") | Some("--json") | Some("-J") => argv.push(a.clone()),
-                    Some(w) if w.starts_with("--days") || w.starts_with("--cwd") => {
-                        argv.push(a.clone())
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].to_str() {
+                    Some("--allow") | Some("--json") | Some("-J") => argv.push(args[i].clone()),
+                    // The value-taking options ride with their value: a
+                    // forwarded flag without it reads as an unknown argument.
+                    Some("--days") | Some("--cwd") => {
+                        argv.push(args[i].clone());
+                        if let Some(v) = args.get(i + 1) {
+                            argv.push(v.clone());
+                        }
+                        i += 1;
                     }
                     _ => return None,
                 }
+                i += 1;
             }
             Some(Claim::AgentsExec("fno doctor bash-census", argv))
         }
@@ -181,19 +188,23 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
                     return None;
                 }
                 let mut argv = vec![OsString::from("context-run"), OsString::from("--audit")];
-                for a in &args[1..] {
-                    match a.to_str() {
+                let mut i = 1;
+                while i < args.len() {
+                    match args[i].to_str() {
                         Some("--context-audit") => {}
-                        Some(w)
-                            if w.starts_with("--source")
-                                || w.starts_with("--context-")
-                                || w.starts_with("--json")
-                                || w == "-J" =>
-                        {
-                            argv.push(a.clone())
+                        Some("--json") | Some("-J") => argv.push(args[i].clone()),
+                        // --source and --context-budget take a value; the
+                        // audit parser reads only the space-separated form.
+                        Some("--source") | Some("--context-budget") => {
+                            argv.push(args[i].clone());
+                            if let Some(v) = args.get(i + 1) {
+                                argv.push(v.clone());
+                            }
+                            i += 1;
                         }
                         _ => return None,
                     }
+                    i += 1;
                 }
                 return Some(Claim::AgentsExec("fno doctor --context-audit", argv));
             }
