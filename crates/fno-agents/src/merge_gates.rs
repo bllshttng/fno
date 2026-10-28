@@ -625,7 +625,7 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         return None;
     }
     // The page auto-files on the first hold read of this head: node, PR,
-    // paint files, and the mux shots embedded, deduped per head. Best-effort:
+    // paint files, and the mux shots as --image, deduped per head. Best-effort:
     // a failed filing never softens the hold, it only names the remedy.
     let root = vault_root(cwd);
     let node_id = entry.as_ref().and_then(crate::graph_store::entry_id);
@@ -648,7 +648,7 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
          its head sha (`fno backlog decide <node> 'Approved: PR {pr} at {head}' \
          --authority role --rationale 'user in chat: <the user's words>'`). Ask via \
          `fno inbox outstanding ask`, then the user answers the page or the lead \
-         records the chat approval.",
+         records the chat approval. Pass each shot with --image.",
         touched.join(", ")
     );
     match (node_id.as_deref(), shots.as_slice()) {
@@ -662,6 +662,8 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         ),
         (Some(node), shots) => {
             let short = head.chars().take(8).collect::<String>();
+            let mux = crate::escalation::vault_dir_with_home(&root, home.as_deref(), "mux");
+            let shots: Vec<PathBuf> = shots.iter().map(|s| mux.join(s)).collect();
             detail.push_str(&file_visual_question(
                 &root,
                 pr,
@@ -669,7 +671,7 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
                 &short,
                 node,
                 &touched.join(", "),
-                shots,
+                &shots,
             ));
         }
     }
@@ -732,21 +734,10 @@ fn visual_page_filed(root: &Path, pr: u64, head: &str) -> bool {
 }
 
 /// The question-file text the gate files: title names the PR, the context
-/// carries head + paint files, the shots embed on option 1 (the option the
-/// user ticks after looking), and `why_user: taste` is what lets a
-/// reversible question reach the user at all.
-fn visual_question_markdown(
-    pr: u64,
-    head: &str,
-    short: &str,
-    node: &str,
-    files: &str,
-    shots: &[String],
-) -> String {
-    let mut embeds = String::new();
-    for shot in shots {
-        embeds.push_str(&format!("\n![[{shot}]]"));
-    }
+/// carries head + paint files, and `why_user: taste` is what lets a
+/// reversible question reach the user at all. The shots ride `--image`, so
+/// the page shows them under its Screens heading.
+fn visual_question_markdown(pr: u64, head: &str, short: &str, node: &str, files: &str) -> String {
     format!(
         "---\n\
          recommend: 1\n\
@@ -758,17 +749,17 @@ fn visual_question_markdown(
          paint surface the config lists ({files}). The user's look is the only clear.\n\n\
          ## Options\n\
          1. Merge as painted. What happens next: the answered page or a role decision \
-         clears the gate and the PR merges{embeds}\n\
+         clears the gate and the PR merges\n\
          2. Hold for changes. What happens next: say what to change; the worker \
          reshoots and the PR re-asks at its new head\n\n\
          ## Why these options\n\
-         Option 1 ships exactly the paint in the embedded shots. Option 2 keeps the \
+         Option 1 ships exactly the paint in the shots under Screens. Option 2 keeps the \
          surface unchanged until you name the change.\n\n\
          ## Recommendation\n\
-         1, because the embedded shots show this head's own paint; the diff is already \
+         1, because the shots show this head's own paint; the diff is already \
          review-green and CI-green.\n\n\
          ## Not thought through\n\
-         Whether the embedded shots cover every surface PR {pr} paints: they are the \
+         Whether the shots cover every surface PR {pr} paints: they are the \
          mux captures named internal/fno/mux/{node}-*.png.\n\n\
          ## Reversible\n\
          yes\n\n\
@@ -792,7 +783,7 @@ fn file_visual_question(
     short: &str,
     node: &str,
     files: &str,
-    shots: &[String],
+    shots: &[PathBuf],
 ) -> String {
     if visual_page_filed(root, pr, head) {
         return format!("; the question page for PR {pr} at {short} is already filed");
@@ -801,7 +792,7 @@ fn file_visual_question(
         "fno-visual-ask-{pr}-{short}-{}.md",
         std::process::id()
     ));
-    let markdown = visual_question_markdown(pr, head, short, node, files, shots);
+    let markdown = visual_question_markdown(pr, head, short, node, files);
     if let Err(e) = std::fs::write(&path, markdown) {
         return format!("; the question could not be staged: {e}");
     }
@@ -812,6 +803,11 @@ fn file_visual_question(
         .arg(&path)
         .args(["--node", node])
         .args(["--subject", &subject])
+        .args(
+            shots
+                .iter()
+                .flat_map(|s| [std::ffi::OsStr::new("--image"), s.as_os_str()]),
+        )
         .output();
     match out {
         Ok(o) if o.status.success() => {
@@ -827,7 +823,7 @@ fn file_visual_question(
             };
             format!(
                 "; the question page could not be filed (ask exited {:?}{note}); file it by \
-                 hand: fno inbox outstanding ask --question-file {} --node {node}",
+                 hand: fno inbox outstanding ask --question-file {} --node {node} --image <each shot>",
                 o.status.code(),
                 path.display()
             )

@@ -1873,26 +1873,27 @@ fn open_question(home: &AgentsHome, lane: &CapLane, now_epoch: i64) {
         .iter()
         .map(|m| format!("{} ({})", m.name, m.provider))
         .collect();
-    let _ = append_questions_row(
-        &questions_path(home),
-        &json!({
-            "ts": epoch_to_rfc3339(now_epoch),
-            "type": "operator_question",
-            "source": "daemon",
-            "data": {
-                "question_id": question_id,
-                "question": format!(
-                    "lane {} capped, reset {}, members: {}. Answer: fno agents provider-cap decide {} --answer all|some:<id,id>|wait",
-                    lane.lane,
-                    lane.reset_epoch.map(epoch_to_rfc3339).unwrap_or_else(|| "unknown".into()),
-                    members.join(", "),
-                    lane.lane,
-                ),
-                "choices": ["all", "some:<id,id>", "wait"],
-                "node": lane.members.iter().filter_map(|m| m.node.clone()).next(),
-            },
-        }),
-    );
+    let mut row = json!({
+        "ts": epoch_to_rfc3339(now_epoch),
+        "type": "operator_question",
+        "source": "daemon",
+        "data": {
+            "question_id": question_id,
+            "question": format!(
+                "lane {} capped, reset {}, members: {}. Answer: fno agents provider-cap decide {} --answer all|some:<id,id>|wait",
+                lane.lane,
+                lane.reset_epoch.map(epoch_to_rfc3339).unwrap_or_else(|| "unknown".into()),
+                members.join(", "),
+                lane.lane,
+            ),
+            "choices": ["all", "some:<id,id>", "wait"],
+            "node": lane.members.iter().filter_map(|m| m.node.clone()).next(),
+        },
+    });
+    if let Some(data) = row.get_mut("data").and_then(Value::as_object_mut) {
+        crate::identity::stamp_person(data);
+    }
+    let _ = append_questions_row(&questions_path(home), &row);
     let marker = json!({
         "question_id": question_id,
         "opened_at": epoch_to_rfc3339(now_epoch),

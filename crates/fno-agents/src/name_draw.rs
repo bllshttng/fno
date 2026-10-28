@@ -535,7 +535,8 @@ pub fn settle_draw(payload: &Value, answer: &mut Value, store: &std::path::Path)
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let outcome = answer.get("outcome").and_then(Value::as_str);
-    if !succession && !payload.get("take_over").is_some_and(Value::is_object) {
+    let take_over = payload.get("take_over").is_some_and(Value::is_object);
+    if !succession && !take_over {
         // A fresh grant: `--name redraw` draws the new lead's name, and a
         // retired `--name` refusal names a fresh draw to retry with.
         let retired = answer.get("retired").and_then(Value::as_str).is_some();
@@ -581,7 +582,9 @@ pub fn settle_draw(payload: &Value, answer: &mut Value, store: &std::path::Path)
     // A hand-off over a scope nobody holds is a fresh grant. With no name
     // typed it still needs one drawn, or the spawn launches nameless.
     let unheld = outcome == Some("granted") && proposed.is_none();
-    if !succession || (outcome != Some("succeeded") && !unheld) {
+    // A take-over draws only on `--name redraw`; its typed name binds as is.
+    let draws = succession || (take_over && redraw);
+    if !draws || (outcome != Some("succeeded") && !unheld) {
         return;
     }
     // The plan answer names the holders this succession vacates.
@@ -858,5 +861,17 @@ mod tests {
         assert!(refusal.contains("The machine drew"), "{refusal}");
         assert_ne!(fresh, drawn, "{refusal}");
         assert_eq!(answer["outcome"], "declined");
+        // A take-over draws on `--name redraw` only; a typed name binds as is.
+        for (redraw, draws) in [(false, false), (true, true)] {
+            let mut answer = json!({"outcome": "succeeded", "holders": ["Alder"]});
+            settle_draw(
+                &json!({"scope": "x-dddd", "take_over": {"reason": "r"},
+                    "redraw": redraw, "proposed_name": if redraw { Value::Null } else { json!("Odile") },
+                    "claims_root": root}),
+                &mut answer,
+                &store,
+            );
+            assert_eq!(answer["draw"]["name"].is_string(), draws, "{answer}");
+        }
     }
 }

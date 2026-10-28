@@ -922,6 +922,82 @@ fn handover_row_is_ours(entries: &[RegistryEntry], worker: &str, own_sid: Option
         .iter()
         .any(|e| e.name == worker && e.harness_session_id.as_deref().map(str::trim) == Some(own))
 }
+
+/// True when the manifest's node is the requested node's graph parent: the
+/// fork receipt's own remedy (`fno do target start <child>`) re-binding this
+/// tree. The receipt guarantees the relationship and the graph row names it
+/// again; anything else is another node's session and keeps the refusal.
+fn row_names_requester_as_child(mnode: &str, child_row: Option<&Value>) -> bool {
+    child_row
+        .and_then(|r| r.get("parent"))
+        .and_then(Value::as_str)
+        == Some(mnode)
+}
+
+/// Re-point a parent-node manifest at its forked child after the child claim
+/// lands: the node lines and the claim pair follow the child, the parent's
+/// plan binding resets (the child binds its own), and every other line stays
+/// byte-identical. Field positions keep frontmatter parsing intact; the
+/// dropped ttl line falls back to the stop gate's 2h default.
+fn rebind_manifest_content_for_child(content: &str, child: &str, holder: &str) -> String {
+    let mut out = String::with_capacity(content.len() + 128);
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        let replacement: Option<String> = if trimmed.starts_with("input:") {
+            Some(format!("input: \"{child}\""))
+        } else if trimmed.starts_with("plan_path:") {
+            Some("plan_path: \"\"".to_string())
+        } else if trimmed.starts_with("graph_node_id:") {
+            Some(format!("graph_node_id: {child}"))
+        } else if trimmed.starts_with("target_claim_key:") {
+            Some(format!("target_claim_key: \"node:{child}\""))
+        } else if trimmed.starts_with("target_claim_holder:") {
+            Some(format!("target_claim_holder: \"{holder}\""))
+        } else if trimmed.starts_with("target_claim_ttl:") {
+            None
+        } else {
+            Some(line.to_string())
+        };
+        if let Some(line_out) = replacement {
+            out.push_str(&line_out);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// The side-effectful half: flock + read + rewrite under the same manifest
+/// lock `fno do state set` holds, reusing the claim-refresh module's writer.
+/// The claim already landed, so a failed rewrite leaves the claim live and
+/// the tree's manifest stale - named on stderr, never fatal to the receipt.
+fn rebind_manifest_for_child(manifest: &Path, child: &str, holder: &str) {
+    if holder.is_empty() {
+        // reacquire_node_claim already refused an unattributable session, so
+        // this is defense, not the expected path: an empty holder line would
+        // poison the manifest the stop gate reads.
+        eprintln!("target start: child manifest rebind skipped for {child}: no holder");
+        return;
+    }
+    let Some(_lock) = crate::claim_cli::manifest_refresh::lock_manifest(manifest) else {
+        eprintln!(
+            "target start: child manifest rebind skipped: {} stayed locked",
+            manifest.display()
+        );
+        return;
+    };
+    let Ok(content) = std::fs::read_to_string(manifest) else {
+        eprintln!(
+            "target start: child manifest rebind skipped for {child}: unreadable {}",
+            manifest.display()
+        );
+        return;
+    };
+    let out = rebind_manifest_content_for_child(&content, child, holder);
+    if let Err(e) = crate::claim_cli::manifest_refresh::atomic_write(manifest, &out) {
+        eprintln!("target start: child manifest rebind failed for {child}: {e}");
+    }
+}
+
 /// `(verdict, state word, record)` for `node:<id>` from THIS session's view:
 /// verdict in {ours, foreign_live, dead_predecessor, free}. Liveness is
 /// pid-based, so a busy owner whose TTL lapsed still reads live. Read-only;
@@ -1019,7 +1095,17 @@ fn bind_worktree(
     // ran" invariant does not hold. A node mismatch is another node's session;
     // refuse rather than re-acquire under its roof.
     let mnode = manifest_node_id(&manifest);
-    if in_place || !node_match_guaranteed {
+    // The forked receipt's remedy (`fno do target start <child>`) is the one
+    // legal node mismatch: the tree's manifest names the parent and the graph
+    // names the parent again as the requested node's own. In place (shared
+    // .fno) the escape never fires - another session may live under that roof.
+    let child_rebind = match mnode.as_deref() {
+        Some(m) if !in_place && m != node => {
+            row_names_requester_as_child(m, find_node(node, None).as_ref())
+        }
+        _ => false,
+    };
+    if (in_place || !node_match_guaranteed) && !child_rebind {
         if let Some(mnode) = &mnode {
             if mnode != node {
                 return Err(refuse(format!(
@@ -1098,8 +1184,20 @@ fn bind_worktree(
         ),
         None => "no prior claim".to_string(),
     };
+    let outcome_note = if child_rebind {
+        // The child claim is the serialization point: rewrite the manifest
+        // only after it lands, so a refused claim never re-points a tree.
+        let holder = session_holder().unwrap_or_default();
+        rebind_manifest_for_child(&manifest, node, &holder);
+        format!(
+            "child rebind: manifest re-pointed from parent {}",
+            mnode.as_deref().unwrap_or("?")
+        )
+    } else {
+        format!("successor took over from {prior}")
+    };
     println!(
-        "worktree={}  base={}  node=reacquired (successor took over from {prior})",
+        "worktree={}  base={}  node=reacquired ({outcome_note})",
         wt_path.display(),
         truthful_base(wt_path, base_label, false),
     );
@@ -2471,5 +2569,51 @@ mod start_progress_tests {
         assert!(!handover_row_is_ours(&entries, "t-w", Some("sid-2")));
         assert!(!handover_row_is_ours(&entries, "t-w", None));
         assert!(!handover_row_is_ours(&entries, "absent", Some("sid-1")));
+    }
+
+    #[test]
+    fn parent_check_reads_the_graph_row_parent_field() {
+        let row = json!({"id": "x-child1", "parent": "x-parent0"});
+        assert!(row_names_requester_as_child("x-parent0", Some(&row)));
+        assert!(!row_names_requester_as_child("x-other2", Some(&row)));
+        assert!(!row_names_requester_as_child("x-parent0", None));
+        let orphan = json!({"id": "x-child1"});
+        assert!(!row_names_requester_as_child("x-parent0", Some(&orphan)));
+    }
+
+    #[test]
+    fn child_rebind_swaps_node_lines_and_keeps_everything_else() {
+        let manifest = "---\nfno_id: f\ninput: \"x-parent0\"\nplan_path: \"/plans/p.md\"\ncreated_at: '2026-10-28T00:00:00Z'\n---\n# Target Session State\n\ntarget_claim_key: \"node:x-parent0\"\ntarget_claim_holder: \"target-session:s-old\"\ntarget_claim_ttl: \"2h\"\ngraph_node_id: x-parent0\n";
+        let out = rebind_manifest_content_for_child(manifest, "x-child1", "target-session:s-new");
+        assert!(out.contains("input: \"x-child1\""), "{out}");
+        assert!(out.contains("plan_path: \"\""), "{out}");
+        assert!(out.contains("graph_node_id: x-child1"), "{out}");
+        assert!(out.contains("target_claim_key: \"node:x-child1\""), "{out}");
+        assert!(
+            out.contains("target_claim_holder: \"target-session:s-new\""),
+            "{out}"
+        );
+        assert!(
+            !out.contains("target_claim_ttl:"),
+            "the dropped ttl falls back to the gate default: {out}"
+        );
+        assert!(out.contains("fno_id: f"), "{out}");
+        assert!(out.contains("created_at"), "{out}");
+        assert!(
+            !out.contains("/plans/p.md"),
+            "the parent plan binding must drop: {out}"
+        );
+        assert!(!out.contains("x-parent0"), "{out}");
+    }
+
+    #[test]
+    fn child_rebind_rewrites_a_blocked_parent_manifest_too() {
+        let manifest = "---\ninput: \"x-parent0\"\n---\ntarget_claim_blocked_reason: claim_held_by_other\ntarget_claim_key: \"node:x-parent0\"\ntarget_claim_holder: \"target-session:s-old\"\ngraph_node_id: x-parent0\n";
+        let out = rebind_manifest_content_for_child(manifest, "x-child1", "target-session:s-new");
+        assert!(out.contains("target_claim_key: \"node:x-child1\""), "{out}");
+        assert!(
+            out.contains("target_claim_blocked_reason:"),
+            "the blocked line is history, not poison, here: it rides untouched"
+        );
     }
 }

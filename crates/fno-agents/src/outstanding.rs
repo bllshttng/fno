@@ -61,6 +61,10 @@ pub struct Question {
     /// The asking machine on a copy pulled from another machine of the
     /// store; `None` (JSON null) for a question asked here.
     pub host: Option<String>,
+    /// The person behind the asking machine; absent on a row written before
+    /// the stamp, so old rows render byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -396,6 +400,7 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                             .map(|_| {
                                 opt_str(data, "host").unwrap_or_else(|| "another machine".into())
                             }),
+                        person: opt_str(data, "person"),
                     },
                 );
             }

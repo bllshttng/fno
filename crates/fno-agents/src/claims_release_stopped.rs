@@ -156,9 +156,19 @@ pub fn release_for_stopped_session(
         if !record_belongs_to_stopped(rec, target) {
             continue;
         }
+        // A launch-window claim records the SPAWNER's ambient pid, never the
+        // named beneficiary's. The beneficiary IS the stopped target here, so
+        // the stop itself is the release proof; probing the spawner's pid
+        // kept a finished blueprint's window live a day past its TTL
+        // (measured live 2026-10-28).
+        let handover_beneficiary_stopped = rec
+            .holder
+            .strip_prefix("spawn-handover:")
+            .is_some_and(|worker| worker == target.name);
         let kept_observed = match rec.pid {
             // No pid to probe: the holder identity itself is the release proof.
             None => None,
+            Some(_pid) if handover_beneficiary_stopped => None,
             Some(_pid) if !is_same_machine(&rec.host, rec.machine_id.as_deref()) => {
                 Some(format!("off-host {}", rec.host))
             }
@@ -255,6 +265,53 @@ mod tests {
 
     fn write_rec(dir: &Path, rec: &ClaimRecord) {
         crate::claim_store::seed_at_path(&dir.join(format!("{}.lock", encode_key(&rec.key))), rec);
+    }
+
+    #[test]
+    fn a_launch_window_ends_with_its_beneficiarys_stop_despite_a_live_spawner_pid() {
+        let td = TempDir::new().unwrap();
+        let claims_dir = td.path().join("claims");
+        // The measured shape: the lead minted the window, so the recorded pid
+        // is the spawner's ambient pid and still alive, while the named
+        // beneficiary has stopped.
+        write_rec(
+            &claims_dir,
+            &stopped_rec(
+                "node:x-win",
+                "spawn-handover:w1",
+                Some(std::process::id() as i32),
+                Some("sess-lead"),
+                "ambient",
+            ),
+        );
+        // Control: the same live pid on a session claim of the stopped
+        // session stays kept - the pid guard still rules there.
+        write_rec(
+            &claims_dir,
+            &stopped_rec(
+                "node:x-sess",
+                "target-session:w1",
+                Some(std::process::id() as i32),
+                Some("sess-9c91"),
+                "session-prover",
+            ),
+        );
+        let target = StoppedHolder {
+            name: "w1".into(),
+            harness_session_id: Some("sess-9c91".into()),
+        };
+        let receipt =
+            release_for_stopped_session(&target, &[claims_dir.clone()], Some(td.path())).unwrap();
+        let released: Vec<String> = receipt.released.iter().map(|r| r.key.clone()).collect();
+        assert_eq!(released, vec!["node:x-win"]);
+        assert!(!lockfile_of(&claims_dir, "node:x-win").exists());
+        assert_eq!(receipt.kept.len(), 1);
+        assert_eq!(receipt.kept[0].key, "node:x-sess");
+        assert!(
+            receipt.kept[0].observed.contains("present"),
+            "the session claim's live pid still keeps it: {}",
+            receipt.kept[0].observed
+        );
     }
 
     #[test]
