@@ -117,7 +117,7 @@ Delete a node from the graph permanently. This command exists and works.
 
 It had no docstring until 2026-08-11, which is why `fno help backlog --all` printed its name against an empty description and read as a stub. An agent consequently ruled that no delete command existed and made that the load-bearing reason for a decision, and another project kept 23 nodes it believed un-file-able. Hence this paragraph: the command's own help is the one place a caller asking "can this node go away" will actually look.
 
-A HARD delete, unlike ``archive``, which stamps the node into archive residency and keeps it readable. Prefer ``archive`` for shipped work, ``supersede`` when something replaced it, and ``defer`` when it is merely not now. Reach for ``remove`` on a duplicate, a test artifact, or a node filed by mistake - the cases where the record itself is the noise.
+A HARD delete, unlike ``archive``, which stamps the node into archive residency and keeps it readable. Use ``archive`` for shipped work. If something replaced the node, use ``supersede``. If it is merely not now, use ``defer``. Reach for ``remove`` on a duplicate, a test artifact, or a node filed by mistake - the cases where the record itself is the noise.
 
 Repairs every edge that pointed at the node, because nothing else can once the node is gone: drops it from every ``blocked_by``, from the symmetric ``related`` lists, nulls a dependent's ``source_node_id`` rather than leaving a dangling string, and releases contained children (the reconcile heal deliberately skips a MISSING owner, so an orphan there is permanent).
 
@@ -281,7 +281,7 @@ The graph is CROSS-PROJECT: a bare number match, scoped by nothing, would pull i
 
 Sweep terminal nodes into archive residency: the sweep stamps ``archived_at`` in the same store, and default reads skip stamped rows. A done node waits for the age gate (``--older-than-days``, default 30). A superseded node sweeps at any age, because its successor carries the work.
 
-Dry-run by default: prints how many would move and why some are held back. ``--apply`` stamps the rows in one write under the graph lock. Never archives a node an OPEN node still references through a hard edge (blocker, parent, supersede target). A SOFT edge (the open node's ``related`` peer or ``source_node_id`` origin) does not hold the target: the reference is stripped from the open side at apply time and the node leaves; the read-through fallback keeps its id resolvable.
+Dry-run by default: it prints how many rows it can move and why it holds some back. ``--apply`` stamps the rows in one write under the graph lock. Never archives a node an OPEN node still references through a hard edge (blocker, parent, supersede target). A SOFT edge does not hold the target. A soft edge is the open node's ``related`` peer or its ``source_node_id`` origin. At apply time the sweep strips the reference from the open side, and the node leaves. The read-through fallback keeps its id resolvable.
 
 Every run's receipt names all four held-back buckets plus the soft-edge strip count, and every run emits a ``graph_archive_swept`` event, dry-run included: a leg that runs daily and reports bare "ok" is indistinguishable from one that never ran - the count that matters is often the held-back one, not the moved one.
 
