@@ -63,12 +63,18 @@ def _capture_parent_edge() -> tuple[Optional[str], Optional[str], Optional[str]]
     # row of the same harness is the daemon's own adoption record - it minted
     # that row from the hosted stream - so the match is a second witness, not
     # raw-env trust. Best-effort: an unreadable registry keeps the refusal.
-    for _marker, family, value in identity.markers_present:
-        try:
-            from fno.agents.registry import load_registry
-            from fno.agents.whoami import _find_by_session
+    try:
+        from fno.agents.registry import load_registry
+        from fno.agents.whoami import _find_by_session
 
-            row = _find_by_session(load_registry(), value, family)
+        registry = load_registry()
+    except Exception:  # noqa: BLE001 - the voucher never fails a spawn
+        registry = None
+    for _marker, family, value in identity.markers_present:
+        if registry is None:
+            break
+        try:
+            row = _find_by_session(registry, value, family)
         except Exception:  # noqa: BLE001 - the voucher never fails a spawn
             continue
         if row is not None and row.status == "live":
