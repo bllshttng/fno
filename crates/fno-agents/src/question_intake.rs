@@ -118,6 +118,14 @@ pub struct IntakeRequest {
     pub op: Option<String>,
     #[serde(default)]
     pub event: Option<Value>,
+    /// `--image`: screenshots the page embeds under `## Screens`. Each is
+    /// copied into `screens_dir` before anything is recorded.
+    #[serde(default)]
+    pub images: Vec<PathBuf>,
+    /// Where the copies land: `<questions dir>/screens`, so the vault holds
+    /// them next to the page. Required when `images` is not empty.
+    #[serde(default)]
+    pub screens_dir: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -292,6 +300,61 @@ fn is_question_file(text: &str) -> bool {
 /// nothing else. Extra text under the heading reads as missing.
 fn is_reversible_word(word: &str) -> bool {
     matches!(word, "yes" | "costly" | "no")
+}
+
+/// A question that would clear a visual-approval hold: the gate's own
+/// subject (`visual approval PR <n> at <head>`), or a title that names a PR
+/// and the visual hold, the shape a lead writes by hand.
+fn asks_visual_approval(subject: Option<&str>, title: &str) -> bool {
+    if subject.is_some_and(|s| s.trim().to_ascii_lowercase().starts_with("visual approval")) {
+        return true;
+    }
+    let t = title.to_ascii_lowercase();
+    let visual = ["visual hold", "visual approval", "visual-approval"]
+        .iter()
+        .any(|w| t.contains(w));
+    visual && names_a_pr(&t)
+}
+
+/// A word-start `pr`, an optional `#`/space run, then a digit.
+fn names_a_pr(lower: &str) -> bool {
+    lower.match_indices("pr").any(|(i, _)| {
+        let start = i == 0 || !lower.as_bytes()[i - 1].is_ascii_alphanumeric();
+        let rest = lower[i + 2..].trim_start_matches(['#', ' ']);
+        start && rest.starts_with(|c: char| c.is_ascii_digit())
+    })
+}
+
+/// An image the viewer and Obsidian both show, judged by extension.
+fn is_image_file(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    matches!(
+        ext.as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp")
+    ) && path.is_file()
+}
+
+/// Copy each screenshot to `<dir>/<qid>-<n>-<name>`, so the vault holds it
+/// next to the page and Obsidian's `![[name]]` resolves it by its unique
+/// name. Returns the copies' absolute paths.
+fn copy_screens(images: &[PathBuf], dir: Option<&Path>, qid: &str) -> Result<Vec<String>, String> {
+    let dir = dir.ok_or("no screens directory was resolved")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut out = Vec::new();
+    for (i, src) in images.iter().enumerate() {
+        let name = src
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let dest = dir.join(format!("{qid}-{}-{name}", i + 1));
+        std::fs::copy(src, &dest).map_err(|e| format!("{}: {e}", src.display()))?;
+        let abs = std::fs::canonicalize(&dest).unwrap_or(dest);
+        out.push(abs.to_string_lossy().into_owned());
+    }
+    Ok(out)
 }
 
 fn title_of(text: &str, parsed_title: &str) -> String {
@@ -643,6 +706,33 @@ with why_user: in the question file."
         }
     }
 
+    // The screens refusal: the user cannot judge paint they cannot see, so
+    // a question that clears a visual-approval hold carries its shots.
+    if let Some(bad) = req.images.iter().find(|p| !is_image_file(p)) {
+        answer.lines.push(format!(
+            "outstanding: refused: --image {} is not a readable png, jpg, gif or webp file.",
+            bad.display()
+        ));
+        answer.refusal = Some("image".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+    if req.images.is_empty()
+        && asks_visual_approval(
+            req.subject.as_deref(),
+            &title_of(&req.question, &parsed.title),
+        )
+    {
+        answer.lines.push(
+            "outstanding: refused: a visual-approval question carries the screens the user \
+judges. Pass each screenshot with --image <path>; the page embeds them under ## Screens."
+                .to_string(),
+        );
+        answer.refusal = Some("screens".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+
     // Dedup: an open question on the same subject and node already waits.
     let subject = req
         .subject
@@ -760,6 +850,21 @@ already waits ({}). Answer it or clear it; do not ask twice.",
     }
     if !req.blocks.is_empty() {
         data.insert("blocks".into(), json!(req.blocks));
+    }
+    if !req.images.is_empty() {
+        match copy_screens(&req.images, req.screens_dir.as_deref(), &qid) {
+            Ok(copies) => {
+                data.insert("images".into(), json!(copies));
+            }
+            Err(e) => {
+                answer.lines.push(format!(
+                    "outstanding: failed to record question: the screens could not be copied: {e}"
+                ));
+                answer.refusal = Some("write".to_string());
+                answer.exit_code = 1;
+                return answer;
+            }
+        }
     }
     if has_options {
         if file_options {
@@ -1036,6 +1141,8 @@ mod tests {
             render_cap: None,
             op: None,
             event: None,
+            images: Vec::new(),
+            screens_dir: None,
         }
     }
 
@@ -1135,6 +1242,55 @@ stops
         assert!(index.contains(&qid));
         assert_eq!(answer.position, Some(1));
         assert_eq!(answer.total, Some(1));
+    }
+
+    #[test]
+    fn a_visual_approval_ask_needs_screens_and_copies_them_beside_the_page() {
+        let home = tmp_home("screens");
+        let root = tmp_root("screens");
+        let mut r = req(QUESTION_FILE, &root);
+        r.node = Some("x-aaaa".to_string());
+        r.subject = Some("visual approval PR 7 at 05ea5bcc".to_string());
+        let refused = run_intake(&r, &home);
+        assert_eq!(
+            refused.refusal.as_deref(),
+            Some("screens"),
+            "{:?}",
+            refused.lines
+        );
+        // A hand-written title naming the PR and the hold reads the same.
+        let mut by_title = req(
+            &QUESTION_FILE.replace(
+                "Is a net-zero Python repair legal with no grant?",
+                "Approve PR 4030 at f5068f08 past the visual hold?",
+            ),
+            &root,
+        );
+        by_title.node = Some("x-aaaa".to_string());
+        assert_eq!(
+            run_intake(&by_title, &home).refusal.as_deref(),
+            Some("screens")
+        );
+        r.images = vec![root.join("missing.png")];
+        assert_eq!(run_intake(&r, &home).refusal.as_deref(), Some("image"));
+        assert!(journal_text(&root).is_empty());
+
+        let shot = root.join("bell.png");
+        std::fs::write(&shot, b"png").unwrap();
+        r.images = vec![shot];
+        r.screens_dir = Some(root.join("questions/screens"));
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "{:?}", answer.lines);
+        let qid = answer.qid.unwrap();
+        let copy = root.join(format!("questions/screens/{qid}-1-bell.png"));
+        assert_eq!(std::fs::read(&copy).unwrap(), b"png");
+        let row: Value = serde_json::from_str(journal_text(&root).lines().last().unwrap()).unwrap();
+        let images = row["data"]["images"].as_array().unwrap();
+        assert_eq!(images.len(), 1);
+        assert!(images[0]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("{qid}-1-bell.png")));
     }
 
     #[test]

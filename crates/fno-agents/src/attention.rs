@@ -204,6 +204,9 @@ pub struct AttentionItem {
     /// store; `None` for a question asked here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// Absolute paths of the screenshots the ask copied into the vault.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub images: Vec<String>,
 }
 
 /// Every defect, so the asker fixes the row instead of a sink dropping it
@@ -438,7 +441,16 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
                 .map(str::to_string),
         })
     });
+    let images: Vec<String> = arr_field(row, "images")
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     let mut item = AttentionItem {
+        images,
         host: crate::question_bus::peer_origin(row).map(|_| {
             str_field(row, "host")
                 .unwrap_or("another machine")
@@ -551,6 +563,7 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
         missing: vec![],
         state: "open".to_string(),
         settled: false,
+        images: vec![],
     };
     item.seal_readiness();
     Some(item)
@@ -607,6 +620,7 @@ fn mine_items(lane_text: &str) -> Vec<AttentionItem> {
             missing: vec![],
             state: "open".to_string(),
             settled: false,
+            images: vec![],
         });
     }
     out
