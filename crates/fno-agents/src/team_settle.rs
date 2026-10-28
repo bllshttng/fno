@@ -338,7 +338,7 @@ fn retired_name_refusal(
     };
     let store_path = home.team_names_json();
     if let Some(scope) = draw_scope {
-        let pending = crate::team_names::pending_draw(&store_path, scope)
+        let pending = crate::team_names::unconsumed_draw(&store_path, scope)
             .map_err(|e| format!("{door} cannot read the name history: {e}"))?;
         if pending.is_some_and(|p| p.eq_ignore_ascii_case(proposed)) {
             return Ok(None);

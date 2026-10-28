@@ -757,8 +757,18 @@ mod tests {
         );
         let drawn = answer["draw"]["name"].as_str().unwrap().to_string();
         assert_eq!(
-            crate::team_names::pending_draw(&store, "x-aaaa").unwrap(),
+            crate::team_names::unconsumed_draw(&store, "x-aaaa").unwrap(),
             Some(drawn.to_ascii_lowercase())
+        );
+        // Once a lead binds the draw, it is a retired name, never an accept.
+        crate::team_names::history_append(
+            &store,
+            crate::team_names::NameHistoryEntry::here(&drawn, "x-aaaa", Some("s".into()), "bound"),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::team_names::unconsumed_draw(&store, "x-aaaa").unwrap(),
+            None
         );
         let mut answer = json!({"outcome": "declined", "retired": "Rowan",
             "refusal": "--promote --name requires a fresh person name: Rowan is retired"});
