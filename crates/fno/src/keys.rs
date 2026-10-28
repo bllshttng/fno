@@ -262,6 +262,9 @@ pub fn resolve_keymap(
     )
 }
 
+// Test-only since the live-map wrappers went: the pub entry points had no
+// callers, and the refusal rules below are what the tests still pin.
+#[cfg(test)]
 fn resolve_prefix_change_with_rebinds(
     spec: &str,
     live_rebinds: &[(String, u8)],
@@ -281,6 +284,7 @@ fn resolve_prefix_change_with_rebinds(
     Ok(map)
 }
 
+#[cfg(test)]
 fn resolve_rebind_with(
     prefix: u8,
     live: &[(String, u8)],
