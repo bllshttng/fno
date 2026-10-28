@@ -553,9 +553,24 @@ def write(chat, rows):
         for r in rows:
             f.write(json.dumps(r) + "\n")
 
+def state(i, mins_ago, word):
+    # A delivery-state line: what the recipient's harness did with a send.
+    return {"type": "delivery", "id": f"fmail-demo-{i}", "how": word, "ts": ts(mins_ago)}
+
+# Every delivery state a sent row shows. A chat whose last row is parked or
+# failed waits on the sender, so the chat list marks it with `!`.
 write("chat-demo-review", [
     msg(1, 9, "rowan", "scout", "Rate-limit review pass today? PR 118 is up."),
+    state(1, 9, "accepted-new-turn"),
     msg(2, 6, "scout", "rowan", "Landed: 60 req/min per key, the 429 carries Retry-After."),
+    msg(7, 2, "rowan", "scout", "Good. Add the 429 case to the journey test before merge."),
+    state(7, 2, "parked"),
+    msg(9, 1, "rowan", "scout", "And tag the release once CI is green."),
+    state(9, 1, "failed"),
+])
+write("chat-demo-keys", [
+    msg(8, 4, "rowan", "archer", "Rotate the staging key once the deploy is green."),
+    state(8, 4, "failed"),
 ])
 write("chat-demo-scope", [
     msg(3, 21, "wren", "archer", "Webhook retry landed behind a flag; the dead-letter queue drains nightly."),
