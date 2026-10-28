@@ -27,12 +27,14 @@ fn clause(text: &str) -> String {
 /// The recommendation's reason without the "Option N, " lead the template
 /// asks for, which the page already prints as "Recommended: N, because".
 fn reason<'a>(why: &'a str, option: &str) -> &'a str {
-    let lead = format!("Option {option}");
-    why.strip_prefix(lead.as_str())
-        .filter(|rest| rest.starts_with([',', ' ']))
-        .map(|rest| rest.trim_start_matches([',', ' ']))
-        .map(|rest| rest.strip_prefix("because ").unwrap_or(rest))
-        .unwrap_or(why)
+    let Some(rest) = why.strip_prefix(format!("Option {option}").as_str()) else {
+        return why;
+    };
+    if let Some(rest) = rest.strip_prefix(',') {
+        let rest = rest.trim_start();
+        return rest.strip_prefix("because ").unwrap_or(rest);
+    }
+    rest.strip_prefix(" because ").unwrap_or(why)
 }
 
 pub fn unescape_text(text: &str) -> String {
@@ -877,6 +879,12 @@ mod tests {
             shaped_body.contains("- [ ] 2. Stay strict...\n"),
             "an ellipsis keeps its dots"
         );
+        // Free prose that only starts with the option name keeps every word.
+        assert_eq!(
+            reason("Option 2 is the safest", "2"),
+            "Option 2 is the safest"
+        );
+        assert_eq!(reason("Option 2 because it is safe", "2"), "it is safe");
     }
 
     #[test]

@@ -77,18 +77,16 @@ pub struct Escalation {
     /// The ask span this question routes (`answers_ask:` frontmatter), the
     /// pointer that links the escalate route span to the ask it answers.
     pub answers_ask: Option<String>,
-    /// `## ` headings no field reads. The page renders known sections only,
-    /// so their text never reaches the user.
+    /// `## ` headings a question page does not carry, so their text never
+    /// reaches the user.
     pub unknown_sections: Vec<String>,
 }
 
-/// Every section heading a field reads.
-pub const KNOWN_SECTIONS: [&str; 14] = [
-    SECTION_DECIDING,
-    SECTION_WHY_NOW,
+/// Every section heading a question page carries. The escalation-only
+/// sections parse too, but the question row never stores them.
+pub const QUESTION_SECTIONS: [&str; 11] = [
     SECTION_OPTIONS,
     SECTION_RECOMMENDATION,
-    SECTION_ON_DEADLINE,
     SECTION_BLOCKED_BECAUSE,
     SECTION_WHY_THESE,
     SECTION_DOWNSIDE,
@@ -259,7 +257,7 @@ pub fn parse(text: &str) -> Escalation {
     esc.unknown_sections = sections
         .iter()
         .map(|(n, _)| n.clone())
-        .filter(|n| !KNOWN_SECTIONS.contains(&n.as_str()))
+        .filter(|n| !QUESTION_SECTIONS.contains(&n.as_str()))
         .collect();
     esc
 }
@@ -570,8 +568,10 @@ The lead waits. A force push cannot be undone.
 
     #[test]
     fn a_section_no_field_reads_is_named() {
-        let esc = parse("Pick one?\n\n## Options\n1. A.\n## The table\n| a |\n");
-        assert_eq!(esc.unknown_sections, ["The table"]);
+        let esc = parse(
+            "Pick one?\n\n## Options\n1. A.\n## The table\n| a |\n## Why it matters now\nsoon\n",
+        );
+        assert_eq!(esc.unknown_sections, ["The table", "Why it matters now"]);
     }
 
     #[test]
