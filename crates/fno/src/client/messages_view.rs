@@ -1687,13 +1687,18 @@ fn state_line(r: &Value) -> Option<(String, BRole)> {
     };
     let reason = reason_words(text_of(r, "state_reason"), to);
     let failures = r.get("state_failures").and_then(Value::as_u64).unwrap_or(0);
+    let delivered = if failures > 0 {
+        "delivered on retry"
+    } else {
+        "delivered"
+    };
     match text_of(r, "state") {
         "" => None,
         "accepted-new-turn" => Some((
-            format!("delivered: {to} took it as a new turn"),
+            format!("{delivered}: {to} took it as a new turn"),
             BRole::Meta,
         )),
-        "accepted-steer" => Some((format!("delivered: {to} read it mid-turn"), BRole::Meta)),
+        "accepted-steer" => Some((format!("{delivered}: {to} read it mid-turn"), BRole::Meta)),
         "parked" => Some(("parked \u{b7} enter submit".to_string(), BRole::Meta)),
         "failed" => {
             let cause = if reason.is_empty() {

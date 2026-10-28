@@ -564,6 +564,10 @@ write("chat-demo-review", [
     msg(1, 9, "rowan", "scout", "Rate-limit review pass today? PR 118 is up."),
     state(1, 9, "accepted-new-turn"),
     msg(2, 6, "scout", "rowan", "Landed: 60 req/min per key, the 429 carries Retry-After."),
+    # A failed send the user retried with r, and it then delivered.
+    msg(11, 5, "rowan", "scout", "Pin the limit in the README too."),
+    state(11, 5, "failed", "not-confirmed"),
+    state(11, 4, "accepted-new-turn"),
     msg(7, 2, "rowan", "scout", "Good. Add the 429 case to the journey test before merge."),
     state(7, 2, "parked"),
     msg(9, 1, "rowan", "scout", "And tag the release once CI is green."),
