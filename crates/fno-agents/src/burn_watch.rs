@@ -1582,10 +1582,9 @@ mod tests {
             cost_usd: Some(3.0),
             ..noted
         };
-        let (d, reason) = decide(Some(&prev), &spending, now, 7200, 0.01);
-        assert!(matches!(d, Decision::Wake(_)));
+        let (d, _) = decide(Some(&prev), &spending, now, 7200, 0.01);
         assert!(
-            matches!(&reason, Decision::Wake(text) if text.contains("spend grew")),
+            matches!(&d, Decision::Wake(text) if text.contains("spend grew")),
             "the reason names spend, not the clock"
         );
     }
