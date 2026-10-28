@@ -142,11 +142,12 @@ fn head_lead_scope() -> Option<String> {
 }
 
 /// Mail the head lead. With no head lead, or a refused send, file one fleet
-/// task instead, so the failure still lands on the lead board.
-fn mail_head_lead(root: &Path, key: &str, text: &str, url: &str) {
+/// task instead, so the failure still lands on the lead board. True when
+/// either one landed.
+fn mail_head_lead(root: &Path, key: &str, text: &str, url: &str) -> bool {
     // Same cargo-test refusal as the operator notice: unpinned means real mail.
     if cfg!(test) && std::env::var_os("FNO_BIN").is_none() {
-        return;
+        return false;
     }
     let sent = head_lead_scope().is_some_and(|scope| {
         let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
@@ -156,12 +157,12 @@ fn mail_head_lead(root: &Path, key: &str, text: &str, url: &str) {
         crate::bounded_cmd::output_with_timeout(cmd, 30).is_some_and(|o| o.status.success())
     });
     if sent {
-        return;
+        return true;
     }
     let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
-        return;
+        return false;
     };
-    if let Err(e) = crate::fleet_task::file_once(
+    let filed = crate::fleet_task::file_once(
         &crate::provider_cap::questions_path(&home),
         LANE,
         key,
@@ -169,9 +170,11 @@ fn mail_head_lead(root: &Path, key: &str, text: &str, url: &str) {
         text,
         Some(url),
         None,
-    ) {
+    );
+    if let Err(e) = &filed {
         eprintln!("release-watch: task refused: {e}");
     }
+    filed.is_ok()
 }
 
 /// One repo's pass. Returns 1 when a page left the machine.
@@ -200,19 +203,23 @@ pub(crate) fn pass(
         return 0;
     };
     let token = id.to_string();
-    if stored_token(path, &key).as_deref() == Some(token.as_str()) {
+    let marked = |k: &str| stored_token(path, k).as_deref() == Some(token.as_str());
+    if marked(&key) && marked(&mail_key) {
         notes.push(format!("{key}:deduped"));
         return 0;
     }
     let line = fetch_error_line(root, &slug, id)
         .unwrap_or_else(|| "no error annotation; open the run".to_string());
     let body = format!("{WORKFLOW} run {label} failed on {slug}: {line}");
-    // The mail rides its own mark, written before the page: a page held by
-    // the rate floor retries next pass and must not mail the lead twice.
-    if mark_once(path, &mail_key, &token) {
+    // The mail rides its own mark, written only once the mail or its task
+    // landed: a page held by the rate floor must not mail the lead twice, and
+    // a lost mail must retry next pass.
+    if !marked(&mail_key) {
         let text =
             format!("{SENDER_LINE} {body} Read it: gh run view {id} --log-failed --repo {slug}");
-        mail_head_lead(root, &key, &text, &url);
+        if mail_head_lead(root, &key, &text, &url) {
+            mark_once(path, &mail_key, &token);
+        }
     }
     let verdict = verdict_label(notify_signal_via(
         path,
