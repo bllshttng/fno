@@ -145,16 +145,40 @@ pub(crate) fn confirmed_claude_stop(short: &str, session_id: Option<&str>) -> St
                     std::time::Duration::from_secs(15),
                 )
                 .await;
-                match members {
+                let mut confirmed = match &members {
                     Ok(members) => {
-                        let (_, survivors) = super::claude_stop::end_survivors(&members).await;
-                        if survivors.is_empty() {
-                            StopLeg::Confirmed
-                        } else {
-                            StopLeg::Asked
-                        }
+                        let (_, survivors) = super::claude_stop::end_survivors(members).await;
+                        survivors.is_empty()
                     }
-                    Err(_) => StopLeg::Asked,
+                    Err(_) => false,
+                };
+                // The pre-ask snapshot can age inside the window: a supervisor
+                // respawn for the same session, or a worker that died and came
+                // back, leaves a live process the captured set never named, and
+                // "no survivors" would confirm on stale evidence. Re-probe the
+                // roster before confirming; a session it still hosts gets one
+                // fresh end, and an unreadable roster never reads as absence.
+                if confirmed {
+                    match super::claude_stop::roster_still_hosts(short, session_id) {
+                        Ok(false) => {}
+                        Ok(true) => {
+                            if let Ok(fresh) =
+                                super::claude_stop::prove_target_blocking(short, session_id)
+                            {
+                                let (_, survivors) =
+                                    super::claude_stop::end_survivors(&fresh).await;
+                                confirmed = survivors.is_empty();
+                            } else {
+                                confirmed = false;
+                            }
+                        }
+                        Err(()) => confirmed = false,
+                    }
+                }
+                if confirmed {
+                    StopLeg::Confirmed
+                } else {
+                    StopLeg::Asked
                 }
             })
         })
