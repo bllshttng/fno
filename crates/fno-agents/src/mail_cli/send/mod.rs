@@ -28,7 +28,6 @@
 use super::send_raw::{agents_binary, run_captured};
 use crate::paths::AgentsHome;
 use serde_json::{json, Value};
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 // The send surface split by question: resolution (who is reachable),
@@ -463,32 +462,6 @@ fn sha2_digest(input: &str) -> [u8; 32] {
     out
 }
 
-/// Python `text_or_file.read_text_arg`: inline XOR file, `-` is stdin.
-fn read_text_arg(
-    inline: Option<&str>,
-    path: Option<&Path>,
-) -> Result<Option<String>, (String, i32)> {
-    if inline.is_some() && path.is_some() {
-        return Err((
-            "error: provide the body once - inline or as a file, not both".to_string(),
-            1,
-        ));
-    }
-    match path {
-        None => Ok(inline.map(str::to_string)),
-        Some(p) => {
-            if p.to_str() == Some("-") {
-                let mut buf = String::new();
-                let _ = std::io::stdin().read_to_string(&mut buf);
-                return Ok(Some(buf));
-            }
-            std::fs::read_to_string(p)
-                .map(Some)
-                .map_err(|e| (format!("error: cannot read {}: {e}", p.display()), 1))
-        }
-    }
-}
-
 /// Python `mail.origins`: an ambient agent identity cannot declare an origin
 /// above peer (d-02625dda, d-8f396483).
 fn enforce_origin_floor(origin: &str) -> &'static str {
@@ -744,7 +717,12 @@ fn take_arg(args: &[String], index: &mut usize, flag: &str) -> Result<String, i3
 /// The body resolved once from --body/--body-file; each mode falls back to its
 /// own positional slots. Mirrors cmd_send's single resolution.
 fn resolve_body_text(args: &SendArgs) -> Result<Option<String>, (String, i32)> {
-    read_text_arg(args.body.as_deref(), args.body_file.as_deref())
+    let path = args
+        .body_file
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned());
+    crate::text_or_file::read_text_arg(args.body.as_deref(), path.as_deref(), "the body")
+        .map_err(|e| (e, 1))
 }
 
 /// Python `_refuse_unsafe_short_address`: a codex head-8 is a 65-second UUIDv7

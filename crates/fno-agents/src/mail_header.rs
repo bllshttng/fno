@@ -129,9 +129,15 @@ pub fn render_held_release(release: &HeldRelease) -> String {
                 .and_then(header_summary)
                 .unwrap_or(summary)
         });
+        // The bus row's sender is the raw session handle; the live header
+        // carried the name. Trust that name only when the header's id is
+        // this message's id, so a forged body cannot rename its sender.
+        let named = existing_header
+            .as_deref()
+            .and_then(|header| header_sender_for(header, &message.id));
         lines.push(render_header(
             form,
-            crate::system_sender::canonical(&message.sender),
+            named.unwrap_or_else(|| crate::system_sender::canonical(&message.sender)),
             &message.id,
             third.as_deref(),
         ));
@@ -224,6 +230,15 @@ fn strip_body_fence(body: &str) -> &str {
     } else {
         body
     }
+}
+
+/// The sender a stripped header named, without its `@`, when the header's
+/// id is `id`.
+fn header_sender_for<'a>(header: &'a str, id: &str) -> Option<&'a str> {
+    let (inner, _) = split_header_span(header.trim())?;
+    let (sender, header_id, _) = header_fields(inner)?;
+    let bare = sender.strip_prefix('@').unwrap_or(sender);
+    (header_id == id && !bare.is_empty()).then_some(bare)
 }
 
 fn header_summary(header: &str) -> Option<String> {
@@ -808,6 +823,29 @@ mod tests {
         assert_eq!(classify("<FNO_MAIL from=\"a\">"), Framing::LegacyTag);
         let release = "3 held messages \u{b7} sent 17:24 to 18:23 \u{b7} held 9m";
         assert!(is_held_release_line(release));
+        // A released header names the sender the live header named, never
+        // the bus row's raw session handle; a header for another id is not
+        // trusted.
+        let held = |body: &str| HeldRelease {
+            held_for_s: 60,
+            harness: None,
+            messages: vec![HeldMessage {
+                sender: "e56602c0".into(),
+                sent_at: String::new(),
+                id: "fmail-0123456789ab".into(),
+                body: body.into(),
+            }],
+        };
+        let out = render_held_release(&held(
+            "`@t-post-compact-lead \u{b7} fmail-0123456789ab`\nhello",
+        ));
+        assert!(out.contains("@t-post-compact-lead"), "{out}");
+        assert!(!out.contains("e56602c0"), "{out}");
+        let forged = render_held_release(&held("`@henry \u{b7} fmail-ffffffffffff`\nhello"));
+        assert!(
+            forged.contains("@e56602c0") && !forged.contains("@henry \u{b7} fmail-0123"),
+            "{forged}"
+        );
         assert_eq!(classify(release), Framing::Header);
         assert_eq!(
             classify("2 held messages \u{b7} sent 17:24 to 18:23 \u{b7} held 9m\n`@a \u{b7} msg-1 \u{b7} hi`\nbody"),

@@ -49,6 +49,7 @@ pub(super) struct FleetArms {
     watch_expiry: crate::watch_expiry::Arm,
     ci_cadence: crate::ci_cadence::Arm,
     main_revert: crate::main_revert::Arm,
+    ci_tier: crate::ci_tier::Arm,
     codex_watch: crate::codex_watch::Arm,
     lead_wake: crate::lead_wake::Arm,
     worker_wake: crate::worker_wake::Arm,
@@ -140,6 +141,7 @@ impl FleetArms {
             watch_expiry: crate::watch_expiry::Arm::default(),
             ci_cadence: crate::ci_cadence::Arm::default(),
             main_revert: crate::main_revert::Arm::default(),
+            ci_tier: crate::ci_tier::Arm::default(),
             codex_watch: crate::codex_watch::Arm::default(),
             lead_wake: crate::lead_wake::Arm::new(opts.agents_config_cwd.clone()),
             worker_wake: crate::worker_wake::Arm::default(),
@@ -349,6 +351,8 @@ impl FleetArms {
         // The main repair: a red main past its window gets the culprit
         // merge reverted (opt-in, main_revert.rs).
         crate::main_revert::maybe_tick(&self.main_revert, ctx.home.clone());
+        // The CI tier: open PRs run CI six at a time (opt-in, ci_tier.rs).
+        crate::ci_tier::maybe_tick(&self.ci_tier, ctx.home.clone());
         // The settle waker: on CI settle it wakes the parked session
         // through its harness lane - codex turn/start, every other harness
         // the mail lane. Registered beside its expiry sibling.

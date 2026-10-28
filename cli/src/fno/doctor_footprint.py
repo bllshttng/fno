@@ -11,6 +11,7 @@ import time
 from functools import lru_cache
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, NoReturn
 
 import typer
@@ -251,7 +252,11 @@ def _row_is_advancing(row: Any) -> bool:
     try:
         from fno.agents import session_truth
         from fno.agents.reachability import ADVANCING, classify_progress, classify_reachability
-        truth = session_truth.resolve_session_truth(str(getattr(row, "name", "") or ""))
+        sid = str(getattr(row, "harness_session_id", "") or "")
+        # The row already names its transcript. Resolving by name instead runs
+        # a fleet-wide discovery per row, which overran the spawn gate's probe budget.
+        own = SimpleNamespace(agent=str(getattr(row, "harness", "") or "claude"), session_id=sid, cwd=str(getattr(row, "cwd", "") or ""), transcript_path=None)
+        truth = session_truth.resolve_session_truth(str(getattr(row, "name", "") or ""), resolve=(lambda _h: (own, [])) if sid else None)
         state = truth.get("state")
         age_s = truth.get("last_activity_age_s")
         reach = classify_reachability(truth_state=state, age_s=age_s, falsifier=None, observed_model=truth.get("observed_model"))

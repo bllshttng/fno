@@ -1,0 +1,7 @@
+{
+  "fenced": [
+    "--bogus-flag"
+  ],
+  "harness": "codex",
+  "line": "fno agents spawn: the codex thread lane has no carrier for --bogus-flag; add --as pane"
+}

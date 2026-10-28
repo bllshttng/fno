@@ -106,6 +106,7 @@ pub mod chats;
 pub mod check_supersession;
 pub mod ci_cadence;
 pub mod ci_front;
+pub mod ci_tier;
 pub mod claim_cli;
 pub mod claim_commands;
 pub mod claim_lanes_cli;
@@ -513,6 +514,7 @@ pub mod revival_check;
 pub mod revive_proof;
 pub mod rm_receipt;
 pub mod rm_tombstone;
+pub mod role_cwd;
 pub mod role_migration;
 pub mod roles;
 pub mod roster_progress;
@@ -558,6 +560,7 @@ pub mod spawn;
 pub mod spawn_admission;
 pub mod spawn_axes;
 pub mod spawn_backends;
+pub mod spawn_bare;
 pub mod spawn_compose;
 pub mod spawn_context;
 pub mod spawn_contract;
@@ -630,6 +633,7 @@ pub mod test_delta;
 pub mod test_hold;
 pub mod test_run;
 mod test_run_journal;
+pub mod text_or_file;
 pub mod think_daily;
 pub mod think_dispatch;
 pub mod think_inspect;
@@ -1858,6 +1862,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "ci_cadence_check",
     // The main_revert arm's read of a red main (main_revert.rs).
     "main_revert_check",
+    // A ci_tier arm pass that cancelled or reran runs (ci_tier.rs).
+    "ci_tier_pass",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
