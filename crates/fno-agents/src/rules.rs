@@ -115,14 +115,8 @@ struct Cases {
 }
 
 /// The `rules-measure` answer: for each labeled case, BM25 over the live
-/// laws' `{subject} {decision}` against the stage keyword match the stage
-/// read uses today. The keyword baseline skips the stage read's project and
-/// node-subject filters, so it reads the keyword table alone.
-pub fn measure_answer(
-    cases: &str,
-    laws: &[Value],
-    keywords: impl Fn(&str) -> Vec<&'static str>,
-) -> Value {
+/// laws' `{subject} {decision}`, scored as recall and precision.
+pub fn measure_answer(cases: &str, laws: &[Value]) -> Value {
     let cases: Cases = match serde_json::from_str(cases) {
         Ok(c) => c,
         Err(e) => return json!({"ok": false, "error": format!("cases: {e}")}),
@@ -139,7 +133,7 @@ pub fn measure_answer(
         .collect();
     let ratio = |hit: usize, of: usize| if of == 0 { 0.0 } else { hit as f64 / of as f64 };
     let mut rows = Vec::new();
-    let mut sums = [0.0f64; 5];
+    let mut sums = [0.0f64; 3];
     for case in &cases.cases {
         let expected: BTreeSet<&str> = case.expected.iter().map(String::as_str).collect();
         let ranked = bm25_rank(&docs, &case.query, 10);
@@ -150,22 +144,10 @@ pub fn measure_answer(
                 .filter(|(id, _)| expected.contains(id.as_str()))
                 .count()
         };
-        let words = keywords(&case.stage);
-        let picked: Vec<&str> = docs
-            .iter()
-            .filter(|(_, text)| {
-                let text = text.to_lowercase();
-                words.iter().any(|w| text.contains(w))
-            })
-            .map(|(id, _)| id.as_str())
-            .collect();
-        let picked_hits = picked.iter().filter(|id| expected.contains(*id)).count();
         let row = [
             ratio(hits(5), expected.len()),
             ratio(hits(10), expected.len()),
             ratio(hits(10), 10),
-            ratio(picked_hits, expected.len()),
-            ratio(picked_hits, picked.len()),
         ];
         for (sum, v) in sums.iter_mut().zip(row) {
             *sum += v;
@@ -178,9 +160,6 @@ pub fn measure_answer(
             "bm25_recall_at_5": row[0],
             "bm25_recall_at_10": row[1],
             "bm25_precision_at_10": row[2],
-            "keywords_picked": picked.len(),
-            "keywords_recall": row[3],
-            "keywords_precision": row[4],
         }));
     }
     let n = cases.cases.len().max(1) as f64;
@@ -192,8 +171,6 @@ pub fn measure_answer(
             "bm25_recall_at_5": sums[0] / n,
             "bm25_recall_at_10": sums[1] / n,
             "bm25_precision_at_10": sums[2] / n,
-            "keywords_recall": sums[3] / n,
-            "keywords_precision": sums[4] / n,
         },
         "per_case": rows,
     })
@@ -235,28 +212,18 @@ mod tests {
     }
 
     #[test]
-    fn rules_measure_scores_bm25_and_the_keyword_baseline() {
+    fn rules_measure_scores_bm25() {
         let laws = vec![
             json!({"decision_id": "d-1", "subject": "merge-approval", "decision": "merge the pull request when review passes"}),
             json!({"decision_id": "d-2", "subject": "merge-freeze", "decision": "a freeze holds every release merge"}),
             json!({"decision_id": "d-3", "subject": "review-lane", "decision": "review inside the session"}),
         ];
         let cases = r#"{"cases": [{"name": "freeze", "stage": "review", "query": "may I merge during the freeze", "expected": ["d-2"]}]}"#;
-        let keywords = |stage: &str| {
-            if stage == "review" {
-                vec!["review"]
-            } else {
-                vec![]
-            }
-        };
-        let answer = measure_answer(cases, &laws, keywords);
+        let answer = measure_answer(cases, &laws);
         assert_eq!(answer["cases"], 1);
         assert_eq!(answer["per_case"][0]["bm25_top10"][0], "d-2");
         assert_eq!(answer["mean"]["bm25_recall_at_5"], 1.0);
         assert_eq!(answer["mean"]["bm25_precision_at_10"], 0.1);
-        // The keyword baseline picks the two review laws and misses the freeze.
-        assert_eq!(answer["per_case"][0]["keywords_picked"], 2);
-        assert_eq!(answer["mean"]["keywords_recall"], 0.0);
-        assert_eq!(measure_answer("not json", &laws, keywords)["ok"], false);
+        assert_eq!(measure_answer("not json", &laws)["ok"], false);
     }
 }
