@@ -9,29 +9,43 @@
 //! so a regression fails here instead of filling the process table, and the
 //! relay's own hop counter refuses at depth 3.
 //!
-//! The front is the sibling crate's debug build (`crates/fno/target/debug/fno`,
-//! which CI builds before this shard), else `fno` on PATH.
+//! The front is built from this checkout by the test itself, never taken
+//! from PATH or a stale target dir: a front from another commit would pass
+//! without exercising this one. Where CI already built it, the build is a
+//! no-op.
 
 #![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 const RUNAWAY: usize = 40;
 
-fn real_fno() -> PathBuf {
-    let sibling = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fno/target/debug/fno");
-    if sibling.is_file() {
-        return sibling;
-    }
-    std::env::var_os("PATH")
-        .and_then(|p| {
-            std::env::split_paths(&p)
-                .map(|d| d.join("fno"))
-                .find(|c| c.is_file())
-        })
-        .expect("build the front first: cargo build --manifest-path crates/fno/Cargo.toml")
+fn real_fno() -> &'static Path {
+    static FRONT: OnceLock<PathBuf> = OnceLock::new();
+    FRONT.get_or_init(|| {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fno/Cargo.toml");
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let out = Command::new(cargo)
+            .args(["build", "--quiet", "--bin", "fno", "--message-format=json"])
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .output()
+            .expect("run cargo build for the fno front");
+        assert!(
+            out.status.success(),
+            "building the fno front failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter_map(|v| v["executable"].as_str().map(PathBuf::from))
+            .find(|p| p.file_name().is_some_and(|n| n == "fno"))
+            .expect("cargo reported no fno executable")
+    })
 }
 
 fn script(path: &Path, body: &str) {
