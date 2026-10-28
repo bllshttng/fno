@@ -429,7 +429,10 @@ pub fn draw_successor_name(
     outgoing: &[String],
 ) -> Result<String, String> {
     let canon = crate::territory::canonical_scope(scope);
-    let pending = crate::team_names::pending_draw(store_path, scope)?;
+    // A draw a bind already consumed is the outgoing lead's own name, never
+    // an offer to the next successor.
+    let pending = crate::team_names::unconsumed_draw(store_path, scope)?
+        .filter(|p| !outgoing.iter().any(|o| o.eq_ignore_ascii_case(p)));
     if let Some(name) = proposed.map(str::trim).filter(|p| !p.is_empty()) {
         if !redraw {
             let accepted = pending
@@ -571,7 +574,14 @@ pub fn settle_draw(payload: &Value, answer: &mut Value, store: &std::path::Path)
         }
         return;
     }
-    if !succession || outcome != Some("succeeded") {
+    let proposed = payload
+        .get("proposed_name")
+        .and_then(Value::as_str)
+        .filter(|p| !p.trim().is_empty());
+    // A hand-off over a scope nobody holds is a fresh grant. With no name
+    // typed it still needs one drawn, or the spawn launches nameless.
+    let unheld = outcome == Some("granted") && proposed.is_none();
+    if !succession || (outcome != Some("succeeded") && !unheld) {
         return;
     }
     // The plan answer names the holders this succession vacates.
@@ -590,10 +600,7 @@ pub fn settle_draw(payload: &Value, answer: &mut Value, store: &std::path::Path)
         store,
         &registry,
         scope,
-        payload
-            .get("proposed_name")
-            .and_then(Value::as_str)
-            .filter(|p| !p.trim().is_empty()),
+        proposed,
         redraw,
         claims_root.as_deref(),
         &outgoing,
@@ -688,6 +695,40 @@ mod tests {
         )
         .unwrap();
         assert_ne!(drawn, second);
+        // The successor binds its draw and later hands off: its own name is
+        // no longer the pending draw, whether a bound row or the outgoing
+        // holder list says so.
+        let accept_thea = |outgoing: &[String]| {
+            draw_successor_name(
+                &store,
+                &registry,
+                "x-aaaa",
+                Some("Thea"),
+                false,
+                Some(tmp.path()),
+                outgoing,
+            )
+            .unwrap_err()
+        };
+        crate::team_names::history_append(
+            &store,
+            crate::team_names::NameHistoryEntry::here(&second, "x-aaaa", None, "bound"),
+        )
+        .unwrap();
+        let err = accept_thea(&[]);
+        assert!(err.contains("no successor name is drawn"), "{err}");
+        let third = draw_successor_name(
+            &store,
+            &registry,
+            "x-aaaa",
+            None,
+            true,
+            Some(tmp.path()),
+            &[],
+        )
+        .unwrap();
+        let err = accept_thea(&[third]);
+        assert!(err.contains("no successor name is drawn"), "{err}");
     }
 
     /// The successor never draws an outgoing holder's name, even when that
@@ -777,6 +818,14 @@ mod tests {
             &store,
         );
         assert!(answer.get("draw").is_none(), "{answer}");
+        // A bare hand-off over a scope nobody holds still gets a name.
+        let mut unheld = json!({"outcome": "granted"});
+        settle_draw(
+            &json!({"scope": "x-cccc", "succession": true, "claims_root": root}),
+            &mut unheld,
+            &store,
+        );
+        assert!(unheld["draw"]["name"].as_str().is_some(), "{unheld}");
         settle_draw(
             &json!({"scope": "x-aaaa", "redraw": true, "claims_root": root}),
             &mut answer,

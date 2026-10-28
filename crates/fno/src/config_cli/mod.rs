@@ -21,6 +21,7 @@
 pub mod get;
 pub mod history;
 pub mod leaves;
+pub mod model;
 pub mod plugin_install;
 
 use serde_json::{Map, Value};
