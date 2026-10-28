@@ -30,10 +30,18 @@ use serde_json::{json, Value};
 
 mod common;
 
+/// One session id per scope, shared by the scope's manifest and its
+/// registry rows: the wake pass correlates the two by session. Distinct
+/// scopes stay distinct, so a multi-row fixture never trips the registry
+/// loader's duplicate-identity guard (which one nondeterministic CI run
+/// paid for three times in one night).
+fn scope_session(scope: &str) -> String {
+    format!("11111111-2222-3333-4444-{scope:0>12}")
+}
+
 /// 2026-08-29T12:00:00Z, the fixtures' fixed clock.
 const NOW: i64 = 1788004800;
 const NOW_ISO: &str = "2026-08-29T12:00:00Z";
-const SESSION: &str = "11111111-2222-3333-4444-555555555555";
 const BIRTH: &str = "2026-08-28T12:00:00Z";
 const CURSOR_SEED: &str = "2026-08-29T10:00:00Z";
 const PROMPT: &str =
@@ -128,7 +136,8 @@ impl World {
             &path,
             format!(
                 "---\nfno_id: wake-fixture\nscope: {scope}\nharness: claude\n\
-                 harness_session_id: {SESSION}\ncreated_at: {BIRTH}\n{extra}---\n"
+                 harness_session_id: {}\ncreated_at: {BIRTH}\n{extra}---\n",
+                scope_session(scope)
             ),
         )
         .unwrap();
@@ -190,7 +199,7 @@ fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
         "role_scope": scope,
         "role_level": 1,
         "created_at": "2026-08-28T12:00:00Z",
-        "harness_session_id": SESSION,
+        "harness_session_id": scope_session(scope),
     })
 }
 
