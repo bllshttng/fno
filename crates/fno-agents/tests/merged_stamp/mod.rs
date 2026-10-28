@@ -7,9 +7,20 @@
 
 use super::*;
 
+/// The store path the gate reads once the rig has pinned FNO_STATE_DIR at
+/// the temp root, so the seed and the finding read land where the gate
+/// looks in CI (door pins) and locally alike.
+fn stamped_graph_path(cwd: &std::path::Path) -> std::path::PathBuf {
+    fno_agents::agents_config::state_dir(cwd)
+        .map(|root| fno_agents::state_layout::graph_anchor(&root))
+        .unwrap_or_else(|| cwd.join("graph.json"))
+}
+
 /// Shared rig for the merged-stamp tests: a manifest bound to `node_id`, a
-/// promise transcript, and the node row seeded under a temp FNO_HOME. The
-/// caller owns the FNO_HOME restore after its fire.
+/// promise transcript, and the node row seeded under a temp state root. The
+/// rig pins FNO_STATE_DIR (which outranks FNO_HOME in the store resolution,
+/// and which CI's run door also pins) so the seed can never reach the live
+/// `~/.fno`. The caller owns both env restores after its fire.
 fn stamped_rig(
     node_id: &str,
     session: &str,
@@ -26,8 +37,9 @@ fn stamped_rig(
     let manifest_path = cwd.join("target-state.md");
     fs::write(&manifest_path, &manifest).unwrap();
     fs::write(cwd.join("transcript.jsonl"), transcript_with_promise()).unwrap();
+    std::env::set_var("FNO_STATE_DIR", tmp.path());
     std::env::set_var("FNO_HOME", tmp.path());
-    fno_agents::graph_store::seed_rows(&tmp.path().join("graph.json"), std::slice::from_ref(&row))
+    fno_agents::graph_store::seed_rows(&stamped_graph_path(cwd), std::slice::from_ref(&row))
         .unwrap();
     let transcript_path = cwd.join("transcript.jsonl");
     (tmp, manifest_path, transcript_path)
@@ -42,6 +54,7 @@ fn stamped_rig(
 #[test]
 fn x0d87_done_node_merged_stamp_allows_without_rest_read() {
     let restore_home = std::env::var_os("FNO_HOME").unwrap_or_default();
+    let restore_state = std::env::var_os("FNO_STATE_DIR").unwrap_or_default();
     let (tmp, manifest_path, transcript_path) = stamped_rig(
         "x-stamp",
         "sess-stamp",
@@ -87,6 +100,7 @@ esac"#,
         &format!("--git-bin={}", git.display()),
     ]);
     std::env::set_var("FNO_HOME", restore_home);
+    std::env::set_var("FNO_STATE_DIR", restore_state);
 
     assert_eq!(code, 0, "exit code must be 0 for allow");
     assert_eq!(
@@ -118,6 +132,7 @@ esac"#,
 #[test]
 fn x0d87_unshipped_local_commit_falls_through() {
     let restore_home = std::env::var_os("FNO_HOME").unwrap_or_default();
+    let restore_state = std::env::var_os("FNO_STATE_DIR").unwrap_or_default();
     let (tmp, manifest_path, transcript_path) = stamped_rig(
         "x-stamp4",
         "sess-stamp4",
@@ -154,6 +169,7 @@ esac"#,
         &format!("--git-bin={}", git.display()),
     ]);
     std::env::set_var("FNO_HOME", restore_home);
+    std::env::set_var("FNO_STATE_DIR", restore_state);
 
     assert_eq!(
         d.decision, "block",
@@ -173,6 +189,7 @@ esac"#,
 #[test]
 fn x0d87_open_operator_finding_falls_through() {
     let restore_home = std::env::var_os("FNO_HOME").unwrap_or_default();
+    let restore_state = std::env::var_os("FNO_STATE_DIR").unwrap_or_default();
     let (tmp, manifest_path, transcript_path) = stamped_rig(
         "x-stamp5",
         "sess-stamp5",
@@ -193,6 +210,8 @@ fn x0d87_open_operator_finding_falls_through() {
   *) echo deadbeefdeadbeefdeadbeefdeadbeef00000001 ;;
 esac"#,
     );
+    // The findings gate reads the default-path store (FNO_STATE_DIR root),
+    // so the finding lands there, not at the node read's layout anchor.
     let store = fno_agents::backlog::api::Store::new(&cwd.join("graph.json"));
     let input = fno_agents::backlog::api::FindingInput {
         body: "operator says hold".into(),
@@ -215,6 +234,7 @@ esac"#,
         &format!("--git-bin={}", git.display()),
     ]);
     std::env::set_var("FNO_HOME", restore_home);
+    std::env::set_var("FNO_STATE_DIR", restore_state);
 
     assert_eq!(
         d.decision, "block",
@@ -235,6 +255,7 @@ esac"#,
 #[test]
 fn x0d87_live_replacement_pr_holds_the_early_allow() {
     let restore_home = std::env::var_os("FNO_HOME").unwrap_or_default();
+    let restore_state = std::env::var_os("FNO_STATE_DIR").unwrap_or_default();
     let (tmp, manifest_path, transcript_path) = stamped_rig(
         "x-stamp2",
         "sess-stamp2",
@@ -262,6 +283,7 @@ fn x0d87_live_replacement_pr_holds_the_early_allow() {
         &format!("--git-bin={}", mock.git.display()),
     ]);
     std::env::set_var("FNO_HOME", restore_home);
+    std::env::set_var("FNO_STATE_DIR", restore_state);
 
     assert_eq!(code, 0, "a block decision still exits 0");
     assert_eq!(
@@ -285,6 +307,7 @@ fn x0d87_live_replacement_pr_holds_the_early_allow() {
 #[test]
 fn x0d87_open_node_keeps_rest_read() {
     let restore_home = std::env::var_os("FNO_HOME").unwrap_or_default();
+    let restore_state = std::env::var_os("FNO_STATE_DIR").unwrap_or_default();
     let (tmp, manifest_path, transcript_path) = stamped_rig(
         "x-stamp3",
         "sess-stamp3",
@@ -311,6 +334,7 @@ fn x0d87_open_node_keeps_rest_read() {
         &format!("--git-bin={}", mock.git.display()),
     ]);
     std::env::set_var("FNO_HOME", restore_home);
+    std::env::set_var("FNO_STATE_DIR", restore_state);
 
     assert_eq!(code, 0, "a block decision still exits 0");
     assert_eq!(
