@@ -4,7 +4,7 @@
 //! byte-for-byte where an operator or a test read them.
 
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io::Read as _;
 use std::os::fd::AsRawFd;
@@ -69,6 +69,22 @@ fn resolve_lenient(path: &Path) -> PathBuf {
         // cheap: canonicalize already did the real work when the path exists.
         PathBuf::from(path)
     })
+}
+
+/// The spelling-stable key for a proxy dir. macOS owns both `/var/folders/...`
+/// (raw, what a PATH part or a not-yet-created dir carries) and
+/// `/private/var/folders/...` (what canonicalize answers), so equality folds
+/// the `/private` prefix and trailing slashes away; `/tmp` and `/private/tmp`
+/// collapse the same way.
+fn dir_key(path: &Path) -> String {
+    let key = resolve_lenient(path).to_string_lossy().into_owned();
+    let key = key.strip_prefix("/private/").unwrap_or(&key);
+    key.trim_end_matches('/').to_string()
+}
+
+/// Dir equality that survives the spelling split [`dir_key`] folds.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    dir_key(a) == dir_key(b)
 }
 
 /// Is this `gh` our own broker shim, judged by content rather than location?
@@ -206,6 +222,7 @@ fn non_empty_env(key: &str) -> Option<String> {
 /// markers the inherited env may carry.
 pub(crate) fn delegate_environment() -> Result<BTreeMap<String, String>, ProxyIdentityError> {
     let proxy_dirs = proxy_dirs()?;
+    let proxy_keys: BTreeSet<String> = proxy_dirs.iter().map(|d| dir_key(d)).collect();
     let current = std::env::var("PATH").unwrap_or_default();
     let path_sep = if cfg!(windows) { ';' } else { ':' };
     let scrubbed: Vec<&str> = current
@@ -215,7 +232,7 @@ pub(crate) fn delegate_environment() -> Result<BTreeMap<String, String>, ProxyId
                 return false;
             }
             let resolved = resolve_lenient(Path::new(part));
-            if proxy_dirs.contains(&resolved) {
+            if proxy_keys.contains(&dir_key(&resolved)) {
                 return false;
             }
             // By basename: a shim two hops down a symlinked dir still matches.
@@ -234,6 +251,7 @@ pub(crate) fn delegate_environment() -> Result<BTreeMap<String, String>, ProxyId
 /// shim and deadlock under the flock. (The `_quota.resolve_real_gh` port.)
 pub(crate) fn resolve_real_gh() -> Result<Option<String>, ProxyIdentityError> {
     let proxy_dirs = proxy_dirs()?;
+    let proxy_keys: BTreeSet<String> = proxy_dirs.iter().map(|d| dir_key(d)).collect();
     if let Some(configured) = std::env::var("FNO_REAL_GH")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -242,7 +260,7 @@ pub(crate) fn resolve_real_gh() -> Result<Option<String>, ProxyIdentityError> {
         let is_shim = is_proxy_shim(&candidate);
         let parent_in_proxy = candidate
             .parent()
-            .map(|p| proxy_dirs.contains(&resolve_lenient(p)))
+            .map(|p| proxy_keys.contains(&dir_key(p)))
             .unwrap_or(false);
         let executable = candidate.is_file() && is_executable(&candidate);
         if executable && !parent_in_proxy && !is_shim {
@@ -261,8 +279,7 @@ pub(crate) fn resolve_real_gh() -> Result<Option<String>, ProxyIdentityError> {
         if !candidate.is_file() || !is_executable(&candidate) {
             continue;
         }
-        if proxy_dirs.contains(&resolve_lenient(Path::new(directory))) || is_proxy_shim(&candidate)
-        {
+        if proxy_keys.contains(&dir_key(Path::new(directory))) || is_proxy_shim(&candidate) {
             continue;
         }
         return Ok(Some(
@@ -845,6 +862,25 @@ mod tests {
         )
         .unwrap();
         assert!(!is_proxy_shim(&real));
+    }
+
+    #[test]
+    fn proxy_dir_equality_survives_the_macos_spelling_split() {
+        // canonicalize answers /private/var/... while a PATH part or a
+        // not-yet-created dir carries the raw /var/... spelling; a
+        // prefix-string sibling is never equal.
+        assert!(same_dir(
+            Path::new("/var/folders/ab/T/fno/uid/github-cli"),
+            Path::new("/private/var/folders/ab/T/fno/uid/github-cli"),
+        ));
+        assert!(same_dir(
+            Path::new("/private/tmp/fno-501/github-cli"),
+            Path::new("/tmp/fno-501/github-cli/"),
+        ));
+        assert!(!same_dir(
+            Path::new("/tmpextra/fno-501/github-cli"),
+            Path::new("/tmp/fno-501/github-cli"),
+        ));
     }
 
     #[test]
