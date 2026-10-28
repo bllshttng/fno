@@ -636,11 +636,24 @@ pub mod terminal_run;
 pub mod terminal_stop;
 pub mod terminal_vocab;
 pub mod territory;
+pub mod test_census;
+pub mod test_changed;
+pub mod test_command;
+#[cfg(test)]
+#[path = "test_command_goldens_tests.rs"]
+mod test_command_goldens_tests;
 pub mod test_delta;
+pub mod test_env;
 pub mod test_hold;
 pub mod test_run;
 mod test_run_journal;
 mod test_run_pins;
+pub mod test_smoke;
+pub mod test_smoke_discovery;
+pub mod test_smoke_registry;
+#[cfg(test)]
+#[path = "test_smoke_tests.rs"]
+mod test_smoke_tests;
 pub mod text_or_file;
 pub mod think_daily;
 pub mod think_dispatch;

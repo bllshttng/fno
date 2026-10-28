@@ -57,7 +57,7 @@ All test scripts follow the same convention:
 `fno doctor test smoke` is the one-command gate, but it has two layers and a gap that a command-surface change falls straight through.
 
 - A pytest step (unit + integration under `cli/tests/`).
-- Auto-included shell steps from `_SMOKE_HARNESS_GLOBS` in `cli/src/fno/test_cmd.py`: root `tests/*.sh`, `tests/{hooks,lib,target,skills,events,lint}/*.sh`, `scripts/tests/*.sh`, and `skills/*/tests/*.sh`.
+- Auto-included shell steps from `HARNESS_GLOBS` in `crates/fno-agents/src/test_smoke_registry.rs`: root `tests/*.sh`, `tests/{hooks,lib,target,skills,events,lint}/*.sh`, `scripts/tests/*.sh`, and `skills/*/tests/*.sh`.
 - The pytest step is fail-fast: while it is red, the shell steps never run.
 
 Two shell trees are NOT in the smoke globs and never run unless invoked directly: `cli/tests/smoke/*.sh` and `cli/tests/scenarios/*.sh`. These call commands (`fno backlog new`, `fno agents mail send`, and friends) that the pytest suite does not exercise.
