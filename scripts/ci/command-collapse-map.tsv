@@ -208,7 +208,6 @@ config schema	T1	config schema	10
 config set	KEEP	config set	43	deliberate readability slack for a high-traffic distinct operation
 config status-sinks	T1	config status-sinks	2
 config unset	T1	config unset	5
-context	KEEP	context	15	single-leaf group
 cost	KEEP	cost	7	single-leaf group
 delivery evaluate	KEEP	delivery evaluate	7	single-leaf group
 do ci status	T1	do ci status	0
