@@ -122,7 +122,16 @@ fn space(root: &Path) -> PathBuf {
 fn arm_manifest(root: &Path) {
     let leads = space(root).join("leads");
     fs::create_dir_all(&leads).unwrap();
-    fs::copy(fixture("manifest-epic-y.md"), leads.join("epic-y.md")).unwrap();
+    // The default term counts from created_at; a fixed stamp ages into a
+    // reached term and the declare case refuses. Stamp it an hour ago.
+    let born = chrono::Utc::now() - chrono::Duration::hours(1);
+    let text = fs::read_to_string(fixture("manifest-epic-y.md"))
+        .unwrap()
+        .replace(
+            "created_at: 2026-10-24T08:55:00Z",
+            &format!("created_at: {}", born.format("%Y-%m-%dT%H:%M:%SZ")),
+        );
+    fs::write(leads.join("epic-y.md"), text).unwrap();
 }
 
 /// Move every registry row's cwd into this world's repo, so the role's
