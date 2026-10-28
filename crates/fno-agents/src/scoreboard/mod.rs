@@ -448,13 +448,11 @@ fn survival(
     if !by_node.values().any(|c| c["delivered"] == true) {
         return json!({"available": false, "reason": "no shipped nodes in window"});
     }
-    // The main view's caller always hands a now (`--now` or the wall
-    // clock), so an absent argv degrades to the clock, never to n/a; the
-    // project view's caller hands None and gets the n/a ladder instead
-    // (computed separately as `project_survival` in the fold).
-    let now_secs = match now.and_then(iso_secs) {
-        Some(secs) => secs,
-        None => chrono::Local::now().timestamp(),
+    // The fold hands the main view's ladder the clock (or `--now`), and the
+    // project view's ladder None; an unmeasurable now answers n/a, never a
+    // clock the caller did not pass.
+    let Some(now_secs) = now.and_then(iso_secs) else {
+        return json!({"available": false, "reason": "no usable now"});
     };
     let window = followup_days * 86400;
     let mut mature: Vec<(&String, &Map<String, Value>, i64)> = Vec::new();
@@ -728,16 +726,25 @@ pub fn classify(params: &Value) -> Result<Value, String> {
         .get("followup_days")
         .and_then(Value::as_i64)
         .unwrap_or(14);
-    // The Python project view handed survival NO now, so its frozen answer
-    // is this same ladder ending at the n/a on an unusable now, never a
-    // clock-driven rate. The project door serves this field; the main view
-    // keeps the clock-driven one below. Computed before the `survival`
-    // binding shadows the function name.
+    // The Python fold always handed survival a now (`--now` or the wall
+    // clock), so the main view's ladder measures against the clock even when
+    // the classifier params carry none. The project view's ladder gets None
+    // on purpose: its frozen answer ends at the n/a on an unusable now. The
+    // now-less call runs before the `survival` binding shadows the name.
+    let fold_now: String = params
+        .get("now")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            chrono::Local::now()
+                .format("%Y-%m-%dT%H:%M:%S%:z")
+                .to_string()
+        });
     let project_survival = survival(&by_node, &by_id, None, followup_days, w4_available);
     let survival = survival(
         &by_node,
         &by_id,
-        params.get("now").and_then(Value::as_str),
+        Some(&fold_now),
         followup_days,
         w4_available,
     );
