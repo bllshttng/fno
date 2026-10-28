@@ -10,6 +10,8 @@ dies in the PR whose family ports its leaf.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 
 class _TestGroup(typer.core.TyperGroup):
@@ -31,9 +33,21 @@ doctor_app = typer.Typer(
 )
 
 @doctor_app.callback(invoke_without_command=True)
-def _teach(ctx: typer.Context) -> None:
-    """The front door owns the family's own surfaces; name the door instead."""
-    if ctx.invoked_subcommand is None:
+def _teach(
+    ctx: typer.Context,
+    context_audit: bool = typer.Option(False, "--context-audit", hidden=True),
+    source: Path | None = typer.Option(None, "--source", hidden=True),
+    harness: str = typer.Option("all", "--context-harness", hidden=True),
+    entry: str = typer.Option("all", "--context-entry", hidden=True),
+    budget: int = typer.Option(32_768, "--context-budget", hidden=True),
+    host: Path | None = typer.Option(None, "--context-host", hidden=True),
+    json_out: bool = typer.Option(False, "--json", "-J", hidden=True),
+) -> None:
+    """Name the front door; the context audit stays while its census is Python."""
+    if ctx.invoked_subcommand is None and context_audit:
+        from fno.context_audit import print_doctor_report
+        print_doctor_report(source or Path.cwd(), host, harness, entry, budget, json_out)
+    elif ctx.invoked_subcommand is None:
         _signpost("fno doctor")
 
 

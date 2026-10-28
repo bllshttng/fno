@@ -292,3 +292,18 @@ def test_postcompact_producer_uses_each_harness_wire_schema(
             "Keep the target oriented"
             in payload["hookSpecificOutput"]["additionalContext"]
         )
+
+
+def test_doctor_context_audit_flag_answers_through_the_forward() -> None:
+    """The Rust front door hands `fno doctor --context-audit` to this group and the
+    context_run native manifest reads its JSON; the doctor port once dropped the flag."""
+    from typer.testing import CliRunner
+
+    from fno.doctor_forward import doctor_app
+
+    argv = ["--context-audit", "--source", str(ROOT), "--context-harness", "claude",
+            "--context-entry", "startup", "--json"]
+    result = CliRunner().invoke(doctor_app, argv)
+    assert result.exit_code == 0, result.output
+    cells = json.loads(result.stdout)["cells"]
+    assert [(c["harness"], c["entry_state"]) for c in cells] == [("claude", "startup")]
