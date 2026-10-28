@@ -1,18 +1,11 @@
 //! The fleet-law seed block: the machine's active freeze/hold constraints,
 //! rendered once and appended to a spawn's delivered payload. A worker seated
-//! while a fleet stop is armed reads the line in its seed, so an unseeded
-//! worker cannot breach by not knowing (the measured specimen: nine workers
-//! seated with no freeze line in any seed ran local cargo into load 418).
-//!
-//! The selector reads machine STATE records, never law rows: the live law
-//! list carries lifts (`merge-freeze:<repo>@<pin>`: "lift") and PR-scoped
-//! holds that a keyword matcher cannot tell from fleet-wide constraints.
-//! What makes a constraint active is the record, and the records live in
-//! three plain local files: the machine breaker (`fleet-stop.json`), the
-//! targeted holds (`fleet-stop.d/`), and the merge freeze
-//! (`merge-freeze.json`, lift-checked against the decision index). All
-//! reads are local files resolved from the agents home - no daemon, no lock,
-//! no network - so the spawn path never waits on background work.
+//! while a fleet stop is armed reads the line in its seed. Law-stage keyword
+//! matching cannot be that selector: the live law list carries lifts
+//! (`merge-freeze:<repo>@<pin>`: "lift") and PR-scoped holds that read as
+//! constraints to it. What makes a constraint active is the STATE record, and
+//! the records are plain local files (machine breaker, targeted holds, merge
+//! freeze) read from the agents home - no daemon, no lock, no network.
 
 use serde_json::json;
 
@@ -152,16 +145,19 @@ fn targeted_lines(home: &AgentsHome, lines: &mut Vec<String>) {
             }
             Verdict::Clear(_) => continue,
         };
-        let target = record
-            .target
-            .clone()
-            .or_else(|| {
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| "unknown".to_string());
-        incident_line(&format!("fleet-stop:{target} (hold)"), &record, lines);
+        let target = record.target.clone().or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        });
+        incident_line(
+            &format!(
+                "fleet-stop:{} (hold)",
+                target.unwrap_or_else(|| "unknown".into())
+            ),
+            &record,
+            lines,
+        );
     }
 }
 
