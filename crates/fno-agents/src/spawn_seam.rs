@@ -64,6 +64,13 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     export_worker_dirs(&cwd);
     refuse_codex_unreachable_tools(&argv, &cwd)?;
     pin_worktree_policy(&argv, &here);
+    // The scrub below removes the markers the harness is inferred from, so
+    // the inferred harness rides the argv first, as the Python leg passed it.
+    let mut argv = argv;
+    if flag_value(&argv[1..], HARNESS_FLAGS).is_none() {
+        let harness = spawn_harness(&argv);
+        argv.splice(1..1, ["--harness".to_string(), harness]);
+    }
     for name in crate::pane_spawn::env_wrap::AMBIENT_IDENTITY_ENV {
         std::env::remove_var(name);
     }
