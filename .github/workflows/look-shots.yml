@@ -1,0 +1,119 @@
+name: look shots
+
+# The paint-surface shots the user reviews before a UI PR merges. They live
+# in their own workflow because the daemon's look_hold arm cancels every
+# other run on a head that waits for the user's look, and reruns them when
+# the look clears (docs/architecture/pr-heal.md, "The look hold"). Keep this
+# workflow cheap: one build and the shots.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - crates/**
+      - scripts/ops/mux-demo-snapshot.sh
+      - .github/workflows/look-shots.yml
+
+jobs:
+  bell-shots:
+    name: bell panel snapshot shots
+    # The user reviews the resize and mark work through three PNGs before
+    # merge, and the build freeze rules out shooting them on a workstation,
+    # so the PR's own CI renders them: build the client once, drive
+    # scripts/ops/mux-demo-snapshot.sh for the three bell views, upload the
+    # PNGs as run artifacts. A shot that fails to render reds here, so the
+    # gap is visible in the log rather than a silent empty picture.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+            crates/fno/target
+          key: ${{ runner.os }}-bellshots-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bellshots-
+            ${{ runner.os }}-cargo-
+
+      - name: Find Chrome for the png raster
+        run: echo "FNO_CHROME=$(command -v google-chrome || command -v chromium || command -v chromium-browser)" >> "$GITHUB_ENV"
+
+      - name: Shoot only when the bell surface changed
+        # A job-level paths gate needs a third-party action; this REST read
+        # keeps the fleet's other Rust PRs out of the build-and-seed cost
+        # while a bell, snapshot or demo-script change still shoots.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
+          case "$files" in
+            *src/client.rs*|*client/sideline.rs*|*client/card_line.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*modal_select.rs*|*client/feed_detail.rs*|*client/questions.rs*|*client/pane_paint.rs*|*client/terminal_cursor.rs*|*client/org_*|*fleet_beacon.rs*|*server/window_size.rs*|*mux-demo-snapshot.sh*)
+              echo "shoot=1" >> "$GITHUB_ENV"
+              echo "the bell surface changed: shooting"
+              ;;
+            *)
+              echo "shoot=" >> "$GITHUB_ENV"
+              echo "the bell surface is untouched: no shots this run"
+              ;;
+          esac
+
+      - name: Build the fno client and agents binaries
+        if: env.shoot == '1'
+        working-directory: crates/fno
+        run: |
+          cargo build --locked
+          cargo build --locked --manifest-path ../fno-agents/Cargo.toml
+
+      - name: Shoot the bell and Messages views
+        if: env.shoot == '1'
+        env:
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+          # The demo root seeds claims, and the client routes those commands to
+          # the fno-agents binary; a runner builds neither by default.
+          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+          # The bootstrap validates the pin at <source>/cli/pyproject.toml,
+          # so the pin is the repo root, not the cli directory.
+          FNO_DEMO_PY_SOURCE: ${{ github.workspace }}
+        run: |
+          # The gathers resolve fno-agents through FNO_AGENTS_BIN, which the
+          # demo script points at its fleet shim; PATH backs any bare call.
+          export PATH="$PWD/crates/fno-agents/target/debug:$PATH"
+          mkdir -p shots
+          for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban navigator-pr navigator-model navigator-menu feed-detail question-detail org-table org-recent org-overview org-graph org-health org-seat org-feed org-system; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
+          done
+          # The selection paints with the theme's sel surface: shoot it light too.
+          for view in feed-detail question-detail; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}-light.png" --format png --view "$view" --theme light --size 200x56 --fit
+          done
+          # The whole mux with no view open: the card sideline at two widths.
+          for size in 200x56 120x40; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-${size}.png" --format png --size "$size" --fit
+          done
+          # Two windows on one tab: the active big window fills, the same
+          # window under the smallest policy letterboxes, and a small
+          # observer crops a tab the big peer sized.
+          bash scripts/ops/mux-demo-snapshot.sh --window-size latest --peer 120x40 --out shots/two-client-latest-big.png --format png --size 200x56
+          bash scripts/ops/mux-demo-snapshot.sh --window-size smallest --peer 120x40 --out shots/two-client-smallest-big.png --format png --size 200x56
+          bash scripts/ops/mux-demo-snapshot.sh --window-size latest --peer 200x56 --no-fit --out shots/two-client-latest-small.png --format png --size 120x40
+
+      - name: Upload the shots
+        if: env.shoot == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bell-panel-shots
+          path: shots/*.png
+          if-no-files-found: error
