@@ -46,18 +46,11 @@ fn shot_workflows(root: &Path) -> Vec<String> {
 
 /// One head's runs, the shot workflows left out: the hold never touches them.
 pub(crate) fn head_of(runs: &[Value], keep: &[String]) -> Head {
-    let file = |r: &Value| {
-        word(r, "/path")
-            .rsplit('/')
-            .next()
-            .unwrap_or("")
-            .to_string()
+    let kept = |r: &&Value| {
+        keep.iter()
+            .any(|k| word(r, "/path").ends_with(&format!("/{k}")))
     };
-    let held: Vec<Value> = runs
-        .iter()
-        .filter(|r| !keep.contains(&file(r)))
-        .cloned()
-        .collect();
+    let held: Vec<Value> = runs.iter().filter(|r| !kept(r)).cloned().collect();
     crate::ci_tier::head_of(&held)
 }
 
