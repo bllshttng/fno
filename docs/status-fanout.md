@@ -72,12 +72,7 @@ enabled = true
 
 The arm notices ride this sink too. `arm_watch`, the `notify_watch` board and main-CI lanes, and the `provider_cap` notices all land as `operator_notice` rows. `arm_watch` names arms broken past `[notify] arm_failing_after_s`, plus hung commands, dead flight holders, and titled scopes that hold ready work with no live holder. Each notice line is the row's own status line. It names the cause and ends with `heal=auto` or `heal=operator`. A known command comes before the owner as `repair: <command>`. An arm that waits on a red arm reads `UPSTREAM` with `cause=upstream_down`. Before it pages, the tick runs the `heal=auto` repairs (switch: `recovery.self_heal.enabled`, default `true`), so a notice names only what is still red. The cause table is in [control-plane-loop](architecture/control-plane-loop.md#cause-repair-and-owner).
 
-The `notify_watch` lanes are opt-in. `[notify] signals` names the ones the arm samples every 300 s. The board lanes are `operator_question`, `mergeable_pr`, `undriven_pr`, and `failed_verdict`. The CI lanes are `main_ci` and `release_run`. With the list empty, the arm does nothing. `release_run` reads the newest finished `release.yml` run of each repo. A failed run pages once and mails the live level-0 lead with the run's first `::error::` line. With no such lead, it files a `release-watch` fleet task instead. A cancelled run is not a verdict, and a passing run clears the signal. The page comes from this machine because a hosted runner cannot reach a private ntfy server.
-
-```toml
-[notify]
-signals = ["main_ci", "release_run"]
-```
+The `notify_watch` lanes are opt-in. `[notify] signals` names the ones the arm samples every 300 s, for example `signals = ["main_ci", "release_run"]`. The board lanes are `operator_question`, `mergeable_pr`, `undriven_pr`, and `failed_verdict`. The CI lanes are `main_ci` and `release_run`. With the list empty, the arm does nothing. `release_run` reads the newest finished `release.yml` run of each repo. A failed run pages once and mails the live level-0 lead with the run's first `::error::` line. With no such lead, it files a `release-watch` fleet task instead. A cancelled run is not a verdict, and a passing run clears the signal. The page comes from this machine because a hosted runner cannot reach a private ntfy server.
 
 In the Rust callers `--pointer` leads the argv: `fno inbox notify --pointer P TITLE BODY`. The Python group callback refuses an option after its positionals, so the trailing form exits 2 and writes no row. `arm_watch` counts a notice sent only on exit 0. A notice that died at the gate leaves the dedupe token unwritten, so the next tick retries.
 
