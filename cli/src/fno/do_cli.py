@@ -13,13 +13,9 @@ from pathlib import Path
 
 import typer
 
-from fno.phase import phase_app
 from fno.plan import plan_app
 from fno.pr_watch.cli import cli as pr_watch_app
 from fno.resume_receipt_cli import cli as resume_app
-from fno.state.cli import cli as state_app
-from fno.stub_manifest import stub_manifest_app
-from fno.target_cli import target_app
 
 
 do_app = typer.Typer(
@@ -30,15 +26,14 @@ do_app = typer.Typer(
 
 # The pr namespace's 29 spellings answer natively now (the fno front door
 # claims `do pr` and the fno-agents pr dispatcher routes them); the wheel
-# keeps only the two Python mounts under the same group.
+# keeps only the watch mount under the same group.
 do_pr_app = typer.Typer(
     name="pr",
-    help="PR lifecycle operations (native commands; watch and stub-manifest stay here).",
+    help="PR lifecycle operations (native commands; watch stays here).",
     no_args_is_help=True,
     add_completion=False,
 )
 do_pr_app.add_typer(pr_watch_app, name="watch")
-do_pr_app.add_typer(stub_manifest_app, name="stub-manifest")
 
 
 delivery_app = typer.Typer(
@@ -102,9 +97,6 @@ def _forward_delivery(argv: list[str]) -> None:
 
 
 do_app.add_typer(delivery_app, name="delivery")
-do_app.add_typer(phase_app, name="phase")
 do_app.add_typer(plan_app, name="plan")
 do_app.add_typer(do_pr_app, name="pr")
 do_app.add_typer(resume_app, name="resume")
-do_app.add_typer(state_app, name="state")
-do_app.add_typer(target_app, name="target")

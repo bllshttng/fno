@@ -43,7 +43,7 @@ def test_classify_matrix():
 
 def test_runtime_dead_claim_with_work_is_interrupted(tmp_path, monkeypatch):
     """AC5: an interrupted attempt has work, a dead owner, no delivery terminal."""
-    monkeypatch.setattr(ra, "read_target_manifest", lambda wt: _manifest_for())
+    monkeypatch.setattr(ra, "_read_target_manifest", lambda wt: _manifest_for())
     monkeypatch.setattr(ra, "_commits_ahead", lambda wt, br: 4)
     rows = runtime_attempts(
         NODE, {"cwd": str(tmp_path), "status": "ready", "pr_number": 712},
@@ -73,7 +73,7 @@ def test_runtime_historical_attempt_not_relabelled_live(tmp_path, monkeypatch):
     def _read(wt):
         return manifest_b if str(wt).endswith("b") else manifest_a
 
-    monkeypatch.setattr(ra, "read_target_manifest", _read)
+    monkeypatch.setattr(ra, "_read_target_manifest", _read)
     monkeypatch.setattr(ra, "_commits_ahead", lambda wt, br: 4)  # both have work
     rows = runtime_attempts(
         NODE, {"cwd": str(tmp_path), "status": "ready"},

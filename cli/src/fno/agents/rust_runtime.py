@@ -725,9 +725,8 @@ def _refuse_codex_spawn_with_unreachable_tools(args: Sequence[str]) -> None:
 def _refuse_seedless_thread_spawn(args: Sequence[str]) -> None:
     """Refuse a fresh claude thread spawn with no message before any worker launches.
 
-    Judges an explicit substrate only: an absent one routes to the Python
-    ``cmd_spawn`` (see :func:`_is_default_substrate_spawn`), which judges the
-    resolved substrate with the same helper.
+    Judges an explicit substrate only: the Rust client judges an absent one
+    after it resolves the default.
     """
     from fno.agents.spawn_defaults import (
         _has_explicit_substrate,
@@ -962,32 +961,6 @@ def _worktree_policy_pin_at_seam(args: "Sequence[str]") -> dict:
         return pin
     except Exception:
         return {}  # ponytail: a pin we cannot compute must never block the spawn
-
-def _is_default_substrate_spawn(command: str, args: Sequence[str]) -> bool:
-    """True for a ``spawn`` with no explicit substrate: the Python door
-    resolves the built-in default (thread, with the thread-seatable refusal
-    and the headless spellings, cli.py's ``substrate or ...``), and the
-    keeper thread lanes live behind it. The scan stops at ``--argv`` and a
-    bare ``--`` so a payload or fenced token never reads as our flag. An
-    EXPLICIT ``--as pane`` routes to the binary's pane spine (row 8 seats
-    every harness); an explicit thread/headless spelling keeps its existing
-    lane.
-    """
-    if command != "spawn":
-        return False
-    explicit = False
-    it = iter(args)
-    for a in it:
-        if a == "--argv" or a == "--":
-            break
-        if a in ("--once", "-o"):
-            return False
-        if a == "--substrate" or a == "--as":
-            next(it, "")
-            explicit = True
-        elif a.startswith("--substrate=") or a.startswith("--as="):
-            explicit = True
-    return not explicit
 
 def _args_before_argv(args: Sequence[str]) -> Sequence[str]:
     """The fno-arg head, stopping at the ``--argv`` provider-payload boundary
@@ -1491,12 +1464,11 @@ def make_agents_group_cls() -> type:
                         raise SystemExit(RM_DECLINED_EXIT)
 
                 mode = runtime_mode()
-                py_spawn = _is_default_substrate_spawn(command, args)
-                if mode == "rust" and not py_spawn:
+                if mode == "rust":
                     _pin = _worktree_policy_pin_at_seam(args)
                     _scrub_ambient_identity_at_exec(command)
                     route_to_rust(_with_seam_marker(list(args), command), env_pin=_pin or None)  # execs; does not return
-                elif mode == "auto" and command in AUTO_ROUTE_COMMANDS and not py_spawn:
+                elif mode == "auto" and command in AUTO_ROUTE_COMMANDS:
                     binary = rust_binary.resolve_installed_binary()
                     if binary is not None:
                         _pin = _worktree_policy_pin_at_seam(args)

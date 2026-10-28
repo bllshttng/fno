@@ -64,6 +64,9 @@ make_repo() {
   printf '# isolated\n' > "${_dir}/home/.fno/config.toml"
   # Pre-create so the never-called scenario counts 0 instead of erroring.
   : > "${_dir}/gate-calls.log"
+  # The gate contract rides the state-path stub now: this file carries the
+  # scenario's gate rc, the log receives the call marker.
+  printf '%s' "$_gate_rc" > "${_dir}/gate-rc"
 
   cat > "${_dir}/bin/fno" << STUB
 #!/usr/bin/env bash
@@ -95,6 +98,8 @@ run_init() {
     HOME="${_dir}/home" \
     FNO_AGENTS_BIN="${_dir}/bin/fno-agents" \
     FNO_TEST_SPACE="${_dir}/space" \
+    FNO_TEST_GATE_RC_FILE="${_dir}/gate-rc" \
+    FNO_TEST_GATE_CALL_LOG="${_dir}/gate-calls.log" \
     TARGET_START=1 \
     TARGET_INPUT="review gate probe" \
     "$@" \
@@ -185,7 +190,7 @@ chmod 755 "${TMP_NOFNO}/agents-bin/fno-agents"
 (cd "$TMP_NOFNO" && env \
   PATH="${TMP_NOFNO}/agents-bin:${_CLEAN_PATH}:/usr/bin:/bin" \
   HOME="${TMP_NOFNO}/home" \
-  FNO_AGENTS_BIN= \
+  FNO_AGENTS_BIN="${TMP_NOFNO}/agents-bin/absent-fno-agents" \
   TARGET_START=1 \
   TARGET_INPUT="review gate probe" \
   bash "$INIT") > "${TMP_NOFNO}/out.log" 2> "${TMP_NOFNO}/err.log"

@@ -90,14 +90,10 @@ mail send !--origin !--provider
 mux
 notify
 paths
-phase kill-check
 plan
 pr-watch
 resume
-state
 status-fanout tick
-stub-manifest
-target
 test
 uninstall
 update

@@ -78,6 +78,12 @@ A red is checked against this page's flake ledger first. A red whose every faili
 
 A real red cancels the head's runs still in flight, through the same reader `fno do pr wait` uses. The arm then mails the pushing session one line. It names the failing checks and the `fno do pr logs <n>` command that prints the log. Mail refuses a multi-line body, so the log itself does not ride in the wake. A green, a newer head, a closed PR or a delivered wake ends the series. Each read lands one `ci_cadence_check` row. Its `outcome` says what the arm did. Read them with `fno doctor event find --field type=ci_cadence_check --since 2h`. A worker's own `fno do pr wait` stays valid. It wakes sooner, and the arm then finds the series already settled.
 
+## The CI tier
+
+The shared runners serve a few PRs at a time. With 30 PRs open, every push queues behind the rest. The daemon's `ci_tier` arm runs open PRs through CI in tiers instead. It is off by default. Turn it on per repo with `[ci_tier] enabled = true`. The tier holds 6 PRs.
+
+Every 3 minutes the arm ranks the open PRs: a `main-repair` node first, drafts last, then node priority, then the older PR. A PR takes a slot only while it wants a runner: runs in flight, or runs the tier cancelled. A green PR takes no slot. Neither does a PR that waits only on review, or an idle red PR. So a merge frees a slot on the next pass. A PR in the tier gets the runs the tier cancelled rerun in full. A run cancelled by hand stays cancelled. A PR outside it has its runs in flight cancelled, unless 80 percent of its head already passed. A `merge-queue-gate` run is never cancelled and holds one slot. A pass that cancels or reruns a run writes one `ci_tier_pass` row.
+
 ## How to add a signature
 
 Make two edits, both in `crates/fno-agents/src/heal.rs`. Add one row to the `SIGNATURES` table. Add one test that carries a real log excerpt.

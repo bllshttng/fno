@@ -144,9 +144,13 @@ impl Core {
                     members
                         .iter()
                         .any(|member| {
-                            member.worker.as_deref() == Some(agent.name.as_str())
-                                && member.harness.as_deref() == Some(harness)
-                                && member.harness_session_id.as_deref() == Some(session_id)
+                            // Ids only: a rename or a resume must not lose
+                            // the workspace the member was placed in.
+                            member.harness.as_deref() == Some(harness)
+                                && member.harness_session_id.as_deref().is_some_and(|m| {
+                                    m == session_id
+                                        || agent.predecessor_session_ids.iter().any(|p| p == m)
+                                })
                         })
                         .then_some(*sid)
                 })
