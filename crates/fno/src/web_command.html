@@ -76,6 +76,7 @@ function waiting(model) {
       box.append(r);
     }
   }
+  if (w.prs_error) box.append(el("p", "empty", "PRs not read: " + w.prs_error + "; showing the last read"));
   const prs = w.prs || [];
   if (prs.length) box.append(el("h3", null, "PRs in review"));
   for (const p of prs) {
@@ -84,7 +85,7 @@ function waiting(model) {
     r.append(el("span", "mono", p.node + " · " + (p.merge_status || "merge state not recorded")));
     box.append(r);
   }
-  if (!qs.length && !prs.length && !w.questions_error) box.append(el("p", "empty", "Nothing waits on you (read " + ago(model.age_s) + " ago)"));
+  if (!qs.length && !prs.length && !w.questions_error && !w.prs_error) box.append(el("p", "empty", "Nothing waits on you (read " + ago(model.age_s) + " ago)"));
 }
 
 function machines(model) {

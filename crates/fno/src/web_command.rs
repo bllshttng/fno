@@ -24,6 +24,8 @@ struct Cached {
     failure: Option<(String, Instant)>,
     questions: Option<Result<Vec<Value>, String>>,
     prs: Vec<Value>,
+    /// The last backlog read failed; `prs` is the last good list.
+    prs_error: Option<String>,
     read_at: Option<Instant>,
 }
 
@@ -73,13 +75,16 @@ impl CommandCache {
                 })
                 .collect()
         }));
-        st.prs = open_prs(backlog);
+        match &backlog.rows_error {
+            Some(reason) => st.prs_error = Some(reason.clone()),
+            None => (st.prs, st.prs_error) = (open_prs(backlog), None),
+        }
         st.read_at = Some(now);
     }
 
     pub(crate) async fn model(&self) -> Value {
         let st = self.state.lock().await;
-        let mut waiting = json!({ "prs": st.prs });
+        let mut waiting = json!({ "prs": st.prs, "prs_error": st.prs_error });
         match &st.questions {
             Some(Ok(items)) => waiting["questions"] = json!(items),
             Some(Err(reason)) => waiting["questions_error"] = json!(reason),
@@ -106,8 +111,9 @@ impl CommandCache {
     }
 }
 
-/// PRs on in-review nodes the store has not seen merged or closed. The store
-/// records no review or conflict word, so `merge_status` is its raw word or null.
+/// PRs on in-review nodes, the primary binding and `additional_prs`, that the
+/// store has not seen merged or closed. The store records no review or
+/// conflict word, so `merge_status` is its raw word or null.
 fn open_prs(backlog: &Inputs) -> Vec<Value> {
     let text = |row: &Value, k: &str| {
         row.get(k)
@@ -119,18 +125,22 @@ fn open_prs(backlog: &Inputs) -> Vec<Value> {
         .rows
         .iter()
         .filter(|row| text(row, "status").as_deref() == Some("in_review"))
-        .filter(|row| {
-            !matches!(
-                text(row, "merge_status").as_deref(),
-                Some("merged" | "closed")
-            )
-        })
-        .filter_map(|row| {
-            let number = row.get("pr_number").and_then(Value::as_u64)?;
-            Some(
-                json!({"node": text(row, "id"), "title": text(row, "title"), "number": number,
-                "url": text(row, "pr_url"), "merge_status": text(row, "merge_status")}),
-            )
+        .flat_map(|row| {
+            let primary = row.get("pr_number").and_then(Value::as_u64);
+            let primary = primary.map(|n| (n, text(row, "pr_url"), text(row, "merge_status")));
+            let extra = row.get("additional_prs").and_then(Value::as_array);
+            let extra = extra.into_iter().flatten().filter_map(|p| {
+                let n = p.get("number").and_then(Value::as_u64)?;
+                Some((n, text(p, "url"), text(p, "merge_status")))
+            });
+            primary
+                .into_iter()
+                .chain(extra)
+                .filter(|(_, _, m)| !matches!(m.as_deref(), Some("merged" | "closed")))
+                .map(move |(number, url, merge_status)| {
+                    json!({"node": text(row, "id"), "title": text(row, "title"), "number": number,
+                    "url": url, "merge_status": merge_status})
+                })
         })
         .collect()
 }
@@ -176,7 +186,8 @@ mod tests {
         at: u64,
     ) -> Value {
         let rows = vec![
-            json!({"id": "x-1", "status": "in_review", "pr_number": 7, "merge_status": ""}),
+            json!({"id": "x-1", "status": "in_review", "pr_number": 7, "merge_status": "",
+                "additional_prs": [{"number": 9}, {"number": 10, "merge_status": "closed"}]}),
             json!({"id": "x-2", "status": "in_review", "pr_number": 8, "merge_status": "merged"}),
         ];
         let backlog = Inputs {
@@ -204,7 +215,10 @@ mod tests {
         assert_eq!(m["waiting"]["questions"].as_array().unwrap().len(), 3);
         assert_eq!(
             m["waiting"]["prs"],
-            json!([{"node": "x-1", "title": null, "number": 7, "url": null, "merge_status": null}])
+            json!([
+                {"node": "x-1", "title": null, "number": 7, "url": null, "merge_status": null},
+                {"node": "x-1", "title": null, "number": 9, "url": null, "merge_status": null}
+            ])
         );
         assert_eq!(
             (&m["measured_at"], &m["fleet_error"]),
@@ -234,5 +248,13 @@ mod tests {
         assert!(m["age_s"].is_u64());
         assert!(m["waiting"].get("questions").is_none());
         assert_eq!(m["waiting"]["questions_error"], "timed out");
+        let locked = Inputs {
+            rows_error: Some("graph locked".into()),
+            ..Inputs::default()
+        };
+        cache.record(fail("x"), Err("x".into()), &locked, 300).await;
+        let m = cache.model().await;
+        assert_eq!(m["waiting"]["prs"].as_array().map(Vec::len), Some(2));
+        assert_eq!(m["waiting"]["prs_error"], "graph locked");
     }
 }
