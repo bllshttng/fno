@@ -462,7 +462,7 @@ fn split_call(rest: &str) -> (&str, String) {
 }
 
 /// Codex rollout files by lowercased session id, one store walk.
-fn codex_rollouts() -> HashMap<String, PathBuf> {
+pub(crate) fn codex_rollouts() -> HashMap<String, PathBuf> {
     let Some(root) = crate::codex_store::codex_home().map(|h| h.join("sessions")) else {
         return HashMap::new();
     };

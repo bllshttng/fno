@@ -151,6 +151,7 @@ pub mod version;
 pub mod view_store;
 pub mod vt;
 pub mod web;
+pub(crate) mod web_command;
 pub mod wizard;
 pub mod wizard_term;
 pub mod wordmark;

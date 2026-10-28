@@ -320,7 +320,7 @@ pub(crate) fn own_role(scope: &str) -> Result<(String, String, PathBuf), String>
     let (session, harness) = crate::claims::resolve_identity();
     let Some(session) = session.filter(|s| !s.is_empty()) else {
         return Err(
-            "lead: an attended shell holds no role; the promoted session \
+            "lead: a terminal with no session identity holds no role; the promoted session \
                     declares its own term from inside it."
                 .to_string(),
         );

@@ -1,0 +1,15 @@
+{
+ "agents_calls": [],
+ "claims": [
+  "config-optout__review.self_review_required.json"
+ ],
+ "global": {
+  "review": {
+   "self_review_required": false
+  }
+ },
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [],
+ "shared": null
+}

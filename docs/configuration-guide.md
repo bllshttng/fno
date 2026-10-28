@@ -52,7 +52,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `backlog.epic_max_open_children` | int (optional) | _(none)_ | advanced | Most open children an epic may hold. A write that would parent one more open child under a full epic is refused and names the new-epic command. Unset means no cap. The graph store reads it from the config.toml beside graph.json, the global config on a default install. |
 | `backlog.max_open_ideas` | int | `25` | advanced | Most unplanned, machine-filed ideas one nearest-epic or project scope may hold (default 25; 0 is off). Operator asks are never capped. The graph store reads it from the config.toml beside graph.json. |
 | `backlog.render_targets` | list[RenderTargetConfig] | `[]` | advanced | Auto-rendered boards (GLOBAL config file only): the daemon re-renders each {path, scope, projection=local\|backlog\|roadmap} target after a graph change; local (the default) writes the board page, backlog and roadmap warn-skip. Never use the state root. See [A local HTML file](backlog-usage.md#a-local-html-file). |
-| `backlog.page_reload_s` | int | `60` | advanced | Seconds an open local board, fleet.html or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off). |
+| `backlog.page_reload_s` | int | `60` | advanced | Seconds an open local board or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off). |
 | `batch.enabled` | bool | `false` | advanced | Coalesce same-domain nodes into one batch PR (opt-in). |
 | `batch.max_nodes` | int | `3` | advanced | Nodes per batch before it closes (default 3). |
 | `batch.max_loc` | int (optional) | _(none)_ | advanced | Optional cumulative-diff LOC ceiling for a batch (off by default). |

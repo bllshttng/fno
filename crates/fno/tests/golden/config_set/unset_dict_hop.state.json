@@ -1,0 +1,17 @@
+{
+ "agents_calls": [],
+ "claims": [],
+ "global": {
+  "review": {
+   "max_rounds": 5
+  }
+ },
+ "global_yaml_left": false,
+ "project": {
+  "review": {
+   "max_rounds": 3
+  }
+ },
+ "receipts": [],
+ "shared": null
+}

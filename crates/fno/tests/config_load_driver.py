@@ -10,8 +10,9 @@
                                     refused), the stderr the load printed,
                                     and the validated value at the probed
                                     path (the whole model for loader cases)
-                    retired.jsonl   the retired dispatch-key drop: file
-                                    text before, receipts, keys after
+                    retired.jsonl   the retired dispatch-key drop, frozen
+                                    while its Python leg lived (that leg is
+                                    deleted; the rows stay committed)
 
 The loader is the live `fno.config.load_settings` with FNO_CONFIG pinned to
 one settings.yaml per case, so every case is a single layer named
@@ -278,31 +279,7 @@ def capture(golden: Path) -> None:
     with (golden / "cases.jsonl").open("w", encoding="utf-8") as fh:
         for case in cases:
             fh.write(json.dumps(case, sort_keys=True) + "\n")
-    capture_retired(golden, root)
     print(f"{len(tsv)} validators, {len(cases)} cases")
-
-
-RETIRED_FILES = {
-    "toml_both": ("config.toml", '[dispatch]\nallowed_verbs = ["a"]\nverb_registry = "x"\nkeep = 1\n'),  # verb-wording: allow
-    "toml_one": ("config.toml", "[dispatch]\nallowed_verbs = []\n\n[review]\nmax_rounds = 2\n"),  # verb-wording: allow
-    "yaml_one": ("settings.yaml", "dispatch:\n  verb_registry: x\nreview:\n  max_rounds: 2\n"),  # verb-wording: allow
-    "toml_none": ("config.toml", "[review]\nmax_rounds = 2\n"),
-    "toml_mention_only": ("config.toml", '[review]\nposture = "allowed_verbs"\n'),  # verb-wording: allow
-}
-
-
-def capture_retired(golden: Path, root: Path) -> None:
-    from fno.config.writer import drop_retired_dispatch_keys
-    from fno.config_io import _load_raw
-
-    with (golden / "retired.jsonl").open("w", encoding="utf-8") as fh:
-        for name, (filename, text) in RETIRED_FILES.items():
-            path = root / name / filename
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-            receipts = [fold(r, root) for r in drop_retired_dispatch_keys([path])]
-            after = (_load_raw(path) or ({},))[0]
-            fh.write(json.dumps({"name": name, "file": filename, "before": text, "receipts": receipts, "after": after}, sort_keys=True) + "\n")
 
 
 def emit_fields(target: Path) -> None:

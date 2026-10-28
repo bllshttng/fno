@@ -1,1 +1,1 @@
-lead: refusing to expire 'epic-z': this session's role is 'epic-y', and an agent expires only its own role. Call `fno agents lead done` with no --scope, or use an attended shell for another territory.
+lead: refusing to expire 'epic-z': this session's role is 'epic-y', and an agent expires only its own role. Call `fno agents lead done` with no --scope, or ask the lead over that territory.

@@ -32,9 +32,10 @@ cat > "$REG" <<'EOF'
 EOF
 
 # The runner is native: the fno front door lexically claims `doctor test` and
-# hands the whole command to the fno-agents binary. CI's smoke-setup puts that
-# binary on PATH; locally, FNO_AGENTS_BIN overrides it.
-RUNNER=("${FNO_AGENTS_BIN:-fno-agents}" test-run doctor smoke)
+# hands the whole command to the fno-agents binary. CI's smoke-setup names that
+# binary in FNO_AGENTS_FRONT and keeps it off PATH; FNO_AGENTS_BIN overrides
+# both.
+RUNNER=("${FNO_AGENTS_BIN:-${FNO_AGENTS_FRONT:-fno-agents}}" test-run doctor smoke)
 
 FAILS=0
 ok()   { echo "  ok: $1"; }

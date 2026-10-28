@@ -462,11 +462,12 @@ fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
                 to = to,
             ),
             None => format!(
-                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" nobody to tell; the operator can answer it: fno inbox outstanding clear {qid} --answer \"per {law_id}\"",
+                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" nobody to tell. {chat}",
                 law_id = law_id,
                 qid = q.id,
                 ident = ident,
                 q100 = q100,
+                chat = crate::question_clear::chat_answer_line(&q.id),
             ),
         };
         lines.push(line);

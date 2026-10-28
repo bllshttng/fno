@@ -3048,7 +3048,8 @@ pub fn legacy_fallback_allowed() -> bool {
 /// (client.rs, NEVER-stderr rule).
 static CONFIG_WARNING: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
 
-#[allow(dead_code)]
+// Every caller sits behind cfg(not(test)), so the test leg sees no call.
+#[cfg_attr(test, allow(dead_code))]
 fn record_config_warning(msg: String, remedy: String) {
     let _ = CONFIG_WARNING.set((msg, remedy));
 }

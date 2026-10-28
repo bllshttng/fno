@@ -203,20 +203,6 @@ fn codex_prompt_ready(screen: &ScreenView) -> bool {
     legacy_prompt || placeholder
 }
 
-/// Provider-agnostic readiness check for the grid attention scanner
-/// (fu-grid-pagination /). codex + gemini share [`PROMPT_GLYPHS`]
-/// and the same [`prompt_ready`] logic, and the grid only ever hosts those
-/// two (claude is excluded, grid Locked Decision 6), so a single shared check
-/// is correct here. Run client-side on a pane's `Term` snapshot to flag an
-/// off-screen agent waiting for input. Inherits the same wall / busy-marker
-/// discipline as the per-CLI detectors: never a byte-count guess, and a
-/// "Waiting for auth" wall reads as not-waiting. A brief false / late badge
-/// is tolerable for an awareness hint, but a false-ready into a busy state is
-/// not - hence the shared `prompt_ready` bias.
-pub fn screen_is_waiting(screen: &ScreenView) -> bool {
-    prompt_ready(screen, PROMPT_GLYPHS)
-}
-
 /// Codex interactive-composer readiness (Open Question #2).
 pub struct CodexReadinessDetector;
 

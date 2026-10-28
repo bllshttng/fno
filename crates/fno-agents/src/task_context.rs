@@ -598,8 +598,8 @@ pub fn revalidate_request(req: &Value) -> Value {
     }
 }
 
-/// `task-context-gate`: the DECLARED required-binding gate, the command the
-/// retired Python `target_context_gate` module only transported. With no
+/// `task-context-gate`: the DECLARED required-binding gate, which
+/// this command only transports. With no
 /// `binding` in the request it loads the declared env path (the request's
 /// `env` map, else the process environment); nothing declared is an absent
 /// gate, never a refusal. The node rides expect always, so a gate that knows

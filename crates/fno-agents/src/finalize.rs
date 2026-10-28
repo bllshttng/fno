@@ -1664,8 +1664,8 @@ fn repo_project_name(cwd: &Path) -> String {
         .unwrap_or_else(|| "project".into())
 }
 
-/// Last path segment of a git remote URL, one trailing `.git` stripped. Mirrors
-/// the Python `_remote_url_to_slug` (paths.py): takes the last `/`-or-`:` segment
+/// Last path segment of a git remote URL, one trailing `.git` stripped. Takes
+/// the last `/`-or-`:` segment
 /// so scp-like (`git@host:org/repo.git`), https, and local-path remotes all
 /// resolve. Returns None for an empty URL or a degenerate segment that would
 /// escape `internal/<project>/`.
