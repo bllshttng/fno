@@ -3017,7 +3017,10 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     // whose shell sat elsewhere read an empty dir while `config paths handoff
     // --scope` found the doc. The cwd default stays only for an unknown scope.
     if user_command && handoffs_defaulted {
-        if let Some(dir) = crate::paths_cli::scope_handoffs_dir(&ctx.scope, None) {
+        // The same ambient home `config paths handoff` passes: with None the
+        // resolver falls back under <project>/.fno and misses the doc.
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        if let Some(dir) = crate::paths_cli::scope_handoffs_dir(&ctx.scope, home.as_deref()) {
             ctx.handoffs_dir = dir;
         }
     }
