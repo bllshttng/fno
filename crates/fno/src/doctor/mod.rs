@@ -119,7 +119,7 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
             // the census arm owns that refusal (exit 3).
             Some(Claim::AgentsExec("fno doctor lanes", argv))
         }
-        // Pure transports: the Rust side already owns these verbs; the
+        // Pure transports: the Rust side already owns these commands; the
         // deleted Python legs only resolved the binary and copied flags.
         Some("bash-census") => {
             let mut argv = vec![OsString::from("bash-census")];
