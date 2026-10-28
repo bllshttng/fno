@@ -473,8 +473,8 @@ def _prefetch_fleet_reading() -> tuple[Optional[Any], Optional[str]]:
     except Exception as exc:  # noqa: BLE001 - an import fault is an unreadable instrument
         return None, f"footprint unavailable: {exc}"
     if result.returncode != 0:
-        tail = (result.stderr or "").strip().splitlines()
-        tail = tail[-1] if tail else ""
+        lines = (result.stderr or "").strip().splitlines()
+        tail = lines[-1] if lines else ""
         return None, f"footprint unavailable: exit {result.returncode}{tail}"
     try:
         return json.loads(result.stdout or "{}"), None
