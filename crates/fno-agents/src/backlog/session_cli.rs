@@ -297,7 +297,10 @@ fn run_open(args: &[String]) -> i32 {
         eprintln!("session open: node:{node_id} is already open for this session ({holder}).");
         return 1;
     }
-    if let Some(own) = own_handover_holder(&s) {
+    // A claim this session already holds - the spawn handover, or the
+    // session's own target claim on an unplanned node - is planned under.
+    let own_target = format!("target-session:{s}");
+    for own in own_handover_holder(&s).into_iter().chain([own_target]) {
         let own_held = rec.as_ref().map(|r| r.holder == own).unwrap_or(false);
         if own_held
             && matches!(
@@ -305,7 +308,6 @@ fn run_open(args: &[String]) -> i32 {
                 crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
             )
         {
-            // fno agents spawn claimed the node for this worker: plan under it.
             if json_out {
                 println!(
                     "{}",

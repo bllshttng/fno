@@ -34,7 +34,7 @@ const ROUTES: &[Route] = &[
     Route {
         name: "faq",
         native: &["lead-state", "--faq"],
-        help: "Usage: fno agents org faq list --scope SCOPE [--max-entries N]\n       \
+        help: "Usage: fno agents org faq list --scope SCOPE [--max-entries N] [--paths]\n       \
                fno agents org faq add --question Q --answer A --specimen S --exit E [--scope SCOPE]\n\n\
                Durable answers a promoted session leaves behind.\n",
     },
@@ -62,8 +62,9 @@ const ROUTES: &[Route] = &[
         name: "checkin",
         native: &["lead-checkin", "--user-command"],
         help: "Usage: fno agents org checkin [--scope SCOPE] [--name NAME] [--theme THEME] \
-               [--change TEXT] [--no-emit] [--json]\n\n\
-               Run the term check-in: gather, print, diff against the last beat, journal.\n",
+               [--change TEXT] [--recall WORD] [--no-emit] [--json]\n\n\
+               Run the term check-in: gather, print, diff against the last beat, journal.\n\
+               After a compaction it refuses until --recall names the canon doc's last-line word.\n",
     },
     Route {
         name: "cancel",

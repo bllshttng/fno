@@ -1054,7 +1054,7 @@ mod tests {
         core.portals.insert(
             0,
             Portal {
-                row_key: "thread".into(),
+                row_key: "thread-id".into(),
                 seat: 7,
                 tab: 5,
             },

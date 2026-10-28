@@ -28,7 +28,8 @@ A lead that spawns workers is not a pure pass. Until the shape field existed, sa
 
 - The lead manifest carries `shape` from birth. The default is `pass`. A lead declares `team` the moment it spawns its first worker, via `fno agents org chart shape <pass|team>`.
 - `hooks/context-nudge.sh` resolves the manifest in its orphan branch. When the shape is `team` and the spawned workers are live, it goes silent. It stays loud for an unshaped lead walking away from live workers.
-- `hooks/lead-postcompact-reinject.sh` appends the lead operating rules after a compaction. The manifest must name the compacting session.
+- `hooks/lead-postcompact-reinject.sh` names the files a lead reads after a compaction. Each gets one `Read this file: <path>` line. The files are the brief, the canon doc, each FAQ entry, and the lead skill. The hook pastes none of them. The lead skill line needs a manifest that names the compacting session.
+- `fno agents org checkin`, `verdict` and `escalate` run from the role's project root. A shell cwd in another repo space moves there first. A missing root with a cwd in no checkout refuses and names both paths.
 
 ## Term
 

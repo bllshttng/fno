@@ -654,6 +654,24 @@ fn normalized_source(source_type: &str, source: &str) -> (String, String) {
     (source_type.into(), source.into())
 }
 
+/// The name `marketplace remove` takes for a listed marketplace. Codex lists
+/// a marketplace by the name in its manifest but keys `config.toml` by the
+/// name it was added under, so one added as `footnote` before the rename
+/// lists as `fno` and only `remove footnote` drops it.
+fn config_key(market: &Marketplace, owned_config: &toml::Table) -> String {
+    if owned_config.contains_key(&market.name) {
+        return market.name.clone();
+    }
+    let listed = normalized_source(&market.source_type, &market.source);
+    owned_config
+        .iter()
+        .find(|(_, row)| {
+            let field = |k: &str| row.get(k).and_then(toml::Value::as_str).unwrap_or_default();
+            normalized_source(field("source_type"), field("source")) == listed
+        })
+        .map_or_else(|| market.name.clone(), |(key, _)| key.clone())
+}
+
 /// Every footnote-owned registration, sorted, so two states compare equal
 /// exactly when the owned part of Codex is the same.
 fn fingerprint(state: &State) -> Vec<Vec<String>> {
@@ -754,17 +772,22 @@ fn restore_snapshot(
         ];
         run(r, "rollback-plugin-remove", &argv, home)?;
     }
-    for market in collect(r, home)?
+    let owned_config = read_owned_config(home)?.marketplaces;
+    let mut keys: Vec<String> = collect(r, home)?
         .marketplaces
         .iter()
         .filter(|m| owned_marketplace(&m.name))
-    {
+        .map(|m| config_key(m, &owned_config))
+        .collect();
+    keys.sort();
+    keys.dedup();
+    for key in &keys {
         let argv = [
             "codex",
             "plugin",
             "marketplace",
             "remove",
-            market.name.as_str(),
+            key.as_str(),
             "--json",
         ];
         run(r, "rollback-marketplace-remove", &argv, home)?;
@@ -1266,7 +1289,11 @@ pub fn converge(r: Runner, home: &Path, req: &Request) -> Result<Converged, Conv
         .iter()
         .filter(|p| p.installed && owned_plugin(&p.plugin_id))
         .collect();
-    let market = state.marketplaces.iter().find(|m| m.name == MARKETPLACE);
+    let keyed = |m: &Marketplace| config_key(m, &snapshot.config.marketplaces);
+    let market = state
+        .marketplaces
+        .iter()
+        .find(|m| m.name == MARKETPLACE && keyed(m) == MARKETPLACE);
     // The marker is the only record of a prior ref.
     let marker: Option<Map<String, Value>> = snapshot
         .marker
@@ -1279,11 +1306,16 @@ pub fn converge(r: Runner, home: &Path, req: &Request) -> Result<Converged, Conv
         .and_then(Value::as_str);
     let ref_ok = git_ref.is_none() || (marker.is_some() && marker_ref == git_ref);
     let market_ok = market.is_some_and(|m| want.matches(&m.source_type, &m.source)) && ref_ok;
-    let legacy_markets: Vec<&Marketplace> = state
+    let mut legacy_markets: Vec<String> = state
         .marketplaces
         .iter()
-        .filter(|m| LEGACY_MARKETPLACES.contains(&m.name.as_str()))
+        .filter(|m| owned_marketplace(&m.name))
+        .map(keyed)
+        .chain(snapshot.config.marketplaces.keys().cloned())
+        .filter(|key| LEGACY_MARKETPLACES.contains(&key.as_str()))
         .collect();
+    legacy_markets.sort();
+    legacy_markets.dedup();
     let selected_ok = selected.is_some_and(|p| {
         p.installed
             && p.enabled
@@ -1376,7 +1408,7 @@ pub fn converge(r: Runner, home: &Path, req: &Request) -> Result<Converged, Conv
                 "plugin",
                 "marketplace",
                 "remove",
-                legacy.name.as_str(),
+                legacy.as_str(),
                 "--json",
             ];
             run(r, "legacy-marketplace-remove", &argv, home)?;
@@ -1447,15 +1479,34 @@ pub fn converge(r: Runner, home: &Path, req: &Request) -> Result<Converged, Conv
             _ => None,
         };
         let Some((plugin, final_market)) = one else {
-            let found: Vec<&str> = enabled.iter().map(|p| p.plugin_id.as_str()).collect();
-            let found = if found.is_empty() {
-                "none".into()
-            } else {
-                found.join(", ")
+            // Name every row with its source: a bare id list read
+            // `enabled=fno@fno` while the plugin's marketplace source was the
+            // part that differed.
+            let plugins = |rows: &[&Plugin]| -> String {
+                let rows: Vec<String> = rows
+                    .iter()
+                    .map(|p| {
+                        let (t, s) = normalized_source(&p.source_type, &p.marketplace_source);
+                        format!("{}({t}:{s})", p.plugin_id)
+                    })
+                    .collect();
+                format!("[{}]", rows.join(", "))
             };
+            let markets: Vec<String> = markets
+                .iter()
+                .map(|m| {
+                    let (t, s) = normalized_source(&m.source_type, &m.source);
+                    format!("{}({t}:{s})", m.name)
+                })
+                .collect();
             return Err(ConvergeError::new(
                 "final-verify",
-                format!("expected {PLUGIN_ID}; enabled={found}"),
+                format!(
+                    "expected one {PLUGIN_ID} from {market_source}; installed={}; enabled={}; marketplaces=[{}]",
+                    plugins(&installed),
+                    plugins(&enabled),
+                    markets.join(", ")
+                ),
             ));
         };
         if candidate.is_some() || req.refresh {

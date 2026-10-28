@@ -313,6 +313,31 @@ impl View {
     pub(super) fn paint_top_row(&self, cells: &mut [Cell], cols: usize, text_w: usize) {
         let limit = text_w.min(cols.saturating_sub(1));
         let rest_fg = crate::theme::dim_fg(&self.theme);
+        // The count folds the same state function as every section rollup,
+        // so it always equals the sum of the section ▲ counts.
+        let need = self
+            .layout
+            .agents
+            .iter()
+            .filter(|a| agent_lattice_state(a) == LatticeState::Blocked)
+            .count();
+        if need > 0 && self.sideline_view == crate::view_store::SidelineView::Agents {
+            let stop = self
+                .top_row_spans()
+                .first()
+                .map_or(limit, |s| s.0.saturating_sub(1));
+            for (col, ch) in format!(" {need} need input").chars().enumerate() {
+                if col >= stop.min(limit) {
+                    break;
+                }
+                cells[col] = Cell {
+                    c: ch,
+                    fg: self.theme.needs_you,
+                    bg: Color::Default,
+                    flags: cell_flags::BOLD,
+                };
+            }
+        }
         for ((start, _, view), (word, _)) in
             self.top_row_spans().into_iter().zip(self.top_row_words())
         {
@@ -679,7 +704,12 @@ impl View {
                 if matches!(drow, DisplayRow::Agent(_)) && density == Density::Slim {
                     // The slim rail's agent lines wear the lattice color.
                     if let DisplayRow::Agent(a) = drow {
-                        let fg = lattice_style(agent_lattice_state(a), self.theme.needs_you).fg;
+                        let fg = lattice_style(
+                            agent_lattice_state(a),
+                            self.theme.needs_you,
+                            self.theme.ok,
+                        )
+                        .fg;
                         for cell in &mut cells[r * cols..r * cols + text_w] {
                             cell.fg = fg;
                         }
@@ -711,7 +741,20 @@ impl View {
                 // included: the chosen fill wins on hover.
                 highlit = true;
             }
-            if highlit && card_chosen {
+            // The selector's cursor row (or card) inverts and wins over the chosen fill.
+            let head = match drow {
+                DisplayRow::CardDetail(..) => i.saturating_sub(1),
+                DisplayRow::CardMetrics(..) => i.saturating_sub(2),
+                _ => i,
+            };
+            let driven = self.list_selector().is_some_and(|s| {
+                if card_pair {
+                    (head..=head + 2).contains(&s)
+                } else {
+                    s == i
+                }
+            });
+            if highlit && card_chosen && !driven {
                 // The chosen card fills all 3 lines with the theme accent
                 // plus a left bar (the operator's 2026-10-04 sideline
                 // ruling): the fill wins on hover, and no lane accent rides
@@ -732,7 +775,11 @@ impl View {
                 // to contrast with it, never per-span inversion, so a span's
                 // own color cannot patch the highlight and the band reads the
                 // same on a dark and a light terminal.
-                let (fg, bg, flags) = crate::theme::band_style(&self.theme);
+                let (fg, bg, flags) = if driven {
+                    crate::theme::focus_style(&self.theme)
+                } else {
+                    crate::theme::band_style(&self.theme)
+                };
                 for cell in &mut cells[r * cols..r * cols + text_w] {
                     cell.bg = bg;
                     cell.fg = fg;
@@ -742,9 +789,10 @@ impl View {
                 // list's state word) only (the operator's color ruling); the
                 // band owns the remaining cells. A row with no colored state
                 // (Default) keeps the band's own explicit pair everywhere.
-                if let DisplayRow::Agent(a) = drow {
+                // The inverted cursor row keeps its one pair throughout.
+                if let (false, DisplayRow::Agent(a)) = (driven, drow) {
                     let lat = agent_lattice_state(a);
-                    let style = lattice_style(lat, self.theme.needs_you);
+                    let style = lattice_style(lat, self.theme.needs_you, self.theme.ok);
                     let accent = if a.pane_id == Some(self.layout.focus) && a.exited {
                         self.theme.brand
                     } else {
@@ -774,6 +822,12 @@ impl View {
                 self.paint_card_identity(cells, r, cols, text_w, drow, highlit);
                 if let DisplayRow::CardMetrics(a) = drow {
                     self.paint_card_activity(cells, r, cols, text_w, a, card_indent + depth * 2);
+                }
+                if driven {
+                    let (fg, bg, flags) = crate::theme::focus_style(&self.theme);
+                    for cell in &mut cells[r * cols..r * cols + text_w] {
+                        (cell.fg, cell.bg, cell.flags) = (fg, bg, flags);
+                    }
                 }
             }
         }
@@ -887,7 +941,7 @@ impl View {
             }
             DisplayRow::Agent(a) => {
                 let lat = agent_lattice_state(a);
-                let style = lattice_style(lat, self.theme.needs_you);
+                let style = lattice_style(lat, self.theme.needs_you, self.theme.ok);
                 let mut flags = style.flags;
                 if a.external && lat != LatticeState::Blocked {
                     flags |= cell_flags::DIM;
@@ -1250,9 +1304,16 @@ impl View {
             agent_lane_fg(
                 agent,
                 lattice,
-                lattice_style(lattice, self.theme.needs_you).fg,
+                lattice_style(lattice, self.theme.needs_you, self.theme.ok).fg,
             )
         };
+        // A resting card's state glyph wears the state color, as a list row's does.
+        let glyph = status_glyph(lattice);
+        if let Some(cell) = line.iter_mut().find(|c| c.c == glyph).filter(|_| !highlit) {
+            if status_fg != Color::Default {
+                cell.fg = status_fg;
+            }
+        }
         let spans = card_line::identity_spans(agent, text_w);
         // Read before the ifs below move the span fields.
         let identity_free = spans.node.is_none() && spans.pr.is_none();

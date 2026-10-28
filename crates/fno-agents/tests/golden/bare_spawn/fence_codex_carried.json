@@ -1,0 +1,8 @@
+{
+  "fenced": [
+    "-c",
+    "model_reasoning_effort=high"
+  ],
+  "harness": "codex",
+  "line": null
+}

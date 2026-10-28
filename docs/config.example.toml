@@ -791,7 +791,7 @@ short_circuit_backoff_secs = 300
 enabled = false
 # Let the lead merge a green mergeable PR. Defaults false; until set, a mergeable PR is reported and never counted as the lead's own work.
 autonomous_merge = false
-# Arm the pr-watch tick's wake phase: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false.
+# Arm the fno-agents daemon's lead-wake arm: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Runs inside the fno-agents daemon; the pr-watcher LaunchAgent is no longer in the path. Defaults false.
 wake_enabled = false
 # Wakes allowed per scope per ROLLING 24h (default 32, ~1.5x the worst measured day). Never a lifetime constant: a lifetime cap strands a long-lived lead.
 wake_ceiling = 32

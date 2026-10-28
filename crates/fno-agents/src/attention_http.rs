@@ -120,6 +120,10 @@ pub fn load_sinks(cwd: &Path) -> (Vec<Sink>, Vec<RefusedSink>) {
                 reason,
             });
         };
+        // The chat loader owns its own row types.
+        if str_of("type").is_some_and(|t| crate::attention_chat::CHAT_TYPES.contains(&t.as_str())) {
+            continue;
+        }
         let Some(url) = str_of("url").filter(|u| !u.is_empty()) else {
             refuse("no url".to_string());
             continue;
@@ -128,7 +132,7 @@ pub fn load_sinks(cwd: &Path) -> (Vec<Sink>, Vec<RefusedSink>) {
             Some("ntfy") => SinkKind::Ntfy,
             Some("webhook") => SinkKind::Webhook,
             _ => {
-                refuse("type must be ntfy or webhook".to_string());
+                refuse("type must be ntfy, webhook, telegram, discord or bluebubbles".to_string());
                 continue;
             }
         };
@@ -137,10 +141,7 @@ pub fn load_sinks(cwd: &Path) -> (Vec<Sink>, Vec<RefusedSink>) {
             refuse("ntfy needs a topic".to_string());
             continue;
         }
-        let Some(token) = str_of("token_env")
-            .and_then(|env| std::env::var(env).ok())
-            .filter(|t| !t.is_empty())
-        else {
+        let Some(token) = str_of("token_env").and_then(|env| resolve_token(&env)) else {
             let env = str_of("token_env").unwrap_or_default();
             refuse(format!("token_env {env} is unset or empty"));
             continue;
@@ -166,6 +167,16 @@ pub fn load_sinks(cwd: &Path) -> (Vec<Sink>, Vec<RefusedSink>) {
         });
     }
     (sinks, refused)
+}
+
+/// The dotenv file a sink token falls back to. A daemon started by launchd
+/// never sees a var the user exported in a shell, so the file is the only
+/// place a token reliably reaches it.
+pub const SINK_ENV_FILE: &str = "~/.fno/.env";
+
+/// A sink secret: the process env first, then [`SINK_ENV_FILE`].
+pub fn resolve_token(env: &str) -> Option<String> {
+    crate::provider_key::resolve_key(env, Some(SINK_ENV_FILE))
 }
 
 /// Why the URL cannot serve a phone: a loopback host never reaches another
@@ -571,21 +582,24 @@ fn full_message(item: &AttentionItem) -> String {
     parts.join(" | ")
 }
 
-/// Build the curl `--config` payload for one post. Every quoted value is
+/// Build the curl `--config` payload for one request. Every quoted value is
 /// escaped for the config grammar: a backslash or double quote inside a URL,
 /// a header or a temp path would otherwise close the quoted string early.
+/// No body path means no `data-binary`, so a GET carries nothing.
 fn curl_config(
+    method: &str,
     url: &str,
     headers: &[(String, String)],
-    body_path: &Path,
+    body_path: Option<&Path>,
     resp_path: &Path,
 ) -> String {
     fn quoted(value: &str) -> String {
         value.replace('\\', "\\\\").replace('"', "\\\"")
     }
     let mut config = format!(
-        "url = \"{}\"\nmax-time = \"{HTTP_POST_TIMEOUT_S}\"\nsilent\nshow-error\n",
-        quoted(url)
+        "url = \"{}\"\nrequest = \"{}\"\nmax-time = \"{HTTP_POST_TIMEOUT_S}\"\nsilent\nshow-error\n",
+        quoted(url),
+        quoted(method)
     );
     for (name, value) in headers {
         config.push_str(&format!(
@@ -594,65 +608,95 @@ fn curl_config(
             quoted(value)
         ));
     }
+    if let Some(body_path) = body_path {
+        config.push_str(&format!(
+            "data-binary = \"@{}\"\n",
+            quoted(&body_path.display().to_string())
+        ));
+    }
     config.push_str(&format!(
-        "data-binary = \"@{}\"\noutput = \"{}\"\nwrite-out = \"%{{http_code}}\"\n",
-        quoted(&body_path.display().to_string()),
+        "output = \"{}\"\nwrite-out = \"%{{http_code}}\"\n",
         quoted(&resp_path.display().to_string())
     ));
     config
 }
 
-/// The real post: one `curl` child, config on stdin, body from a 0600 temp
-/// file. Exit non-zero or a timeout reads as no status (transient).
+/// Write a temp file only its owner can read: a body may carry a chat
+/// message or a token.
+fn write_private(path: &Path, body: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)?.write_all(body.as_bytes())
+}
+
+/// One `curl` child, config on stdin, the body (when present) from a 0600
+/// temp file. Exit non-zero or a timeout reads as no status (transient).
+/// The sink posts and the chat lane's reads share this one seam.
+pub fn curl_request(
+    method: &str,
+    url: &str,
+    headers: &[(String, String)],
+    body: Option<&str>,
+) -> PostResult {
+    let stem = std::env::temp_dir().join(format!(
+        "fno-http-post-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let body_path = body.map(|b| {
+        let _ = write_private(&stem, b);
+        stem.clone()
+    });
+    let resp_path = stem.with_extension("resp");
+    let config = curl_config(method, url, headers, body_path.as_deref(), &resp_path);
+    let output = std::process::Command::new("curl")
+        .arg("--config")
+        .arg("-")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            // The piped stdin always takes; a None still closes cleanly
+            // instead of panicking inside the daemon beat.
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(config.as_bytes());
+            }
+            child.wait_with_output()
+        });
+    if let Some(p) = &body_path {
+        let _ = std::fs::remove_file(p);
+    }
+    let resp = std::fs::read_to_string(&resp_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&resp_path);
+    match output {
+        Ok(out) if out.status.success() => PostResult {
+            status: String::from_utf8_lossy(&out.stdout).trim().parse().ok(),
+            body: resp,
+        },
+        _ => PostResult {
+            status: None,
+            body: String::new(),
+        },
+    }
+}
+
+/// The real post: [`curl_request`] with a POST.
 pub struct CurlPost;
 
 impl HttpPost for CurlPost {
     fn post(&mut self, url: &str, headers: &[(String, String)], body: &str) -> PostResult {
-        let body_path = std::env::temp_dir().join(format!(
-            "fno-http-post-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let _ = std::fs::write(&body_path, body);
-        let resp_path = body_path.with_extension("resp");
-        let config = curl_config(url, headers, &body_path, &resp_path);
-        let output = std::process::Command::new("curl")
-            .arg("--config")
-            .arg("-")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                use std::io::Write;
-                // The piped stdin always takes; a None still closes cleanly
-                // instead of panicking inside the daemon beat.
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(config.as_bytes());
-                }
-                child.wait_with_output()
-            });
-        let _ = std::fs::remove_file(&body_path);
-        let result = output.ok().and_then(|out| {
-            let code: Option<u16> = String::from_utf8_lossy(&out.stdout).trim().parse().ok();
-            let resp = std::fs::read_to_string(&resp_path).unwrap_or_default();
-            let _ = std::fs::remove_file(&resp_path);
-            if out.status.success() {
-                Some(PostResult {
-                    status: code,
-                    body: resp,
-                })
-            } else {
-                None
-            }
-        });
-        result.unwrap_or(PostResult {
-            status: None,
-            body: String::new(),
-        })
+        curl_request("POST", url, headers, Some(body))
     }
 }
 
@@ -797,6 +841,28 @@ mod tests {
         };
         let t3 = tick_sinks(&[], &sinks, dir.path(), future(), &mut quiet);
         assert_eq!(t3.acted(), 0);
+    }
+
+    /// A launchd daemon never sees an exported var: a token set only in
+    /// `~/.fno/.env` still resolves.
+    #[test]
+    fn a_sink_token_resolves_from_the_fno_env_file() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".fno")).unwrap();
+        std::fs::write(
+            home.path().join(".fno/.env"),
+            "FNO_TEST_SINK_TOKEN=from-file\n",
+        )
+        .unwrap();
+        let _home = crate::claims::EnvVarGuard::set("HOME", home.path().to_str().unwrap());
+        let _unset = crate::claims::EnvVarGuard::unset("FNO_TEST_SINK_TOKEN");
+        assert_eq!(
+            resolve_token("FNO_TEST_SINK_TOKEN").as_deref(),
+            Some("from-file")
+        );
     }
 
     #[test]
