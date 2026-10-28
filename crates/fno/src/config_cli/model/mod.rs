@@ -639,7 +639,11 @@ pub fn field_default(model: &str, field: &str) -> Option<Value> {
 /// field order.
 pub fn model_defaults(model: &str) -> Value {
     let mut out = Map::new();
-    for field in models().get(model).map(|m| m.fields.as_slice()).unwrap_or(&[]) {
+    for field in models()
+        .get(model)
+        .map(|m| m.fields.as_slice())
+        .unwrap_or(&[])
+    {
         if let Some(default) = &field.default {
             out.insert(field.name.clone(), default.clone());
         }

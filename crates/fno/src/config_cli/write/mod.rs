@@ -310,9 +310,9 @@ pub(crate) fn coerce(value: &str, field: &Field) -> Res<Value> {
             )),
             _ => Ok(Value::String(value.to_string())),
         },
-        Shape::Int => py_int(value).map(Value::from).ok_or_else(|| {
-            Refusal::new(format!("expected an integer; got {}", repr(value)), 2)
-        }),
+        Shape::Int => py_int(value)
+            .map(Value::from)
+            .ok_or_else(|| Refusal::new(format!("expected an integer; got {}", repr(value)), 2)),
         Shape::Float => value
             .trim()
             .replace('_', "")
@@ -888,7 +888,12 @@ pub(crate) fn attester_identity() -> (String, String) {
     let Ok(payload) = serde_json::from_slice::<Value>(&out.stdout) else {
         return unproven;
     };
-    let field = |name: &str| payload.get(name).and_then(Value::as_str).map(str::to_string);
+    let field = |name: &str| {
+        payload
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
     (
         field("session_id").unwrap_or_default(),
         field("witness").unwrap_or_else(|| "env_only".to_string()),
@@ -995,8 +1000,7 @@ fn emit_receipts(before: &Value, after: &Value, real: &Path, scope: &str) {
             "source": "config",
             "data": Value::Object(data),
         });
-        if let Err(e) = crate::event_store::append_envelope(&journal, &envelope.to_string(), None)
-        {
+        if let Err(e) = crate::event_store::append_envelope(&journal, &envelope.to_string(), None) {
             failed.push(key.as_str());
             last_error = e;
         }
@@ -1119,7 +1123,11 @@ fn optout_status(key: &str) -> Res<Value> {
 }
 
 fn release(key: &str, holder: &str) -> Res<()> {
-    let flags = ["--holder".to_string(), holder.to_string(), "--with-claim".to_string()];
+    let flags = [
+        "--holder".to_string(),
+        holder.to_string(),
+        "--with-claim".to_string(),
+    ];
     claim_call("release", &format!("{OPTOUT_PREFIX}{key}"), &flags)
         .map(|_| ())
         .map_err(|e| Refusal::new(e.text(), 1))
@@ -1352,7 +1360,11 @@ pub fn restore_reaped_optout(claim_key: &str, metadata: &Map<String, Value>) -> 
     }
     let config_key = match metadata.get("config_key").and_then(Value::as_str) {
         Some(key) if is_merge_gating(key) => key.to_string(),
-        _ => return Err(format!("{claim_key} has invalid config_key restore metadata")),
+        _ => {
+            return Err(format!(
+                "{claim_key} has invalid config_key restore metadata"
+            ))
+        }
     };
     let config_path = match metadata.get("config_path").and_then(Value::as_str) {
         Some(path) if !path.is_empty() => super::resolve_path(Path::new(path)),
@@ -1377,9 +1389,14 @@ pub fn restore_reaped_optout(claim_key: &str, metadata: &Map<String, Value>) -> 
         }
         Ok(existing)
     };
-    locked_update(&config_path, "global", Some(Duration::from_secs(2)), restore)
-        .map(|_| ())
-        .map_err(|refusal| refusal.message)
+    locked_update(
+        &config_path,
+        "global",
+        Some(Duration::from_secs(2)),
+        restore,
+    )
+    .map(|_| ())
+    .map_err(|refusal| refusal.message)
 }
 
 // ---------------------------------------------------------------------------
@@ -1389,26 +1406,29 @@ pub fn restore_reaped_optout(claim_key: &str, metadata: &Map<String, Value>) -> 
 /// The parsed argv of `set` / `unset`: positionals, the scope, or the exit
 /// a usage error or `--help` already decided.
 pub(crate) enum Parsed {
-    Args { positionals: Vec<String>, local: bool },
+    Args {
+        positionals: Vec<String>,
+        local: bool,
+    },
     Exit(i32),
 }
 
 /// click's usage refusal, exit 2.
-pub(crate) fn usage_error(verb: &str, metavar: &str, message: &str) -> i32 {
-    eprintln!("Usage: fno config {verb} [OPTIONS] {metavar}");
-    eprintln!("Try 'fno config {verb} --help' for help.");
+pub(crate) fn usage_error(command: &str, metavar: &str, message: &str) -> i32 {
+    eprintln!("Usage: fno config {command} [OPTIONS] {metavar}");
+    eprintln!("Try 'fno config {command} --help' for help.");
     eprintln!();
     eprintln!("Error: {message}");
     2
 }
 
 pub(crate) fn parse_argv(
-    verb: &str,
+    command: &str,
     metavar: &str,
     help: &str,
     args: &[std::ffi::OsString],
 ) -> Parsed {
-    let usage = |message: String| Parsed::Exit(usage_error(verb, metavar, &message));
+    let usage = |message: String| Parsed::Exit(usage_error(command, metavar, &message));
     let mut positionals = Vec::new();
     let mut local = false;
     let mut options_done = false;
@@ -1426,7 +1446,9 @@ pub(crate) fn parse_argv(
             }
             "-l" | "--local" => local = true,
             "-g" | "--global" => local = false,
-            short if !short.starts_with("--") && short[1..].chars().all(|c| c == 'l' || c == 'g') => {
+            short
+                if !short.starts_with("--") && short[1..].chars().all(|c| c == 'l' || c == 'g') =>
+            {
                 local = short.ends_with('l');
             }
             other => return usage(format!("No such option: {other}")),
@@ -1449,8 +1471,10 @@ mod tests {
         let refused = restore_reaped_optout("config-optout:review.self_review_required", &metadata);
         assert_eq!(
             refused,
-            Err("config-optout:review.self_review_required has no config_path restore metadata"
-                .to_string())
+            Err(
+                "config-optout:review.self_review_required has no config_path restore metadata"
+                    .to_string()
+            )
         );
     }
 }

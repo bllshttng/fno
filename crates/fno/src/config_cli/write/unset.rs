@@ -139,12 +139,12 @@ fn run_restore(args: &[OsString]) -> i32 {
     }
 }
 
-pub fn run(verb: &str, args: &[OsString]) -> i32 {
-    if verb == "unset" && args.first().is_some_and(|a| a == "--restore-optout") {
+pub fn run(command: &str, args: &[OsString]) -> i32 {
+    if command == "unset" && args.first().is_some_and(|a| a == "--restore-optout") {
         return run_restore(&args[1..]);
     }
-    let help = if verb == "rm" { HELP_RM } else { HELP_UNSET };
-    let (positionals, local) = match parse_argv(verb, "KEY", help, args) {
+    let help = if command == "rm" { HELP_RM } else { HELP_UNSET };
+    let (positionals, local) = match parse_argv(command, "KEY", help, args) {
         Parsed::Exit(code) => return code,
         Parsed::Args { positionals, local } => (positionals, local),
     };
@@ -156,7 +156,7 @@ pub fn run(verb: &str, args: &[OsString]) -> i32 {
             "arguments"
         };
         return usage_error(
-            verb,
+            command,
             "KEY",
             &format!("Got unexpected extra {noun} ({})", extra.join(" ")),
         );

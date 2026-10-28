@@ -41,7 +41,7 @@ pub enum Door {
     ActiveBacklog,
     PluginInstall(Vec<OsString>),
     Set(Vec<OsString>),
-    /// `unset` and its `rm` alias; the verb names the usage line.
+    /// `unset` and its `rm` alias; the command names the usage line.
     Unset(&'static str, Vec<OsString>),
 }
 
@@ -56,7 +56,7 @@ pub fn run(door: Door) -> i32 {
         Door::ActiveBacklog => leaves::run_active_backlog(&[]),
         Door::PluginInstall(rest) => plugin_install::run(&rest),
         Door::Set(rest) => write::set::run(&rest),
-        Door::Unset(verb, rest) => write::unset::run(verb, &rest),
+        Door::Unset(command, rest) => write::unset::run(command, &rest),
     }
 }
 
