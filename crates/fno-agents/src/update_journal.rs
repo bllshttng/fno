@@ -4,7 +4,8 @@
 //! journal through `event_store::append_envelope`, and the installed and
 //! failed rows mail the roles through the front binary's own mail command. A
 //! failed row whose reason holds Python behind Rust is a skew: it pages the
-//! leads urgently, once per source rev, and the row records `paged`. The
+//! leads once per source rev (urgently unless the hold is planned publish
+//! lag), and the row records `paged`. The
 //! Python side composes nothing: one argv per step, one exit code back, and
 //! the fail trap passes `--rc` instead of a JSON template.
 
@@ -210,7 +211,10 @@ pub fn run_update_journal(args: &[String]) -> i32 {
                 &rev[..rev.len().min(8)],
                 reason.as_deref().unwrap_or_default()
             );
-            mail_roles(bin, &body, true);
+            // A planned hold (rc 0) is publish lag that the next update
+            // clears; only an unplanned hold pages urgently.
+            let planned = args.fields.get("rc").and_then(Value::as_str) == Some("0");
+            mail_roles(bin, &body, !planned);
         }
         return 0;
     }
