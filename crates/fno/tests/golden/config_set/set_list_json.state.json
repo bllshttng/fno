@@ -1,0 +1,32 @@
+{
+ "agents_calls": [],
+ "claims": [],
+ "global": {
+  "review": {
+   "nonblocking_categories": [
+    "style",
+    "docs"
+   ]
+  }
+ },
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [
+  {
+   "attester_session_id": "",
+   "attester_witness": "env_only",
+   "config_path": "<FIXTURE>/fake_home/.fno/config.toml",
+   "journal": "events.jsonl",
+   "key": "review.nonblocking_categories",
+   "new_value": [
+    "style",
+    "docs"
+   ],
+   "present_after": true,
+   "present_before": false,
+   "root_kind": "operator",
+   "scope": "global"
+  }
+ ],
+ "shared": null
+}

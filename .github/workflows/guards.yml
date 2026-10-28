@@ -45,6 +45,9 @@ name: guards
 
 on:
   workflow_dispatch:
+  # merge-queue-gate.yml runs these jobs on a merge queue batch. The event
+  # it passes in is workflow_dispatch, so the PR-only jobs skip.
+  workflow_call:
   # `edited` is load-bearing for guards-pr: oos-tracked.yml triggered on
   # [opened, synchronize, reopened, edited] on purpose, because its fix path
   # IS a PR-body edit that cites a tracked node, with no

@@ -769,6 +769,7 @@ mod tests {
                 rank: None,
                 live: None,
                 reach: None,
+                person: None,
             }),
             node: Some("x-bbbb".into()),
             blocked_because: Some("the ruling decides which gate ships".into()),

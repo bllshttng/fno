@@ -1,0 +1,34 @@
+{
+ "agents_calls": [],
+ "claims": [],
+ "global": {
+  "accounts": {
+   "active": "work",
+   "records": [
+    {
+     "auth": "managed",
+     "harness": "claude",
+     "id": "work",
+     "name": "Work"
+    }
+   ]
+  }
+ },
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [
+  {
+   "attester_session_id": "",
+   "attester_witness": "env_only",
+   "config_path": "<FIXTURE>/fake_home/.fno/config.toml",
+   "journal": "events.jsonl",
+   "key": "accounts.active",
+   "new_value": "work",
+   "present_after": true,
+   "present_before": false,
+   "root_kind": "operator",
+   "scope": "global"
+  }
+ ],
+ "shared": null
+}

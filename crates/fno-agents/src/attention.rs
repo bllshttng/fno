@@ -112,6 +112,9 @@ pub struct Asker {
     pub live: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reach: Option<String>,
+    /// The person behind the asking machine: a display name, never proof.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -427,6 +430,7 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
             .and_then(|c| c.get("reach"))
             .and_then(Value::as_str)
             .map(str::to_string),
+        person: str_field(row, "person").map(str::to_string),
     });
     let recommendation = ctx.and_then(|c| c.get("recommendation")).and_then(|r| {
         Some(Recommendation {
@@ -555,6 +559,7 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
             rank: None,
             live: None,
             reach: None,
+            person: None,
         }),
         node: esc.node.clone(),
         blocked_because: (!blocked.is_empty()).then_some(blocked),

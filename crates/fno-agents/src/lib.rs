@@ -362,6 +362,7 @@ pub mod merge_grant;
 pub mod merge_hold;
 pub mod merge_posture;
 pub mod merge_provenance;
+pub mod merge_queue;
 pub mod merge_reap;
 #[cfg(test)]
 #[path = "mint_guard_tests.rs"]
@@ -490,6 +491,7 @@ pub mod registry_json;
 pub mod registry_read;
 pub mod registry_store;
 pub mod release_notes;
+pub mod release_record;
 pub mod release_watch;
 pub mod removals;
 pub mod rename;
@@ -1895,6 +1897,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // user's look clears (look_hold.rs).
     "look_hold_cancel",
     "look_hold_release",
+    // A PR queued in place of a merge, and the merge queue arm's acts
+    // (merge_queue.rs).
+    "merge_queue_entry",
+    "merge_queue_step",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
