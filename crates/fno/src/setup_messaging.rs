@@ -154,10 +154,14 @@ pub fn step(
                         out.done
                             .push(format!("messaging: {kind} added to attention.sinks"));
                         out.paths.push(path.display().to_string());
-                        out.done.push(format!(
-                            "messaging: {kind} test message: {}",
-                            test_send(kind, &row, &token, &mut Curl)
-                        ));
+                        match test_send(kind, &row, &token, &mut Curl).as_str() {
+                            "sent" => out
+                                .done
+                                .push(format!("messaging: {kind} test message sent")),
+                            why => out.needs_human.push(format!(
+                                "messaging: {kind} test message {why} - rerun `{REENTER}`"
+                            )),
+                        }
                     }
                     Err(e) => out.needs_human.push(format!("messaging: {kind}: {e}")),
                 }
@@ -362,10 +366,16 @@ pub fn test_send(kind: &str, row: &Value, token: &str, http: &mut dyn Http) -> S
 }
 
 /// Write `key=value` to `~/.fno/.env`, replacing an existing line, mode 0600.
+/// The new file lands beside it and renames over it, so a failed write
+/// never loses the other keys.
 fn upsert_env(key: &str, value: &str) -> std::io::Result<()> {
     let home = std::env::var_os("HOME").ok_or_else(|| std::io::Error::other("HOME is unset"))?;
     let path = PathBuf::from(home).join(".fno/.env");
-    let old = std::fs::read_to_string(&path).unwrap_or_default();
+    let old = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
     let mut lines: Vec<String> = old
         .lines()
         .filter(|l| {
@@ -378,6 +388,7 @@ fn upsert_env(key: &str, value: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let tmp = path.with_file_name(".env.fno-tmp");
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -385,14 +396,15 @@ fn upsert_env(key: &str, value: &str) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    opts.open(&path)?
-        .write_all(format!("{}\n", lines.join("\n")).as_bytes())?;
+    let mut file = opts.open(&tmp)?;
+    file.write_all(format!("{}\n", lines.join("\n")).as_bytes())?;
+    file.sync_all()?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
     }
-    Ok(())
+    std::fs::rename(&tmp, &path)
 }
 
 /// The terminal: plain line reads, and a masked read for a secret. A raw
