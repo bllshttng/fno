@@ -386,6 +386,27 @@ fn claim_holder() -> String {
     format!("team-names@{}", crate::claims::hostname())
 }
 
+/// A free person name for a nameless `--promote` spawn: a random pool name
+/// no machine ever used. Nothing is recorded here, because the grant's own
+/// bind writes the history row and a `drawn` row would make that bind's
+/// retired-name check refuse its own pick. Two spawns racing to the same
+/// pick meet that check, and the second one refuses.
+pub fn pick_free_name(store_path: &Path, registry_path: &Path) -> Result<String, String> {
+    let used = crate::team_names::used_names(store_path, registry_path)?;
+    let pool: Vec<&str> = NAME_POOL
+        .iter()
+        .copied()
+        .filter(|n| !used.contains(*n))
+        .collect();
+    if pool.is_empty() {
+        return Err("the name pool is exhausted; extend NAME_POOL in name_draw.rs".into());
+    }
+    Ok(crate::team_names::display(
+        pool[random_index(pool.len())?],
+        1,
+    ))
+}
+
 /// Draw the successor's person name. The machine draws at random from
 /// [`NAME_POOL`] minus every name ever used (history, store, registry, bus,
 /// handoffs, and the `name:` claims the peer hosts wrote), so a retired
@@ -596,6 +617,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ok, drawn);
+        // A promote spawn's pick skips the drawn name and records nothing.
+        let before = crate::team_names::history_names(&store).unwrap();
+        let picked = pick_free_name(&store, &registry).unwrap();
+        assert!(!picked.eq_ignore_ascii_case(drawn.trim()));
+        assert!(NAME_POOL.iter().any(|n| n.eq_ignore_ascii_case(&picked)));
+        assert_eq!(crate::team_names::history_names(&store).unwrap(), before);
         let err = draw_successor_name(
             &store,
             &registry,
