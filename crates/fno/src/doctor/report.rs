@@ -35,6 +35,24 @@ pub(crate) use surface::*;
 // Transports
 // ---------------------------------------------------------------------------
 
+/// The interpreter the installed wheel runs on: the `fno-py` script's
+/// shebang. `fno-py` itself is the CLI and takes no `-c`.
+pub(crate) fn wheel_python() -> Option<String> {
+    let script = std::fs::read_to_string(which("fno-py")?).ok()?;
+    let mut words = script
+        .lines()
+        .next()?
+        .strip_prefix("#!")?
+        .split_whitespace();
+    let first = words.next()?;
+    let python = if first.ends_with("/env") {
+        words.next()?
+    } else {
+        first
+    };
+    Some(python.to_string())
+}
+
 pub(crate) fn which(program: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {

@@ -494,19 +494,6 @@ pub fn is_blueprint_name(name: &str) -> bool {
     parse_dispatch_agent_name(Some(name)).is_some_and(|p| p.command == "bp")
 }
 
-/// Command code for a pre-cutover convention name (`target-*` -> `t`,
-/// `think-*` -> `th`), else None: the legacy-read window helper.
-pub fn legacy_command_code(name: Option<&str>) -> Option<String> {
-    let name = name?;
-    if name.starts_with("target-") {
-        Some("t".to_string())
-    } else if name.starts_with("think-") {
-        Some("th".to_string())
-    } else {
-        None
-    }
-}
-
 // ── internal machine commands (binary-direct, not `fno agents` surface) ─────────
 //
 // The delegation flip: Python's naming.py keeps its public signatures and

@@ -132,6 +132,9 @@ mod tests {
         // attested human name, never a session.
         assert!(decision_row["data"]["trace"]["actor_session"].is_null());
         assert_eq!(decision_row["data"]["trace"]["actor_kind"], "user");
+        // The person rides beside decided_by and never replaces it.
+        assert_eq!(decision_row["data"]["decided_by"], "test-agent");
+        assert!(decision_row["data"]["person"].is_string());
         // A lead authority keeps its session: the same rule populates the
         // field from proven session identity.
         let mut agent_req = request(&tmp, "q-open2", Some("ship it"));
@@ -390,6 +393,88 @@ mod tests {
             crate::merge_grant::head_grant_status(Some(&payload)),
             crate::merge_grant::HeadGrant::Conflict
         );
+    }
+
+    #[test]
+    fn chat_attested_clear_records_the_users_words() {
+        let chat = |req: &mut ClearRequest, quote: &str| {
+            req.provenance = json!({
+                "decided_by": "agent-1",
+                "authority_source": "chat_attested",
+                "attested_by": "user in chat",
+                "quote": quote,
+            });
+            req.caller.as_mut().unwrap().ancestry_handle = Some("agent-1".to_string());
+        };
+        // AC1: an agent relays the user's chat answer to the user's question.
+        // A bare option number and a short phrase pass the evidence gate.
+        for answer in ["go narrow", "1"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut req = request(&tmp, "q-chat", Some(answer));
+            chat(&mut req, answer);
+            seed_question(&req, &ask_from("q-chat", "49a80492", "which lane?"));
+            let result = run_clear(&req);
+            assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+            let rows = graph_decisions(&req);
+            assert_eq!(rows.len(), 1, "{rows:?}");
+            assert_eq!(rows[0]["authority_source"], "chat_attested");
+            assert_eq!(rows[0]["decided_by"], "agent-1");
+            assert_eq!(rows[0]["quote"], answer);
+            let (_, closed) = crate::question_intake::question_rows(&req.index_path);
+            assert!(closed.contains("q-chat"));
+        }
+
+        // AC2 (core side): chat_attested with no words is still an agent
+        // answer, so it is refused and nothing lands.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-bare", Some("go narrow"));
+        chat(&mut req, " ");
+        seed_question(&req, &ask_from("q-bare", "49a80492", "which lane?"));
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(result.lines[0].contains("--authority chat_attested --quote"));
+        assert!(graph_decisions(&req).is_empty());
+        // AC2 (argv side): the flag front refuses a missing --quote before
+        // any identity or store read.
+        let argv = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            crate::outstanding_cmds::run_clear_cmd(&argv(&[
+                "q-1",
+                "--answer",
+                "a",
+                "--authority",
+                "chat_attested"
+            ])),
+            2
+        );
+
+        // AC3: a chat answer to a merge-grant question records, mints no
+        // grant, and says so.
+        let sha = "a29b38c37b18e737eaf850e8765920498287cabf";
+        let subject = format!("merge-grant:footnote#2739@{sha}");
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-grant", Some("Merge it now."));
+        chat(&mut req, "merge it now");
+        seed_question(
+            &req,
+            &ask("q-grant", "Merge PR 2739?", Some(&subject), Some("x-0000")),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("do not mint a merge grant")),
+            "{:?}",
+            result.lines
+        );
+        let rows = graph_decisions(&req);
+        assert!(
+            rows.iter().all(|r| r["subject"] != subject.as_str()),
+            "{rows:?}"
+        );
+        assert_eq!(rows.len(), 1, "{rows:?}");
     }
 
     #[test]
@@ -839,14 +924,18 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             .filter(|value| !value.is_empty());
         if let Some(agent) = closer.as_deref() {
             let own_ask = is_own_ask(req, asker, asker_session, closer.as_deref());
+            let authority = req
+                .provenance
+                .get("authority_source")
+                .and_then(Value::as_str);
+            let quoted = req
+                .provenance
+                .get("quote")
+                .and_then(Value::as_str)
+                .is_some_and(|quote| !quote.trim().is_empty());
             let allowed = if req.answer.is_some() {
-                own_ask
-                    && req
-                        .provenance
-                        .get("authority_source")
-                        .and_then(Value::as_str)
-                        == Some("role")
-                    && caller.teamed
+                (authority == Some("chat_attested") && quoted)
+                    || (own_ask && authority == Some("role") && caller.teamed)
             } else {
                 own_ask
             };
@@ -854,7 +943,8 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 refused += 1;
                 answer.lines.push(if req.answer.is_some() {
                     format!(
-                        "outstanding: refused: {qid} asks the user, and this session is agent {agent}. Nothing was closed; the question stays open. The user answers it on the question board (fno-agents state path questions) or at their own terminal: fno inbox outstanding clear {qid} --answer \"<answer>\". A teamed asker answers only its own question, with --authority role."
+                        "outstanding: refused: {qid} asks the user, and this session is agent {agent}. Nothing was closed; the question stays open. {} A teamed asker answers only its own question, with --authority role.",
+                        chat_answer_line(qid)
                     )
                 } else {
                     let shown = if asker.is_empty() { "the user" } else { asker };
@@ -1007,6 +1097,17 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 "outstanding: closed {qid} (decision {decision_id} {label})"
             ));
             if let Some(subject) = merge_grant_subject(question_event) {
+                if !operator_can_grant(req)
+                    && req
+                        .provenance
+                        .get("authority_source")
+                        .and_then(Value::as_str)
+                        == Some("chat_attested")
+                {
+                    answer.lines.push(format!(
+                        "outstanding: chat answers do not mint a merge grant; the user answers {subject} on the board or /command"
+                    ));
+                }
                 if operator_can_grant(req) {
                     answer.lines.push(if merge_answer_grants(question_event, &text) {
                         format!(
@@ -1285,6 +1386,7 @@ fn make_decision(
         "relayed_by",
         "origin",
         "authority_source",
+        "quote",
     ] {
         if let Some(value) = req.provenance.get(key).filter(|value| !value.is_null()) {
             decision.insert(key.into(), value.clone());
@@ -1332,6 +1434,7 @@ fn make_decision(
             }
         }
     }
+    crate::identity::stamp_person(&mut decision);
     Ok(json!({
         "ts": chrono::Utc::now().to_rfc3339(),
         "type": "operator_decision",
@@ -1535,6 +1638,14 @@ fn question_text(question: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+/// The one line every relayed string uses to send an agent to the user:
+/// ask in chat, then record the user's own words through the clear door.
+pub(crate) fn chat_answer_line(qid: &str) -> String {
+    format!(
+        "Ask the user in chat. When they answer, record their exact words: fno inbox outstanding clear {qid} --answer \"<their answer>\" --authority chat_attested --quote \"<their words>\". They can also answer on the question board or /command."
+    )
 }
 
 fn cut(text: &str, cap: usize) -> String {

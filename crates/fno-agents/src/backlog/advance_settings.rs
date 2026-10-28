@@ -114,7 +114,7 @@ fn unwrap_config_dict(raw: serde_json::Value) -> serde_json::Value {
     serde_json::Value::Object(base)
 }
 
-/// Deep-merge `over` into `base` (over wins per leaf), Python `_deep_merge`.
+/// Deep-merge `over` into `base` (over wins per leaf).
 fn deep_merge(base: &mut serde_json::Map<String, serde_json::Value>, over: serde_json::Value) {
     match over {
         serde_json::Value::Object(map) => {

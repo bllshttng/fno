@@ -25,10 +25,10 @@ use crate::mail_cli::send;
 use crate::mail_cli::send::lanes::{name_lane_send, NameLane, NameLaneArgs};
 use crate::mail_cli::send::resolve::{is_full_session_id, resolve_reachable, ReachResult};
 
-/// Valid `--kind` values (Python `VALID_KINDS` = `AUTHORED_MAIL_KINDS`).
+/// Valid `--kind` values.
 const VALID_KINDS: [&str; 4] = ["fyi", "heads-up", "question", "send"];
 
-/// Python `DEPRECATED_KINDS`: removed kinds name their replacement.
+/// Removed kinds name their replacement.
 fn deprecated_kind_replacement(kind: &str) -> Option<&'static str> {
     match kind {
         "notification" => Some("fyi"),
@@ -39,7 +39,7 @@ fn deprecated_kind_replacement(kind: &str) -> Option<&'static str> {
     }
 }
 
-/// Python `LEGACY_HANDLE_RE`: the retired `<harness>-<hex6+>` address form.
+/// The retired `<harness>-<hex6+>` address form.
 /// Kept only so a pre-flip record's sender can be migrated and answered;
 /// never an accepted address, never generated.
 fn is_legacy_handle(token: &str) -> bool {
@@ -139,7 +139,7 @@ fn parse_args(args: &[String]) -> Result<ReplyArgs, i32> {
     Ok(out)
 }
 
-/// Python `_read_body`: the body from whichever one of the three forms was
+/// The body from whichever one of the three forms was
 /// used; two at once is an explicit error, never a precedence rule. File
 /// reads (and `-` for stdin) mirror `read_text_arg`.
 fn resolve_body(args: &ReplyArgs) -> Result<String, i32> {
@@ -187,7 +187,7 @@ fn resolve_body(args: &ReplyArgs) -> Result<String, i32> {
     Err(1)
 }
 
-/// Python `_validate_kind`: valid kinds pass; removed kinds hint at their
+/// Valid kinds pass; removed kinds hint at their
 /// replacement; anything else refuses naming the valid set.
 fn validate_kind(kind: &str) -> Result<String, i32> {
     if VALID_KINDS.contains(&kind) {
@@ -382,7 +382,7 @@ fn directed_lane_reply(
     )
 }
 
-/// Python `_reply_to_name_handle`: the reply ladder over the resolved sender
+/// The reply ladder over the resolved sender
 /// handle. The uniqueness check exists to disambiguate a TYPED name; this
 /// handle came off the answered message and was never typed, so an unreadable
 /// store is not evidence against it: the reply fails open to the durable
@@ -587,7 +587,7 @@ struct CandidateHarness {
     session_id: Option<String>,
 }
 
-/// Python `_candidate_stores`: every store this process could own, deduped.
+/// Every store this process could own, deduped.
 /// A process can carry markers for more than one harness family; enumerate
 /// instead of picking, and let the receipt decide.
 fn candidate_harnesses() -> Vec<CandidateHarness> {
@@ -620,7 +620,7 @@ fn candidate_harnesses() -> Vec<CandidateHarness> {
     out
 }
 
-/// Python `_transcript_path`: locate the invoking session's transcript
+/// Locate the invoking session's transcript
 /// (claude: `<projects>/*/<id>.jsonl`; codex: rollout embedding the id).
 fn transcript_path(harness: &str, session_id: &str) -> Option<PathBuf> {
     if harness == "claude" {
@@ -705,7 +705,7 @@ fn sender_from_transcript_text(
     None
 }
 
-/// Python `reply_resolve._addressed_here`: a present session address is
+/// A present session address is
 /// matched by TIER, not by string equality. No usable address at all counts
 /// (`to` is optional in the renderer, and a `node:` job address names work
 /// rather than a session).

@@ -1230,7 +1230,14 @@ Self-end when done; never spawn further work."
         // process itself, so the reap leg runs no stop.
         let mut removed = 0usize;
         for name in &rows {
-            let argv: Vec<String> = vec!["agents".to_string(), "rm".to_string(), name.clone()];
+            // The named reason is what makes rm honor a pinned row's keep mark.
+            let argv: Vec<String> = vec![
+                "agents".to_string(),
+                "rm".to_string(),
+                name.clone(),
+                "--audit-reason".to_string(),
+                "post-merge-ritual".to_string(),
+            ];
             let cwd = self.canon_path();
             let r = run_leg(&argv, &cwd, Duration::from_secs(30), false);
             if r.ok() {

@@ -1124,27 +1124,6 @@ impl MemberEvidence {
         }
     }
 
-    /// Build evidence from a successful empty agent system. This is the one
-    /// legacy compatibility case where an unmatched attach id is known dead:
-    /// both registry stores are absent, so no worker identity can be live.
-    pub fn from_complete_live_set(live: std::collections::HashSet<String>) -> Self {
-        Self {
-            live,
-            dead: std::collections::HashSet::new(),
-            live_pairs: std::collections::HashSet::new(),
-            dead_pairs: std::collections::HashSet::new(),
-            dead_names: std::collections::HashSet::new(),
-            registry_row_names: std::collections::HashSet::new(),
-            spawned_names: std::collections::HashSet::new(),
-            held_names: std::collections::HashSet::new(),
-            retire_eligible_names: std::collections::HashSet::new(),
-            unmeasured_expiry_s: 0,
-            now_secs: 0,
-            complete_registry_names: false,
-            complete_attach_set: true,
-        }
-    }
-
     pub fn add_dead(&mut self, identity: impl Into<String>) {
         self.dead.insert(identity.into());
     }

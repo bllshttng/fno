@@ -717,13 +717,6 @@ pub fn default_roster_path() -> PathBuf {
     daemon_dir().join("roster.json")
 }
 
-/// `<daemon_dir>/control.key` -- the daemon control key an `op:attach` presents
-/// (32 hex, mode 600, same-uid). NOT the per-worker `ptyAuth` (that is the
-/// ptySock DATA path). [corroborated]
-pub fn control_key_path() -> PathBuf {
-    daemon_dir().join("control.key")
-}
-
 /// Read and trim the daemon control key, if present. Returns `None` when the file
 /// is absent or empty -- a same-uid socket attach may legally omit `auth` ("legacy
 /// client, allowed via peerUid"), so the caller treats this as optional, never an

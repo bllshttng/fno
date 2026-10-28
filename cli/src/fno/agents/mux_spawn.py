@@ -3255,7 +3255,7 @@ def dispatch_spawn_pane(
         )
         if role_refusal is not None:
             raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
-        name = adopt_drawn_name(succession, role_plan, name)
+        name = adopt_drawn_name(role_plan, name)
 
     conflict = pane_placement_conflict(
         pane, workspace=squad, split=split, at=at, tab=tab, tab_id=tab_id,

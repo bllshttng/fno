@@ -199,12 +199,14 @@ pub mod events_limits;
 pub mod evidence;
 pub mod executor_route;
 pub mod fallback_chain;
+pub mod family_doors;
 pub mod feed;
 pub mod finalize;
 pub mod finalize_run_summary;
 pub mod first_check;
 pub mod fleet_beacon;
 pub mod fleet_incident;
+pub mod fleet_law;
 pub mod fleet_load;
 pub mod fleet_state;
 pub mod fleet_task;
@@ -358,6 +360,7 @@ pub mod merge_grant;
 pub mod merge_hold;
 pub mod merge_posture;
 pub mod merge_provenance;
+pub mod merge_queue;
 pub mod merge_reap;
 #[cfg(test)]
 #[path = "mint_guard_tests.rs"]
@@ -435,6 +438,7 @@ pub mod pr_create;
 pub mod pr_door;
 pub mod pr_draft_ready;
 pub mod pr_front;
+pub(crate) mod pr_idle;
 pub mod pr_info;
 pub mod pr_list;
 pub mod pr_merge_result;
@@ -485,6 +489,8 @@ pub mod registry_json;
 pub mod registry_read;
 pub mod registry_store;
 pub mod release_notes;
+pub mod release_record;
+pub mod release_watch;
 pub mod removals;
 pub mod rename;
 pub mod repeated_asks;
@@ -592,12 +598,15 @@ pub mod state_layout;
 pub mod state_layout_sqlite;
 pub mod state_path;
 pub mod state_root_drift;
+pub mod status_fanout;
+pub mod status_render;
 pub mod status_sinks;
 pub mod store_conn;
 pub mod store_exec;
 pub mod store_export;
 pub mod store_remote;
 pub mod stream_worker;
+pub mod stub_manifest;
 pub mod stuck_work;
 pub mod subagent_hold;
 pub mod subprocess_ask;
@@ -610,6 +619,7 @@ pub mod sync_canonical;
 pub mod system_sender;
 pub mod target_blast;
 pub mod target_denominator;
+pub mod target_gates;
 pub mod target_init;
 pub mod target_orient;
 pub mod target_start;
@@ -628,10 +638,24 @@ pub mod terminal_run;
 pub mod terminal_stop;
 pub mod terminal_vocab;
 pub mod territory;
+pub mod test_census;
+pub mod test_changed;
+pub mod test_command;
+#[cfg(test)]
+#[path = "test_command_goldens_tests.rs"]
+mod test_command_goldens_tests;
 pub mod test_delta;
+pub mod test_env;
 pub mod test_hold;
 pub mod test_run;
 mod test_run_journal;
+mod test_run_pins;
+pub mod test_smoke;
+pub mod test_smoke_discovery;
+pub mod test_smoke_registry;
+#[cfg(test)]
+#[path = "test_smoke_tests.rs"]
+mod test_smoke_tests;
 pub mod text_or_file;
 pub mod think_daily;
 pub mod think_dispatch;
@@ -641,6 +665,7 @@ pub mod tick_ledger;
 pub mod tool_activity;
 pub mod tracker;
 pub mod transcript_activity;
+pub mod transcript_turns;
 pub mod truth_probe;
 pub mod update_journal;
 pub mod usage;
@@ -651,6 +676,7 @@ pub mod version;
 pub mod wait;
 pub mod wake_meter;
 pub mod wake_name;
+pub mod wake_read;
 pub mod watch_expiry;
 pub mod wave;
 pub mod whoami;
@@ -1861,8 +1887,15 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "ci_cadence_check",
     // The main_revert arm's read of a red main (main_revert.rs).
     "main_revert_check",
-    // A ci_tier arm pass that cancelled or reran runs (ci_tier.rs).
+    // A ci_tier arm pass, a push it held, and the wake when a slot freed
+    // (ci_tier.rs).
     "ci_tier_pass",
+    "ci_tier_held",
+    "ci_tier_wake",
+    // A PR queued in place of a merge, and the merge queue arm's acts
+    // (merge_queue.rs).
+    "merge_queue_entry",
+    "merge_queue_step",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.

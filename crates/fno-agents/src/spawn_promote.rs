@@ -179,11 +179,10 @@ pub fn plan(
     if let Some(refusal) = occupancy["refusal"].as_str() {
         return Err(refuse(refusal));
     }
-    if hand_off {
-        if let Some(drawn) = occupancy["draw"]["name"].as_str().filter(|n| !n.is_empty()) {
-            *name = drawn.to_string();
-            params["name"] = json!(drawn);
-        }
+    // The settle draws on a hand-off, and on a fresh grant's `--name redraw`.
+    if let Some(drawn) = occupancy["draw"]["name"].as_str().filter(|n| !n.is_empty()) {
+        *name = drawn.to_string();
+        params["name"] = json!(drawn);
     }
     let harness = params["provider"]
         .as_str()

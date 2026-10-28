@@ -454,8 +454,23 @@ pub fn payload_block(binding: &Value) -> Option<String> {
 pub fn run_payload(args: &[String]) -> i32 {
     run_stdin_command(
         args,
-        "task-context-payload  (one JSON request on stdin: path? - defaults to $FNO_TASK_CONTEXT_FILE)",
+        "task-context-payload  (one JSON request on stdin: path? - defaults to $FNO_TASK_CONTEXT_FILE; fleet_laws: true renders the fleet-law block for cwd?)",
         |req| {
+            if req.get("fleet_laws").is_some_and(|v| v.as_bool() == Some(true)) {
+                let cwd = req
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                let delivered = crate::fleet_law::active_laws_at(&cwd);
+                let answer = serde_json::json!({
+                    "ok": true,
+                    "block": delivered.as_ref().map(|d| d.block.clone()),
+                    "subjects": delivered.map(|d| d.subjects),
+                });
+                println!("{answer}");
+                return;
+            }
             let path = req
                 .get("path")
                 .and_then(Value::as_str)
@@ -583,8 +598,8 @@ pub fn revalidate_request(req: &Value) -> Value {
     }
 }
 
-/// `task-context-gate`: the DECLARED required-binding gate, the command the
-/// retired Python `target_context_gate` module only transported. With no
+/// `task-context-gate`: the DECLARED required-binding gate, which
+/// this command only transports. With no
 /// `binding` in the request it loads the declared env path (the request's
 /// `env` map, else the process environment); nothing declared is an absent
 /// gate, never a refusal. The node rides expect always, so a gate that knows

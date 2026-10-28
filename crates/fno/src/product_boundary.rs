@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 /// The four shipped binaries. The plugin is markdown and ships no binary.
 pub const FNO_BIN: &str = "fno";
 pub const AGENT_RUNTIME_BIN: &str = "fno-agents";
-pub const AGENT_DAEMON_BIN: &str = "fno-agents-daemon";
 pub const GRAPH_WORKER_BIN: &str = "fno-agents-worker";
 /// The Python porcelain the native mux forwards delivery commands to.
 pub const PYTHON_CLI: &str = "python3 (fno cli)";

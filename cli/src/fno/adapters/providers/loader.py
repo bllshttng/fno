@@ -23,12 +23,41 @@ from fno.adapters.providers.model import (
     ProvidersConfig,
     QuotaConfig,
 )
-from fno.state.io import atomic_write
 
 if TYPE_CHECKING:
     from fno.adapters.providers.rotation import Combo
 
 logger = logging.getLogger(__name__)
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """The lock-then-tempfile-then-os.replace write, inlined from the
+    state-io helper at the family port: that module dies with the
+    port. The lock prevents interleaved writers; os.replace is atomic on
+    POSIX."""
+    import tempfile
+
+    import filelock
+
+    path = Path(path)
+    with filelock.FileLock(str(path) + ".lock", timeout=10):
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+                encoding="utf-8",
+            ) as tmp:
+                tmp.write(content)
+                tmp_path = Path(tmp.name)
+            os.replace(tmp_path, path)
+            tmp_path = None
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
 
 
 def _global_settings_path() -> Path:
@@ -745,7 +774,7 @@ def save_providers(
 ) -> None:
     """Write config back to settings.yaml at the requested scope.
 
-    Atomic write (temp-file + rename) via fno.state.io.atomic_write.
+    Atomic write (temp-file + rename) via the module's _atomic_write.
     Preserves all existing top-level keys and other config.* sub-keys.
     """
     if scope == "project":
@@ -812,4 +841,4 @@ def save_providers(
     existing["accounts"] = providers_block
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(target, tomli_w.dumps(_strip_none(existing)))
+    _atomic_write(target, tomli_w.dumps(_strip_none(existing)))

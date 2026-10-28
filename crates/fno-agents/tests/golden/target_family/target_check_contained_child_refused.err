@@ -1,0 +1,2 @@
+fno do target init: NODE-HEX ships inside NODE-HEX's PR; run `/fno:target NODE-HEX`.
+NODE-HEX was folded into NODE-HEX as a contained node, so it has no PR of its own and is not separately costed. Nothing was claimed.

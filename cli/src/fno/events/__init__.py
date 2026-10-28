@@ -645,63 +645,6 @@ def operator_notice(
     return _build("operator_notice", source, data)
 
 
-def operator_decision(
-    *,
-    decision_id: str,
-    decision: str,
-    subject: str | None = None,
-    question_id: str | None = None,
-    question: str | None = None,
-    asked_by: str | None = None,
-    asked_at: str | None = None,
-    expiry_ref: dict[str, Any] | None = None,
-    options: "list[str] | None" = None,
-    decided_by: str | None = None,
-    attested_by: str | None = None,
-    relayed_by: str | None = None,
-    origin: str | None = None,
-    authority_source: str | None = None,
-    graduation: dict[str, str] | None = None,
-    rationale: str | None = None,
-    supersedes: str | None = None,
-    reads: "list[dict[str, Any]] | None" = None,
-    scope: str | None = None,
-    source: str = "target",
-) -> dict[str, Any]:
-    """Build an ``operator_decision`` event (a durable decision record).
-
-    Modeled on ``approval_decided``: who decided, under what authority, and
-    what was on the table. ``subject`` is the recovery key a later agent
-    queries; ``supersedes`` orders two decisions on one subject so a reader
-    of the older one can tell it is not current. ``reads`` carries the
-    executed evidence rows for a code fact the ruling asserts (see
-    the evidence gate): cmd, exit code, output head.
-    """
-    data: dict[str, Any] = {"decision_id": decision_id, "decision": decision[:QUESTION_CAP]}
-    for key, value in (
-        ("subject", subject),
-        ("question_id", question_id),
-        ("question", question[:QUESTION_CAP] if question else None),
-        ("asked_by", asked_by),
-        ("asked_at", asked_at),
-        ("expiry_ref", expiry_ref),
-        ("options", options),
-        ("decided_by", decided_by),
-        ("attested_by", attested_by),
-        ("relayed_by", relayed_by),
-        ("origin", origin),
-        ("authority_source", authority_source),
-        ("graduation", graduation),
-        ("rationale", rationale[:QUESTION_CAP] if rationale else None),
-        ("supersedes", supersedes),
-        ("reads", reads),
-        ("scope", scope),
-    ):
-        if value is not None:
-            data[key] = value
-    return _build("operator_decision", source, data)
-
-
 def decision_retracted(
     *,
     retraction_id: str | None = None,
@@ -1362,7 +1305,6 @@ __all__ = [
     "QUESTION_CAP",
     "operator_question",
     "operator_question_closed",
-    "operator_decision",
     "decision_retracted",
     "phase_0_decision",
     "phase_transition",
