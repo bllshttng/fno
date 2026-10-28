@@ -23,7 +23,6 @@ struct Cached {
     good: Option<(Fleet, Instant)>,
     failure: Option<(String, Instant)>,
     questions: Option<Result<Vec<Value>, String>>,
-    /// The last refresh, or the last claimed attempt.
     read_at: Option<Instant>,
 }
 
