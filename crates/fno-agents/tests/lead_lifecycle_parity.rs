@@ -122,7 +122,26 @@ fn space(root: &Path) -> PathBuf {
 fn arm_manifest(root: &Path) {
     let leads = space(root).join("leads");
     fs::create_dir_all(&leads).unwrap();
-    fs::copy(fixture("manifest-epic-y.md"), leads.join("epic-y.md")).unwrap();
+    let manifest = fs::read_to_string(fixture("manifest-epic-y.md")).unwrap();
+    // The term gate measures `now - created_at` against the 96h default, so
+    // a frozen created_at ages past it and turns the term declaration into
+    // a reached-term replacement. Stamp a fresh one: the case stays a first
+    // declaration on every day this suite runs.
+    let now = (chrono::Utc::now() - chrono::Duration::hours(1))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let stamped: String = manifest
+        .lines()
+        .map(|line| {
+            if line.starts_with("created_at:") {
+                format!("created_at: {now}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(leads.join("epic-y.md"), stamped).unwrap();
 }
 
 /// Move every registry row's cwd into this world's repo, so the role's

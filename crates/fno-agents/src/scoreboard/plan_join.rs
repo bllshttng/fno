@@ -18,6 +18,11 @@ pub(crate) fn parse_ac_ids(doc: &str) -> BTreeSet<String> {
     while i < bytes.len() {
         if bytes[i] == b'A' {
             let mut j = i + 1;
+            // The literal `C` of the `AC` prefix; without it the scanner
+            // demands digits right after `A` and every id goes unmatched.
+            if j < bytes.len() && bytes[j] == b'C' {
+                j += 1;
+            }
             let mut digits = 0;
             while j < bytes.len() && bytes[j].is_ascii_digit() {
                 j += 1;
