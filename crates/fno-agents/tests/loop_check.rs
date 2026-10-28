@@ -470,12 +470,12 @@ fn fire(args: &[&str]) -> (i32, Decision) {
     ));
     (code, d)
 }
-
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 mod awaiting_merge_ruling;
 mod cancel_sentinel;
 mod gh_budget_gate;
+mod merged_stamp;
 mod watch_lease_gate;
 
 /// AC1-HP: promise with green PR -> DonePRGreen, exit 0, termination event.
