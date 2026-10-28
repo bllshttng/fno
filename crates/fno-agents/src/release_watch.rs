@@ -19,6 +19,7 @@ use crate::operator_notice::{
 const WORKFLOW: &str = "release.yml";
 const TITLE: &str = "release failed";
 const SENDER: &str = "fno/release-watch";
+const LANE: &str = "release-watch";
 const SENDER_LINE: &str = "Automatic notice from the fno daemon release-watch arm, not a person.";
 /// GitHub's own trailer on every failed step. It names no cause, so a run
 /// with a real `::error::` line reports that line instead.
@@ -162,7 +163,7 @@ fn mail_head_lead(root: &Path, key: &str, text: &str, url: &str) {
     };
     if let Err(e) = crate::fleet_task::file_once(
         &crate::provider_cap::questions_path(&home),
-        "release-watch",
+        LANE,
         key,
         &root.display().to_string(),
         text,
@@ -190,6 +191,11 @@ pub(crate) fn pass(
     let Verdict::Failed { id, url, label } = verdict else {
         forget_at(path, &key);
         forget_at(path, &mail_key);
+        if let Some(home) = crate::paths::AgentsHome::from_env_opt() {
+            let store = crate::provider_cap::questions_path(&home);
+            let cwd = root.display().to_string();
+            let _ = crate::fleet_task::close(&store, LANE, &key, &cwd, "release passed", SENDER);
+        }
         notes.push(format!("{key}:clear"));
         return 0;
     };
@@ -206,7 +212,7 @@ pub(crate) fn pass(
     if mark_once(path, &mail_key, &token) {
         let text =
             format!("{SENDER_LINE} {body} Read it: gh run view {id} --log-failed --repo {slug}");
-        mail_head_lead(root, &format!("{key}:{id}"), &text, &url);
+        mail_head_lead(root, &key, &text, &url);
     }
     let verdict = verdict_label(notify_signal_via(
         path,
@@ -246,11 +252,14 @@ mod tests {
             panic!("the failure under the cancel must read failed");
         };
         assert_eq!((id, label.as_str()), (2, "#2 (schedule, failure)"));
-        let healed = json!({"workflow_runs": [
-            run(2, "2026-10-15T06:30:00Z", "failure"),
-            run(4, "2026-10-17T06:30:00Z", "success"),
-        ]});
-        assert_eq!(verdict(&healed), Some(Verdict::Clear));
+        let healed = [
+            run(2, "2026-10-15", "failure"),
+            run(4, "2026-10-17", "success"),
+        ];
+        assert_eq!(
+            verdict(&json!({ "workflow_runs": healed })),
+            Some(Verdict::Clear)
+        );
         assert_eq!(verdict(&json!({"message": "Not Found"})), None);
     }
 
@@ -266,10 +275,7 @@ mod tests {
             error_line(&annotations).as_deref(),
             Some("v0.4.1 is released; bump main with sync-version.sh")
         );
-        let generic = json!([annotations[0].clone()]);
-        assert_eq!(
-            error_line(&generic).unwrap(),
-            "Process completed with exit code 1."
-        );
+        let generic = error_line(&json!([annotations[0].clone()]));
+        assert_eq!(generic.unwrap(), "Process completed with exit code 1.");
     }
 }
