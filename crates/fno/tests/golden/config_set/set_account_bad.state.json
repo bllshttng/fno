@@ -1,0 +1,20 @@
+{
+ "agents_calls": [],
+ "claims": [],
+ "global": {
+  "accounts": {
+   "records": [
+    {
+     "auth": "managed",
+     "harness": "claude",
+     "id": "work",
+     "name": "Work"
+    }
+   ]
+  }
+ },
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [],
+ "shared": null
+}

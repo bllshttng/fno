@@ -269,7 +269,7 @@ fn read_event_line(line: &str, pass: &mut EventPass) {
     }
 }
 
-/// The whole report; group 2 renders the same shape as html.
+/// The whole report; `--json` prints this shape.
 #[derive(Debug, Default, Serialize)]
 pub struct FleetReport {
     pub window_days: u64,
@@ -964,7 +964,7 @@ fn cov_of(cov: &SeriesCov) -> SeriesCoverage {
 pub fn run_fleet_cli(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print!(
-            "fno-agents intel --fleet [--days N] [--backfill] [--json|--html] [--out PATH]\n\n\
+            "fno-agents intel --fleet [--days N] [--backfill] [--json]\n\n\
              The fleet capacity fold: the machine's load history beside what the\n\
              fleet was running, a slowdown threshold from the operator's own\n\
              turns, and a suggested session cap. Default window 30 days;\n\
@@ -976,8 +976,6 @@ pub fn run_fleet_cli(args: &[String]) -> i32 {
     let mut days = DEFAULT_WINDOW_DAYS;
     let mut backfill = false;
     let mut json = false;
-    let mut html = false;
-    let mut out: Option<PathBuf> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -1000,31 +998,12 @@ pub fn run_fleet_cli(args: &[String]) -> i32 {
             }
             "--backfill" => backfill = true,
             "--json" | "-J" => json = true,
-            "--html" => html = true,
-            "--out" => {
-                i += 1;
-                match args.get(i) {
-                    Some(path) => out = Some(PathBuf::from(path)),
-                    None => {
-                        eprintln!("fno-agents intel --fleet: --out needs a path");
-                        return 2;
-                    }
-                }
-            }
             other => {
                 eprintln!("fno-agents intel: unknown flag {other}");
                 return 2;
             }
         }
         i += 1;
-    }
-    if html && json {
-        eprintln!("fno-agents intel --fleet: --html and --json are mutually exclusive");
-        return 2;
-    }
-    if out.is_some() && !html {
-        eprintln!("fno-agents intel --fleet: --out requires --html");
-        return 2;
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let Some(state_dir) = crate::agents_config::state_dir(&cwd) else {
@@ -1049,20 +1028,6 @@ pub fn run_fleet_cli(args: &[String]) -> i32 {
         },
     };
     let report = analyze(&inputs);
-    if html {
-        let path = out.unwrap_or_else(|| crate::state_layout::place(&state_dir, "fleet.html"));
-        let reload_s = crate::rundown::reload_secs(crate::agents_config::config_lookup(
-            &cwd,
-            &["backlog", "page_reload_s"],
-        ));
-        let body = crate::fleet_page::render(&report, &Utc::now().to_rfc3339(), reload_s);
-        if let Err(error) = crate::fleet_page::write_page(&path, &body) {
-            eprintln!("fno-agents intel --fleet --html: {error}");
-            return 1;
-        }
-        println!("{}", path.display());
-        return 0;
-    }
     let text = if json {
         serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string())
     } else {

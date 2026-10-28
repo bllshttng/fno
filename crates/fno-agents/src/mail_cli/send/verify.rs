@@ -5,7 +5,7 @@ use super::*;
 // Liveness, attendance, escalation (receipts.py / deferred_liveness.py twins)
 // ---------------------------------------------------------------------------
 
-/// Python `session_truth.fmt_age`: compact floored age, 45s / 12m / 3h.
+/// Compact floored age, 45s / 12m / 3h.
 pub(super) fn fmt_age(seconds: f64) -> String {
     let s = seconds.max(0.0) as i64;
     if s < 60 {
@@ -17,7 +17,7 @@ pub(super) fn fmt_age(seconds: f64) -> String {
     format!("{}h", s / 3600)
 }
 
-/// Python `session_truth._humanize_age`: fixed-width-4 so a column never
+/// Fixed-width-4 so a column never
 /// reflows; None renders `   ?`, never 0s.
 pub(super) fn humanize_age_fixed(seconds: Option<f64>) -> String {
     let Some(seconds) = seconds else {
@@ -36,7 +36,7 @@ pub(super) fn humanize_age_fixed(seconds: Option<f64>) -> String {
     format!("{:>4}", format!("{}d", (total / 86400).min(999)))
 }
 
-/// Python `receipts._live_miss_age_suffix`: the transcript-age discriminator
+/// The transcript-age discriminator
 /// on a live-miss receipt. An unreadable transcript prints unknown, never 0s.
 pub(super) fn live_miss_age_suffix(recipient: &str) -> String {
     let Some(probe) = crate::truth_probe::family1_truth_probe(recipient) else {
@@ -48,7 +48,7 @@ pub(super) fn live_miss_age_suffix(recipient: &str) -> String {
     }
 }
 
-/// Python `deferred_liveness.deferred_liveness_head`: the receipt preamble
+/// The receipt preamble
 /// repeats the one liveness oracle's verdict; only a positively stalled
 /// transcript may warn the recipient may never drain.
 pub(super) fn deferred_liveness_head(target: &str) -> Option<String> {
@@ -73,7 +73,7 @@ pub(super) fn deferred_liveness_head(target: &str) -> Option<String> {
     ))
 }
 
-/// Python `_recipient_is_attended`: the registry row's origin=operator stamp,
+/// The registry row's origin=operator stamp,
 /// read through the mail-receipt door. A door failure escalates nothing.
 pub(super) fn recipient_is_attended(recipient: &str) -> bool {
     matches!(
@@ -82,7 +82,7 @@ pub(super) fn recipient_is_attended(recipient: &str) -> bool {
     )
 }
 
-/// Python `_codex_daemon_socket_absent`: the connect probe, never the file's
+/// The connect probe, never the file's
 /// existence; the socket file outlives the daemon that made it.
 pub(super) fn codex_daemon_socket_absent() -> bool {
     use std::os::unix::net::UnixStream;
@@ -90,7 +90,7 @@ pub(super) fn codex_daemon_socket_absent() -> bool {
     UnixStream::connect(&path).is_err()
 }
 
-/// Python `_escalate_to_human`: the debounced send-time human nudge. The
+/// The debounced send-time human nudge. The
 /// overlay event emits BEFORE the notifier verdict so a headless host still
 /// renders it. Best-effort throughout; never affects the send's exit.
 pub(super) fn escalate_to_human(
@@ -153,7 +153,7 @@ pub(super) fn escalate_to_human(
 // Post-send landing verify (landed.py twins)
 // ---------------------------------------------------------------------------
 
-/// Python `post_send_settle_seconds`: the beat a just-sent row gets before
+/// The beat a just-sent row gets before
 /// the sender-side verify reads; the env override exists so tests read now.
 pub(super) fn post_send_settle_seconds() -> f64 {
     std::env::var("FNO_MAIL_LANDED_SETTLE_S")
@@ -177,7 +177,7 @@ pub(super) fn bus_rows() -> Vec<Value> {
     rows
 }
 
-/// Python `bus.log.landed_ids`: ids proven landed by a same-sender/recipient
+/// Ids proven landed by a same-sender/recipient
 /// control row. The acknowledging row's own id never joins.
 pub(super) fn landed_ids_from(rows: &[Value]) -> Vec<String> {
     let mut out = Vec::new();
@@ -200,7 +200,7 @@ pub(super) fn landed_ids_from(rows: &[Value]) -> Vec<String> {
     out
 }
 
-/// Python `bus.cursor.read_cursor`: the consumer's last-seen id, or None.
+/// The consumer's last-seen id, or None.
 pub(super) fn read_cursor(name: &str) -> Option<String> {
     if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
         return None;
@@ -234,7 +234,7 @@ pub(super) fn transcript_path(to_harness: &str, to_session: &str) -> Option<Path
     None
 }
 
-/// Python `landed.post_send_landed`: three proofs, not only the transcript -
+/// Three proofs, not only the transcript -
 /// the bus landed record, the recipient's read cursor past this row, and the
 /// raw id in the recipient transcript's 4MiB tail.
 pub(super) fn post_send_landed(

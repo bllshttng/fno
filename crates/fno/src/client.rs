@@ -90,7 +90,7 @@ use overlay_paint::{
 };
 use theme_ground::LaunchTheme;
 // Re-exported for the test module's glob; the layout fns are the only callers.
-#[allow(unused_imports)]
+#[cfg(test)]
 pub(crate) use overlay_paint::family_b_origin;
 
 mod row_stamp;
@@ -1831,7 +1831,7 @@ pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, pee
 mod messages_view;
 mod org_board;
 mod org_pages;
-mod org_seats;
+pub(crate) mod org_seats;
 mod org_tabs;
 mod overlay_paint;
 mod release_check;
@@ -7417,7 +7417,7 @@ async fn attach_and_run(
         }
         // task 2.3: kick a queued answer; refresh the projection and index.
         questions::maybe_kick(&mut view, &questions_tx, &questions_index_tx);
-        questions::kick_action(&mut view, &question_act_tx);
+        questions::kick_action(&mut view, &question_act_tx, &link_tx);
         if view.yard_want && !view.yard_inflight {
             view.yard_want = false;
             view.yard_inflight = true;

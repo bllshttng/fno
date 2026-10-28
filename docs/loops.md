@@ -27,7 +27,6 @@ The control plane runs every scheduled loop below. One row names its scheduler, 
 | `board_render` | `daemon` | 300 | always | `control_plane_tick` | `fno agents loops table` |
 | `team_ledger` | `daemon` | 300 | always | `control_plane_tick` | `fno agents loops table` |
 | `lead_eval` | `daemon` | 600 | always | `control_plane_tick` | `fno agents loops table` |
-| `fleet_page` | `daemon` | 1800 | always | `control_plane_tick` | `fno agents loops table` |
 | `attention` | `daemon` | 30 | always | `control_plane_tick` | `fno agents loops table` |
 | `heal` | `launchd:sh.fno.pr-watcher` | 600 | `auto_heal.enabled` | `pr_heal_tick` | `fno do pr watch status` |
 | `otlp_export` | `daemon` | 300 | `telemetry.otlp.enabled` | `control_plane_tick` | `fno agents feed --otlp` |
@@ -126,10 +125,6 @@ Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in th
 ### lead_eval
 
 Start: daemon fires, every 600s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
-
-### fleet_page
-
-Start: daemon fires, every 1800s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents loops table`. If the row reads red, its `cause=` suffix names the next read.
 
 ### attention
 

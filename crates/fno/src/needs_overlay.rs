@@ -134,6 +134,9 @@ pub struct QuestionItem {
     pub settled: bool,
     #[serde(default)]
     pub options: Vec<QuestionOption>,
+    /// The screenshots the ask attached, as absolute paths.
+    #[serde(default)]
+    pub images: Vec<String>,
     #[serde(default)]
     pub blocked_because: Option<String>,
     #[serde(default)]
@@ -150,6 +153,10 @@ pub struct QuestionItem {
     pub meanwhile: Option<String>,
     #[serde(default)]
     pub class: Option<String>,
+    /// The asking machine on a copy from another machine; `None` when it
+    /// was asked here.
+    #[serde(default)]
+    pub host: Option<String>,
 }
 
 /// One recently answered item beside the open list, from the payload's

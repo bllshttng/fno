@@ -1275,12 +1275,13 @@ impl Pass<'_> {
                 .iter()
                 .map(|(k, v)| (k.clone(), json!(v)))
                 .collect();
-            self.out.line(crate::graph_store::to_python_json(&json!({
-                "complete": false,
-                "incomplete_leg": leg,
-                "duration_s": duration_s,
-                "legs_completed": legs,
-            })));
+            self.out
+                .line(crate::graph_store::to_python_pretty_json(&json!({
+                    "complete": false,
+                    "incomplete_leg": leg,
+                    "duration_s": duration_s,
+                    "legs_completed": legs,
+                })));
         } else {
             for (name, detail) in self.legs_done.clone() {
                 self.out.line(format!("  {name}: {detail}"));
@@ -1788,7 +1789,8 @@ pub(crate) fn run_pass(flags: Flags, seams: &Seams, out: &mut Out) -> i32 {
                 "error": v.error,
             });
         }
-        pass.out.line(crate::graph_store::to_python_json(&payload));
+        pass.out
+            .line(crate::graph_store::to_python_pretty_json(&payload));
         return if validity_result.as_ref().is_some_and(|v| v.error.is_some()) {
             1
         } else {

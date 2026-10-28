@@ -262,20 +262,9 @@ pub fn resolve_keymap(
     )
 }
 
-/// Resolve a candidate prefix against the live rebinds.
-///
-/// The returned map is safe to pass to [`reinstall`]. A refusal carries the
-/// same operator-readable warning as [`resolve_keymap`] and changes nothing.
-pub fn resolve_prefix_change(spec: &str) -> Result<Keymap, String> {
-    let rebinds = KEYMAP
-        .read()
-        .map_err(|_| "keymap is unavailable; prefix unchanged".to_string())?
-        .as_ref()
-        .map(|map| map.rebinds.clone())
-        .unwrap_or_default();
-    resolve_prefix_change_with_rebinds(spec, &rebinds)
-}
-
+// Test-only since the live-map wrappers went: the pub entry points had no
+// callers, and the refusal rules below are what the tests still pin.
+#[cfg(test)]
 fn resolve_prefix_change_with_rebinds(
     spec: &str,
     live_rebinds: &[(String, u8)],
@@ -295,14 +284,7 @@ fn resolve_prefix_change_with_rebinds(
     Ok(map)
 }
 
-/// Resolve moving one action to `byte` against the live keymap, with the
-/// same rules a config file gets. A refusal carries the resolver's sentence
-/// and changes nothing; the returned map is safe to pass to [`reinstall`].
-pub fn resolve_rebind(action: &str, byte: u8) -> Result<Keymap, String> {
-    let map = keymap();
-    resolve_rebind_with(map.prefix, &map.rebinds, action, byte)
-}
-
+#[cfg(test)]
 fn resolve_rebind_with(
     prefix: u8,
     live: &[(String, u8)],
@@ -1475,24 +1457,6 @@ fn default_bindings() -> Vec<KeyBinding> {
 /// deliberately absent here and refused as rebind targets.
 pub fn key_bindings() -> Vec<KeyBinding> {
     bindings_for(&keymap())
-}
-
-/// Every rebindable binding as the settings page lists it: the live table
-/// plus the actions that ship with no chord, which read "unbound" so the
-/// page can give them one.
-pub fn editable_bindings() -> Vec<KeyBinding> {
-    let map = keymap();
-    let mut rows = default_bindings();
-    for kb in &mut rows {
-        if kb.key == 0 {
-            kb.disp = "unbound".into();
-        }
-        if let Some((_, byte)) = map.rebinds.iter().find(|(a, _)| a == kb.action) {
-            kb.key = *byte;
-            kb.disp = key_disp(*byte);
-        }
-    }
-    rows
 }
 
 fn bindings_for(map: &Keymap) -> Vec<KeyBinding> {

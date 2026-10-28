@@ -870,6 +870,8 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
         render_cap: None,
         op: Some("append".to_string()),
         event: Some(envelope),
+        images: Vec::new(),
+        screens_dir: None,
     };
     let home = AgentsHome::from_env();
     let answer = crate::question_intake::run_intake(&req, &home);

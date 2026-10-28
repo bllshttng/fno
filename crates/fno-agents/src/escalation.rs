@@ -190,6 +190,21 @@ pub(crate) fn vault_dir_with_home(cwd: &Path, home: Option<&Path>, leaf: &str) -
     crate::paths::space_dir(cwd).join(leaf)
 }
 
+/// A vault file another machine named by its own absolute path, re-rooted
+/// onto this machine's vault: the part from `internal/` on is the same in
+/// every synced copy. `None` when the path names no vault file or no vault
+/// resolves here.
+pub(crate) fn rebase_vault_path(path: &str, cwd: &Path) -> Option<PathBuf> {
+    let rel = &path[path.find("/internal/")? + 1..];
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut candidates = vec![cwd.join(".fno/config.toml")];
+    if let Some(h) = &home {
+        candidates.push(h.join(".fno/config.toml"));
+    }
+    let vault = crate::finalize::resolve_obsidian_vault(&candidates)?;
+    Some(crate::finalize::resolve_vault_root(&vault, home.as_deref())?.join(rel))
+}
+
 /// Tolerant parse: anything missing is empty/None and [`problems`] names it.
 pub fn parse(text: &str) -> Escalation {
     let mut esc = Escalation::default();
@@ -421,34 +436,6 @@ pub fn overdue(e: &Escalation, now: chrono::DateTime<chrono::Utc>) -> bool {
     chrono::DateTime::parse_from_rfc3339(&e.deadline)
         .map(|d| d < now)
         .unwrap_or(false)
-}
-
-/// The inverse of [`parse`], for a Rust writer.
-pub fn to_note(e: &Escalation) -> String {
-    let mut fm = String::new();
-    fm.push_str(&format!("class: {}\n", e.class));
-    fm.push_str(&format!("status: {}\n", e.status));
-    if let Some(node) = &e.node {
-        fm.push_str(&format!("node: {node}\n"));
-    }
-    fm.push_str(&format!("raised_by: {}\n", e.raised_by));
-    fm.push_str(&format!("raised_at: {}\n", e.raised_at));
-    fm.push_str(&format!("deadline: {}\n", e.deadline));
-    if let Some(n) = e.recommend {
-        fm.push_str(&format!("recommend: {n}\n"));
-    }
-    fm.push_str(&format!("on_silence: {}\n", e.on_silence));
-    let options = e
-        .options
-        .iter()
-        .enumerate()
-        .map(|(i, o)| format!("{}. {} What happens next: {}", i + 1, o.text, o.next))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "---\n{fm}---\n# {}\n\n## {SECTION_DECIDING}\n{}\n\n## {SECTION_WHY_NOW}\n{}\n\n## {SECTION_OPTIONS}\n{options}\n\n## {SECTION_RECOMMENDATION}\n{}\n\n## {SECTION_ON_DEADLINE}\n{}\n",
-        e.title, e.deciding, e.why_now, e.recommendation, e.on_deadline
-    )
 }
 
 /// Every note in the directory, path-stamped and sorted. An unreadable

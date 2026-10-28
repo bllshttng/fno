@@ -148,13 +148,6 @@ impl Chrome {
         }
     }
 
-    /// No esc chip on the top border (construction-time): the pane is one of
-    /// several in an overlay whose chip rides another pane.
-    pub fn without_close(mut self) -> Self {
-        self.closeable = false;
-        self
-    }
-
     /// The flat frame (construction-time, like [`Self::full`]): border,
     /// title, chip and footer resolve through the panel slots - thin rules,
     /// bold head, dim meta - with no INVERSE band anywhere on the frame.

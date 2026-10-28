@@ -244,7 +244,7 @@ fn consume_init_sentinel(path: &Path) {
 
 /// Write via a sibling tempfile and rename, so a reader never sees a half
 /// manifest.
-fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let tmp = dir.join(format!(
         ".{}.refresh-{}",

@@ -87,7 +87,7 @@ fn row_id(row: &Value) -> Option<&str> {
     row.get("id").and_then(Value::as_str)
 }
 
-/// Python `datetime.fromisoformat` over the shapes the store writes: a `Z`
+/// Over the shapes the store writes: a `Z`
 /// or numeric offset, a naive stamp (read as UTC), or a bare date.
 pub(crate) fn parse_ts(value: Option<&Value>) -> Option<DateTime<Utc>> {
     let text = value.and_then(Value::as_str)?.trim();

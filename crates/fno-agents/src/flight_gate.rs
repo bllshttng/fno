@@ -266,10 +266,6 @@ pub fn run_flight_release(args: &[String]) -> i32 {
     }
 }
 
-// keep the unused-import lint honest: Value is used by print_receipt callers
-#[allow(dead_code)]
-fn _value_witness(_: &Value) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

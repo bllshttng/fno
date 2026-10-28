@@ -37,15 +37,6 @@ pub enum InterruptedCallOutcome {
     Unresolved,
 }
 
-/// Parse one Claude JSONL transcript line into the small vocabulary needed by
-/// the classifier. Malformed or unrelated records are intentionally `Other`.
-pub fn parse_transcript_entry(line: &str) -> TranscriptEntry {
-    parse_transcript_entries(line)
-        .into_iter()
-        .next()
-        .unwrap_or(TranscriptEntry::Other)
-}
-
 /// Parse every relevant block in one Claude JSONL transcript line. Claude can
 /// record more than one tool invocation in a single assistant message; dropping
 /// all but the last one would turn ambiguous evidence into a false claim.
@@ -206,17 +197,6 @@ pub fn resume_paragraph(outcome: &InterruptedCallOutcome) -> Option<String> {
 pub enum TranscriptDiscovery {
     Found(PathBuf),
     Unresolved,
-}
-
-/// Locate exactly one transcript for `cwd` whose mtime falls in the dispatch
-/// window. Two candidates are unresolved rather than guessed.
-pub fn discover_transcript(
-    cwd: &Path,
-    dispatch_started: SystemTime,
-    dispatch_finished: SystemTime,
-) -> TranscriptDiscovery {
-    let projects_dir = crate::claude_drive::claude_projects_dir();
-    discover_transcript_in(cwd, &projects_dir, dispatch_started, dispatch_finished)
 }
 
 /// Locate a transcript under an explicit Claude config's `projects/` tree.

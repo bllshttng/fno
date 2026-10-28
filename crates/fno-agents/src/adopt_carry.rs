@@ -2,7 +2,7 @@
 //! about authority, so the merge keeps whatever a spawn, register or grantor
 //! path stamped. Dropping it is the registry-restore shape that unpromoted a
 //! live fleet - rows stayed, their teams did not, and no team could be
-//! granted until an attended shell re-stamped.
+//! granted until a terminal re-stamped it.
 
 use crate::state::RegistryEntry;
 

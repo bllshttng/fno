@@ -1,0 +1,25 @@
+Usage: fno config set [OPTIONS] TOKENS...
+
+  Set one or more config keys in config.toml (atomic, schema-validated).
+
+  Two forms:
+
+    fno config set <key> <value>        # single key (value may contain '=')
+    fno config set a.b=1 c.d=2 ...       # atomic multi-key set   fno config set
+    agents.profiles.target.lanes '["codex-luna","zai"]'
+
+  A list takes a JSON array or `a,b`. Each value is coerced to the field's type
+  and schema-validated (``config.agents.a2a.turn_ceiling`` must be >= 1), then
+  written atomically under one file lock. The multi-key batch is all-or-nothing:
+  any invalid value leaves the file unchanged and exits non-zero. A key repeated
+  in one call uses the last value.
+
+Arguments:
+  TOKENS...  Either `<key> <value>` (single set; value may contain '=') or one-
+             or-more `key=value` pairs (atomic multi-key set).  [required]
+
+Options:
+  -l, --local / -g, --global  Write the project-local .fno/config.toml instead
+                              of the per-user global ~/.fno/config.toml (default
+                              global).  [default: global]
+  --help                      Show this message and exit.
