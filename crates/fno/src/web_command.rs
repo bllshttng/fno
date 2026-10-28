@@ -10,7 +10,6 @@ use crate::backlog_model::Inputs;
 use crate::client::org_seats::{self, Fleet};
 use crate::needs_overlay::QuestionsFold;
 
-/// A model older than this starts one background refresh on the next read.
 pub(crate) const REFRESH_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
@@ -66,7 +65,7 @@ impl CommandCache {
         st.questions = Some(questions.map(|fold| {
             fold.items
                 .iter()
-                .filter(|q| !q.settled)
+                .filter(|q| q.state == "open" && !q.settled)
                 .map(|q| {
                     json!({
                         "id": q.id,
@@ -139,6 +138,12 @@ mod tests {
                 .map(|(i, h)| QuestionItem {
                     id: format!("q-{i}"),
                     host: h.map(str::to_string),
+                    state: (if h == &Some("answered") {
+                        "answered"
+                    } else {
+                        "open"
+                    })
+                    .into(),
                     ..QuestionItem::default()
                 })
                 .collect(),
@@ -158,7 +163,7 @@ mod tests {
 
     #[tokio::test]
     async fn two_machine_fold_serializes_every_seat_and_question_host() {
-        let qs = questions(&[None, Some("iMac2D2"), Some("iMac2D2")]);
+        let qs = questions(&[None, Some("iMac2D2"), Some("iMac2D2"), Some("answered")]);
         let m = read(&CommandCache::default(), Ok(two_machines()), Ok(qs), 100).await;
         let seats = |i: usize| {
             m["machines"][i]["leads"][0]["seats"]
