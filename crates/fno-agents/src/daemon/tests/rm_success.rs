@@ -30,7 +30,7 @@ async fn rm_cascades_claude_before_removing_the_registry_row() {
             called.lock().unwrap().push(short_id.to_string());
             Ok(())
         },
-        &|_| true,
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
         &|_, _| Ok(true),
         &|_, _| PaneProbe::Unknown,
     )
@@ -87,7 +87,7 @@ async fn rm_never_deletes_a_successors_re_armed_manifest() {
         &request,
         &snapshots,
         &|_| Ok(()),
-        &|_| true,
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
         &|_, _| Ok(true),
         &|_, _| PaneProbe::Unknown,
     )
@@ -126,7 +126,7 @@ async fn rm_removes_a_stored_live_row_provably_gone_from_the_roster() {
         &request,
         &|| crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
         &|_| panic!("row already absent from the roster must not reach claude rm"),
-        &|_| true,
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
         &|_, _| Ok(true),
         &|_, _| PaneProbe::Unknown,
     )
@@ -166,7 +166,7 @@ async fn rm_clears_a_stored_live_pane_row_whose_pane_is_provably_absent() {
         &request,
         &|| panic!("non-Claude row must not read the Claude list"),
         &|_| panic!("non-Claude row must not call claude rm"),
-        &|_| panic!("no claude stop may run in this test"),
+        &|_, _| panic!("no claude stop may run in this test"),
         &|session, pane_id| {
             assert_eq!((session, pane_id), ("main", 76));
             Ok(false)
@@ -240,9 +240,9 @@ async fn rm_stops_the_claude_thread_itself_before_the_cascade() {
             order.lock().unwrap().push(format!("rm {short_id}"));
             Ok(())
         },
-        &|_| {
+        &|_, _| {
             order.lock().unwrap().push("stop".to_string());
-            true
+            crate::daemon::rm_teardown::StopLeg::Asked
         },
         &|_, _| panic!("a background thread has no pane"),
         &|_, _| PaneProbe::Unknown,
@@ -258,6 +258,128 @@ async fn rm_stops_the_claude_thread_itself_before_the_cascade() {
         .unwrap()
         .entries
         .is_empty());
+    std::fs::remove_dir_all(home.root()).ok();
+}
+
+/// A glm (zai-route) worker's `claude stop` returns without ending
+/// the session, and its listing row never flips terminal - the ask alone
+/// refused every rm and the seat stayed charged to the lead. The leg now
+/// ends the proven process set itself, and the confirmed end is the death
+/// evidence: rm proceeds with the listing still reading live.
+#[tokio::test]
+async fn rm_ends_a_glm_worker_the_ask_could_not() {
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let home = short_home("rmglmend");
+    let mut row = claude_rm_row(
+        "glm-worker",
+        "27f5226c",
+        "27f5226c-1111-2222-3333-444444444444",
+    );
+    row.status = AgentStatus::Live;
+    state::update_registry(&home.registry_json(), |registry| registry.entries.push(row)).unwrap();
+    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
+    let request = Request::new(1, "agent.rm", json!({"name": "glm-worker"}));
+    // The zai shape: the row reads `running` before the ask and still reads
+    // `running` after it - claude never marks the session finished. Only the
+    // cascade's post-removal read finds the row gone.
+    let first = std::sync::atomic::AtomicBool::new(true);
+    let second = std::sync::atomic::AtomicBool::new(true);
+
+    let response = handle_rm_with(
+        &ctx,
+        &request,
+        &|| {
+            let running = || {
+                crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
+                    crate::claude_roster::ClaudeAgentRow::new("27f5226c", Some("running")),
+                ])
+            };
+            if first.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                running()
+            } else if second.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                running()
+            } else {
+                crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new())
+            }
+        },
+        &|_| Ok(()),
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Confirmed,
+        &|_, _| Ok(true),
+        &|_, _| PaneProbe::Unknown,
+    )
+    .await;
+
+    assert_eq!(response.result().unwrap()["removed"], true);
+    assert!(state::load_registry(&home.registry_json())
+        .unwrap()
+        .entries
+        .is_empty());
+    std::fs::remove_dir_all(home.root()).ok();
+}
+
+/// The confirmed end is recorded even when the removal then refuses (here
+/// the harness cascade fails), so a retried rm and every other reader see
+/// the row fno-ended instead of stored-live: the stop record is the row's
+/// memory the reachability gate reads.
+#[tokio::test]
+async fn rm_confirmed_end_marks_the_registry_row_when_the_cascade_refuses() {
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let home = short_home("rmglmmark");
+    let mut row = claude_rm_row(
+        "glm-worker",
+        "c1defe3e",
+        "c1defe3e-1111-2222-3333-444444444444",
+    );
+    row.status = AgentStatus::Live;
+    state::update_registry(&home.registry_json(), |registry| registry.entries.push(row)).unwrap();
+    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
+    let request = Request::new(1, "agent.rm", json!({"name": "glm-worker"}));
+    let first = std::sync::atomic::AtomicBool::new(true);
+    let second = std::sync::atomic::AtomicBool::new(true);
+
+    let response = handle_rm_with(
+        &ctx,
+        &request,
+        &|| {
+            let running = || {
+                crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
+                    crate::claude_roster::ClaudeAgentRow::new("c1defe3e", Some("running")),
+                ])
+            };
+            if first.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                running()
+            } else if second.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                running()
+            } else {
+                crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new())
+            }
+        },
+        &|_| Err("claude rm exited 1".into()),
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Confirmed,
+        &|_, _| Ok(true),
+        &|_, _| PaneProbe::Unknown,
+    )
+    .await;
+
+    assert!(response
+        .error()
+        .unwrap()
+        .message
+        .contains("harness removal failed"));
+    let stored = state::load_registry(&home.registry_json()).unwrap();
+    let row = stored
+        .entries
+        .iter()
+        .find(|e| e.name == "glm-worker")
+        .expect("the refused rm keeps the row");
+    assert_eq!(row.status, AgentStatus::Exited);
+    let stop = row.stop.as_ref().expect("the confirmed end is recorded");
+    assert_eq!(stop.by, "stop-command");
+    assert_eq!(stop.reason.as_deref(), Some("claude"));
     std::fs::remove_dir_all(home.root()).ok();
 }
 
@@ -288,7 +410,7 @@ async fn rm_refuses_an_unmapped_codex_thread_whose_reattach_refuses() {
         &request,
         &|| panic!("a codex row must not read the claude roster"),
         &|_| panic!("rm must not reach claude rm"),
-        &|_| panic!("no claude stop may run for a codex row"),
+        &|_, _| panic!("no claude stop may run for a codex row"),
         &|_, _| panic!("a thread row has no mux ref to kill"),
         &|_, _| PaneProbe::Unknown,
     )
@@ -338,7 +460,7 @@ async fn rm_drops_a_codex_thread_row_whose_actor_is_gone() {
         &request,
         &|| panic!("a codex row must not read the claude roster"),
         &|_| panic!("rm must not reach claude rm"),
-        &|_| panic!("no claude stop may run for a codex row"),
+        &|_, _| panic!("no claude stop may run for a codex row"),
         &|_, _| panic!("a thread row has no mux ref to kill"),
         &|_, _| PaneProbe::Unknown,
     )
@@ -386,7 +508,7 @@ async fn rm_stamps_a_tombstone_for_the_removed_codex_session() {
         &request,
         &|| panic!("a codex row must not read the claude roster"),
         &|_| panic!("rm must not reach claude rm"),
-        &|_| panic!("no claude stop may run for a codex row"),
+        &|_, _| panic!("no claude stop may run for a codex row"),
         &|_, _| panic!("a thread row has no mux ref to kill"),
         &|_, _| PaneProbe::Unknown,
     )

@@ -3640,8 +3640,10 @@ def cmd_rm(
     the orphan in the receipt. rm needs no prior stop: it ends the
     session's process itself as part of the removal. The one exception is
     a claude background thread, where rm runs `claude stop` first - and
-    runs it itself, so no caller composes one. When the process end
-    cannot be confirmed, rm keeps the row and says why. Do not tear a
+    runs it itself, so no caller composes one. When the ask does not end
+    the session, rm ends the proven process set itself (a glm worker's
+    `claude stop` returns without ending it); only an end rm cannot
+    confirm keeps the row, and then it says why. Do not tear a
     session down by hand: the harness session record IS the resume
     handle, and dropping it directly spends that handle for nothing this
     command has not already done. If one is already orphaned, use the
