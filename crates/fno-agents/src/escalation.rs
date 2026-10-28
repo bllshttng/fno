@@ -77,7 +77,28 @@ pub struct Escalation {
     /// The ask span this question routes (`answers_ask:` frontmatter), the
     /// pointer that links the escalate route span to the ask it answers.
     pub answers_ask: Option<String>,
+    /// `## ` headings no field reads. The page renders known sections only,
+    /// so their text never reaches the user.
+    pub unknown_sections: Vec<String>,
 }
+
+/// Every section heading a field reads.
+pub const KNOWN_SECTIONS: [&str; 14] = [
+    SECTION_DECIDING,
+    SECTION_WHY_NOW,
+    SECTION_OPTIONS,
+    SECTION_RECOMMENDATION,
+    SECTION_ON_DEADLINE,
+    SECTION_BLOCKED_BECAUSE,
+    SECTION_WHY_THESE,
+    SECTION_DOWNSIDE,
+    SECTION_UNKNOWNS,
+    SECTION_REVERSIBLE,
+    SECTION_COST_IF_WRONG,
+    SECTION_MEANWHILE,
+    SECTION_WHY_USER,
+    "Answer",
+];
 
 /// The project's escalations directory: `<vault>/internal/<project>/escalations`
 /// when obsidian is enabled with a vault, else the space's `escalations/`.
@@ -235,6 +256,11 @@ pub fn parse(text: &str) -> Escalation {
     if !why_user.is_empty() {
         esc.why_user = why_user;
     }
+    esc.unknown_sections = sections
+        .iter()
+        .map(|(n, _)| n.clone())
+        .filter(|n| !KNOWN_SECTIONS.contains(&n.as_str()))
+        .collect();
     esc
 }
 
@@ -540,6 +566,12 @@ The lead waits. A force push cannot be undone.
             found.iter().any(|p| p.contains("irreversible call waits")),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn a_section_no_field_reads_is_named() {
+        let esc = parse("Pick one?\n\n## Options\n1. A.\n## The table\n| a |\n");
+        assert_eq!(esc.unknown_sections, ["The table"]);
     }
 
     #[test]
