@@ -244,6 +244,17 @@ fn term_matches_the_python_goldens() {
     // cwd, never the process cwd.
     rows_live_in_the_repo(p);
     arm_manifest(p);
+    // The fixture's fixed created_at would age past the default term and
+    // flip this case to the reached refusal; a team minted now stays within.
+    let path = space(p).join("leads/epic-y.md");
+    let minted = fs::read_to_string(&path).unwrap().replace(
+        "created_at: 2026-10-24T08:55:00Z",
+        &format!(
+            "created_at: {}",
+            chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
+        ),
+    );
+    fs::write(&path, minted).unwrap();
     case_in(
         "term declares the holder's own term",
         p,
