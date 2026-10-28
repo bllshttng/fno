@@ -247,13 +247,6 @@ impl PaneContext {
                 .unwrap_or_default(),
         })
     }
-
-    /// The geometry directives an arm must own to answer this spawn itself.
-    /// Empty for the plain and bounded lanes; anything here is a shape the
-    /// row-7 arms decline back to Python.
-    pub fn has_geometry(&self) -> bool {
-        self.squad.is_some() || self.split.is_some() || self.tab.is_some() || self.at.is_some()
-    }
 }
 
 /// What an arm adds to the spine: the wrapped provider argv and the
@@ -1416,7 +1409,7 @@ pub fn stamp_late_bind(
         .unwrap_or(false)
 }
 
-/// Python `_RECLAIMABLE_STATUSES`: a row in one of these statuses does not own
+/// A row in one of these statuses does not own
 /// its name; the spawn's write transaction drops the corpse and appends the
 /// replacement.
 fn is_reclaimable(status: AgentStatus) -> bool {
@@ -1520,7 +1513,7 @@ impl PaneReceipt {
         PaneReceipt { obj }
     }
 
-    /// Python `json.dumps` spacing (", " between items, ": " after keys) so
+    /// Spacing (", " between items, ": " after keys) so
     /// the printed receipt is byte-equal to the CLI's stdout, not
     /// serde_json-compact.
     pub fn to_json(&self) -> String {

@@ -405,7 +405,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.17x | 7 | 6 | `cli/src/fno/graph/slug.py:83` | `assign_unique_slug` |
 | 1.17x | 7 | 6 | `cli/src/fno/inbox/store.py:317` | `_slug_for` |
 | 1.17x | 7 | 6 | `cli/src/fno/pr_watch/_discover.py:102` | `_resolve_repo_dir` |
-| 1.17x | 7 | 6 | `cli/src/fno/pr_watch/cli.py:410` | `ensure_watcher_activated` |
 | 1.17x | 7 | 6 | `cli/src/fno/relay/envelope.py:88` | `frame_envelope` |
 | 1.17x | 7 | 6 | `cli/src/fno/target_cli.py:2286` | `_read_node_claim` |
 | 1.16x | 44 | 38 | `cli/src/fno/graph/_reconcile.py:1141` | `emit_gate_escape_for_record` |

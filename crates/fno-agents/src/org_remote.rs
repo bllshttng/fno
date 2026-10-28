@@ -278,7 +278,7 @@ fn scope_of(args: &[String]) -> Option<&str> {
 }
 
 /// Only the holder itself (its ambient session id matches the predecessor's)
-/// or an attended shell (no ambient session identity) may hand the role
+/// or a terminal with no ambient session identity may hand the role
 /// down - the same caller rule team_settle's `--hand-off` applies (read at
 /// team_settle.rs:385-407 at plan time).
 fn caller_check(holder: &(String, Option<String>)) {
@@ -293,7 +293,7 @@ fn caller_check(holder: &(String, Option<String>)) {
     if let Some(session) = session.filter(|s| !s.is_empty()) {
         if Some(session) != holder.1.as_deref() {
             eprintln!(
-                "org-remote: session {session} is not the holder of this scope; only the holder or an attended shell hands the role down"
+                "org-remote: session {session} is not the holder of this scope; only the holder or a lead whose team contains it hands the role down"
             );
             std::process::exit(2);
         }

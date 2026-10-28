@@ -798,8 +798,8 @@ fn unchecked_row(value: &Value, at: &str) -> Result<Unchecked, String> {
     })
 }
 
-/// `spawn-overlay` kind `roles-resolve`: the dumped arguments of the
-/// Python `resolve_role` in, the dumped resolution out.
+/// `spawn-overlay` kind `roles-resolve`: the dumped arguments
+/// in, the dumped resolution out.
 pub fn resolve_kind(payload: &Value) -> Result<Value, String> {
     let request = Request {
         role: models::role_ref(field(payload, "role")?, "role")?,

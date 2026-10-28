@@ -24,10 +24,6 @@ pub const MIRROR_KEYS: &[&str] = &[
     "related_links",
 ];
 
-/// Mirror keys that are always lists; an empty list is meaningful (it clears a
-/// stale mirror).
-pub const LIST_MIRROR_KEYS: &[&str] = &["blocked_by", "tags"];
-
 /// Mirror keys whose graph value can legitimately be cleared to None. For
 /// these, an explicit None means "clear the stale doc mirror", not "skip".
 /// Parent and link mirrors clear when their graph relation or target disappears.

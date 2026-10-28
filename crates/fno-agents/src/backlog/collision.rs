@@ -96,11 +96,6 @@ pub struct Collision {
     pub severity: Severity,
     pub recommended_action: Action,
     pub rationale: String,
-    // Shape parity with the wheel's collision row; the fill classifier reads
-    // only severity and with_node_id, the rationale builder takes the raw
-    // value as a parameter.
-    #[allow(dead_code)]
-    other_created_at: String,
 }
 
 /// Strip backticks, parenthetical annotations, and trailing line suffixes
@@ -582,7 +577,6 @@ pub fn find_collisions(
                 severity: severity.clone(),
                 recommended_action: action,
                 rationale,
-                other_created_at: entry_created,
             });
         }
     }

@@ -521,7 +521,7 @@ pub(crate) fn default_journals(cwd: &Path) -> Vec<PathBuf> {
 /// `lead-history [--scope SCOPE] [--events-path PATH ...] [--json|-J]`
 ///
 /// With no `--scope`, the caller's team scope is resolved natively from the
-/// registry (the retired Python `resolve_scope`). With no `--events-path`,
+/// registry. With no `--events-path`,
 /// the read takes [`default_journals`] for the cwd: this is the
 /// `fno agents org history` command.
 ///

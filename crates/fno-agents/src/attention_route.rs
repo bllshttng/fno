@@ -407,6 +407,7 @@ mod tests {
             rank: None,
             live: None,
             reach: None,
+            person: None,
         });
         let routing = r.route(&it);
         assert_eq!(

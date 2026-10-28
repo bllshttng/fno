@@ -462,11 +462,12 @@ fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
                 to = to,
             ),
             None => format!(
-                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" nobody to tell; the operator can answer it: fno inbox outstanding clear {qid} --answer \"per {law_id}\"",
+                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" nobody to tell. {chat}",
                 law_id = law_id,
                 qid = q.id,
                 ident = ident,
                 q100 = q100,
+                chat = crate::question_clear::chat_answer_line(&q.id),
             ),
         };
         lines.push(line);
@@ -2052,6 +2053,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if !paths.is_empty() {
         data["paths"] = json!(paths);
+    }
+    if let Some(map) = data.as_object_mut() {
+        crate::identity::stamp_person(map);
     }
     let envelope = json!({"ts": ts, "type": "operator_decision", "source": "target", "data": data});
     // Durability first: the project journal. A failed write here records
@@ -3958,6 +3962,10 @@ pub(crate) mod scope_tests {
         assert!(
             !index.contains("\"paths\""),
             "no paths key when none sent: {index}"
+        );
+        assert!(
+            index.contains("\"person\":"),
+            "the person rides along: {index}"
         );
         let journal = env.journal_text();
         assert!(

@@ -8,11 +8,7 @@ use crate::backlog::dispatch_resolve::grid_lane_for;
 use serde_json::{json, Value};
 use std::path::Path;
 
-#[allow(unused_imports)]
-use super::advance::{
-    bounded_command_env, gate_refusal_detail, slot_queue_retry_at, BoundedOutput, SpawnFailure,
-    SpawnFailureKind, EVENT_SOURCE,
-};
+use super::advance::{bounded_command_env, SpawnFailure, EVENT_SOURCE};
 
 /// The sandbox probe's exit code (byte-parity with the Python runtime).
 const EXIT_SANDBOX_UNREACHABLE: i32 = 85;

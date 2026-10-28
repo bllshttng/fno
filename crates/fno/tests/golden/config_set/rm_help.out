@@ -1,0 +1,18 @@
+Usage: fno config rm [OPTIONS] KEY
+
+  Remove a config key, reverting it to the model default.
+
+  The undo of ``set``: deletes the dotted key (and prunes any block the removal
+  leaves empty), so the value falls back to its schema default. Since the revert
+  is non-destructive there is no confirmation. An unknown key exits 1 and
+  changes nothing; an absent key is a clean no-op (``not set: <key>``). Aliased
+  as ``fno config rm``.
+
+Arguments:
+  KEY  Dotted config key to remove, e.g. config.auto_merge.enabled  [required]
+
+Options:
+  -l, --local / -g, --global  Remove from the project-local .fno/config.toml
+                              instead of the per-user global ~/.fno/config.toml
+                              (default global).  [default: global]
+  --help                      Show this message and exit.

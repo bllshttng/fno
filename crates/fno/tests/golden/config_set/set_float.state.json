@@ -1,0 +1,26 @@
+{
+ "agents_calls": [],
+ "claims": [],
+ "global": {
+  "agents": {
+   "min_free_gb": 2.5
+  }
+ },
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [
+  {
+   "attester_session_id": "",
+   "attester_witness": "env_only",
+   "config_path": "<FIXTURE>/fake_home/.fno/config.toml",
+   "journal": "events.jsonl",
+   "key": "agents.min_free_gb",
+   "new_value": 2.5,
+   "present_after": true,
+   "present_before": false,
+   "root_kind": "operator",
+   "scope": "global"
+  }
+ ],
+ "shared": null
+}

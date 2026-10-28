@@ -1,0 +1,29 @@
+{
+ "agents_calls": [],
+ "claims": [],
+ "global": {
+  "loops": {
+   "token": {
+    "level": "assisted"
+   }
+  }
+ },
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [
+  {
+   "attester_session_id": "",
+   "attester_witness": "env_only",
+   "config_path": "<FIXTURE>/fake_home/.fno/config.toml",
+   "journal": "events.jsonl",
+   "key": "loops.token.level",
+   "new_value": "<redacted:sha256:e15d11e928d9>",
+   "present_after": true,
+   "present_before": false,
+   "redacted": true,
+   "root_kind": "operator",
+   "scope": "global"
+  }
+ ],
+ "shared": null
+}

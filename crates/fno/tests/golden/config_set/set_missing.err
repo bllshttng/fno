@@ -1,0 +1,4 @@
+Usage: fno config set [OPTIONS] TOKENS...
+Try 'fno config set --help' for help.
+
+Error: Missing argument 'TOKENS...'.

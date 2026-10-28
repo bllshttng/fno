@@ -78,11 +78,6 @@ pub(crate) struct RollupEntry {
     /// by-lead lens; the replay pushes them under `--scorecard` only.
     #[serde(default)]
     operator_texts: Vec<crate::intel_scorecard::OpText>,
-    /// Landing pad for the friction/smooth marker detectors; nothing
-    /// writes it yet.
-    #[serde(default)]
-    #[allow(dead_code)]
-    markers: BTreeMap<String, u64>,
 }
 
 /// One bindable turn: the ms the witness bind needs, whether the turn is a

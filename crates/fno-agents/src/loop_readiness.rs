@@ -65,8 +65,6 @@ pub struct EffectiveLoopReadiness {
     pub continuation_owner: String,
 }
 
-pub type LoopReadiness = EffectiveLoopReadiness;
-
 impl EffectiveLoopReadiness {
     pub fn ready(&self) -> bool {
         !self.continuation_owner.trim().is_empty()

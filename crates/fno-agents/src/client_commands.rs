@@ -374,7 +374,7 @@ const KNOWN_STATUSES: &[&str] = &[
 /// `registry.load_registry`:
 ///
 /// - A missing file is an empty registry (`Ok(vec![])`), NOT an error.
-/// - The rows live under the top-level `"agents"` key (Python `write_registry`);
+/// - The rows live under the top-level `"agents"` key;
 ///   `"entries"` is accepted as a fallback for a registry last written by the
 ///   Rust daemon's `state::update_registry` (which serializes that key).
 /// - Malformed JSON / non-object top-level / unknown `schema_version` /

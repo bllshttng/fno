@@ -83,11 +83,11 @@ on it, so P2 needs no new substrate.
 `config.agents.a2a.{auto,turn_ceiling}` governs the autonomous relay between
 adopted headless threads. It previously had zero command surface.
 
-- **`fno config set <key> <value>`** (`cli/src/fno/config/writer.py`): a
+- **`fno config set <key> <value>`** (`crates/fno/src/config_cli/write/`): a
   write companion to the read-only `get`. The value is coerced to the leaf
   field's schema type and validated by constructing the changed block in
   isolation (so `turn_ceiling >= 1` fires while unrelated keys like `work:` are
-  untouched), then written atomically (temp + `os.replace`) under a file lock.
+  untouched), then written atomically (temp file + rename) under a file lock.
   An invalid value leaves the file unchanged and exits non-zero.
 - **First-use confirm** (`dispatch._a2a_first_use_gate`): the first time the relay would fire its first autonomous hop, an interactive run asks once and persists the answer (so it never re-asks).
   The TTY read has a five-second deadline; an unanswered or unreadable prompt applies observed mode for that send without persisting a marker or setting.

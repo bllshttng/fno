@@ -1544,6 +1544,53 @@ pub fn ambient_parent_edge_from(
     (session, harness, cwd)
 }
 
+/// Why [`ambient_parent_edge`] named no session, as one diagnostic clause.
+/// Mirrors the Python spawn notice's `_lineage_reason`: the identity
+/// disposition plus the NAMES of every present marker (never their values,
+/// so the refusal is safe to paste into a report). A downgrade that says
+/// nothing is undiagnosable - the 2026-10-28 lead-session spawns fell to the
+/// dispatcher path three times across two builds with no way to tell which
+/// of the strict vendor rules zeroed the session.
+pub fn ambient_edge_reason() -> String {
+    ambient_edge_reason_from(|k| std::env::var(k).ok())
+}
+
+fn ambient_edge_reason_from(get: impl Fn(&str) -> Option<String>) -> String {
+    let (_, _, disposition) = canonical_identity_from(&get);
+    let disposition_word = match disposition {
+        CanonicalDisposition::Absent => "absent",
+        CanonicalDisposition::Invalid => "invalid",
+        CanonicalDisposition::NameOnly => "name-only",
+        CanonicalDisposition::Complete => "complete",
+    };
+    let (_, vendor_ambiguous) = vendor_identity_from(&get);
+    let mut markers: Vec<&str> = Vec::new();
+    for (marker, _harness) in HARNESS_SESSION_MARKERS
+        .iter()
+        .chain(LEGACY_HARNESS_SESSION_MARKERS.iter())
+    {
+        if get(marker).map(|v| !v.trim().is_empty()).unwrap_or(false) {
+            markers.push(marker);
+        }
+    }
+    for pin in [FNO_HARNESS_NAME, FNO_HARNESS_SESSION_ID] {
+        if get(pin).map(|v| !v.trim().is_empty()).unwrap_or(false) {
+            markers.push(pin);
+        }
+    }
+    let ambiguous = if vendor_ambiguous {
+        "+vendor-ambiguous"
+    } else {
+        ""
+    };
+    let names = if markers.is_empty() {
+        "no markers".to_string()
+    } else {
+        markers.join(",")
+    };
+    format!("identity disposition={disposition_word}{ambiguous}, markers={names}")
+}
+
 /// The measured codex thread shape behind the daemon's "spawn request carried
 /// no parent edge" mints: codex sets `CODEX_SESSION_ID` to the ROOT session
 /// and `CODEX_THREAD_ID` per thread, so an all-codex env legitimately carries
