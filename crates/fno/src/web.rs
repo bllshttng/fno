@@ -3042,8 +3042,7 @@ console.log("recent searches: 12 cases ok");
         let (tx, _) = broadcast::channel(4);
         let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
         let command = Arc::new(crate::web_command::CommandCache::default());
-        // A recorded read and a spent first read: the route answers from the
-        // cache and spawns no fleet read.
+        // A recorded, spent first read: the route spawns no fleet read.
         let fleet = serde_json::json!({"machines": [{"host": "bb16", "sessions": []}]});
         let none = backlog_model::Inputs::default();
         command
