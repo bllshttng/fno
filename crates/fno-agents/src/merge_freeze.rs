@@ -221,7 +221,8 @@ fn read_record(store: &Store) -> Result<Option<Record>, String> {
     }))
 }
 
-/// A live operator row at `subject`: the one row that lifts.
+/// A live user ruling at `subject` (`decision_index::is_user_ruling`): the
+/// one row that lifts.
 fn is_operator_lift(row: &Value, subject: &str) -> bool {
     decision_index::is_user_ruling(row)
         && row
