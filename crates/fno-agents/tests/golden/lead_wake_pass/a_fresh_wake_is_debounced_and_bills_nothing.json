@@ -1,0 +1,47 @@
+{
+ "label": "a fresh wake is debounced and bills nothing",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [],
+   "events": [
+    [
+     "lead_wake_refused",
+     {
+      "ceiling": 32,
+      "reason": "mail",
+      "refusal": "debounce",
+      "scope": "epic-x",
+      "window_count": 1
+     }
+    ]
+   ],
+   "sidecar": {
+    "answered_cursor": "2026-08-28T12:00:00+00:00"
+   },
+   "successor_flags": [],
+   "summary": {
+    "armed": true,
+    "evaluated": 1,
+    "note": "",
+    "refused": [
+     {
+      "refusal": "debounce",
+      "scope": "epic-x"
+     }
+    ],
+    "roles": 1,
+    "team_incomplete": false,
+    "truth_reads": 1,
+    "woke": []
+   },
+   "unread_calls": [
+    "aa11bb22"
+   ],
+   "wake_times": [
+    "2026-08-29T11:55:00Z"
+   ]
+  }
+ ]
+}

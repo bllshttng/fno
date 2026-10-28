@@ -131,17 +131,22 @@ fn pristine_shell_and_live_workload_render_different_glyphs() {
 }
 
 #[test]
-fn lattice_accent_only_on_blocked() {
+fn lattice_color_only_on_blocked_and_done() {
     use LatticeState::*;
-    // The accent is reserved for needs-attention (Blocked); every other
-    // state stays default-colored (US6 invariant). The accent is now the
-    // theme's pick (x-f75e); pass it in and expect Blocked to wear it.
-    assert_eq!(lattice_style(Blocked, LATTICE_ACCENT).fg, LATTICE_ACCENT);
-    for s in [Working, Idle, DoneUnseen, Exited, Unmeasured] {
+    // Two states wear a color: Blocked the theme's attention accent, an
+    // unseen Done the theme's ok color (the user's 2026-10-27 pick). Every
+    // other state stays default-colored.
+    let ok = Color::Indexed(2);
+    assert_eq!(
+        lattice_style(Blocked, LATTICE_ACCENT, ok).fg,
+        LATTICE_ACCENT
+    );
+    assert_eq!(lattice_style(DoneUnseen, LATTICE_ACCENT, ok).fg, ok);
+    for s in [Working, Idle, Exited, Unmeasured] {
         assert_eq!(
-            lattice_style(s, LATTICE_ACCENT).fg,
+            lattice_style(s, LATTICE_ACCENT, ok).fg,
             Color::Default,
-            "{s:?} must not carry the accent"
+            "{s:?} must not carry a color"
         );
     }
     // Attention is never dimmed (AC1-UI): Blocked is BOLD, not DIM.

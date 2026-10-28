@@ -196,7 +196,9 @@ pub fn parse_chat_rows(
         };
         match str_of("machine") {
             None => {
-                refuse("no machine: setup stamps the one machine that runs it".into());
+                refuse(format!(
+                    "no machine: name the one machine that runs it (this one is {machine})"
+                ));
                 continue;
             }
             Some(m) if m != machine => {
@@ -261,6 +263,10 @@ struct ChatState {
     deliveries: Deliveries,
     #[serde(default)]
     cursors: BTreeMap<String, String>,
+    /// The messages already handled in a batch whose cursor is still held,
+    /// so a retried batch never answers, refuses or hints twice.
+    #[serde(default)]
+    handled: BTreeMap<String, Vec<String>>,
 }
 
 /// The tick's per-beat result.
@@ -433,9 +439,19 @@ fn tick_one(
         }
     };
     for msg in inbound {
-        if msg.from_self {
+        if msg.from_self
+            || state
+                .handled
+                .get(&sink.name)
+                .is_some_and(|h| h.contains(&msg.id))
+        {
             continue;
         }
+        state
+            .handled
+            .entry(sink.name.clone())
+            .or_default()
+            .push(msg.id.clone());
         if let Some(tap) = &msg.tap_id {
             transport.ack_tap(tap);
         }
@@ -486,7 +502,11 @@ fn tick_one(
                 transport.reply(&ext, &format!("{receipt} for {}", item.id));
             }
             Err(e) => {
-                // The cursor holds, so the next beat reads this reply again.
+                // The cursor holds, so the next beat reads this reply again;
+                // the replies before it stay handled and are skipped.
+                if let Some(h) = state.handled.get_mut(&sink.name) {
+                    h.pop();
+                }
                 tick.detail
                     .push(format!("chat: {} answer for {}: {e}", sink.name, item.id));
                 return;
@@ -494,6 +514,7 @@ fn tick_one(
         }
     }
     state.cursors.insert(sink.name.clone(), next);
+    state.handled.remove(&sink.name);
 }
 
 /// The question a reply answers, and the answer text: the thread or reply
@@ -530,6 +551,9 @@ fn read_answer(item: &AttentionItem, text: &str) -> Result<FileAnswer, String> {
     }
     let answer = crate::attention_file::parse_answer_text(text);
     if let FileAnswer::Option(n) = answer {
+        if item.kind == "pin" {
+            return Err(format!("{} has no options; reply done or words", item.id));
+        }
         if !item.options.iter().any(|o| o.n == n) {
             return Err(format!(
                 "option {n} is not on {}; pick 1-{}",

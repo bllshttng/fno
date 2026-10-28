@@ -106,6 +106,11 @@ impl ChatTransport for Telegram<'_> {
                     tap_id: None,
                 });
             } else if let Some(q) = u.get("callback_query") {
+                // A message id is unique only inside its chat: a tap in
+                // another chat must never map onto this chat's question.
+                if q["message"]["chat"]["id"].to_string().trim_matches('"') != self.chat_id {
+                    continue;
+                }
                 let data = q["data"].as_str().unwrap_or_default();
                 let n = data.rsplit(':').next().unwrap_or_default();
                 out.push(Inbound {
