@@ -10,6 +10,14 @@ pub fn enrich_spawn_payload(message: &str) -> String {
     format!("{message}\n\n{block}")
 }
 
+/// The full payload entry: brevity guidance once, then the fleet-law block
+/// last, nearest the worker's eye. The vec names what was delivered, for the
+/// spawn receipt; empty means no active fleet constraint rode the seed.
+pub fn finalize_spawn_payload(message: &str) -> (String, Vec<String>) {
+    let enriched = enrich_spawn_payload(message);
+    crate::fleet_law::append_fleet_laws(&enriched)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{enrich_spawn_payload, BREVITY_END_MARKER, BREVITY_INSTRUCTION, BREVITY_MARKER};

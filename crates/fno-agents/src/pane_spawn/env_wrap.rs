@@ -247,15 +247,11 @@ fn generate_msg_id() -> String {
     format!("fmail-{hex}")
 }
 
-/// `enrich_spawn_payload` (`spawn_payload.py:21`): the one payload entry -
-/// first-party brevity guidance appended once to a non-empty seed.
-pub fn enrich_spawn_payload(message: &str) -> String {
-    const BREVITY_BLOCK: &str = "<fno_relay_compression>\nKeep reports and handoffs at 80 words or fewer unless this payload requires a longer artifact or exact output schema. Think fully; write only the requested result, essential reason, and next action. Drop filler, pleasantries, hedges, repeated context, and articles where clear. Fragments work. Keep technical terms, commands, errors, numbers, units, negation, and code blocks exact. Put long detail in durable artifacts when available; return a path or link.\n</fno_relay_compression>";
-    if message.is_empty() || message.contains(BREVITY_BLOCK) {
-        return message.to_string();
-    }
-    format!("{message}\n\n{BREVITY_BLOCK}")
-}
+/// `enrich_spawn_payload` (`spawn_payload.py:21`) lives in
+/// `crate::spawn_payload` - the one payload entry this crate's pane lane
+/// calls through `seed_text`. The inline copy that stood here was a third
+/// spelling of the brevity block and is gone.
+pub use crate::spawn_payload::enrich_spawn_payload;
 
 /// `is_command_seed` (`config/_dispatch_commands.py:60`): position 0 is
 /// load-bearing - only a leading command token may be rewritten.
