@@ -10,6 +10,10 @@ body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 ui-sans-serif,
 .count{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);font-size:12.5px;font-variant-numeric:tabular-nums}.dot{width:8px;height:8px;border-radius:50%}.age{font:12px ui-monospace,Menlo,monospace;color:var(--muted)}.banner{padding:10px 14px;border-radius:12px;border:1px solid rgba(255,181,71,.35);background:rgba(255,181,71,.08);color:var(--warn)}
 section{border-radius:16px;border:1px solid var(--line);background:var(--bg2);padding:14px 16px}h2{margin:0 0 10px;font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.1em}h3{margin:12px 0 6px;font-size:13px;color:var(--muted);font-weight:600}.row{display:flex;flex-wrap:wrap;gap:4px 12px;padding:8px 0;border-top:1px solid var(--line)}.row b{font-weight:600;flex:1 1 260px;min-width:0;overflow-wrap:anywhere}.mono{font:12px ui-monospace,Menlo,monospace;color:var(--muted);overflow-wrap:anywhere}.empty{color:var(--muted)}
 .machines{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px}.host{padding:14px;border-radius:14px;border:1px solid var(--line);display:flex;flex-direction:column;gap:6px}.host b{font-size:17px}.stale{color:var(--warn)}.fresh{color:var(--ok)}
+.tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}.tools input{flex:1 1 220px;min-height:34px;padding:6px 12px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:inherit}.chip{border:1px solid var(--line);background:transparent;color:var(--muted);font:500 12.5px ui-sans-serif,system-ui,sans-serif;padding:6px 11px;border-radius:999px;cursor:pointer;min-height:32px}.chip[aria-pressed="true"]{color:var(--fg);background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.26)}
+.tscroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;font-weight:600;color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.06em;padding:6px 8px;white-space:nowrap;cursor:pointer;user-select:none}th[aria-sort]{color:var(--fg)}td{padding:7px 8px;border-top:1px solid var(--line);white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus{background:rgba(255,255,255,.05);outline:none}
+.drawer{position:fixed;top:52px;right:12px;bottom:12px;width:min(440px,calc(100vw - 24px));z-index:20;border-radius:22px;background:rgba(14,17,27,.94);border:1px solid rgba(160,190,255,.2);box-shadow:0 30px 80px rgba(0,0,0,.6);transform:translateX(calc(100% + 40px));visibility:hidden;transition:transform .35s ease,visibility .35s;display:flex;flex-direction:column;overflow:hidden}.drawer.on{transform:none;visibility:visible}.dhead{padding:18px 18px 12px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--line)}.dtop{display:flex;align-items:center;gap:8px}.x{margin-left:auto;width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--fg);cursor:pointer;font-size:18px}.dhead h2{margin:0;font-size:19px;color:var(--fg);text-transform:none;letter-spacing:0}.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:7px 12px;margin:0;padding:14px 18px 22px;overflow:auto;font-size:13px}.kv dt{color:var(--muted)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere}.kv a{color:var(--writing)}
+@media (max-width:640px){.drawer{top:auto;left:8px;right:8px;width:auto;height:78vh;transform:translateY(calc(100% + 30px))}.kv{grid-template-columns:96px minmax(0,1fr)}}
 </style>
 </head>
 <body>
@@ -18,7 +22,15 @@ section{border-radius:16px;border:1px solid var(--line);background:var(--bg2);pa
   <div id="banners"></div>
   <section aria-label="Machines"><h2>Machines</h2><div id="machines" class="machines"><p class="empty">reading the fleet</p></div></section>
   <section aria-label="Waiting on you"><h2>Waiting on you</h2><div id="waiting"></div></section>
+  <section aria-label="Seats"><h2>Seats</h2>
+    <div class="tools"><input id="filter" type="search" placeholder="Filter by seat, node, title, model, session id" aria-label="Filter seats"><span id="chips"></span><span class="age" id="rowcount"></span></div>
+    <div class="tscroll"><table><thead><tr id="thead"></tr></thead><tbody id="tbody"></tbody></table></div>
+  </section>
 </div>
+<aside class="drawer" id="drawer" aria-hidden="true" aria-label="Seat details">
+  <div class="dhead"><div class="dtop"><span class="count" id="dstate"></span><span class="mono" id="dhost"></span><button class="x" id="dclose" aria-label="Close details">×</button></div><h2 id="dtitle"></h2><div class="mono" id="dnode"></div></div>
+  <dl class="kv" id="dbody"></dl>
+</aside>
 <script>
 (() => {
 const COLORS = {writing:"--writing", quiet:"--quiet", parked:"--parked", unknown:"--unknown"};
@@ -104,6 +116,107 @@ function machines(model) {
   }
 }
 
+const work = (r, k) => r.s.work ? r.s.work[k] : null;
+const COLS = [
+  ["machine", (r) => r.host], ["lead", (r) => r.lead], ["seat", (r) => r.s.name], ["harness", (r) => r.s.harness],
+  ["model", (r) => r.s.model && r.s.model + (r.s.model_basis ? " (" + r.s.model_basis + ")" : "")],
+  ["state", (r) => r.s.status], ["alive", (r) => since(r.s.started_at), ago],
+  ["last msg", (r) => since(r.s.last_message_at), (v) => ago(v) + " ago"],
+  ["node", (r) => work(r, "id")], ["title", (r) => work(r, "title")], ["PR", (r) => work(r, "pr"), (v) => "#" + v],
+];
+let rows = [], hidden = new Set(), sort = {col: 0, dir: 1}, openKey = null;
+const keyOf = (r) => r.host + "/" + (r.s.session_id || r.s.name);
+
+function seats(model) {
+  rows = model.machines.flatMap((m) => m.leads.flatMap((l) => l.seats.map((s) => ({host: m.host, local: m.local, lead: l.name, s}))));
+  const chips = document.getElementById("chips");
+  chips.replaceChildren();
+  for (const m of model.machines) {
+    const b = el("button", "chip", m.host + " · " + rows.filter((r) => r.host === m.host).length);
+    b.setAttribute("aria-pressed", String(!hidden.has(m.host)));
+    b.onclick = () => { hidden.has(m.host) ? hidden.delete(m.host) : hidden.add(m.host); seats(model); };
+    chips.append(b, " ");
+  }
+  paint();
+  const again = rows.find((r) => keyOf(r) === openKey);
+  if (again) openSeat(again); else if (openKey) closeSeat();
+}
+
+function paint() {
+  const q = document.getElementById("filter").value.trim().toLowerCase();
+  const hay = (r) => [r.host, r.lead, r.s.name, r.s.session_id, r.s.harness, r.s.model, work(r, "id"), work(r, "title")];
+  const shown = rows.filter((r) => !hidden.has(r.host) && (!q || hay(r).some((v) => v && String(v).toLowerCase().includes(q))));
+  const get = COLS[sort.col][1];
+  shown.sort((a, b) => {
+    const x = get(a), y = get(b);
+    if (x == null || y == null) return (x == null) - (y == null);
+    return (typeof x === "number" ? x - y : String(x).localeCompare(String(y))) * sort.dir;
+  });
+  const head = document.getElementById("thead");
+  head.replaceChildren(...COLS.map(([label], i) => {
+    const th = el("th", null, label + (i === sort.col ? (sort.dir > 0 ? " ↑" : " ↓") : ""));
+    if (i === sort.col) th.setAttribute("aria-sort", sort.dir > 0 ? "ascending" : "descending");
+    th.tabIndex = 0;
+    th.onclick = th.onkeydown = (e) => {
+      if (e.key && e.key !== "Enter") return;
+      sort = {col: i, dir: i === sort.col ? -sort.dir : 1};
+      paint();
+    };
+    return th;
+  }));
+  document.getElementById("tbody").replaceChildren(...shown.map((r) => {
+    const tr = el("tr");
+    tr.tabIndex = 0;
+    for (const [label, get, fmt] of COLS) {
+      const v = get(r);
+      tr.append(el("td", null, v == null ? (label === "last msg" ? "not published" : "") : fmt ? fmt(v) : v));
+    }
+    tr.onclick = () => openSeat(r);
+    tr.onkeydown = (e) => { if (e.key === "Enter") openSeat(r); };
+    return tr;
+  }));
+  document.getElementById("rowcount").textContent = shown.length + " of " + rows.length + " seats";
+}
+
+const drawer = document.getElementById("drawer");
+function openSeat(r) {
+  const s = r.s, at = (iso) => iso ? iso + " (" + ago(since(iso)) + " ago)" : "not published";
+  openKey = keyOf(r);
+  const st = document.getElementById("dstate");
+  const d = el("i", "dot");
+  d.style.background = "var(" + COLORS[s.status] + ")";
+  st.replaceChildren(d, s.status);
+  document.getElementById("dhost").textContent = r.host + " · " + r.lead;
+  document.getElementById("dtitle").textContent = s.name;
+  document.getElementById("dnode").textContent = s.work ? [s.work.id, s.work.title, s.work.status].filter(Boolean).join(" · ") : "no node";
+  const plan = s.plan_uri && s.plan_uri.startsWith("obsidian://") ? Object.assign(el("a", null, "open in Obsidian"), {href: s.plan_uri}) : work(r, "plan") || "no plan";
+  const kv = [
+    ["session id", s.session_id], ["harness", s.harness], ["model", COLS[4][1](r)], ["started", at(s.started_at)],
+    ["cwd", s.cwd], ["project", s.project], ["role", s.role], ["context", s.context_pct == null ? null : s.context_pct + "% used"],
+    ["PR", work(r, "pr") ? "#" + work(r, "pr") : "none"], ["plan", plan],
+    ["last message", "not published" + (s.last_message_at ? " · stamped " + at(s.last_message_at) : "")],
+    ["attach", s.attach + (r.local ? "" : " (on " + r.host + ")")],
+  ];
+  document.getElementById("dbody").replaceChildren(...kv.flatMap(([k, v]) => {
+    const dd = el("dd", k === "attach" || k === "session id" || k === "cwd" ? "mono" : null);
+    dd.append(v == null ? "not published" : v);
+    return [el("dt", null, k), dd];
+  }));
+  if (!drawer.classList.contains("on")) {
+    drawer.classList.add("on");
+    drawer.setAttribute("aria-hidden", "false");
+    document.getElementById("dclose").focus();
+  }
+}
+function closeSeat() {
+  openKey = null;
+  drawer.classList.remove("on");
+  drawer.setAttribute("aria-hidden", "true");
+}
+document.getElementById("dclose").onclick = closeSeat;
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSeat(); });
+document.getElementById("filter").oninput = paint;
+
 const nav = document.querySelector("nav.fno-nav");
 const token = new URLSearchParams(location.search).get("t") || "";
 const url = (nav ? nav.dataset.base : "./") + "command/model.json?t=" + encodeURIComponent(token);
@@ -115,7 +228,7 @@ async function load() {
     return;
   }
   const model = await res.json();
-  header(model); banners(model); waiting(model); machines(model);
+  header(model); banners(model); waiting(model); machines(model); seats(model);
 }
 load();
 setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);

@@ -1,12 +1,16 @@
 //! `/command/model.json`: the org view's fleet fold as JSON. The bridge keeps
 //! the last good read and refreshes it off the request path.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
 use crate::backlog_model::Inputs;
+use crate::client::org_pages::attach_command;
 use crate::client::org_seats::{self, Fleet};
+use crate::digest_overlay::ObsidianCfg;
+use crate::link::{plan_link, PlanLink};
 use crate::needs_overlay::QuestionsFold;
 
 pub(crate) const REFRESH_AFTER: Duration = Duration::from_secs(60);
@@ -20,7 +24,8 @@ pub(crate) struct CommandCache {
 
 #[derive(Default)]
 struct Cached {
-    good: Option<(Fleet, Instant)>,
+    /// The fold, its machines as JSON, and when it was read.
+    good: Option<(Fleet, Value, Instant)>,
     failure: Option<(String, Instant)>,
     questions: Option<Result<Vec<Value>, String>>,
     prs: Vec<Value>,
@@ -51,7 +56,10 @@ impl CommandCache {
         let mut st = self.state.lock().await;
         match fleet {
             Ok(map) => {
-                st.good = Some((org_seats::fold(&map, backlog, &[], measured_at), now));
+                let fleet = org_seats::fold(&map, backlog, &[], measured_at);
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let machines = machines_json(&fleet, &ObsidianCfg::read(&cwd));
+                st.good = Some((fleet, machines, now));
                 st.failure = None;
             }
             Err(reason) => st.failure = Some((reason, now)),
@@ -85,7 +93,7 @@ impl CommandCache {
             Some(Err(reason)) => waiting["questions_error"] = json!(reason),
             None => waiting["questions_error"] = json!("not read yet"),
         }
-        let fleet = st.good.as_ref().map(|(f, _)| f);
+        let fleet = st.good.as_ref().map(|(f, _, _)| f);
         let fleet_error = match (&st.failure, &st.good) {
             (Some((reason, at)), _) => {
                 json!({"reason": reason, "failed_age_s": at.elapsed().as_secs()})
@@ -96,14 +104,34 @@ impl CommandCache {
         json!({
             "schema": 1,
             "measured_at": fleet.map(|f| f.measured_at),
-            "age_s": st.good.as_ref().map(|(_, at)| at.elapsed().as_secs()),
+            "age_s": st.good.as_ref().map(|(_, _, at)| at.elapsed().as_secs()),
             "notice": fleet.and_then(|f| f.notice.clone()),
             "seat_error": fleet.and_then(|f| f.seat_error.clone()),
             "fleet_error": fleet_error,
-            "machines": fleet.map(|f| json!(f.machines)).unwrap_or_else(|| json!([])),
+            "machines": st.good.as_ref().map_or_else(|| json!([]), |(_, m, _)| m.clone()),
             "waiting": waiting,
         })
     }
+}
+
+/// The machines with each seat's attach command and, when its plan sits in
+/// the vault, the `obsidian://` link, so the page builds neither.
+fn machines_json(fleet: &Fleet, obsidian: &ObsidianCfg) -> Value {
+    let mut machines = json!(fleet.machines);
+    let rows = machines
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .flat_map(|m| m["leads"].as_array_mut().into_iter().flatten())
+        .flat_map(|l| l["seats"].as_array_mut().into_iter().flatten());
+    for (row, seat) in rows.zip(fleet.seats()) {
+        row["attach"] = json!(attach_command(seat));
+        let plan = seat.work.as_ref().and_then(|w| w.plan.as_deref());
+        if let PlanLink::Obsidian { uri } = plan_link(plan.map(Path::new), obsidian) {
+            row["plan_uri"] = json!(uri);
+        }
+    }
+    machines
 }
 
 /// PRs on in-review nodes the store has not seen merged or closed. The store
@@ -200,6 +228,11 @@ mod tests {
         assert!(m["machines"][0]["leads"][0]["seats"][0]
             .get("local")
             .is_none());
+        let imac = &m["machines"][1]["leads"][0]["seats"][0];
+        assert_eq!(imac["name"], "t-two");
+        assert!(imac["attach"]
+            .as_str()
+            .is_some_and(|a| a.starts_with("fno agents session attach ")));
         assert_eq!(m["waiting"]["questions"][1]["host"], "iMac2D2");
         assert_eq!(m["waiting"]["questions"].as_array().unwrap().len(), 3);
         assert_eq!(
