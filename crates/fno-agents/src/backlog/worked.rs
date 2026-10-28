@@ -217,6 +217,11 @@ fn fleet_rows_from(
         }
     }
     for (sid, e) in spine.iter() {
+        // A promoted lead is never a node worker (the `worked-nodes` role
+        // gate). It stays in the spine so its vendor row is not vendor-only.
+        if e.role_level.is_some() {
+            continue;
+        }
         let vendor = vendor_by_sid.get(*sid).copied();
         let (state, warn) = match vendor {
             Some(r) => row_state(r),
@@ -332,7 +337,7 @@ fn fleet_rows_from(
         });
     }
     for entry in entries.into_iter().flatten() {
-        if entry.harness.as_deref() == Some("claude") {
+        if entry.harness.as_deref() == Some("claude") || entry.role_level.is_some() {
             continue;
         }
         if !is_live_status(entry.status) {
@@ -1285,6 +1290,38 @@ mod tests {
         let (rows, warnings) = fleet_rows_from(again, None);
         assert_eq!(rows.len(), 1);
         assert!(!warnings.iter().any(|w| w.contains("vendor-only")));
+
+        // A promoted lead is never a node worker, on either harness leg, even
+        // when its row names the node it dispatched.
+        let mut lead = crate::state::RegistryEntry::default();
+        lead.harness = Some("claude".into());
+        lead.name = "wren".into();
+        lead.harness_session_id = Some("aa2f99d7-0000-0000-0000-000000000000".into());
+        lead.status = crate::AgentStatus::Live;
+        lead.node = Some("x-ce31".into());
+        lead.role_level = Some(2);
+        let mut codex_lead = lead.clone();
+        codex_lead.harness = Some("codex".into());
+        codex_lead.name = "rook".into();
+        codex_lead.harness_session_id = Some("01a10e75-0000-0000-0000-000000000000".into());
+        let vendor_lead = RawAgents {
+            rows: vec![serde_json::json!({
+                "sessionId": "aa2f99d7-0000-0000-0000-000000000000",
+                "name": "wren",
+                "state": "working"
+            })],
+            warnings: Vec::new(),
+        };
+        let (rows, warnings) = fleet_rows_from(vendor_lead, Some(&[lead, codex_lead]));
+        assert!(
+            rows.is_empty(),
+            "{:?}",
+            rows.iter().map(|r| &r.name).collect::<Vec<_>>()
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("vendor-only")),
+            "{warnings:?}"
+        );
         match spaces_backup {
             Some(v) => std::env::set_var("FNO_SPACES_DIR", v),
             None => std::env::remove_var("FNO_SPACES_DIR"),
