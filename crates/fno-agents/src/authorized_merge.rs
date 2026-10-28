@@ -184,11 +184,6 @@ impl Outcome {
         }
     }
 
-    /// Whether the queue entry or the merge actually happened.
-    pub fn effected(&self) -> bool {
-        matches!(self, Outcome::Merged { .. } | Outcome::Armed { .. })
-    }
-
     pub fn to_json(&self) -> Value {
         let mut out = json!({ "outcome": self.word(), "detail": self.detail() });
         match self {

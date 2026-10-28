@@ -541,14 +541,6 @@ impl AcpSession {
         Ok(id)
     }
 
-    pub fn session_load(&self, session_id: &str) -> Result<Value, AcpError> {
-        let result = self.session_command("session/load", json!({"sessionId":session_id}))?;
-        if let Ok(mut slot) = self.session_id.lock() {
-            *slot = Some(session_id.to_string());
-        }
-        Ok(result)
-    }
-
     pub fn session_resume(&self, session_id: &str) -> Result<Value, AcpError> {
         let result = self.session_command(
             "session/resume",

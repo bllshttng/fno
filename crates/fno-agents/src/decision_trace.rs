@@ -9,17 +9,6 @@ use serde_json::{json, Map, Value};
 use std::io::Read;
 use std::path::Path;
 
-/// Who acted on a span. `lead` needs a live team bound to the session,
-/// `worker` is any other resolved session, `user` is an attended terminal
-/// with no session identity (the decide door's state 2), `sweep` is daemon
-/// work. The same vocabulary names a span's recipient.
-pub const ACTOR_KINDS: &[&str] = &["user", "lead", "worker", "sweep"];
-
-/// The comms surface a span traveled on: the tag the Notifications tab
-/// groups by. `mail` is the agent mail bus, `chat` the harness transcript,
-/// `question` the operator question lane.
-pub const COMMS_KINDS: &[&str] = &["mail", "chat", "question"];
-
 /// The decision class a route weighed. The four escalation-page classes plus
 /// the two only a traced decision names: gate-override and none.
 pub const DECISION_CLASSES: &[&str] = &[

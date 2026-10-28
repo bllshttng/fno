@@ -72,15 +72,6 @@ pub enum CompactionBand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContextReading {
-    pub usage: ContextUsage,
-    pub used_tokens: u64,
-    pub window_tokens: u64,
-    pub used_pct: u64,
-    pub band: CompactionBand,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextWindowError {
     Missing(&'static str),
     Invalid(&'static str),

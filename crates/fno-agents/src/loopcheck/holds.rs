@@ -502,6 +502,7 @@ mod tests {
         let needles = [
             ["their own", " terminal"].concat(),
             ["attended", " shell"].concat(),
+            ["paste", " ! fno"].concat(),
         ];
         let sources = [
             ("loopcheck/holds.rs", include_str!("holds.rs")),
@@ -511,6 +512,21 @@ mod tests {
             ("lead_answers.rs", include_str!("../lead_answers.rs")),
             ("pr_draft_ready.rs", include_str!("../pr_draft_ready.rs")),
             ("merge_freeze.rs", include_str!("../merge_freeze.rs")),
+            ("lead_lifecycle.rs", include_str!("../lead_lifecycle.rs")),
+            ("territory.rs", include_str!("../territory.rs")),
+            ("lead_ops.rs", include_str!("../lead_ops.rs")),
+            ("lead_reads.rs", include_str!("../lead_reads.rs")),
+            ("team_settle.rs", include_str!("../team_settle.rs")),
+            ("team_widen.rs", include_str!("../team_widen.rs")),
+            (
+                "backlog/epic_cap.rs",
+                include_str!("../backlog/epic_cap.rs"),
+            ),
+            ("org_remote.rs", include_str!("../org_remote.rs")),
+            (
+                "lead_verdict_inputs.rs",
+                include_str!("../lead_verdict_inputs.rs"),
+            ),
         ];
         for needle in &needles {
             let hits: Vec<&str> = sources

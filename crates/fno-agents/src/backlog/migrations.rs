@@ -58,7 +58,7 @@ fn sorted_json(v: &Value) -> String {
     py_json_compact(&sort(v))
 }
 
-/// Python `repr` of a scalar, for the refusal that names a row's values.
+/// Of a scalar, for the refusal that names a row's values.
 fn py_repr(v: Option<&Value>) -> String {
     match v {
         None | Some(Value::Null) => "None".into(),
