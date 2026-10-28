@@ -843,8 +843,9 @@ fn rerun_rows() {
 }
 
 /// The stub_gh_drive_rerun gh plus the run-jobs endpoint the incident probe
-/// reads: `jobs_body` verbatim, so the test picks the casualty shape.
-fn stub_gh_drive_rerun_jobs(dir: &Path, jobs_body: &str) -> std::path::PathBuf {
+/// reads: `jobs_pages_body` verbatim as the endpoint's echo payload, so the
+/// test picks the page shape the probe must parse.
+fn stub_gh_drive_rerun_jobs(dir: &Path, jobs_pages_body: &str) -> std::path::PathBuf {
     let script = r#"#!/bin/sh
 D="$(dirname "$0")"
 echo "gh $*" >> "$D/gh.log"
@@ -857,7 +858,7 @@ for a in "$@"; do case "$a" in
   *check-runs) echo '{"check_runs":[{"name":"ci","status":"completed","conclusion":"cancelled","html_url":"https://github.com/o/r/actions/runs/777/job/9"}]}'; exit 0 ;;
   *'runs/777/jobs'*) echo '"#
         .to_string()
-        + jobs_body
+        + jobs_pages_body
         + r#"'; exit 0 ;;
   */logs) echo "the run was cancelled before any step ran"; exit 0 ;;
   */status) echo '{"statuses":[]}'; exit 0 ;;
@@ -914,14 +915,13 @@ fn rerun_holds_for_runnerless_incident() {
     );
 
     // Drive loop, runnerless jobs, live incident: the rerun holds. The page
-    // read was spent (the shape matched first), no rerun key was ever
-    // issued, and the hold is stable across ticks.
+    // read was spent (the shape matched first), the hold row lands with the
+    // dedup key, the tick's rerun_keys stay empty, and the next tick
+    // re-probes instead of skipping as unchanged.
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
-    stub_gh_drive_rerun_jobs(
-        d,
-        r#"[{"name":"ci","conclusion":"cancelled","runner_name":null,"started_at":null}]"#,
-    );
+    let casualty_page = r#"{"total_count":1,"jobs":[{"name":"ci","conclusion":"cancelled","runner_name":null,"started_at":null}]}"#;
+    stub_gh_drive_rerun_jobs(d, casualty_page);
     stub_curl(d, LIVE_INCIDENTS);
     stub_git_drive(d);
     stub_fno(d);
@@ -943,8 +943,12 @@ fn rerun_holds_for_runnerless_incident() {
     );
     let events = log_of(d, "events.jsonl");
     assert!(
-        !events.contains("\"aaa1:777\""),
-        "a held rerun writes no rerun key: {events}"
+        events.contains("\"pr_heal_hold\"") && events.contains("\"key\":\"aaa1:777\""),
+        "the hold row lands with the dedup key: {events}"
+    );
+    assert!(
+        !events.contains("\"rerun_keys\":[\"aaa1:777\"]"),
+        "a held rerun never reads as an issued rerun: {events}"
     );
     run_heal(&drive_args(d, &[]));
     let gh = log_of(d, "gh.log");
@@ -953,13 +957,30 @@ fn rerun_holds_for_runnerless_incident() {
         "the hold survives the next tick: {gh}"
     );
 
-    // Same casualty shape, page clear: the rerun issues exactly once.
+    // The P1 resume proof: the incident clears, the next tick must RE-PROBE
+    // (the hold door reopens the PR) and issue the rerun it once held.
+    stub_curl(d, r#"{"incidents":[]}"#);
+    let code = run_heal(&drive_args(d, &[]));
+    assert_eq!(
+        code, EXIT_CLEAN,
+        "after the incident clears the rerun acted"
+    );
+    assert_eq!(
+        log_of(d, "gh.log").matches("run rerun 777").count(),
+        1,
+        "exactly one rerun, after the incident cleared"
+    );
+    assert_eq!(
+        log_of(d, "curl.log").matches("githubstatus.com").count(),
+        3,
+        "every held tick re-probed the page"
+    );
+
+    // Same casualty shape, page clear on the first sighting: the rerun
+    // issues exactly once, like the pre-hold behavior.
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
-    stub_gh_drive_rerun_jobs(
-        d,
-        r#"[{"name":"ci","conclusion":"cancelled","runner_name":null,"started_at":null}]"#,
-    );
+    stub_gh_drive_rerun_jobs(d, casualty_page);
     stub_curl(d, r#"{"incidents":[]}"#);
     stub_git_drive(d);
     stub_fno(d);
@@ -967,11 +988,10 @@ fn rerun_holds_for_runnerless_incident() {
     std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
     let code = run_heal(&drive_args(d, &[]));
     assert_eq!(code, EXIT_CLEAN, "no incident, the rerun acted");
-    let gh = log_of(d, "gh.log");
     assert_eq!(
-        gh.matches("run rerun 777").count(),
+        log_of(d, "gh.log").matches("run rerun 777").count(),
         1,
-        "exactly one rerun: {gh}"
+        "exactly one rerun"
     );
 
     // A started job is a human or timeout cancel, not a casualty: the rerun
@@ -980,7 +1000,7 @@ fn rerun_holds_for_runnerless_incident() {
     let d = tmp.path();
     stub_gh_drive_rerun_jobs(
         d,
-        r#"[{"name":"ci","conclusion":"cancelled","runner_name":null,"started_at":"2026-10-05T19:27:00Z"}]"#,
+        r#"{"total_count":1,"jobs":[{"name":"ci","conclusion":"cancelled","runner_name":null,"started_at":"2026-10-05T19:27:00Z"}]}"#,
     );
     stub_curl(d, LIVE_INCIDENTS);
     stub_git_drive(d);
@@ -993,6 +1013,32 @@ fn rerun_holds_for_runnerless_incident() {
         log_of(d, "curl.log"),
         "",
         "the page is only spent once the shape matched"
+    );
+    assert_eq!(
+        log_of(d, "gh.log").matches("run rerun 777").count(),
+        1,
+        "the rerun issued"
+    );
+
+    // More jobs than one page holds: the probe reads EVERY page before the
+    // predicate, so a casualty first page over a started later page reruns.
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    stub_gh_drive_rerun_jobs(
+        d,
+        r#"[{"total_count":1,"jobs":[{"name":"ci","conclusion":"cancelled","runner_name":null,"started_at":null}]},{"total_count":2,"jobs":[{"name":"rollup","conclusion":"cancelled","runner_name":null,"started_at":"2026-10-05T19:27:00Z"}]}]"#,
+    );
+    stub_curl(d, LIVE_INCIDENTS);
+    stub_git_drive(d);
+    stub_fno(d);
+    hold_claim(d);
+    std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
+    let code = run_heal(&drive_args(d, &[]));
+    assert_eq!(code, EXIT_CLEAN, "a casualty first page is no verdict");
+    assert_eq!(
+        log_of(d, "curl.log"),
+        "",
+        "the second page was read before the page was spent"
     );
     assert_eq!(
         log_of(d, "gh.log").matches("run rerun 777").count(),
