@@ -119,7 +119,7 @@ fn machine_wide_lines(home: &AgentsHome, lines: &mut Vec<String>) {
         }
         Verdict::Clear(_) => return,
     };
-    incident_line("fleet-stop (machine-wide)", &record, lines);
+    incident_line("fleet-stop (machine-wide", &record, lines);
 }
 
 fn targeted_lines(
@@ -162,7 +162,7 @@ fn targeted_lines(
         if !fleet_incident::target_matches(&target, subject).unwrap_or(false) {
             continue;
         }
-        incident_line(&format!("fleet-stop:{target} (hold)"), &record, lines);
+        incident_line(&format!("fleet-stop:{target} (hold"), &record, lines);
     }
 }
 
