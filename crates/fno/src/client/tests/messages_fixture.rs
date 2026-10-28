@@ -278,7 +278,7 @@ async fn messages_reply_board_contracts() {
         .map(|l| l.text.trim())
         .collect();
     assert_eq!(
-        warn.join(" "),
+        warn.join(" ").replace('\u{a0}', " "),
         "retry failed: quill has no pane to type into \u{b7} r retry \u{b7} y copy",
         "{texts4:?}"
     );

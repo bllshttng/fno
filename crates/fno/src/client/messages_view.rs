@@ -893,7 +893,7 @@ impl MessagesBoard {
             // A sent row says what the recipient's harness did with it, and
             // a stuck one names the key that moves it.
             if let Some((text, role)) = mine_row.then(|| state_line(r)).flatten() {
-                for mut line in BLine::of(&[seg(text, role)]).wrap(wrap_w) {
+                for mut line in BLine::of(&[seg(text, role)]).wrap(w.saturating_sub(1)) {
                     let pad = w
                         .saturating_sub(1)
                         .saturating_sub(line.text.chars().count());
@@ -1681,10 +1681,19 @@ fn copy_bubble(view: &mut View, whole_body: bool) {
 /// the cause and the keys that act on it. Submit or retry comes first; copy
 /// and paste by hand is the last rung, offered once a retry failed too.
 fn state_line(r: &Value) -> Option<(String, BRole)> {
-    let reason = reason_words(text_of(r, "state_reason"), text_of(r, "to"));
+    let to = match text_of(r, "to") {
+        "" => "the recipient",
+        to => to,
+    };
+    let reason = reason_words(text_of(r, "state_reason"), to);
     let failures = r.get("state_failures").and_then(Value::as_u64).unwrap_or(0);
     match text_of(r, "state") {
         "" => None,
+        "accepted-new-turn" => Some((
+            format!("delivered: {to} took it as a new turn"),
+            BRole::Meta,
+        )),
+        "accepted-steer" => Some((format!("delivered: {to} read it mid-turn"), BRole::Meta)),
         "parked" => Some(("parked \u{b7} enter submit".to_string(), BRole::Meta)),
         "failed" => {
             let cause = if reason.is_empty() {
@@ -1692,12 +1701,14 @@ fn state_line(r: &Value) -> Option<(String, BRole)> {
             } else {
                 format!(": {reason}")
             };
-            let text = if failures > 1 {
-                format!("retry failed{cause} \u{b7} r retry \u{b7} y copy")
+            // No-break spaces hold the keys on one line when the cause wraps.
+            let (head, keys) = if failures > 1 {
+                ("retry failed", " \u{b7} r retry \u{b7} y copy")
             } else {
-                format!("failed{cause} \u{b7} r retry")
+                ("failed", " \u{b7} r retry")
             };
-            Some((text, BRole::Warn))
+            let keys = keys.trim_start().replace(' ', "\u{a0}");
+            Some((format!("{head}{cause} {keys}"), BRole::Warn))
         }
         word => Some((word.to_string(), BRole::Meta)),
     }
@@ -1707,7 +1718,6 @@ fn state_line(r: &Value) -> Option<(String, BRole)> {
 /// with `;`, so the first token with a phrase wins; an unknown token reads
 /// with its hyphens as spaces.
 fn reason_words(reason: &str, to: &str) -> String {
-    let to = if to.is_empty() { "the recipient" } else { to };
     let phrase = |token: &str| -> Option<String> {
         Some(match token {
             "no-pane-ref" => format!("{to} has no pane to type into"),
@@ -1799,7 +1809,10 @@ fn retry_selected(view: &mut View) {
         return;
     }
     let id = text_of(&row, "id").to_string();
-    let to = text_of(&row, "to").to_string();
+    let to = match text_of(&row, "to") {
+        "" => "the recipient".to_string(),
+        to => to.to_string(),
+    };
     let tx = view.reply_notice_tx.clone();
     view.set_notice(format!("retrying {id}"));
     tokio::spawn(async move {
