@@ -155,6 +155,14 @@ pub(crate) fn resolve_scope(
     explicit_scope: Option<&str>,
     registry_path: &Path,
 ) -> Result<String, String> {
+    resolve_scope_in(explicit_scope, registry_path, &crate::paths::spaces_root())
+}
+
+fn resolve_scope_in(
+    explicit_scope: Option<&str>,
+    registry_path: &Path,
+    spaces_root: &Path,
+) -> Result<String, String> {
     if let Some(raw) = explicit_scope {
         let canonical = crate::territory::canonical_scope(raw.trim());
         if canonical.is_empty() {
@@ -187,22 +195,75 @@ pub(crate) fn resolve_scope(
             "the registry row for {session} is finished ({why}), a terminal state"
         ));
     }
-    let team = row
+    let stamped = row
         .role_scope
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
+        .map(str::to_string);
+    let team = match stamped {
+        Some(team) => team,
+        None => heal_from_manifest(registry_path, spaces_root, &session).ok_or_else(|| {
             format!(
-                "the registry row for {session} carries no role_scope: the row \
-                 is unstamped, so no team proves this session's authority"
+                "the registry row for {session} carries no role_scope, and no live lead \
+                 manifest for this session holds a grant the user made: the row is \
+                 unstamped, so no team proves this session's authority. Ask your lead \
+                 to grant the team"
             )
-        })?;
+        })?,
+    };
+    let team = team.as_str();
     let canonical = crate::territory::canonical_scope(team);
     if canonical.is_empty() {
         return Err("this session holds no team. Pass --scope <territory>.".to_string());
     }
     Ok(canonical)
+}
+
+/// A hand-off can leave the registry row unstamped while the lead manifest
+/// still holds the grant the user made. That manifest is the receipt, so the
+/// row re-stamps from it and the check-in goes on. Only a live (not
+/// superseded) manifest for this exact session, granted by `human`, heals.
+fn heal_from_manifest(registry_path: &Path, spaces_root: &Path, session: &str) -> Option<String> {
+    use crate::claude_adopt::manifest_field;
+    let manifests = crate::lead_state::collect_lead_manifests(spaces_root);
+    let superseded = crate::lead_state::superseded_manifests(&manifests);
+    let (scope, level) = manifests
+        .iter()
+        .filter(|(path, _)| !superseded.contains(path))
+        .find_map(|(_, content)| {
+            let ours = manifest_field(content, "harness_session_id").as_deref() == Some(session);
+            let user = manifest_field(content, "role_grantor").as_deref() == Some("human");
+            let scope = manifest_field(content, "role_scope").filter(|s| !s.trim().is_empty())?;
+            let level = manifest_field(content, "role_level").and_then(|l| l.parse::<u32>().ok());
+            (ours && user).then_some((scope, level))
+        })?;
+    crate::state::update_registry(registry_path, |doc| {
+        let row = doc.entries.iter_mut().find(|r| {
+            [
+                r.harness_session_id.as_deref(),
+                r.cc_session_id.as_deref(),
+                r.session_id.as_deref(),
+            ]
+            .contains(&Some(session))
+        })?;
+        if row
+            .role_scope
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+        {
+            return None;
+        }
+        row.role_scope = Some(scope.clone());
+        row.role_level = level.or(row.role_level);
+        row.role_grantor = Some("human".to_string());
+        eprintln!(
+            "lead: re-stamped the registry row for {session} over {scope:?} from its lead manifest"
+        );
+        Some(scope.clone())
+    })
+    .ok()
+    .flatten()
 }
 
 /// The manifest the verdict reads: explicit and authoritative, else
@@ -915,6 +976,52 @@ mod tests {
                 .expect_err("an orphaned row with a gone pid is finished");
             assert!(err.contains("terminal"), "{err}");
         });
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A hand-off left the row unstamped, but this session's live lead
+    /// manifest holds the user's grant: check-in re-stamps and goes on. The
+    /// same manifest with a non-user grantor still refuses.
+    #[test]
+    fn unstamped_row_heals_from_the_users_manifest_grant() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("heal");
+        let unstamped = || {
+            let mut row = teamed_row(serde_json::json!({}));
+            row.as_object_mut().unwrap().remove("role_scope");
+            row.as_object_mut().unwrap().remove("role_level");
+            row
+        };
+        let manifest = |grantor: &str| {
+            let leads = dir.join("spaces/space-a/leads");
+            fs::create_dir_all(&leads).unwrap();
+            fs::write(
+                leads.join("fno-books.md"),
+                format!(
+                    "---\nscope: fno-books\nharness_session_id: ses-team\nrole_level: 2\n\
+                     role_scope: fno-books\nrole_grantor: {grantor}\n---\n"
+                ),
+            )
+            .unwrap();
+        };
+        manifest("someone-else");
+        let path = write_registry(&dir, serde_json::json!([unstamped()]));
+        with_teamed_identity(|| {
+            let err =
+                resolve_scope_in(None, &path, &dir.join("spaces")).expect_err("no user grant");
+            assert!(err.contains("unstamped"), "{err}");
+            assert!(!err.contains(&["attended", " shell"].concat()), "{err}");
+        });
+        manifest("human");
+        with_teamed_identity(|| {
+            let scope = resolve_scope_in(None, &path, &dir.join("spaces")).expect("heals");
+            assert_eq!(scope, crate::territory::canonical_scope("fno-books"));
+        });
+        let healed = crate::state::load_registry(&path).unwrap();
+        assert_eq!(healed.entries[0].role_scope.as_deref(), Some("fno-books"));
+        assert_eq!(healed.entries[0].role_level, Some(2));
         fs::remove_dir_all(&dir).ok();
     }
 

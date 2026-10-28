@@ -719,7 +719,7 @@ pub fn run_done(args: &[String]) -> i32 {
                 2,
                 "lead: cannot verify the caller's role: this session carries an agent identity \
                  the registry does not resolve to a row, and expiring a role requires a holder. \
-                 Run /fno-me or retry, or pass --scope from an attended shell.",
+                 Run /fno-me or retry, or ask your lead to expire it.",
             ),
             crate::spawn_promote::Calling::Human => None,
             crate::spawn_promote::Calling::Agent(row, _) => Some(*row),
@@ -732,7 +732,7 @@ pub fn run_done(args: &[String]) -> i32 {
             if scope.trim().is_empty() {
                 return refuse(
                     2,
-                    "lead: an attended shell holds no role of its own; pass --scope <territory> \
+                    "lead: a terminal with no session identity holds no role of its own; pass --scope <territory> \
                      to expire that role.",
                 );
             }
@@ -818,7 +818,7 @@ pub fn run_done(args: &[String]) -> i32 {
                         &format!(
                             "lead: refusing to expire {}: this session's role is {}, and an \
                              agent expires only its own role. Call `fno agents lead done` with \
-                             no --scope, or use an attended shell for another territory.",
+                             no --scope, or ask the lead over that territory.",
                             py_repr(&scope),
                             own.as_deref().map_or("None".to_string(), py_repr)
                         ),

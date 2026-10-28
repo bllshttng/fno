@@ -564,7 +564,7 @@ fn plan_with_projects(
                     occupancy,
                     Vec::new(),
                     json!(format!(
-                        "--take-over refused: your team over {mine:?} does not contain {scope:?}. Only a lead whose team contains a sub-team can move it. Ask that lead, or the user from an attended shell."
+                        "--take-over refused: your team over {mine:?} does not contain {scope:?}. Only a lead whose team contains a sub-team can move it. Ask that lead."
                     )),
                     caller_value,
                 ));
@@ -575,7 +575,7 @@ fn plan_with_projects(
                     occupancy,
                     Vec::new(),
                     json!(format!(
-                        "--take-over refused: no live team answers {by:?}, so no seat contains {scope:?}. Only a lead whose team contains a sub-team can move it. Ask that lead, or the user from an attended shell."
+                        "--take-over refused: no live team answers {by:?}, so no seat contains {scope:?}. Only a lead whose team contains a sub-team can move it. Ask that lead."
                     )),
                     caller_value,
                 ));
@@ -675,8 +675,8 @@ fn plan_with_projects(
                 format!(
                     "scope {scope:?} is held by live row(s) {holders:?}, not by this session, so \
                      this session cannot hand it down. Only the holder (spawn --promote \
-                     --hand-off from its own session) or an attended shell (spawn --promote \
-                     --hand-off) can transfer it."
+                     --hand-off from its own session) or a lead whose team contains it \
+                     can transfer it."
                 )
             }
         }
