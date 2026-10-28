@@ -206,6 +206,7 @@ pub mod finalize_run_summary;
 pub mod first_check;
 pub mod fleet_beacon;
 pub mod fleet_incident;
+pub mod fleet_law;
 pub mod fleet_load;
 pub mod fleet_page;
 pub mod fleet_state;
