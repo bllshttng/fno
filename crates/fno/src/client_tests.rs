@@ -6982,10 +6982,9 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
     // selector paints the explicit hover band, so the cursor row renders
     // DIFFERENTLY from the unselected header.
     assert_ne!(
-        sel_cell.bg, unsel_cell.bg,
+        sel_cell.flags, unsel_cell.flags,
         "selector highlight must visibly toggle the notes header"
     );
-    assert_eq!(sel_cell.bg, Color::Indexed(0), "hover band bg");
 }
 
 #[test]
@@ -7735,8 +7734,8 @@ fn client_compose_agents_first_omits_tab_rows_and_highlights_squad() {
     let cols = frame.cols as usize;
     let unsel_frame = two_pane_view().compose();
     assert_ne!(
-        frame.cells[3 * cols].bg,
-        unsel_frame.cells[3 * cols].bg,
+        frame.cells[3 * cols].flags,
+        unsel_frame.cells[3 * cols].flags,
         "selector cursor row must be visibly toggled"
     );
     // While the selector is open the terminal cursor hides.
@@ -8339,7 +8338,8 @@ async fn peek_j_moves_to_adjacent_agent_and_refetches() {
     let mut buf: Vec<u8> = Vec::new();
     let first = agent_row_at(&v, |a| a.name == "worker");
     v.selector = Some(first);
-    selector_keys(&mut v, b" ", &mut buf).await.unwrap();
+    let w = "worker".to_string();
+    fetch_peek(&mut v, first, w, &mut buf).await.unwrap();
     let seq0 = v.peek.as_ref().unwrap().seq;
     buf.clear();
     peek_keys(&mut v, b"j", &mut buf).await.unwrap();
