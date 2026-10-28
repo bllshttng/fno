@@ -205,10 +205,16 @@ fn log_fires(ev: &fno::rules::Event, decision: &fno::rules::Decision) {
         };
         let mut attrs = serde_json::Map::new();
         attrs.insert("rule".into(), Value::from(fire.rule.clone()));
-        attrs.insert("law".into(), fire.law.clone().map(Value::from).unwrap_or(Value::Null));
+        attrs.insert(
+            "law".into(),
+            fire.law.clone().map(Value::from).unwrap_or(Value::Null),
+        );
         attrs.insert("event".into(), Value::from(ev.kind.clone()));
         attrs.insert("verdict".into(), Value::from(fire.action.clone()));
-        attrs.insert("tool".into(), ev.tool.clone().map(Value::from).unwrap_or(Value::Null));
+        attrs.insert(
+            "tool".into(),
+            ev.tool.clone().map(Value::from).unwrap_or(Value::Null),
+        );
         let _ = crate::decision_trace::emit_span("rule", &trace, &attrs);
     }
 }

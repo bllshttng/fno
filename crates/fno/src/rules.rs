@@ -693,12 +693,17 @@ mod tests {
             ..Event::default()
         };
         assert_eq!(decide(&rules, &skill, day()).verdict, "inject");
-        let ack = rule("id = \"ack\"\naction = \"require-ack\"\n[rule.when]\nevents = [\"plan-start\"]\n");
+        let ack = rule(
+            "id = \"ack\"\naction = \"require-ack\"\n[rule.when]\nevents = [\"plan-start\"]\n",
+        );
         let mut ev = Event {
             kind: "plan-start".into(),
             ..Event::default()
         };
-        assert_eq!(decide(std::slice::from_ref(&ack), &ev, day()).verdict, "block");
+        assert_eq!(
+            decide(std::slice::from_ref(&ack), &ev, day()).verdict,
+            "block"
+        );
         ev.acks = vec!["ack".into()];
         assert_eq!(decide(&[ack], &ev, day()).verdict, "inject");
     }
@@ -714,9 +719,14 @@ mod tests {
             ..Event::default()
         };
         let mut rules = vec![r];
-        for (i, text) in ["graph store writes", "mail send raw", "spawn model tier", "worktree prune"]
-            .iter()
-            .enumerate()
+        for (i, text) in [
+            "graph store writes",
+            "mail send raw",
+            "spawn model tier",
+            "worktree prune",
+        ]
+        .iter()
+        .enumerate()
         {
             rules.push(rule(&format!("id = \"other{i}\"\naction = \"inform\"\n[rule.when]\nevents = [\"prompt\"]\nretrieval = \"{text}\"\n")));
         }

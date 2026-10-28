@@ -766,7 +766,11 @@ fn stage_answer(req: StageRequest) -> Value {
                 .iter()
                 .find(|row| row.get("decision_id").and_then(Value::as_str) == Some(id))
                 .and_then(stage_law_line),
-            None => Some(format!("- {} (rule): {}", fire.rule, one_line(&fire.text, 160))),
+            None => Some(format!(
+                "- {} (rule): {}",
+                fire.rule,
+                one_line(&fire.text, 160)
+            )),
         })
         .collect();
     // Graduated laws ride the block: their retraction is not stage-local.
@@ -2626,9 +2630,7 @@ pub fn run_law_match_str(input: &str) -> i32 {
             let near = near_law_lines(&r.law);
             serde_json::to_string(&law_answer_with(&r, near)).expect("serializes")
         }
-        MatchRequest::Stage(r) => {
-            serde_json::to_string(&stage_answer(r)).expect("serializes")
-        }
+        MatchRequest::Stage(r) => serde_json::to_string(&stage_answer(r)).expect("serializes"),
         MatchRequest::Validate(r) => {
             serde_json::to_string(&validate_answer(&r)).expect("serializes")
         }
@@ -2810,7 +2812,10 @@ pub(crate) mod tests {
         let ctx = unread["hook_output"]["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .expect("an unreadable store is said, never silent");
-        assert!(ctx.contains("The decision index could not be read"), "{ctx}");
+        assert!(
+            ctx.contains("The decision index could not be read"),
+            "{ctx}"
+        );
 
         let mut rows = vec![format!(
             "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-10T00:00:00Z\",\
@@ -2838,8 +2843,14 @@ pub(crate) mod tests {
         let ctx = answer["hook_output"]["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .expect("context present");
-        assert!(ctx.contains("- d-0fa92eb9 (review-rounds-sufficient"), "{ctx}");
-        assert!(!ctx.contains("d-5fff6900"), "an unrelated law stays out: {ctx}");
+        assert!(
+            ctx.contains("- d-0fa92eb9 (review-rounds-sufficient"),
+            "{ctx}"
+        );
+        assert!(
+            !ctx.contains("d-5fff6900"),
+            "an unrelated law stays out: {ctx}"
+        );
     }
 
     fn validate_req(
