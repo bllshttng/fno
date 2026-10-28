@@ -53,11 +53,6 @@ const CLAUDE_SPARE_POOL_ARGS: &[&str] = &["bg-spare", "bg-pty-host", "--bg-spare
 /// Registry statuses that can hold a live process (`spawn_gate.LIVE_STATUSES`).
 const LIVE_STATUSES: &[&str] = &["spawning", "ready", "idle", "busy", "live", "restarting"];
 
-/// Per-lane seed costs (cores, GB) used when no live roster row exists to
-/// measure from. Observed resident sizes on the specifying node.
-pub(crate) const SEED_PER_LANE_CORES: f64 = 0.1;
-pub(crate) const SEED_PER_LANE_GB: f64 = 0.35;
-
 // ---------------------------------------------------------------------------
 // Capacity and threshold
 // ---------------------------------------------------------------------------
@@ -266,7 +261,6 @@ pub(crate) struct Footprint {
     pub top: Vec<(f64, String)>,
     pub unparsed_lines: u64,
     pub unparsed_samples: Vec<UnparsedSample>,
-    pub unparsed_pids: BTreeSet<u64>,
     pub attribution_gap: Option<String>,
     pub test_process_count: u64,
     pub spare_pool_process_count: u64,
@@ -571,7 +565,6 @@ struct Row {
     exited_at: Option<String>,
     mux_session: Option<String>,
     mux_pane_id: Option<u64>,
-    route_settings_path: Option<String>,
 }
 
 impl Row {
@@ -619,10 +612,6 @@ impl Row {
                 .get("mux")
                 .and_then(|m| m.get("pane_id"))
                 .and_then(Value::as_u64),
-            route_settings_path: v
-                .get("route_settings_path")
-                .and_then(Value::as_str)
-                .map(str::to_string),
         })
     }
 
@@ -1431,7 +1420,7 @@ fn live_root_pids(
 /// One CPU fleet reading shared by the gate and the doctor footprint
 /// command: the single producer, so the two explanations cannot drift.
 /// `Err` carries the reason (an exit-4 answer).
-pub fn cause_reading(memory: bool, timeout: Duration) -> Result<CauseReading, String> {
+pub(crate) fn cause_reading(memory: bool, timeout: Duration) -> Result<CauseReading, String> {
     let deadline = Instant::now().checked_add(timeout);
     let (table, _unreadable) = crate::census::process_table();
     let snapshot_pids: BTreeSet<u32> = table.iter().map(|r| r.pid).collect();

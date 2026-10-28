@@ -1217,7 +1217,6 @@ fn compile_context(
         for (i, s) in &unique {
             budget_omitted.push((*i, s));
         }
-        used = 0;
     } else {
         // kernel in, then progressive greedy
         for (i, s) in &kernel_candidates {
@@ -1298,7 +1297,7 @@ fn compile_context(
     } else {
         let after = included
             .last()
-            .map(|(i, s)| records[*i].get("source_id").cloned().unwrap_or(Value::Null));
+            .map(|(i, _s)| records[*i].get("source_id").cloned().unwrap_or(Value::Null));
         let remaining_ids: Vec<&str> = budget_omitted
             .iter()
             .map(|(i, _)| {
