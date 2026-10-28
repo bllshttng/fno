@@ -148,63 +148,56 @@ mod tests {
         }
     }
 
-    fn backlog() -> Inputs {
-        Inputs::default()
+    async fn read(
+        cache: &CommandCache,
+        fleet: Result<Value, String>,
+        qs: Result<QuestionsFold, String>,
+        at: u64,
+    ) -> Value {
+        cache.record(fleet, qs, &Inputs::default(), at).await;
+        cache.model().await
     }
 
     #[tokio::test]
     async fn two_machine_fold_serializes_every_seat_and_question_host() {
-        let cache = CommandCache::default();
         let qs = questions(&[None, Some("iMac2D2"), Some("iMac2D2")]);
-        cache
-            .record(Ok(two_machines()), Ok(qs), &backlog(), 100)
-            .await;
-        let m = cache.model().await;
-        assert_eq!(m["machines"].as_array().unwrap().len(), 2);
+        let m = read(&CommandCache::default(), Ok(two_machines()), Ok(qs), 100).await;
         let seats = |i: usize| {
             m["machines"][i]["leads"][0]["seats"]
                 .as_array()
-                .unwrap()
-                .len()
+                .map(Vec::len)
         };
-        assert_eq!((seats(0), seats(1)), (2, 1));
+        assert_eq!((seats(0), seats(1), seats(2)), (Some(2), Some(1), None));
         assert!(m["machines"][0]["leads"][0]["seats"][0]
             .get("local")
             .is_none());
         assert_eq!(m["waiting"]["questions"][1]["host"], "iMac2D2");
         assert_eq!(m["waiting"]["questions"].as_array().unwrap().len(), 3);
-        assert_eq!(m["measured_at"], 100);
-        assert!(m["fleet_error"].is_null());
+        assert_eq!(
+            (&m["measured_at"], &m["fleet_error"]),
+            (&json!(100), &Value::Null)
+        );
     }
 
     #[tokio::test]
     async fn a_failed_read_names_its_reason_and_keeps_the_last_good_fold() {
         let cache = CommandCache::default();
         let fail = |r: &str| Err::<Value, String>(r.into());
-        cache
-            .record(fail("no primary"), Ok(questions(&[None])), &backlog(), 1)
-            .await;
-        let m = cache.model().await;
+        let m = read(&cache, fail("no primary"), Ok(questions(&[None])), 1).await;
         assert_eq!(m["machines"], json!([]));
         assert_eq!(m["fleet_error"]["reason"], "no primary");
         assert_eq!(m["waiting"]["questions"].as_array().unwrap().len(), 1);
-        cache
-            .record(Ok(two_machines()), Err("timed out".into()), &backlog(), 100)
-            .await;
-        cache
-            .record(
-                fail("fleet top timed out after 30s"),
-                Err("timed out".into()),
-                &backlog(),
-                200,
-            )
-            .await;
-        let m = cache.model().await;
-        assert_eq!(
-            (m["machines"].as_array().unwrap().len(), &m["measured_at"]),
-            (2, &json!(100))
-        );
-        assert_eq!(m["fleet_error"]["reason"], "fleet top timed out after 30s");
+        read(&cache, Ok(two_machines()), Err("timed out".into()), 100).await;
+        let m = read(
+            &cache,
+            fail("fleet top timed out"),
+            Err("timed out".into()),
+            200,
+        )
+        .await;
+        assert_eq!(m["machines"].as_array().unwrap().len(), 2);
+        assert_eq!(m["measured_at"], 100);
+        assert_eq!(m["fleet_error"]["reason"], "fleet top timed out");
         assert!(m["age_s"].is_u64());
         assert!(m["waiting"].get("questions").is_none());
         assert_eq!(m["waiting"]["questions_error"], "timed out");
