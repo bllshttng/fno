@@ -450,7 +450,12 @@ fn is_receipt_kind(kind: &str) -> bool {
 
 /// The message a receipt row is about, and the delivery word it records.
 fn receipt_of(kind: &str, meta: &Value) -> (String, String) {
-    let field = |k: &str| meta.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let field = |k: &str| {
+        meta.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
     if kind == "landed" {
         (field("landed"), "landed".to_string())
     } else {

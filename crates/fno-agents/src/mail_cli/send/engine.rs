@@ -278,13 +278,11 @@ pub(super) fn run_mail_inject_child(
     if captured.spawn_failed || captured.timed_out {
         return refused(reasons, "probe-unavailable");
     }
-    let Some(state) = serde_json::from_str::<Value>(captured.stdout.trim())
-        .ok()
-        .as_ref()
-        .and_then(DeliveryState::from_json)
-    else {
+    let Ok(outcome) = serde_json::from_str::<Value>(captured.stdout.trim()) else {
         return refused(reasons, "unreadable");
     };
+    // An older child prints only `delivered`/`reason`; read it like an older host.
+    let state = deliver_answer_state(&outcome);
     if let Some(reasons) = reasons {
         reasons.push(state.reason().unwrap_or(state.word()).to_string());
         if !state.reached() {
@@ -920,9 +918,10 @@ pub(super) fn deliver_live(
     }
 }
 
-/// The `agent.deliver` answer as a state. A host that predates the states
-/// answers only `delivered` (and `queued`): a queued prompt is parked, a
-/// taken one is injected, since neither read a turn record.
+/// An `agent.deliver` answer or a `mail-inject` outcome as a state. A host
+/// or child that predates the states answers only `delivered` (and
+/// `queued`): a queued prompt is parked, a taken one is injected, since
+/// neither read a turn record.
 fn deliver_answer_state(result: &Value) -> DeliveryState {
     if let Some(state) = DeliveryState::from_json(result) {
         return state;
@@ -1498,7 +1497,12 @@ pub(super) fn dispatch_send_locked(
                 &mut live_reasons,
                 &family1_state,
             );
-            crate::mail_delivery_state::record(&msg_id, &state, &mail_ctx.from_, &recipient_for_row);
+            crate::mail_delivery_state::record(
+                &msg_id,
+                &state,
+                &mail_ctx.from_,
+                &recipient_for_row,
+            );
             let delivered = state.reached();
             live_state = state;
             if delivered {

@@ -522,7 +522,6 @@ case "$1 $2 $3" in
     exit 0 ;;
   "agents resume"*) exit "${STUB_RESUME_EXIT:-1}" ;;
   "mux pane read") echo '{"text": "ready"}'; exit 0 ;;
-  "mux pane send") exit "${STUB_PANE_EXIT:-0}" ;;
 esac
 exec "$STUB_REAL" "$@""#;
 
@@ -601,17 +600,17 @@ fn live_cases() -> Vec<Live> {
         // contract: "3a-codex-hosted-inject-short-circuits-durable"
         Live { contract: "1a-discovery-miss-still-injects", seed: |_| {}, env: &[("STUB_INJECT_CODEX", OK)],
             argv: &["f6a7b8c9-1111-2222-3333-444455556666", BODY],
-            want: vec![Exit(0), Has(Stdout, "delivered (hosted)"), Lacks(Stdout, "queued"), Lacks(Log, "agents resume"),
+            want: vec![Exit(0), Has(Stdout, "injected"), Lacks(Stdout, "queued"), Lacks(Log, "agents resume"),
                 Has(Log, "mail-inject --harness claude --session f6a7b8c9-1111"), Lines(Log, "mail-inject --harness codex", 1)] },
         // contract: "1e-failed-wake-demotes-with-lane-receipt"
         Live { contract: "1b-inject-precedes-durable-write", seed: |r| asleep(r, ASLEEP_SID), env: &[],
             argv: &[ASLEEP_SID, BODY],
-            want: vec![Has(Log, "bus-at-inject=1"), Lines(Bus, "", 2), Has(Stdout, "queued (durable)"),
+            want: vec![Has(Log, "bus-at-inject=1"), Lines(Bus, "", 3), Lines(Bus, r#""kind":"state""#, 1), Has(Stdout, "queued (durable)"),
                 Has(Stderr, "lanes tried: inject=not-delivered, wake=resume-failed")] },
         // contract: "1d-wake-prompt-envelope-wrapped"
         Live { contract: "1c-asleep-session-woken-not-queued", seed: |r| asleep(r, ASLEEP_SID),
             env: &[("STUB_RESUME_EXIT", "0")], argv: &[ASLEEP_SID, BODY],
-            want: vec![Exit(0), Has(Stdout, "delivered (woken)"), Lacks(Stdout, "queued"), Has(Log, BODY),
+            want: vec![Exit(0), Has(Stdout, "injected (woken)"), Lacks(Stdout, "queued"), Has(Log, BODY),
                 Has(Log, "agents resume c4d5e6f7-1111-2222-3333-444455556666 --message `@a1b2c3d4 · fmail-")] },
         Live { contract: "1f-ambiguous-short-id-wakes-nothing",
             seed: |r| { asleep(r, "a7b8c9d0-1111-2222-3333-444455556666"); asleep(r, "a7b8c9d0-9999-8888-7777-666655554444") },
@@ -625,23 +624,23 @@ fn live_cases() -> Vec<Live> {
         Live { contract: "1i-live-failure-receipt-positives-durable-leg", seed: |r| asleep(r, ASLEEP_SID),
             env: &[("STUB_INJECT_CLAUDE", r#"{"delivered": false, "reason": "not-confirmed"}"#)],
             argv: &[ASLEEP_SID, BODY], want: vec![Has(Stdout, "durable leg holds"), Lacks(Stdout, "not-confirmed")] },
-        Live { contract: "2a-refused-pane-write-leaves-staged-row", seed: |r| pane_seed(r, "worker-1", OTHER_SID, "live"), env: &[("STUB_PANE_EXIT", "1")], argv: FORCE, want: vec![Exit(1), Lines(Bus, "", 1), Lacks(Bus, r#""delivery":"typed""#)] },
+        Live { contract: "2a-refused-pane-write-leaves-staged-row", seed: |r| pane_seed(r, "worker-1", OTHER_SID, "live"), env: &[], argv: FORCE, want: vec![Exit(1), Lines(Bus, "", 2), Has(Bus, r#""state":"failed""#), Lacks(Bus, r#""delivery":"typed""#)] },
         // contract: "2e-outbox-row-names-the-pane"
-        Live { contract: "2b-force-receipt-typed-never-delivered", seed: |r| pane_seed(r, "worker-1", OTHER_SID, "live"), env: &[], argv: FORCE,
-            want: vec![Exit(0), Has(Stdout, "typed (pane 7)"), Lacks(Stdout, "delivered"),
+        Live { contract: "2b-force-receipt-typed-never-delivered", seed: |r| pane_seed(r, "worker-1", OTHER_SID, "live"), env: &[("STUB_INJECT_CLAUDE", OK)], argv: FORCE,
+            want: vec![Exit(0), Has(Stdout, "injected [pane 7]"), Lacks(Stdout, "delivered"), Has(Log, "--pane s1:7"),
                 Lines(Bus, r#""delivery":"typed""#, 1), Has(Bus, r#""pane_id":"7""#)] },
-        Live { contract: "2c-force-refuses-non-live-row", seed: |r| pane_seed(r, "worker-1", OTHER_SID, "exited"), env: &[], argv: FORCE, want: vec![Exit(1), Has(Stderr, "is exited"), Lacks(Log, "mux pane send")] },
+        Live { contract: "2c-force-refuses-non-live-row", seed: |r| pane_seed(r, "worker-1", OTHER_SID, "exited"), env: &[], argv: FORCE, want: vec![Exit(1), Has(Stderr, "is exited"), Lacks(Log, "mail-inject")] },
         Live { contract: "2d-force-refuses-this-session", seed: |r| pane_seed(r, "self-row-1", SID, "live"),
             env: &[], argv: &[SID, BODY, "--force"],
-            want: vec![Exit(2), Has(Stderr, "cannot type into this session's own prompt"), Lacks(Log, "mux pane send")] },
-        Live { contract: "3b-pane-rung-delivers-on-socket-miss", seed: |r| pane_seed(r, "worker-1", OTHER_SID, "live"), env: &[], argv: &["worker-1", BODY], want: vec![Exit(0), Has(Stdout, "delivered (hosted)"), Has(Log, "mux pane send 7")] },
-        Live { contract: "3c-pane-rung-failure-falls-closed", seed: |r| pane_seed(r, "worker-1", OTHER_SID, "live"), env: &[("STUB_PANE_EXIT", "1")],
+            want: vec![Exit(2), Has(Stderr, "cannot type into this session's own prompt"), Lacks(Log, "mail-inject")] },
+        Live { contract: "3b-pane-rung-delivers-on-socket-miss", seed: |r| pane_seed(r, "worker-1", OTHER_SID, "live"), env: &[("STUB_INJECT_CLAUDE", OK)], argv: &["worker-1", BODY], want: vec![Exit(0), Has(Stdout, "injected"), Lacks(Stdout, "delivered"), Has(Log, "--harness pane"), Has(Log, "--pane s1:7")] },
+        Live { contract: "3c-pane-rung-failure-falls-closed", seed: |r| pane_seed(r, "worker-1", OTHER_SID, "live"), env: &[],
             argv: &["worker-1", BODY],
-            want: vec![Has(Stdout, "queued (durable)"), Lacks(Stdout, "delivered"), Lines(Log, "mux pane send 7", 2)] },
+            want: vec![Has(Stdout, "queued (durable)"), Lacks(Stdout, "delivered"), Has(Log, "--pane s1:7")] },
         Live { contract: "3d-transcript-veto-names-the-reading", seed: |r| { pane_seed(r, "worker-1", OTHER_SID, "live"); asleep(r, OTHER_SID) },
             env: &[("STUB_INJECT_CLAUDE", OK)], argv: &["worker-1", BODY],
             want: vec![Has(Stdout, "[transcript-stalled"), Lacks(Stdout, "live-miss"), Lines(Log, "mail-inject", 0),
-                Lacks(Log, "mux pane send")] },
+                Lacks(Log, "--pane")] },
         Live { contract: "3e-registered-handle-colliding-with-discovery-sends-nothing",
             seed: |r| { seed_registry(r, &[row_worker()]); plant_turn(r, LIVE_SID, "Running the tests now.");
                 std::fs::write(r.join("agents-home").join("name-map.json"), serde_json::json!({ LIVE_SID: "worker-1" }).to_string()).unwrap() },
@@ -649,7 +648,7 @@ fn live_cases() -> Vec<Live> {
             want: vec![Exit(2), Has(Stderr, "ambiguous"), Lacks(Log, "mail-inject"), Lines(Bus, "", 0)] },
         Live { contract: "3f-discovered-handle-is-session-addressed", seed: |r| plant_turn(r, LIVE_SID, "Running the tests now."),
             env: &[("STUB_INJECT_CLAUDE", OK)], argv: &[LIVE_SID, BODY],
-            want: vec![Exit(0), Has(Stdout, "delivered (hosted) [live claude session"), Has(Log, "--session e5f6a7b8-1111"),
+            want: vec![Exit(0), Has(Stdout, "injected [live claude session"), Has(Log, "--session e5f6a7b8-1111"),
                 Lacks(Log, "agents resume")] },
         // G1: a regular file where the bus dir belongs fails every append
         // after the msg id is minted.

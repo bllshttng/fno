@@ -218,12 +218,15 @@ fn expires_at(line: &Value) -> Option<&str> {
 
 /// Each message's delivery state, folded from the store's delivery lines in
 /// order (`landed`, the legacy `hosted`/`typed` marks, and `state` rows). An
-/// accepted line is terminal: a later retry line never lowers it.
+/// accepted line is terminal: a later retry line never lowers it. A legacy
+/// mark is read only for a message with no `state` row: a reached send also
+/// writes `hosted`, which would otherwise turn a parked message accepted.
 fn delivery_states(
     texts: &[String],
 ) -> std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState> {
     use crate::mail_delivery_state::{DeliveryState, Evidence};
     let mut out: std::collections::HashMap<String, DeliveryState> = Default::default();
+    let mut stated: std::collections::HashSet<String> = Default::default();
     for line in texts.iter().flat_map(|t| t.lines()) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -236,19 +239,31 @@ fn delivery_states(
         if id.is_empty() || how.is_empty() {
             continue;
         }
-        let state = match how {
-            "landed" => DeliveryState::accepted(
+        let (state, legacy) = match how {
+            "landed" => (
+                DeliveryState::accepted(
+                    false,
+                    Evidence {
+                        record: "landed".into(),
+                        ..Evidence::default()
+                    },
+                ),
                 false,
-                Evidence {
-                    record: "landed".into(),
-                    ..Evidence::default()
-                },
             ),
-            word => DeliveryState::from_json(&json!({"state": word}))
-                .unwrap_or_else(|| DeliveryState::from_legacy(word)),
+            word => match DeliveryState::from_json(&json!({"state": word})) {
+                Some(state) => (state, false),
+                None => (DeliveryState::from_legacy(word), true),
+            },
         };
-        if out.get(id).is_some_and(DeliveryState::is_accepted) {
+        let accepted = out.get(id).is_some_and(DeliveryState::is_accepted);
+        if legacy && (accepted || stated.contains(id)) {
             continue;
+        }
+        if !legacy && accepted && stated.contains(id) {
+            continue;
+        }
+        if !legacy {
+            stated.insert(id.to_string());
         }
         out.insert(id.to_string(), state);
     }
@@ -265,7 +280,9 @@ fn state_word(
     match states.get(id) {
         Some(state) => state.word(),
         None => crate::mail_delivery_state::DeliveryState::from_legacy(
-            v.get("delivery").and_then(Value::as_str).unwrap_or("durable"),
+            v.get("delivery")
+                .and_then(Value::as_str)
+                .unwrap_or("durable"),
         )
         .word(),
     }
@@ -1417,6 +1434,32 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// A reached send writes its state row and then the legacy `hosted`
+    /// mark. The mark must not turn a parked message accepted, in either
+    /// order, while a message with only the mark still reads from it.
+    #[test]
+    fn delivery_state_rows_outrank_the_legacy_hosted_mark() {
+        let line =
+            |id: &str, how: &str| json!({"type": "delivery", "id": id, "how": how}).to_string();
+        let text = [
+            line("m-parked", "parked"),
+            line("m-parked", "hosted"),
+            line("m-late", "hosted"),
+            line("m-late", "injected"),
+            line("m-old", "hosted"),
+            line("m-landed", "parked"),
+            line("m-landed", "landed"),
+            line("m-landed", "failed"),
+        ]
+        .join("\n");
+        let states = delivery_states(&[text]);
+        let word = |id: &str| states.get(id).map(|s| s.word());
+        assert_eq!(word("m-parked"), Some("parked"));
+        assert_eq!(word("m-late"), Some("injected"));
+        assert_eq!(word("m-old"), Some("accepted-new-turn"));
+        assert_eq!(word("m-landed"), Some("accepted-new-turn"));
     }
 
     #[test]

@@ -211,7 +211,9 @@ fn refusal_line(m: &Value, msg_id: &str) -> String {
             "message '{msg_id}' was typed into a pane (delivery unconfirmed); cursor not advanced"
         );
     }
-    format!("message '{msg_id}' already reached the recipient's harness (hosted); cursor not advanced")
+    format!(
+        "message '{msg_id}' already reached the recipient's harness (hosted); cursor not advanced"
+    )
 }
 
 /// `bus.cursor.advance_cursor`, verbatim: forward-only on FIRST-occurrence

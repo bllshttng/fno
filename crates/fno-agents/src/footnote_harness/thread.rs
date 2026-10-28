@@ -619,16 +619,10 @@ pub fn deliver_rpc(home: &AgentsHome, req: &Request) -> Response {
         Err(e) => return Response::err(req.id, ErrorCode::Internal, e.to_string()),
     };
     let Some(entry) = reg.find(name) else {
-        return Response::ok(
-            req.id,
-            failed_answer("no-such-agent"),
-        );
+        return Response::ok(req.id, failed_answer("no-such-agent"));
     };
     let Some(socket) = host_socket(entry) else {
-        return Response::ok(
-            req.id,
-            failed_answer("no-deliver-lane"),
-        );
+        return Response::ok(req.id, failed_answer("no-deliver-lane"));
     };
     // The RPC names the sender; its row holds the full id.
     let sender = reg

@@ -546,7 +546,8 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             }
         } else if provider.as_deref() == Some("codex") {
             let mut reasons = Vec::new();
-            lane_state = mail_inject_codex(&resolved.session_id, &wrapped, Some(&mut reasons), None);
+            lane_state =
+                mail_inject_codex(&resolved.session_id, &wrapped, Some(&mut reasons), None);
             injected = lane_state.reached();
             if !injected && !reasons.is_empty() {
                 live_reason = Some(reasons.join(";"));
@@ -593,7 +594,12 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         .map(|r| format!(" re:{r}"))
         .unwrap_or_default();
     if args.resolved.is_some() || args.token.is_some() {
-        crate::mail_delivery_state::record(&msg_id, &lane_state, &stamp_from(args.from_name), &recipient);
+        crate::mail_delivery_state::record(
+            &msg_id,
+            &lane_state,
+            &stamp_from(args.from_name),
+            &recipient,
+        );
     }
     if injected {
         let row = record.clone();

@@ -1548,7 +1548,7 @@ pub fn deliver_via_keeper_socket_in(
             // this lane ever confirms. The budget still runs its
             // full course: the CR resubmits inside it are send retries for a
             // busy recipient, not confirm polls, and the honest outcome is
-            // the unconfirmed receipt whose durable recovery Python writes.
+            // `injected`: the bytes sit at the prompt and no record says more.
             LaneConfirm::Unconfirmable => None,
             LaneConfirm::Refused(_) => None,
         }
@@ -2250,10 +2250,23 @@ pub(crate) fn deliver_via_pane_state(
         .map(str::to_string)
         .unwrap_or_else(|| resolve_row_harness(session).unwrap_or_else(|| "claude".to_string()));
     let confirm_cwd = resolve_row_cwd(session);
-    let confirm_target = resolve_confirm(&row_hosted, session, &confirm_cwd, None, &grok_root());
-    if let LaneConfirm::Refused(reason) = confirm_target {
-        return Err(reason);
-    }
+    let pi_store = crate::pi::pi_store(&confirm_cwd).ok();
+    let confirm_target = match resolve_confirm(
+        &row_hosted,
+        session,
+        &confirm_cwd,
+        pi_store.as_ref(),
+        &grok_root(),
+    ) {
+        // A pane can host a harness no lane reads a turn record for
+        // (opencode, a shell). It still takes typed bytes: `injected`.
+        LaneConfirm::Refused("no-confirm-source") => LaneConfirm::Unconfirmable,
+        LaneConfirm::Refused(reason) => return Err(reason),
+        confirm => confirm,
+    };
+    // An unconfirmable pane is typed and left: no record could ever clear
+    // a withdraw, so a withdraw would delete every message it is sent.
+    let withdraw_on_silence = !matches!(confirm_target, LaneConfirm::Unconfirmable);
     let mut transport = PaneTransport {
         server: server.to_string(),
         address: pane_id.to_string(),
@@ -2283,7 +2296,7 @@ pub(crate) fn deliver_via_pane_state(
         typed_since,
         &journal,
         session,
-        true,
+        withdraw_on_silence,
         move || match &confirm_target {
             LaneConfirm::Transcript { path, baseline } => {
                 landing_after(path, &marker, *baseline, running.as_deref()).unwrap_or(None)
@@ -2300,6 +2313,14 @@ pub(crate) fn deliver_via_pane_state(
                         session,
                     )
                     .map(|dir| crate::footnote_harness::transcript::transcript_file(&dir, session)),
+                    "pi" => {
+                        pi_store.as_ref().and_then(|store| {
+                            match crate::pi::lookup_sessions_in(store, &confirm_cwd, session) {
+                                crate::pi::SessionLookup::One { file } => Some(file),
+                                _ => None,
+                            }
+                        })
+                    }
                     _ => None,
                 };
                 file.and_then(|f| landing_after(&f, &marker, 0, None).ok().flatten())

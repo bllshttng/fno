@@ -15,7 +15,6 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-
 /// Python `stamp_from`: an explicit `--from-name`, even the empty string,
 /// wins verbatim; otherwise the resolved self handle, floored to the bare
 /// fleet name. Unlike hold there is no identity refusal here: an
