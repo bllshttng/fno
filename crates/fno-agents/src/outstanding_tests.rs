@@ -89,7 +89,7 @@ fn the_json_contract_keeps_every_key_in_order_and_names_each_root() {
         r#"{"roots":{"carveouts":{"scope":"project","root":"/r"},"questions":{"scope":"machine","store":"/q"},"#,
         r#""captures":{"scope":"machine","files_read":2},"lane":{"scope":"machine","store":"/l"}},"#,
         r#""carveouts":{"total":3,"by_kind":{"oos-bug":2,"deferred":1},"oldest_ts":"2026-07-14T04:27:55Z"},"#,
-        r#""questions":[{"id":"q1","ts":"t","question":"?","session_id":null,"cwd":null,"node":null,"asker":null,"ask":null,"options":["a"],"blocks":[],"subject":null,"live":true,"rank":1}],"#,
+        r#""questions":[{"id":"q1","ts":"t","question":"?","session_id":null,"cwd":null,"node":null,"asker":null,"ask":null,"options":["a"],"blocks":[],"subject":null,"live":true,"host":null,"rank":1}],"#,
         r#""captures":{"total":2,"resolved_files":2,"parsed_open_rows":3,"repeated_ids":1,"by_project":{"p":2},"#,
         r#""items":[{"id":"fu-a","title":"A","project":"p","added_at":null},{"id":"fu-b","title":"B","project":"p","added_at":"t"}]},"#,
         r#""lane":{"total":1,"parked":1,"items":[{"text":"top","line":4}]},"#,

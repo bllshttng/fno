@@ -152,7 +152,7 @@ impl View {
         // the review found both the toggles and the key table cramped at the
         // content's own minimum. render() clamps min_width to WIDTH_CAP, so
         // the cap IS the widest this modal can go.
-        let popup = Popup::new(rows, Anchor::Center)
+        let mut popup = Popup::new(rows, Anchor::Center)
             .title("settings")
             .tabs(vec![
                 ("general".to_string(), tab == SettingsTab::General),
@@ -167,6 +167,7 @@ impl View {
             })
             .min_width(widest.max(crate::popup::WIDTH_CAP))
             .plain_body();
+        popup.focus_invert = true;
         AuxPopup { popup, actions }
     }
 
@@ -261,6 +262,27 @@ pub(super) fn back(view: &mut View) -> bool {
     }
     view.reopen_settings_keeping_sel();
     true
+}
+
+/// The checkbox row a space flips: the selected settings row when it is a
+/// toggle. An open text field takes its keys before the modal sees them
+/// (`field_keys`), so this reads only the selection. Every other row keeps
+/// its keys.
+pub(super) fn space_toggle(view: &View) -> Option<AuxAction> {
+    if !is_settings(view) {
+        return None;
+    }
+    let m = view.aux.as_ref()?;
+    match m.actions.get(m.popup.sel)? {
+        a @ (AuxAction::ToggleHoverFocus
+        | AuxAction::ToggleStatus
+        | AuxAction::ToggleResourceMeter
+        | AuxAction::ToggleConfirmLifecycle
+        | AuxAction::ToggleSidelineLayout
+        | AuxAction::ToggleReserveAuto
+        | AuxAction::ToggleExperimental(_)) => Some(a.clone()),
+        _ => None,
+    }
 }
 
 /// Feed one read to the open settings text field. `None` when none is open,

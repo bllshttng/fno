@@ -1,0 +1,70 @@
+{
+ "label": "the backstop fires when no event did",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [
+    [
+     "epic-x",
+     "backstop",
+     null,
+     null
+    ]
+   ],
+   "events": [
+    [
+     "lead_woken",
+     {
+      "address": null,
+      "ceiling": 32,
+      "reason": "backstop",
+      "scope": "epic-x",
+      "successor": false,
+      "window_count": 1
+     }
+    ]
+   ],
+   "sidecar": {
+    "answered_cursor": "2026-08-28T12:00:00+00:00",
+    "board_hash": "1d98bbe491ace2bd8519abecc91c128184c102b102863715c56bb6fcd8af0ea5",
+    "board_rows": [
+     [
+      "x-1",
+      "ready",
+      "ready",
+      "p1"
+     ]
+    ]
+   },
+   "successor_flags": [
+    false
+   ],
+   "summary": {
+    "armed": true,
+    "evaluated": 1,
+    "note": "",
+    "refused": [],
+    "roles": 1,
+    "team_incomplete": false,
+    "truth_reads": 1,
+    "woke": [
+     {
+      "address": null,
+      "reason": "backstop",
+      "scope": "epic-x",
+      "successor": false
+     }
+    ]
+   },
+   "unread_calls": [
+    "aa11bb22",
+    "epic-x",
+    "lead-x"
+   ],
+   "wake_times": [
+    "2026-08-29T12:00:00Z"
+   ]
+  }
+ ]
+}

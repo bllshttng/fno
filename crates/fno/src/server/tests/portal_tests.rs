@@ -1900,6 +1900,11 @@ async fn portal_reach_on_a_witnessed_claude_row_needs_no_plan() {
     row.claude_session_uuid = Some(uuid.into());
     core.agents = vec![row];
 
+    // A loaded runner can list the child before its argv reads back.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while core.live_attach_argv("deadbee1").is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     assert!(
         core.live_attach_argv("deadbee1").is_some(),
         "the live argv witnesses the row"

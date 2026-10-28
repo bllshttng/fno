@@ -1,0 +1,62 @@
+{
+ "label": "a blocked graph read degrades and mail still wakes",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [
+    [
+     "epic-b1",
+     "mail",
+     "cc22dd33",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "lead_woken",
+     {
+      "address": "cc22dd33",
+      "ceiling": 32,
+      "reason": "mail",
+      "scope": "epic-b1",
+      "successor": false,
+      "window_count": 1
+     }
+    ]
+   ],
+   "sidecar": {
+    "answered_cursor": "2026-08-28T12:00:00+00:00"
+   },
+   "successor_flags": [
+    false
+   ],
+   "summary": {
+    "armed": true,
+    "evaluated": 2,
+    "note": "graph read timed out; later roles poll the same read",
+    "refused": [],
+    "roles": 2,
+    "team_incomplete": false,
+    "truth_reads": 1,
+    "woke": [
+     {
+      "address": "cc22dd33",
+      "reason": "mail",
+      "scope": "epic-b1",
+      "successor": false
+     }
+    ]
+   },
+   "unread_calls": [
+    "aa11bb22",
+    "epic-a1",
+    "lead-a",
+    "cc22dd33"
+   ],
+   "wake_times": [
+    "2026-08-29T12:00:00Z"
+   ]
+  }
+ ]
+}

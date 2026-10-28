@@ -21,9 +21,8 @@ class LeadBlock(BaseModel):
     """The lead loop (config.lead). Field detail is in registry.py's Meta
     text, surfaced by `fno config schema`.
 
-    ``RunAtLoad`` is false for the pr-watcher LaunchAgent by design, so a
-    machine that never ran ``launchctl load`` has no waker; ``wake_enabled``
-    does not change that.
+    The wake arm runs inside the fno-agents daemon, so a machine without the
+    daemon has no waker; ``wake_enabled`` does not change that.
     """
 
     model_config = ConfigDict(extra="ignore")

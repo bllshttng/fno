@@ -112,6 +112,7 @@ Every subfolder and file below was found in the real root unnamed at the 2026-09
 | Entry | Writer | Lifetime |
 |---|---|---|
 | `state/attention/items.json` | `crates/fno-agents/src/attention_arm.rs` (the `attention` arm) | the attention projection cache plus `questions_dir`, rewritten every beat; the lead check-in reads it and refuses when it is missing or over 600 s old, safe to delete, next beat rebuilds it |
+| `state/question_bus/status.json` | `crates/fno-agents/src/question_bus.rs` (the question bus beat, inside the mail arm) | the arm's last beat (`at`, `published`, `peer_hosts`, `last_error`), rewritten every beat; safe to delete, next beat rebuilds it |
 | `state/attention/questions.json` | `crates/fno-agents/src/attention_arm.rs` | page settle state (body hashes and since-stamps); deleting it restarts every settle window and cannot double-deliver, because a page's existence proves delivery |
 | `state/attest/` | `hooks/attest-model.sh`, `hooks/review-hold.sh` | one attestation sidecar per reviewed session |
 | `agents/quiet-recovery/` | `crates/fno-agents/src/codex_watch/quiet.rs` | one episode per native session; resets on new transcript activity; retained as recovery evidence after retirement; deleting a file can repeat its nudge |
@@ -301,9 +302,9 @@ The deleter: a whole space (or a `<space>/worktrees/<name>` slice) whose source 
 | `<space>/claims/` | `fno.claims` for repo-local keys (`walker:`, `review:`, `reap:`); global-id keys (`node:`, `dispatch:`, ...) stay at the global root | re-acquirable leases |
 | `<space>/leads/<scope>.md` | `crates/fno-agents/src/lead_state.rs` via promotion or `fno agents org init` | one loop-state file per live role scope; stale files are inert without a live registry role and cleanup is best-effort (`fno agents org done` on departure) |
 | `<space>/leads/<scope>.md.lock`, `.md.tmp` | `lead_state.rs` / `loop_lead.rs` / `lead_ops.rs` over the manifest lock | lock lives only for the critical section; tmp is replaced on every locked write |
-| `<space>/leads/<scope>.wake.json` | `pr_watch/_lead_wake.py` (the tick's wake phase) | tick-local trigger cache with no lead meaning: `board_hash` + `board_rows` (the board-change trigger) and `answered_cursor` (the answered-escalation trigger); refreshed only when a wake fires, so it never outlives the manifest beside it |
-| `<space>/leads/<scope>.wake.json.lock`, `.json.<pid>.tmp` | `pr_watch/_lead_wake.py` over the manifest-lock helper | lock lives only for the sidecar's read-modify-write critical section; the pid-suffixed tmp is replaced on every locked write |
-| `<space>/leads/<scope>.md.wake.log` | `pr_watch/_lead_wake.py` (detached wake-mode walk) | append-only stdout of the walks this phase spawned; the events journal is the receipt, this log is diagnosis |
+| `<space>/leads/<scope>.wake.json` | `lead_wake_triggers.rs` (the daemon's wake arm) | arm-local trigger cache with no lead meaning: `board_hash` + `board_rows` (the board-change trigger) and `answered_cursor` (the answered-escalation trigger); refreshed only when a wake fires, so it never outlives the manifest beside it |
+| `<space>/leads/<scope>.wake.json.lock`, `.json.<pid>.tmp` | `lead_wake_triggers.rs` over `lead_ops.rs`' manifest-lock helper | lock lives only for the sidecar's read-modify-write critical section; the pid-suffixed tmp is replaced on every locked write |
+| `<space>/leads/<scope>.md.wake.log` | `lead_wake_triggers.rs` (detached wake-mode walk) | append-only stdout of the walks the arm spawned; the events journal is the receipt, this log is diagnosis |
 | `<space>/plans/` | `paths.plans_dir()` default (a configured vault template still wins) | permanent plan docs |
 | `<space>/status-sinks/` | `paths.status_sinks_dir()` | per-sink cursors + error logs |
 | `<space>/carveouts.jsonl`, `.lock.d/` | `cli/src/fno/carveout/core.py` via `paths.project_log` | append-only ledger; consumed by the retro-triage harvest |

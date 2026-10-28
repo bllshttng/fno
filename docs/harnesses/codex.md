@@ -24,9 +24,11 @@ Install first validates the requested marketplace and plugin in an isolated temp
 
 Install also removes legacy registrations and their cache. They are `footnote-dev` (`fno@footnote-dev`) and `footnote` (`fno@footnote`). `footnote` is the marketplace name before the rename to `fno`. Until install runs, `fno doctor` reports an old `fno@footnote` install as `legacy-marketplace`.
 
+Codex lists a marketplace by the name in its `marketplace.json`, but `config.toml` and `codex plugin marketplace remove` use the name it was added under. A stage added as `footnote` before the rename lists as `fno`, and `remove fno` fails. So install and its rollback remove each marketplace by its `config.toml` key. If config has the listed name, that name is the key. Otherwise the key is the owned entry whose source matches.
+
 An already-correct install is a no-op unless `--force` is present. Every mutation can require hook approval and takes effect in a new Codex session. The engine is `crates/fno-agents/src/codex_converge.rs`. Blocking `cli-ci` installs Codex 0.145 and runs its real-binary rollback regression on every pull request that touches the Rust crates.
 
-`fno doctor` reports Codex plugin freshness separately from Python and Rust CLI freshness. `fno-agents plugin-install codex --status` prints the same verdict as one JSON line.
+`fno doctor` reports Codex plugin freshness separately from Python and Rust CLI freshness. It reads the verdict from `fno-agents plugin-install codex --status`, which prints it as one JSON line.
 It compares the installed loadable source payload with `CODEX_HOME/plugins/cache/<marketplace>/fno/<version>` and gives the exact refresh command for wrong-channel, missing-cache, version-mismatch, and payload-drift findings.
 
 The verified payload preserves one loaded set of:

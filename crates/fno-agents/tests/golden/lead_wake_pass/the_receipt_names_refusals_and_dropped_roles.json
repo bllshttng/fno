@@ -1,0 +1,34 @@
+{
+ "label": "the receipt names refusals and dropped roles",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [],
+   "events": [],
+   "sidecar": null,
+   "successor_flags": [],
+   "summary": {
+    "armed": true,
+    "evaluated": 1,
+    "note": "epic-y: manifest missing at <ROOT>/spaces/<ROOTSLUG>/leads/epic-y.md",
+    "refused": [
+     {
+      "refusal": "working",
+      "scope": "epic-x"
+     }
+    ],
+    "roles": 1,
+    "team_incomplete": false,
+    "truth_reads": 1,
+    "woke": []
+   },
+   "unread_calls": [
+    "aa11bb22",
+    "epic-x",
+    "lead-x"
+   ],
+   "wake_times": null
+  }
+ ]
+}

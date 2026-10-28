@@ -58,6 +58,9 @@ pub struct Question {
     pub blocks: Vec<String>,
     pub subject: Option<String>,
     pub live: Option<bool>,
+    /// The asking machine on a copy pulled from another machine of the
+    /// store; `None` (JSON null) for a question asked here.
+    pub host: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -383,6 +386,11 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                         blocks: str_list(data, "blocks"),
                         subject: opt_str(data, "subject"),
                         live: None,
+                        host: opt_str(data, "origin_machine")
+                            .filter(|m| *m != crate::claims::machine_id())
+                            .map(|_| {
+                                opt_str(data, "host").unwrap_or_else(|| "another machine".into())
+                            }),
                     },
                 );
             }
@@ -409,7 +417,9 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
 /// lane. No asker is stale; an asker missing from `answers` is unknown.
 pub fn apply_liveness(questions: &mut [Question], answers: &HashMap<String, bool>) {
     for q in questions.iter_mut() {
+        // A copy's asker runs on its own machine, where no probe here reaches.
         q.live = match &q.asker {
+            _ if q.host.is_some() => None,
             None => Some(false),
             Some(a) => answers.get(a).copied(),
         };
@@ -934,6 +944,9 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
                 })
             });
             let mut details: Vec<String> = where_.into_iter().collect();
+            if let Some(host) = &q.host {
+                details.push(format!("on {host}"));
+            }
             if stale_row {
                 details.push(match age_days(&q.ts, ctx.now) {
                     Some(age) => format!("{} old", plural(age, "day")),
