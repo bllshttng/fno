@@ -148,6 +148,10 @@ const CODES: &[(&str, &str)] = &[
         "projects_hand_set",
         "move the hand-set work.workspaces.main.projects value into an array of {name, path} tables, then rerun `fno config setup run`",
     ),
+    (
+        "messaging_unfinished",
+        "read the messaging line above, then rerun `fno config setup run --only messaging`",
+    ),
 ];
 
 /// One problem a run or a dry-run hit: which list it sat on, a stable
@@ -2452,7 +2456,12 @@ pub fn run(tail: &[OsString]) -> i32 {
                     &rows,
                     &crate::setup_messaging::machine(),
                 )),
-                Err(e) => rep.needs_human.push(format!("messaging: {e}")),
+                Err(e) => {
+                    let message = format!("messaging: {e}");
+                    rep.rows
+                        .push(row("needs_human", "messaging_unfinished", message.clone()));
+                    rep.needs_human.push(message);
+                }
             },
             (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
             (Layer::Global, "permission-rules") => step_permission_rules(&mut rep),
