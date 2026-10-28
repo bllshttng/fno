@@ -1,8 +1,6 @@
 //! A titled lead's role commands run against the role's project, never the
-//! shell's cwd. A lead whose shell sat in a job tmp dir journaled its beats
-//! into the wrong space, read zero open PRs against seventeen, and nothing
-//! refused. Every role command calls [`rebind`] before its first read, so
-//! each `current_dir()` reader below it agrees with the role.
+//! shell's cwd: a beat from a job tmp dir journaled into the wrong space and
+//! nothing refused. [`rebind`] runs before the first `current_dir()` read.
 
 use std::path::{Path, PathBuf};
 
@@ -12,8 +10,7 @@ use crate::state::RegistryEntry;
 /// What a role command does with its cwd.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Decision {
-    /// No titled row for this session, or the cwd already sits in the role's
-    /// space: run where the shell is.
+    /// No titled row, or the cwd is already in the role's space.
     Stay,
     /// The cwd is in another space: run from the role's project root.
     Move(PathBuf),
