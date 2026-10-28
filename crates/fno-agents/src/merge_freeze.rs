@@ -8,9 +8,10 @@
 //! pr-watch merge arm and the finalize auto-merge arm. The pr-watch pre-check
 //! in Python asks the `freeze-check` op for its early skip.
 //!
-//! Only the user lifts a freeze: a live `operator` ruling at
-//! `merge-freeze:<repo>@<pin key>`. Any harness session can mint a
-//! `chat_attested` row, so that lane never lifts. A team set with a new pin
+//! Only the user lifts a freeze: a live user ruling at
+//! `merge-freeze:<repo>@<pin key>`, an `operator` row or a `chat_attested`
+//! row that stores the user's words (`decision_index::is_user_ruling`). A
+//! bare chat_attested row any session can mint never lifts. A team set with a new pin
 //! over a lifted one re-arms the freeze, because the new pin has its own lift
 //! subject and no ruling there. A PR on the pin's PR list merges normally: the
 //! freeze scopes a release window, it is not a full stop. An unreadable record
@@ -222,8 +223,7 @@ fn read_record(store: &Store) -> Result<Option<Record>, String> {
 
 /// A live operator row at `subject`: the one row that lifts.
 fn is_operator_lift(row: &Value, subject: &str) -> bool {
-    decision_index::is_law(row)
-        && row.get("authority_source").and_then(Value::as_str) == Some("operator")
+    decision_index::is_user_ruling(row)
         && row
             .get("subject")
             .and_then(Value::as_str)
@@ -270,8 +270,9 @@ fn verdict_for_in(store: &Store, pr: Option<u64>, repo: Option<&str>, laws: Laws
 /// The user's two doors, named in every refusal.
 fn lift_doors(lift: &str) -> String {
     format!(
-        "only the user lifts it: `fno inbox decide '{lift}' 'lift' --authority operator` \
-         at their own terminal; a chat-attested row does not lift it"
+        "only the user lifts it. Ask the user in chat; when they say lift, record \
+         their exact words: `fno inbox law set '{lift}' 'lift' --rationale 'user in chat: \
+         <their words>'`. At a terminal: `fno inbox decide '{lift}' 'lift' --authority operator`"
     )
 }
 
@@ -787,12 +788,20 @@ mod tests {
         // An unknown slug is not inside a repo-scoped freeze: it renders
         // none, and only a version-1 all-repo record could bind it.
         assert!(active_freeze_line_in(&home, None, &empty).is_none());
-        // Any harness session can mint a chat_attested row, so it holds.
+        // Any harness session can mint a bare chat_attested row, so it holds;
+        // the same row carrying the user's chat words lifts.
         let chat = store(vec![row("d-4", &lift, "chat_attested")]);
         assert!(matches!(
             verdict_for_in(&home, Some(8), Some("o/r"), &chat),
             Verdict::Frozen { .. }
         ));
+        let mut quoted = row("d-5", &lift, "chat_attested");
+        quoted["rationale"] = json!("user in chat: lift it");
+        let quoted = store(vec![quoted]);
+        assert_eq!(
+            verdict_for_in(&home, Some(8), Some("o/r"), &quoted),
+            Verdict::Clear
+        );
 
         // AC4: an unreadable store fails closed.
         let broken = || -> Result<Index, String> { Err("gone".to_string()) };

@@ -1005,6 +1005,10 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
         ));
     }
     lines.push("  Answer with: fno inbox outstanding clear <id> --answer \"...\"".to_string());
+    lines.push(
+        "  An agent relaying the user's chat answer adds: --authority chat_attested --quote \"<their words>\""
+            .to_string(),
+    );
     if body_trimmed {
         lines.push(
             "  Rows are trimmed to one line; read a full question with: fno inbox outstanding -J"
