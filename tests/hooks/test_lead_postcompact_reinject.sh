@@ -182,13 +182,16 @@ cat > "$CANON_DOC" <<'DOC'
 <!-- fno:session -->
 SENTINEL_CANON_WORKAROUND restart sqld yourself.
 <!-- /fno:session -->
+
+Recall word: 00000009
 DOC
+# 0x9 % 8 = 1 picks the second opener: the recall word drives the rotation.
 printf '%s\n' "$CANON_DOC" > "$LEAD_HANDOFF_PATH_FIXTURE"
 OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
 RC=$?
 [[ $RC -eq 0 ]] \
   && echo "$OUT" | jq -e --arg doc "$CANON_DOC" '.hookSpecificOutput.additionalContext
-      | contains("Read this file: " + $doc)' >/dev/null 2>&1 \
+      | contains("Fresh brain, who dis? Your memory is here. Read all of it: " + $doc)' >/dev/null 2>&1 \
   && ! printf '%s' "$OUT" | grep -q "SENTINEL_CANON_WORKAROUND" \
   && pass "canon pointer: doc path named, no section pasted" \
   || fail "canon pointer rc=$RC payload=${OUT:0:300}"

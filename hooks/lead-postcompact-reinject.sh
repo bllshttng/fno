@@ -101,8 +101,23 @@ Read this file: ${BRIEF}"
 if [[ -n "$TEAM_SCOPE" ]]; then
     CANON_PATH="$(fno config paths handoff --scope "$TEAM_SCOPE" 2>/dev/null || true)"
     if [[ -n "$CANON_PATH" && -f "$CANON_PATH" ]]; then
+        # The opener rotates like a spinner word, picked by the doc's recall
+        # word, so the line never reads as boilerplate the lead skims past.
+        # The tail never changes: org checkin's refusal names the same path.
+        OPENERS=(
+            "Feeling amnesia?"
+            "Fresh brain, who dis?"
+            "Woke up in a new context?"
+            "Your past self left you a note."
+            "Lost the plot?"
+            "Context wiped clean?"
+            "Deja vu, minus the memories?"
+            "New session, same job."
+        )
+        RECALL="$(sed -n 's/^Recall word: *\([0-9a-f]\{1,8\}\).*/\1/p' "$CANON_PATH" 2>/dev/null | tail -1)"
+        OPENER="${OPENERS[$(( 0x${RECALL:-0} % ${#OPENERS[@]} ))]}"
         CONTEXT="$CONTEXT
-Read this file: ${CANON_PATH}"
+${OPENER} Your memory is here. Read all of it: ${CANON_PATH}"
     fi
     while IFS= read -r FAQ_FILE; do
         [[ -n "$FAQ_FILE" && -f "$FAQ_FILE" ]] || continue

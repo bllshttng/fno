@@ -637,6 +637,13 @@ if [[ -n "$_TMP_OUT" ]]; then
   echo "<!-- fno:user -->"
   printf '%s\n' "$USER_BLOCK"
   echo "<!-- /fno:user -->"
+  # The read check: a fresh word on every refresh, last in the doc. A teamed
+  # lead's org checkin refuses until --recall names it, so only a read to the
+  # end gets the beat past a compaction.
+  if [[ "$IS_TEAMED" == "1" ]]; then
+    echo ""
+    echo "Recall word: $(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  fi
   } > "$_TMP_OUT" 2>/dev/null || true
   mv -f "$_TMP_OUT" "$DOC_PATH" 2>/dev/null || true
   _TMP_OUT=""

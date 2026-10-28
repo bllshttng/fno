@@ -62,8 +62,9 @@ const ROUTES: &[Route] = &[
         name: "checkin",
         native: &["lead-checkin", "--user-command"],
         help: "Usage: fno agents org checkin [--scope SCOPE] [--name NAME] [--theme THEME] \
-               [--change TEXT] [--no-emit] [--json]\n\n\
-               Run the term check-in: gather, print, diff against the last beat, journal.\n",
+               [--change TEXT] [--recall WORD] [--no-emit] [--json]\n\n\
+               Run the term check-in: gather, print, diff against the last beat, journal.\n\
+               After a compaction it refuses until --recall names the canon doc's last-line word.\n",
     },
     Route {
         name: "cancel",
