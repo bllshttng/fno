@@ -487,6 +487,73 @@ fn round_missing_journals() {
     );
 }
 
+/// The fix-verification witness: `--raise-at-head` answers `raised`
+/// only when the chain's NEWEST in-scope row raises (blocking findings or
+/// truncation) at the named head. The raise row and the fix commit sharing
+/// one head is the shape the scoped emitter accepts an in-place
+/// verification over; any other newest row, or a raise at an earlier head
+/// the emit no longer sits on, answers clear and the refusal stands.
+#[test]
+fn round_raise_at_head_raised() {
+    let fx = fixture("repo");
+    let head = repo_head(&fx.repo);
+    seed_chain(&fx, [head, head], 1);
+    assert_case(
+        &fx,
+        "round raise at head raised",
+        &[
+            "round",
+            "--branch",
+            "feat/a",
+            "--head",
+            &head,
+            "--raise-at-head",
+        ],
+        &[],
+    );
+}
+
+#[test]
+fn round_raise_at_head_clear_when_the_newest_row_moved_off() {
+    let fx = fixture("repo");
+    let head = repo_head(&fx.repo);
+    let other = "1111111111111111111111111111111111111111";
+    seed_chain(&fx, [head, other], 2);
+    assert_case(
+        &fx,
+        "round raise at head clear when the newest row moved off",
+        &[
+            "round",
+            "--branch",
+            "feat/a",
+            "--head",
+            &head,
+            "--raise-at-head",
+        ],
+        &[],
+    );
+}
+
+#[test]
+fn round_raise_at_head_clear_when_nothing_blocks() {
+    let fx = fixture("repo");
+    let head = repo_head(&fx.repo);
+    seed_chain(&fx, [head, head], 0);
+    assert_case(
+        &fx,
+        "round raise at head clear when nothing blocks",
+        &[
+            "round",
+            "--branch",
+            "feat/a",
+            "--head",
+            &head,
+            "--raise-at-head",
+        ],
+        &[],
+    );
+}
+
 // ── the cap-refusal family (chain journals seeded natively) ─────────────────
 
 /// Two distinct in-scope reviewed heads: the per-PR total reads 2 of 2.

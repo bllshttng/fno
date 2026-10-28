@@ -326,6 +326,7 @@ struct Args {
     flags_json: Option<String>,
     ttl_minutes: Option<f64>,
     fresh: bool,
+    raise_at_head: bool,
     cwd: PathBuf,
 }
 
@@ -345,6 +346,7 @@ impl Args {
             flags_json: None,
             ttl_minutes: None,
             fresh: false,
+            raise_at_head: false,
             cwd: default_cwd,
         };
         let mut it = rest.iter();
@@ -367,6 +369,7 @@ impl Args {
                 "--level-source" => a.level_source = it.next().cloned().unwrap_or_default(),
                 "--flags-json" => a.flags_json = it.next().cloned(),
                 "--fresh" => a.fresh = true,
+                "--raise-at-head" => a.raise_at_head = true,
                 "--ttl-minutes" => a.ttl_minutes = it.next().and_then(|v| v.parse().ok()),
                 "--repo" => {
                     if let Some(dir) = it.next() {
@@ -510,6 +513,27 @@ fn round_arm(a: &Args) -> (i32, String, String) {
     if !review_journals_present(&a.cwd) {
         return (1, String::new(), String::new());
     }
+    // The fix-verification witness: does the chain's newest in-scope row RAISE
+    // at --head? The scoped emitter asks this before accepting an in-place
+    // fix-verification over an empty diff: a raise at the attesting
+    // head is the something a contentless verify re-reads. The raise shape is
+    // chain_first_blocking's (blocking > 0, or truncation shedding findings
+    // the record could not carry); `last` is the newest row, which is the
+    // raise in the same-head shape this witnesses. Missing journals and an
+    // unreadable chain both answer clear (exit 1) - a witness that cannot
+    // read never vouches.
+    if a.raise_at_head {
+        let answer = chain_answer(&a.cwd, branch, &a.head);
+        let last = answer.get("last").cloned().unwrap_or(Value::Null);
+        let raised = last.get("head_sha").and_then(Value::as_str) == Some(a.head.as_str())
+            && (last.get("blocking").and_then(Value::as_i64).unwrap_or(0) > 0
+                || last.get("findings_truncated").and_then(Value::as_bool) == Some(true));
+        return if raised {
+            (0, "raised\n".into(), String::new())
+        } else {
+            (1, String::new(), String::new())
+        };
+    }
     let round = if a.fresh {
         fresh_round(&chain_answer(&a.cwd, branch, &a.head), &a.head)
     } else {
@@ -646,7 +670,18 @@ fn parse_flags_json(raw: &str) -> Option<Vec<String>> {
 fn review_journals_present(cwd: &Path) -> bool {
     let inputs =
         crate::loopcheck::review_inputs::resolve_review_inputs(cwd, None, None, None, None, None);
-    inputs.project_events.exists() || inputs.global_events.exists()
+    journal_present(&inputs.project_events) || journal_present(&inputs.global_events)
+}
+
+/// One journal answers when its raw file OR its committed store exists: the
+/// writer commits to the store beside the journal and does not always leave
+/// a live raw file, so a store-only journal is a journal that answered.
+/// Presence reads both shapes, never the raw name alone.
+fn journal_present(journal: &Path) -> bool {
+    journal.exists()
+        || crate::event_store::try_store_path(journal)
+            .map(|store| store.is_file())
+            .unwrap_or(false)
 }
 
 /// One JSON request on stdin, one JSON answer on stdout: the shape
@@ -779,5 +814,29 @@ mod tests {
         );
         assert_eq!(parse_flags_json(r#"["--verify-fixes", 1]"#), None);
         assert_eq!(parse_flags_json("not json"), None);
+    }
+
+    #[test]
+    fn journal_presence_reads_the_store_only_shape() {
+        let dir = std::env::temp_dir().join(format!(
+            "fno-journal-present-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = dir.join("events.jsonl");
+        // Neither shape: absent.
+        assert!(!journal_present(&journal));
+        // Raw file only.
+        std::fs::write(&journal, "").unwrap();
+        assert!(journal_present(&journal));
+        // Store only: the writer commits to the db and leaves no live file.
+        std::fs::remove_file(&journal).unwrap();
+        std::fs::write(dir.join("events.db"), b"SQLite format 3\x00").unwrap();
+        assert!(journal_present(&journal));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
