@@ -69,8 +69,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
 
 /// One bounded mail subprocess: the front binary's mail command is local, but a
 /// wedged front door must not hang a failed install's exit past the minute
-/// the old Python wrapper allowed.
-fn mail_roles(fno_bin: &str, body: &str, urgent: bool) {
+/// the old Python wrapper allowed. True only when the mail command exited 0.
+fn mail_roles(fno_bin: &str, body: &str, urgent: bool) -> bool {
     let mut argv = vec![
         "agents",
         "mail",
@@ -94,13 +94,13 @@ fn mail_roles(fno_bin: &str, body: &str, urgent: bool) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("fno doctor update: WARNING: role mail not sent: {e}");
-            return;
+            return false;
         }
     };
     let deadline = Instant::now() + MAIL_TIMEOUT;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return,
+            Ok(Some(status)) => return status.success(),
             Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(200));
             }
@@ -108,7 +108,7 @@ fn mail_roles(fno_bin: &str, body: &str, urgent: bool) {
                 let _ = child.kill();
                 let _ = child.wait();
                 eprintln!("fno doctor update: WARNING: role mail timed out");
-                return;
+                return false;
             }
         }
     }
@@ -186,8 +186,22 @@ pub fn run_update_journal(args: &[String]) -> i32 {
         && new_rev
             .as_deref()
             .is_some_and(|rev| !skew_paged(&args.events, rev));
+    // The page goes before the row, and the row records `paged` only on a
+    // delivered page: a failed send must not suppress the next hold's page.
     if page_skew {
-        args.fields.insert("paged".to_string(), json!("true"));
+        let bin = args.mail_from.as_deref().unwrap_or_default();
+        let rev = new_rev.as_deref().unwrap_or_default();
+        let body = format!(
+            "fno doctor update SKEW at {}: {}.",
+            &rev[..rev.len().min(8)],
+            reason.as_deref().unwrap_or_default()
+        );
+        // A planned hold (rc 0) is publish lag that the next update
+        // clears; only an unplanned hold pages urgently.
+        let planned = args.fields.get("rc").and_then(Value::as_str) == Some("0");
+        if mail_roles(bin, &body, !planned) {
+            args.fields.insert("paged".to_string(), json!("true"));
+        }
     }
     let data: Value = Value::Object(args.fields.clone());
     let envelope = json!({
@@ -203,19 +217,6 @@ pub fn run_update_journal(args: &[String]) -> i32 {
         return 1;
     }
     if skew {
-        if page_skew {
-            let bin = args.mail_from.as_deref().unwrap_or_default();
-            let rev = new_rev.as_deref().unwrap_or_default();
-            let body = format!(
-                "fno doctor update SKEW at {}: {}.",
-                &rev[..rev.len().min(8)],
-                reason.as_deref().unwrap_or_default()
-            );
-            // A planned hold (rc 0) is publish lag that the next update
-            // clears; only an unplanned hold pages urgently.
-            let planned = args.fields.get("rc").and_then(Value::as_str) == Some("0");
-            mail_roles(bin, &body, !planned);
-        }
         return 0;
     }
     if args.mail_from.is_some() && matches!(args.type_name.as_str(), "installed" | "failed") {
@@ -287,11 +288,11 @@ mod tests {
     }
 
     #[test]
-    fn skew_pages_once_per_source_rev() {
+    fn skew_pages_once_per_rev() {
         let dir = tempfile::tempdir().unwrap();
         let events = dir.path().join("events.jsonl");
         let log = dir.path().join("mail.log");
-        let bin = dir.path().join("fno");
+        let bin = dir.path().join("mail-stub");
         let script = format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display());
         std::fs::write(&bin, script).unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -321,5 +322,19 @@ mod tests {
             .map(|v| v["data"]["paged"].as_str() == Some("true"))
             .collect();
         assert_eq!(paged, vec![true, false, true]);
+
+        // A send that exits nonzero records no `paged`, so the next hold at
+        // that rev pages again.
+        let broken = dir.path().join("fno-broken");
+        std::fs::write(&broken, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(held_row(&events, &broken, "cccccccc3333"), 0);
+        assert_eq!(held_row(&events, &bin, "cccccccc3333"), 0);
+        let sent = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            sent.lines().count(),
+            3,
+            "a failed send suppressed the page: {sent}"
+        );
     }
 }
