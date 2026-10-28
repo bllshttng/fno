@@ -203,30 +203,13 @@ RC=$?
   && pass "UTF-8-straddling truncation carries no lone-surrogate escape" \
   || fail "UTF-8-straddling truncation rc=$RC leaked a lone surrogate: ${OUT:0:200}"
 
-# 7e. Canon read-back: the precompact doc's FILLED judgment blocks ride back
-#     after the compact; default placeholders (their signature text) do not.
+# 7e. Canon pointer: the hook names the precompact doc and says read it in
+#     full; it pastes none of the doc's sections.
 registry_fixture "$TEAMED_ROW"
 FNO_PLATFORM=claude
 CANON_DOC="$TMP/canon-doc.md"
 cat > "$CANON_DOC" <<'DOC'
 # Canon doc: team fno
-
-Session id (authoritative): `sess-lead`  |  refreshed by precompact-canon-doc.sh.
-
-## Merge order and why (session)
-<!-- fno:session -->
-Ship the sibling's PR before the read-back wave.
-SENTINEL_CANON_MERGE
-DOC
-# Past the 4000B cap on its own: one doc-order cap cut the Workarounds below.
-for _ in $(seq 1 80); do echo "Merge filler line that pads the section past the whole-doc byte cap."; done >> "$CANON_DOC"
-cat >> "$CANON_DOC" <<'DOC'
-<!-- /fno:session -->
-
-## Open decisions awaiting the operator (session)
-<!-- fno:session -->
-_Open decisions awaiting the operator. Nothing external knows this. The session fills it at full context._
-<!-- /fno:session -->
 
 ## Workarounds in force (session)
 <!-- fno:session -->
@@ -237,13 +220,11 @@ printf '%s\n' "$CANON_DOC" > "$LEAD_HANDOFF_PATH_FIXTURE"
 OUT="$(run_lead "{\"source\":\"compact\",\"session_id\":\"$SID\"}")"
 RC=$?
 [[ $RC -eq 0 ]] \
-  && echo "$OUT" | jq -e '.hookSpecificOutput.additionalContext
-      | contains("Your team'"'"'s handoff") and contains("SENTINEL_CANON_MERGE") and contains("Full canon doc")
-        and contains("truncated at 4000B") and contains("SENTINEL_CANON_WORKAROUND")
-        and (index("SENTINEL_CANON_WORKAROUND") < index("SENTINEL_CANON_MERGE"))' >/dev/null 2>&1 \
-  && ! printf '%s' "$OUT" | grep -q "Nothing external knows this" \
-  && pass "canon read-back: workarounds ride first past the cap, placeholders dropped" \
-  || fail "canon read-back rc=$RC payload=${OUT:0:300}"
+  && echo "$OUT" | jq -e --arg doc "$CANON_DOC" '.hookSpecificOutput.additionalContext
+      | contains("Your team'"'"'s handoff") and contains("Read `" + $doc + "` in full before your first lever")' >/dev/null 2>&1 \
+  && ! printf '%s' "$OUT" | grep -q "SENTINEL_CANON_WORKAROUND" \
+  && pass "canon pointer: doc path named with read-in-full, no section pasted" \
+  || fail "canon pointer rc=$RC payload=${OUT:0:300}"
 : > "$LEAD_HANDOFF_PATH_FIXTURE"
 
 # 7f. No resolvable canon doc: no handoff section, base brief still present

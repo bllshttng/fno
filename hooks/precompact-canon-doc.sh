@@ -135,10 +135,29 @@ lvl = r.get("role_level")
 scp = r.get("role_scope")
 print("1" if (mine and (lvl is not None or scp is not None)) else "0")
 print(scp if isinstance(scp, str) else "")
+print(r.get("project_root") or r.get("cwd") or "")
 ' 2>/dev/null || true)"
 IS_TEAMED="$(printf '%s' "$TEAM_INFO" | sed -n 1p)"
 TEAM_SCOPE="$(printf '%s' "$TEAM_INFO" | sed -n 2p)"
+ROLE_ROOT="$(printf '%s' "$TEAM_INFO" | sed -n 3p)"
 [[ "$IS_TEAMED" == "1" ]] || IS_TEAMED=0
+
+# A teamed session's facts come from the role's project, never the shell's
+# cwd: a lead whose shell sat in a job tmp dir refreshed a doc listing zero
+# open PRs. Same rule as the native role commands. A worktree of the role's
+# own repo shares its git common dir and stays put.
+_git_common() {
+  (cd "$1" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)
+}
+if [[ -n "$TEAM_SCOPE" && -n "$ROLE_ROOT" ]]; then
+  if [[ -d "$ROLE_ROOT" ]]; then
+    if [[ "$(_git_common "$PWD")" != "$(_git_common "$ROLE_ROOT")" ]]; then
+      cd "$ROLE_ROOT" 2>/dev/null || true
+    fi
+  else
+    echo "precompact-canon-doc.sh: cwd $PWD is outside role $TEAM_SCOPE's project $ROLE_ROOT, which does not exist; facts read from the cwd" >&2
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # Resolve the canon doc path. A manual /compact <path> carries a path the

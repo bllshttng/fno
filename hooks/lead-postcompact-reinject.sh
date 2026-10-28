@@ -128,67 +128,21 @@ $FAQ_ENTRIES"
     fi
 fi
 
-# Canon read-back: the PreCompact hook wrote this team's rolling handoff doc,
-# and the judgment halves it holds (merge order, open decisions, gaps,
-# workarounds) exist in no other channel - the session that wrote them is
-# gone after the compact, and a successor resolves the SAME scope-keyed doc.
-# Only the session-filled blocks ride back: the mechanical halves are stale by
-# definition (they describe the pre-compact world), and an unfilled heading
-# still carries its default placeholder, recognizable by its signature text.
-# Bounded like the FAQ (byte cap) and degrade-safe: no resolvable doc, no doc
-# on disk, or nothing filled means no section, never a failed hook.
-# Workarounds in force and Open decisions ride FIRST, under their own budget:
-# they hold the commands and rulings a lead otherwise re-asks the user for, and
-# they sit last in the doc, so one doc-order cap over a long doc cut both.
+# Canon pointer: the PreCompact hook wrote this team's rolling handoff doc,
+# and its judgment halves (merge order, open decisions, gaps, workarounds)
+# exist in no other channel. The hook names the doc and says read it; it
+# never pastes it. A byte-capped paste in doc order cut the Workarounds
+# section off a 10KB doc on every compaction, and the lead re-asked the user
+# for a command the doc held. Degrade-safe: no resolvable doc, no line.
 CANON_MAX_BYTES=4000
-CANON_PRIORITY_MAX_BYTES=6000
-# $1 = 1 for the priority sections, 0 for the rest; $2 = the doc.
-canon_sections() {
-    awk -v want="$1" '
-        /^## / { heading = $0; next }
-        /<!-- fno:session -->/ { grab = 1; buf = ""; next }
-        grab && /<!-- \/fno:session -->/ {
-            grab = 0
-            prio = (heading ~ /^## (Workarounds in force|Open decisions)/) ? 1 : 0
-            if (prio == want + 0 && buf ~ /[^[:space:]]/ && buf !~ /Nothing external knows this/) {
-                print ""
-                print heading
-                printf "%s", buf
-            }
-            next
-        }
-        grab { buf = buf $0 "\n" }
-    ' "$2" 2>/dev/null
-}
-# $1 = text, $2 = byte cap. Same UTF-8-safe cut as the FAQ: decode, drop the
-# trailing partial character, never split one mid-sequence.
-canon_cap() {
-    local bytes
-    bytes="$(printf '%s' "$1" | wc -c | tr -d ' ')"
-    if [[ "$bytes" -le "$2" ]]; then
-        printf '%s' "$1"
-        return
-    fi
-    printf '%s' "$1" | python3 -c "
-import sys
-sys.stdout.write(sys.stdin.buffer.read($2).decode('utf-8', errors='ignore'))
-"
-    printf '\n\n_(truncated at %sB; `%s` has the rest)_' "$2" "$CANON_PATH"
-}
 if [[ -n "$TEAM_SCOPE" ]]; then
     CANON_PATH="$(fno config paths handoff --scope "$TEAM_SCOPE" 2>/dev/null || true)"
     if [[ -n "$CANON_PATH" && -f "$CANON_PATH" ]]; then
-        CANON_SECTIONS="$(canon_cap "$(canon_sections 1 "$CANON_PATH")" "$CANON_PRIORITY_MAX_BYTES")
-$(canon_cap "$(canon_sections 0 "$CANON_PATH")" "$CANON_MAX_BYTES")"
-        if [[ -n "$(printf '%s' "$CANON_SECTIONS" | tr -d '[:space:]')" ]]; then
-            CONTEXT="$CONTEXT
+        CONTEXT="$CONTEXT
 
 ## Your team's handoff (written before the compact)
 
-$CANON_SECTIONS
-
-Full canon doc: \`${CANON_PATH}\`. Before you ask the user to do a thing, check its Workarounds in force: the command may already be yours to run."
-        fi
+Read \`${CANON_PATH}\` in full before your first lever. Its Workarounds in force and Open decisions hold commands and rulings you already own; do not ask the user for them."
 
         # The fno:user block rides back too: the machine never writes it, so
         # anything beyond the seed placeholder is the user's own words and is
