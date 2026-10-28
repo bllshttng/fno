@@ -517,7 +517,7 @@ pub(crate) fn cpu_admission(
         machine_cores: reading.measured_cpu_cores,
         capacity_cores,
         ceiling: share_ceiling,
-        gap,
+        gap: gap.clone(),
         top_holder: holder,
     };
     if share_high <= share_ceiling {
@@ -1112,6 +1112,16 @@ fn shared_daemon_label(row: &Row) -> Option<&'static str> {
     }
 }
 
+/// The row's name as the error text reads it; the registry's absent name
+/// reads as "?" (the deleted leg's getattr default).
+fn name_or(row: &Row) -> &str {
+    if row.name.is_empty() {
+        "?"
+    } else {
+        &row.name
+    }
+}
+
 /// Positively live worker pids that may have detached children, plus the
 /// named attribution gap. `Err` refuses the whole reading; `Ok`'s gap text
 /// names what the share above it undercounts.
@@ -1127,6 +1137,7 @@ fn live_root_pids(
     let mut recycled_idx: Vec<usize> = Vec::new();
     let mut dead_rows: Vec<String> = Vec::new();
     let mut gap_rows: Vec<String> = Vec::new();
+    let mut roots: BTreeSet<u32> = BTreeSet::new();
     for (idx, row) in rows.iter().enumerate() {
         if row.is_live() {
             continue;
@@ -1354,7 +1365,12 @@ fn live_root_pids(
             if readable && in_roster == Some(false) && !socket_blind {
                 continue;
             }
-            let Some(pid) = pid else {
+            let Some(pid) = roster_pids
+                .as_ref()
+                .and_then(|m| m.get(key))
+                .copied()
+                .flatten()
+            else {
                 still_missing.push(pos);
                 continue;
             };
@@ -1476,7 +1492,7 @@ pub fn cause_reading(memory: bool, timeout: Duration) -> Result<CauseReading, St
     Ok(CauseReading {
         footprint: reading,
         sccache_server_pid: crate::cargo_build_dirs::sccache_row_pid(&table),
-        sccache_restarts_1h: crate::machine_watch::sccache_restarts_1h(),
+        sccache_restarts_1h: Some(crate::machine_watch::sccache_restarts_1h() as u64),
     })
 }
 
@@ -1899,13 +1915,7 @@ pub fn footprint_command(json_output: bool, cause_only: bool) -> i32 {
     if exit_code != 0 || cause_only {
         println!("top fleet consumers:");
         for (cpu, command) in fp.top.iter().take(5) {
-            let mut text = command.clone();
-            if let Some(limit) = command_limit {
-                if text.len() > limit {
-                    text = String::from_utf8_lossy(&text.as_bytes()[..limit]).into_owned() + "...";
-                }
-            }
-            println!("  {text} ({cpu:.1}%)");
+            println!("  {command} ({cpu:.1}%)");
         }
     }
     exit_code

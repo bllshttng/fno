@@ -121,7 +121,7 @@ impl ContextSource {
             "error": self.error,
             "bytes": if directive { size } else { 0 },
             "estimated_tokens": if directive { (size + 3) / 4 } else { 0 },
-            "content_hash": if directive { digest } else { None::<String> },
+            "content_hash": if directive { digest.clone() } else { None::<String> },
             "carrier_bytes": if !directive { Some(size) } else { None },
             "carrier_hash": if !directive { digest } else { None },
             "measurement": self.measurement.value(),
@@ -205,7 +205,7 @@ fn pitfall_section(text: &str) -> String {
 fn instruction_anchors(content: &[u8]) -> BTreeMap<String, Vec<String>> {
     let text = String::from_utf8_lossy(content);
     let section = pitfall_section(&text);
-    let mut pitfalls: Vec<String> = regex_heading()
+    let pitfalls: Vec<String> = regex_heading()
         .captures_iter(&section)
         .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
         .collect();
@@ -429,9 +429,9 @@ fn managed_block_sources(
                 ordinal + 1,
             );
             s.provenance = format!("{}#fno-managed-block", base.provenance);
+            s.anchors = instruction_anchors(managed.as_bytes());
             s.content = Some(managed.into_bytes());
             s.packet_eligible = !source_repository;
-            s.anchors = instruction_anchors(managed.as_bytes());
             out.push(s);
         }
         None if !source_repository && marker_state(&host_text) == "malformed" => {
@@ -744,7 +744,7 @@ fn measure_hook(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let is_using_fno = name == "session-start-using-fno.sh";
-    let (source_id, content_path, mut status, mut measurement) = if is_using_fno {
+    let (source_id, content_path, status, measurement) = if is_using_fno {
         (
             "using-fno".to_string(),
             repo_root.join("skills/using-fno/SKILL.md"),
@@ -918,7 +918,7 @@ fn discover_cell_sources(
             commands.push((cmd, "session_start".to_string()));
         }
         if !registered {
-            sources.push(measure_file_source(
+            let mut s = measure_file_source(
                 "session-start-wrapper",
                 &plugin_root.join(GEMINI_CARRIER_SCRIPT),
                 harness,
@@ -929,10 +929,11 @@ fn discover_cell_sources(
                 "Gemini SessionStart registration",
                 ordinal,
                 plugin_root,
-            ));
+            );
             s.status = "omitted".to_string();
             s.error = Some("entry_state_not_registered".to_string());
             s.packet_eligible = false;
+            sources.push(s);
             ordinal += 1;
             if entry_state == "post_compact" {
                 // Derived from the hooks dir, not hardcoded: a third reinject
@@ -995,6 +996,7 @@ fn discover_cell_sources(
         return sources;
     }
     for (command_index, (command, lifecycle)) in commands.iter().enumerate() {
+        let path = command_path(command, plugin_root);
         let Some(path) = path else {
             let mut s = ContextSource::new(
                 &format!("unresolved-hook:{command_index}"),
@@ -1136,7 +1138,7 @@ fn conflict_groups(records: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-fn merged_anchors(sources: &[ContextSource]) -> Value {
+fn merged_anchors<'a>(sources: impl IntoIterator<Item = &'a ContextSource>) -> Value {
     let mut merged: Vec<(String, Vec<String>)> = Vec::new();
     for source in sources {
         for (key, values) in &source.anchors {
@@ -1194,10 +1196,16 @@ fn compile_context(
     }
     // kernel-first, then ordinal (stable keeps the ordinal/index order on ties)
     unique.sort_by_key(|(_, s)| (if s.layer == "kernel" { 0 } else { 1 }, s.ordinal));
-    let kernel_candidates: Vec<(usize, &ContextSource)> =
-        unique.iter().filter(|(_, s)| s.layer == "kernel").collect();
-    let progressive_candidates: Vec<(usize, &ContextSource)> =
-        unique.iter().filter(|(_, s)| s.layer != "kernel").collect();
+    let kernel_candidates: Vec<(usize, &ContextSource)> = unique
+        .iter()
+        .filter(|(_, s)| s.layer == "kernel")
+        .map(|(i, s)| (*i, s))
+        .collect();
+    let progressive_candidates: Vec<(usize, &ContextSource)> = unique
+        .iter()
+        .filter(|(_, s)| s.layer != "kernel")
+        .map(|(i, s)| (*i, s))
+        .collect();
     let kernel_total: usize = kernel_candidates
         .iter()
         .map(|(_, s)| s.content.as_ref().map(Vec::len).unwrap_or(0))
@@ -1207,13 +1215,13 @@ fn compile_context(
     let mut used: usize = 0;
     if kernel_total > packet_budget {
         for (i, s) in &unique {
-            budget_omitted.push((i, *s));
+            budget_omitted.push((*i, *s));
         }
         used = 0;
     } else {
         // kernel in, then progressive greedy
         for (i, s) in &kernel_candidates {
-            included.push((i, s));
+            included.push((*i, *s));
         }
         used = kernel_total;
         let mut continuation_started = false;
@@ -1221,9 +1229,9 @@ fn compile_context(
             let bytes = s.content.as_ref().map(Vec::len).unwrap_or(0);
             if continuation_started || used + bytes > packet_budget {
                 continuation_started = true;
-                budget_omitted.push((i, *s));
+                budget_omitted.push((*i, *s));
             } else {
-                included.push((i, s));
+                included.push((*i, *s));
                 used += bytes;
             }
         }
@@ -1285,13 +1293,13 @@ fn compile_context(
             "bytes": records[*i].get("bytes"),
         }));
     }
-    let continuation: Value = if remaining.is_empty() {
+    let continuation: Value = if budget_omitted.is_empty() {
         Value::Null
     } else {
         let after = included
             .last()
             .map(|(i, s)| records[*i].get("source_id").cloned().unwrap_or(Value::Null));
-        let remaining_ids: Vec<&str> = remaining
+        let remaining_ids: Vec<&str> = budget_omitted
             .iter()
             .map(|(i, _)| {
                 records[*i]
@@ -1300,7 +1308,7 @@ fn compile_context(
                     .unwrap_or("")
             })
             .collect();
-        let remaining_bytes: usize = remaining
+        let remaining_bytes: usize = budget_omitted
             .iter()
             .map(|(i, _)| {
                 records[*i]
@@ -1347,7 +1355,7 @@ fn compile_context(
             } else {
                 Some(sha256_hex(kernel_hash_input.as_bytes()))
             },
-            "anchors": merged_anchors(&kernel_sources),
+            "anchors": merged_anchors(kernel_sources.iter().copied()),
         },
         "progressive_sources": progressive_pairs
             .iter()

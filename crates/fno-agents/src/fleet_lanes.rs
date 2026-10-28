@@ -9,12 +9,12 @@
 //! cap minus live slots), so the advisor and a refusal cannot disagree: one
 //! decider, the probe, called in process.
 
-use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+
+use crate::spawn_gate_command::probe_answer;
 
 /// One macmon sample, then the pipe is closed: a one-shot read, not a
 /// subscription. The tool streams forever, so the bounded kill is the NORMAL
@@ -194,7 +194,7 @@ fn read_memory_pressure(timeout: u64) -> (Option<f64>, Option<String>) {
             Some("memory_pressure produced no free-percentage line".to_string()),
         );
     };
-    let Ok(pct) = caps.get(1).and_then(|m| m.as_str().parse::<f64>().ok()) else {
+    let Some(pct) = caps.get(1).and_then(|m| m.as_str().parse::<f64>().ok()) else {
         return (
             None,
             Some("memory_pressure produced no free-percentage line".to_string()),

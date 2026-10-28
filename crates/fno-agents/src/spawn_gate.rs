@@ -17,7 +17,6 @@
 //! that bricks spawning.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
