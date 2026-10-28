@@ -268,7 +268,7 @@ fn shared_columns(connection: &Connection) -> Result<BTreeMap<String, Vec<String
 /// `(name, primary-key position)` per column; position 0 is not in the key.
 fn column_info(connection: &Connection, table: &str) -> Result<Vec<(String, i64)>, String> {
     let mut statement = connection
-        .prepare(&format!(
+        .prepare_cached(&format!(
             "SELECT name, pk FROM pragma_table_info('{table}')"
         ))
         .map_err(|e| e.to_string())?;
@@ -437,6 +437,12 @@ fn narrow_updates(connection: &Connection, changes: &mut [Change]) -> Result<(),
     for change in changes.iter_mut() {
         if change.op != Op::Update {
             continue;
+        }
+        if change.old.len() != change.columns.len() || change.new.len() != change.columns.len() {
+            return Err(format!(
+                "{}: the update's row images do not match its columns",
+                change.table
+            ));
         }
         let info = column_info(connection, &change.table)?;
         let keep: Vec<usize> = change
@@ -1635,9 +1641,11 @@ fn whole_row(
         })?;
     let mut new = local.clone();
     for (i, name) in change.columns.iter().enumerate() {
-        if let Some(pos) = columns.iter().position(|c| c == name) {
-            new[pos] = change.new[i].clone();
-        }
+        let pos = columns
+            .iter()
+            .position(|c| c == name)
+            .ok_or_else(|| format!("{}: the update names unknown column {name}", change.table))?;
+        new[pos] = change.new[i].clone();
     }
     Ok((columns, local, new))
 }
