@@ -71,7 +71,10 @@ for top in ("skills", "agents", "commands"):
 
 for e in errors:
     print(f"FAIL {e}", file=sys.stderr)
-print(f"pack-profiles: {entries + files} classified, {len(unclassified)} unclassified")
+# The summary goes to stdout only on a clean pass, so a grep for
+# "0 unclassified" can never read green while another check failed.
+print(f"pack-profiles: {entries + files} classified, {len(unclassified)} unclassified",
+      file=sys.stderr if errors else sys.stdout)
 sys.exit(1 if errors else 0)
 PY
 }
