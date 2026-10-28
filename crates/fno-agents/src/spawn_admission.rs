@@ -1,18 +1,8 @@
-//! Spawn admission: the duties the Python seam (`rust_runtime.make_context`)
-//! runs before it execs this client, ported for the in-process arm (agents
-//! port group 2, row 10): the seed refusals, the node seed rewrite,
-//! normalization, the compose and the headroom account pick.
-//!
-//! Four seam duties are not here yet and land with the client wiring: the
-//! codex git-grant refusal, `extract_existing_pane`, the worker-dir export and
-//! the codex sandbox probe. `Admission::events` are the compose's
-//! `model_vendor_mismatch` rows, for the caller to emit.
-//!
-//! [`admit`] is not on the client's spawn path yet. Python `cmd_spawn` still
-//! serves three shapes no Rust arm owns: a `--role` spawn, `--route` with an
-//! account flag, and a routed non-thread spawn (`spawn_route::route_seam`
-//! bounces the last two). The seam bounce and both Python legs stay until
-//! those shapes have an owner here.
+//! Spawn admission: the seed refusals, the node seed rewrite, normalization,
+//! the compose and the headroom account pick, run in process for every
+//! `spawn` argv by [`crate::spawn_seam::admit_spawn`] before the client parses
+//! it. `Admission::events` are the compose's `model_vendor_mismatch` rows, for
+//! the caller to emit.
 //!
 //! The goldens (`tests/golden/spawn_seam/`, captured from the live Python
 //! legs by `spawn_seam_golden_driver.py`) pin the scan projection, the
@@ -100,7 +90,7 @@ const SPAWN_VALUE_FLAGS_EXTRA: &[&str] = &[
     "--mux-session",
 ];
 
-const HARNESS_FLAGS: &[&str] = &["--harness", "-H"];
+pub(crate) const HARNESS_FLAGS: &[&str] = &["--harness", "-H"];
 const MODEL_FLAGS: &[&str] = &["--model", "-m"];
 const EFFORT_FLAGS: &[&str] = &["--effort"];
 
@@ -863,7 +853,7 @@ fn dispatch_harness(tail: &[String]) -> Option<String> {
 /// Whether the fno-arg head (up to the `--argv` payload and the bare `--`
 /// fence) carries a flag: a short as `-X`, `-X=V` or glued `-XV`, a long as
 /// `--foo` or `--foo=V`.
-fn has_flag(args: &[String], short: &str, longs: &[&str]) -> bool {
+pub(crate) fn has_flag(args: &[String], short: &str, longs: &[&str]) -> bool {
     args.iter()
         .take_while(|a| *a != "--argv" && *a != "--")
         .any(|a| {
