@@ -450,13 +450,10 @@ pub fn run_notify_watch(
 
     // Release lane: the newest finished release.yml run per repo. A failure
     // pages once per run and mails the head lead; a pass clears the signal.
+    // A missing gh reads as an unreadable repo there.
     if signals.iter().any(|s| s == "release_run") {
-        if !gh_on_path() {
-            notes.push("release_run:gh_absent".to_string());
-        } else {
-            for root in roots {
-                acted += crate::release_watch::pass(root, &path, now, min_interval_s, &mut notes);
-            }
+        for root in roots {
+            acted += crate::release_watch::pass(root, &path, now, min_interval_s, &mut notes);
         }
     }
 
@@ -553,7 +550,7 @@ fn main_ci_body(slug: &str, population: usize, verdict: &str, failing: &[String]
     format!("main CI on {slug}: {verdict} ({population} check run(s)).")
 }
 
-pub(crate) fn gh_on_path() -> bool {
+fn gh_on_path() -> bool {
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path).any(|dir| dir.join("gh").is_file())
 }
