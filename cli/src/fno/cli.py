@@ -61,18 +61,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Delivery work: plans, targets, reviews, PRs, state, and supporting operations.",
         {"hidden": True},
     ),
-    "state": ("fno.state.cli:cli", "manage fno do state files", {"hidden": True}),
-    "target": (
-        "fno.target_cli:target_app",
-        "Target sessions: status, resolve-model, and check gates",
-        {"hidden": True},
-    ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
-    "lead": (
-        "fno.lead.cli:lead_app",
-        "The lead's board and its session manifest.",
-        {"hidden": True},
-    ),
     "event": ("fno.events.cli:cli", "emit and audit events", {"hidden": True}),
     "inbox": (
         "fno.inbox.cli:inbox_app",
@@ -104,11 +93,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     # their move rows stay in command_moves.py.
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
-    "stub-manifest": (
-        "fno.stub_manifest:stub_manifest_app",
-        "Stub-manifest for contract-tier dependents (emit/validate/check-pr).",
-        {"hidden": True},
-    ),
     "status-fanout": (
         "fno.status_fanout:status_fanout_app",
         "Sweep events.jsonl and route status events to configured sinks (tick).",
@@ -136,11 +120,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
         {"hidden": True},
     ),
-    "phase": (
-        "fno.phase:phase_app",
-        "Phase utilities (kill-check via the fno-agents binary)",
-        {"hidden": True},
-    ),
     "config": ("fno.config_writer_cli:app", "Configuration management"),
     "notify": (
         "fno.notify:notify_app",
@@ -149,11 +128,10 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     ),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
     "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
-    "route": (
-        "fno.route_cli:route_app",
-        "Provider route lanes: ls / set / unset / env (GLM build lane).",
-        {"hidden": True},
-    ),
+    # `fno route` (the hidden root spelling of the provider route lanes)
+    # answers natively: the front classifies it onto route-slot's
+    # config-route mode, so no Python mount remains. The worktree family's
+    # root spellings joined the same way with its port.
     "evals": (
         "fno.evals_cli:evals_app",
         "Golden-task efficacy evals (run / report / diff)",
@@ -231,10 +209,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "plan": set(),
     "pr-watch": set(),
     "resume": set(),
-    "route": set(),
-    "state": set(),
-    "stub-manifest": set(),
-    "target": set(),
 }
 
 for _group_name, _keep in COLLAPSE_KEEP.items():

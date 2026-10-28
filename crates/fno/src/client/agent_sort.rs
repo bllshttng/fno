@@ -12,6 +12,28 @@ pub(super) struct AgentOrder<'a> {
     pub pinned: &'a [String],
 }
 
+/// Pin or unpin the agent row under the selector cursor, persisted like the
+/// sort itself; a non-agent row notices why.
+pub(super) fn toggle_pin(view: &mut View, cur: usize) {
+    let name = match view.display_rows().get(cur) {
+        Some(DisplayRow::Agent(a)) => a.name.clone(),
+        _ => {
+            view.set_notice("pin works on an agent row".into());
+            return;
+        }
+    };
+    let pinned = if let Some(pos) = view.pinned_agents.iter().position(|n| *n == name) {
+        view.pinned_agents.remove(pos);
+        false
+    } else {
+        view.pinned_agents.push(name.clone());
+        true
+    };
+    crate::view_store::save_pinned(&view.pinned_agents);
+    let word = if pinned { "pinned" } else { "unpinned" };
+    view.set_notice(format!("{word} {name}"));
+}
+
 #[allow(clippy::type_complexity)]
 pub(super) fn append_sorted_agent_group<'a>(
     out: &mut Vec<(DisplayRow<'a>, usize)>,

@@ -508,9 +508,9 @@ fn hover_and_selection_share_the_same_card_cell_snapshot() {
         selected_detail_i,
     );
 
-    assert_eq!(
+    assert_ne!(
         hover_cells, selected_cells,
-        "hover and click use one paint path"
+        "the cursor card inverts apart from hover"
     );
     // The pairing bands all three lines for both gestures, every cell and
     // column boundary included; the metrics line's hover is covered by its
@@ -520,8 +520,10 @@ fn hover_and_selection_share_the_same_card_cell_snapshot() {
         "hover bands every cell of all three lines"
     );
     assert!(
-        selected_cells.iter().all(|cell| cell.bg != Color::Default),
-        "selection bands every cell of all three lines"
+        selected_cells
+            .iter()
+            .all(|cell| cell.flags & cell_flags::INVERSE != 0),
+        "the cursor card inverts every cell of all three lines"
     );
 }
 

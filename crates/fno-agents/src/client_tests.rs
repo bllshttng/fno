@@ -814,20 +814,19 @@ fn parse_rows() {
 
 #[test]
 fn substrate_rows() {
-    // The pane-default harnesses get the interactive host_mode on an unflagged
-    // spawn; codex/gemini/agy never mint a session id (claude-only).
+    // A pane comes only from an explicit lane and gets the interactive
+    // host_mode; codex/gemini/agy never mint a session id (claude-only).
     for provider in ["gemini", "agy"] {
         let args = vec![
             "wk".to_string(),
             "--harness".to_string(),
             provider.to_string(),
+            "--as".to_string(),
+            "pane".to_string(),
         ];
         let (method, params) = build_request("spawn", &args).unwrap();
         assert_eq!(method, "agent.spawn");
-        assert_eq!(
-            params["substrate"], "pane",
-            "{provider} defaults to the pane"
-        );
+        assert_eq!(params["substrate"], "pane", "{provider} keeps the pane");
         assert_eq!(
             params["host_mode"], "interactive",
             "{provider} default-interactive"
@@ -835,10 +834,11 @@ fn substrate_rows() {
         assert!(params.get("session_id").is_none(), "{provider} never mints");
     }
 
-    // claude/codex seat a thread by default: the resolved lane rides params,
-    // so dispatch and the thread-only grant read one value, and a thread gets
-    // no host_mode and no mint.
-    for provider in ["claude", "codex"] {
+    // An unflagged spawn takes a thread for every harness, as `cmd_spawn`
+    // does; admission refuses a thread the harness cannot seat. The resolved
+    // lane rides params, so dispatch and the thread-only grant read one value,
+    // and a thread gets no host_mode and no mint.
+    for provider in ["claude", "codex", "gemini", "agy"] {
         let args = vec![
             "wk".to_string(),
             "--harness".to_string(),
@@ -1266,7 +1266,13 @@ fn render_list_rows() {
     // Without a codex probe the key is absent, not null.
     assert!(parsed.get("codex_loaded").is_none());
 
-    let table = render_list_table(&agents, &discovered, Some(3), Some(3), &Value::Null);
+    let table = fno_agents::list_render::render_list_table(
+        &agents,
+        &discovered,
+        Some(3),
+        Some(3),
+        &Value::Null,
+    );
     assert!(table.contains("DISCOVERED LIVE SESSIONS (1, host-local)"));
     // ADDRESS leads and the alias is demoted to LABEL. The alias led this
     // table for its whole life, so it was the leftmost thing a reader
@@ -1349,7 +1355,8 @@ fn render_list_rows() {
             "pr_basis": "no-node",
         }
     ]);
-    let table = render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
     let lines: Vec<&str> = table.lines().collect();
     assert_eq!(
         lines[0].split_whitespace().collect::<Vec<_>>().join(" "),
@@ -1401,7 +1408,8 @@ fn render_list_rows() {
             "pr_basis": "graph-unreadable",
         }
     ]);
-    let table = render_list_table(&agents, &[], Some(2), Some(2), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(2), Some(2), &Value::Null);
     let sub = table.lines().find(|l| l.contains("sub-worker")).unwrap();
     assert!(
         sub.contains("claude-opus-5 (observed; requested glm-5.3-flash[1m])"),
@@ -1445,7 +1453,8 @@ fn render_list_rows() {
             "log_path": null
         }
     ]);
-    let table = render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
     let lines: Vec<&str> = table.lines().collect();
 
     assert!(
@@ -1488,7 +1497,8 @@ fn render_list_rows() {
             "log_path": null
         }
     ]);
-    let table = render_list_table(&agents, &[], Some(43), Some(0), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(43), Some(0), &Value::Null);
     assert!(
         table.contains("truth probe failed: 0 of 43 rows answered"),
         "outage must be named, got: {table}"
@@ -1498,7 +1508,8 @@ fn render_list_rows() {
         "the statuses must be disclaimed: {table}"
     );
 
-    let healthy = render_list_table(&agents, &[], Some(43), Some(43), &Value::Null);
+    let healthy =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(43), Some(43), &Value::Null);
     assert!(
         !healthy.contains("truth probe failed"),
         "a healthy page carries no outage line: {healthy}"

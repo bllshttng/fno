@@ -402,6 +402,17 @@ fn inheritor_for(
     live: &[crate::territory::Team],
     cwd: &Path,
 ) -> String {
+    presiding_holder(level, scope, live, cwd).unwrap_or_else(|| "operator".to_string())
+}
+
+/// The holder of the live team one rung above `scope`, or None. `lead done`
+/// and `lead escalate` read the same rung rule the sweep's inheritor does.
+pub(crate) fn presiding_holder(
+    level: Option<u32>,
+    scope: &str,
+    live: &[crate::territory::Team],
+    cwd: &Path,
+) -> Option<String> {
     let members = |s: &str| -> Vec<String> {
         s.split(',')
             .map(|m| m.trim().to_string())
@@ -423,20 +434,18 @@ fn inheritor_for(
                 .filter_map(|m| project_of(m))
                 .collect();
             if projects.len() != 1 {
-                return "operator".to_string();
+                return None;
             }
-            let project = crate::territory::canonical_scope(projects.into_iter().next().unwrap());
+            let project = crate::territory::canonical_scope(projects.into_iter().next()?);
             live.iter()
                 .find(|c| c.level == 1 && c.scope == project)
                 .map(|c| c.holder.clone())
-                .unwrap_or_else(|| "operator".to_string())
         }
         Some(1) => live
             .iter()
             .find(|c| c.level == 0 && members(&c.scope).iter().any(|m| m == scope))
-            .map(|c| c.holder.clone())
-            .unwrap_or_else(|| "operator".to_string()),
-        _ => "operator".to_string(),
+            .map(|c| c.holder.clone()),
+        _ => None,
     }
 }
 

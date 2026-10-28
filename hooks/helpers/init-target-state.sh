@@ -92,8 +92,8 @@ rm -f "$STATE_DIR/.target-starting" "$REPO_ROOT/.fno/.target-starting" 2>/dev/nu
 # command", so treating 2 as a refusal would hard-refuse every direct bootstrap
 # the moment the CLI fell behind source.
 if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
-  if command -v fno >/dev/null 2>&1; then
-    fno do target check-review-gate && _RG_RC=0 || _RG_RC=$?
+  if command -v "${FNO_AGENTS_BIN:-fno-agents}" >/dev/null 2>&1; then
+    "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-review-gate && _RG_RC=0 || _RG_RC=$?
     if [[ "$_RG_RC" -eq 9 ]]; then
       echo "[init-target-state] REFUSED: review capability gate (see above). Refusing to write state file." >&2
       exit 2
@@ -103,7 +103,7 @@ if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
     # Plan-level hold gate. Unlike compatibility guards, an unreadable hold
     # state refuses: dispatch cannot prove the plan is unheld. The wrapper runs
     # this in-process; this call covers the documented direct script path.
-    fno do target check-dispatch-hold && _DH_RC=0 || _DH_RC=$?
+    "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-dispatch-hold && _DH_RC=0 || _DH_RC=$?
     if [[ "$_DH_RC" -eq 9 ]]; then
       echo "[init-target-state] REFUSED: dispatch hold (see above). Refusing to write state file or claim." >&2
       exit 2
@@ -118,7 +118,7 @@ if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
     # and its own rc, so a broken gate cannot suppress the other one; the node
     # is read from TARGET_INPUT/TARGET_PLAN_PATH by the command, so the shell
     # passes nothing and cannot pass the wrong node.
-    fno do target check-contained && _CT_RC=0 || _CT_RC=$?
+    "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-contained && _CT_RC=0 || _CT_RC=$?
     if [[ "$_CT_RC" -eq 9 ]]; then
       echo "[init-target-state] REFUSED: contained node (see above). Refusing to write state file or claim." >&2
       exit 2
@@ -840,7 +840,7 @@ if [[ -f "$STATE_FILE" ]] && is_valid_state_file; then
       echo ""
       echo "If this manifest is stale, archive it and re-run init; the claim is"
       echo "taken fresh:"
-      echo "  fno do state archive --path \"$STATE_FILE\""
+      echo "  ${FNO_AGENTS_BIN:-fno-agents} state-cli archive --path \"$STATE_FILE\" --type target"
     } >&2
     exit 1
   fi
@@ -1049,8 +1049,8 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # precedence) rather than bricking init - the same degrade every other
   # fno do target check-* gate here already uses.
   _OWNED_OUT=""
-  if command -v fno >/dev/null 2>&1; then
-    _OWNED_OUT="$(fno do target resolve-owned-identity 2>/dev/null || true)"
+  if command -v "${FNO_AGENTS_BIN:-fno-agents}" >/dev/null 2>&1; then
+    _OWNED_OUT="$("${FNO_AGENTS_BIN:-fno-agents}" target-gates resolve-owned-identity 2>/dev/null || true)"
   fi
   if [[ -n "$_OWNED_OUT" ]]; then
     # Parse the command's KEY=value lines in one read (zero subprocesses), not four
@@ -1651,7 +1651,7 @@ PYEOF
         #
         # `cmd && rc=0 || rc=$?`, not `if ! cmd`: after a negation `$?` is the
         # negation's status, so the rc test would never see the 9.
-        TARGET_INPUT="$_NODE_ID" TARGET_PLAN_PATH="" fno do target check-contained \
+        TARGET_INPUT="$_NODE_ID" TARGET_PLAN_PATH="" "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-contained \
           && _PC_RC=0 || _PC_RC=$?
         # A BROKEN gate on this path degrades silently unless it is said out
         # loud, exactly like the pre-claim gate a hundred lines above: only 9

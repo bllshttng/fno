@@ -55,7 +55,6 @@ from fno.events.cli import cli as event_app  # noqa: E402
 from fno.status_fanout import status_fanout_app  # noqa: E402
 from fno.test_cmd import test_command  # noqa: E402
 from fno.lint_cli import lint  # noqa: E402
-from fno.route_cli import inventory_cmd  # noqa: E402
 
 doctor_app.add_typer(codemap_app, name="codemap")
 doctor_app.add_typer(evals_app, name="evals")

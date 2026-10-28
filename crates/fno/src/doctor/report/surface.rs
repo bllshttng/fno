@@ -14,18 +14,7 @@ pub(crate) fn harness_surface_report() -> Value {
     }
     let codex_gate = which("codex").is_some() || codex_plugin_state_exists(&codex_home());
     if codex_gate {
-        // The verdict reads from one owner: fno-agents plugin-install codex
-        // --status (x-b92e). A failed transport reads as the same
-        // state-unreadable shape the in-process read produced on an
-        // unreadable state.
-        let (_, verdict) = call_binary_json("plugin-install", &["codex", "--status", "--json"], 60);
-        report["codex_plugin"] = verdict.unwrap_or_else(|| {
-            json!({
-                "status": "unknown",
-                "issue": "state-unreadable",
-                "remedy": "fno config plugin install codex --force",
-            })
-        });
+        report["codex_plugin"] = super::codex::codex_plugin_report();
     }
     let dual = super::codex::codex_hooks_dual_and_foreign();
     if dual.0 {

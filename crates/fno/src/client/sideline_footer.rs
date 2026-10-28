@@ -10,6 +10,9 @@ use super::View;
 /// only: the former `☰` is an ambiguous-width glyph some terminals render
 /// wide, which displaced that row's whole line.
 const SESSION: (&str, &str) = ("toggle-composer", "+ session");
+/// The session button's widest label, Claude's agents-view prompt wording.
+/// It shows only where the whole row fits; narrower rows step down.
+const TASK_PROMPT: &str = "+ describe a task for a new session";
 const WORKSPACE: (&str, &str) = ("new-workspace", "+ workspace");
 const MENU: (&str, &str) = ("sideline-menu", "menu");
 
@@ -24,7 +27,8 @@ pub(super) struct FooterButtons {
 
 impl View {
     /// The footer at this panel width, one row of three buttons joined by
-    /// ` · `: `+ session (i) · + workspace (N) · menu (P)`. The keys resolve
+    /// ` · `: `+ session (i) · + workspace (N) · menu (P)`, with the session
+    /// button reading the task prompt when the panel is wide. The keys resolve
     /// through the live chord table (`key_for`), so a rebind relabels the
     /// row. A narrow panel shows the keys only (`i · N · P`), each still a
     /// button. Narrower still, or with a recruit-mark tally on the row, the
@@ -36,8 +40,13 @@ impl View {
             // Columns as the row painter counts them, so a rebound key
             // with a wide glyph cannot move a range off its label.
             let cols = |s: &str| s.chars().map(super::glyph_cols).sum::<usize>();
-            for with_label in [true, false] {
+            for (prompt, with_label) in [(true, true), (false, true), (false, false)] {
                 let label = |(action, bare): (&str, &str)| {
+                    let bare = if prompt && action == SESSION.0 {
+                        TASK_PROMPT
+                    } else {
+                        bare
+                    };
                     crate::keys::key_for(action).map(|k| {
                         if with_label {
                             format!("{bare} ({k})")

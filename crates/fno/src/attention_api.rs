@@ -422,10 +422,22 @@ pub fn load_sink_auth() -> Vec<SinkAuth> {
             let Some(name) = row.get("name").and_then(|n| n.as_str()) else {
                 continue;
             };
+            // A chat row's secret is a bot token or a server password, never
+            // a bearer for this door.
+            if row
+                .get("type")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| matches!(t, "telegram" | "discord" | "bluebubbles"))
+            {
+                continue;
+            }
             let Some(env_name) = row.get("token_env").and_then(|t| t.as_str()) else {
                 continue;
             };
-            let Ok(token) = std::env::var(env_name) else {
+            // The arm reads the same file, so a button it posts always
+            // carries a token this door accepts.
+            let Some(token) = crate::provider_key::resolve_key(env_name, Some("~/.fno/.env"))
+            else {
                 continue;
             };
             if token.is_empty() || out.iter().any(|s| s.name == name) {

@@ -165,9 +165,11 @@ def _graph_callback(
         help="Output structured JSON to stdout. Diagnostics go to stderr.",
     ),
 ) -> None:
-    from fno.handoff.output import merge_json_flag
-
-    merge_json_flag(ctx, json_output)
+    # merge_json_flag's 3-line merge, inlined: the handoff module
+    # dies with the family port and this caller survives it.
+    ctx.ensure_object(dict)
+    if json_output:
+        ctx.obj["json"] = True
 
 
 def _graph_path() -> Path:
@@ -887,14 +889,12 @@ def _render_external_get(id: str, field: Optional[str], ctx: typer.Context) -> N
     try:
         node, sc = _read_external_node_and_sidecar(id)
     except _TrackerNodeNotFound:
-        from fno.handoff.output import json_mode
-
         message = (
             f"fno backlog get: no node matches '{id}' "
             "(an external backend resolves exact ids; slug/bare-hex are "
             "footnote-minted)"
         )
-        if json_mode(ctx):
+        if bool(ctx.obj and ctx.obj.get("json", False)):
             typer.echo(json.dumps({"ok": False, "error": message}))
         else:
             typer.echo(message, err=True)

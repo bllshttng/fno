@@ -1,0 +1,7 @@
+{
+  "fenced": [
+    "--bogus-flag"
+  ],
+  "harness": "opencode",
+  "line": "fno agents spawn: the opencode thread lane has no carrier for --bogus-flag; add --as pane"
+}

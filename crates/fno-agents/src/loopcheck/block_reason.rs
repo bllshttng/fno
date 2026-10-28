@@ -154,7 +154,7 @@ pub(super) fn build_block_reason(
                 "PR is closed. Reopen with `gh pr reopen`, or create a new PR: `gh pr create`"
             }
             PrState::None => {
-                "No PR for HEAD yet. Create one: `/fno:ship pr create`, or `gh pr create`"
+                "No PR for HEAD yet. An unplanned node plans first (`/fno:blueprint <node>`) and commits; then create one: `/fno:ship pr create`, or `gh pr create`"
             }
             _ => "PR state is not open or merged - verify on GitHub and update locally",
         };

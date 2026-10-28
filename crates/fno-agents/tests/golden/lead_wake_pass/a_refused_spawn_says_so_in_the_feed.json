@@ -1,0 +1,68 @@
+{
+ "label": "a refused spawn says so in the feed",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [],
+   "events": [
+    [
+     "lead_wake_refused",
+     {
+      "ceiling": 32,
+      "reason": "mail",
+      "refusal": "manifest-carries-no-model-pin",
+      "scope": "epic-x",
+      "window_count": 1
+     }
+    ],
+    [
+     "lead_woken",
+     {
+      "address": "lead-x",
+      "ceiling": 32,
+      "reason": "mail",
+      "scope": "epic-x",
+      "successor": false,
+      "window_count": 1
+     }
+    ]
+   ],
+   "sidecar": {
+    "answered_cursor": "2026-08-28T12:00:00+00:00"
+   },
+   "successor_flags": [],
+   "summary": {
+    "armed": true,
+    "evaluated": 1,
+    "note": "",
+    "refused": [
+     {
+      "refusal": "manifest-carries-no-model-pin",
+      "scope": "epic-x"
+     }
+    ],
+    "roles": 1,
+    "team_incomplete": false,
+    "truth_reads": 1,
+    "woke": [
+     {
+      "address": "lead-x",
+      "reason": "mail",
+      "scope": "epic-x",
+      "successor": false
+     }
+    ]
+   },
+   "unread_calls": [
+    "aa11bb22",
+    "epic-x",
+    "lead-x"
+   ],
+   "wake_log": "lead-wake refused epic-x: the role manifest carries no model pin; re-role pinned, never respawn on the account default.\n",
+   "wake_times": [
+    "2026-08-29T12:00:00Z"
+   ]
+  }
+ ]
+}

@@ -1,14 +1,12 @@
-//! The lead commands answered natively: `fno agents org` history, verdict,
-//! faq, init, checkin, cancel, term, `chart shape`, `chart manifest-path`, and
-//! `fno inbox board`.
+//! The lead commands, all answered natively: `fno agents org` history,
+//! verdict, faq, init, checkin, cancel, term, done, escalate, drain, `chart
+//! shape`, `chart manifest-path`, `chart ledger`, and `fno inbox board`.
 //!
 //! The agents menu rewrites every `org` spelling to `agents lead <command>`
 //! first, so this route claims that argv, the deprecated root `fno lead
 //! <command>` (with the move notice the Python shim printed), and `fno inbox
 //! board`. Each command execs an argument of an existing `fno-agents` action,
-//! because law d-fe66560a bars a new action. `board --last-run` stays with
-//! the Python leg, which shares its predicate with the PR watcher's lead
-//! wake: one owner until that caller ports.
+//! because law d-fe66560a bars a new action.
 
 use std::ffi::OsString;
 use std::process::Command;
@@ -36,7 +34,7 @@ const ROUTES: &[Route] = &[
     Route {
         name: "faq",
         native: &["lead-state", "--faq"],
-        help: "Usage: fno agents org faq list --scope SCOPE [--max-entries N]\n       \
+        help: "Usage: fno agents org faq list --scope SCOPE [--max-entries N] [--paths]\n       \
                fno agents org faq add --question Q --answer A --specimen S --exit E [--scope SCOPE]\n\n\
                Durable answers a promoted session leaves behind.\n",
     },
@@ -64,8 +62,9 @@ const ROUTES: &[Route] = &[
         name: "checkin",
         native: &["lead-checkin", "--user-command"],
         help: "Usage: fno agents org checkin [--scope SCOPE] [--name NAME] [--theme THEME] \
-               [--change TEXT] [--no-emit] [--json]\n\n\
-               Run the term check-in: gather, print, diff against the last beat, journal.\n",
+               [--change TEXT] [--recall WORD] [--no-emit] [--json]\n\n\
+               Run the term check-in: gather, print, diff against the last beat, journal.\n\
+               After a compaction it refuses until --recall names the canon doc's last-line word.\n",
     },
     Route {
         name: "cancel",
@@ -80,6 +79,31 @@ const ROUTES: &[Route] = &[
                [--scope SCOPE]\n\n\
                Declare or extend this term: the bound past which the Stop hook asks \
                for a handoff or a reason.\n",
+    },
+    Route {
+        name: "done",
+        native: &["lead-state", "--done"],
+        help: "Usage: fno agents org done [--scope SCOPE]\n\n\
+               Expire this role: vacate the row and clear the scope manifest. \
+               SCOPE defaults to this session's own role.\n",
+    },
+    Route {
+        name: "escalate",
+        native: &["lead-state", "--escalate"],
+        help: "Usage: fno agents org escalate [SCOPE] [--stalled IDS] [--reason R]\n\n\
+               Escalate to the presiding role or operator with work pending.\n",
+    },
+    Route {
+        name: "drain",
+        native: &["lead-state", "--drain"],
+        help: "Usage: fno agents org drain SCOPE\n\n\
+               Is the role drained: how many scope nodes are not done or superseded.\n",
+    },
+    Route {
+        name: "ledger",
+        native: &["lead-rundown", "--ledger"],
+        help: "Usage: fno agents org ledger [--out PATH]\n\n\
+               Render the term ledger page: every role, its territory, its nodes.\n",
     },
 ];
 
@@ -136,7 +160,7 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
     };
     if name == "board" {
         // Only the root `lead board` and `inbox board` spellings name it.
-        if words[0] == "agents" || tail.iter().any(|a| a.to_str() == Some("--last-run")) {
+        if words[0] == "agents" {
             return None;
         }
         let notice = root_lead.then(|| "fno lead board is now fno inbox board".to_string());
@@ -232,6 +256,26 @@ mod tests {
                 &["inbox", "board", "--json"],
                 &["board", "--user-command", "--json"],
             ),
+            (
+                &["inbox", "board", "--last-run", "--since", "2h"],
+                &["board", "--user-command", "--last-run", "--since", "2h"],
+            ),
+            (
+                &["agents", "lead", "done", "--scope", "s"],
+                &["lead-state", "--done", "--scope", "s"],
+            ),
+            (
+                &["agents", "lead", "escalate", "s", "--stalled", "x-1"],
+                &["lead-state", "--escalate", "s", "--stalled", "x-1"],
+            ),
+            (
+                &["agents", "lead", "drain", "s"],
+                &["lead-state", "--drain", "s"],
+            ),
+            (
+                &["agents", "lead", "ledger", "--out", "p"],
+                &["lead-rundown", "--ledger", "--out", "p"],
+            ),
         ];
         for (argv, want) in cases {
             assert_eq!(native(argv), Some(os(want)), "{argv:?}");
@@ -258,13 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn the_python_owned_spellings_stay_unclaimed() {
-        // --last-run shares its predicate with the PR watcher's lead wake.
-        assert_eq!(classify(&os(&["inbox", "board", "--last-run"])), None);
-        // The lifecycle commands are still Python's.
-        for name in ["done", "escalate", "drain", "ledger"] {
-            assert_eq!(classify(&os(&["agents", "lead", name])), None, "{name}");
-        }
+    fn only_the_inbox_spellings_name_the_board() {
         assert_eq!(classify(&os(&["agents", "lead", "board"])), None);
     }
 }

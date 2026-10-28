@@ -1,0 +1,211 @@
+{
+  "subject": "dispatch harness",
+  "cases": [
+    {
+      "label": "resolve explicit wins",
+      "payload": {
+        "mode": "resolve",
+        "explicit": "codex",
+        "env": {}
+      },
+      "config": "",
+      "env": {},
+      "exit": 0,
+      "out": "[\"codex\", \"explicit\"]",
+      "err": ""
+    },
+    {
+      "label": "resolve explicit empty refuses",
+      "payload": {
+        "mode": "resolve",
+        "explicit": "   ",
+        "env": {}
+      },
+      "config": "",
+      "env": {},
+      "exit": 1,
+      "out": "",
+      "err": "DispatchFlagError: --harness must not be empty"
+    },
+    {
+      "label": "resolve infers from one marker",
+      "payload": {
+        "mode": "resolve",
+        "explicit": null,
+        "env": {
+          "CODEX_THREAD_ID": "th_golden"
+        }
+      },
+      "config": "",
+      "env": {
+        "CODEX_THREAD_ID": "th_golden"
+      },
+      "exit": 0,
+      "out": "[\"codex\", \"harness-inferred\"]",
+      "err": ""
+    },
+    {
+      "label": "resolve claudecode marker yields to the codex thread",
+      "payload": {
+        "mode": "resolve",
+        "explicit": null,
+        "env": {
+          "CODEX_THREAD_ID": "th_golden",
+          "CLAUDECODE": "1"
+        }
+      },
+      "config": "",
+      "env": {
+        "CODEX_THREAD_ID": "th_golden",
+        "CLAUDECODE": "1"
+      },
+      "exit": 0,
+      "out": "[\"codex\", \"harness-inferred\"]",
+      "err": ""
+    },
+    {
+      "label": "resolve no marker answers builtin default",
+      "payload": {
+        "mode": "resolve",
+        "explicit": null,
+        "env": {}
+      },
+      "config": "",
+      "env": {},
+      "exit": 0,
+      "out": "[\"claude\", \"builtin-default\"]",
+      "err": ""
+    },
+    {
+      "label": "resolve flag naming rides through",
+      "payload": {
+        "mode": "resolve",
+        "explicit": "",
+        "env": {},
+        "flag": "--provider"
+      },
+      "config": "",
+      "env": {},
+      "exit": 1,
+      "out": "",
+      "err": "DispatchFlagError: --provider must not be empty"
+    },
+    {
+      "label": "infer returns none on contradiction",
+      "payload": {
+        "mode": "resolve",
+        "explicit": null,
+        "env": {
+          "CODEX_THREAD_ID": "th_golden",
+          "CLAUDE_CODE_SESSION_ID": "ses_golden"
+        }
+      },
+      "config": "",
+      "env": {},
+      "exit": 0,
+      "out": "null",
+      "err": ""
+    },
+    {
+      "label": "infer reads the codex thread",
+      "payload": {
+        "mode": "resolve",
+        "explicit": null,
+        "env": {
+          "CODEX_THREAD_ID": "th_golden"
+        }
+      },
+      "config": "",
+      "env": {
+        "CODEX_THREAD_ID": "th_golden"
+      },
+      "exit": 0,
+      "out": "[\"codex\", \"harness-inferred\"]",
+      "err": ""
+    },
+    {
+      "label": "reject model none passes",
+      "payload": {
+        "mode": "validate-model",
+        "model": null
+      },
+      "config": "",
+      "env": {},
+      "exit": 0,
+      "out": "null",
+      "err": ""
+    },
+    {
+      "label": "reject model token passes verbatim",
+      "payload": {
+        "mode": "validate-model",
+        "model": "glm-5.3[1m]"
+      },
+      "config": "",
+      "env": {},
+      "exit": 0,
+      "out": "glm-5.3[1m]",
+      "err": ""
+    },
+    {
+      "label": "reject model empty refuses",
+      "payload": {
+        "mode": "validate-model",
+        "model": "  "
+      },
+      "config": "",
+      "env": {},
+      "exit": 1,
+      "out": "",
+      "err": "DispatchFlagError: --model must not be empty"
+    },
+    {
+      "label": "configured stage table answers harness and route",
+      "payload": {
+        "mode": "configured",
+        "command": "target"
+      },
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n[agents.profiles.target]\nprovider = \"codex\"\nroute = \"zai/glm-5.3\"\n",
+      "env": {},
+      "exit": 0,
+      "out": "{\"harness\": \"codex\", \"note\": null, \"route\": \"zai/glm-5.3\"}",
+      "err": ""
+    },
+    {
+      "label": "configured legacy key still answers",
+      "payload": {
+        "mode": "configured",
+        "command": "target"
+      },
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n[dispatch]\nharness = \"codex\"\n",
+      "env": {},
+      "exit": 0,
+      "out": "{\"harness\": \"codex\", \"note\": null, \"route\": \"\"}",
+      "err": ""
+    },
+    {
+      "label": "configured unset answers none",
+      "payload": {
+        "mode": "configured",
+        "command": "target"
+      },
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n",
+      "env": {},
+      "exit": 0,
+      "out": "{\"harness\": null, \"note\": null, \"route\": \"\"}",
+      "err": ""
+    },
+    {
+      "label": "configured disagreement names the loser",
+      "payload": {
+        "mode": "configured",
+        "command": "target"
+      },
+      "config": "[model_routing.providers.zai]\nprotocol = \"anthropic\"\nbase_url = \"https://api.z.ai/api/anthropic\"\napi_key_env = \"ZAI_API_KEY\"\napi_key_file = \"~/.fno/.env\"\n\n[model_routing.providers.zai.tier_models]\nhaiku = \"glm-4.7\"\n[dispatch]\nharness = \"codex\"\n[agents.profiles.target]\nprovider = \"opencode\"\n",
+      "env": {},
+      "exit": 0,
+      "out": "{\"harness\": \"opencode\", \"note\": \"harness=deprecated dispatch.harness='codex' ignored; agents.profiles.target.provider='opencode' is the home\", \"route\": \"\"}",
+      "err": ""
+    }
+  ]
+}

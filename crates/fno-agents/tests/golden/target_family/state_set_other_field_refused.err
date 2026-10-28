@@ -1,0 +1,1 @@
+target-state.md is an immutable session manifest (control-plane collapse); only first-fill of plan_path is allowed

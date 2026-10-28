@@ -47,19 +47,10 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
     # Hidden: the menu cap is 12 and config already curates nine visible
     # commands; `fno help config --all` lists these.
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
-    "route": (
-        "fno.route_cli:route_app",
-        "Provider route lanes: ls / set / unset / env (GLM build lane).",
-        {"hidden": True},
-    ),
-    # The routing-inventory surface under its plan-named spelling: same app as
-    # `route`, so `fno config routing init` and `fno config route init` both
-    # resolve. Hidden like its sibling.
-    "routing": (
-        "fno.route_cli:route_app",
-        "Declared model-routing inventory: init (sample) / inventory (reach).",
-        {"hidden": True},
-    ),
+    # `config route` / `config routing` (the provider route lanes and the
+    # declared-inventory reads) answer natively: the front classifies both
+    # spellings onto route-slot's config-route mode, so no Python mount
+    # remains.
     # One local-dev install door for every plugin harness. VISIBLE on
     # purpose and as a lazy mount: this installs the footnote plugin itself,
     # from the filtered stage, in one action per harness (claude|codex|
