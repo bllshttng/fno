@@ -148,6 +148,10 @@ const CODES: &[(&str, &str)] = &[
         "projects_hand_set",
         "move the hand-set work.workspaces.main.projects value into an array of {name, path} tables, then rerun `fno config setup run`",
     ),
+    (
+        "messaging_unfinished",
+        "read the messaging line above, then rerun `fno config setup run --only messaging`",
+    ),
 ];
 
 /// One problem a run or a dry-run hit: which list it sat on, a stable
@@ -1947,6 +1951,27 @@ pub(crate) fn list_json() -> serde_json::Value {
     serde_json::Value::Array(arr)
 }
 
+/// The messaging step: the terminal walk when prompting, else one skip
+/// line naming the re-entry command. `picked` carries the wizard's picks.
+fn step_messaging(exe: &Path, prompting: bool, picked: Option<&[&str]>, rep: &mut Report) {
+    use crate::setup_messaging as m;
+    if !prompting {
+        rep.skipped
+            .push(m::summary_line(&m::sink_rows(), &m::machine()));
+        return;
+    }
+    let set = |value: &str| config_set(exe, &[("attention.sinks", value)], false);
+    let out = m::step(picked, &mut m::TermAsk::new(), &set);
+    rep.done.extend(out.done);
+    rep.skipped.extend(out.skipped);
+    rep.paths.extend(out.paths);
+    for message in out.needs_human {
+        rep.rows
+            .push(row("needs_human", "messaging_unfinished", message.clone()));
+        rep.needs_human.push(message);
+    }
+}
+
 fn layer_name(l: Layer) -> &'static str {
     match l {
         Layer::Global => "global",
@@ -2445,10 +2470,7 @@ pub fn run(tail: &[OsString]) -> i32 {
             (Layer::Global, "groom-agent") => step_groom_agent(&exe, &mut rep, &mut loaded),
             (Layer::Global, "projects") => step_projects(&exe, &root, &mut rep),
             (Layer::Global, "review-merge") => step_review_merge(&mut rep),
-            (Layer::Global, "messaging") => rep.skipped.push(crate::setup_messaging::summary_line(
-                &crate::setup_messaging::sink_rows(),
-                &crate::setup_messaging::machine(),
-            )),
+            (Layer::Global, "messaging") => step_messaging(&exe, prompting, None, &mut rep),
             (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
             (Layer::Global, "permission-rules") => step_permission_rules(&mut rep),
             (Layer::Global, "join") => {

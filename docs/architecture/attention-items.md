@@ -169,7 +169,7 @@ A webhook sink receives the `Delivery` body. The body carries `delivery_id`, `ev
 
 ## Chat channels
 
-A chat channel sends each open question to one chat as one message. A reply in that message's thread answers it. The channels are Telegram, Discord, and iMessage through a BlueBubbles server. Each one is off until its row exists in config.toml. Keep the row's secret in `~/.fno/.env`, so the daemon reads it.
+A chat channel sends each open question to one chat as one message. A reply in that message's thread answers it. The channels are Telegram, Discord, and iMessage through a BlueBubbles server. Each one is off until its row exists in config.toml. Keep the row's secret in `~/.fno/.env`, so the daemon reads it. `fno config setup run --only messaging` walks each channel, writes its row and its secret, and sends one test message. Setup also offers this step, and a skip prints the same command.
 
 A chat row is an `[[attention.sinks]]` row with `type` set to `telegram`, `discord` or `bluebubbles`. Every row carries `name`, `type`, `machine`, `token_env` and `allow`. Telegram adds `chat_id`. Discord adds `channel_id`. BlueBubbles adds `url` and `chat_guid`, and its `token_env` names the server password. A loopback `url` is legal for BlueBubbles, because the server runs on the same Mac.
 
