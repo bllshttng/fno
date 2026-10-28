@@ -8613,7 +8613,7 @@ event_types:
     data: {required: [slug, branch, held_ms]}
   - name: merge_queue_entry
     description: "authorized_merge queued a PR head in place of merging it, because merge_queue.enabled is on. The merge queue arm lands it in a batch tested on main."
-    sources: [rust]
+    sources: [daemon, rust]
     data: {required: [slug, pr, head]}
   - name: merge_queue_step
     description: "One merge queue act on a batch. step names it: build, rerun, land, split, eject, rebuild or hold."
