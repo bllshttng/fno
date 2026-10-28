@@ -298,10 +298,11 @@ pub fn run_with(config: &TriggerConfig, seams: Seams) -> TriggerOutcome {
 
     // One answered-questions read per pass, shared by every scope. An
     // unreadable journal is not a trigger.
-    if budget_exhausted(seconds_left.as_deref_mut()) {
+    // One read decides both the floor and the wait cap.
+    let left = read_seconds_left(seconds_left.as_deref_mut());
+    if left.is_some_and(|l| l < STEP_FLOOR_S) {
         return budget_stop(summary, "answers");
     }
-    let left = read_seconds_left(seconds_left.as_deref_mut());
     let (answered, answers_timed_out) = bounded(move || answered(), wait_cap(left, truth_wait_s));
     let _ = answers_timed_out;
     let answered_records = answered.unwrap_or_default();
@@ -367,10 +368,10 @@ pub fn run_with(config: &TriggerConfig, seams: Seams) -> TriggerOutcome {
         if reason.is_none() {
             // The board lane: poll the shared graph read on its wait cap.
             if graph.is_none() && !graph_cut {
-                if budget_exhausted(seconds_left.as_deref_mut()) {
+                let left = read_seconds_left(seconds_left.as_deref_mut());
+                if left.is_some_and(|l| l < STEP_FLOOR_S) {
                     return budget_stop(summary, "graph");
                 }
-                let left = read_seconds_left(seconds_left.as_deref_mut());
                 match graph_rx.recv_timeout(Duration::from_secs_f64(wait_cap(left, truth_wait_s))) {
                     Ok(GraphOutcome::Rows(rows)) => graph = Some(rows),
                     Ok(GraphOutcome::Failed(e)) => {
