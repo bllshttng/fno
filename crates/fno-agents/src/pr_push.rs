@@ -236,11 +236,11 @@ pub(crate) fn read_checks_rows(gh_bin: &str, cwd: &Path, head: &str) -> Result<V
     // A new run of a workflow on the same head (a body edit, a re-trigger)
     // mints a new check suite, so the suite id cannot key supersession: the
     // old run's failure would stand beside the new run's row forever. The
-    // workflow name keys it, as `gh pr checks` rows do.
+    // workflow file keys it: two files can share a display name.
     let workflow_of = |suite: &Value| -> String {
         runs.iter()
             .find(|run| run.get("check_suite_id") == Some(suite))
-            .and_then(|run| run.get("name").and_then(Value::as_str))
+            .and_then(|run| run.get("path").and_then(Value::as_str))
             .map(str::to_string)
             .unwrap_or_else(|| suite.to_string())
     };
