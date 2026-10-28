@@ -2170,6 +2170,16 @@ fn apply_rerun(a: &Args, findings: &mut [Finding], head: &str) -> Vec<String> {
             };
             continue;
         }
+        // A cancelled run during a live Actions incident never reached a
+        // runner, so rerunning it feeds the dead queue (2026-10-05, x-cca9):
+        // hold the row with the incident line. Both reads fail open - no
+        // casualty shape, no live page, no hold.
+        if was_cancelled {
+            if let Some(hold) = incident_hold(a, &run_id) {
+                f.remedy = Remedy::Escalate { repro: hold };
+                continue;
+            }
+        }
         match run(&a.gh_bin, &rerun_args, &a.cwd, remedy_timeout(a)) {
             Ok((true, _, _)) => {
                 issued.push(key);
@@ -2194,6 +2204,29 @@ fn apply_rerun(a: &Args, findings: &mut [Finding], head: &str) -> Vec<String> {
         }
     }
     issued
+}
+
+/// The incident probe a cancelled rerun must pass before issuing: read the
+/// run's jobs for the never-got-a-runner shape, and only then spend the
+/// status-page read. Fail-open: any read failure is no incident.
+fn incident_hold(a: &Args, run_id: &str) -> Option<String> {
+    let raw = gh_api(
+        a,
+        &format!("repos/{{owner}}/{{repo}}/actions/runs/{run_id}/jobs?per_page=100"),
+        &[],
+    )
+    .ok()?;
+    let jobs = serde_json::from_str::<Value>(&raw)
+        .ok()?
+        .get("jobs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !crate::gh_incident::cancelled_no_runner(&jobs) {
+        return None;
+    }
+    let incidents = crate::pr_status::seams::platform_incident_via(&seam_bin(a, "curl"));
+    crate::gh_incident::rerun_hold(&jobs, &incidents)
 }
 
 /// One `pr_heal_tick` row per drive-loop invocation: the arm's visibility.
