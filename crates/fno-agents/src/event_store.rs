@@ -510,13 +510,7 @@ fn refuse_corrupt_store(store: &Path, error: &str) -> String {
         identity.update(meta.ino().to_le_bytes());
     }
     let id = format!("q-store-{:x}", identity.finalize());
-    let mut row = serde_json::json!({"ts": chrono::Utc::now().to_rfc3339(), "type": "operator_question", "source": "rust", "data": {"question_id": id, "question": error, "ask": "Recover an offline copy of the event store; pause writers before any separately approved installation.", "asker": "event-store", "node": "none", "context": {"blocked_because": error, "unknowns": "The original corruption interleaving and live installation safety have not been verified."}, "subject": "event-store-integrity", "blocks": []}});
-    if let Some(data) = row
-        .get_mut("data")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        crate::identity::stamp_person(data);
-    }
+    let row = serde_json::json!({"ts": chrono::Utc::now().to_rfc3339(), "type": "operator_question", "source": "rust", "data": {"question_id": id, "question": error, "ask": "Recover an offline copy of the event store; pause writers before any separately approved installation.", "asker": "event-store", "node": "none", "context": {"blocked_because": error, "unknowns": "The original corruption interleaving and live installation safety have not been verified."}, "subject": "event-store-integrity", "blocks": []}});
     use std::io::Write;
     let notice = std::fs::OpenOptions::new()
         .create(true)
