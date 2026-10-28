@@ -158,7 +158,6 @@ struct AppState {
     /// /rundown then never republishes through the fallback path, so a
     /// project-isolated bridge cannot overwrite the global page.
     rundown_republish: bool,
-    /// The `/command/model.json` fold and its refresh flag.
     command: Arc<crate::web_command::CommandCache>,
     /// True when the bound address is loopback, so the backlog page may act.
     /// Computed from the bound address, never from `--bind` text.
@@ -1075,9 +1074,7 @@ async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response 
     .await
 }
 
-/// `GET /command/model.json`: the org view's fleet fold behind the token.
-/// The first read waits for one fleet read; later reads answer from the
-/// cache and start one background refresh once it is stale.
+/// `GET /command/model.json`: the first read waits; later reads answer from the cache.
 async fn command_model(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response {
     if !token_ok(q.t.as_deref(), &st.token) {
         return unauthorized();

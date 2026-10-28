@@ -1,6 +1,5 @@
-//! `/command/model.json`: the org view's fleet fold, served as JSON by the
-//! web bridge. The bridge keeps the last good read and refreshes it off the
-//! request path, so a slow fleet read never holds a request.
+//! `/command/model.json`: the org view's fleet fold as JSON. The bridge keeps
+//! the last good read and refreshes it off the request path.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -95,10 +94,9 @@ impl CommandCache {
         }
         let fleet = st.good.as_ref().map(|(f, _)| f);
         let fleet_error = match (&st.failure, &st.good) {
-            (Some((reason, at)), _) => json!({
-                "reason": reason,
-                "failed_age_s": at.elapsed().as_secs(),
-            }),
+            (Some((reason, at)), _) => {
+                json!({"reason": reason, "failed_age_s": at.elapsed().as_secs()})
+            }
             (None, None) => json!({ "reason": "fleet not read yet", "failed_age_s": null }),
             (None, Some(_)) => Value::Null,
         };
