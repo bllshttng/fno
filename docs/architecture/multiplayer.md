@@ -61,9 +61,9 @@ A later fno version that adds a backlog column does not change the primary. Writ
 
 ## A node on a second machine
 
-These facts travel with the store. The backlog rows in `SHARED_TABLES` move: nodes, notes, decisions, sessions and pull requests. The dispatch claims move. Mail to `<name>@<host>` moves.
+These facts travel with the store. The backlog rows in `SHARED_TABLES` move: nodes, notes, decisions, sessions and pull requests. The dispatch claims move. Mail to `<name>@<host>` moves. Open questions move: see [Questions](#questions).
 
-These facts stay on each machine. The agent registry, the roles, the questions, the event store, the worktrees, the credentials and the harness logins stay. The config stays too. That covers `lead.enabled`, the work map and the agent caps. Review attestations are the one event-store exception. They reach the primary through their own carrier, so machine B's merge gate sees machine A's review.
+These facts stay on each machine. The agent registry, the roles, the event store, the worktrees, the credentials and the harness logins stay. The config stays too. That covers `lead.enabled`, the work map and the agent caps. Review attestations are the one event-store exception. They reach the primary through their own carrier, so machine B's merge gate sees machine A's review.
 
 Plan bodies of open nodes travel through their own carrier too (`crates/fno-agents/src/plan_carry.rs`). A node that is not done, superseded, deferred or archived keeps its plan file in the primary's `fno_plan_bodies` table, keyed on the node id. Each backlog-share tick and each `fno agents claim backlog sync` pushes the bodies this machine changed. It writes a body this machine lacks at the recorded `plan_path`. A node whose binding was lost on this machine still gets its file, because the key is the node id. `fno do target init` fetches its own node's plan on a miss, before it refuses or seats a worker with no plan. The conflict rule: each machine records the body hash it last synced. When both machines changed one plan since then, neither file is overwritten, and the sync receipt names the node under `plans.conflicts`. Merge the two copies by hand.
 
@@ -104,6 +104,16 @@ A final refusal does not wait. A pull that sees exit 1 asks the receiver's own s
 The primary can be unreachable. The send then queues the row in `mail_outbox.jsonl` and reports `queued (local, store unreachable)`. When the store answers again, the flush leg drains it. No `store.remote_url` at all means the ssh fallback. The remote machine's own `fno` answers, its exit code and receipt pass through, and `--from-self` refuses on that lane. The reason: that flag stamps whichever machine runs the command, so pass `--from-name`.
 
 Host spellings normalize on write and on pull. Lowercase, and a trailing `.local` drops, so `iMac2D2.local` and `imac2d2` are one host. The two-machine walk-through is the same throwaway-primary drill as [the shared backlog](#start-sharing).
+
+## Questions
+
+A question asked on one machine shows on every machine of the store. The code is `crates/fno-agents/src/question_bus.rs`. The event store stays on each machine. One table on the primary, `fleet_question`, carries the questions, and it never joins `SHARED_TABLES`.
+
+The table holds one row per machine id and question id. Only the machine that asked writes the row. The row holds the raw `operator_question` record, with its text, options and node (the user ruled this on 2026-10-27), and the close time and reason. Each daemon beat publishes this machine's open questions and their closes. The beat then pulls the other machines' rows. It appends a new peer question to the local `questions.jsonl` through the one append path, stamped `data.origin_machine` and `data.host`. The copy's id is `<id>@<host>`, so a fixed id two machines both use, such as `provider-cap:<lane>`, stays two questions. So `fno inbox outstanding`, the Waiting on you block and the mux Questions tab list it with no change of their own. Each shows `on <host>` beside it. When the origin closes a question, the copy closes on the next pull. A copy whose origin row is gone from a clean pull closes as `gone from <host>`. An origin never deletes an open row, so a missing row was closed and then aged out.
+
+A copy closes only through its asking machine. `fno inbox outstanding clear` on a copy refuses and names that machine, because a close here leaves the original open there. Answer it on the machine that asked, or on its synced vault page, and the close reaches every machine on the next pull.
+
+The beat rides the mail cadence key, `agents.remote.pull_interval_secs`. A closed row leaves the primary 7 days after the close (`RETAIN_SECS`). The vault page stays the asking machine's: a copy gets no page, so the synced folder has one writer. `state/question_bus/status.json` names the last beat, its peer hosts and its last error. With no `store.remote_url`, questions stay on the machine that asked. The trust model is the mail bus's: any writer on the primary can write a row, and the tailnet is the boundary.
 
 ## The lease heartbeat
 

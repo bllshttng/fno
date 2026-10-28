@@ -752,6 +752,7 @@ mod tests {
 
     fn ready_item(id: &str, harness: Option<&str>, sid: Option<&str>) -> AttentionItem {
         let item = AttentionItem {
+            host: None,
             recovery_batch: None,
             id: id.into(),
             kind: "question".into(),

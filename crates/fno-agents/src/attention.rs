@@ -200,6 +200,10 @@ pub struct AttentionItem {
     /// an unreadable graph marks nothing, so a sink never invents it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub settled: bool,
+    /// The machine that asked, on a copy pulled from another machine of the
+    /// store; `None` for a question asked here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
 }
 
 /// Every defect, so the asker fixes the row instead of a sink dropping it
@@ -435,6 +439,11 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
         })
     });
     let mut item = AttentionItem {
+        host: crate::question_bus::peer_origin(row).map(|_| {
+            str_field(row, "host")
+                .unwrap_or("another machine")
+                .to_string()
+        }),
         recovery_batch: row
             .get("_recovery_batch")
             .and_then(Value::as_str)
@@ -502,6 +511,7 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
         esc.blocked_because.clone()
     };
     let mut item = AttentionItem {
+        host: None,
         recovery_batch: None,
         id: format!("note-{slug}"),
         kind: "question".to_string(),
@@ -569,6 +579,7 @@ fn mine_items(lane_text: &str) -> Vec<AttentionItem> {
             continue;
         }
         out.push(AttentionItem {
+            host: None,
             recovery_batch: None,
             id: format!("mine-{:016x}", fnv1a(rest)),
             kind: "mine".to_string(),

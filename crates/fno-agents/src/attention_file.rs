@@ -719,6 +719,7 @@ mod tests {
 
     fn item() -> AttentionItem {
         AttentionItem {
+            host: None,
             recovery_batch: None,
             id: "q-e5e5520b".into(),
             kind: "question".into(),
