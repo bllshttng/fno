@@ -26,7 +26,7 @@ A machine chore whose row names the command that clears it is a `fleet_task`, no
 
 ## The ten context fields and the readiness gate
 
-The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields. The `asker` object carries `person` when the row has one: the asking machine's `fleet.owner`, else its login name. It is a display name, never proof, and no gate reads it.
+The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields. If the row has a `person`, the `asker` object carries it: the asking machine's `fleet.owner`, else its login name. It is a display name, never proof, and no gate reads it.
 
 ## Who asks: direct, by default
 
