@@ -356,6 +356,7 @@ mod tests {
             missing: vec![],
             state: "open".into(),
             settled: false,
+            images: vec![],
         }
     }
 

@@ -221,6 +221,8 @@ pub fn outside_question(groups: &[StoredGroup]) -> IntakeRequest {
         render_cap: None,
         op: None,
         event: None,
+        images: Vec::new(),
+        screens_dir: None,
     }
 }
 
@@ -553,6 +555,8 @@ pub fn file_budget_question(
         render_cap: None,
         op: None,
         event: None,
+        images: Vec::new(),
+        screens_dir: None,
     };
     let answer = crate::question_intake::run_intake(&req, home);
     // A dedup names the still-open question: adopt its id so the answer

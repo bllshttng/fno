@@ -202,6 +202,11 @@ def test_every_moved_spelling_is_hidden():
             "mcp", "setup", "route", "research", "think", "target", "state",
             "phase", "workspace", "worktree", "autonomy", "loops", "observer",
             "lead",
+            # `test` joined when the whole test-command family ported native:
+            # the front door claims both spellings (classify_test_command),
+            # the tail byte-verbatim, so a python registration would forward
+            # into nothing.
+            "test",
         ):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue

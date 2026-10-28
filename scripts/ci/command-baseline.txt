@@ -92,7 +92,6 @@ plan
 pr-watch
 resume
 scoreboard
-test
 uninstall
 update
 version

@@ -241,6 +241,12 @@ def scrubbed_env(fake_home: Path, case_env: dict[str, str]) -> dict[str, str]:
         "FNO_ROUTE_PROVIDER": "",
         "FNO_AGENTS_BIN": "",
         "FNO_CONFIG": "",
+        # The case env clears os.environ; without this floor the in-process
+        # writer loses TMPDIR, its tempdir falls to /tmp, and a fixture
+        # binary under the OS temp root reads as durable - the 2026-10-28
+        # rewrite of the machine's gh shim.
+        "TMPDIR": os.environ.get("TMPDIR", ""),
+        "TEMPDIR": os.environ.get("TEMPDIR", ""),
     }
     env.pop("FNO_CAPTURE_GOLDEN", None)
     env.update(case_env)

@@ -554,6 +554,31 @@ mod probe {
         // refused spawn deserves the same fleet reading as an admitted one.
         out.insert("slots".into(), json!(slots));
         out.insert("max_live".into(), json!(cap));
+        // The lanes answer, beside its decider (the gate's own cap and slot
+        // occupancy): how many more spawn lanes fit. A machine-load hold caps
+        // it at 0 through the SAME footprint admission the gate refuses
+        // spawns on, so `fno doctor lanes` and the suite's thread cap read
+        // one arithmetic (law d-b6cc1a2a: Python deletes, the gate decides).
+        let mut headroom = cap.saturating_sub(slots);
+        if let Ok(raw) = crate::footprint_cache::footprint_cause_cached(
+            crate::footprint_cache::FOOTPRINT_CACHE_FRESH,
+        ) {
+            if let Some(verdict) = serde_json::from_str::<Value>(&raw).ok().and_then(|v| {
+                v.get("admission")
+                    .and_then(|a| a.get("verdict"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }) {
+                if matches!(verdict.as_str(), "hold" | "undecidable" | "refuse") {
+                    headroom = 0;
+                    out.insert(
+                        "headroom_note".into(),
+                        json!(format!("cpu admission {verdict}, headroom capped at 0")),
+                    );
+                }
+            }
+        }
+        out.insert("headroom".into(), json!(headroom));
 
         // The test feed rides only when the payload asks, so gate-status and
         // the leads pay nothing for it.

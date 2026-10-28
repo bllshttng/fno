@@ -8600,9 +8600,17 @@ event_types:
     sources: [daemon]
     data: {required: [slug, head, outcome]}
   - name: ci_tier_pass
-    description: "One ci_tier arm pass that acted on a repo's open PRs: the active tier, the spared PRs, and the runs it cancelled or reran."
+    description: "One ci_tier arm pass over a repo's open PRs: the active tier, the ranked PRs and their branches, and the runs it cancelled or reran. Written when the tier changes, when it acts, and every 10 minutes."
     sources: [daemon]
     data: {required: [slug, slots, active]}
+  - name: ci_tier_held
+    description: "fno do pr push held a push because the CI tier was full and the PR ranked below every PR in it."
+    sources: [daemon, rust]
+    data: {required: [slug, branch, pr, cwd]}
+  - name: ci_tier_wake
+    description: "The ci_tier arm found a held push whose hold cleared and woke the session to push again."
+    sources: [daemon]
+    data: {required: [slug, branch, held_ms]}
   - name: mcp_channel_demoted_to_socket
     description: "Legacy agents-family telemetry kind, envelope-mapped by the shared emitter."
     sources: [daemon, agents]

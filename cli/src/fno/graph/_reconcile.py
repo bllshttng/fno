@@ -1395,7 +1395,8 @@ def children_all_closed(parent: dict, kids: list[dict]) -> bool:
     still catching up - EXCEPT a child superseded BY THIS PARENT: the parent
     absorbed that child's work, so the parent's own liveness keeps it open.
     The shipped term keeps a parent whose every child was replaced elsewhere
-    from closing as done with nothing built.
+    from closing as done with nothing built. A deferred child never counts as
+    shipped, so a parent whose only child is a won't-do deferral stays open.
     """
     from fno.graph.statuses import is_terminal_entry
 
@@ -1404,7 +1405,14 @@ def children_all_closed(parent: dict, kids: list[dict]) -> bool:
         return False
     if any(not is_terminal_entry(k) or k.get("superseded_by") == pid for k in kids):
         return False
-    return any(k.get("status") != "superseded" and not k.get("superseded_by") for k in kids)
+    return any(
+        k.get("status") not in ("superseded", "deferred")
+        and not k.get("superseded_by")
+        and not k.get("deferred_at")
+        and bool(k.get("completed_at"))
+        and not str(k.get("completed_at")).startswith("deferred:")
+        for k in kids
+    )
 
 
 def cascade_close_should_stop(parent: dict, kids: list[dict], child: object) -> bool:
