@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -40,10 +41,36 @@ struct Cursor {
 
 static CURSORS: Mutex<Option<HashMap<String, Cursor>>> = Mutex::new(None);
 
+/// The codex rollout index. Building it walks the whole session store, so
+/// one build serves every cold cursor; a session missing from it rebuilds
+/// at most once per `REINDEX`.
+static ROLLOUTS: Mutex<Option<(Instant, HashMap<String, PathBuf>)>> = Mutex::new(None);
+const REINDEX: Duration = Duration::from_secs(30);
+
+fn codex_rollout(sid: &str) -> Option<PathBuf> {
+    let sid = sid.to_ascii_lowercase();
+    let mut guard = ROLLOUTS.lock().unwrap_or_else(|e| e.into_inner());
+    let rebuild = guard
+        .as_ref()
+        .is_none_or(|(at, map)| !map.contains_key(&sid) && at.elapsed() > REINDEX);
+    if rebuild {
+        *guard = Some((Instant::now(), crate::session_backfill::codex_rollouts()));
+    }
+    guard.as_ref()?.1.get(&sid).cloned()
+}
+
 fn transcript(harness: &str, sid: &str) -> Option<PathBuf> {
     match harness {
-        "claude" => crate::claude_drive::find_transcript(sid),
-        "codex" => crate::session_backfill::codex_rollouts().remove(&sid.to_ascii_lowercase()),
+        // A worker on an isolated account keeps its transcript under that
+        // account's config dir, not the ambient one.
+        "claude" => crate::claude_drive::find_transcript(sid).or_else(|| {
+            crate::claude_roster::isolated_account_dirs()
+                .into_iter()
+                .find_map(|(_, dir)| {
+                    crate::claude_drive::find_transcript_in(&dir.join("projects"), sid)
+                })
+        }),
+        "codex" => codex_rollout(sid),
         _ => None,
     }
 }
@@ -94,7 +121,9 @@ pub fn turn_text(event: &Value) -> Option<String> {
 pub fn reply_text(event: &Value) -> Option<String> {
     let items = match event.get("type").and_then(Value::as_str)? {
         "assistant" => event.pointer("/message/content")?.as_array()?,
-        "response_item" if event.pointer("/payload/role").and_then(Value::as_str) == Some("assistant") => {
+        "response_item"
+            if event.pointer("/payload/role").and_then(Value::as_str) == Some("assistant") =>
+        {
             event.pointer("/payload/content")?.as_array()?
         }
         _ => return None,
