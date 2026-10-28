@@ -632,6 +632,7 @@ pub mod test_delta;
 pub mod test_hold;
 pub mod test_run;
 mod test_run_journal;
+mod test_run_pins;
 pub mod think_daily;
 pub mod think_dispatch;
 pub mod think_inspect;
