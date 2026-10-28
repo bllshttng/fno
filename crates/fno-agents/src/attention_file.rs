@@ -17,7 +17,11 @@ pub fn escape_text(text: &str) -> String {
 /// A clause the page joins with ". ": its own closing period is dropped, so
 /// a template-shaped "<choice>." never renders "choice.. Next:".
 fn clause(text: &str) -> String {
-    escape_text(text.trim_end().trim_end_matches('.'))
+    let text = text.trim_end();
+    match text.strip_suffix('.') {
+        Some(rest) if !rest.ends_with('.') => escape_text(rest),
+        _ => escape_text(text),
+    }
 }
 
 /// The recommendation's reason without the "Option N, " lead the template
@@ -861,6 +865,7 @@ mod tests {
         let mut shaped = item();
         shaped.options[0].text = "Yes, net zero needs no grant.".into();
         shaped.options[0].next = Some("open the gate.".into());
+        shaped.options[1].text = "Stay strict...".into();
         if let Some(rec) = shaped.recommendation.as_mut() {
             rec.why = "Option 2, the strict reading blocks the least.".into();
         }
@@ -868,6 +873,10 @@ mod tests {
         assert!(shaped_body
             .contains("- [ ] 1. Yes, net zero needs no grant. Next: open the gate. Pro: fast"));
         assert!(shaped_body.contains("Recommended: 2, because the strict reading blocks the least. Downside: one release carries the shim."));
+        assert!(
+            shaped_body.contains("- [ ] 2. Stay strict...\n"),
+            "an ellipsis keeps its dots"
+        );
     }
 
     #[test]
