@@ -1681,7 +1681,7 @@ fn copy_bubble(view: &mut View, whole_body: bool) {
 /// the cause and the keys that act on it. Submit or retry comes first; copy
 /// and paste by hand is the last rung, offered once a retry failed too.
 fn state_line(r: &Value) -> Option<(String, BRole)> {
-    let reason = text_of(r, "state_reason");
+    let reason = reason_words(text_of(r, "state_reason"), text_of(r, "to"));
     let failures = r.get("state_failures").and_then(Value::as_u64).unwrap_or(0);
     match text_of(r, "state") {
         "" => None,
@@ -1701,6 +1701,33 @@ fn state_line(r: &Value) -> Option<(String, BRole)> {
         }
         word => Some((word.to_string(), BRole::Meta)),
     }
+}
+
+/// A lane's failure reason in words. The lanes join their reason tokens
+/// with `;`, so the first token with a phrase wins; an unknown token reads
+/// with its hyphens as spaces.
+fn reason_words(reason: &str, to: &str) -> String {
+    let to = if to.is_empty() { "the recipient" } else { to };
+    let phrase = |token: &str| -> Option<String> {
+        Some(match token {
+            "no-pane-ref" => format!("{to} has no pane to type into"),
+            "not-confirmed" => format!("{to} did not show it in a turn"),
+            "no-recipient" => format!("no agent named {to} is registered"),
+            "bus-only" => format!("{to} takes mail only, never typed text"),
+            "attach-failed" => format!("could not attach to {to}'s pane"),
+            "no-confirm-source" => format!("{to}'s harness cannot confirm a turn"),
+            "io-error" => "the pane connection broke".to_string(),
+            "unsafe-text" => "the text holds characters a pane cannot take".to_string(),
+            "no-binary" => "the harness program is missing".to_string(),
+            t if t.starts_with("mux-send-failed") => "the pane refused the text".to_string(),
+            _ => return None,
+        })
+    };
+    let tokens = || reason.split(';').map(str::trim).filter(|t| !t.is_empty());
+    tokens()
+        .find_map(phrase)
+        .or_else(|| tokens().next().map(|t| t.replace('-', " ")))
+        .unwrap_or_default()
 }
 
 /// The selected thread row when it is a message this agent sent, with its
@@ -1772,6 +1799,7 @@ fn retry_selected(view: &mut View) {
         return;
     }
     let id = text_of(&row, "id").to_string();
+    let to = text_of(&row, "to").to_string();
     let tx = view.reply_notice_tx.clone();
     view.set_notice(format!("retrying {id}"));
     tokio::spawn(async move {
@@ -1780,7 +1808,7 @@ fn retry_selected(view: &mut View) {
             .output()
             .await;
         let notice = match out {
-            Ok(out) => retry_notice(&String::from_utf8_lossy(&out.stdout)),
+            Ok(out) => retry_notice(&String::from_utf8_lossy(&out.stdout), &to),
             Err(e) => format!("retry could not run: {e}; press y to copy the message"),
         };
         if let Some(tx) = tx {
@@ -1791,11 +1819,11 @@ fn retry_selected(view: &mut View) {
 
 /// The notice for one retry answer: the state it reached, or the cause and
 /// the next step when it failed again.
-fn retry_notice(stdout: &str) -> String {
+fn retry_notice(stdout: &str, to: &str) -> String {
     let Ok(v) = serde_json::from_str::<Value>(stdout.trim()) else {
         return "retry gave no answer; press y to copy the message".to_string();
     };
-    let reason = text_of(&v, "reason");
+    let reason = reason_words(text_of(&v, "reason"), to);
     match text_of(&v, "state") {
         "failed" => format!(
             "retry failed: {reason}. Next: r to try again, or y to copy it and paste it into the recipient's session"

@@ -80,7 +80,7 @@ async fn messages_reply_board_contracts() {
              "rows":[
                {"id":"m5","ts":"2026-10-01T08:55:00Z","from":"quill","from_key":"s-q","to_key":"s-c","summary":"one","body":"one","system":false},
                {"id":"m6","ts":"2026-10-01T08:56:00Z","from":"quill","from_key":"s-q","to_key":"s-c","summary":"two","body":"two","system":false},
-               {"id":"m7","ts":"2026-10-01T08:57:00Z","from":"candor","from_key":"s-c","to_key":"s-q","summary":"three","body":"three","system":false,"state":"failed","state_reason":"no-recipient","state_failures":2},
+               {"id":"m7","ts":"2026-10-01T08:57:00Z","from":"candor","from_key":"s-c","to_key":"s-q","to":"quill","summary":"three","body":"three","system":false,"state":"failed","state_reason":"waited-3s;no-pane-ref;not-confirmed","state_failures":2},
                {"id":"m8","ts":"2026-10-01T08:58:00Z","from":"quill","from_key":"s-q","to_key":"s-c","summary":"four","body":"four","system":false}],
              "last_ts":"2026-10-01T08:58:00Z"}
         ],
@@ -270,8 +270,8 @@ async fn messages_reply_board_contracts() {
         .filter(|t| t.trim() == "quill" || t.trim() == "candor")
         .count();
     assert_eq!(labels4, 3, "{texts4:?}");
-    // A retry that failed again names its cause, then the retry key, then
-    // the copy rung last, in the warning color.
+    // A retry that failed again names its cause in words, then the retry
+    // key, then the copy rung last, in the warning color.
     let warn: Vec<&str> = lines4
         .iter()
         .filter(|l| l.roles.contains(&BRole::Warn))
@@ -279,7 +279,7 @@ async fn messages_reply_board_contracts() {
         .collect();
     assert_eq!(
         warn.join(" "),
-        "retry failed: no-recipient \u{b7} r retry \u{b7} y copy",
+        "retry failed: quill has no pane to type into \u{b7} r retry \u{b7} y copy",
         "{texts4:?}"
     );
     let one_i = texts4.iter().position(|t| t.ends_with("one")).unwrap();

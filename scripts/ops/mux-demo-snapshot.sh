@@ -569,11 +569,14 @@ write("chat-demo-review", [
     msg(9, 1, "rowan", "scout", "And tag the release once CI is green."),
     state(9, 1, "failed", "not-confirmed"),
     # The r retry failed too, so the line offers the copy rung.
-    state(9, 0, "failed", "no-pane-ref"),
+    state(9, 0, "failed", "waited-3s;no-pane-ref"),
+    # A first failure: its cause and r retry, no copy rung yet.
+    msg(10, 0, "rowan", "scout", "Then post the 429 shot on the visual page."),
+    state(10, 0, "failed", "not-confirmed"),
 ])
 write("chat-demo-keys", [
     msg(8, 4, "rowan", "archer", "Rotate the staging key once the deploy is green."),
-    state(8, 4, "failed", "recipient is bus-only by policy"),
+    state(8, 4, "failed", "bus-only"),
 ])
 write("chat-demo-scope", [
     msg(3, 21, "wren", "archer", "Webhook retry landed behind a flag; the dead-letter queue drains nightly."),
