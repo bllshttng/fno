@@ -231,6 +231,49 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
     }
 }
 
+/// `--context-audit`: the census module is Python, so the wheel's own
+/// interpreter runs it with the whole fact set in one JSON argument.
+fn context_audit_run(
+    source: Option<String>,
+    context: &std::collections::BTreeMap<&str, String>,
+    json: bool,
+) -> i32 {
+    let Ok(budget) = context
+        .get("budget")
+        .map_or(Ok(32_768), |b| b.parse::<i64>())
+    else {
+        return usage_error("Option '--context-budget' needs a whole number");
+    };
+    let root = source.unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|d| d.display().to_string())
+            .unwrap_or_else(|_| ".".into())
+    });
+    let all = || "all".to_string();
+    let payload = serde_json::json!({
+        "root": root,
+        "host": context.get("host"),
+        "harness": context.get("harness").cloned().unwrap_or_else(all),
+        "entry": context.get("entry").cloned().unwrap_or_else(all),
+        "budget": budget,
+        "json_out": json,
+    });
+    let Some(python) = report::wheel_python() else {
+        eprintln!("fno doctor --context-audit: no fno-py interpreter found; install the fno wheel");
+        return 2;
+    };
+    match std::process::Command::new(python)
+        .args(["-m", "fno.context_audit", &payload.to_string()])
+        .status()
+    {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("fno doctor --context-audit: interpreter spawn failed: {e}");
+            2
+        }
+    }
+}
+
 fn usage_error(message: &str) -> i32 {
     eprintln!("Usage: fno doctor [OPTIONS]\nTry 'fno doctor --help' for help.\n\nError: {message}");
     2
@@ -479,6 +522,8 @@ fn run_home(args: &[String]) -> i32 {
     let mut codex_bind = false;
     let mut codex_app_server = false;
     let mut find_transcript: Option<String> = None;
+    let mut context_audit = false;
+    let mut context: std::collections::BTreeMap<&str, String> = Default::default();
     let mut i = 0;
     while i < args.len() {
         let word = args[i].as_str();
@@ -490,6 +535,7 @@ fn run_home(args: &[String]) -> i32 {
             "--codex-hooks" => codex_hooks = true,
             "--codex-bind" => codex_bind = true,
             "--codex-app-server" => codex_app_server = true,
+            "--context-audit" => context_audit = true,
             "--find-transcript" => {
                 i += 1;
                 match args.get(i) {
@@ -504,12 +550,14 @@ fn run_home(args: &[String]) -> i32 {
                     None => return usage_error("Option '--source' requires an argument"),
                 }
             }
-            // Accepted-and-ignored context arms: the Python command declared
-            // them, so a bare run with one set still answers the report.
+            // The context arms feed --context-audit; a bare report ignores them.
             "--context-harness" | "--context-entry" | "--context-budget" | "--context-host" => {
                 i += 1;
-                if args.get(i).is_none() {
-                    return usage_error(&format!("Option '{word}' requires an argument"));
+                match args.get(i) {
+                    Some(v) => {
+                        context.insert(&word[10..], v.clone());
+                    }
+                    None => return usage_error(&format!("Option '{word}' requires an argument")),
                 }
             }
             w if w.starts_with("--source=") => source = Some(w["--source=".len()..].to_string()),
@@ -519,12 +567,24 @@ fn run_home(args: &[String]) -> i32 {
             w if w.starts_with("--context-harness=")
                 || w.starts_with("--context-entry=")
                 || w.starts_with("--context-budget=")
-                || w.starts_with("--context-host=") => {}
+                || w.starts_with("--context-host=") =>
+            {
+                let (key, value) = w[10..].split_once('=').unwrap_or_default();
+                context.insert(key, value.to_string());
+            }
             other => return usage_error(&format!("Got unexpected extra argument ({other})")),
         }
         i += 1;
     }
 
+    if context_audit {
+        if fix || cost_check || codex_hooks || codex_bind {
+            return usage_error(
+                "--context-audit cannot be combined with --fix, --cost-check, --codex-hooks, or --codex-bind",
+            );
+        }
+        return context_audit_run(source, &context, json);
+    }
     // The hidden op doors the surviving Python callers read (change 4).
     if codex_app_server {
         print_json(&report::codex_app_server_report());
@@ -812,6 +872,19 @@ fn cost_check_report() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::bounded_command_for;
+
+    /// The Python CLI declares no --context-audit, so a fall-through exits 2.
+    #[test]
+    fn context_audit_is_claimed_natively() {
+        let argv: Vec<std::ffi::OsString> = ["doctor", "--context-audit", "--json"]
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect();
+        assert!(matches!(
+            super::classify(&argv),
+            Some(super::Claim::Home(_))
+        ));
+    }
 
     /// The deleted Python transport's contract (its
     /// test_doctor_timeout_kills_gate_descendants fixture): a timed-out
