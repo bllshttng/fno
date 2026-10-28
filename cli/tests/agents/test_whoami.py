@@ -1,6 +1,6 @@
 """Tests for the held-node reader `fno.agents.whoami` keeps for the carveout
-stamp. The `fno agents whoami` verb is native; its contracts are the goldens
-under crates/fno-agents/tests/golden/registry_verbs.
+stamp. The `fno agents whoami` command is native; its contracts are the goldens
+under crates/fno-agents/tests/golden/registry_commands.
 """
 from __future__ import annotations
 

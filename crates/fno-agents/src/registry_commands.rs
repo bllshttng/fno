@@ -1,5 +1,5 @@
 //! `fno agents whoami` and `fno agents registry-repair`: two registry-backed
-//! verbs, native since their Python fronts were retired. Both are read leaves
+//! commands, native since their Python fronts were retired. Both are read leaves
 //! over the registry the daemon reads; neither starts or asks the daemon.
 //! The router rewrites each into an argument of the `status` action
 //! (`status --whoami`, `status --registry-repair`), because the binary's
@@ -452,8 +452,11 @@ fn repair(target: &Path, to: i64, apply: bool) -> Result<String, String> {
     let transaction = crate::registry_store::begin(&absolute).map_err(|e| unreadable(&e))?;
     let raw = transaction.document.clone();
     let plan = plan_repair(&raw, &shown, to)?;
-    let verb = if apply { "repaired" } else { "would repair" };
-    let mut report = format!("{verb} {shown}: schema_version {} -> {to}\n", plan.on_disk);
+    let action = if apply { "repaired" } else { "would repair" };
+    let mut report = format!(
+        "{action} {shown}: schema_version {} -> {to}\n",
+        plan.on_disk
+    );
     let mut sorted = plan.dropped.clone();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
     for (name, keys) in &sorted {

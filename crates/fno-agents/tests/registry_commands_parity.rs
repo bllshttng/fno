@@ -1,13 +1,13 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.agents.whoami.resolve_self
 //!
-//! The name, whoami, registry-repair and heal-token verbs, frozen against
-//! goldens captured from their Python legs (tests/golden/registry_verbs/
+//! The name, whoami, registry-repair and heal-token commands, frozen against
+//! goldens captured from their Python legs (tests/golden/registry_commands/
 //! capture.py) before those legs were deleted. The fixtures here rebuild the
 //! capture's homes and stores case for case. Exit codes and stderr compare
 //! byte for byte everywhere; stdout does too, except heal-token's row, which
 //! compares by field (the Python leg printed every dataclass field, the
-//! native verb prints the row as stored).
+//! native command prints the row as stored).
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -20,7 +20,7 @@ const CODEX_ID: &str = "019a2b3c-4d5e-7f60-8123-456789abcdef";
 
 fn golden(case: &str, ext: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden/registry_verbs")
+        .join("tests/golden/registry_commands")
         .join(format!("{case}.{ext}"));
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
@@ -122,7 +122,7 @@ impl Run<'_> {
             .args(["status", door])
             .args(args)
             .output()
-            .expect("verb ran");
+            .expect("command ran");
         (
             out.status.code().unwrap_or(-1),
             scrub(&out.stdout, root),
@@ -163,7 +163,7 @@ fn name_matches_the_python_goldens() {
     let cases: &[(&str, &[&str], Option<&str>)] = &[
         (
             "name-legacy",
-            &["target", "x-245d", "--slug", "port-verbs"],
+            &["target", "x-245d", "--slug", "port-names"],
             None,
         ),
         (

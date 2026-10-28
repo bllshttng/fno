@@ -1,6 +1,6 @@
 """fno.agents.whoami: the session-to-row matchers ``fno agents whoami`` shared.
 
-The verb itself is native (crates/fno-agents/src/registry_verbs.rs). What
+The command itself is native (crates/fno-agents/src/registry_commands.rs). What
 stays here is read by Python callers: the harness-scoped session matcher the
 role authorization and succession checks use, and the held-node reader the
 carveout stamp uses. Read-only by construction.

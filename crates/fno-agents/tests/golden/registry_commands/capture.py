@@ -7,7 +7,7 @@ directly with the venv interpreter - neither a build nor the test suite (the
 reading the logs and register PRs recorded under the same freeze). Run from
 the repo root with the canonical checkout's venv:
 
-    <venv>/bin/python crates/fno-agents/tests/golden/registry_verbs/capture.py
+    <venv>/bin/python crates/fno-agents/tests/golden/registry_commands/capture.py
 
 Each case writes <case>.exit, <case>.out and <case>.err beside this script,
 with the fixture root scrubbed to <ROOT> and a repair backup stamp scrubbed to
@@ -118,7 +118,7 @@ def main() -> int:
     for stale in OUT.glob("*.exit"):
         for ext in (".exit", ".out", ".err"):
             stale.with_suffix(ext).unlink(missing_ok=True)
-    root = Path(tempfile.mkdtemp(prefix="registry-verbs-golden-"))
+    root = Path(tempfile.mkdtemp(prefix="registry-commands-golden-"))
     cases: list[tuple] = []
 
     # Warmup: spend the one-time bootstrap line so no golden carries it.
@@ -127,7 +127,7 @@ def main() -> int:
     # --- name -------------------------------------------------------------
     h = root / "home-name"
     cases += [
-        ("name-legacy", h, {}, ["name", "target", "x-245d", "--slug", "port-verbs"]),
+        ("name-legacy", h, {}, ["name", "target", "x-245d", "--slug", "port-names"]),
         ("name-dispatch", h, {}, ["name", "--source", "kl", "--command", "th", "x-245d",
                                   "--discriminator", "ab12"]),
         ("name-command-word", h, {}, ["name", "--command", "target", "x-1234"]),

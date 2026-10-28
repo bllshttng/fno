@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check of the registry-miss heal (x-da8c): a stored-but-unregistered
 # session must be addressable by the Rust lifecycle commands, which heal in
-# process (crates/fno-agents/src/store_heal.rs). The goldens pin the verb's
+# process (crates/fno-agents/src/store_heal.rs). The goldens pin the command's
 # bytes; this tree drives the lifecycle commands through a real adoption.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

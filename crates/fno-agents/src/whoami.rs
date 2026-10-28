@@ -1774,7 +1774,7 @@ fn role_text(ident: &crate::spawn_context::OwnedIdentity, home: &AgentsHome) -> 
     };
     let rows = registry_rows(home);
     // The label derives from role_level and role_scope; no row stores it.
-    crate::registry_verbs::role_text(find_by_session(&rows, sid, harness)?)
+    crate::registry_commands::role_text(find_by_session(&rows, sid, harness)?)
 }
 
 // -------------------------------------------------------------------------

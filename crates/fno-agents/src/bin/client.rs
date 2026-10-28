@@ -1237,10 +1237,10 @@ async fn run(args: Vec<String>) -> i32 {
             }
             Some("--name") => return fno_agents::naming::run_agents_name(&rest[1..]),
             Some("--whoami") => {
-                return fno_agents::registry_verbs::run_whoami(&rest[1..], &AgentsHome::from_env())
+                return fno_agents::registry_commands::run_whoami(&rest[1..], &AgentsHome::from_env())
             }
             Some("--registry-repair") => {
-                return fno_agents::registry_verbs::run_registry_repair(&rest[1..])
+                return fno_agents::registry_commands::run_registry_repair(&rest[1..])
             }
             Some("--heal-token") => return fno_agents::store_heal::run_heal_token(&rest[1..]),
             _ => {}
