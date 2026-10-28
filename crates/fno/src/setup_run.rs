@@ -1932,14 +1932,16 @@ pub(crate) fn list_json() -> serde_json::Value {
                 "effect": s.effect,
             });
             if s.id == "messaging" {
-                let states = crate::setup_messaging::channel_states(
-                    &crate::setup_messaging::sink_rows(),
-                    &crate::setup_messaging::machine(),
-                );
-                v["channels"] = states
-                    .iter()
-                    .map(|(kind, on)| json!({"type": kind, "configured": on}))
-                    .collect();
+                match crate::setup_messaging::sink_rows() {
+                    Ok(rows) => {
+                        let me = crate::setup_messaging::machine();
+                        v["channels"] = crate::setup_messaging::channel_states(&rows, &me)
+                            .iter()
+                            .map(|(kind, on)| json!({"type": kind, "configured": on}))
+                            .collect();
+                    }
+                    Err(e) => v["error"] = json!(e),
+                }
             }
             v
         })
@@ -2445,10 +2447,13 @@ pub fn run(tail: &[OsString]) -> i32 {
             (Layer::Global, "groom-agent") => step_groom_agent(&exe, &mut rep, &mut loaded),
             (Layer::Global, "projects") => step_projects(&exe, &root, &mut rep),
             (Layer::Global, "review-merge") => step_review_merge(&mut rep),
-            (Layer::Global, "messaging") => rep.skipped.push(crate::setup_messaging::summary_line(
-                &crate::setup_messaging::sink_rows(),
-                &crate::setup_messaging::machine(),
-            )),
+            (Layer::Global, "messaging") => match crate::setup_messaging::sink_rows() {
+                Ok(rows) => rep.skipped.push(crate::setup_messaging::summary_line(
+                    &rows,
+                    &crate::setup_messaging::machine(),
+                )),
+                Err(e) => rep.needs_human.push(format!("messaging: {e}")),
+            },
             (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
             (Layer::Global, "permission-rules") => step_permission_rules(&mut rep),
             (Layer::Global, "join") => {

@@ -40,18 +40,29 @@ pub fn channel_states(rows: &[Value], machine: &str) -> Vec<(&'static str, bool)
         .collect()
 }
 
-/// The `attention.sinks` rows of the global config, as JSON.
-pub fn sink_rows() -> Vec<Value> {
+/// The `attention.sinks` rows of the global config, as JSON. A missing
+/// file is no rows; an unreadable one is an error, never "unconfigured".
+pub fn sink_rows() -> Result<Vec<Value>, String> {
     let global = crate::config_defaults::global_config_path();
-    crate::config_defaults::read_flat(&global)
-        .ok()
-        .flatten()
+    let map = crate::config_defaults::read_flat(&global)
+        .map_err(|e| format!("cannot read {}: {e}", global.display()))?;
+    Ok(map
         .and_then(|map| map.get("attention.sinks").cloned())
         .map(|v| match crate::setup_run::toml_as_json(&v) {
             Value::Array(a) => a,
             _ => Vec::new(),
         })
-        .unwrap_or_default()
+        .unwrap_or_default())
+}
+
+/// A row's id as text: TOML allows a string or an integer, as the runtime
+/// loader does.
+fn id_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    }
 }
 
 /// This machine's id: the one the attention arm compares against `machine`.
@@ -121,6 +132,11 @@ impl Http for Curl {
                 child.wait_with_output()
             })
             .ok()?;
+        // A failed transfer still prints `000` for --write-out; it is no
+        // answer, not a refusal.
+        if !out.status.success() {
+            return None;
+        }
         let text = String::from_utf8_lossy(&out.stdout).to_string();
         let (body, code) = text.rsplit_once('\n')?;
         Some((code.trim().parse().ok()?, body.to_string()))
@@ -143,7 +159,7 @@ pub fn test_send(kind: &str, row: &Value, token: &str, http: &mut dyn Http) -> S
             "POST",
             &format!(
                 "https://discord.com/api/v10/channels/{}/messages",
-                row["channel_id"].as_str().unwrap_or_default()
+                id_text(&row["channel_id"])
             ),
             &[json_h, ("Authorization", format!("Bot {token}"))],
             Some(&json!({ "content": text }).to_string()),
@@ -220,11 +236,14 @@ mod tests {
         assert_eq!(test_send("bluebubbles", &row, "p w&", &mut http), "sent");
         let row = json!({"chat_id": "100"});
         assert_eq!(test_send("telegram", &row, "tok", &mut http), "sent");
+        let row = json!({"channel_id": 200});
+        assert_eq!(test_send("discord", &row, "tok", &mut http), "sent");
         assert_eq!(
             http.0,
             [
                 "http://localhost:1234/api/v1/message/text?password=p%20w%26",
                 "https://api.telegram.org/bottok/sendMessage",
+                "https://discord.com/api/v10/channels/200/messages",
             ]
         );
     }
