@@ -60,7 +60,7 @@ cli = typer.Typer(
     epilog=(
         "Corrections: reopen (undo done) | remove (hard delete) | unarchive | "
         "undefer | unqueue | unsupersede | unclaim. All hidden; "
-        "`fno help backlog --all` lists every command. "
+        "`fno-py help backlog --all` lists every command. "
         "JSON contract: `-J` sits before the command (`fno backlog -J get <id>`), "
         "and `get` prints one JSON document on stdout - the node object on a "
         "hit, `{\"ok\": false, \"error\": ...}` with rc 1 on a miss."

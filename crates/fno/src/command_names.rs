@@ -35,9 +35,14 @@ pub fn live_roots() -> Vec<&'static str> {
 }
 
 /// The one stderr line for a root word the front door does not answer, or
-/// None when the word is live. A flag is not a name, so it passes.
+/// None when the word is live. A flag is not a name, so it passes; the global
+/// `-J` is skipped first, so it cannot carry a retired word past the check.
 pub fn root_refusal(args: &[std::ffi::OsString]) -> Option<String> {
-    let word = args.first()?.to_string_lossy();
+    let at = args
+        .iter()
+        .take_while(|a| *a == "-J" || *a == "--json")
+        .count();
+    let word = args.get(at)?.to_string_lossy();
     if word.starts_with('-') {
         return None;
     }
@@ -76,6 +81,7 @@ mod tests {
         let review = refusal(&["review", "lane"]);
         assert_eq!(review.as_deref(), Some("fno review is now fno do review"));
         assert!(refusal(&["codemap"]).unwrap().contains("was removed"));
+        assert!(refusal(&["-J", "claim", "status"]).is_some());
         assert!(refusal(&["frobnicate"])
             .unwrap()
             .contains("Commands: agents"));
