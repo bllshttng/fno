@@ -72,22 +72,31 @@ fn fleet_beacon_each_machine_replaces_only_its_own_rows() {
     assert_eq!(names, vec![("mac-a", "w3"), ("mac-b", "w2")]);
 }
 
-/// A new daemon's seats round trip with whole-second ages; an old
-/// daemon's sessions read with null seat facts; a seat whose session row is
-/// gone drops; and no seat row carries the text of a last turn.
+/// A new daemon's seats, turns, display name and lanes round trip with
+/// whole-second ages; an old daemon's rows read null; a seat or turn whose
+/// session row is gone, or whose beat is stale, drops; and no lane carries
+/// its holders' names.
 #[test]
-fn fleet_beacon_seats_join_their_sessions_and_never_carry_message_text() {
+fn fleet_beacon_seats_and_turns_join_their_sessions() {
     let primary = test_primary::start();
     let top = json!({"workers": [{
         "name": "sorrel", "handle": "sorrel", "harness": "claude", "status": "writing",
         "status_age_s": 53.4, "role": "L1 fno", "session_id": "aaaa1111-2222",
         "model": "opus", "model_basis": "registry", "started_at": "2026-10-23T09:00:00Z",
         "last_message": "private turn text", "last_message_at": "2026-10-23T10:00:00Z",
-        "cwd": "/w/fno", "project": "fno", "context_pct": 41
-    }]});
-    let new = sessions_from_top("mac-a", &top);
+        "cwd": "/w/fno", "project": "fno", "context_pct": 41, "progress": "advancing"
+    }], "lanes": [
+        {"provider": "anthropic", "cap": 4, "count": 6, "full": true, "holders": ["sorrel"]},
+        {"provider": null, "unreadable": "gate probe unreadable"}
+    ]});
+    let mut new = sessions_from_top("mac-a", &top);
     assert_eq!(new[0].age_s, Some(53));
-    publish(&primary.remote, &machine("mac-a", "mbp", 1000), &new).unwrap();
+    new[0].last_prompt = Some("ship it".into());
+    new[0].user_turns = Some(3);
+    let mut a = machine("mac-a", "mbp", 1000);
+    a.display_name = Some("MacBook".into());
+    a.lanes = lanes_from_top(&top);
+    publish(&primary.remote, &a, &new).unwrap();
     // An old daemon writes only its nine session columns.
     publish(
         &primary.remote,
@@ -102,6 +111,14 @@ fn fleet_beacon_seats_join_their_sessions_and_never_carry_message_text() {
         .execute(
             "INSERT INTO fleet_seat (machine_id, name, model, beat_at) \
              VALUES ('mac-b', 'gone', 'opus', 1000), ('mac-b', 'w2', 'opus', 940)",
+            &[],
+        )
+        .unwrap();
+    primary
+        .remote
+        .execute(
+            "INSERT INTO fleet_turn (machine_id, name, last_prompt, beat_at) \
+             VALUES ('mac-b', 'w2', 'stale prompt', 940)",
             &[],
         )
         .unwrap();
@@ -126,12 +143,24 @@ fn fleet_beacon_seats_join_their_sessions_and_never_carry_message_text() {
         ("project", json!("fno")),
         ("role", json!("L1 fno")),
         ("age_s", json!(53)),
+        ("last_message", json!("private turn text")),
+        ("last_prompt", json!("ship it")),
+        ("user_turns", json!(3)),
+        ("progress", json!("advancing")),
     ] {
         assert_eq!(seat[key], want, "{key}");
     }
-    assert!(!map.to_string().contains("private turn text"));
+    let mbp = &map["machines"][0];
+    assert_eq!(mbp["display_name"], json!("MacBook"));
+    assert_eq!(
+        mbp["lanes"],
+        json!([{"provider": "anthropic", "cap": 4, "count": 6, "full": true}])
+    );
     let old = &map["machines"][1]["sessions"][0];
     assert!(old["model"].is_null() && old["cwd"].is_null(), "{old}");
+    assert!(old["last_prompt"].is_null(), "{old}");
+    assert!(map["machines"][1]["display_name"].is_null());
+    assert_eq!(map["machines"][1]["lanes"], json!([]));
 }
 
 #[test]

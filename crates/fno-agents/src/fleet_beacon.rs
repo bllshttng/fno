@@ -22,8 +22,11 @@
 //! A seat row carries the beat that wrote it, and a read keeps it only when
 //! that beat is still the machine's newest, so a seat left behind by a newer
 //! daemon never attaches to an old daemon's session of the same name.
-//! The text of a session's last turn stays on its own machine: the seat row
-//! carries only the stamp of that turn.
+//! Two more side tables follow the same rule. `fleet_turn` carries a
+//! session's last message and last prompt text, its user turn count and its
+//! progress, so a remote session's drawer shows them. `fleet_machine_facts`
+//! carries the machine's display name (`fleet.name`) and its provider lanes,
+//! without the holder names. The text goes only to the user's own primary.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,6 +91,22 @@ CREATE TABLE IF NOT EXISTS fleet_seat (
     context_pct INTEGER,
     beat_at INTEGER NOT NULL,
     PRIMARY KEY (machine_id, name)
+);
+CREATE TABLE IF NOT EXISTS fleet_turn (
+    machine_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    last_message TEXT,
+    last_prompt TEXT,
+    user_turns INTEGER,
+    progress TEXT,
+    beat_at INTEGER NOT NULL,
+    PRIMARY KEY (machine_id, name)
+);
+CREATE TABLE IF NOT EXISTS fleet_machine_facts (
+    machine_id TEXT PRIMARY KEY,
+    display_name TEXT,
+    lanes TEXT,
+    beat_at INTEGER NOT NULL
 );";
 
 const MACHINE_COLUMNS: &str = "machine_id, host, owner, role, beat_at, cpu, mem_used, \
@@ -96,6 +115,9 @@ const SESSION_COLUMNS: &str =
     "machine_id, name, session, harness, node, status, age_s, rss_mb, parent";
 const SEAT_COLUMNS: &str = "machine_id, name, session_id, model, model_basis, started_at, \
      last_message_at, cwd, project, role, context_pct, beat_at";
+const TURN_COLUMNS: &str =
+    "machine_id, name, last_message, last_prompt, user_turns, progress, beat_at";
+const FACTS_COLUMNS: &str = "machine_id, display_name, lanes, beat_at";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Machine {
@@ -113,6 +135,20 @@ pub struct Machine {
     pub cap: Option<i64>,
     pub ceiling: Option<i64>,
     pub takes_work: bool,
+    /// `fleet.name`, from `fleet_machine_facts`. Null means the reader shows
+    /// the host.
+    pub display_name: Option<String>,
+    pub lanes: Vec<Lane>,
+}
+
+/// One provider lane as the spawn gate counts it. `count` is null when the
+/// gate could not read the lane.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Lane {
+    pub provider: String,
+    pub cap: Option<i64>,
+    pub count: Option<i64>,
+    pub full: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -140,9 +176,22 @@ pub struct Session {
     pub project: Option<String>,
     pub role: Option<String>,
     pub context_pct: Option<i64>,
+    /// The turn facts, from `fleet_turn`. Null for a machine whose daemon
+    /// predates the table, and for a harness with no transcript reader.
+    pub last_message: Option<String>,
+    pub last_prompt: Option<String>,
+    pub user_turns: Option<i64>,
+    pub progress: Option<String>,
 }
 
 impl Session {
+    fn has_turn(&self) -> bool {
+        self.last_message.is_some()
+            || self.last_prompt.is_some()
+            || self.user_turns.is_some()
+            || self.progress.is_some()
+    }
+
     fn has_seat(&self) -> bool {
         self.session_id.is_some()
             || self.model.is_some()
@@ -233,7 +282,35 @@ pub fn local_machine(home: &AgentsHome, now: i64) -> Machine {
         cap: state.as_ref().map(|s| i64::from(s.effective)),
         ceiling: state.as_ref().map(|s| i64::from(s.ceiling)),
         takes_work: takes_work(home),
+        display_name: config_text("name"),
+        lanes: Vec::new(),
     }
+}
+
+/// This machine with its lanes, and its sessions, from one `top` read.
+fn with_top(mut machine: Machine) -> (Machine, Vec<Session>) {
+    let top = crate::agents_top::payload(false, false);
+    machine.lanes = lanes_from_top(&top);
+    let sessions = sessions_from_top(&machine.machine_id, &top);
+    (machine, sessions)
+}
+
+/// Lane rows from the `top` payload. A row the gate could not read at all
+/// names no provider and is left out.
+pub fn lanes_from_top(top: &Value) -> Vec<Lane> {
+    top.get("lanes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            Some(Lane {
+                provider: row.get("provider")?.as_str()?.to_string(),
+                cap: row.get("cap").and_then(Value::as_i64),
+                count: row.get("count").and_then(Value::as_i64),
+                full: row.get("full").and_then(Value::as_bool).unwrap_or(false),
+            })
+        })
+        .collect()
 }
 
 /// Session rows from the `top` payload's worker rows.
@@ -267,6 +344,9 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
                 project: text(row, "project"),
                 role: text(row, "role"),
                 context_pct: row.get("context_pct").and_then(Value::as_i64),
+                last_message: text(row, "last_message"),
+                progress: text(row, "progress"),
+                ..Session::default()
             })
         })
         .collect()
@@ -320,8 +400,41 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
             "DELETE FROM fleet_seat WHERE machine_id = ?1".to_string(),
             vec![id.clone()],
         ),
+        (
+            "DELETE FROM fleet_turn WHERE machine_id = ?1".to_string(),
+            vec![id.clone()],
+        ),
+        (
+            format!(
+                "INSERT OR REPLACE INTO fleet_machine_facts ({FACTS_COLUMNS}) \
+                 VALUES (?1, ?2, ?3, ?4)"
+            ),
+            vec![
+                id.clone(),
+                opt_text(&machine.display_name),
+                SqlValue::Text(serde_json::to_string(&machine.lanes).unwrap_or_default()),
+                SqlValue::Integer(machine.beat_at),
+            ],
+        ),
     ];
     for s in sessions {
+        if s.has_turn() {
+            steps.push((
+                format!(
+                    "INSERT OR REPLACE INTO fleet_turn ({TURN_COLUMNS}) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+                ),
+                vec![
+                    id.clone(),
+                    SqlValue::Text(s.name.clone()),
+                    opt_text(&s.last_message),
+                    opt_text(&s.last_prompt),
+                    opt_int(s.user_turns),
+                    opt_text(&s.progress),
+                    SqlValue::Integer(machine.beat_at),
+                ],
+            ));
+        }
         steps.push((
             format!(
                 "INSERT OR REPLACE INTO fleet_session ({SESSION_COLUMNS}) \
@@ -378,6 +491,14 @@ fn text(v: &SqlValue) -> Option<String> {
     v.text().map(str::to_string)
 }
 
+/// The machine a side-table row belongs to, when the row's beat is still
+/// that machine's newest. A row from an older beat attaches to nothing.
+fn current(machines: &[Machine], id: &Option<String>, beat: Option<i64>) -> Option<usize> {
+    machines
+        .iter()
+        .position(|m| Some(&m.machine_id) == id.as_ref() && Some(m.beat_at) == beat)
+}
+
 /// What [`read`] answers: every machine, every session with its seat facts
 /// joined on, and why the seat read failed when it did.
 pub struct Fleet {
@@ -415,6 +536,7 @@ pub fn read(remote: &Remote) -> Result<Fleet, String> {
             cap: r[11].integer(),
             ceiling: r[12].integer(),
             takes_work: r[13].integer().unwrap_or(1) != 0,
+            ..Machine::default()
         })
         .collect();
     let sessions = remote
@@ -446,10 +568,7 @@ pub fn read(remote: &Remote) -> Result<Fleet, String> {
         Ok(reply) => {
             for r in &reply.rows {
                 let (machine_id, name) = (text(&r[0]), text(&r[1]));
-                let current = fleet.machines.iter().any(|m| {
-                    Some(&m.machine_id) == machine_id.as_ref() && Some(m.beat_at) == r[11].integer()
-                });
-                if !current {
+                if current(&fleet.machines, &machine_id, r[11].integer()).is_none() {
                     continue;
                 }
                 let Some(s) = fleet.sessions.iter_mut().find(|s| {
@@ -469,6 +588,49 @@ pub fn read(remote: &Remote) -> Result<Fleet, String> {
             }
         }
         Err(error) => fleet.seat_error = Some(error),
+    }
+    let mut errors = Vec::new();
+    match remote.execute(
+        &format!("SELECT {FACTS_COLUMNS} FROM fleet_machine_facts"),
+        &[],
+    ) {
+        Ok(reply) => {
+            for r in &reply.rows {
+                let Some(i) = current(&fleet.machines, &text(&r[0]), r[3].integer()) else {
+                    continue;
+                };
+                let m = &mut fleet.machines[i];
+                m.display_name = text(&r[1]);
+                m.lanes = text(&r[2])
+                    .and_then(|j| serde_json::from_str(&j).ok())
+                    .unwrap_or_default();
+            }
+        }
+        Err(error) => errors.push(error),
+    }
+    match remote.execute(&format!("SELECT {TURN_COLUMNS} FROM fleet_turn"), &[]) {
+        Ok(reply) => {
+            for r in &reply.rows {
+                let (machine_id, name) = (text(&r[0]), text(&r[1]));
+                if current(&fleet.machines, &machine_id, r[6].integer()).is_none() {
+                    continue;
+                }
+                let Some(s) = fleet.sessions.iter_mut().find(|s| {
+                    Some(&s.machine_id) == machine_id.as_ref() && Some(&s.name) == name.as_ref()
+                }) else {
+                    continue;
+                };
+                s.last_message = text(&r[2]);
+                s.last_prompt = text(&r[3]);
+                s.user_turns = r[4].integer();
+                s.progress = text(&r[5]);
+            }
+        }
+        Err(error) => errors.push(error),
+    }
+    if !errors.is_empty() {
+        errors.extend(fleet.seat_error.take());
+        fleet.seat_error = Some(errors.join("; "));
     }
     Ok(fleet)
 }
@@ -619,11 +781,7 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
     }
     let flag = Arc::clone(&arm.in_flight);
     std::thread::spawn(move || {
-        let machine = local_machine(&home, chrono::Utc::now().timestamp());
-        let sessions = sessions_from_top(
-            &machine.machine_id,
-            &crate::agents_top::payload(false, false),
-        );
+        let (machine, sessions) = with_top(local_machine(&home, chrono::Utc::now().timestamp()));
         if let Err(error) = publish(&remote, &machine, &sessions) {
             // An unreachable primary repeats every beat; say it once.
             static UNREACHABLE: std::sync::Once = std::sync::Once::new();
@@ -746,9 +904,9 @@ pub fn run(args: &[String]) -> i32 {
 
 /// This machine alone, with its local sessions.
 fn alone(local: &Machine, now: i64, fresh_s: i64) -> Value {
-    let sessions = sessions_from_top(&local.machine_id, &crate::agents_top::payload(false, false));
+    let (local, sessions) = with_top(local.clone());
     map_json(
-        std::slice::from_ref(local),
+        std::slice::from_ref(&local),
         &sessions,
         &local.machine_id,
         now,
