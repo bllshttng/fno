@@ -417,6 +417,22 @@ else
   fail "teamed doc missing the new session headings"
 fi
 
+# 8a. The recall word turns over once per compaction: a refresh with no
+# event on stdin (org refresh-canon) keeps it, a real compaction event mints
+# a new one.
+W1="$(sed -n 's/^Recall word: //p' "$TEAMED_DOC")"
+env PATH="$FAKE_BIN:$PATH" CLAUDE_CODE_SESSION_ID="$SID" CANON_PATH_OUT="$TEAMED_DOC" \
+  bash "$HOOK" </dev/null >/dev/null 2>&1
+W2="$(sed -n 's/^Recall word: //p' "$TEAMED_DOC")"
+printf '{"trigger":"auto","custom_instructions":"%s"}' "$TEAMED_DOC" \
+  | env PATH="$FAKE_BIN:$PATH" CLAUDE_CODE_SESSION_ID="$SID" bash "$HOOK" >/dev/null 2>&1
+W3="$(sed -n 's/^Recall word: //p' "$TEAMED_DOC")"
+if [[ -n "$W1" && "$W1" == "$W2" && -n "$W3" && "$W3" != "$W2" ]]; then
+  pass "recall word: kept across a refresh, new on a compaction"
+else
+  fail "recall word rotation: w1=$W1 w2=$W2 w3=$W3"
+fi
+
 # ---------------------------------------------------------------------------
 # 9. AC1-HP portfolio case: a level-2 team over TWO epics (a comma-joined
 # scope, fno.agents.team.canonical_scope's stored shape) sees BOTH epics'

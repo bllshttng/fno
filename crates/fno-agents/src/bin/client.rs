@@ -931,6 +931,10 @@ async fn run(args: Vec<String>) -> i32 {
     // Daemon-free `==` dispatch like org-fold: the caller's team scope and the live journals resolve natively when the argv names none. `--verdict` reads the same journals as a tenure verdict (law d-fe66560a).
     if command == "lead-history" {
         if args.iter().skip(1).any(|a| a == "--verdict") {
+            if let Err(message) = fno_agents::role_cwd::rebind("verdict") {
+                eprintln!("{message}");
+                return 2;
+            }
             return fno_agents::lead_history::run_lead_verdict(&args[1..]);
         }
         return fno_agents::lead_history::run_lead_history(&args[1..]);
@@ -942,6 +946,10 @@ async fn run(args: Vec<String>) -> i32 {
     // side gathers, prints, diffs and journals the row, reusing the org-fold
     // fold and the lead-history scan in process.
     if command == "lead-checkin" {
+        if let Err(message) = fno_agents::role_cwd::rebind("checkin") {
+            eprintln!("{message}");
+            return 2;
+        }
         return fno_agents::lead_checkin::run_lead_checkin(&args[1..]);
     }
     // `evals-macro`: the macro-eval failure-pattern leaderboard for
