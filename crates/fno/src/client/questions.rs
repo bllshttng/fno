@@ -33,9 +33,11 @@ pub(super) struct Detail {
     pub(super) delegate: bool,
     /// The first `X` armed archive-all; the second sends it.
     pub(super) archive_armed: bool,
-    /// The screenshots the ask attached, decoded only when the terminal
-    /// shows images.
+    /// The screenshots the ask attached.
     pub(super) shots: Vec<Shot>,
+    /// Their pixels, one slot per shot. A thread fills it, so a decode never
+    /// stalls the UI loop; until it lands the strip shows names only.
+    pixels: std::sync::Arc<std::sync::OnceLock<Vec<Option<image::DynamicImage>>>>,
     /// The screen the arrows picked; Enter expands it.
     pub(super) screen: Option<usize>,
     /// The picked screen fills the view.
@@ -57,7 +59,6 @@ type ShotCache = (
 
 pub(super) struct Shot {
     pub(super) path: std::path::PathBuf,
-    img: Option<image::DynamicImage>,
 }
 
 impl Shot {
@@ -74,19 +75,26 @@ impl Detail {
     pub(super) fn open(fold: &crate::needs_overlay::QuestionsFold, id: &str) -> Option<Detail> {
         let item = fold.items.iter().find(|q| q.id == id).cloned()?;
         let graphics = image_layer::graphics();
-        // Decoded here, on open: a few screenshots, each under the viewer's
-        // decode caps.
-        let shots = item
+        let shots: Vec<Shot> = item
             .images
             .iter()
-            .map(|p| {
-                let path = std::path::PathBuf::from(p);
-                let img = graphics
-                    .then(|| super::file_viewer::decode_image(&path))
-                    .flatten();
-                Shot { path, img }
+            .map(|p| Shot {
+                path: std::path::PathBuf::from(p),
             })
             .collect();
+        let pixels = std::sync::Arc::new(std::sync::OnceLock::new());
+        if graphics && !shots.is_empty() {
+            let paths: Vec<_> = shots.iter().map(|s| s.path.clone()).collect();
+            let slot = pixels.clone();
+            std::thread::spawn(move || {
+                let _ = slot.set(
+                    paths
+                        .iter()
+                        .map(|p| super::file_viewer::decode_image(p))
+                        .collect(),
+                );
+            });
+        }
         Some(Detail {
             item,
             sel: None,
@@ -97,12 +105,18 @@ impl Detail {
             delegate: false,
             archive_armed: false,
             shots,
+            pixels,
             screen: None,
             expanded: false,
             graphics,
             open_req: None,
             cache: std::cell::RefCell::new(None),
         })
+    }
+
+    /// Shot `i`'s pixels, once the decode thread has landed them.
+    fn img(&self, i: usize) -> Option<&image::DynamicImage> {
+        self.pixels.get()?.get(i)?.as_ref()
     }
 
     /// Step the picked screen by `dir`, wrapping. The first step from none
@@ -406,7 +420,7 @@ fn draw_strip(
     let mut lines = vec![backlog_style::BLine::meta(String::new()); h - 1];
     lines.push(backlog_style::BLine::meta(strip_label(d)));
     backlog_style::paint_panel(cells, rows, cols, top, cols, h, &lines, None, theme);
-    let shown: Vec<&image::DynamicImage> = d.shots.iter().filter_map(|s| s.img.as_ref()).collect();
+    let shown: Vec<&image::DynamicImage> = (0..d.shots.len()).filter_map(|i| d.img(i)).collect();
     let rect = image_layer::Rect {
         row: top as u16,
         col: 1,
@@ -458,7 +472,7 @@ fn draw_expanded(d: &Detail, cells: &mut [Cell], rows: usize, cols: usize, theme
     let mut lines = vec![backlog_style::BLine::meta(title)];
     lines.resize(rows, backlog_style::BLine::meta(String::new()));
     backlog_style::paint_panel(cells, rows, cols, 0, cols, rows, &lines, None, theme);
-    let Some(img) = d.shots[i].img.as_ref() else {
+    let Some(img) = d.img(i) else {
         return;
     };
     let rect = image_layer::Rect {
@@ -874,7 +888,7 @@ pub(super) async fn detail_keys(
             continue;
         }
         if let Some(i) = d.screen.filter(|_| matches!(k, b'\r' | b'\n')) {
-            if d.graphics && d.shots[i].img.is_some() {
+            if d.graphics && d.img(i).is_some() {
                 d.expanded = true;
             } else {
                 d.open_req = Some(d.shots[i].path.clone());
@@ -1498,7 +1512,7 @@ mod tests {
         v.open_detail_on("q-s");
         let d = v.question_detail.as_mut().unwrap();
         // The test picker is half-blocks: no graphics, so no decode.
-        assert!(!d.graphics && d.shots.iter().all(|s| s.img.is_none()));
+        assert!(!d.graphics && d.pixels.get().is_none());
         detail_keys(&mut v, b"\x1b[D", &mut Vec::new())
             .await
             .unwrap();
@@ -1529,9 +1543,10 @@ mod tests {
         // With graphics, Enter expands, arrows step, Esc goes back to the page.
         let d = v.question_detail.as_mut().unwrap();
         d.graphics = true;
-        for s in &mut d.shots {
-            s.img = Some(red.clone());
-        }
+        d.pixels = std::sync::Arc::new(std::sync::OnceLock::from(vec![
+            Some(red.clone()),
+            Some(red.clone()),
+        ]));
         detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
         assert!(v.question_detail.as_ref().unwrap().expanded);
         detail_keys(&mut v, b"\x1b[C", &mut Vec::new())
