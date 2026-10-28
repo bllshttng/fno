@@ -123,6 +123,21 @@ fn arm_manifest(root: &Path) {
     let leads = space(root).join("leads");
     fs::create_dir_all(&leads).unwrap();
     fs::copy(fixture("manifest-epic-y.md"), leads.join("epic-y.md")).unwrap();
+    // The fixture's static created_at ages out of the 96h default term, and
+    // an expired reading makes the declare case's own gate refuse it. Arm
+    // with a fresh stamp (the runtime-rewrite idiom rows_live_in_the_repo
+    // uses for cwd), so the gate's window never lapses on the wall clock.
+    let path = leads.join("epic-y.md");
+    let text = fs::read_to_string(&path).unwrap();
+    let fresh = (chrono::Utc::now() - chrono::Duration::hours(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let stamped = format!("created_at: {fresh}");
+    let text = text.replacen("created_at: 2026-10-24T08:55:00Z", &stamped, 1);
+    assert!(
+        text.contains(&stamped),
+        "the fixture's created_at stamp drifted"
+    );
+    fs::write(path, text).unwrap();
 }
 
 /// Move every registry row's cwd into this world's repo, so the role's
