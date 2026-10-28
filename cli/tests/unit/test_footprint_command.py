@@ -494,13 +494,16 @@ def test_live_root_pids_spares_an_advancing_row_and_names_only_the_silent_one(
     from fno import doctor_footprint
     import fno.agents.session_truth as session_truth
 
-    advancing = _codex_thread_row("t-adv-row")
+    advancing = _codex_thread_row("t-adv-row", session_id="019a-adv")
     silent = _codex_thread_row("t-silent-row")
     monkeypatch.setattr(
         "fno.agents.registry.load_registry", lambda: [advancing, silent]
     )
+    resolved: dict[str, object] = {}
 
     def fake_truth(handle, **kwargs):
+        resolve = kwargs.get("resolve")
+        resolved[handle] = resolve and resolve(handle)[0].session_id
         if handle == "t-adv-row":
             return {
                 "state": "working",
@@ -529,6 +532,9 @@ def test_live_root_pids_spares_an_advancing_row_and_names_only_the_silent_one(
     assert "t-silent-row" in error.text
     assert "t-adv-row" not in error.text
     assert witness_calls == ["t-silent-row"]
+    # A row naming its session resolves from itself; a fleet scan per row
+    # overran the spawn gate's probe budget. Only an id-less row looks it up.
+    assert resolved == {"t-adv-row": "019a-adv", "t-silent-row": None}
 
 
 def test_live_root_pids_pane_row_costs_the_attributed_mux_server(monkeypatch) -> None:

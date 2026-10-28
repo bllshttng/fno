@@ -21,6 +21,7 @@ struct Fake {
     merge_result: Option<ProbeOutcome>,
     ci_base: Option<ProbeOutcome>,
     fresh_ci: Option<bool>,
+    live_lanes: usize,
     ci_base_calls: RefCell<u32>,
     checks: Option<String>,
     /// GitHub's ruleset hold for the PR under decision; `None` (the
@@ -301,6 +302,9 @@ impl Probes for Fake {
     }
     fn require_fresh_ci(&self, _cwd: &Path) -> bool {
         self.fresh_ci.unwrap_or(true)
+    }
+    fn live_lanes(&self, _cwd: &Path) -> usize {
+        self.live_lanes
     }
     fn slot_holder(&self, _cwd: &Path, _base_ref: &str) -> Result<Option<u64>, String> {
         if self.slot_holder_err {
@@ -927,15 +931,31 @@ fn ci_base_freshness_gates_the_chain() {
     assert!(outcome.detail().contains("retry later"));
     assert!(fake.gh_calls.borrow().is_empty());
     assert!(fake.take_slot_calls.borrow().is_empty());
+    // Off by default, the base_overlap hold rides the same key: live lanes
+    // never read the base move, so a mergeable PR merges as it is.
+    let reads_refs = |fake: &Fake| {
+        fake.gh_calls
+            .borrow()
+            .iter()
+            .any(|call| call.iter().any(|arg| arg == "baseRefName,headRefName"))
+    };
     let fake = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: old".to_string())),
         fresh_ci: Some(false),
+        live_lanes: 2,
         ..clean()
     };
     let mut req = request(Effect::Merge);
     req.require_checks = true;
     assert_eq!(run(&fake, &req).word(), "merged");
     assert_eq!(*fake.ci_base_calls.borrow(), 0);
+    assert!(!reads_refs(&fake));
+    let armed = Fake {
+        live_lanes: 2,
+        ..clean()
+    };
+    run(&armed, &req);
+    assert!(reads_refs(&armed));
 }
 
 #[test]
