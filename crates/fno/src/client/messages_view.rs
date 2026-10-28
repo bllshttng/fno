@@ -260,6 +260,8 @@ pub(crate) enum ChatRow {
         partner_key: String,
         last: String,
         unread: bool,
+        /// The last row is parked or failed: it waits on the sender.
+        stuck: bool,
         ts: String,
     },
     /// A You thread: the session whose transcript carries the operator's
@@ -480,12 +482,15 @@ impl MessagesBoard {
                 let ts = last_row.map(|r| text_of(r, "ts")).unwrap_or("");
                 let unread =
                     !chat_id.is_empty() && marks.get(chat_id).map(String::as_str) < Some(ts);
+                let stuck =
+                    last_row.is_some_and(|r| matches!(text_of(r, "state"), "parked" | "failed"));
                 rows.push(ChatRow::Thread {
                     chat_id: chat_id.to_string(),
                     partner: other_name,
                     partner_key: other.to_string(),
                     last: last.to_string(),
                     unread,
+                    stuck,
                     ts: ts.to_string(),
                 });
             }
@@ -673,9 +678,21 @@ impl MessagesBoard {
                     partner,
                     last,
                     unread,
+                    stuck,
                     ..
                 } => BLine::of(&[
-                    seg(if *unread { "*" } else { " " }, BRole::Meta),
+                    // `!` outranks `*`: the last message is parked or failed
+                    // and waits on the sender, not the reader.
+                    seg(
+                        if *stuck {
+                            "!"
+                        } else if *unread {
+                            "*"
+                        } else {
+                            " "
+                        },
+                        BRole::Meta,
+                    ),
                     seg(partner.clone(), BRole::Body),
                     seg(format!(" \u{b7} {last}"), BRole::Meta),
                 ]),
@@ -871,6 +888,15 @@ impl MessagesBoard {
                         .saturating_sub(line.text.chars().count());
                     line.text = format!("{}{}", " ".repeat(pad), line.text);
                 }
+                line.band = selected;
+                lines.push(line);
+                owners.push(Some(index));
+            }
+            // A sent row says what the recipient's harness did with it.
+            let state = text_of(r, "state");
+            if mine_row && !state.is_empty() {
+                let pad = w.saturating_sub(1).saturating_sub(state.chars().count());
+                let mut line = BLine::meta(format!("{}{state}", " ".repeat(pad)));
                 line.band = selected;
                 lines.push(line);
                 owners.push(Some(index));

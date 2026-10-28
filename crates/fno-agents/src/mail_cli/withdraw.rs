@@ -15,8 +15,6 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-const HOSTED_DELIVERY: &str = "hosted";
-const TYPED_DELIVERY: &str = "typed";
 
 /// Python `stamp_from`: an explicit `--from-name`, even the empty string,
 /// wins verbatim; otherwise the resolved self handle, floored to the bare
@@ -130,16 +128,34 @@ pub fn run(args: &[String]) -> i32 {
         println!("{msg_id} is already withdrawn");
         return 0;
     }
-    let delivery = str_field(target, "delivery", "");
-    if delivery == HOSTED_DELIVERY {
-        eprintln!("{msg_id} was already delivered (hosted); it cannot be withdrawn");
-        return 1;
-    }
-    // A typed row is bytes already at somebody's prompt: a tombstone here
-    // would print success while retracting nothing.
-    if delivery == TYPED_DELIVERY {
-        eprintln!("{msg_id} was typed into a pane; the bytes are already at the recipient's prompt and cannot be recalled. Send a correction.");
-        return 1;
+    // A tombstone retracts only the bus copy. Once the bytes sit with the
+    // recipient's harness (accepted, queued there, or typed at its prompt)
+    // a tombstone would print success while retracting nothing.
+    use crate::mail_delivery_state::{DeliveryState, Parked};
+    match crate::mail_delivery_state::newest_state(&msgs, &msg_id) {
+        state @ (DeliveryState::AcceptedNewTurn { .. } | DeliveryState::AcceptedSteer { .. }) => {
+            eprintln!(
+                "{msg_id} is {}: the recipient's harness took it, so it cannot be withdrawn. Send a correction.",
+                state.word()
+            );
+            return 1;
+        }
+        DeliveryState::Parked {
+            where_: Parked::Composer,
+        } => {
+            eprintln!(
+                "{msg_id} is parked in the recipient's composer, typed and not submitted. A tombstone cannot reach it: read the pane with `fno mux pane read <pane>` and clear the line there, or send a correction."
+            );
+            return 1;
+        }
+        state @ (DeliveryState::Parked { .. } | DeliveryState::Injected) => {
+            eprintln!(
+                "{msg_id} is {}: the bytes are already with the recipient's harness and cannot be recalled. Send a correction.",
+                state.word()
+            );
+            return 1;
+        }
+        DeliveryState::Queued | DeliveryState::Failed { .. } => {}
     }
     let to = str_field(target, "to", "");
     if let Some(cursor) = read_cursor(&bus, &to) {

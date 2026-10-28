@@ -216,6 +216,61 @@ fn expires_at(line: &Value) -> Option<&str> {
         .or_else(|| line.get("expires").and_then(Value::as_str))
 }
 
+/// Each message's delivery state, folded from the store's delivery lines in
+/// order (`landed`, the legacy `hosted`/`typed` marks, and `state` rows). An
+/// accepted line is terminal: a later retry line never lowers it.
+fn delivery_states(
+    texts: &[String],
+) -> std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState> {
+    use crate::mail_delivery_state::{DeliveryState, Evidence};
+    let mut out: std::collections::HashMap<String, DeliveryState> = Default::default();
+    for line in texts.iter().flat_map(|t| t.lines()) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) != Some("delivery") {
+            continue;
+        }
+        let id = v.get("id").and_then(Value::as_str).unwrap_or("");
+        let how = v.get("how").and_then(Value::as_str).unwrap_or("");
+        if id.is_empty() || how.is_empty() {
+            continue;
+        }
+        let state = match how {
+            "landed" => DeliveryState::accepted(
+                false,
+                Evidence {
+                    record: "landed".into(),
+                    ..Evidence::default()
+                },
+            ),
+            word => DeliveryState::from_json(&json!({"state": word}))
+                .unwrap_or_else(|| DeliveryState::from_legacy(word)),
+        };
+        if out.get(id).is_some_and(DeliveryState::is_accepted) {
+            continue;
+        }
+        out.insert(id.to_string(), state);
+    }
+    out
+}
+
+/// The state word for one message row: its folded delivery lines, else the
+/// legacy reading of its own `delivery` mark.
+fn state_word(
+    states: &std::collections::HashMap<String, crate::mail_delivery_state::DeliveryState>,
+    v: &Value,
+) -> &'static str {
+    let id = v.get("id").and_then(Value::as_str).unwrap_or("");
+    match states.get(id) {
+        Some(state) => state.word(),
+        None => crate::mail_delivery_state::DeliveryState::from_legacy(
+            v.get("delivery").and_then(Value::as_str).unwrap_or("durable"),
+        )
+        .word(),
+    }
+}
+
 /// The projection of one chats store. `now` decides which announcements
 /// still stand.
 pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
@@ -252,6 +307,7 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
         .filter_map(|entry| std::fs::read_to_string(entry.path().join("messages.jsonl")).ok())
         .collect();
     let aliases = store_aliases(&texts, registry);
+    let states = delivery_states(&texts);
     for text in &texts {
         let mut rows: Vec<Value> = Vec::new();
         for line in text.lines() {
@@ -316,6 +372,7 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
                 "expires": expires_at(&v),
                 "in_reply_to": v.get("in_reply_to").and_then(Value::as_str),
                 "delivery": v.get("delivery").and_then(Value::as_str),
+                "state": state_word(&states, &v),
                 "system": system_row,
             });
             match v.get("kind").and_then(Value::as_str) {

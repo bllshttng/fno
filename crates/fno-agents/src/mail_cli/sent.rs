@@ -8,6 +8,7 @@
 
 use crate::claude_drive::claude_projects_dir;
 use crate::mail_control_drain::{landed_ids, withdrawn_ids};
+use crate::mail_delivery_state::newest_state;
 use crate::mail_header::ids_in_text;
 use crate::paths::AgentsHome;
 use crate::spawn_context::resolve_self_identity;
@@ -127,8 +128,11 @@ pub fn run_sent(args: &[String]) -> i32 {
             .iter()
             .map(|m| {
                 let id = str_field(m, "id", "?");
+                let delivery_state = newest_state(&all, &id);
                 json!({
                     "id": id,
+                    "state": delivery_state.word(),
+                    "state_detail": crate::mail_delivery_state::detail(&delivery_state),
                     "to": str_field(m, "to", ""),
                     "to_kind": m.get("to_kind").cloned().unwrap_or(Value::Null),
                     "kind": str_field(m, "kind", ""),
@@ -160,6 +164,7 @@ pub fn run_sent(args: &[String]) -> i32 {
     }
     for m in &msgs {
         let id = str_field(m, "id", "?");
+        let delivery_state = newest_state(&all, &id);
         let state = match delivery_of(m) {
             HOSTED_DELIVERY => match landed_flag.get(&id).cloned().flatten() {
                 Some(true) => "landed".to_string(),
@@ -186,11 +191,12 @@ pub fn run_sent(args: &[String]) -> i32 {
             .filter(|s| !s.is_empty())
             .unwrap_or("?");
         println!(
-            "{}  -> {}  [{lane}/{}]  {}  {state}",
+            "{}  -> {}  [{lane}/{}]  {}  {} ({state})",
             id,
             str_field(m, "to", ""),
             delivery_of(m),
             str_field(m, "ts", ""),
+            crate::mail_delivery_state::receipt(&delivery_state, ""),
         );
     }
     println!(
