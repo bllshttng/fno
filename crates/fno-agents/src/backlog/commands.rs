@@ -6,7 +6,6 @@
 //! forwarding shim. The catalog is
 //! the single source both the compatibility help and any future dispatcher
 //! must read - no second handwritten mapping in help or completion.
-use serde_json::{json, Value};
 
 /// One canonical group: its purpose line and the action vocabulary, where
 /// each action names the legacy first-level command it dispatches to (the

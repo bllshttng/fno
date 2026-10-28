@@ -17,7 +17,7 @@
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::{UnixListener, UnixStream};

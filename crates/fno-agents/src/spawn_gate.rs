@@ -2348,6 +2348,9 @@ pub(crate) struct AdmissionPayload {
     pub(crate) capacity_cores: f64,
     #[serde(default)]
     pub(crate) ceiling: f64,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(crate) gap: Option<String>,
     /// The Python decider's short form of the fleet's largest program; absent
     /// on an older wheel and whenever no attributed row exists.
     #[serde(default)]
