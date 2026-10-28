@@ -931,6 +931,9 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     if let Some(rows) = &read_rows {
         data["reads"] = json!(rows);
     }
+    if let Some(map) = data.as_object_mut() {
+        crate::identity::stamp_person(map);
+    }
     // Minted after the route span: the row is the child, and its ts must not
     // precede the parent the trace names.
     let ts = now_iso();
@@ -1341,6 +1344,31 @@ mod tests {
             route["ts"].as_str().unwrap() <= row["ts"].as_str().unwrap(),
             "route precedes the row in ts order"
         );
+    }
+
+    #[test]
+    fn decide_records_person_beside_the_session() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        save_node(
+            &crate::graph_get::default_graph_path(),
+            "x-node4",
+            "node-four",
+        );
+        let code = decide_door_write(
+            decide_argv(&["x-node4", "Ship it", "--authority", "agent"]),
+            DecideIdentity::Forced(Some("cl-test4")),
+        );
+        assert_eq!(code, 0);
+        let (rows, _) = all_decision_rows().expect("reads");
+        let row = rows.last().expect("a row landed");
+        // The person rides beside decided_by; it never replaces the caller.
+        assert_eq!(row["person"], json!(crate::identity::person()));
+        assert_ne!(row["decided_by"], row["person"], "{row}");
+        let machine_id = crate::claims::machine_id();
+        if !machine_id.is_empty() {
+            assert_eq!(row["machine_id"], json!(machine_id));
+        }
     }
 
     #[test]

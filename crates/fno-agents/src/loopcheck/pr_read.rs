@@ -156,6 +156,31 @@ pub(super) struct PrInfo {
     pub(super) range_tiling: RangeTiling,
 }
 
+/// The node's numbered PR rows: (number, merge_status, history-marked). The
+/// one collection every store-side PR row rule reads, so the live/terminal
+/// and reopen-age rules cannot drift between them.
+fn numbered_pr_rows(node: &crate::backlog::model::Node) -> Vec<(i64, Option<&str>, bool)> {
+    node.primary_pr
+        .iter()
+        .chain(node.additional_prs.iter().flatten())
+        .filter_map(|pr| {
+            pr.number.filter(|number| *number > 0).map(|n| {
+                (
+                    n,
+                    pr.merge_status.as_deref(),
+                    pr.extras.get("history").and_then(Value::as_bool) == Some(true),
+                )
+            })
+        })
+        .collect()
+}
+
+/// A merge_status stamp that settles the row's PR: merged or closed, in any
+/// writer spelling (compare case-insensitively on purpose).
+fn terminal_stamp(status: &Option<&str>) -> bool {
+    status.is_some_and(|s| s.eq_ignore_ascii_case("merged") || s.eq_ignore_ascii_case("closed"))
+}
+
 /// The session manifest node's PR number, as a gh selector string.
 ///
 /// The terminal read pins the PR the manifest's own node shipped instead of
@@ -187,20 +212,7 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
         Ok(Some(n)) => n,
         _ => return None,
     };
-    let mut rows: Vec<(i64, Option<&str>, bool)> = node
-        .primary_pr
-        .iter()
-        .chain(node.additional_prs.iter().flatten())
-        .filter_map(|pr| {
-            pr.number.filter(|number| *number > 0).map(|n| {
-                (
-                    n,
-                    pr.merge_status.as_deref(),
-                    pr.extras.get("history").and_then(Value::as_bool) == Some(true),
-                )
-            })
-        })
-        .collect();
+    let mut rows = numbered_pr_rows(&node);
     // Newest first, then a stable pass that lifts non-terminal rows above
     // stamped ones. The stamps ride the writers' own spelling, which is
     // lowercase today but GitHub-adjacent prose elsewhere, so the compare is
@@ -209,9 +221,7 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
     // whose only PR is merged still pins it. An unstamped row at or below
     // the newest stamp shares the stamped rows' key: it predates them, and
     // a row the reopen marked history sinks whatever its number.
-    let terminal = |status: &Option<&str>| {
-        status.is_some_and(|s| s.eq_ignore_ascii_case("merged") || s.eq_ignore_ascii_case("closed"))
-    };
+    let terminal = terminal_stamp;
     let max_terminal = rows
         .iter()
         .filter(|(_, status, _)| terminal(status))
@@ -231,6 +241,50 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
         }
     });
     rows.first().map(|(number, _, _)| number.to_string())
+}
+
+/// The manifest node's work reads finished in the graph store alone: the node
+/// is done (or superseded), at least one of its recorded PRs is stamped
+/// merged, and no live row is left open. Returns the newest merged PR number
+/// so the caller can name its evidence.
+///
+/// This is the done-worker early allow: once the store records the merge, the
+/// gate's REST read can only re-learn a fact it already knows, and under a
+/// loaded machine that read is the one thing that can still fail - each
+/// timeout re-blocking a finished session that never goes idle, so queued
+/// mail never lands. An unreadable store, a missing row, an open node, or an
+/// unstamped live row keeps the REST read exactly as before (fail-open); the
+/// live-row rule is the selector's own (an unstamped row at or below the
+/// newest terminal stamp is reopen history, a marked `history` row sinks
+/// regardless), so a replacement PR in flight holds the gate.
+pub(super) fn node_done_pr_merged(cwd: &Path, node_id: Option<&str>) -> Option<i64> {
+    use crate::backlog::model::Status;
+    let node_id = node_id?;
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
+    let node = match crate::backlog::api::node(&store, node_id) {
+        Ok(Some(n)) => n,
+        _ => return None,
+    };
+    if !matches!(node.status, Status::Done | Status::Superseded) {
+        return None;
+    }
+    let rows = numbered_pr_rows(&node);
+    let terminal = terminal_stamp;
+    let max_terminal = rows
+        .iter()
+        .filter(|(_, status, _)| terminal(status))
+        .map(|(number, _, _)| *number)
+        .max();
+    let has_live = rows.iter().any(|(number, status, history)| {
+        !history && !terminal(status) && !max_terminal.is_some_and(|bound| *number <= bound)
+    });
+    if has_live {
+        return None;
+    }
+    rows.iter()
+        .filter(|(_, status, _)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
+        .map(|(number, _, _)| *number)
+        .max()
 }
 
 /// The node's live replacement PR when the bound one reads CLOSED: the

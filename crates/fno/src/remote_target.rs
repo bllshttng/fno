@@ -15,6 +15,11 @@
 
 use std::ffi::OsString;
 
+/// The mail relay's hop count (the twin const lives in mail_remote.rs). The
+/// front clears it on every route but [`classify`]'s, so a process the local
+/// command starts never inherits a count.
+pub const MAIL_HOP_ENV: &str = "FNO_MAIL_HOP";
+
 /// The full argv, `agents` leading. The claimed tail runs from the command
 /// onward (`send|peek` first), the shape `mail_remote::run` routes on;
 /// `None` forwards byte-verbatim.

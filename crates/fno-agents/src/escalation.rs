@@ -190,6 +190,21 @@ pub(crate) fn vault_dir_with_home(cwd: &Path, home: Option<&Path>, leaf: &str) -
     crate::paths::space_dir(cwd).join(leaf)
 }
 
+/// A vault file another machine named by its own absolute path, re-rooted
+/// onto this machine's vault: the part from `internal/` on is the same in
+/// every synced copy. `None` when the path names no vault file or no vault
+/// resolves here.
+pub(crate) fn rebase_vault_path(path: &str, cwd: &Path) -> Option<PathBuf> {
+    let rel = &path[path.find("/internal/")? + 1..];
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut candidates = vec![cwd.join(".fno/config.toml")];
+    if let Some(h) = &home {
+        candidates.push(h.join(".fno/config.toml"));
+    }
+    let vault = crate::finalize::resolve_obsidian_vault(&candidates)?;
+    Some(crate::finalize::resolve_vault_root(&vault, home.as_deref())?.join(rel))
+}
+
 /// Tolerant parse: anything missing is empty/None and [`problems`] names it.
 pub fn parse(text: &str) -> Escalation {
     let mut esc = Escalation::default();

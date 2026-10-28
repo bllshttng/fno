@@ -502,7 +502,7 @@ Tier-1 auto-emit: a ``gate_escape{reason:dead-bot}`` when
 
 ## scan_merge_drift
 
-Find open nodes whose PR has merged outside the ship gate.
+Find open nodes whose PR has merged outside the ship gate and whose PR closure line (`Fixes <ids>`) names them. A merged PR with no line for a node, such as an earlier wave of a multi-wave node, is not that node's closing evidence.
 
     Returns one record per open node that resolves to a MERGED PR, plus
     records flagged with ``error`` for nodes whose PR state could not be

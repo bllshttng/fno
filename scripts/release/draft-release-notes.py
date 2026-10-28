@@ -14,6 +14,9 @@ usage:
   draft-release-notes.py <tag>                       # v0.1 draft
   draft-release-notes.py <tag> --since <tag>         # explicit base
   draft-release-notes.py <tag> --pr-file prs.json --out /tmp/x  # offline
+  draft-release-notes.py <tag> --record <agents home>/releases/<tag>.json
+    reads the release record: its included PRs replace the tag range, and
+    its joiners print under "Joined after pin".
   --self-test runs the bucket and title-cleaning asserts.
 """
 
@@ -122,12 +125,17 @@ def prs_from_gh(since_date: str) -> list:
     return [pr for pr in prs if pr["mergedAt"] >= since_date]
 
 
-def draft(tag: str, since: str, prs: list, slug: str, retired: list, now: str) -> str:
+def draft(tag: str, since: str, prs: list, slug: str, retired: list, now: str,
+          joiners: list = ()) -> str:
     sections = {name: [] for name in SECTION_ORDER + [INTERNAL]}
+    joined = []
     for pr in prs:
         bucket = categorize(pr["title"], retired)
         bullet = f"- {clean_title(pr['title'])} (#{pr['number']})"
-        sections[bucket].append(bullet)
+        if pr["number"] in joiners:
+            joined.append(bullet)
+        else:
+            sections[bucket].append(bullet)
     if not prs:
         raise SystemExit(f"draft-release-notes: no merged PRs since {since}; nothing to draft")
 
@@ -156,6 +164,11 @@ def draft(tag: str, since: str, prs: list, slug: str, retired: list, now: str) -
         lines.append("")
         lines.extend(bullets)
         lines.append("")
+    if joined:
+        lines.append(f"### Joined after pin ({len(joined)} PRs)")
+        lines.append("")
+        lines.extend(joined)
+        lines.append("")
     internal = sections[INTERNAL]
     if internal:
         lines.append("<details>")
@@ -181,6 +194,10 @@ def self_test() -> None:
     assert clean_title("feat(mux): Add portals") == "Add portals"
     assert clean_title("docs: rewrite the install page") == "Rewrite the install page"
     assert clean_title("plain title") == "Plain title"
+    prs = [{"number": 1, "title": "feat: a"}, {"number": 2, "title": "fix: b"}]
+    body = draft("v9", "v8", prs, "o/r", [], "now", joiners=[2])
+    assert "### Joined after pin (1 PRs)\n\n- B (#2)" in body, body
+    assert "### Fixes" not in body
     print("draft-release-notes: self-test OK")
 
 
@@ -189,6 +206,7 @@ def main() -> None:
     parser.add_argument("tag", nargs="?", help="candidate tag, e.g. v0.4.1rc1")
     parser.add_argument("--since", help="base tag (default: newest plain tag)")
     parser.add_argument("--pr-file", help="offline PR list (JSON) instead of gh")
+    parser.add_argument("--record", help="release record JSON: included PRs and joiners")
     parser.add_argument("--out", help="output dir (default internal/fno/releases)")
     parser.add_argument("--force", action="store_true", help="overwrite an existing draft")
     parser.add_argument("--self-test", action="store_true")
@@ -199,17 +217,28 @@ def main() -> None:
         return
 
     root = Path(git_out("rev-parse", "--show-toplevel"))
-    since = args.since or newest_plain_tag()
+    record = json.loads(Path(args.record).read_text()) if args.record else None
+    since = args.since or (record or {}).get("base_tag") or newest_plain_tag()
     since_date = git_out("for-each-ref", f"refs/tags/{since}", "--format=%(creatordate:iso-strict)")
     retired = load_retired()
 
     if args.pr_file:
-        prs = [pr for pr in json.loads(Path(args.pr_file).read_text()) if pr["mergedAt"] >= since_date]
+        prs = json.loads(Path(args.pr_file).read_text())
     else:
         prs = prs_from_gh(since_date)
+    joiners = []
+    if record:
+        # The record names the candidate's PRs; the tag range cannot tell a
+        # joiner from a PR that slipped in.
+        joiners = [j["pr"] for j in record.get("joiners", [])]
+        wanted = set(record.get("included", [])) | set(joiners)
+        prs = [pr for pr in prs if pr["number"] in wanted]
+    else:
+        prs = [pr for pr in prs if pr["mergedAt"] >= since_date]
 
     now = datetime.now().strftime("%Y-%m-%dT%H:%M")
-    body = draft(tag=args.tag, since=since, prs=prs, slug=repo_slug(), retired=retired, now=now)
+    body = draft(tag=args.tag, since=since, prs=prs, slug=repo_slug(), retired=retired, now=now,
+                 joiners=joiners)
 
     out_dir = Path(args.out) if args.out else root / "internal/fno/releases"
     if not out_dir.is_dir():

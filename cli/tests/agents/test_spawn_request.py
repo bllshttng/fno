@@ -112,3 +112,70 @@ def test_half_carrier_refuses(monkeypatch):
         build_spawn_provenance()
 
 
+
+
+def _identity_stub(monkeypatch, markers, session_id=None, harness=None):
+    from types import SimpleNamespace
+
+    from fno.claims import self_identity as self_identity_mod
+
+    stub = SimpleNamespace(
+        session_id=session_id,
+        harness=harness,
+        markers_present=markers,
+        disposition="ambiguous" if session_id is None else "single",
+    )
+    monkeypatch.setattr(
+        self_identity_mod, "resolve_self_identity", lambda *a, **k: stub
+    )
+    return stub
+
+
+def test_capture_parent_edge_vouches_hosted_session_from_live_registry_row(
+    monkeypatch,
+):
+    """A marker naming a live registry row of the same harness vouches the
+    parent edge for a hosted session whose shells have no harness ancestor
+    for the prover to walk."""
+    from types import SimpleNamespace
+
+    from fno.agents import registry as registry_mod
+    from fno.agents import whoami as whoami_mod
+    from fno.agents.spawn_lineage import _capture_parent_edge
+
+    monkeypatch.setenv("PWD", "/repo")
+    _identity_stub(
+        monkeypatch,
+        [("CLAUDE_CODE_SESSION_ID", "claude", "5eb990ff-0000")],
+    )
+    monkeypatch.setattr(
+        registry_mod, "load_registry", lambda: [SimpleNamespace(status="live")]
+    )
+    monkeypatch.setattr(
+        whoami_mod,
+        "_find_by_session",
+        lambda registry, token, harness: registry[0],
+    )
+    session, harness, cwd = _capture_parent_edge()
+    assert session == "5eb990ff-0000"
+    assert harness == "claude"
+    assert cwd == "/repo"
+
+
+def test_capture_parent_edge_keeps_refusal_without_live_row(monkeypatch):
+    """No live row, no voucher: the capture stays None and the spawn keeps
+    the dispatcher path."""
+    from fno.agents import registry as registry_mod
+    from fno.agents import whoami as whoami_mod
+    from fno.agents.spawn_lineage import _capture_parent_edge
+
+    monkeypatch.setenv("PWD", "/repo")
+    _identity_stub(
+        monkeypatch,
+        [("CLAUDE_CODE_SESSION_ID", "claude", "dead0000-0000")],
+    )
+    monkeypatch.setattr(registry_mod, "load_registry", lambda: [])
+    monkeypatch.setattr(whoami_mod, "_find_by_session", lambda *a, **k: None)
+    session, harness, cwd = _capture_parent_edge()
+    assert session is None
+    assert cwd == "/repo"

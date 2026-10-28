@@ -489,6 +489,8 @@ pub mod registry_json;
 pub mod registry_read;
 pub mod registry_store;
 pub mod release_notes;
+pub mod release_record;
+pub mod release_watch;
 pub mod removals;
 pub mod rename;
 pub mod repeated_asks;

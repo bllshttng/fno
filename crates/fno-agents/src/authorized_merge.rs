@@ -2752,6 +2752,20 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
         );
         return (0, out, String::new());
     }
+    // The release ops write and read the release record (`release_record.rs`):
+    // `{"op": "release-pin"|"release-join"|"release-show", ...}`. A pin also
+    // moves a live freeze's sha.
+    if payload
+        .get("op")
+        .and_then(Value::as_str)
+        .is_some_and(|op| op.starts_with("release-"))
+    {
+        let out = crate::release_record::run(
+            payload.get("op").and_then(Value::as_str).unwrap_or(""),
+            &payload,
+        );
+        return (0, out, String::new());
+    }
     // The grant ops are the durable-grant reader riding this command's payload,
     // the same transport the hold ops use: `{"op": "grant-verdict", ...}`
     // answers one PR, `{"op": "grant-queue", ...}` answers the merge queue.
