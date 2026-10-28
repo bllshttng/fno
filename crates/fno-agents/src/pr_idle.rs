@@ -55,9 +55,17 @@ fn dir(home: &AgentsHome) -> PathBuf {
     home.root().join("pr-idle")
 }
 
+/// A reversible file stem: `foo-bar/r` and `foo_bar/r` must never share a
+/// clock, and the escape keeps `-` free as the slug-to-PR separator.
 fn stem(slug: &str) -> String {
     slug.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_string()
+            } else {
+                format!("_{:02x}", c as u32)
+            }
+        })
         .collect()
 }
 
@@ -237,7 +245,7 @@ pub(crate) fn run_pass(home: &AgentsHome, now: i64) -> Result<(), String> {
             .iter()
             .filter_map(|pr| status_read(root, *pr))
             .collect();
-        let mut phone = crate::operator_notice::notify_operator;
+        let mut phone = crate::operator_notice::notify_operator_confirmed;
         if let Err(e) = run_repo(
             home,
             now,
@@ -419,6 +427,8 @@ mod tests {
         .unwrap();
         assert_eq!(since(8), None);
         assert!(file(&home, "o/other", 8).exists());
+        // Slugs that differ only in punctuation keep separate clocks.
+        assert_ne!(file(&home, "foo-bar/r", 8), file(&home, "foo_bar/r", 8));
     }
 
     #[test]
