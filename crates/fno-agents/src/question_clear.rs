@@ -132,6 +132,9 @@ mod tests {
         // attested human name, never a session.
         assert!(decision_row["data"]["trace"]["actor_session"].is_null());
         assert_eq!(decision_row["data"]["trace"]["actor_kind"], "user");
+        // The person rides beside decided_by and never replaces it.
+        assert_eq!(decision_row["data"]["decided_by"], "test-agent");
+        assert!(decision_row["data"]["person"].is_string());
         // A lead authority keeps its session: the same rule populates the
         // field from proven session identity.
         let mut agent_req = request(&tmp, "q-open2", Some("ship it"));
@@ -1332,6 +1335,7 @@ fn make_decision(
             }
         }
     }
+    crate::identity::stamp_person(&mut decision);
     Ok(json!({
         "ts": chrono::Utc::now().to_rfc3339(),
         "type": "operator_decision",

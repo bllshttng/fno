@@ -1673,7 +1673,11 @@ fn main() {
         }
     }
     fno::join_marker::join_if_needed();
-    match decide_role(&args, is_tty) {
+    let role = decide_role(&args, is_tty);
+    if !matches!(role, Role::RemoteMail(_)) {
+        std::env::remove_var(fno::remote_target::MAIL_HOP_ENV);
+    }
+    match role {
         Role::Forward => bootstrap::forward(&args),
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),

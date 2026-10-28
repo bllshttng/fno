@@ -47,7 +47,7 @@ pub fn route(url: &str) -> Route {
     Route::Web
 }
 
-type LinkTx = UnboundedSender<(String, LinkOutcome)>;
+pub(crate) type LinkTx = UnboundedSender<(String, LinkOutcome)>;
 
 /// What the off-loop leg did: ran an outside opener, or read a file for the
 /// viewer, which only the UI loop can open.
