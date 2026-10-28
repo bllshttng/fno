@@ -144,15 +144,9 @@ fn head_lead_scope() -> Option<String> {
 /// Mail the head lead. With no head lead, or a refused send, file one fleet
 /// task instead, so it lands on the lead board. True when either landed.
 fn mail_head_lead(root: &Path, key: &str, text: &str, url: &str) -> bool {
-    // Under cargo test the running binary is the test harness, never mail.
-    if cfg!(test) {
-        return false;
-    }
-    let sent = head_lead_scope().is_some_and(|scope| {
-        // The running fno-agents binary owns mail send natively.
-        let Ok(exe) = std::env::current_exe() else {
-            return false;
-        };
+    // The running fno-agents owns mail send; under cargo test it is the harness.
+    let exe = std::env::current_exe().ok().filter(|_| !cfg!(test));
+    let sent = head_lead_scope().zip(exe).is_some_and(|(scope, exe)| {
         let mut cmd = std::process::Command::new(exe);
         cmd.args(["mail", "send", "--from-name", SENDER])
             .args(["--origin", "scheduler", "--to-lead", &scope, text])
