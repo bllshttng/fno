@@ -873,12 +873,10 @@ impl View {
                 }
             }
             // The pin star, painted after every band: filled in the accent
-            // when pinned, an outline on the hovered or cursor row.
-            let hovered = self.hover_row.is_some_and(|h| {
-                h == i || matches!(drow, DisplayRow::CardDetail(..)) && h.abs_diff(i) == 1
-            });
+            // when pinned, an outline on any highlighted row or card (chosen,
+            // cursor, hover).
             if let Some((col, a)) = pin_star_cell(drow, &rects, card, density) {
-                if col < text_w && (a.pinned || driven || hovered) {
+                if col < text_w && (a.pinned || highlit || driven) {
                     let cell = &mut cells[r * cols + col];
                     cell.c = if a.pinned { PIN_STAR } else { PIN_OUTLINE };
                     if cell.bg == Color::Default {
