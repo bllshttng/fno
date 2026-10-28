@@ -194,9 +194,6 @@ fn main() {
     } else {
         select_jobs(event, None, None)
     };
-    // `cargo` stays for one release so a workflow line not yet moved to the
-    // split outputs never reads empty.
-    println!("cargo={}", selection.cargo_agents || selection.cargo_mux);
     println!("cargo_agents={}", selection.cargo_agents);
     println!("cargo_mux={}", selection.cargo_mux);
     println!("python_full={}", selection.python_full);

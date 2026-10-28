@@ -196,13 +196,12 @@ jobs:
   # The Rust selector owns lane routing. Main, the nightly and an unreadable
   # diff select every lane. A PR diff confined to crates/ selects its cargo
   # lanes (fno-agents only skips the mux lanes) and the smoke-seam leg in
-  # place of the full Python shards. `cargo` is the OR of both cargo lanes.
+  # place of the full Python shards.
   pr-affected:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      cargo: ${{ steps.select.outputs.cargo }}
       cargo_agents: ${{ steps.select.outputs.cargo_agents }}
       cargo_mux: ${{ steps.select.outputs.cargo_mux }}
       python_full: ${{ steps.select.outputs.python_full }}
