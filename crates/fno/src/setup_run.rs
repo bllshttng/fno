@@ -148,6 +148,10 @@ const CODES: &[(&str, &str)] = &[
         "projects_hand_set",
         "move the hand-set work.workspaces.main.projects value into an array of {name, path} tables, then rerun `fno config setup run`",
     ),
+    (
+        "messaging_unfinished",
+        "read the messaging line above, then rerun `fno config setup run --only messaging`",
+    ),
 ];
 
 /// One problem a run or a dry-run hit: which list it sat on, a stable
@@ -353,6 +357,13 @@ pub const STEPS: &[Step] = &[
         kind: Kind::Approve,
         question: "Set the review posture and auto-merge grant?",
         effect: "writes review.posture, auto_merge.enabled and auto_merge.grant from the wizard answer or a profile, never a default",
+    },
+    Step {
+        id: "messaging",
+        layer: Layer::Global,
+        kind: Kind::Human,
+        question: "Set up a chat channel for questions?",
+        effect: "pick BlueBubbles (iMessage), Telegram or Discord; each open question posts there and a reply in its thread answers it",
     },
     Step {
         id: "machine-tools",
@@ -1894,28 +1905,10 @@ fn git_version_at_least(text: &str, minimum: (u32, u32)) -> bool {
 /// the machine shape; plain `--list` prints one row per step.
 fn print_list(opts: &Opts) {
     if opts.json {
-        let arr: Vec<serde_json::Value> = STEPS
-            .iter()
-            .map(|s| {
-                json!({
-                    "id": s.id,
-                    "layer": match s.layer {
-                        Layer::Global => "global",
-                        Layer::Project => "project",
-                        Layer::Contributor => "contributor",
-                    },
-                    "kind": match s.kind {
-                        Kind::Act => "act",
-                        Kind::Approve => "approve",
-                        Kind::Report => "report",
-                        Kind::Human => "human",
-                    },
-                    "question": s.question,
-                    "effect": s.effect,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&arr).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&list_json()).unwrap_or_default()
+        );
         return;
     }
     for s in STEPS {
@@ -1927,6 +1920,37 @@ fn print_list(opts: &Opts) {
             s.question
         );
     }
+}
+
+/// The `--list --json` rows. The messaging row also carries each chat
+/// channel and whether this machine has it configured.
+pub(crate) fn list_json() -> serde_json::Value {
+    let arr: Vec<serde_json::Value> = STEPS
+        .iter()
+        .map(|s| {
+            let mut v = json!({
+                "id": s.id,
+                "layer": layer_name(s.layer),
+                "kind": kind_name(s.kind),
+                "question": s.question,
+                "effect": s.effect,
+            });
+            if s.id == "messaging" {
+                match crate::setup_messaging::sink_rows() {
+                    Ok(rows) => {
+                        let me = crate::setup_messaging::machine();
+                        v["channels"] = crate::setup_messaging::channel_states(&rows, &me)
+                            .iter()
+                            .map(|(kind, on)| json!({"type": kind, "configured": on}))
+                            .collect();
+                    }
+                    Err(e) => v["error"] = json!(e),
+                }
+            }
+            v
+        })
+        .collect();
+    serde_json::Value::Array(arr)
 }
 
 fn layer_name(l: Layer) -> &'static str {
@@ -2427,6 +2451,18 @@ pub fn run(tail: &[OsString]) -> i32 {
             (Layer::Global, "groom-agent") => step_groom_agent(&exe, &mut rep, &mut loaded),
             (Layer::Global, "projects") => step_projects(&exe, &root, &mut rep),
             (Layer::Global, "review-merge") => step_review_merge(&mut rep),
+            (Layer::Global, "messaging") => match crate::setup_messaging::sink_rows() {
+                Ok(rows) => rep.skipped.push(crate::setup_messaging::summary_line(
+                    &rows,
+                    &crate::setup_messaging::machine(),
+                )),
+                Err(e) => {
+                    let message = format!("messaging: {e}");
+                    rep.rows
+                        .push(row("needs_human", "messaging_unfinished", message.clone()));
+                    rep.needs_human.push(message);
+                }
+            },
             (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
             (Layer::Global, "permission-rules") => step_permission_rules(&mut rep),
             (Layer::Global, "join") => {
