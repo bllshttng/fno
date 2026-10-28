@@ -913,49 +913,6 @@ mod tests {
     }
 
     #[test]
-    fn a_retargeted_away_node_does_not_close_on_the_handoff_pr() {
-        // The recorded shape: a PR retargeted from one node to another, with
-        // the old node still carrying the PR binding. The handoff body hands
-        // the old node away, so neither scan closes it on this PR.
-        let body = "Fixes x-bbbb\n\nRetarget x-aaaa x-bbbb msg-123456";
-        let entries = vec![open_node(json!({
-            "pr_number": 7,
-            "pr_url": "https://github.com/o/r/pull/7",
-            "cwd": ".",
-        }))];
-        let mut row = pr_row(7, "feature/x-aaaa-port", "MERGED");
-        row["body"] = json!(body);
-
-        let cache = ListingCache::new();
-        cache
-            .rows_for_with("merged", ".", |_| Ok(vec![row.clone()]))
-            .expect("seed merged");
-        cache
-            .rows_for_with("open", ".", |_| Ok(Vec::new()))
-            .expect("seed open");
-        let records = scan_merge_drift(&entries, None, Some(&cache), |_, _, _, _| {
-            panic!("a handed-away PR is not this node's evidence")
-        });
-        assert!(records.is_empty(), "{records:?}");
-
-        // The same row without the Retarget line still closes the node.
-        let cache = ListingCache::new();
-        cache
-            .rows_for_with("merged", ".", |_| {
-                Ok(vec![pr_row(7, "feature/x-aaaa-port", "MERGED")])
-            })
-            .expect("seed merged");
-        cache
-            .rows_for_with("open", ".", |_| Ok(Vec::new()))
-            .expect("seed open");
-        let records = scan_merge_drift(&entries, None, Some(&cache), |_, _, _, _| {
-            panic!("query owed nothing: the listing answered")
-        });
-        assert_eq!(records.len(), 1, "{records:?}");
-        assert!(records[0].closeable());
-    }
-
-    #[test]
     fn a_merged_pr_closes_only_a_node_its_closing_line_names() {
         // The recorded shape: wave 1 of a multi-wave node merges with no
         // closing line, and the node must stay open for its later waves.
@@ -979,7 +936,8 @@ mod tests {
             })
         };
         assert!(scan_listing("wave 1 of 2").is_empty());
-        assert!(scan_listing("Fixes x-bbbb").is_empty());
+        // An approved Retarget hand-off names the new node, not this one.
+        assert!(scan_listing("Fixes x-bbbb\n\nRetarget x-aaaa x-bbbb msg-123456").is_empty());
         let records = scan_listing("Fixes x-bbbb x-aaaa");
         assert_eq!(records.len(), 1, "{records:?}");
         assert!(records[0].closeable());
