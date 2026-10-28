@@ -221,9 +221,11 @@ WORKER_BAND="${FNO_WORKER_BAND:-}"
 if [[ -z "$WORKER_BAND" && -n "$NODE_ID" && -f ".fno/join-briefs/${NODE_ID}.md" ]]; then
     WORKER=$(fno agents whoami 2>/dev/null | python3 -c \
         "import json,sys; print(json.load(sys.stdin).get('name') or '')" 2>/dev/null || true)
-    WORKER_BAND=$(awk -F'|' -v w="$WORKER" \
-        'tolower($2) ~ tolower(w) {gsub(/ /, "", $3); print $3; exit}' \
-        ".fno/join-briefs/${NODE_ID}.md" 2>/dev/null)
+    if [[ -n "$WORKER" ]]; then
+        WORKER_BAND=$(awk -F'|' -v w="$WORKER" \
+            '{cell = tolower($2); gsub(/ /, "", cell); want = tolower(w); gsub(/ /, "", want); if (cell == want && cell != "") {gsub(/ /, "", $3); print $3; exit}}' \
+            ".fno/join-briefs/${NODE_ID}.md" 2>/dev/null)
+    fi
 fi
 if [[ -n "$WORKER_BAND" ]]; then
     READY_ARGS+=(--band "$WORKER_BAND")
