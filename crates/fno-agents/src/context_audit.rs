@@ -1025,14 +1025,14 @@ fn discover_cell_sources(
                 plugin_root,
                 harness,
                 entry_state,
-                path,
+                &path,
                 ordinal,
             ));
             ordinal += FOLDED_CONTEXT_SCRIPTS.len() as i64 + 1;
             continue;
         }
         sources.push(measure_hook(
-            path,
+            &path,
             plugin_root,
             harness,
             entry_state,
@@ -1215,7 +1215,7 @@ fn compile_context(
     let mut used: usize = 0;
     if kernel_total > packet_budget {
         for (i, s) in &unique {
-            budget_omitted.push((*i, *s));
+            budget_omitted.push((*i, s));
         }
         used = 0;
     } else {

@@ -1138,7 +1138,7 @@ fn live_root_pids(
     let mut dead_rows: Vec<String> = Vec::new();
     let mut gap_rows: Vec<String> = Vec::new();
     let mut roots: BTreeSet<u32> = BTreeSet::new();
-    for (idx, row) in rows.iter().enumerate() {
+    for row in rows.iter() {
         if row.is_live() {
             continue;
         }

@@ -303,7 +303,7 @@ fn run_context_probe(args: &[String]) -> i32 {
         }
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let payload = match transcript_reading(Path::new(transcript), &session, &cwd) {
+    let payload = match transcript_reading(Path::new(transcript.as_str()), &session, &cwd) {
         Ok(payload) => payload,
         Err(error) => {
             if error.starts_with("effective context window unreadable:") {
