@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::merge_evidence::PrReadError;
-use super::merge_state::{query_pr_merge_state, PrMergeState};
+use super::merge_state::{query_pr_merge_state, read_body, PrMergeState};
 use super::pr_link::repo_slug_from_url;
 use crate::backlog_ready::node_is_open;
 use crate::loop_dispatch::which_binary;
@@ -736,7 +736,7 @@ pub(crate) fn scan_merge_drift(
                     merge_sha: None,
                     changed_files: Vec::new(),
                     files_truncated: false,
-                    body: String::new(),
+                    body: None,
                 });
                 break;
             }
@@ -762,7 +762,8 @@ pub(crate) fn scan_merge_drift(
                     continue;
                 }
                 Ok(state) => {
-                    if state.state == "MERGED" && closure_names(&state.body, nid) {
+                    let body = state.body.as_deref().unwrap_or_default();
+                    if state.state == "MERGED" && closure_names(body, nid) {
                         merged = Some(state);
                         break;
                     }
@@ -815,14 +816,19 @@ pub(crate) fn scan_merge_drift(
     records
 }
 
-/// The production query seam: the cache-first merge-state read.
+/// The production query seam: the cache-first merge-state read, with the
+/// closure body read fresh when the cache served the merge facts.
 pub(crate) fn query_seam(
     pr: i64,
     repo: Option<&str>,
     cwd: Option<&str>,
     include_files: bool,
 ) -> Result<PrMergeState, PrReadError> {
-    query_pr_merge_state(pr, repo, cwd, include_files)
+    let mut state = query_pr_merge_state(pr, repo, cwd, include_files)?;
+    if state.state == "MERGED" && state.body.is_none() {
+        state.body = Some(read_body(pr, repo, cwd)?);
+    }
+    Ok(state)
 }
 
 fn str_field(v: Option<&Value>) -> Option<String> {
@@ -893,7 +899,7 @@ mod tests {
                 merge_sha: Some("abc".into()),
                 changed_files: vec!["a.rs".into()],
                 files_truncated: false,
-                body: "Fixes x-aaaa".into(),
+                body: Some("Fixes x-aaaa".into()),
             })
         });
         assert_eq!(records[0].pr_state, "MERGED");
@@ -952,7 +958,7 @@ mod tests {
                     merge_sha: None,
                     changed_files: Vec::new(),
                     files_truncated: false,
-                    body: body.to_string(),
+                    body: Some(body.to_string()),
                 })
             })
         };

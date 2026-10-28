@@ -33,7 +33,9 @@ pub(crate) struct PrMergeState {
     pub changed_files: Vec<String>,
     pub files_truncated: bool,
     /// The PR body; its closure line names the nodes this merge closes.
-    pub body: String,
+    /// None on a cache hit: a body stays editable after merge, so the
+    /// permanent row never holds it ([`read_body`] reads it fresh).
+    pub body: Option<String>,
 }
 
 /// The production read: cache first, REST on a miss, write-back on a fresh
@@ -71,8 +73,6 @@ fn cached_row(
     let row = row.get("row")?.as_object()?;
     let info = row.get("info")?.as_object()?;
     let state = info.get("state")?.as_str()?.to_string();
-    // A row written before the body was cached is a miss: the close needs it.
-    let body = info.get("body")?.as_str().unwrap_or_default().to_string();
     if include_files && !row.get("files").map(Value::is_array).unwrap_or(false) {
         return None;
     }
@@ -93,7 +93,7 @@ fn cached_row(
             })
             .unwrap_or_default(),
         files_truncated: false,
-        body,
+        body: None,
     })
 }
 
@@ -115,7 +115,6 @@ fn write_cache_row(
             "url": state.url,
             "merged_at": state.merged_at,
             "merge_sha": state.merge_sha,
-            "body": state.body,
         }
     });
     if include_files {
@@ -186,12 +185,27 @@ pub(crate) fn fresh_read(
         merge_sha: str_field(map.get("merge_sha")),
         changed_files,
         files_truncated: false,
-        body: map
-            .get("body")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
+        body: Some(
+            map.get("body")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ),
     })
+}
+
+/// The PR body, read fresh: the closure evidence a cached merge row omits.
+pub(crate) fn read_body(
+    pr: i64,
+    repo: Option<&str>,
+    cwd: Option<&str>,
+) -> Result<String, PrReadError> {
+    let info = read_info(pr, repo, Path::new(cwd.unwrap_or(".")))?;
+    Ok(info
+        .get("body")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
 }
 
 /// The production info seam: resolve the slug, one `gh api` pull read,
@@ -432,7 +446,6 @@ mod tests {
                 "url": format!("https://github.com/o/r/pull/{pr}"),
                 "merged_at": "2026-10-01T00:00:00Z",
                 "merge_sha": "abc123",
-                "body": "",
             },
             "files": files,
         })
