@@ -1398,7 +1398,7 @@ fn make_decision(
     };
     let subject = match (&grant_subject, &retraction) {
         (Some(subject), _) => subject.clone(),
-        (None, Some(subject)) => subject.clone(),
+        (None, Some((subject, _))) => subject.clone(),
         (None, None) => node
             .map(str::to_string)
             .unwrap_or_else(|| format!("question:{qid}")),
@@ -1716,38 +1716,6 @@ fn is_affirmative_retraction_answer(answer: &str) -> bool {
             normalized.as_str(),
             "yes" | "y" | "approve" | "approved" | "go ahead" | "do it"
         )
-}
-
-/// The closed retraction vocabulary. The intent verbs lead the way the ask
-/// gate's `cites_retraction` words the action; a negation right after the
-/// verb ("retract nothing", "retract? no") never reads affirmative, and the
-/// generic tail is the merge set minus the merge-only words.
-fn is_affirmative_retraction_answer(answer: &str) -> bool {
-    let normalized = answer
-        .trim()
-        .trim_end_matches(['.', '!', '?', ';', ',', ':'])
-        .to_lowercase();
-    const NEGATIONS: [&str; 5] = ["no", "not", "never", "don't", "dont"];
-    const INTENT: [&str; 5] = ["retract", "repeal", "rescind", "revoke", "overturn"];
-    for lead in INTENT {
-        if let Some(rest) = normalized.strip_prefix(lead) {
-            let rest = rest
-                .trim_start()
-                .trim_start_matches(['?', '!', '.', ',', ';', ':'])
-                .trim_start();
-            let negated = rest.starts_with("n't")
-                || NEGATIONS
-                    .iter()
-                    .any(|n| rest == *n || rest.starts_with(&format!("{n} ")));
-            if !negated {
-                return true;
-            }
-        }
-    }
-    matches!(
-        normalized.as_str(),
-        "yes" | "y" | "approve" | "approved" | "go ahead" | "do it"
-    )
 }
 
 /// The subject path validates its target the way the retract door does: a

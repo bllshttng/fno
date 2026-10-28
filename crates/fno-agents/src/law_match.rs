@@ -2495,10 +2495,15 @@ pub(crate) enum RetractOutcome {
 pub(crate) fn write_retraction_event(w: &RetractWrite) -> RetractOutcome {
     let retraction_id = mint_retraction_id();
     let ts = now_iso();
+    let subject_field = if w.subject.is_empty() {
+        "(unscoped)".to_string()
+    } else {
+        w.subject.clone()
+    };
     let mut data = json!({
         "retraction_id": retraction_id,
         "target_decision_id": w.target_decision_id,
-        "subject": if w.subject.is_empty() { "(unscoped)".to_string() } else { w.subject },
+        "subject": subject_field,
         "reason": text_cap(w.reason.trim(), 2000),
         "retracted_by": w.retracted_by,
         "authority_source": w.authority_source,
