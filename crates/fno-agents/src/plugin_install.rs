@@ -16,6 +16,7 @@ use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
 
+use crate::pack_profile::{MuxPaths, Profile, HOOK_FILES};
 use crate::paths::{dirs_home, AgentsHome};
 
 const BUILD_DIR_KEY: &str = "CARGO_BUILD_BUILD_DIR";
@@ -278,7 +279,21 @@ fn require_fno_source(source_root: &Path) -> Result<(), String> {
 /// half-built tree; running bash hooks keep their open inode and finish on
 /// old bytes. Returns the stage path and the file count copied.
 fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usize), String> {
+    build_stage_as(source_root, stage_parent, Profile::Full)
+}
+
+/// `build_stage` for one profile. A pack stage lives at `plugin-stage/fno-pack`
+/// and holds no mux path and no hook entry that runs one.
+fn build_stage_as(
+    source_root: &Path,
+    stage_parent: &Path,
+    profile: Profile,
+) -> Result<(PathBuf, usize), String> {
     require_fno_source(source_root)?;
+    let mux = match profile {
+        Profile::Full => None,
+        Profile::Pack => Some(MuxPaths::load(source_root)?),
+    };
     let listed = run_checked(
         &[
             "git".to_string(),
@@ -289,10 +304,11 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
         ],
         Some(source_root),
     )?;
-    let dest = stage_parent.join(STAGE_DIR);
+    let dir = profile.stage_dir();
+    let dest = stage_parent.join(dir);
     let pid = std::process::id();
-    let new_dir = stage_parent.join(format!(".fno.new-{pid}"));
-    let old_dir = stage_parent.join(format!(".fno.old-{pid}"));
+    let new_dir = stage_parent.join(format!(".{dir}.new-{pid}"));
+    let old_dir = stage_parent.join(format!(".{dir}.old-{pid}"));
     let _ = std::fs::remove_dir_all(&new_dir);
     let _ = std::fs::remove_dir_all(&old_dir);
     std::fs::create_dir_all(&new_dir).map_err(|e| format!("stage: {e}"))?;
@@ -300,6 +316,9 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
     let copy_all = || -> Result<usize, String> {
         let mut copied = 0usize;
         for rel in listed.split('\0').filter(|s| !s.is_empty()) {
+            if mux.as_ref().is_some_and(|m| m.covers(rel)) {
+                continue;
+            }
             let src = source_root.join(rel);
             let meta = match std::fs::symlink_metadata(&src) {
                 Ok(m) => m,
@@ -315,6 +334,18 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
             std::fs::copy(&src, &target).map_err(|e| format!("stage: {rel}: {e}"))?;
             copied += 1;
         }
+        if let Some(m) = &mux {
+            for rel in HOOK_FILES {
+                let path = new_dir.join(rel);
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let filtered = m
+                    .filter_hooks(&text)
+                    .map_err(|e| format!("stage: {rel}: {e}"))?;
+                std::fs::write(&path, filtered).map_err(|e| format!("stage: {rel}: {e}"))?;
+            }
+        }
         Ok(copied)
     };
     let copied = match copy_all() {
@@ -328,7 +359,11 @@ fn build_stage(source_root: &Path, stage_parent: &Path) -> Result<(PathBuf, usiz
         &["git".to_string(), "rev-parse".into(), "HEAD".into()],
         Some(source_root),
     ) {
-        let stamp = json!({"source_head": head, "built_at": chrono::Utc::now().to_rfc3339()});
+        let stamp = json!({
+            "source_head": head,
+            "built_at": chrono::Utc::now().to_rfc3339(),
+            "profile": if profile == Profile::Pack { "pack" } else { "full" },
+        });
         let _ = std::fs::write(new_dir.join(STAGE_STAMP), stamp.to_string());
     }
 
@@ -473,6 +508,16 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         Ok(l) => l,
         Err(e) => return unknown_check(stage, source_dir, e),
     };
+    // A pack stage leaves the mux paths out and rewrites the hook files on
+    // purpose, so neither is drift.
+    let pack = std::fs::read_to_string(stage.join(STAGE_STAMP))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .is_some_and(|v| v.get("profile").and_then(Value::as_str) == Some("pack"));
+    let mux = match pack.then(|| MuxPaths::load(&root)).transpose() {
+        Ok(m) => m,
+        Err(e) => return unknown_check(stage, source_dir, e),
+    };
 
     let mut tracked: Vec<(String, String)> = Vec::new(); // (path, blob sha)
     for entry in listing.split('\0').filter(|s| !s.is_empty()) {
@@ -496,9 +541,14 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
     let mut to_hash: Vec<(&str, &str)> = Vec::new(); // (stage path, HEAD sha)
     let mut manifests = Vec::new();
     for (path, sha) in &tracked {
-        if [MARKETPLACE_REL, CODEX_MARKETPLACE_REL].contains(&path.as_str()) {
+        if mux.as_ref().is_some_and(|m| m.covers(path)) {
+            continue;
+        }
+        if [MARKETPLACE_REL, CODEX_MARKETPLACE_REL].contains(&path.as_str())
+            || (mux.is_some() && HOOK_FILES.contains(&path.as_str()))
+        {
             // The stage serves a rewritten copy of this file
-            // (staged_marketplace_bytes), so no HEAD sha can match it.
+            // (staged_marketplace_bytes, filter_hooks), so no HEAD sha can match it.
             manifests.push(path.as_str());
             continue;
         }
@@ -547,7 +597,10 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         } else {
             let verdict = std::fs::read_to_string(root.join(marketplace))
                 .map_err(|e| format!("{marketplace}: {e}"))
-                .and_then(|t| staged_marketplace_bytes(&t, marketplace))
+                .and_then(|t| match &mux {
+                    Some(m) if HOOK_FILES.contains(&marketplace) => m.filter_hooks(&t),
+                    _ => staged_marketplace_bytes(&t, marketplace),
+                })
                 .and_then(|expected| {
                     std::fs::read_to_string(&stage_manifest)
                         .map(|actual| actual == expected)
@@ -952,10 +1005,14 @@ enum RestageOutcome {
 
 /// Rebuild an EXISTING stage from `source_dir`. Never installs, exports env,
 /// or reclaims: those belong to install, not deploy. A machine that never set
-/// up the directory marketplace has no stage and gets a no-op.
+/// up the directory marketplace has no stage and gets a no-op. Each profile
+/// stage on disk rebuilds; the file count sums them.
 fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcome, String> {
-    let stage = stage_parent.join("fno");
-    if !stage.exists() {
+    let present: Vec<Profile> = [Profile::Full, Profile::Pack]
+        .into_iter()
+        .filter(|p| stage_parent.join(p.stage_dir()).exists())
+        .collect();
+    if present.is_empty() {
         return Ok(RestageOutcome::Absent);
     }
     let root = repo_root(source_dir)?;
@@ -967,7 +1024,10 @@ fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcom
         ],
         Some(&root),
     )?;
-    let (_, files) = build_stage(&root, &stage_parent)?;
+    let mut files = 0;
+    for profile in present {
+        files += build_stage_as(&root, stage_parent, profile)?.1;
+    }
     Ok(RestageOutcome::Restaged {
         files,
         root,
@@ -1897,7 +1957,8 @@ fn run_opencode_arm(
             }
             let home = AgentsHome::from_env();
             let _ = crate::reclaim::run_reclaim(&RECLAIM_ON_INSTALL.map(String::from), &home);
-            prime_plugin_root_pointer(&state_root().join("plugin-stage").join(STAGE_DIR));
+            let full = Profile::Full.stage_dir();
+            prime_plugin_root_pointer(&state_root().join("plugin-stage").join(full));
             if receipt.status == "partial" {
                 3
             } else {
@@ -2213,10 +2274,6 @@ fn zcode_install_config(config_path: &Path, stage: &Path) -> Result<String, Stri
         stage.display()
     ))
 }
-
-/// The stage dir name under plugin-stage; build_stage and the pointer prime
-/// must agree on it.
-const STAGE_DIR: &str = "fno";
 
 /// Written into the stage at build: the source HEAD it was built from and
 /// when, so the check can say how far behind a stale stage is. HEAD never
@@ -2891,6 +2948,56 @@ mod tests {
         fs::create_dir_all(&stage_parent).unwrap();
         let (stage, _) = build_stage(&source, &stage_parent).unwrap();
         (source, stage)
+    }
+
+    /// AC3/AC4: a pack stage drops mux paths and mux hook entries, checks
+    /// fresh against its own source, and a manifest naming a missing path
+    /// refuses before any temp dir exists.
+    #[test]
+    fn pack_stage_drops_mux_paths_and_checks_fresh() {
+        let base = std::env::temp_dir().join(format!("pi-pack-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let source = base.join("source");
+        new_repo(&source);
+        fs::create_dir_all(source.join("skills/mail")).unwrap();
+        fs::write(source.join("skills/mail/SKILL.md"), "mail\n").unwrap();
+        fs::write(source.join("hooks/mail.sh"), "mail\n").unwrap();
+        fs::write(
+            source.join("hooks/hooks.json"),
+            r#"{"hooks":{"Stop":[{"hooks":[{"command":"${R}/hooks/mail.sh"},{"command":"${R}/hooks/live.sh"}]}]}}"#,
+        )
+        .unwrap();
+        let manifest = r#"{"mux":["hooks/mail.sh","skills/mail"]}"#;
+        fs::write(source.join(crate::pack_profile::MANIFEST), manifest).unwrap();
+        git_in(&source, &["add", "-A"]);
+        git_in(&source, &["commit", "-q", "-m", "c2"]);
+        let parent = base.join("stage-parent");
+        fs::create_dir_all(&parent).unwrap();
+
+        let (stage, _) = build_stage_as(&source, &parent, Profile::Pack).unwrap();
+        assert!(stage.ends_with("fno-pack"));
+        assert!(!stage.join("skills/mail").exists());
+        assert!(!stage.join("hooks/mail.sh").exists());
+        let hooks = fs::read_to_string(stage.join("hooks/hooks.json")).unwrap();
+        assert!(
+            !hooks.contains("mail.sh") && hooks.contains("live.sh"),
+            "{hooks}"
+        );
+        assert_eq!(check_stage_report(&stage, &source).status, "fresh");
+
+        fs::write(
+            source.join(crate::pack_profile::MANIFEST),
+            r#"{"mux":["skills/gone"]}"#,
+        )
+        .unwrap();
+        let err = build_stage_as(&source, &parent, Profile::Pack).unwrap_err();
+        assert!(err.contains("skills/gone"), "{err}");
+        let temp = fs::read_dir(&parent)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().starts_with(".fno-pack."));
+        assert!(!temp, "a refused pack build left a temp dir");
+        let _ = fs::remove_dir_all(&base);
     }
 
     /// AC1-HP: the swap is atomic (no temp dirs left), new bytes land, and a
