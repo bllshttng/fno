@@ -47,7 +47,9 @@ pub fn root_refusal(args: &[std::ffi::OsString]) -> Option<String> {
         return None;
     }
     // A retired leaf with its own new home outranks its root's row.
-    let leaf = args.get(at + 1).map(|w| format!("{word} {}", w.to_string_lossy()));
+    let leaf = args
+        .get(at + 1)
+        .map(|w| format!("{word} {}", w.to_string_lossy()));
     let row = rows()
         .find(|r| !r.1 && Some(r.0) == leaf.as_deref())
         .or_else(|| rows().find(|r| r.0 == word));
@@ -88,7 +90,10 @@ mod tests {
         assert!(refusal(&["codemap"]).unwrap().contains("was removed"));
         assert!(refusal(&["-J", "claim", "status"]).is_some());
         let leaf = refusal(&["decide", "list"]);
-        assert_eq!(leaf.as_deref(), Some("fno decide list is now fno backlog decisions"));
+        assert_eq!(
+            leaf.as_deref(),
+            Some("fno decide list is now fno backlog decisions")
+        );
         assert!(refusal(&["frobnicate"])
             .unwrap()
             .contains("Commands: agents"));
