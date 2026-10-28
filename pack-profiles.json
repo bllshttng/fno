@@ -1,5 +1,5 @@
 {
-  "description": "The two install profiles of the fno plugin. A full install carries every file. A pack install (fno config plugin install <harness> --pack) drops every path under mux and every hook entry that runs a mux script. A skill, agent or command not under mux is pack. Every hook script that hooks/hooks.json, hooks/codex-hooks.json or hooks/context-hooks.json runs must sit in mux or pack_hooks, so a new hook makes its author pick a profile. Gate: scripts/ci/check-pack-profiles.sh. Reader: crates/fno-agents/src/pack_profile.rs.",
+  "description": "The two install profiles of the fno plugin. A full install carries every file. A pack install drops every path under mux and every hook entry that runs a mux script. A skill, agent or command not under mux is pack. Every hook script that hooks/hooks.json, hooks/codex-hooks.json or hooks/context-hooks.json runs must sit in mux or pack_hooks, so a new hook makes its author pick a profile. Gate: scripts/ci/check-pack-profiles.sh.",
   "mux": [
     "hooks/codex-app-server-nudge-session-start.sh",
     "hooks/inject-announce.sh",

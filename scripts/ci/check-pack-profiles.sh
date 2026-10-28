@@ -3,8 +3,8 @@
 #
 # pack-profiles.json splits the plugin into the pack (runs in any harness with
 # no mux) and the mux (mail, panes, the daemon registry). A pack install
-# (fno config plugin install <harness> --pack) drops every mux path and every
-# hook entry that runs a mux script. This gate fails when a hook script that
+# drops every mux path and every hook entry that runs a mux script. This
+# gate fails when a hook script that
 # hooks/hooks.json, hooks/codex-hooks.json or hooks/context-hooks.json runs
 # sits in neither mux nor pack_hooks, when a script sits in both, and when a
 # manifest path does not exist. Skills, agents and commands default to pack,
