@@ -1,12 +1,11 @@
 //! The `fno config` read-side doors that answer natively on the front door.
 //!
-//! One classify, one dispatch line in `main.rs`, bodies beside this module:
-//! [`get`], [`history`], [`leaves`] and [`plugin_install`]. The write side
-//! (`set`, `unset`, `rm`) and the doctor command stay Python for now: the writer
-//! belongs to the config-writer port, and the bare doctor engine
-//! (`run_doctor` in `cli/src/fno/setup/doctor.py`) is the setup family's
-//! file, so the command moves with its engine rather than forking a second
-//! doctor leg.
+//! One classify, one dispatch line in `main.rs` ([`run`]), bodies beside
+//! this module: [`get`], [`history`], [`leaves`], [`plugin_install`] and the
+//! writer, [`write`] (`set`, `unset`, `rm`). The doctor command stays
+//! Python: its bare engine (`run_doctor` in `cli/src/fno/setup/doctor.py`)
+//! is the setup family's file, so the command moves with its engine rather
+//! than forking a second doctor leg.
 //!
 //! The reader replays the Python loader's merge: candidate chain, per-layer
 //! legacy alias, deep merge, worktree-local allowlist, then the schema table
@@ -23,6 +22,7 @@ pub mod history;
 pub mod leaves;
 pub mod model;
 pub mod plugin_install;
+pub mod write;
 
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
@@ -40,12 +40,30 @@ pub enum Door {
     StatusSinks(Vec<OsString>),
     ActiveBacklog,
     PluginInstall(Vec<OsString>),
+    Set(Vec<OsString>),
+    /// `unset` and its `rm` alias; the verb names the usage line.
+    Unset(&'static str, Vec<OsString>),
+}
+
+/// The one dispatch for every claimed door.
+pub fn run(door: Door) -> i32 {
+    match door {
+        Door::Get(rest) => get::run(&rest),
+        Door::History(rest) => history::run(&rest),
+        Door::BuildDir => leaves::run_build_dir(&[]),
+        Door::Budget(rest) => leaves::run_budget(&rest),
+        Door::StatusSinks(rest) => leaves::run_status_sinks(&rest),
+        Door::ActiveBacklog => leaves::run_active_backlog(&[]),
+        Door::PluginInstall(rest) => plugin_install::run(&rest),
+        Door::Set(rest) => write::set::run(&rest),
+        Door::Unset(verb, rest) => write::unset::run(verb, &rest),
+    }
 }
 
 /// Claim the read-side `config` leaves lexically, before clap, the way
 /// `config_defaults::classify` does. `None` forwards to the Python shell
-/// untouched: the writer commands, the doctor command, the lazy mounts (accounts,
-/// paths, route, routing) and the codex arm of `plugin install`.
+/// untouched: the doctor command, the lazy mounts (accounts, paths, route,
+/// routing) and the codex arm of `plugin install`.
 pub fn classify(args: &[OsString]) -> Option<Door> {
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
     if words.len() != args.len() {
@@ -70,6 +88,9 @@ pub fn classify(args: &[OsString]) -> Option<Door> {
             rest.iter().map(|w| OsString::from(*w)).collect(),
         )),
         ["config", "active-backlog"] => Some(Door::ActiveBacklog),
+        ["config", "set", ..] => Some(Door::Set(args[2..].to_vec())),
+        ["config", "unset", ..] => Some(Door::Unset("unset", args[2..].to_vec())),
+        ["config", "rm", ..] => Some(Door::Unset("rm", args[2..].to_vec())),
         ["config", "plugin", "install", tail @ ..] => {
             // The codex arm stays on the Python converge engine (ship-phase
             // ruling, setup family): forward whenever the harness word is or
@@ -203,7 +224,7 @@ pub fn resolve_path(path: &Path) -> PathBuf {
 // The candidate chain and its layers
 // ---------------------------------------------------------------------------
 
-fn global_settings_path() -> PathBuf {
+pub(crate) fn global_settings_path() -> PathBuf {
     if let Some(env) = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
         if !env.is_empty() {
             return PathBuf::from(env);
@@ -406,7 +427,7 @@ pub fn unwrap_config_dict(raw: &Value) -> Value {
 }
 
 /// `_flatten_leaf_paths`: dotted path and value for every leaf in a tree.
-fn flatten_leaf_paths(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
+pub(crate) fn flatten_leaf_paths(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
     match value {
         Value::Object(map) => {
             for (key, entry) in map {
@@ -782,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_claims_read_doors_and_forwards_writer_and_codex() {
+    fn classify_claims_the_doors_and_forwards_doctor_and_codex() {
         let os = |words: &[&str]| -> Vec<OsString> { words.iter().map(OsString::from).collect() };
         assert!(matches!(
             classify(&os(&["config", "get", "review.max_rounds"])),
@@ -808,9 +829,15 @@ mod tests {
             classify(&os(&["config", "plugin", "install", "claude", "--dev"])),
             Some(Door::PluginInstall(_))
         ));
-        // The writer and the doctor stay Python.
-        assert_eq!(classify(&os(&["config", "set", "a.b", "1"])), None);
-        assert_eq!(classify(&os(&["config", "unset", "a.b"])), None);
+        assert!(matches!(
+            classify(&os(&["config", "set", "a.b", "1"])),
+            Some(Door::Set(_))
+        ));
+        assert!(matches!(
+            classify(&os(&["config", "rm", "a.b"])),
+            Some(Door::Unset("rm", _))
+        ));
+        // The doctor stays Python.
         assert_eq!(classify(&os(&["config", "doctor", "--post-merge"])), None);
         // The codex arm stays on the Python converge engine.
         assert_eq!(

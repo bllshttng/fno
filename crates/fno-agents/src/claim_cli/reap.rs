@@ -768,47 +768,18 @@ pub fn run(args: &[String]) -> i32 {
     i32::from(!summary.reap_failed.is_empty())
 }
 
-/// The opt-out restore fold (cli.py's `restore_reaped_optouts` extend,
-/// cli.py:1502-1505): config files are written through the Python config
-/// writer, so each reaped `config-optout:` claim restores via a
-/// `python -m fno.claims._optout_restore` subprocess carrying the fresh
-/// record as JSON. The child folds its own failure into one stderr line
-/// (`opt-out restore failed: ...`), the exact string Python's fold appends.
-/// Failures land in `reap_failed` after the sweep's own failures and before
-/// render, so the FAILED lines and the exit code match the Python order.
+/// The opt-out restore fold: each reaped `config-optout:` claim restores the
+/// value its metadata recorded through the config writer, in process. A
+/// failure is one `opt-out restore failed: ...` row, landing in
+/// `reap_failed` after the sweep's own failures and before render, so the
+/// FAILED lines and the exit code keep their order.
 fn restore_reaped_optouts(summary: &mut ReapSummary) {
-    let cwd = std::env::current_dir().unwrap_or_default();
     for claim in std::mem::take(&mut summary.optout_sink) {
-        let payload = match serde_json::to_string(&claim) {
-            Ok(payload) => payload,
-            Err(err) => {
-                summary
-                    .reap_failed
-                    .push((claim.key.clone(), format!("opt-out restore failed: {err}")));
-                continue;
-            }
-        };
-        let mut cmd = crate::finalize::py_module(&cwd);
-        cmd.args(["-m", "fno.claims._optout_restore", "--claim", &payload]);
-        match cmd.output() {
-            Ok(output) if output.status.success() => {}
-            Ok(output) => {
-                let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let reason = if reason.is_empty() {
-                    format!(
-                        "opt-out restore failed: exit code {}",
-                        output.status.code().unwrap_or(-1)
-                    )
-                } else {
-                    reason
-                };
-                summary.reap_failed.push((claim.key.clone(), reason));
-            }
-            Err(err) => {
-                summary
-                    .reap_failed
-                    .push((claim.key.clone(), format!("opt-out restore failed: {err}")));
-            }
+        if let Err(err) = fno::config_cli::write::restore_reaped_optout(&claim.key, &claim.metadata)
+        {
+            summary
+                .reap_failed
+                .push((claim.key.clone(), format!("opt-out restore failed: {err}")));
         }
     }
 }
