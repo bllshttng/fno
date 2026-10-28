@@ -12,7 +12,7 @@
 //! as no turn. A reply is the text of an assistant message. A message that
 //! only calls tools leaves the last reply standing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -155,8 +155,21 @@ pub fn user_turns(harness: &str, sid: &str) -> Option<Turns> {
         );
     }
     let cursor = cursors.get_mut(&key)?;
-    advance(cursor).ok()?;
+    if advance(cursor).is_err() {
+        // A transcript that moved or vanished resolves again next beat.
+        cursors.remove(&key);
+        return None;
+    }
     Some(cursor.turns.clone())
+}
+
+/// Keep only the cursors of the sessions in `live`, so a long-running
+/// daemon holds one cursor per live session.
+pub fn retain_live(live: &[(&str, &str)]) {
+    let keep: HashSet<String> = live.iter().map(|(h, s)| format!("{h}:{s}")).collect();
+    if let Some(cursors) = CURSORS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        cursors.retain(|key, _| keep.contains(key));
+    }
 }
 
 #[cfg(test)]

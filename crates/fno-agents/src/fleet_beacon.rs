@@ -305,6 +305,11 @@ fn with_top(mut machine: Machine) -> (Machine, Vec<Session>) {
     let top = crate::agents_top::payload(false, false);
     machine.lanes = lanes_from_top(&top);
     let mut sessions = sessions_from_top(&machine.machine_id, &top);
+    let live: Vec<(&str, &str)> = sessions
+        .iter()
+        .filter_map(|s| Some((s.harness.as_deref()?, s.session_id.as_deref()?)))
+        .collect();
+    crate::transcript_turns::retain_live(&live);
     for s in &mut sessions {
         let (Some(harness), Some(id)) = (s.harness.as_deref(), s.session_id.as_deref()) else {
             continue;
