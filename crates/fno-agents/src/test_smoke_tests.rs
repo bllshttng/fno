@@ -348,10 +348,12 @@ fn the_workflow_actually_shards_the_gate() {
     for (job, _, _, _, _) in &selectors {
         *by_job.entry(job.as_str()).or_insert(0) += 1;
     }
+    // smoke-seam is the crates-only subset that runs when the selector
+    // turns the full legs off; the full legs still cover the registry alone.
     assert_eq!(
         by_job.keys().cloned().collect::<Vec<_>>(),
-        vec!["smoke-pytest", "smoke-rest"],
-        "expected pytest and rest legs, found {by_job:?}"
+        vec!["smoke-pytest", "smoke-rest", "smoke-seam"],
+        "expected pytest, rest and seam legs, found {by_job:?}"
     );
     assert!(by_job.values().all(|v| *v >= 1));
 }
@@ -422,7 +424,9 @@ fn the_shards_cover_every_step() {
     let weights = disc::smoke_step_weights(&repo());
     let mut covered: std::collections::BTreeSet<String> = Default::default();
     for (job, shard, total, flag, globs) in shard_selectors() {
-        let _ = job;
+        if job == "smoke-seam" {
+            continue;
+        }
         let leg = selected_names(&names, &flag, &globs, shard, total, &weights);
         covered.extend(leg);
     }
