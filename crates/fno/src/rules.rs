@@ -436,6 +436,175 @@ pub fn bm25_rank(docs: &[(String, String)], query: &str, k: usize) -> Vec<(Strin
     scored
 }
 
+/// The lowest BM25 score a tier-1 rule needs to fire. Set from the tier-1
+/// case measurement in `docs/architecture/event-rules.md`.
+pub const TIER1_FLOOR: f64 = 2.0;
+/// A tier-1 match fires for the best three ranks at most.
+const TIER1_TOP: usize = 3;
+
+/// One rule that matched an event, with the action decide() applied.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Fire {
+    pub rule: String,
+    pub law: Option<String>,
+    pub action: String,
+    pub class: String,
+    pub deliver: String,
+    pub tier: u8,
+    pub text: String,
+    pub why: String,
+    pub instead: String,
+}
+
+/// What decide() answers for one event. `verdict` is the strongest fire:
+/// block over warn over inject over allow.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Decision {
+    pub verdict: &'static str,
+    /// Every fire, ordered block, warn, inform, then rule id.
+    pub fires: Vec<Fire>,
+    /// One `<rule id>: <why>` line per block or warn fire.
+    pub reasons: Vec<String>,
+    /// Tier-2 rule ids whose events matched; never decided here.
+    pub unevaluated: Vec<String>,
+}
+
+fn scope_fits(scope: Option<&str>, ev: &Event) -> bool {
+    let Some(scope) = scope else { return true };
+    let is = |want: &Option<String>, rest: &str| want.as_deref() == Some(rest);
+    if let Some(p) = scope.strip_prefix("project:") {
+        is(&ev.project, p)
+    } else if let Some(n) = scope.strip_prefix("node:") {
+        is(&ev.node, n)
+    } else if let Some(s) = scope.strip_prefix("session:") {
+        is(&ev.session, s)
+    } else {
+        // fleet, and team: (no event carries a team), reach every event.
+        true
+    }
+}
+
+fn expired(expires: Option<&str>, now: chrono::NaiveDate) -> bool {
+    expires
+        .and_then(|e| chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d").ok())
+        .is_some_and(|d| d < now)
+}
+
+fn rank(action: &str) -> u8 {
+    match action {
+        "block" => 0,
+        "warn" => 1,
+        _ => 2,
+    }
+}
+
+/// Decide one event against a rule set. Pure: no I/O, so the hooks, the
+/// doors and the fnh harness all reach the same answer.
+///
+/// Tier 0 runs the structural match. Tier 1 runs only at `prompt` and
+/// `skill` events, ranked by BM25 over `ev.text`, and never blocks. Tier 2
+/// is listed in `unevaluated`. A `require-ack` rule blocks until `ev.acks`
+/// names it. A `notify` or `emit` fire never raises the verdict: its caller
+/// delivers it.
+pub fn decide(rules: &[Rule], ev: &Event, now: chrono::NaiveDate) -> Decision {
+    let live: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.when.predicates.is_empty())
+        .filter(|r| scope_fits(r.scope.as_deref(), ev) && !expired(r.expires.as_deref(), now))
+        .collect();
+    let mut hits: Vec<&Rule> = Vec::new();
+    let mut unevaluated = Vec::new();
+    for r in &live {
+        match r.tier() {
+            0 if matches(r, ev) => hits.push(r),
+            2 if matches(r, ev) => unevaluated.push(r.id.clone()),
+            _ => {}
+        }
+    }
+    if matches!(ev.kind.as_str(), "prompt" | "skill") {
+        let query = ev.text.as_deref().or(ev.skill.as_deref()).unwrap_or("");
+        let tier1: Vec<&Rule> = live
+            .iter()
+            .copied()
+            .filter(|r| r.tier() == 1 && matches(r, ev))
+            .collect();
+        let docs: Vec<(String, String)> = tier1
+            .iter()
+            .map(|r| (r.id.clone(), r.when.retrieval.clone().unwrap_or_default()))
+            .collect();
+        for (id, score) in bm25_rank(&docs, query, TIER1_TOP) {
+            if score >= TIER1_FLOOR {
+                hits.extend(tier1.iter().copied().find(|r| r.id == id));
+            }
+        }
+    }
+    let mut fires: Vec<Fire> = hits
+        .into_iter()
+        .map(|r| {
+            let mut action = r.action.clone();
+            if r.tier() > 0 && matches!(action.as_str(), "block" | "require-ack") {
+                action = "warn".into();
+            }
+            if action == "require-ack" {
+                action = if ev.acks.contains(&r.id) {
+                    "inform"
+                } else {
+                    "block"
+                }
+                .into();
+            }
+            let text = [&r.text, &r.what]
+                .into_iter()
+                .find(|t| !t.is_empty())
+                .cloned()
+                .or_else(|| r.when.retrieval.clone())
+                .unwrap_or_default();
+            Fire {
+                rule: r.id.clone(),
+                law: r.law.clone(),
+                class: r.class().to_string(),
+                deliver: r.deliver().to_string(),
+                tier: r.tier(),
+                why: if r.why.is_empty() {
+                    text.clone()
+                } else {
+                    r.why.clone()
+                },
+                instead: r.instead.clone(),
+                text,
+                action,
+            }
+        })
+        .collect();
+    fires.sort_by(|a, b| {
+        rank(&a.action)
+            .cmp(&rank(&b.action))
+            .then_with(|| a.rule.cmp(&b.rule))
+    });
+    fires.dedup_by(|a, b| a.rule == b.rule);
+    let verdict = match fires.first() {
+        Some(f) if f.action == "block" => "block",
+        Some(f) if f.action == "warn" => "warn",
+        _ if fires.iter().any(|f| f.deliver == "context") => "inject",
+        _ => "allow",
+    };
+    // A block verdict carries only the refusals; the rest wait for a retry.
+    if verdict == "block" {
+        fires.retain(|f| f.action == "block");
+    }
+    let reasons = fires
+        .iter()
+        .filter(|f| rank(&f.action) < 2)
+        .map(|f| format!("{}: {}", f.rule, f.why))
+        .collect();
+    Decision {
+        verdict,
+        fires,
+        reasons,
+        unevaluated,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,6 +663,68 @@ mod tests {
         assert!(!matches(&r, &ev), "a Read is not an Edit");
         ev.tool = None;
         assert!(!matches(&r, &ev), "a set field needs a value");
+    }
+
+    fn day() -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap()
+    }
+
+    #[test]
+    fn decide_answers_the_strongest_fire_and_names_it() {
+        let rules = vec![
+            rule("id = \"tag-freeze\"\naction = \"block\"\nwhy = \"release is frozen\"\n[rule.when]\nevents = [\"pre-tool\"]\ncommands = [\"git tag v*\"]\n"),
+            rule("id = \"bp\"\naction = \"inform\"\n[rule.when]\nskills = [\"fno:blueprint\"]\n"),
+            rule("id = \"old\"\naction = \"block\"\nexpires = \"2026-01-01\"\n[rule.when]\ncommands = [\"git tag*\"]\n"),
+        ];
+        let ev = Event {
+            kind: "pre-tool".into(),
+            tool: Some("Bash".into()),
+            command: Some("git tag v0.5.0".into()),
+            ..Event::default()
+        };
+        let d = decide(&rules, &ev, day());
+        assert_eq!(d.verdict, "block");
+        let ids: Vec<&str> = d.fires.iter().map(|f| f.rule.as_str()).collect();
+        assert_eq!(ids, ["tag-freeze"], "an expired rule never fires");
+        assert_eq!(d.reasons, ["tag-freeze: release is frozen"]);
+        let skill = Event {
+            kind: "skill".into(),
+            skill: Some("fno:blueprint".into()),
+            ..Event::default()
+        };
+        assert_eq!(decide(&rules, &skill, day()).verdict, "inject");
+        let ack = rule("id = \"ack\"\naction = \"require-ack\"\n[rule.when]\nevents = [\"plan-start\"]\n");
+        let mut ev = Event {
+            kind: "plan-start".into(),
+            ..Event::default()
+        };
+        assert_eq!(decide(std::slice::from_ref(&ack), &ev, day()).verdict, "block");
+        ev.acks = vec!["ack".into()];
+        assert_eq!(decide(&[ack], &ev, day()).verdict, "inject");
+    }
+
+    #[test]
+    fn a_ranked_match_never_refuses_a_tool() {
+        // problems() refuses this row; decide() must still hold if one slips by.
+        let mut r = rule("id = \"t1\"\naction = \"inform\"\n[rule.when]\nevents = [\"prompt\"]\nretrieval = \"release tag freeze version bump\"\n");
+        r.action = "block".into();
+        let ev = Event {
+            kind: "prompt".into(),
+            text: Some("cut the release tag for the version bump".into()),
+            ..Event::default()
+        };
+        let mut rules = vec![r];
+        for (i, text) in ["graph store writes", "mail send raw", "spawn model tier", "worktree prune"]
+            .iter()
+            .enumerate()
+        {
+            rules.push(rule(&format!("id = \"other{i}\"\naction = \"inform\"\n[rule.when]\nevents = [\"prompt\"]\nretrieval = \"{text}\"\n")));
+        }
+        let d = decide(&rules, &ev, day());
+        assert_eq!(d.verdict, "warn", "{d:?}");
+        assert_eq!(d.fires.len(), 1, "unrelated rules stay under the floor");
+        assert_eq!(d.fires[0].action, "warn");
+        assert_eq!(d.fires[0].tier, 1);
     }
 
     #[test]
