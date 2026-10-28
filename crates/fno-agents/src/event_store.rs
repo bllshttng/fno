@@ -368,24 +368,7 @@ pub fn import_all(live: &Path) -> Result<SyncReceipt, String> {
     // Every retained generation imports, oldest first, then the live file,
     // then the ephemeral sibling - the same order the pre-store segment walk
     // concatenated, so commit-order rows read the same as the old concat.
-    let mut generations: Vec<(u64, PathBuf)> = Vec::new();
-    if let (Some(dir), Some(name)) = (live.parent(), live.file_name()) {
-        let name = name.to_string_lossy();
-        let prefix = format!("{name}.");
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let candidate = entry.file_name().to_string_lossy().into_owned();
-                if let Some(gen) = candidate
-                    .strip_prefix(&prefix)
-                    .and_then(|g| g.parse::<u64>().ok())
-                {
-                    generations.push((gen, dir.join(&candidate)));
-                }
-            }
-        }
-    }
-    generations.sort_by_key(|(gen, _)| *gen);
-    let mut sources: Vec<PathBuf> = generations.into_iter().map(|(_, p)| p).collect();
+    let mut sources: Vec<PathBuf> = generation_files(live).into_iter().map(|(_, p)| p).collect();
     sources.push(live.to_path_buf());
     sources.push(ephemeral_sibling(live));
     let refs: Vec<&Path> = sources.iter().map(|p| p.as_path()).collect();
@@ -2178,16 +2161,23 @@ pub(crate) fn review_text(journal: &Path) -> String {
 /// reader never writes. A routed state-root journal imports a stray raw file
 /// before it answers, so the raw bytes never serve a read directly; a caller
 /// that must see the failure calls [`journal_text_checked`]. Any other
-/// journal's store failure reads the live file alone, which never tightens a
-/// gate.
+/// journal's store failure reads the whole journal family, oldest generation
+/// first, so the degrade is never shorter than the store's own answer; the
+/// degrade notice names the failed store and the family that answered.
 pub fn journal_text(journal: &Path, types: &[&str]) -> String {
     let live = live_journal(journal);
     let routed = routed_root_journal(&live);
-    journal_text_checked(journal, &EventQuery::of_types(types)).unwrap_or_else(|_| {
+    journal_text_checked(journal, &EventQuery::of_types(types)).unwrap_or_else(|err| {
         if routed {
             return String::new();
         }
-        std::fs::read_to_string(live).unwrap_or_default()
+        // The degrade answers from the whole family, never the live file
+        // alone: a live-only answer dropped every committed row and read
+        // zero verdicts while the journals held the chain. The notice names
+        // the failed store and the family that answered.
+        let fallback = family_fallback_text(&live);
+        eprintln!("{}", degrade_notice(&store_path(&live), &err, &live));
+        fallback
     })
 }
 
@@ -2262,16 +2252,6 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
         .map_err(|e| format!("{}: {e}", store.display()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("{}: {e}", store.display()))?;
-    let mut held = conn
-        .prepare(
-            // A line the store holds either as an event or as a pending
-            // observation is committed knowledge; only the latter exists for a
-            // suppressed poll, and treating it as an uncommitted tail would
-            // double-represent it in every journal-text read.
-            "SELECT EXISTS(SELECT 1 FROM events WHERE row_hash = ?1)
-         OR EXISTS(SELECT 1 FROM event_observation_pending WHERE row_hash = ?1)",
-        )
-        .map_err(|e| format!("{}: {e}", store.display()))?;
     let mut text = String::new();
     for line in rows {
         text.push_str(&line);
@@ -2279,60 +2259,125 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
     }
     // The ingest cursor records how far import_file ingested this inode.
     // Every complete line before `offset` is committed knowledge - it sits in
-    // events or event_observation_pending, the two tables `held` probes - so
-    // the read pulls the tail past the cursor alone: head hash from a bounded
-    // 256 KB head read, tail bytes by seek, never the whole journal (the
-    // whole-file slurp cost 118 MB of reads per read on the live store). A
-    // stale cursor (the head line changed, the file shrank) or an absent one
-    // falls back to the full-file scan, the pre-cursor behavior.
+    // events or event_observation_pending, the two tables the dedupe probe
+    // consults - so the read pulls the tail past the cursor alone: head hash
+    // from a bounded 256 KB head read, tail bytes by seek, never the whole
+    // journal (the whole-file slurp cost 118 MB of reads per read on the live
+    // store). A stale cursor (the head line changed, the file shrank) or an
+    // absent one falls back to the full-file scan, the pre-cursor behavior.
     // A routed state-root journal stops at the committed rows: its raw file
     // is a stray a writer recreated after the retire, never an order of
     // record.
     if routed {
         return Ok(text);
     }
-    let start: u64 = match std::fs::metadata(&live) {
-        Ok(meta) => {
-            let cursor = conn
-                .query_row(
-                    "SELECT head_hash, \"offset\" FROM ingest_cursor WHERE dev = ?1 AND ino = ?2",
-                    params![meta.dev(), meta.ino()],
-                    |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)),
-                )
-                .ok();
-            match (read_head_hash(&live), cursor) {
-                (Some(hash), Some((head, offset)))
-                    if head == hash && offset >= 0 && offset as u64 <= meta.len() =>
-                {
-                    offset as u64
-                }
-                _ => 0,
-            }
-        }
-        Err(_) => 0,
-    };
-    let tail = match read_range(&live, start) {
-        Ok(tail) => tail,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(err) => return Err(format!("{}: {err}", live.display())),
-    };
-    let complete_end = tail.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
-    // The tail filter the loop below applies per line: the query's types
-    // expanded the way the store side expands them, plus whether typeless
-    // rows pass (they do only when the query asked for the empty type).
+    // Un-ingested bytes of every rotated generation join the union before
+    // the live tail (commit order): the tail read covered the live file
+    // alone, so a rotation hid un-ingested bytes and a lagging store answered
+    // zero verdicts where one read earlier had seen the chain.
     let tail_allowed = if q.types.is_empty() {
         None
     } else {
         Some(query_types_with_aliases(&q.types))
     };
     let tail_typeless_ok = q.types.iter().any(|t| t.is_empty());
-    // ponytail: a pre-store line no import took reads as newest; any import fixes it.
+    for (_, gen) in generation_files(&live) {
+        append_uningested_lines(
+            &mut text,
+            &conn,
+            &gen,
+            tail_allowed.as_deref(),
+            tail_typeless_ok,
+        )?;
+    }
+    append_uningested_lines(
+        &mut text,
+        &conn,
+        &live,
+        tail_allowed.as_deref(),
+        tail_typeless_ok,
+    )?;
+    Ok(text)
+}
+
+/// Every rotated generation of one journal family, oldest first: the
+/// `{stem}.{n}` files beside `live`, numeric suffix ascending. One
+/// discovery walk shared by the import and the read unions, so the two
+/// never disagree about what a generation is.
+fn generation_files(live: &Path) -> Vec<(u64, PathBuf)> {
+    let mut generations: Vec<(u64, PathBuf)> = Vec::new();
+    if let (Some(dir), Some(name)) = (live.parent(), live.file_name()) {
+        let name = name.to_string_lossy();
+        let prefix = format!("{name}.");
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let candidate = entry.file_name().to_string_lossy().into_owned();
+                if let Some(gen) = candidate
+                    .strip_prefix(&prefix)
+                    .and_then(|g| g.parse::<u64>().ok())
+                {
+                    generations.push((gen, dir.join(&candidate)));
+                }
+            }
+        }
+    }
+    generations.sort_by_key(|(gen, _)| *gen);
+    generations
+}
+
+/// Append the complete lines of one journal file that the store has not
+/// ingested: bytes past that inode's cursor, complete lines only, after the
+/// type filter and the row-hash dedupe. A regressed cursor re-reads and the
+/// store already holds those rows; a fresh inode (a rotation) contributes
+/// its whole file.
+fn append_uningested_lines(
+    text: &mut String,
+    conn: &Connection,
+    path: &Path,
+    tail_allowed: Option<&[String]>,
+    tail_typeless_ok: bool,
+) -> Result<(), String> {
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let start: u64 = {
+        let cursor = conn
+            .query_row(
+                "SELECT head_hash, \"offset\" FROM ingest_cursor WHERE dev = ?1 AND ino = ?2",
+                params![meta.dev(), meta.ino()],
+                |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .ok();
+        match (read_head_hash(path), cursor) {
+            (Some(hash), Some((head, offset)))
+                if head == hash && offset >= 0 && offset as u64 <= meta.len() =>
+            {
+                offset as u64
+            }
+            _ => 0,
+        }
+    };
+    let tail = match read_range(path, start) {
+        Ok(tail) => tail,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => return Err(format!("{}: {err}", path.display())),
+    };
+    let complete_end = tail.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let held = conn
+        .prepare(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE row_hash = ?1)
+         OR EXISTS(SELECT 1 FROM event_observation_pending WHERE row_hash = ?1)",
+        )
+        .map_err(|e| format!("{}: held probe: {e}", path.display()))?;
+    let mut held = held;
     for line_bytes in tail[..complete_end].split(|&b| b == b'\n') {
         let line_bytes = line_bytes.strip_suffix(b"\r").unwrap_or(line_bytes);
         if line_bytes.is_empty() {
             continue;
         }
-        if !tail_line_wanted(line_bytes, tail_allowed.as_deref(), tail_typeless_ok) {
+        if !tail_line_wanted(line_bytes, tail_allowed, tail_typeless_ok) {
             continue;
         }
         let hash = Sha256::digest(line_bytes).to_vec();
@@ -2342,16 +2387,54 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
             .unwrap_or(false);
         if not_held {
             let raw = String::from_utf8_lossy(line_bytes);
-            if observation::tail_line_flushed(&conn, &raw) {
+            if observation::tail_line_flushed(conn, &raw) {
                 // The line is represented by a flushed observation window; a
-                // second copy in the tail would double-represent it.
+                // second copy would double-represent it.
                 continue;
             }
             text.push_str(&raw);
             text.push('\n');
         }
     }
-    Ok(text)
+    Ok(())
+}
+
+/// The no-store-answer degrade: every generation of the family plus the live
+/// file, oldest first, raw. Answers from the journal the process CAN read,
+/// so a failed store read is never shorter than the store's own answer; the
+/// caller names the failed store and this family on stderr.
+fn family_fallback_text(live: &Path) -> String {
+    let mut text = String::new();
+    let mut sources = generation_files(live)
+        .into_iter()
+        .map(|(_, p)| p)
+        .collect::<Vec<_>>();
+    sources.push(live.to_path_buf());
+    for path in sources {
+        match std::fs::read_to_string(path) {
+            Ok(part) => {
+                text.push_str(&part);
+                if !part.is_empty() && !part.ends_with('\n') {
+                    text.push('\n');
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!("event store: family read {}: {e}", path.display()),
+        }
+    }
+    text
+}
+
+/// The one-line degrade notice: which store failed, why, and which journal
+/// family answered instead, so a coverage flap is attributable from the
+/// transcript alone.
+fn degrade_notice(store: &Path, err: &str, live: &Path) -> String {
+    format!(
+        "event store: {} read failed ({}); answered from journal bytes beside {}",
+        store.display(),
+        err.trim(),
+        live.display()
+    )
 }
 
 /// sha256 of the journal's first line, from a bounded 256 KB head read; a
