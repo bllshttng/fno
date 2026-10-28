@@ -1059,6 +1059,8 @@ pub(crate) fn mux_restore_policy(cwd: &Path) -> MuxRestorePolicy {
 /// project tier would silently split those external callers off a project's
 /// sessions. Explicit isolation (`FNO_CONFIG`, inherited by every subprocess
 /// an isolated environment spawns) is the supported isolation for the mux.
+// The only callers sit behind cfg(not(test)), so the test leg sees no call.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn config_explicit_top_str(key: &str) -> Option<String> {
     if let Some(explicit) = non_empty_env_os("FNO_CONFIG") {
         return read_top_file(&PathBuf::from(explicit), key);
@@ -1104,6 +1106,8 @@ pub(crate) fn global_config_toml() -> Option<PathBuf> {
 /// a lower-priority candidate (its `_prefer_toml` keeps both files). Exposed
 /// for the state-root resolver's divergence warning: a state_dir that lives
 /// only in this file is invisible to every TOML-only reader here.
+// Its caller is cfg(not(test)) too, so the test leg sees no call.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn global_settings_yaml_sibling() -> Option<PathBuf> {
     non_empty_env("FNO_GLOBAL_SETTINGS_PATH")
         .map(PathBuf::from)
