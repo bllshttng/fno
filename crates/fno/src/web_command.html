@@ -479,7 +479,7 @@ function drawGraph(now) {
   if (cam.auto) cam.tk = fitK(); cam.x += (cam.tx - cam.x) * .12; cam.y += (cam.ty - cam.y) * .12; cam.k += (cam.tk - cam.k) * .1; cam.ox += (cam.tox - cam.ox) * .1; cam.sx += (cam.tsx - cam.sx) * .1; cam.oy += (cam.toy - cam.oy) * .1;
   if (!still) tick(.06);
   const grow = still ? 1 : Math.min(1, (now - born) / 1800), sel = rows.find((r) => keyOf(r) === openKey), focus = hover || (sel && sel._n) || null, rel = related(focus);
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H); const pills = [];
   if (layout === "transit") drawTransit(now, grow, focus, rel);
   if (layout === "constellation") nodes.forEach((n) => { if (n.kind !== "territory") return; const c = toScreen(n), R = 200 * cam.k, g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, R); g.addColorStop(0, tcolor[n.label] + "22"); g.addColorStop(1, tcolor[n.label] + "00"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c.x, c.y, R, 0, 7); ctx.fill(); });
   if (layout === "hemispheres") hosts.forEach((h) => { if (hiddenHosts.has(h.host) || !h._n) return; const hc = toScreen(h._n), g = ctx.createRadialGradient(hc.x, hc.y, 0, hc.x, hc.y, 320 * cam.k);
@@ -503,6 +503,7 @@ function drawGraph(now) {
     const p = toScreen(n), r = radius(n) * Math.max(.7, cam.k) * (.4 + .6 * appear); ctx.globalAlpha = (focus && !rel.has(n) ? .28 : 1) * appear;
     if (n.kind === "host") drawHost(ctx, n.h, p.x, p.y, r, now, true);
     else if (n.kind === "territory" && layout === "transit") { const c = tcolor[n.label]; ctx.font = "600 13px " + UI; const tw = ctx.measureText(n.label).width + 26; ctx.fillStyle = T.base; ctx.strokeStyle = c; ctx.lineWidth = 2.5;
+      pills.push({x: p.x - tw / 2, y: p.y - 14, w: tw});
       ctx.beginPath(); ctx.roundRect(p.x - tw / 2, p.y - 14, tw, 28, 14); ctx.fill(); ctx.stroke(); ctx.fillStyle = c; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y + 4.5); }
     else if (n.kind === "territory") { const tc = tcolor[n.label], g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3.2); g.addColorStop(0, A(T.text, .95)); g.addColorStop(.25, tc + "66"); g.addColorStop(1, tc + "00"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.2, 0, 7); ctx.fill();
       ctx.fillStyle = T.text; ctx.font = "600 13px " + UI; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y + r + 20); }
@@ -511,7 +512,10 @@ function drawGraph(now) {
     else { const st = n.r.s.status, c = COL[st], lead = leadName(n.r), breathe = st === "writing" && !still ? 1 + .18 * Math.sin(now / 380 + i) : 1;
       if (st !== "unknown") { const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.4 * breathe); g.addColorStop(0, A(T.text, .22)); g.addColorStop(1, A(T.text, 0)); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.4 * breathe, 0, 7); ctx.fill(); ctx.fillStyle = T.subtext0; star(p.x, p.y, r, n.r.host); ctx.fill(); ctx.strokeStyle = c; ctx.lineWidth = 2; star(p.x, p.y, r + 1.5, n.r.host); ctx.stroke(); }
       else { ctx.strokeStyle = c; ctx.lineWidth = 1.6; star(p.x, p.y, r, n.r.host); ctx.stroke(); }
-      if (lead) { ctx.strokeStyle = T.text; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, r + 5, 0, 7); ctx.stroke(); ctx.fillStyle = T.text; ctx.font = "600 12px " + UI; ctx.textAlign = "center"; ctx.fillText(lead, p.x, p.y - r - 11); }
+      if (lead) { ctx.strokeStyle = T.text; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, r + 5, 0, 7); ctx.stroke(); ctx.fillStyle = T.text; ctx.font = "600 12px " + UI; ctx.textAlign = "center";
+        // A name that would touch a station pill goes below its star.
+        const lw = ctx.measureText(lead).width / 2 + 4, above = p.y - r - 11, hit = pills.some((b) => p.x + lw > b.x && p.x - lw < b.x + b.w && above > b.y - 2 && above - 12 < b.y + 30);
+        ctx.fillText(lead, p.x, hit ? p.y + r + 20 : above); }
       else if (focus === n || cam.k > 1.3) { ctx.fillStyle = T.subtext0; ctx.font = "500 11px " + DATA; ctx.textAlign = "center"; ctx.fillText(work(n.r, "id") || n.r.s.short || n.r.s.name, p.x, p.y - r - 9); }
       if (sel === n.r) { ctx.strokeStyle = T.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, r + 9 + 2 * Math.sin(now / 250), 0, 7); ctx.stroke(); } }
     ctx.globalAlpha = 1; });
