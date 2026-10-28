@@ -53,7 +53,7 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
         crate::claude_ask::emit_event(&home.events_jsonl(), "model_vendor_mismatch", &fields);
     }
     let argv = admitted.argv;
-    if let Some(refusal) = seed_of(&argv[1..])
+    if let Some(refusal) = gate_seed(&argv)
         .and_then(|seed| crate::capability_leaves::loop_refusal(&spawn_harness(&argv), &seed, None))
     {
         eprintln!("{refusal}");
@@ -93,6 +93,16 @@ fn spawn_cwd(args: &[String], here: &Path) -> PathBuf {
         .filter(|c| !c.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| here.to_path_buf())
+}
+
+/// The seed the loop gate judges: the inline message, else the contents of a
+/// `--prompt-file` path. `-` (stdin) is left for the parse to read once.
+fn gate_seed(args: &[String]) -> Option<String> {
+    seed_of(&args[1..]).or_else(|| {
+        flag_value(&args[1..], &["--prompt-file"])
+            .filter(|p| !p.is_empty() && p != "-")
+            .and_then(|p| std::fs::read_to_string(p).ok())
+    })
 }
 
 /// The harness a spawn dispatches to: the flag, else the ambient harness,
@@ -339,5 +349,34 @@ mod tests {
             strip_admitted_marker(&argv(&["spawn", "w", "--", "--defaults-applied"])),
             None
         );
+    }
+
+    #[test]
+    fn the_loop_gate_judges_a_prompt_file_seed_but_never_reads_stdin() {
+        let file = std::env::temp_dir().join(format!("fno-gate-seed-{}.txt", std::process::id()));
+        std::fs::write(&file, "/fno:target x-1").unwrap();
+        let path = file.to_string_lossy().into_owned();
+        assert_eq!(
+            gate_seed(&argv(&["spawn", "--name", "w", "--prompt-file", &path])).as_deref(),
+            Some("/fno:target x-1")
+        );
+        assert_eq!(
+            gate_seed(&argv(&[
+                "spawn",
+                "--name",
+                "w",
+                "--prompt-file",
+                &path,
+                "--",
+                "hi"
+            ]))
+            .as_deref(),
+            Some("hi")
+        );
+        assert_eq!(
+            gate_seed(&argv(&["spawn", "--name", "w", "--prompt-file", "-"])),
+            None
+        );
+        std::fs::remove_file(&file).ok();
     }
 }

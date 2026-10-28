@@ -821,6 +821,14 @@ def _apply_capability_overrides() -> None:
             overridden.add(name)
 
 
+def reload_capability_overrides() -> None:
+    """Re-read the config chain over the bundled rows. Import time applies it
+    once (the Rust reader's contract is the same: its OnceLock resolves a
+    config edit at the next process start); this is the test and tool
+    re-entry."""
+    _apply_capability_overrides()
+
+
 _HARNESS_CAPS: dict[str, dict] = {}
 _apply_capability_overrides()
 

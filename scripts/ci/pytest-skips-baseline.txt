@@ -1,5 +1,4 @@
 cli/tests/_native_door.py::run_native::pytest.skip  # on main before this ratchet
-cli/tests/agents/test_agy_spawn_journey.py::test_AC1_HP_the_spawn_seam_journey_on_a_real_agy_thread::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_ask_e2e_dispatch.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_ask_e2e_dispatch.py::test_ask_followup_e2e_registry_seeded::marker.requires_rust  # on main before this ratchet
 cli/tests/agents/test_codex_integration_smoke.py::_run_capture_script::pytest.skip  # on main before this ratchet
@@ -10,12 +9,10 @@ cli/tests/agents/test_codex_signal_handling.py::test_wait_with_grace_killpg_term
 cli/tests/agents/test_codex_signal_handling.py::test_wait_with_grace_killpg_terminates_subshells_after_turn_completed::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_codex_thread_effort_journey.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_role.py::_prepare_role_cli::pytest.skip  # the team commands need a fno-agents dev build for the lock-time identity match; the smoke pytest lanes delete the build by design (same contract as native_backlog_door)
-cli/tests/agents/test_grok_spawn_journey.py::test_grok_spawn_journey_public_surface_reaches_a_live_row::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_harness_capability_parity.py::test_resolved_rows_match_between_readers::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_lane_b_thread_spawn.py::_rust_posture_door::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_lane_b_thread_spawn.py::test_lane_b_journey_real_keeper_hosts_the_thread::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_pi_journey.py::test_AC10_HP_live_a_stopped_pi_session_resumes_by_id_and_cwd::mark.skipif  # on main before this ratchet
-cli/tests/agents/test_pi_spawn_journey.py::test_AC1_HP_the_spawn_seam_journey_on_a_real_pi_thread::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_retask_live_smoke.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/agents/test_retask_live_smoke.py::test_real_spawned_idle_pane_retasks_with_live_readiness::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_retask_live_smoke.py::test_real_spawned_idle_pane_retasks_with_live_readiness::pytest.skip  # on main before this ratchet
@@ -26,8 +23,6 @@ cli/tests/agents/test_rust_command_parity.py::test_attach_codex_thread_headless_
 cli/tests/agents/test_rust_command_parity.py::test_attach_missing_agent_exit2::marker.requires_rust  # on main before this ratchet
 cli/tests/agents/test_rust_command_parity.py::test_attach_surfaces_a_portal_refusal_instead_of_double_attaching::marker.requires_rust  # on main before this ratchet
 cli/tests/agents/test_rust_command_parity.py::test_rust_reads_real_python_written_registry::marker.requires_rust  # on main before this ratchet
-cli/tests/agents/test_sandbox_probe.py::test_live_ref_lock_without_the_grant_is_blocked::mark.skipif  # on main before this ratchet
-cli/tests/agents/test_spawn_lost_command.py::test_a_real_shell_mangling_is_refused::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_pane_journeys.py::test_late_codex_identity_composes_across_every_peer_surface::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_spawn_permission_mode.py::rust_door::pytest.skip  # on main before this ratchet
 cli/tests/agents/test_store_fallback.py::test_real_unreadable_directory_refuses_partial_store_answer::pytest.skip  # on main before this ratchet
@@ -108,7 +103,6 @@ cli/tests/goldens/_door.py::door::pytest.skip  # native door: the golden receipt
 cli/tests/integration/test_collision.py::_native_supersede::pytest.skip  # native supersede door: the guard ladder is the Rust leg's; no dev build means no door to pin
 cli/tests/unit/test_contain.py::_native_contain::pytest.skip  # native contain door: the guard ladder is the Rust leg's; no dev build means no door to pin
 cli/tests/unit/test_reconcile_supersession.py::_native_supersede::pytest.skip  # native supersede door: the supersede leaf is the Rust leg's; no dev build means no door to pin
-cli/tests/agents/test_rust_runtime.py::test_spawn_seam_injects_config_defaults::pytest.skip  # native door: the compose reads the config FILE through the fno-agents binary; without a dev build there is no door to pin
 cli/tests/agents/test_spawn_defaults.py::_pin_world::pytest.skip  # native door: the compose parity drives the fno-agents binary; without a dev build there is no door to pin
 cli/tests/unit/test_evidence_refusal_remedy.py::test_unmeasured_refusal_names_only_remedies_the_commands_support::pytest.skip  # front-binary probe: CI builds crates/fno, a bare checkout has none
 cli/tests/integration/test_birth_hook_wiring.py::test_decompose_never_fires_birth_hook::pytest.skip  # the door drives the native fno-agents binary, and the smoke shard deletes that target on purpose
