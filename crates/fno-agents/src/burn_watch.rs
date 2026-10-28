@@ -1869,7 +1869,7 @@ mod tests {
                 if argv.len() > 2 && argv[2] == "mail" {
                     replay_mails.push(argv.to_vec());
                 }
-                (0, "msg-1 delivered (hosted)".to_string(), String::new())
+                (0, "msg-1 accepted-new-turn".to_string(), String::new())
             };
             crate::watch_expiry::run_pass_with(&home, replay_runner).unwrap();
             crate::watch_expiry::run_pass_with(&home, replay_runner).unwrap();
@@ -2131,7 +2131,7 @@ mod tests {
             }
             if argv[0] == "fno" && argv[2] == "mail" && joined.contains("--to-lead") {
                 return if mail_ok {
-                    (0, "delivered (hosted)\n".into(), String::new())
+                    (0, "accepted-new-turn\n".into(), String::new())
                 } else {
                     (1, String::new(), String::new())
                 };

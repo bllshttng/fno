@@ -1038,7 +1038,7 @@ mod tests {
             "\n",
             r#"{"ts":"2026-09-26T05:01:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-a","sink":"mux","option":1,"answered_at":"2026-09-26T05:01:00Z","superseded":false}}"#,
             "\n",
-            r#"{"ts":"2026-09-26T05:02:00Z","type":"attention_delivery","source":"daemon","data":{"item_id":"q-a","rung":"mail","outcome":"landed","evidence":"outstanding: q-a answered; mail to w1: delivered (hosted)"}}"#,
+            r#"{"ts":"2026-09-26T05:02:00Z","type":"attention_delivery","source":"daemon","data":{"item_id":"q-a","rung":"mail","outcome":"landed","evidence":"outstanding: q-a answered; mail to w1: accepted-new-turn"}}"#,
             "\n",
         );
         // now = 05:10:00Z: the answer is 9 minutes old, inside the TTL.

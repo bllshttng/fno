@@ -690,7 +690,7 @@ mod tests {
         let mut deliver = |argv: &[String], _: &str| {
             assert_eq!(argv[8], parent);
             notices.push(argv[9].clone());
-            (0, "delivered (hosted)".into(), String::new())
+            (0, "accepted-new-turn".into(), String::new())
         };
         run_pass(&home, armed.deadline - 1, &mut deliver).unwrap();
         assert_eq!(read_check().notices, 0);
