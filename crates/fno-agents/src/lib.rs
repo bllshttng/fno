@@ -406,6 +406,7 @@ pub mod otlp_export;
 pub mod outstanding;
 pub mod outstanding_cmds;
 pub(crate) mod owner_ladder;
+pub mod pack_profile;
 pub mod pane_claim;
 pub mod pane_keeper;
 pub mod pane_loop;

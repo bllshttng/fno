@@ -98,6 +98,10 @@ The live rubric reads the spawn form from the capability table. A harness that d
 
 What each CLI can DO - a review command, a spawn arm, rpc, plugins, MCP - is the features dimension of the capability table, rendered per harness in [docs/harnesses/capability-matrix.md](harnesses/capability-matrix.md). That matrix is generated; never edit it by hand.
 
+## Install the pack without the mux
+
+fno installs in two profiles. The full profile carries every file, as before. The pack profile carries the pipeline: skills, commands, subagents, and the hooks that work with no mux running. It drops the mux skills (agent, mail, dnd, fno-me, lead) and every hook entry that calls the daemon, mail or panes. Run `fno config plugin install <harness> --pack` for claude, codex, agy, grok or zcode. The pack stage lives at `~/.fno/plugin-stage/fno-pack`, beside the full stage at `plugin-stage/fno`. The opencode and pi adapters have no pack profile yet, so `--pack` refuses there. `pack-profiles.json` at the repo root lists the mux paths. A new hook script must sit in its `mux` or `pack_hooks` list, and `scripts/ci/check-pack-profiles.sh` fails CI until it does.
+
 ## Launch each harness its own way
 
 Each harness documents its own CLI. The line it documents is the line that launches a worker, and fno translates no flags on this path. Around the launch fno does four things. It gates the launch where it sees it. It carries what only fno knows: a provider route through a claude `--settings` file, an account through `CLAUDE_CONFIG_DIR`. It records a provenance event holding the verbatim argv, caller and cwd. It adopts the session: the harness's own SessionStart hook reports to fno. The session then gets a registry row, a name, a parent edge and a node. `fno agents spawn <name> "<payload>" --node <node-id>` stays the path that applies your config preferences. Both paths end in the same adopt.
