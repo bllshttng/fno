@@ -2422,7 +2422,7 @@ fn family_fallback_text(live: &Path) -> String {
         .collect::<Vec<_>>();
     sources.push(live.to_path_buf());
     for path in sources {
-        match std::fs::read_to_string(path) {
+        match std::fs::read_to_string(&path) {
             Ok(part) => {
                 text.push_str(&part);
                 if !part.is_empty() && !part.ends_with('\n') {
