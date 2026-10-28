@@ -28,7 +28,6 @@ struct Cached {
     good: Option<(Fleet, Instant)>,
     failure: Option<(String, Instant)>,
     questions: Option<Result<Vec<Value>, String>>,
-    prs: Vec<Value>,
     read_at: Option<Instant>,
 }
 
@@ -82,14 +81,13 @@ impl CommandCache {
                 })
                 .collect()
         }));
-        st.prs = open_prs(backlog);
         st.read_at = Some(now);
         self.refreshing.store(false, Ordering::Release);
     }
 
     pub(crate) async fn model(&self) -> Value {
         let st = self.state.lock().await;
-        let mut waiting = json!({ "prs": st.prs });
+        let mut waiting = json!({});
         match &st.questions {
             Some(Ok(items)) => waiting["questions"] = json!(items),
             Some(Err(reason)) => waiting["questions_error"] = json!(reason),
@@ -115,35 +113,6 @@ impl CommandCache {
             "waiting": waiting,
         })
     }
-}
-
-/// PRs on nodes in review that the store has not seen merged or closed. The
-/// store records no review or conflict state, so `status` is the node's
-/// status word and `merge_status` the store's, or null when unset.
-fn open_prs(backlog: &Inputs) -> Vec<Value> {
-    backlog
-        .rows
-        .iter()
-        .filter(|row| row.get("status").and_then(Value::as_str) == Some("in_review"))
-        .filter_map(|row| {
-            let number = row.get("pr_number").and_then(Value::as_u64)?;
-            let merge = row
-                .get("merge_status")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty());
-            if matches!(merge, Some("merged" | "closed")) {
-                return None;
-            }
-            Some(json!({
-                "node": row.get("id"),
-                "title": row.get("title"),
-                "number": number,
-                "url": row.get("pr_url"),
-                "status": "in_review",
-                "merge_status": merge,
-            }))
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -180,13 +149,7 @@ mod tests {
     }
 
     fn backlog() -> Inputs {
-        Inputs {
-            rows: vec![
-                json!({"id": "x-1", "status": "in_review", "pr_number": 7, "merge_status": ""}),
-                json!({"id": "x-2", "status": "in_review", "pr_number": 8, "merge_status": "merged"}),
-            ],
-            ..Inputs::default()
-        }
+        Inputs::default()
     }
 
     #[tokio::test]
@@ -198,20 +161,18 @@ mod tests {
             .await;
         let m = cache.model().await;
         assert_eq!(m["machines"].as_array().unwrap().len(), 2);
-        let seats: usize = m["machines"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|mc| mc["leads"].as_array().unwrap())
-            .map(|l| l["seats"].as_array().unwrap().len())
-            .sum();
-        assert_eq!(seats, 3);
+        let seats = |i: usize| {
+            m["machines"][i]["leads"][0]["seats"]
+                .as_array()
+                .unwrap()
+                .len()
+        };
+        assert_eq!((seats(0), seats(1)), (2, 1));
         assert!(m["machines"][0]["leads"][0]["seats"][0]
             .get("local")
             .is_none());
         assert_eq!(m["waiting"]["questions"][1]["host"], "iMac2D2");
         assert_eq!(m["waiting"]["questions"].as_array().unwrap().len(), 3);
-        assert_eq!(m["waiting"]["prs"].as_array().unwrap().len(), 1);
         assert_eq!(m["measured_at"], 100);
         assert!(m["fleet_error"].is_null());
     }
