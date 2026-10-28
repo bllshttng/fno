@@ -97,9 +97,9 @@ done <"$REGISTRY"
 
 # The name table's retired root words join the registry, so one file says
 # what the front door refuses and the same file says what no string teaches.
+# The fno crate compiles the table in, so a tree without it has no fno front.
 NAMES="crates/fno/command-names.tsv"
-[ -f "$NAMES" ] || fail "name table not found at $NAMES"
-while IFS=$'\t' read -r path state replacement note; do
+[ -f "$NAMES" ] && while IFS=$'\t' read -r path state replacement note; do
     case "$path" in ''|'#'*|*' '*) continue ;; esac
     [ "$state" = retired ] || continue
     [ "$replacement" = - ] && instead="nothing: $note" || instead="fno $replacement"
