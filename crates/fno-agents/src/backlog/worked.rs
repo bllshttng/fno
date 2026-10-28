@@ -208,6 +208,14 @@ fn fleet_rows_from(
             }
         }
     }
+    // A promoted lead is never a node worker (the `worked-nodes` role gate),
+    // including a launch-window lead whose vendor row has no session id yet.
+    let promoted: BTreeSet<&str> = entries
+        .into_iter()
+        .flatten()
+        .filter(|e| e.role_level.is_some() && !e.name.is_empty())
+        .map(|e| e.name.as_str())
+        .collect();
     // One pass over the vendor rows: sid -> row, so the spine join is a
     // map lookup, not a rescan per spine entry.
     let mut vendor_by_sid: BTreeMap<String, &Value> = BTreeMap::new();
@@ -217,8 +225,8 @@ fn fleet_rows_from(
         }
     }
     for (sid, e) in spine.iter() {
-        // A promoted lead is never a node worker (the `worked-nodes` role
-        // gate). It stays in the spine so its vendor row is not vendor-only.
+        // A promoted lead stays in the spine so its vendor row is not
+        // vendor-only, and lists as no worker.
         if e.role_level.is_some() {
             continue;
         }
@@ -275,6 +283,9 @@ fn fleet_rows_from(
         let Some(sid) = raw_row_sid(r) else {
             let cwd = r.get("cwd").and_then(Value::as_str).unwrap_or("");
             let name = r.get("name").and_then(Value::as_str).unwrap_or("unknown");
+            if promoted.contains(name) {
+                continue;
+            }
             let node = if is_linked_worktree(cwd) {
                 node_id_from_worktree(cwd)
             } else {
@@ -1298,21 +1309,46 @@ mod tests {
         lead.name = "wren".into();
         lead.harness_session_id = Some("aa2f99d7-0000-0000-0000-000000000000".into());
         lead.status = crate::AgentStatus::Live;
-        lead.node = Some("x-ce31".into());
+        lead.node = Some("n-dispatched".into());
         lead.role_level = Some(2);
         let mut codex_lead = lead.clone();
         codex_lead.harness = Some("codex".into());
         codex_lead.name = "rook".into();
         codex_lead.harness_session_id = Some("01a10e75-0000-0000-0000-000000000000".into());
+        // A launch-window lead: its vendor row has no session id yet but sits
+        // in a node worktree, the shape the unmeasurable fold would admit.
+        let tree = std::env::temp_dir().join(format!("worked-lead-tree-{}", std::process::id()));
+        std::fs::create_dir_all(tree.join(".fno")).unwrap();
+        std::fs::write(tree.join(".git"), "gitdir: elsewhere\n").unwrap();
+        std::fs::write(
+            tree.join(".fno").join("target-state.md"),
+            "graph_node_id: n-dispatched\n",
+        )
+        .unwrap();
+        let mut window_lead = lead.clone();
+        window_lead.name = "kestrel".into();
+        window_lead.harness_session_id = None;
         let vendor_lead = RawAgents {
-            rows: vec![serde_json::json!({
-                "sessionId": "aa2f99d7-0000-0000-0000-000000000000",
-                "name": "wren",
-                "state": "working"
-            })],
+            rows: vec![
+                serde_json::json!({
+                    "sessionId": "aa2f99d7-0000-0000-0000-000000000000",
+                    "name": "wren",
+                    "state": "working"
+                }),
+                serde_json::json!({
+                    "name": "kestrel",
+                    "cwd": tree.to_string_lossy(),
+                    "state": "working"
+                }),
+            ],
             warnings: Vec::new(),
         };
-        let (rows, warnings) = fleet_rows_from(vendor_lead, Some(&[lead, codex_lead]));
+        let (rows, warnings) = fleet_rows_from(vendor_lead, Some(&[lead, codex_lead, window_lead]));
+        let _ = std::fs::remove_dir_all(&tree);
+        assert!(
+            !warnings.iter().any(|w| w.contains("node=n-dispatched")),
+            "{warnings:?}"
+        );
         assert!(
             rows.is_empty(),
             "{:?}",
