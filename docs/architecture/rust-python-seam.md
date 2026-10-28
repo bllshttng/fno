@@ -109,7 +109,7 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `doctor/report/ops.rs run_session_cost` | conforming | session cost computed by the cost module's own `python3 -m` entry point; the billing arithmetic stays single-implementation in Python |
 | `doctor/mod.rs context_audit_run` | conforming | the context census runs as `python -m fno.context_audit` on the wheel's interpreter, all its inputs in one JSON argument; the census stays Python until its family ports |
 
-The last four rows are the interpreter direction, new with the doctor family port. They exec the wheel's interpreter (read from the `fno-py` shebang by `report::wheel_python`) or `python3`, never the literal porcelain, so the lint above is silent on them and these rows are the record. Each carries the whole fact set in one spawn: one answer, parsed, no decision split across the boundary. The hook probe's interpreter list in `doctor/report/hooks_probe.rs` launches plugin hook scripts, not facts, so it is no crossing.
+The last four rows are the interpreter direction, new with the doctor family port. They exec the wheel's interpreter or `python3`, never the literal porcelain. `report::wheel_python` reads that interpreter from the `fno-py` shebang. So the lint above is silent on them and these rows are the record. Each carries the whole fact set in one spawn: one answer, parsed, no decision split across the boundary. The hook probe's interpreter list in `doctor/report/hooks_probe.rs` launches plugin hook scripts, not facts, so it is no crossing.
 
 ## The refusal of consumer-driven scoping
 
