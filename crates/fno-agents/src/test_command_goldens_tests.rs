@@ -53,6 +53,10 @@ fn norm(
 ) -> String {
     v.replace(sb_real, "{SB}")
         .replace(sb, "{SB}")
+        // The slashed raw form must tokenize before tmp_real: on Linux /tmp
+        // is its own canonical form, and a tmp_real-first replace would
+        // collapse the golden's two distinct entries into one token.
+        .replace(&format!("{tmp}/"), "{TMP}/")
         .replace(tmp_real, "{TMPR}")
         .replace(tmp, "{TMP}")
         .replace(fx, "{FX}")
@@ -79,6 +83,11 @@ fn fx_dir() -> String {
 
 fn cap() -> (String, String, String, String, String, String) {
     // (sb, sb_real, tmp, tmp_real, fx, home)
+    // The capture machine's TMPDIR carried a trailing slash, so the golden
+    // pins both the raw and the canonicalized ceiling entry. Pin the same
+    // shape here: the slashed form never equals its canonical form, so the
+    // FNO_CONFIG_SEARCH_ROOT row matches on every POSIX box.
+    std::env::set_var("TMPDIR", format!("{}/", tmp_root()));
     let tmp = tempfile::tempdir().unwrap();
     let sb = tmp.path().join("sb");
     std::fs::create_dir_all(&sb).unwrap();
