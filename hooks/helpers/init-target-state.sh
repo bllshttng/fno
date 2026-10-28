@@ -1626,10 +1626,10 @@ PYEOF
               # `fno agents whoami` (the Python family command) emits the
               # canonical JSON shape whenever stdout is not a tty, which
               # command substitution always is. Top-level `fno whoami` is the
-              # Rust front's native verb: it ignores --json and prints human
-              # text, so this rung used to read an empty name and never arm.
-              # The `|| true` keeps set -e + pipefail from aborting init when
-              # whoami refuses an unregistered session (nonzero exit).
+              # Rust front's native command: it ignores --json and prints
+              # human text, so this rung used to read an empty name and never
+              # arm. The `|| true` keeps set -e + pipefail from aborting init
+              # when whoami refuses an unregistered session (nonzero exit).
               _SELF_NAME="$(fno agents whoami 2>/dev/null \
                 | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
             fi
