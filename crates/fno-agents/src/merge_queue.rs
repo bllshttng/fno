@@ -74,9 +74,11 @@ pub(crate) enum Gate {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct State {
     pub active: Option<Batch>,
-    /// The batch size cap: `max_batch` after a landing, half a red batch
-    /// after a split, so the left half builds next.
+    /// The batch size cap, `merge_queue.max_batch`.
     pub cap: usize,
+    /// The left half of the last split: it builds next, ahead of any entry
+    /// queued since, until it lands or ejects.
+    pub next: Vec<u64>,
     pub rebuilds: u32,
     /// Main's sha when the queue held because main kept moving.
     pub hold_main: Option<String>,
@@ -178,6 +180,14 @@ pub(crate) fn decide(view: &View) -> Step {
     if view.main_red {
         return Step::Idle;
     }
+    let pinned: Vec<u64> = order
+        .iter()
+        .map(|e| e.pr)
+        .filter(|pr| state.next.contains(pr))
+        .collect();
+    if !pinned.is_empty() {
+        return Step::Build { prs: pinned };
+    }
     let prs = order.iter().take(state.cap.max(1)).map(|e| e.pr).collect();
     Step::Build { prs }
 }
@@ -203,6 +213,7 @@ pub(crate) fn fold(steps: &[Value], max_batch: usize) -> State {
     let mut state = State {
         active: None,
         cap: max_batch,
+        next: Vec::new(),
         rebuilds: 0,
         hold_main: None,
         ejected: HashSet::new(),
@@ -234,12 +245,12 @@ pub(crate) fn fold(steps: &[Value], max_batch: usize) -> State {
             "land" => {
                 state.landed.extend(numbers(row, "/data/prs"));
                 state.active = None;
-                state.cap = max_batch;
+                state.next.clear();
                 state.rebuilds = 0;
             }
             "split" => {
                 state.active = None;
-                state.cap = numbers(row, "/data/left").len().max(1);
+                state.next = numbers(row, "/data/left");
                 state.rebuilds = 0;
             }
             "eject" => {
@@ -248,7 +259,7 @@ pub(crate) fn fold(steps: &[Value], max_batch: usize) -> State {
                 }
                 if ends_active {
                     state.active = None;
-                    state.cap = max_batch;
+                    state.next.clear();
                     state.rebuilds = 0;
                 }
             }

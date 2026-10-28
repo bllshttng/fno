@@ -208,6 +208,18 @@ fn the_gate_reruns_once_for_known_flakes_and_for_a_run_that_never_started() {
         step(&entries, &with_active(old), "m0", false, &Gate::Missing),
         Step::Rerun
     );
+    // The split's left half builds next, ahead of a newer p0 entry.
+    let split = [row(
+        STEP_EVENT,
+        NOW,
+        json!({"step": "split", "batch": "1", "left": [1], "right": [2]}),
+    )];
+    let newer = [entry(1, 2, 1), entry(2, 2, 2), entry(3, 0, 3)];
+    let state = fold(&split, DEFAULT_MAX_BATCH);
+    assert_eq!(
+        step(&newer, &state, "m0", false, &Gate::Pending),
+        build(&[1])
+    );
 }
 
 #[test]

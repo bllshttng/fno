@@ -1150,6 +1150,7 @@ fn an_arm_receipt_names_the_head_and_is_never_merged() {
         Outcome::Armed {
             head: "abc123".to_string(),
             merge_grant: None,
+            queued: false,
         }
     );
     let calls = fake.gh_calls.borrow();
@@ -1240,8 +1241,10 @@ fn a_queued_merge_runs_no_gh_merge_and_an_ejected_head_holds() {
         Outcome::Armed {
             head: "abc123".to_string(),
             merge_grant: None,
+            queued: true,
         }
     );
+    assert!(outcome.detail().contains("fno merge queue"));
     assert!(!fake
         .gh_calls
         .borrow()

@@ -135,6 +135,8 @@ pub enum Outcome {
     Armed {
         head: String,
         merge_grant: Option<String>,
+        /// The fno merge queue, not GitHub, owns the landing.
+        queued: bool,
     },
     /// The decision cleared and the caller asked to stop there. Nothing ran.
     Authorized { head: String },
@@ -168,6 +170,9 @@ impl Outcome {
     pub fn detail(&self) -> String {
         match self {
             Outcome::Merged { head, .. } => head.clone(),
+            Outcome::Armed {
+                head, queued: true, ..
+            } => format!("{head} queued in the fno merge queue, which lands it"),
             Outcome::Armed { head, .. } | Outcome::Authorized { head } => head.clone(),
             Outcome::Held { reason }
             | Outcome::Refused { reason }
@@ -204,8 +209,15 @@ impl Outcome {
                     out["merge_grant"] = json!(g);
                 }
             }
-            Outcome::Armed { head, merge_grant } => {
+            Outcome::Armed {
+                head,
+                merge_grant,
+                queued,
+            } => {
                 out["head"] = json!(head);
+                if *queued {
+                    out["queued"] = json!(true);
+                }
                 if let Some(g) = merge_grant {
                     out["merge_grant"] = json!(g);
                 }
@@ -1494,6 +1506,7 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
             Effect::Arm => Outcome::Armed {
                 head: authorized.head.clone(),
                 merge_grant: authorized.merge_grant.clone(),
+                queued: false,
             },
             // Merging now would race the queue that already owns this PR.
             Effect::Merge => Outcome::Held {
@@ -1511,6 +1524,7 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
             Ok(None) => Outcome::Armed {
                 head: authorized.head.clone(),
                 merge_grant: authorized.merge_grant.clone(),
+                queued: true,
             },
             Ok(Some(reason)) => Outcome::Held { reason },
             Err(reason) => Outcome::Unknown { reason },
@@ -1541,6 +1555,7 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
             Effect::Arm => Outcome::Armed {
                 head: authorized.head.clone(),
                 merge_grant: authorized.merge_grant.clone(),
+                queued: false,
             },
             Effect::Merge => Outcome::Merged {
                 head: authorized.head.clone(),
