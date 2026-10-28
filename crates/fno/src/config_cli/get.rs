@@ -421,7 +421,7 @@ fn get_value(key: &str, json_out: bool) -> i32 {
 
     // The loader validates the whole config on every get, as the Python
     // door's load_settings did: a refused value exits 1 with the refusal,
-    // and a coerced leaf reads its coerced value.
+    // and a leaf or block reads its coerced, validator-normalized value.
     let validated = match super::model::load_validated(&root) {
         Ok(validated) => validated,
         Err(refusal) => {
@@ -430,7 +430,7 @@ fn get_value(key: &str, json_out: bool) -> i32 {
         }
     };
     let is_leaf = !matches!(node, Node::Model(_) | Node::DictOf(_));
-    let value = match (is_leaf && !descended, validated_at(&validated, key)) {
+    let value = match (!descended, validated_at(&validated, key)) {
         (true, Some(coerced)) => coerced,
         _ => resolve_value(&node, raw.as_ref()),
     };

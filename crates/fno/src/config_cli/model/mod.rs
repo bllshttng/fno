@@ -639,12 +639,15 @@ pub fn coerce_bool(value: &Value) -> Result<Value, &'static str> {
     const PARSE: &str = "Input should be a valid boolean, unable to interpret input";
     match value {
         Value::Bool(_) => Ok(value.clone()),
+        // A fractional float is a type miss; a whole number past 0/1 a parse miss.
         Value::Number(n) => match n.as_f64() {
             Some(f) if f == 0.0 => Ok(Value::Bool(false)),
             Some(f) if f == 1.0 => Ok(Value::Bool(true)),
+            Some(f) if f.fract() != 0.0 => Err("Input should be a valid boolean"),
             _ => Err(PARSE),
         },
-        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+        // pydantic does not strip the string first: " yes " refuses.
+        Value::String(s) => match s.to_ascii_lowercase().as_str() {
             "0" | "off" | "f" | "false" | "n" | "no" => Ok(Value::Bool(false)),
             "1" | "on" | "t" | "true" | "y" | "yes" => Ok(Value::Bool(true)),
             _ => Err(PARSE),
@@ -669,10 +672,19 @@ pub fn coerce_int(value: &Value) -> Result<Value, &'static str> {
             }
         }
         Value::String(s) => {
+            const PARSE: &str =
+                "Input should be a valid integer, unable to parse string as an integer";
             let trimmed = s.trim().replace('_', "");
-            trimmed.parse::<i64>().map(Value::from).map_err(|_| {
-                "Input should be a valid integer, unable to parse string as an integer"
-            })
+            if let Ok(int) = trimmed.parse::<i64>() {
+                return Ok(Value::from(int));
+            }
+            // A whole decimal string ("3.0") is an int to pydantic.
+            match trimmed.parse::<f64>() {
+                Ok(f) if f.is_finite() && f.fract() == 0.0 && trimmed.contains('.') => {
+                    Ok(Value::from(f as i64))
+                }
+                _ => Err(PARSE),
+            }
         }
         _ => Err("Input should be a valid integer"),
     }
@@ -709,10 +721,16 @@ pub struct Outcome {
 
 /// Validate the merged config the loader built from `layers` (priority
 /// order, each already aliased and unwrapped). `json_surface` silences the
-/// unknown-key lines the way a `--json` argv does.
-pub fn validate_layers(layers: &[(PathBuf, Value)], merged: Value, json_surface: bool) -> Outcome {
+/// unknown-key lines the way a `--json` argv does. `claim_state` answers a
+/// claim key's state word, the read the opt-out revocation makes.
+pub fn validate_layers(
+    layers: &[(PathBuf, Value)],
+    merged: Value,
+    json_surface: bool,
+    claim_state: &dyn Fn(&str) -> String,
+) -> Outcome {
     let mut notes = Vec::new();
-    let raw = super::unwrap_config_dict(&merged);
+    let mut raw = super::unwrap_config_dict(&merged);
     if !json_surface {
         let problems = unknown::unknown_key_problems(layers);
         for line in problems.iter().take(UNKNOWN_WARN_CAP) {
@@ -725,6 +743,7 @@ pub fn validate_layers(layers: &[(PathBuf, Value)], merged: Value, json_surface:
             ));
         }
     }
+    revoke_unbacked_optouts(&mut raw, claim_state, &mut notes);
     let mut walk = Walk {
         ctx: Ctx::default(),
         errors: Vec::new(),
@@ -741,21 +760,21 @@ pub fn validate_layers(layers: &[(PathBuf, Value)], merged: Value, json_surface:
 
 /// Validate one priority-ordered layer list with no worktree-local file:
 /// the merge `merged_config` runs, without the disk walk.
-pub fn validate_layer_list(layers: &[(PathBuf, Value)], json_surface: bool) -> Outcome {
+pub fn validate_layer_list(
+    layers: &[(PathBuf, Value)],
+    json_surface: bool,
+    claim_state: &dyn Fn(&str) -> String,
+) -> Outcome {
     let mut merged = Value::Object(Map::new());
     for (_path, parsed) in layers.iter().rev() {
         super::deep_merge(&mut merged, parsed);
     }
-    validate_layers(layers, merged, json_surface)
+    validate_layers(layers, merged, json_surface, claim_state)
 }
 
 /// The native `load_settings`: drop retired keys from disk, merge the
 /// chain, print the unknown-key lines and validator notes to stderr, and
 /// return the validated settings or the refusal text.
-///
-/// Gap, recorded in the dual inventory: `_revoke_unbacked_optouts` reads
-/// the opt-out lease store, which has no native reader yet, so an opt-out
-/// with no live lease is not revoked here.
 pub fn load_validated(repo_root: &Path) -> Result<Value, String> {
     let candidates = super::candidate_paths(repo_root);
     for receipt in drop_retired_dispatch_keys(&candidates) {
@@ -764,11 +783,90 @@ pub fn load_validated(repo_root: &Path) -> Result<Value, String> {
     let layers = super::aliased_layers(repo_root);
     let merged = super::merged_config(repo_root);
     let json_surface = std::env::args().any(|a| a == "--json" || a == "-J");
-    let outcome = validate_layers(&layers, merged, json_surface);
+    let outcome = validate_layers(&layers, merged, json_surface, &native_claim_state);
     for line in &outcome.notes {
         eprintln!("{line}");
     }
     outcome.result
+}
+
+/// Merge-gating opt-outs (`fno/config/optouts.py`): the opt-out value, and
+/// the resolved default the revocation note names.
+const MERGE_GATING_OPTOUTS: [(&str, &str); 3] = [
+    ("review.self_review_required", "True"),
+    ("review.optional_apps", "'built-in optional reviewer list'"),
+    ("auto_merge.require_checks_pass", "True"),
+];
+
+fn is_optout_value(key: &str, value: &Value) -> bool {
+    if key == "review.optional_apps" {
+        return value.as_array().is_some_and(Vec::is_empty);
+    }
+    // Python compares `value != False`, and 0 == False there.
+    match value {
+        Value::Bool(b) => !b,
+        Value::Number(n) => n.as_f64() == Some(0.0),
+        _ => false,
+    }
+}
+
+/// `optout_lease.revoke_unbacked_optouts`: a merge-gating opt-out holds only
+/// while its `config-optout:<key>` claim is live. Any other state, an
+/// unreadable one included, drops the value so the default gate applies.
+fn revoke_unbacked_optouts(
+    raw: &mut Value,
+    claim_state: &dyn Fn(&str) -> String,
+    notes: &mut Vec<String>,
+) {
+    for (key, default) in MERGE_GATING_OPTOUTS {
+        let (block, leaf) = key.split_once('.').unwrap_or((key, key));
+        let present = raw
+            .get(block)
+            .and_then(|b| b.get(leaf))
+            .is_some_and(|v| is_optout_value(key, v));
+        if !present {
+            continue;
+        }
+        let state = claim_state(&format!("config-optout:{key}"));
+        if state == "live" {
+            continue;
+        }
+        if let Some(Value::Object(table)) = raw.get_mut(block) {
+            table.remove(leaf);
+            if table.is_empty() {
+                if let Some(map) = raw.as_object_mut() {
+                    map.remove(block);
+                }
+            }
+        }
+        notes.push(format!(
+            "merge-gating opt-out {key} revoked: claim instrument is {state}; resolved default is {default}"
+        ));
+    }
+}
+
+/// The claim state word from `fno-agents claim status <key> --json`, the
+/// one claim reader; no binary, a failed run or no state word reads as
+/// `unreadable`, which revokes.
+pub fn native_claim_state(key: &str) -> String {
+    let Some(binary) = crate::digest_overlay::fno_agents_bin_auto() else {
+        return "unreadable".to_string();
+    };
+    let output = std::process::Command::new(binary)
+        .args(["claim", "status", key, "--json"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    output
+        .ok()
+        .and_then(|out| serde_json::from_slice::<Value>(&out.stdout).ok())
+        .and_then(|payload| {
+            payload
+                .get("state")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "unreadable".to_string())
 }
 
 fn describe_failure(errors: &[Error], layers: &[(PathBuf, Value)]) -> String {
@@ -859,11 +957,41 @@ pub fn drop_retired_dispatch_keys(paths: &[PathBuf]) -> Vec<String> {
         {
             continue;
         }
-        for key in drop_from_toml(&real, &text) {
+        for key in locked_drop(&real) {
             gone.push(format!("removed retired key {key} from {}", real.display()));
         }
     }
     gone
+}
+
+/// The drop under the writer's lock (`<file>.lock`, flock, the 2 s budget
+/// `_locked_update` gets here): re-read under the lock, then replace the
+/// file atomically, so a concurrent `config set` is never clobbered and a
+/// failed write never truncates. A busy lock skips the drop this load.
+fn locked_drop(path: &Path) -> Vec<&'static str> {
+    use std::os::unix::io::AsRawFd;
+    let mut lock_name = path.as_os_str().to_owned();
+    lock_name.push(".lock");
+    let Ok(lock) = std::fs::File::create(PathBuf::from(lock_name)) else {
+        return Vec::new();
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        // SAFETY: the fd belongs to `lock`, which outlives the call.
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Vec::new();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let removed = match std::fs::read_to_string(path) {
+        Ok(text) => drop_from_toml(path, &text),
+        Err(_) => Vec::new(),
+    };
+    drop(lock);
+    removed
 }
 
 fn drop_from_toml(path: &Path, text: &str) -> Vec<&'static str> {
@@ -884,7 +1012,14 @@ fn drop_from_toml(path: &Path, text: &str) -> Vec<&'static str> {
             doc.remove(block);
         }
     }
-    if !removed.is_empty() && std::fs::write(path, doc.to_string()).is_err() {
+    if removed.is_empty() {
+        return removed;
+    }
+    let mut temp_name = path.as_os_str().to_owned();
+    temp_name.push(format!(".tmp-{}", std::process::id()));
+    let temp = PathBuf::from(temp_name);
+    if std::fs::write(&temp, doc.to_string()).is_err() || std::fs::rename(&temp, path).is_err() {
+        let _ = std::fs::remove_file(&temp);
         return Vec::new();
     }
     removed

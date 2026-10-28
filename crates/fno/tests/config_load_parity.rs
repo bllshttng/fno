@@ -52,7 +52,9 @@ fn replay(case: &Value) -> (i64, String, Value) {
         PathBuf::from("<FIXTURE>/settings.yaml"),
         unwrap_config_dict(&raw),
     )];
-    let outcome = validate_layer_list(&layers, false);
+    // The capture ran with no fno-agents on PATH, so every opt-out claim
+    // read answered `unreadable`; the replay gives the same answer.
+    let outcome = validate_layer_list(&layers, false, &|_| "unreadable".to_string());
     let stderr: String = outcome
         .notes
         .iter()
