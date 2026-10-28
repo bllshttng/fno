@@ -128,8 +128,7 @@ impl World {
             &path,
             format!(
                 "---\nfno_id: wake-fixture\nscope: {scope}\nharness: claude\n\
-                 harness_session_id: {session}\ncreated_at: {BIRTH}\n{extra}---\n",
-                session = session_for(scope),
+                 harness_session_id: {SESSION}\ncreated_at: {BIRTH}\n{extra}---\n"
             ),
         )
         .unwrap();
@@ -182,19 +181,15 @@ impl World {
     }
 }
 
-/// One session id per scope, shared by the scope's row and manifest. The
-/// registry refuses two rows with one id, and the goldens bind `SESSION`
-/// to `epic-x`.
-fn session_for(scope: &str) -> String {
-    if scope == "epic-x" {
-        return SESSION.to_string();
-    }
-    let tag: String = scope.bytes().map(|b| format!("{b:02x}")).collect();
-    format!("11111111-2222-3333-4444-{tag:0>12}")
-}
-
 fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
-    let session = session_for(scope);
+    // The registry refuses two rows with one session id, so each extra row
+    // gets its own; the pass reads the lead session from the manifest.
+    let session = if name == "lead-x" {
+        SESSION.to_string()
+    } else {
+        let tag: String = name.bytes().map(|b| format!("{b:02x}")).collect();
+        format!("11111111-2222-3333-4444-{tag:0>12}")
+    };
     json!({
         "name": name,
         "status": "live",
@@ -351,10 +346,6 @@ fn fold(value: &mut Value, root: &Path) {
             *text = text
                 .replace(&slug, "<ROOTSLUG>")
                 .replace(&root.to_string_lossy().into_owned(), "<ROOT>");
-            // The space base sits beside the project in the fixture's temp dir.
-            if let Some(parent) = root.parent() {
-                *text = text.replace(&parent.to_string_lossy().into_owned(), "<ROOT>");
-            }
         }
         Value::Array(items) => items.iter_mut().for_each(|v| fold(v, root)),
         Value::Object(map) => map.values_mut().for_each(|v| fold(v, root)),
@@ -766,9 +757,10 @@ fn the_33rd_wake_is_refused_naming_ceiling_and_asks_once() {
 #[test]
 fn a_conflicted_scope_is_skipped() {
     let world = World::new();
-    let mut second = row("lead-b", &world.root(), "", "epic-x");
-    second["harness_session_id"] = json!(session_for("epic-x-b"));
-    let rows = world.set_registry(json!([row("lead-a", &world.root(), "", "epic-x"), second]));
+    let rows = world.set_registry(json!([
+        row("lead-a", &world.root(), "", "epic-x"),
+        row("lead-b", &world.root(), "", "epic-x"),
+    ]));
     let rec = Rec::default();
     let outcome = run_with(
         &armed(),
