@@ -162,17 +162,20 @@ fn work(session: Arc<AcpSession>, host: Arc<Host>) {
             }
         };
         host.busy.store(true, Ordering::SeqCst);
-        record_mail_accepted(next.meta.as_ref());
+        let meta = next.meta.clone();
         let ran = session.prompt_with_meta(&next.text, next.meta);
         host.busy.store(false, Ordering::SeqCst);
         session.take_notifications();
         match ran {
-            Ok(_) => {}
-            // The turn ended badly but the session is still open.
+            Ok(_) => record_mail_state(meta.as_ref(), None),
+            // The turn ended badly but the session is still open, so the
+            // prompt did reach `session/prompt`.
             Err(e @ (AcpError::Protocol { .. } | AcpError::NoPositiveResult { .. })) => {
+                record_mail_state(meta.as_ref(), None);
                 eprintln!("footnote-host: turn failed: {e}");
             }
             Err(e) => {
+                record_mail_state(meta.as_ref(), Some(&e.to_string()));
                 eprintln!("footnote-host: session lost: {e}");
                 host.gone.store(true, Ordering::SeqCst);
                 host.gone_wake.notify_one();
@@ -184,8 +187,10 @@ fn work(session: Arc<AcpSession>, host: Arc<Host>) {
 
 /// A mail prompt leaves the host queue as its own `session/prompt`: that is
 /// the turn record, written here because the deliver RPC answered long ago.
-/// ACP has no steer, so it is always a new turn.
-fn record_mail_accepted(meta: Option<&Value>) {
+/// It is written after the call, since a lost session can fail it before
+/// the request goes out (`failed` with the error). ACP has no steer, so an
+/// accepted prompt is always a new turn.
+fn record_mail_state(meta: Option<&Value>, lost: Option<&str>) {
     use crate::mail_delivery_state::{DeliveryState, Evidence};
     let origin = meta.and_then(|m| m.get("footnote/origin"));
     let Some(id) = origin
@@ -199,14 +204,17 @@ fn record_mail_accepted(meta: Option<&Value>) {
         .and_then(|o| o.get("sender_session_id"))
         .and_then(Value::as_str)
         .unwrap_or("");
-    let state = DeliveryState::accepted(
-        false,
-        Evidence {
-            record: "acp:session/prompt".to_string(),
-            at: crate::graph_store::now_isoformat(),
-            ..Evidence::default()
-        },
-    );
+    let state = match lost {
+        Some(reason) => DeliveryState::failed(reason),
+        None => DeliveryState::accepted(
+            false,
+            Evidence {
+                record: "acp:session/prompt".to_string(),
+                at: crate::graph_store::now_isoformat(),
+                ..Evidence::default()
+            },
+        ),
+    };
     crate::mail_delivery_state::record(id, &state, from, "");
 }
 
