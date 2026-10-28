@@ -953,7 +953,10 @@ mod tests {
         let record = read_record(&home).unwrap().unwrap();
         assert_eq!(record.sha.as_deref(), Some(moved));
         assert_eq!(record.prs, vec![7]);
-        assert_eq!(verdict_for_in(&home, Some(7), Some("o/r"), &empty), Verdict::Clear);
+        assert_eq!(
+            verdict_for_in(&home, Some(7), Some("o/r"), &empty),
+            Verdict::Clear
+        );
         let old = store(vec![row("d-1", &old_lift, "operator")]);
         assert!(matches!(
             verdict_for_in(&home, Some(8), Some("o/r"), &old),
