@@ -188,16 +188,42 @@ rc=$?
 [[ "$out" == *"journal literal raw write at"* ]] || { echo "FAIL AC11-cfg-use-below diag: $out"; fail=1; }
 cleanup "$d"
 
-# AC4-EDGE: a `#[cfg(test)]` that opens a test module is the boundary; the
-# module's fixture writers stay legal without new allow markers.
+# AC11-EDGE: an events-discipline:allow marker ABOVE the literal excuses the
+# writer the same as one below; the question-intake door places it there.
 d=$(make_fixture)
 mkdir -p "$d/crates/x/src"
 cat > "$d/crates/x/src/lib.rs" <<'INNER_EOF'
+fn intake_write() {
+    let req = Req {
+        // events-discipline:allow: the write belongs to the question-intake
+        // door; this line only names its append target.
+        journal_path: Some(std::path::PathBuf::from(".fno").join("events.jsonl")),
+    };
+    let _ = req;
+    std::fs::write(std::path::PathBuf::from("x"), b"raw\n").unwrap();
+}
+INNER_EOF
+out=$(cd "$d" && bash "$LINT" 2>&1)
+rc=$?
+[[ $rc -eq 0 ]] || { echo "FAIL AC11-marker-above rc=$rc out=$out"; fail=1; }
+cleanup "$d"
+
+# AC4-EDGE: a `#[cfg(test)]` that opens a test module is the boundary; the
+# module's fixture writers stay legal without new allow markers, and an
+# event-named production fn just above the module never reaches into them.
+d=$(make_fixture)
+mkdir -p "$d/crates/x/src"
+cat > "$d/crates/x/src/lib.rs" <<'INNER_EOF'
+pub fn maybe_tick() {}
+
 #[cfg(test)]
 pub(crate) mod tests {
     fn fixture_write() {
         let path = std::path::PathBuf::from(".fno").join("events.jsonl");
         std::fs::write(path, b"raw\n").unwrap();
+    }
+    fn stage(path: &std::path::Path) {
+        let _f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
     }
 }
 INNER_EOF

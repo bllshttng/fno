@@ -130,11 +130,11 @@ def _emit_tick_row(arm: str, *, interval_s: int, acted: int = 0,
 def _notify_parked(message: str) -> None:
     """Send an OS notification for a parked PR.
 
-    Calls send_notification with (title, message) -- two positional args.
+    Calls notify_operator with (title, message) -- two positional args.
     On failure, logs a warning instead of silently passing.
     """
     try:
-        send_notification("pr-watch", message)
+        notify_operator("pr-watch", message)
     except Exception as exc:
         log.warning("pr-watch: notify failed: %s", exc)
 
@@ -171,15 +171,15 @@ def _catchup_roots() -> list[Path]:
     every id), never ``list_open()`` plus a per-id ``load()`` loop.
     """
     try:
-        from fno.tracker import sidecar as sidecar_store
+        from fno import rust_binary
 
-        sidecars = sidecar_store.load_all()
+        sidecars = rust_binary.sidecar_all()
     except Exception as exc:  # noqa: BLE001 - no sidecar store means nothing to sweep
         log.warning("pr-watch: could not read sidecars for catch-up roots: %s", exc)
         return []
     roots: dict[str, Path] = {}
     for sc in sidecars.values():
-        cwd = sc.cwd
+        cwd = sc.get("cwd")
         if cwd and str(cwd) not in roots:
             roots[str(cwd)] = Path(cwd)
     return [p for p in roots.values() if p.is_dir()]
@@ -276,21 +276,27 @@ def _run_evals_arm_phase(settings: Any, *, seconds_left_fn) -> None:
     try:
         import subprocess
 
-        from fno.evals.report import evals_health_summary
         from fno.paths import evals_history, state_dir
-        from fno.rust_binary import resolve_binary
+        from fno.rust_binary import command_call, resolve_binary
 
         binary = resolve_binary()
         if binary is None:
             raise RuntimeError("fno-agents binary not found")
+        stale_days = int(getattr(evals_cfg, "stale_days", 7) or 7)
+        # The native health projection (evals-trend op health); None when no
+        # history or no rows, which json.dumps passes through as null.
+        health = command_call(
+            "evals-trend",
+            {"op": "health", "history": str(evals_history()), "stale_days": stale_days},
+        )
         argv = [
             str(binary), "evals-arm",
+            "--summary-json", json.dumps(health),
             "--history", str(evals_history()),
             "--events", str(state_dir() / "events.jsonl"),
             "--fno-bin", _resolve_fno_binary(),
             "--schedule-days", str(days),
-            "--stale-days", str(int(getattr(evals_cfg, "stale_days", 7) or 7)),
-            "--summary-json", json.dumps(evals_health_summary(evals_history())),
+            "--stale-days", str(stale_days),
         ]
         proc = subprocess.run(argv, capture_output=True, text=True, check=False,
                               timeout=max(1.0, seconds_left_fn() or 30.0))
@@ -366,7 +372,7 @@ class ClaimAdapter:
 
 from fno.claims.core import claim_status  # noqa: E402
 from fno.config import load_settings, load_settings_for_repo  # noqa: E402
-from fno.notify._impl import send_notification  # noqa: E402
+from fno.rust_binary import notify_operator  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -425,12 +431,6 @@ _RECOVERY_ROOT_FLOOR_S = 3.0
 _EVERY_TICK_CAP_S: dict[str, float] = {
     "settings": 10,
     "sweep": 150,
-    # The wake pays three fixed reads before its first role (team, the
-    # answered journal, the graph), each bounded at 10s, and guards every
-    # truth read behind a 15s step floor. The 45s cap measured "budget
-    # spent after 0 of 5 roles" with truth_reads=0 (2026-09-28 fleet
-    # specimen). 75s fits the fixed reads plus two truth reads.
-    "lead_wake": 75,
     # The notify phase pays the arm subprocess over every catch-up root
     # (armed pass: 23.1s measured over 12 roots 2026-09-27). 15s still cut
     # it mid-arm; 30s fits at the 0.85x deadline.
@@ -533,7 +533,7 @@ def tick() -> None:
     """
     import time
 
-    from fno.config_cli import post_merge_readiness
+    from fno.setup.config_doctor import post_merge_readiness
     from fno.pr_watch._dispatch import (
         current_tick_phase,
         phase_seconds_left,
@@ -572,7 +572,7 @@ def tick() -> None:
     # boundary (SCAN_PROGRESS); this dict holds the rest.
     progress: dict[str, str] = {}
     ceiling_box: dict[str, Optional[int]] = {"v": None}
-    arm_interval: dict[str, int] = {"lead_wake": 900, "notify_watch": 300, "watchdog": 600}
+    arm_interval: dict[str, int] = {"notify_watch": 300, "watchdog": 600}
     roots_box: dict[str, Optional[list]] = {"v": None}
     phase_caps = dict(_PHASE_CAP_S)
     grant_queue_timeout_s = _GRANT_QUEUE_READ_TIMEOUT_S
@@ -794,11 +794,16 @@ def tick() -> None:
                 # ticks instead.
                 if _fleet_swept:
                     try:
-                        from fno.fleet_state import write_heartbeat
+                        from fno.rust_binary import command_call
 
-                        write_heartbeat(
-                            candidates=_fleet_candidates, refused=_fleet_refused,
-                            silent=_fleet_silent,
+                        command_call(
+                            ["fleet-incident", "fleet-state", "heartbeat"],
+                            {
+                                "candidates": _fleet_candidates,
+                                "refused": _fleet_refused,
+                                "silent": _fleet_silent,
+                            },
+                            timeout=5,
                         )
                     except Exception as exc:  # noqa: BLE001 - never fatal to the PR legs
                         log.warning("pr-watch: fleet heartbeat write failed: %s", exc)
@@ -1039,7 +1044,6 @@ def tick() -> None:
                             for recovery_root, recovery_scan in recovery_scans:
                                 results = _wd.apply_recoverable(
                                     recovery_scan,
-                                    scope_cwd=recovery_root,
                                     should_apply=lambda: (
                                         phase_seconds_left() or 0.0
                                     ) >= _WAKE_APPLY_FLOOR_S,
@@ -1216,7 +1220,7 @@ def tick() -> None:
             assert cfg is not None
             set_tick_phase("merge")
             interval = int(getattr(cfg, "interval_seconds", 600))
-            head = f"merge kw={'cut' if 'lead_wake' in cut else 'ok'}"
+            head = "merge ok"
             if not tick_enabled:
                 _emit_tick_row("pr_watch_merge", interval_s=interval, skip_reason="disabled",
                                detail=f"{head} pr_watch disabled")
@@ -1273,73 +1277,6 @@ def tick() -> None:
         # anything here acts. Report, never reap: only STRANDED rows get
         # pushed and filed; only UNKNOWN rows get recorded; every other
         # class, LIVE included, is quiet and untouched.
-        #
-        # The lead wake phase runs BEFORE it: it is cheaper than either leg
-        # (one registry read, one transcript probe per role, a bus scan) and
-        # the wake it fires is the thing the stranded sweep would otherwise
-        # have to notice too late.
-        def _phase_lead_wake(_slice_s: float) -> None:
-            set_tick_phase("lead_wake")
-            # The guard is the first statement, before the import: this module is
-            # on the launchd hot path and the wake phase pulls the bus and the
-            # harness layer, which an unarmed tick must not pay for. The double
-            # getattr matches the phase's own read: a settings stub with no lead
-            # block at all (the tick's test harnesses) must read as unarmed.
-            # Double getattr throughout: a settings stub with no lead block at all
-            # must read as unarmed (debounce default), never crash the tick.
-            kw_i = int(getattr(getattr(settings, "lead", None), "wake_debounce_seconds", 900))
-            arm_interval["lead_wake"] = kw_i
-            if getattr(getattr(settings, "lead", None), "wake_enabled", False):
-                try:
-                    from fno.pr_watch._lead_wake import run_lead_wake
-
-                    wake_summary = run_lead_wake(
-                        settings,
-                        emit=_emit_event,
-                        seconds_left_fn=phase_seconds_left,
-                        on_step=lambda s: set_tick_phase(f"lead_wake:{s}"),
-                    )
-                    woke = ", ".join(
-                        f"{w['scope']}:{w['reason']}" for w in wake_summary.get("woke", [])
-                    )
-                    typer.echo(
-                        f"lead wake: roles={wake_summary.get('roles', 0)}"
-                        + (f" woke={woke}" if woke else "")
-                    )
-                    roles = int(wake_summary.get("roles", 0) or 0)
-                    woke_n = len(wake_summary.get("woke", []) or [])
-                    evaluated = int(wake_summary.get("evaluated", 0) or 0)
-                    truth_reads = int(wake_summary.get("truth_reads", 0) or 0)
-                    if roles == 0 and wake_summary.get("team_incomplete"):
-                        skip = "team_read_incomplete"
-                    elif roles == 0:
-                        skip = "no_promoted_target"
-                    elif woke_n:
-                        skip = None
-                    elif wake_summary.get("budget_spent"):
-                        skip = "budget_spent"
-                    else:
-                        skip = "no_trigger"
-                    note = wake_summary.get("note")
-                    from collections import Counter
-                    rc = Counter(str(i.get("refusal") or "?") for i in wake_summary.get("refused") or [])
-                    refused_s = ",".join(f"{k}:{rc[k]}" for k in sorted(rc))
-                    detail = (
-                        f"roles={roles} evaluated={evaluated}/{roles}"
-                        f" truth_reads={truth_reads}"
-                        + (f" woke={woke}" if woke else "")
-                        + (f" refused={refused_s}" if refused_s else "")
-                        + (f" note={note}" if note else "")
-                    )
-                    _emit_tick_row("lead_wake", interval_s=kw_i, acted=woke_n,
-                                   skip_reason=skip, detail=detail)
-                except Exception as exc:  # noqa: BLE001 - never let a wake break the tick
-                    log.warning("pr-watch: lead wake phase failed: %s", exc)
-                    _emit_tick_row("lead_wake", interval_s=kw_i, skip_reason="wake_failed",
-                                   detail=str(exc)[:200])
-            else:
-                _emit_tick_row("lead_wake", interval_s=kw_i, skip_reason="wake_disabled")
-
         # The operator-notice sampler: one phase, always run; the
         # Rust arm answers notify_off itself when the [notify] signals list
         # is empty, so the readout shows the arm whether or not it is armed.
@@ -1399,7 +1336,7 @@ def tick() -> None:
                         "a stranded sweep costs"
                     )
                 from fno.branch_provenance_cache import write_cache
-                from fno.worktree_stranded import STRANDED, UNKNOWN, apply_sweep, sweep
+                from fno.rust_binary import call_binary_json
 
                 wake = lane_armed and _wd_wake_armed(settings)
                 changed, stranded_n, unknown_n, acted_n, failed_n, roots_done = False, 0, 0, 0, 0, 0
@@ -1428,14 +1365,26 @@ def tick() -> None:
                         )
                         break
                     try:
-                        stranded_rows = sweep(repo=root)
+                        door_args = ["--repo", str(root), "--json", "--apply"]
+                        if not wake:
+                            # The report posture still records UNKNOWN rows;
+                            # only the STRANDED push+file waits for the arm.
+                            door_args.append("--no-wake")
+                        door_err, payload = call_binary_json(
+                            "worktree-stranded", door_args, timeout=120
+                        )
+                        if door_err is not None or not isinstance(payload, dict):
+                            raise RuntimeError(
+                                f"worktree-stranded door failed: {door_err}"
+                            )
+                        stranded_rows = payload.get("rows") or []
+                        outcomes = payload.get("outcomes") or []
                         changed |= write_cache(root, stranded_rows)
-                        outcomes = apply_sweep(stranded_rows, wake=wake)
                     except Exception as exc:  # noqa: BLE001 - one bad repo never stops the rest
                         log.warning("pr-watch: stranded sweep failed for %s: %s", root, exc)
                         continue
-                    stranded_n += sum(1 for r in stranded_rows if r.klass == STRANDED)
-                    unknown_n += sum(1 for r in stranded_rows if r.klass == UNKNOWN)
+                    stranded_n += sum(1 for r in stranded_rows if r.get("class") == "STRANDED")
+                    unknown_n += sum(1 for r in stranded_rows if r.get("class") == "UNKNOWN")
                     acted_n += len(outcomes)
                     failed_n += sum(1 for o in outcomes if o["stopped_at"])
                     roots_done += 1
@@ -1461,7 +1410,6 @@ def tick() -> None:
         # state, never the sweep's result, so they run first; the sweep
         # follows as the one arm that resumes per-PR across ticks.
         sweep_started = True
-        _run_phase("lead_wake", _phase_lead_wake, arm="lead_wake")
         _run_phase("merge", _phase_merge, arm="pr_watch_merge")
         _run_phase("sweep", _phase_sweep, arm="pr_watch_sweep")
         _run_phase("notify_watch", _phase_notify, arm="notify_watch")

@@ -29,9 +29,10 @@ _SUFFIXES = (".py", ".rs")
 def _is_cargo_build_artifact(path: Path) -> bool:
     """True only for `crates/<crate>/target/**` (cargo's build dir).
 
-    Deliberately NOT a bare `"target" in path.parts`: `cli/src/fno/target/`
-    is a real runtime package (it holds `orient.py`, the target orienter), so
-    the unanchored form silently drops five Python files from this scan - the
+    Deliberately NOT a bare `"target" in path.parts`: the runtime package
+    `cli/src/fno/target/` (manifest.py, denominator.py) lived under that exact
+    name until the target family ported native, and the unanchored form
+    silently dropped its Python files from this scan while it existed - the
     same over-exclusion trap the AGENTS.md pitfall corpus records, which this
     guard fell into while fixing a different decorative guard.
     """
@@ -40,6 +41,20 @@ def _is_cargo_build_artifact(path: Path) -> bool:
     except ValueError:
         return False
     return len(rel.parts) > 1 and rel.parts[1] == "target"
+
+
+def test_cargo_build_artifact_exclusion_stays_anchored_to_crates():
+    """The exclusion keys on the crates prefix, never the bare name.
+
+    The positive control used to assert on the real `cli/src/fno/target/`
+    package; the family port deleted that package, so the control pins the
+    helper's shape directly: a same-named runtime path stays in scope and a
+    crates build path stays out.
+    """
+    runtime_named = _REPO / "cli" / "src" / "fno" / "target" / "manifest.py"
+    assert not _is_cargo_build_artifact(runtime_named)
+    assert _is_cargo_build_artifact(_REPO / "crates" / "fno-agents" / "target" / "debug" / "x.py")
+    assert not _is_cargo_build_artifact(_REPO / "crates" / "fno-agents" / "src" / "lib.rs")
 
 
 def test_no_runtime_string_promises_a_0_4_0_removal():
@@ -55,11 +70,6 @@ def test_no_runtime_string_promises_a_0_4_0_removal():
     # wrong reason; anchor it so a moved test file fails loudly instead.
     assert len(sources) > 100, f"scan found only {len(sources)} files"
     assert any(p.suffix == ".rs" for p in sources), "Rust emitters not scanned"
-    # Positive control on the exclusion itself: the runtime package whose name
-    # collides with cargo's build dir must be IN scope.
-    assert any(
-        p.name == "orient.py" and p.parent.name == "target" for p in sources
-    ), "cli/src/fno/target/ was excluded; the exclusion is over-broad again"
     offenders = [
         f"{path.relative_to(_REPO)}:{n}"
         for path in sources

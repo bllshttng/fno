@@ -138,23 +138,26 @@ export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENTS_HOME="$
 # root provisions the python leg's executables under .local/bin. Without
 # this every fold dies with "could not run" and the org views shoot empty.
 export PATH="$ROOT/.local/bin:$PATH"
-# The org view reads `fno-agents top --machines --json`. The demo root has
-# no fleet primary, and fleet top keeps only seats with a live pid, so the
-# org views would shoot empty. This shim answers that one call with the
-# invented fleet map seeded below, and hands every other call to the real
-# binary.
+# The org view reads `fno-agents census --workers --machines --json`. The
+# demo root has no fleet primary, and fleet top keeps only seats with a live
+# pid, so the org views would shoot empty. This shim answers that one call
+# with the invented fleet map seeded below, and hands every other call to the
+# real binary. The views resolve fno-agents through FNO_AGENTS_BIN first, so
+# the shim takes that name and forwards to the binary it named.
+REAL_AGENTS="${FNO_AGENTS_BIN:-fno-agents}"
 mkdir -p "$ROOT/fleetbin"
 cat >"$ROOT/fleetbin/fno-agents" <<SH
 #!/bin/sh
-if [ "\$*" = "top --machines --json" ]; then exec cat "$ROOT/fleet-top.json"; fi
+if [ "\$*" = "census --workers --machines --json" ]; then exec cat "$ROOT/fleet-top.json"; fi
 # Drop this directory wherever it sits in PATH: a process that prepends its
 # own directory would otherwise send the call back here forever.
 PATH="\$(printf '%s' "\$PATH" | tr ':' '\\n' | grep -vxF "$ROOT/fleetbin" | paste -sd: -)"
 export PATH
-exec fno-agents "\$@"
+exec "$REAL_AGENTS" "\$@"
 SH
 chmod +x "$ROOT/fleetbin/fno-agents"
 export PATH="$ROOT/fleetbin:$PATH"
+export FNO_AGENTS_BIN="$ROOT/fleetbin/fno-agents"
 # The claims legacy lock takes a FILESYSTEM root; a fresh root carries the
 # graph.db migration tombstone at .fno/claims, which is not a directory and
 # crashes the lock. Give the demo's claims their own directory.
@@ -396,7 +399,8 @@ agents = [
     row("archer", "codex", "gpt-6-sol", ids[0], "working", sids[1]),
     row("scout", "claude", "opus", ids[1], "done", sids[0]),
     row("reviewer", "opencode", "zen", ids[2], "working", sids[2]),
-    row("pager", "pi", "glm-5", ids[3], "working"),
+    # Blocked, so the strip's need-input count and the Input word render.
+    row("pager", "pi", "glm-5", ids[3], "blocked"),
     row("scribe", "claude", "sonnet", ids[4], "done"),
     # Paneless threads, so the sideline shows the other states too.
     # Leads dispatch and never host a pane: attachable thread rows.

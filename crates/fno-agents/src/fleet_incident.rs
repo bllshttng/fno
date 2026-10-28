@@ -202,7 +202,7 @@ fn scope_verdict(verdict: Verdict, scope: &str) -> Verdict {
     }
 }
 
-fn target_from_path(path: &Path) -> Option<String> {
+pub(crate) fn target_from_path(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_str()?.strip_suffix(".json")?;
     let (kind, value) = if let Some(value) = name.strip_prefix("session-") {
         ("session", value.to_string())
@@ -418,7 +418,7 @@ fn print_machine_status(record: &IncidentRecord, state: &str, targets: &[TargetS
     }
 }
 
-fn target_matches(target: &str, subject: &Subject<'_>) -> Result<bool, String> {
+pub(crate) fn target_matches(target: &str, subject: &Subject<'_>) -> Result<bool, String> {
     let (kind, value) = target
         .split_once(':')
         .ok_or_else(|| format!("invalid target {target:?}"))?;
@@ -1139,6 +1139,13 @@ pub fn run_fleet_incident(args: &[String]) -> i32 {
         return 2;
     };
     let rest = &args[1..];
+    // The fleet-sweep watermark ops ride this action as arguments (law
+    // d-fe66560a allows no new client action; gh-budget and cutover are the
+    // precedent): `fleet-incident fleet-state <op> ...` (see fleet_state.rs).
+    // A watermark must be writable when the daemon itself is the thing wedged.
+    if action.as_str() == "fleet-state" {
+        return crate::fleet_state::run(rest);
+    }
     if matches!(action.as_str(), "-h" | "--help" | "help")
         || rest
             .iter()
@@ -1747,4 +1754,27 @@ mod tests {
         }
         cleanup(&path);
     }
+}
+
+/// The `fleet-incident` client action's routing: the family body that used
+/// to live inline in bin/client.rs. gh-budget and cutover ride this action
+/// as its subcommands (law d-fe66560a allows no new client action), so the
+/// dispatch answers before every gh call even when the daemon is the thing
+/// wedged; the stdin door catches a bare admit.
+pub async fn run_dispatch(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) == Some("gh-budget") {
+        return crate::gh_budget::run_gh_budget(&args[1..]);
+    }
+    // `cutover` quiesces the writers and snapshots the stores for a machine
+    // move; it rides this action for the same reason.
+    if args.first().map(String::as_str) == Some("cutover") {
+        return crate::cutover::run_cutover(&args[1..]).await;
+    }
+    if args.is_empty() {
+        match crate::gh_budget::run_gh_budget_stdin_door() {
+            -1 => {}
+            code => return code,
+        }
+    }
+    run_fleet_incident(args)
 }

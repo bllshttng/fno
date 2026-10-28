@@ -519,14 +519,24 @@ fn launch_account_from_env_is_three_valued() {
     std::env::set_var(LAUNCH_ACCOUNT_ENV_KEY, "makers");
     std::env::set_var("CLAUDE_CONFIG_DIR", "/unrelated");
     let a = launch_account_from_env();
+    let stamped = crate::accounts::launch::pane_stamp();
 
     std::env::remove_var(LAUNCH_ACCOUNT_ENV_KEY);
     let b = launch_account_from_env();
 
     std::env::remove_var("CLAUDE_CONFIG_DIR");
     let c = launch_account_from_env();
+    let unstamped = crate::accounts::launch::pane_stamp();
 
     restore(saved_launch, saved_dir);
+
+    // A pane carries the stamp only when an account was applied; the
+    // fallback "default" never rides a wrapper.
+    assert_eq!(
+        stamped.first(),
+        Some(&(LAUNCH_ACCOUNT_ENV_KEY.to_string(), "makers".to_string()))
+    );
+    assert_eq!(unstamped, Vec::new());
 
     assert_eq!(a.as_deref(), Some("makers"), "seam id outranks ambient dir");
     assert_eq!(b, None, "an ambient config dir is unknown, never default");

@@ -324,7 +324,7 @@ async fn rm_flow_rows() {
     let out = format_success("rm", "bar-agent", &result, false, true, false)
         .expect("rm renders a receipt");
     assert!(
-        out.contains("fno agents adopt 01a02125-4eb4-7bf1-b74e-d238887eb092 --cross-project"),
+        out.contains("fno agents adopt 01a02125-4eb4-7bf1-b74e-d238887eb092"),
         "{out}"
     );
     assert!(!out.contains("adopt 01a02125\n"), "{out}");
@@ -342,21 +342,17 @@ async fn rm_flow_rows() {
         out.starts_with("removed: bar-agent (fno + claude)"),
         "{out}"
     );
-    assert!(
-        out.contains("fno agents adopt 0a6e775f --cross-project"),
-        "{out}"
-    );
+    assert!(out.contains("fno agents adopt 0a6e775f"), "{out}");
     assert!(out.contains("resume handle"), "{out}");
 
     let resume = command_usage("resume").expect("resume usage");
-    assert!(resume.contains("--cross-project"), "{resume}");
     assert!(resume.contains("--cwd <existing-checkout>"), "{resume}");
     // The seam appends --account on a wake; the usage line naming it is
     // the parse contract that keeps the wake ladder honest.
     assert!(resume.contains("--account <id>"), "{resume}");
 
     let adopt = command_usage("adopt").expect("adopt usage");
-    assert!(adopt.contains("--cross-project"), "{adopt}");
+    assert!(!adopt.contains("--cross-project"), "{adopt}");
 
     let result = json!({
         "removed": true,
@@ -756,22 +752,20 @@ fn parse_rows() {
         build_request("rm", &["myagent".to_string(), "-F".to_string()]).expect("-F must parse");
     assert_eq!(force_params["force"], true);
 
-    let (method, params) = build_request(
+    let (method, _params) = build_request(
         "rm",
         &["myagent".to_string(), "--cross-project".to_string()],
     )
-    .expect("the refusal-prescribed --cross-project must parse on rm");
+    .expect("the retired --cross-project no-op still parses on rm");
     assert_eq!(method, "agent.rm");
-    assert_eq!(params["cross_project"], true);
     let (_, plain) = build_request("rm", &["myagent".to_string()]).expect("plain rm must parse");
     assert!(plain.get("cross_project").is_none());
-    let (stop_method, stop_params) = build_request(
+    let (stop_method, _stop_params) = build_request(
         "stop",
         &["myagent".to_string(), "--cross-project".to_string()],
     )
-    .expect("the refusal-prescribed --cross-project must parse on stop");
+    .expect("the retired --cross-project no-op still parses on stop");
     assert_eq!(stop_method, "agent.stop");
-    assert_eq!(stop_params["cross_project"], true);
     let err = build_request("list", &["--cross-project".to_string()]).unwrap_err();
     assert!(err.contains("unknown flag: --cross-project"), "got: {err}");
 
@@ -794,12 +788,11 @@ fn parse_rows() {
     assert!(!defaults.no_wait);
 }
 
-/// The lifecycle commands' store heal resolves through the project-confinement
-/// refusal that prescribes `--cross-project`, so `fno agents rm|stop <id>
-/// --cross-project` must PARSE (the old surface died with "unknown flag:
-/// --cross-project" before any resolution ran). The flag rides to the daemon
-/// as `cross_project`, where entry_for_lifecycle hands it to the scoped
-/// resolver; commands that take no such flag keep refusing it.
+/// The lifecycle commands accept the retired `--cross-project` flag as a
+/// silent no-op (d-460ea8c7: the store heal is machine-wide now), so
+/// `fno agents rm|stop <id> --cross-project` still PARSES (the old surface
+/// died with "unknown flag: --cross-project" before any resolution ran).
+/// Commands that never took the flag keep refusing it.
 
 /// x-c5cc: the spawn-gate flags parse on the spawn command (--force already
 /// shared with stop/rm; --no-wait is gate-only).
@@ -821,20 +814,19 @@ fn parse_rows() {
 
 #[test]
 fn substrate_rows() {
-    // The pane-default harnesses get the interactive host_mode on an unflagged
-    // spawn; codex/gemini/agy never mint a session id (claude-only).
+    // A pane comes only from an explicit lane and gets the interactive
+    // host_mode; codex/gemini/agy never mint a session id (claude-only).
     for provider in ["gemini", "agy"] {
         let args = vec![
             "wk".to_string(),
             "--harness".to_string(),
             provider.to_string(),
+            "--as".to_string(),
+            "pane".to_string(),
         ];
         let (method, params) = build_request("spawn", &args).unwrap();
         assert_eq!(method, "agent.spawn");
-        assert_eq!(
-            params["substrate"], "pane",
-            "{provider} defaults to the pane"
-        );
+        assert_eq!(params["substrate"], "pane", "{provider} keeps the pane");
         assert_eq!(
             params["host_mode"], "interactive",
             "{provider} default-interactive"
@@ -842,10 +834,11 @@ fn substrate_rows() {
         assert!(params.get("session_id").is_none(), "{provider} never mints");
     }
 
-    // claude/codex seat a thread by default: the resolved lane rides params,
-    // so dispatch and the thread-only grant read one value, and a thread gets
-    // no host_mode and no mint.
-    for provider in ["claude", "codex"] {
+    // An unflagged spawn takes a thread for every harness, as `cmd_spawn`
+    // does; admission refuses a thread the harness cannot seat. The resolved
+    // lane rides params, so dispatch and the thread-only grant read one value,
+    // and a thread gets no host_mode and no mint.
+    for provider in ["claude", "codex", "gemini", "agy"] {
         let args = vec![
             "wk".to_string(),
             "--harness".to_string(),
@@ -1273,7 +1266,13 @@ fn render_list_rows() {
     // Without a codex probe the key is absent, not null.
     assert!(parsed.get("codex_loaded").is_none());
 
-    let table = render_list_table(&agents, &discovered, Some(3), Some(3), &Value::Null);
+    let table = fno_agents::list_render::render_list_table(
+        &agents,
+        &discovered,
+        Some(3),
+        Some(3),
+        &Value::Null,
+    );
     assert!(table.contains("DISCOVERED LIVE SESSIONS (1, host-local)"));
     // ADDRESS leads and the alias is demoted to LABEL. The alias led this
     // table for its whole life, so it was the leftmost thing a reader
@@ -1356,7 +1355,8 @@ fn render_list_rows() {
             "pr_basis": "no-node",
         }
     ]);
-    let table = render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
     let lines: Vec<&str> = table.lines().collect();
     assert_eq!(
         lines[0].split_whitespace().collect::<Vec<_>>().join(" "),
@@ -1408,7 +1408,8 @@ fn render_list_rows() {
             "pr_basis": "graph-unreadable",
         }
     ]);
-    let table = render_list_table(&agents, &[], Some(2), Some(2), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(2), Some(2), &Value::Null);
     let sub = table.lines().find(|l| l.contains("sub-worker")).unwrap();
     assert!(
         sub.contains("claude-opus-5 (observed; requested glm-5.3-flash[1m])"),
@@ -1452,7 +1453,8 @@ fn render_list_rows() {
             "log_path": null
         }
     ]);
-    let table = render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(3), Some(3), &Value::Null);
     let lines: Vec<&str> = table.lines().collect();
 
     assert!(
@@ -1495,7 +1497,8 @@ fn render_list_rows() {
             "log_path": null
         }
     ]);
-    let table = render_list_table(&agents, &[], Some(43), Some(0), &Value::Null);
+    let table =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(43), Some(0), &Value::Null);
     assert!(
         table.contains("truth probe failed: 0 of 43 rows answered"),
         "outage must be named, got: {table}"
@@ -1505,7 +1508,8 @@ fn render_list_rows() {
         "the statuses must be disclaimed: {table}"
     );
 
-    let healthy = render_list_table(&agents, &[], Some(43), Some(43), &Value::Null);
+    let healthy =
+        fno_agents::list_render::render_list_table(&agents, &[], Some(43), Some(43), &Value::Null);
     assert!(
         !healthy.contains("truth probe failed"),
         "a healthy page carries no outage line: {healthy}"
@@ -1703,7 +1707,7 @@ fn status_rows() {
     failing.failing = true;
     let rows = vec![unobserved, fresh_no_op, stale, failing];
 
-    let payload = degraded_status_payload(&rows);
+    let payload = fno_agents::status_render::degraded_status_payload(&rows);
     assert_eq!(payload["schema_version"], 1);
     assert!(payload["daemon"].is_null());
     assert_eq!(payload["arms"].as_array().map(Vec::len), Some(4));
@@ -1718,7 +1722,7 @@ fn status_rows() {
     assert!(attention.contains(&"a_stale"), "{attention:?}");
     assert!(attention.contains(&"a_failing"), "{attention:?}");
 
-    let payload = degraded_status_payload(&[]);
+    let payload = fno_agents::status_render::degraded_status_payload(&[]);
     let stuck = &payload["stuck_work"];
     assert!(stuck.is_object(), "{stuck}");
     if let Some(err) = stuck.get("error").and_then(|e| e.as_str()) {

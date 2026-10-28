@@ -20,7 +20,13 @@ pub struct GraphTracker {
 impl GraphTracker {
     pub fn new() -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        Self::with_path(crate::org_board::scope::graph_json_path(&cwd))
+        // The standard store resolution (FNO_STATE_DIR, then the configured
+        // state root, then the env-and-HOME default) - the resolver every
+        // other client-side reader rides. The door's Python callers pin the
+        // store with FNO_STATE_DIR in hermetic tests, so the FNO_HOME-only
+        // resolution this used before would read a different store than the
+        // one the Python side pins.
+        Self::with_path(crate::graph_get::graph_path_for(&cwd))
     }
 
     pub fn with_path(path: PathBuf) -> Self {
@@ -159,17 +165,74 @@ impl Tracker for GraphTracker {
     }
 
     fn sidecar(&self, id: &str) -> Result<serde_json::Map<String, Value>, TrackerError> {
-        let mut out = serde_json::Map::new();
-        if let Some(row) = self.find(self.load()?, id) {
-            if let Some(obj) = row.as_object() {
-                for key in super::sidecar::SIDECAR_KEYS {
-                    if let Some(v) = obj.get(*key) {
-                        out.insert((*key).to_string(), v.clone());
-                    }
-                }
+        let Some(row) = self.find(self.load()?, id) else {
+            return Ok(serde_json::Map::new());
+        };
+        // An invalid projection degrades to the empty sidecar (the pydantic
+        // ValidationError case in the Python `_load_from_graph`); a valid one
+        // rides the shared projection with its null-list coercion.
+        Ok(super::sidecar::project_row(row).unwrap_or_default())
+    }
+
+    fn sidecar_all(&self) -> Result<Vec<(String, serde_json::Map<String, Value>)>, TrackerError> {
+        let rows = self.load()?;
+        let mut out = Vec::new();
+        for row in rows {
+            // The default read hides archived residents (the Python
+            // `load_all` filtered them through wire_rows).
+            if row.get("archived_at").is_some_and(|v| !v.is_null()) {
+                continue;
+            }
+            let Some(id) = row.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            // Invalid projections are skipped, like a corrupt per-id file in
+            // the Python scan.
+            if let Some(projected) = super::sidecar::project_row(row) {
+                out.push((id.to_string(), projected));
             }
         }
         Ok(out)
+    }
+
+    fn set_sidecar(
+        &self,
+        id: &str,
+        fields: &serde_json::Map<String, Value>,
+    ) -> Result<PathBuf, TrackerError> {
+        super::sidecar::gate_fields(fields)?;
+        let path = self.path.clone();
+        let mut apply = |rows: &mut Vec<Value>| -> Result<bool, crate::graph_store::StoreError> {
+            let mut found = false;
+            for row in rows.iter_mut() {
+                if row.get("id").and_then(Value::as_str) == Some(id) {
+                    // Provided keys only: a partial sidecar cannot null out
+                    // values it never carried.
+                    if let Some(obj) = row.as_object_mut() {
+                        for (k, v) in fields {
+                            if k != "id" {
+                                obj.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                    found = true;
+                    break;
+                }
+            }
+            Ok(found)
+        };
+        match crate::graph_store::mutate_rows(
+            &path,
+            std::time::Duration::from_secs(5),
+            None,
+            None,
+            &mut apply,
+        ) {
+            // Ok(None): the domain refusal - no row carried this id.
+            Ok(Some(_)) => Ok(path),
+            Ok(None) => Err(TrackerError::NotFound(id.to_string())),
+            Err(e) => Err(TrackerError::Backend(e.to_string())),
+        }
     }
 
     fn close(&self, _id: &str) -> Result<(), TrackerError> {

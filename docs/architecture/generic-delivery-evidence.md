@@ -75,8 +75,8 @@ Observation subjects are excluded, so later business performance cannot rewrite 
 
 ## Producer Boundary
 
-Approval and effect lifecycle state remains owned by `fno.approvals`.
-Delivery consumes the public `evidence_projection` seam and the documented approval and effect events.
+Approval and effect lifecycle state remains owned by the Rust effect gate and approvals module (`crates/fno-agents/src/effect_gate.rs`, `approvals.rs`).
+Delivery consumes the documented approval and effect events and maps each effect state to one evidence result.
 The adapter selects current source events from one coherent snapshot, validates work-order and attempt bindings, and projects facts into uniquely matching required slots.
 Current approval and effect events deduplicate on their producer-owned data.event_id; legacy and test events without that optional identity retain the binding-and-timestamp fallback.
 It never authorizes a decision, dispatches an effect, mutates the effect journal, or declares aggregate success.

@@ -90,6 +90,7 @@ const ADMIT: &[Node] = &[
     command("slot", &["route-slot"], "Delivery-slot resolver over a stdin payload."),
     command("provider-cap", &["provider-cap"], "The provider-cap actor."),
     command("capabilities", &["capabilities"], "One harness's config-independent capability contract."),
+    command("liveness", &["liveness"], "One 'is this worker alive' answer per handle."),
     command("autonomy", &["autonomy"], "Every path that can start a session without an operator."),
 ];
 
@@ -150,6 +151,7 @@ const ORG_CHART: &[Node] = &[
 const ORG: &[Node] = &[
     command("init", &["lead", "init"], "Write the role manifest (step 1 of the lead skill)."),
     command("checkin", &["lead", "checkin"], "One lead beat: gather, print, diff, journal."),
+    command("refresh-canon", &["lead", "refresh-canon"], "Refresh the beat's canon doc, resolving the plugin root itself."),
     command("done", &["lead", "done"], "Expire this role: vacate the row and clear the manifest."),
     command("cancel", &["lead", "cancel"], "Set or clear the cancel signal beside a role manifest."),
     command("escalate", &["lead", "escalate"], "Escalate to the presiding role with work pending."),
@@ -567,6 +569,42 @@ pub fn classify(args: &[OsString]) -> Option<Agents> {
     Some(outcome)
 }
 
+/// The fno-agents argv prefix for each forwarded `agents <word>` the front
+/// execs natively. The front execs from this table, and the Explorer tabs
+/// resolve their public argv through it, so a leaf rename moves both.
+const NATIVE_LEAF: &[(&str, &[&str])] = &[
+    ("top", &["census", "--workers"]),
+    ("org-fold", &["org-fold"]),
+];
+
+/// The leaf prefix for a natively exec'd forwarded word; empty for any other.
+pub fn native_leaf(word: &str) -> &'static [&'static str] {
+    NATIVE_LEAF
+        .iter()
+        .find(|(w, _)| *w == word)
+        .map_or(&[], |(_, leaf)| leaf)
+}
+
+/// The fno-agents argv a public `fno agents ...` argv execs, when the front
+/// execs it natively; None when the front would route it anywhere else.
+pub fn native_leaf_argv(public: &[&str]) -> Option<Vec<OsString>> {
+    let args: Vec<OsString> = public.iter().map(OsString::from).collect();
+    let forwarded = match resolve(args.get(1..)?)? {
+        (Agents::Run(argv), None) => argv,
+        _ => return None,
+    };
+    let leaf = native_leaf(forwarded.get(1)?.to_str()?);
+    if leaf.is_empty() {
+        return None;
+    }
+    Some(
+        leaf.iter()
+            .map(OsString::from)
+            .chain(forwarded[2..].iter().cloned())
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,6 +615,20 @@ mod tests {
 
     fn run(texts: &[&str]) -> Option<(Agents, Option<String>)> {
         resolve(&osv(texts))
+    }
+
+    /// The Explorer tabs' public argv resolves to the leaf the front execs.
+    #[test]
+    fn explorer_tab_argv_resolves_to_its_native_leaf() {
+        assert_eq!(
+            native_leaf_argv(crate::org_model::FLEET_TOP_ARGV),
+            Some(osv(&["census", "--workers", "--machines", "--json"]))
+        );
+        assert_eq!(
+            native_leaf_argv(crate::org_model::ORG_FOLD_ARGV),
+            Some(osv(&["org-fold"]))
+        );
+        assert_eq!(native_leaf_argv(&["agents", "spawn"]), None);
     }
 
     #[test]
@@ -653,6 +705,11 @@ mod tests {
         assert_eq!(
             run(&["org", "-J"]),
             Some((Agents::Run(osv(&["agents", "team", "-J"])), None))
+        );
+        // The canon-refresh row forwards to its lead-family door.
+        assert_eq!(
+            run(&["org", "refresh-canon"]),
+            Some((Agents::Run(osv(&["agents", "lead", "refresh-canon"])), None))
         );
         let rundown = walk(&ROOT)
             .into_iter()

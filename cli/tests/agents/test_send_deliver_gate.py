@@ -121,11 +121,11 @@ def test_deliver_live_codex_daemon_delivered_true(
     monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _mock_rpc)
 
     from fno.agents.dispatch import dispatch_send
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
+    result = dispatch_send(from_name="lead",
         name="codex-agent",
         message="hey codex via PTY",
         provider=None,
@@ -139,7 +139,7 @@ def test_deliver_live_codex_daemon_delivered_true(
 
     # Bus demotion (node x-1f23): a hosted delivery is self-recording (transcript),
     # NOT also queued durable.
-    queued = [m for m in iter_messages() if m.to == "00000001" and m.delivery != "hosted"]
+    queued = [m for m in read_rows() if m["to"] == "00000001" and m.get("delivery") != "hosted"]
     assert queued == [], "hosted delivery must not queue durable"
 
     # The deliver RPC carried the delivered-mail header turn (codex/gemini share
@@ -171,11 +171,11 @@ def test_deliver_live_codex_daemon_delivered_false(
     monkeypatch.setattr(dispatch_mod, "_daemon_rpc", _mock_rpc)
 
     from fno.agents.dispatch import dispatch_send
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
+    result = dispatch_send(from_name="lead",
         name="codex-agent",
         message="hey queued",
         provider=None,
@@ -185,7 +185,7 @@ def test_deliver_live_codex_daemon_delivered_false(
     assert result.delivery == "durable"
     assert result.msg_id.startswith("fmail-")
 
-    assert len({m.id for m in iter_messages() if m.to == "deadbeef"}) == 1
+    assert len({m["id"] for m in read_rows() if m["to"] == "deadbeef"}) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -580,8 +580,7 @@ def test_real_relay_descendant_releases_captured_receipt_pipes(
     """A real double-forked relay cannot delay the hosted CLI-style receipt."""
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents.registry import AgentEntry, write_registry
-    from fno.bus.cursor import scan_unread
-    from fno.bus.log import iter_messages
+    from tests.fixtures.bus_rows import read_rows, scan_unread
 
     write_registry(
         [
@@ -668,17 +667,17 @@ print(f"{result.msg_id} delivered ({result.delivery})")
         assert result.returncode == 0, result.stdout + result.stderr
         assert len(result.stdout.splitlines()) == 1
         assert result.stdout.strip().endswith("delivered (hosted)")
-        audit_rows = list(iter_messages())
+        audit_rows = read_rows()
         # The write-ahead stage row and the hosted receipt share one id.
         assert len(audit_rows) == 2
         staged_row, audit = audit_rows
-        assert staged_row.id == audit.id
-        assert staged_row.delivery is None
-        assert "hello" in staged_row.body
-        assert audit.delivery == "hosted"
-        assert audit.id in result.stdout
-        assert "hello" in audit.body
-        assert scan_unread(audit.to) == []
+        assert staged_row["id"] == audit["id"]
+        assert staged_row.get("delivery") is None
+        assert "hello" in staged_row.get("body", "")
+        assert audit.get("delivery") == "hosted"
+        assert audit["id"] in result.stdout
+        assert "hello" in audit.get("body", "")
+        assert scan_unread(audit["to"]) == []
         # Poll for the CONTENT, not the path. `exists()` goes true the instant the
         # file is created, so a poll on it can read an empty file the relay has not
         # finished writing, and the assert fails on '' instead of "started".
@@ -965,13 +964,6 @@ def test_deliver_live_mcp_row_delivers_via_control_sock(
         )
     ])
 
-    from fno.mcp import client as mcp_client
-    push_calls: list = []
-    monkeypatch.setattr(
-        mcp_client, "send_to_channel",
-        lambda routing_key, envelope: push_calls.append((routing_key, envelope)),
-    )
-
     from fno.agents import dispatch as dispatch_mod
     inject_calls: list = []
 
@@ -985,12 +977,11 @@ def test_deliver_live_mcp_row_delivers_via_control_sock(
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(from_name="lead", 
+    result = dispatch_send(from_name="lead",
         name="claude-mcp", message="fyi built", provider=None, cwd=cwd
     )
 
     assert result.delivery == "hosted"
-    assert len(push_calls) == 0, "the retired MCP fast lane must not fire"
     assert inject_calls == ["abcd1234"], "delivery rides the confirming control.sock lane"
 
 

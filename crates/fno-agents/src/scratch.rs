@@ -259,8 +259,8 @@ const REMEDIES: &[Remedy] = &[
         "JSON-stdout contract: every -J command prints exactly one document, [] on empty; documented envelope keys; --timeout on mail send/ask (rank 1)", "low",
         ["agents", "mail", "send", "--help"], r"--timeout\b"),
     remedy!("ci_probe", "CI state for a commit, main, or PR",
-        "no command today: fno do ci status <sha|main|pr> --watch is the asked remedy; do pr status is PR-keyed and carries no per-check names (rank 4)", "medium",
-        ["help", "do", "--all"], r"(?im)^\s*ci\s"),
+        "existing: fno do ci status <sha|main|pr> [--watch] prints per-check names; do pr status keeps the merge verdict (rank 4)", "medium",
+        ["do", "ci", "--help"], r"(?m)^\s*status <sha"),
     remedy!("pr_threads", "PR review threads: list, reply, resolve",
         "no command today: fno do pr threads list|reply|resolve (rank 11)", "medium",
         ["do", "pr", "--help"], r"(?im)^\s*threads\s"),
@@ -283,8 +283,8 @@ const REMEDIES: &[Remedy] = &[
     remedy!("pr_state", "PR state for several PRs",
         "existing: fno do pr info and fno do pr list already answer this (cause two)", "low", report_only),
     remedy!("graph", "Graph read: subtree walk or batch status",
-        "no command today: fno backlog tree <id> -J [--status !done] (rank 10)", "medium",
-        ["help", "backlog", "--all"], r"(?im)^\s*tree\s"),
+        "existing: fno backlog list in:\"<id>\" -s:done -J walks the whole subtree; fno backlog list n:\"<a>\",\"<b>\" -J reads batch status (quote ids: a bare value is a prefix match)", "low",
+        ["backlog", "list", "--help"], r"(?m)^\s*in:"),
     remedy!("fno_internal", "Import fno internals to probe one function",
         "none: one-off probe targeting code under change", "medium", report_only),
     remedy!("vault_doc", "Vault doc append", "none: vault writes", "medium", report_only),
@@ -1025,7 +1025,7 @@ fn receipt_node(stdout: &str) -> Option<String> {
     obj.get("id").and_then(|v| v.as_str()).map(str::to_string)
 }
 
-fn last_json_object(stdout: &str) -> Option<serde_json::Value> {
+pub(crate) fn last_json_object(stdout: &str) -> Option<serde_json::Value> {
     // Reverse scan: the receipt is the LAST stdout block, and an earlier
     // object (or a nested one) can parse from a prefix only when the JSON
     // extends to end-of-string, which the true last block does.
@@ -1584,7 +1584,7 @@ mod tests {
         assert_eq!(flag(c, "--origin-evidence"), Some("scratch-shape:ci_probe"));
         assert!(c.contains(&"--separate".to_string()), "got {c:?}");
         assert!(
-            fake.calls().iter().any(|c| c == &["help", "do", "--all"]),
+            fake.calls().iter().any(|c| c == &["do", "ci", "--help"]),
             "the remedy probe runs before filing: {:?}",
             fake.calls()
         );

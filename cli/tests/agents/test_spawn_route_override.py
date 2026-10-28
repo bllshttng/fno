@@ -16,6 +16,7 @@ from typing import Any, Dict
 import pytest
 from typer.testing import CliRunner
 
+from fno import rust_binary
 from fno.paths_testing import use_tmpdir
 
 
@@ -415,10 +416,22 @@ def test_route_lane_name_resolves_the_row_axes(monkeypatch) -> None:
         "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
         "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
     }
-    monkeypatch.setattr(
-        "fno.route_slot_client.route_slot_call",
-        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
-    )
+    real_call = rust_binary.command_call
+
+    def _slot_call(command, payload, *a, **k):
+        """The route-slot transport, stubbed at the command door: the lane
+        ask rides the row, every other ask reads empty, and the harness
+        fold answers its built-in default (the native door's semantics are
+        golden-frozen on the Rust side)."""
+        if command == "route-slot":
+            if payload.get("mode") == "lane":
+                return dict(row, found=True)
+            if payload.get("mode") == "resolve":
+                return {"harness": "claude", "source": "builtin-default"}
+            return {"found": False}
+        return real_call(command, payload, *a, **k)
+
+    monkeypatch.setattr("fno.rust_binary.command_call", _slot_call)
     from fno.agents import spawn_overlay_client
 
     asks: list[dict] = []
@@ -590,8 +603,8 @@ def test_partial_route_env_is_refused_with_or_without_account(
     monkeypatch.delenv("FNO_PROVIDER_AUTH", raising=False)
     with pytest.raises(RouteCompositionError, match="without its own credential"):
         resolve_spawn_route(None, partial)
-    # Self-authed but model-less: compose_worker_credentials scrubs every
-    # inherited model var (they are all SCRUB_AUTH_VARS), so the worker would
+    # Self-authed but model-less: the credentials compose scrubs every
+    # inherited model var (they are all on its scrub list), so the worker would
     # ask the foreign endpoint for Claude's default model and fail its first
     # turn behind a "live" receipt (codex P2 on this PR).
     authed = {**partial, "ANTHROPIC_AUTH_TOKEN": "route-key"}
@@ -610,68 +623,13 @@ def test_partial_route_env_is_refused_with_or_without_account(
     assert resolve_spawn_route(None, complete) == complete
 
 
-# ---------------------------------------------------------------------------
-# x-3db9 P2: a route-bearing --account spawn must not scrub the route key at the
-# seam. A vendor may name a SCRUB_AUTH_VARS member (e.g. ANTHROPIC_AUTH_TOKEN) as
-# its api_key_env; resolve_explicit_route reads it from os.environ, so scrubbing
-# first reports a valid route keyless only when --account is also present.
-# Routed spawns are Python-only and the create lane scrubs + applies route-wins
-# itself, so the seam scrub is skipped entirely for them.
-# ---------------------------------------------------------------------------
-
-
-def test_seam_scrub_skips_route_bearing_account_spawn(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import os
-
-    from fno.agents import rust_runtime
-
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "route-key")
-    args = ["spawn", "--name", "w", "hi", "--account", "acct", "--route", "zai,glm-5.2"]
-    rust_runtime._scrub_account_auth_at_seam(args)
-    assert os.environ.get("ANTHROPIC_AUTH_TOKEN") == "route-key"  # not scrubbed
-
-
-def test_dispatch_account_refuses_a_harness_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The cutover carrier must agree with the binary it spawns.
-
-    A codex record's CODEX_HOME handed to a claude spawn authenticates nothing
-    and launches the wrong binary - the exact miss this flag exists to prevent,
-    so the record's harness is verified rather than trusted from the caller.
-    """
-    from types import SimpleNamespace
-
-    from fno.agents import spawn_gate
-
-    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    monkeypatch.setattr(
-        "fno.adapters.providers.loader.load_providers",
-        lambda *a, **k: SimpleNamespace(
-            by_id={"codex-acct": SimpleNamespace(harness="codex")}
-        ),
-    )
-    monkeypatch.setattr(
-        "fno.adapters.providers.dispatch.dispatch_env",
-        lambda *a, **k: pytest.fail("staged an overlay for the wrong harness"),
-    )
-    from fno.agents.cli import agents_app
-
-    result = runner.invoke(
-        agents_app,
-        ["spawn", "--name", "w", "hi", "--harness", "claude", "--once",
-         "--dispatch-account", "codex-acct"],
-    )
-    assert result.exit_code == 2, result.output
-    assert "codex account but the spawn resolves claude" in result.output
-
-
+@pytest.mark.dev_build
 def test_every_spawn_seam_uses_the_one_composition_function(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC5-INV: bg_create, headless_create, and _mesh_env_wrapper all produce
-    exactly what compose_worker_credentials produces - asserted by enumerating
-    the seams against the function, not by three independent orderings.
+    exactly what the `accounts::credentials` compose produces - asserted by
+    enumerating the seams against it, not by three independent orderings.
 
     An account overlay + a vendor route COMPOSE. The route wins
     endpoint+auth+model as one unit; the account keeps CLAUDE_CONFIG_DIR, and
@@ -822,10 +780,22 @@ def test_native_lane_execs_through_the_door(tmp_path: Path, monkeypatch) -> None
         "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
         "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
     }
-    monkeypatch.setattr(
-        "fno.route_slot_client.route_slot_call",
-        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
-    )
+    real_call = rust_binary.command_call
+
+    def _slot_call(command, payload, *a, **k):
+        """The route-slot transport, stubbed at the command door: the lane
+        ask rides the row, every other ask reads empty, and the harness
+        fold answers its built-in default (the native door's semantics are
+        golden-frozen on the Rust side)."""
+        if command == "route-slot":
+            if payload.get("mode") == "lane":
+                return dict(row, found=True)
+            if payload.get("mode") == "resolve":
+                return {"harness": "claude", "source": "builtin-default"}
+            return {"found": False}
+        return real_call(command, payload, *a, **k)
+
+    monkeypatch.setattr("fno.rust_binary.command_call", _slot_call)
     from fno.agents import spawn_lineage
 
     monkeypatch.setattr(
@@ -885,10 +855,22 @@ def test_native_lane_keeps_the_dispatcher_outside_a_session(tmp_path: Path, monk
         "name": "zai-flash", "harness": "claude", "model": "glm-5.3-flash[1m]",
         "route": "zai/glm-5.3-flash[1m]", "effort": "xhigh", "vendor": "zai",
     }
-    monkeypatch.setattr(
-        "fno.route_slot_client.route_slot_call",
-        lambda ask: dict(row, found=True) if ask.get("mode") == "lane" else {"found": False},
-    )
+    real_call = rust_binary.command_call
+
+    def _slot_call(command, payload, *a, **k):
+        """The route-slot transport, stubbed at the command door: the lane
+        ask rides the row, every other ask reads empty, and the harness
+        fold answers its built-in default (the native door's semantics are
+        golden-frozen on the Rust side)."""
+        if command == "route-slot":
+            if payload.get("mode") == "lane":
+                return dict(row, found=True)
+            if payload.get("mode") == "resolve":
+                return {"harness": "claude", "source": "builtin-default"}
+            return {"found": False}
+        return real_call(command, payload, *a, **k)
+
+    monkeypatch.setattr("fno.rust_binary.command_call", _slot_call)
     dispatched: list[dict] = []
 
     def fake_dispatch(**kw):

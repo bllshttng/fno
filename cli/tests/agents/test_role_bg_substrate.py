@@ -47,7 +47,6 @@ def bg_home(tmp_path, monkeypatch, native_backlog_door):
 
     from tests.agents._fake_claude import install_fake_claude
     from fno import paths
-    from fno.projects import resolve as proj_resolve
 
     use_tmpdir(monkeypatch, tmp_path)
     bin_dir = tmp_path / "bin"
@@ -65,14 +64,32 @@ def bg_home(tmp_path, monkeypatch, native_backlog_door):
                 ]
             }
         ))
-    cfg = tmp_path / "config.toml"
-    cfg.write_text(
-        '[work.workspaces.ws1]\nprojects = [{ name = "alpha" }]\n', encoding="utf-8"
+    # The store gate checks that a level-0 stamp names members that RESOLVE as
+    # projects; the resolver is native (the project-family port), so the fixture
+    # registry rides a stub binary pinned over FNO_AGENTS_BIN. Non-project
+    # spawn-overlay shapes exec the real binary (the ladder door rides the
+    # same env pin).
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    real = find_dev_binary() or resolve_binary()
+    fallback = f'exec "{real}" "$@"\n' if real else "exit 1\n"
+    stub = tmp_path / "agents-stub"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$2" = "project" ]; then\n'
+        '  if [ "$3" = "map" ]; then\n'
+        "    echo '{\"alpha\":\"alpha\"}'; exit 0\n"
+        "  fi\n"
+        '  case "$4" in\n'
+        "    alpha) echo alpha; exit 0;;\n"
+        "    *) exit 1;;\n"
+        "  esac\n"
+        "fi\n" + fallback,
+        encoding="utf-8",
     )
-    monkeypatch.setattr(proj_resolve, "SETTINGS_PATH", cfg)
-    proj_resolve._clear_cache()
+    stub.chmod(0o755)
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(stub))
     yield tmp_path
-    proj_resolve._clear_cache()
 
 
 def _spawn(*args: str):
@@ -92,7 +109,7 @@ def _row(name: str) -> AgentEntry:
 
 @pytest.mark.dev_build
 def test_bg_spawn_stamps_the_role(bg_home, monkeypatch) -> None:
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "parent-sess-abc")
@@ -213,7 +230,7 @@ def test_thread_spawn_stamps_the_promotion(bg_home, monkeypatch, harness) -> Non
     import subprocess as _subprocess
     import uuid as _uuid
 
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
     monkeypatch.setattr(
@@ -299,7 +316,7 @@ def test_thread_spawn_stamps_the_promotion(bg_home, monkeypatch, harness) -> Non
     assert row.role_grantor == "human"
     # Resolve the manifest path through the same state-root resolver the arm
     # uses: a dev-build env can pin the state root away from <cwd>/.fno.
-    from fno.lead.state import lead_state_root
+    from fno.paths import space_dir as lead_state_root
 
     manifest = lead_state_root(Path(row.cwd)) / "leads" / "epic-x.md"
     if harness == "opencode":

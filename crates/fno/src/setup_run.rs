@@ -148,6 +148,10 @@ const CODES: &[(&str, &str)] = &[
         "projects_hand_set",
         "move the hand-set work.workspaces.main.projects value into an array of {name, path} tables, then rerun `fno config setup run`",
     ),
+    (
+        "messaging_unfinished",
+        "read the messaging line above, then rerun `fno config setup run --only messaging`",
+    ),
 ];
 
 /// One problem a run or a dry-run hit: which list it sat on, a stable
@@ -355,6 +359,13 @@ pub const STEPS: &[Step] = &[
         effect: "writes review.posture, auto_merge.enabled and auto_merge.grant from the wizard answer or a profile, never a default",
     },
     Step {
+        id: "messaging",
+        layer: Layer::Global,
+        kind: Kind::Human,
+        question: "Set up a chat channel for questions?",
+        effect: "pick BlueBubbles (iMessage), Telegram or Discord; each open question posts there and a reply in its thread answers it",
+    },
+    Step {
         id: "machine-tools",
         layer: Layer::Global,
         kind: Kind::Report,
@@ -451,6 +462,7 @@ pub fn parse_opts(tail: &[OsString]) -> Result<Opts, String> {
     while i < tail.len() {
         let flag = tail[i].to_str().unwrap_or("");
         match flag {
+            "--help" | "-h" => o.help = true,
             "--yes" => o.yes = true,
             "--once" => o.once = true,
             "--list" => o.list = true,
@@ -570,6 +582,7 @@ pub struct Opts {
     json: bool,
     dry_run: bool,
     check: bool,
+    help: bool,
     scan: bool,
     scan_dirs: Vec<String>,
     export: bool,
@@ -578,7 +591,7 @@ pub struct Opts {
 }
 
 /// The argv tail `parse_opts` accepts, repeated for refusals.
-const USAGE: &str = "usage: fno config setup run [--yes] [--once] [--scope global|project|both] [--only <id,...>] [--list] [--json] [--dry-run] [--check] [--scan-repos] [--scan-dirs <dir,...>] [--export] [--out <file>] [--join <file or -]";
+const USAGE: &str = "usage: fno config setup run [--help] [--yes] [--once] [--scope global|project|both] [--only <id,...>] [--list] [--json] [--dry-run] [--check] [--scan-repos] [--scan-dirs <dir,...>] [--export] [--out <file>] [--join <file or ->]";
 
 /// Every non-usage refusal exit: the same code the Python CLI uses for a
 /// bad flag or value.
@@ -1289,37 +1302,77 @@ fn step_permission_rules(rep: &mut Report) {
     );
 }
 
+/// Why a verify read failed, in one short clause: the timeout as
+/// bounded_for words it, else the first line naming a problem and the line
+/// after it (a doctor prints its header lines first), else the command to
+/// re-run, else the caller's own reason.
+fn verify_reason(name: &str, detail: &str) -> String {
+    if detail.contains("timed out after") {
+        return detail.rsplit(": ").next().unwrap_or(detail).to_string();
+    }
+    let lines: Vec<&str> = detail
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let hit = lines.iter().position(|l| {
+        let l = l.to_ascii_lowercase();
+        ["blocker", "issue", "error", "fail", "missing"]
+            .iter()
+            .any(|w| l.contains(w))
+    });
+    match hit {
+        Some(i) => lines[i..lines.len().min(i + 2)]
+            .iter()
+            .map(|l| l.chars().take(200).collect::<String>())
+            .collect::<Vec<_>>()
+            .join(" "),
+        // bounded_for words a command's exit with a leading backtick; any
+        // other detail is a reason the caller already wrote.
+        None if detail.starts_with('`') => format!("run `{name}` to read why"),
+        None => detail.trim().to_string(),
+    }
+}
+
 /// The end-of-run verify: the writing steps claimed work, these bounded
 /// reads say whether the machine holds it. Green names the check in
 /// `verified`; red turns the check into a needs_human row, and the marker
 /// gate upstream withholds on any needs_human, so a red verify never
 /// stamps the run done. Exit stays 0 - the report is the verdict.
 fn run_verify(exe: &Path, loaded: &[String], rep: &mut Report) {
-    fn fold(rep: &mut Report, name: &str, ok: bool) {
-        if ok {
+    fn fold(rep: &mut Report, name: &str, result: Result<String, String>) {
+        let Err(detail) = result else {
             rep.verified.push(name.to_string());
-        } else {
-            let message = format!("verify: {name} failed");
-            rep.rows
-                .push(row("needs_human", "verify_red", message.clone()));
-            rep.needs_human.push(message);
-        }
+            return;
+        };
+        let message = format!("verify: {name} failed ({})", verify_reason(name, &detail));
+        rep.rows
+            .push(row("needs_human", "verify_red", message.clone()));
+        rep.needs_human.push(message);
     }
     const VERIFY_CAP: std::time::Duration = std::time::Duration::from_secs(10);
     if let Some(exe) = exe.to_str() {
         fold(
             rep,
             "fno doctor --blockers",
-            crate::setup_detect::bounded_for(&[exe, "doctor", "--blockers"], VERIFY_CAP).is_ok(),
+            crate::setup_detect::bounded_for(&[exe, "doctor", "--blockers"], VERIFY_CAP),
         );
         fold(
             rep,
             "fno config doctor",
-            crate::setup_detect::bounded_for(&[exe, "config", "doctor"], VERIFY_CAP).is_ok(),
+            crate::setup_detect::bounded_for(&[exe, "config", "doctor"], VERIFY_CAP),
         );
     } else {
-        fold(rep, "fno doctor --blockers", false);
-        fold(rep, "fno config doctor", false);
+        fold(
+            rep,
+            "fno doctor --blockers",
+            Err("executable path is not valid UTF-8".into()),
+        );
+        fold(
+            rep,
+            "fno config doctor",
+            Err("executable path is not valid UTF-8".into()),
+        );
     }
     let serving = crate::digest_overlay::fno_agents_bin()
         .to_str()
@@ -1334,7 +1387,15 @@ fn run_verify(exe: &Path, loaded: &[String], rep: &mut Report) {
                 .map(|s| s == "serving")
         })
         .unwrap_or(false);
-    fold(rep, "fno-agents daemon serving", serving);
+    fold(
+        rep,
+        "fno-agents daemon serving",
+        if serving {
+            Ok(String::new())
+        } else {
+            Err("daemon is not serving".into())
+        },
+    );
     if loaded.is_empty() {
         return;
     }
@@ -1344,7 +1405,15 @@ fn run_verify(exe: &Path, loaded: &[String], rep: &mut Report) {
             .as_ref()
             .map(|ls| ls.iter().any(|l| l == label))
             .unwrap_or(false);
-        fold(rep, &format!("launchd {label}"), ok);
+        fold(
+            rep,
+            &format!("launchd {label}"),
+            if ok {
+                Ok(String::new())
+            } else {
+                Err("service is not loaded".into())
+            },
+        );
     }
 }
 
@@ -1637,6 +1706,7 @@ fn run_check(opts: &Opts, steps: &[&Step], root: &Path, join_proposed: &[Proposa
     let global = crate::config_defaults::global_config_path();
     let project = root.join(".fno").join("config.toml");
     let mut drift: Vec<String> = Vec::new();
+    drift.extend(prerequisite_lines());
     for p in &proposed {
         if p.key.is_empty() {
             continue;
@@ -1764,32 +1834,81 @@ fn run_check(opts: &Opts, steps: &[&Step], root: &Path, join_proposed: &[Proposa
     }
 }
 
+/// The pieces a clean machine lacks before setup can help: one line each,
+/// in the `drift:` shape, with the command that fixes it. They count toward
+/// `--check`'s exit the way drift does.
+fn prerequisite_lines() -> Vec<String> {
+    let detected = crate::setup_detect::detect(Path::new("."), None);
+    let mut rows = Vec::new();
+    let any_harness = detected["harnesses"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|h| h["on_path"] == true));
+    if !any_harness {
+        rows.push(
+            "missing: agent CLI - fix: install Claude Code (https://claude.com/download) or Codex (https://developers.openai.com/codex/cli)"
+                .to_string(),
+        );
+    }
+    let gh = &detected["gh"];
+    if gh["status"] == "unreadable" {
+        rows.push(
+            "missing: GitHub CLI login - fix: `brew install gh`, then `gh auth login`".into(),
+        );
+    } else if gh["missing"]
+        .as_array()
+        .is_some_and(|missing| !missing.is_empty())
+    {
+        rows.push("missing: GitHub CLI scopes repo, workflow - fix: `gh auth refresh -s repo -s workflow`".into());
+    }
+    if detected["tools"]["jq"] != true {
+        rows.push("missing: jq - fix: `brew install jq`".into());
+    }
+    match crate::setup_detect::bounded_output(&["git", "--version"]) {
+        Ok(version) if git_version_at_least(&version, (2, 31)) => {}
+        Ok(version) => rows.push(format!(
+            "outdated: {} (need 2.31 or newer) - fix: `brew install git`",
+            version.trim()
+        )),
+        Err(_) => rows.push("missing: git - fix: `brew install git`".into()),
+    }
+    match crate::digest_overlay::fno_agents_bin_auto() {
+        None => rows.push("missing: fno-agents - fix: `curl -fsSL fno.sh | sh`".into()),
+        Some(agents) => {
+            let dir = agents.parent().unwrap_or(Path::new("."));
+            for stem in ["fno-agents-daemon", "fno-agents-worker"] {
+                if !dir.join(stem).is_file() {
+                    rows.push(format!(
+                        "missing: {stem} beside {} - fix: `curl -fsSL fno.sh | sh`",
+                        agents.display()
+                    ));
+                }
+            }
+        }
+    }
+    rows
+}
+
+fn git_version_at_least(text: &str, minimum: (u32, u32)) -> bool {
+    let Some(version) = text.trim().strip_prefix("git version ") else {
+        return false;
+    };
+    let mut parts = version
+        .split('.')
+        .filter_map(|part| part.parse::<u32>().ok());
+    match (parts.next(), parts.next()) {
+        (Some(major), Some(minor)) => (major, minor) >= minimum,
+        _ => false,
+    }
+}
+
 /// `--list`: the step table the chat skill asks from. `--list --json` is
 /// the machine shape; plain `--list` prints one row per step.
 fn print_list(opts: &Opts) {
     if opts.json {
-        let arr: Vec<serde_json::Value> = STEPS
-            .iter()
-            .map(|s| {
-                json!({
-                    "id": s.id,
-                    "layer": match s.layer {
-                        Layer::Global => "global",
-                        Layer::Project => "project",
-                        Layer::Contributor => "contributor",
-                    },
-                    "kind": match s.kind {
-                        Kind::Act => "act",
-                        Kind::Approve => "approve",
-                        Kind::Report => "report",
-                        Kind::Human => "human",
-                    },
-                    "question": s.question,
-                    "effect": s.effect,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&arr).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&list_json()).unwrap_or_default()
+        );
         return;
     }
     for s in STEPS {
@@ -1801,6 +1920,37 @@ fn print_list(opts: &Opts) {
             s.question
         );
     }
+}
+
+/// The `--list --json` rows. The messaging row also carries each chat
+/// channel and whether this machine has it configured.
+pub(crate) fn list_json() -> serde_json::Value {
+    let arr: Vec<serde_json::Value> = STEPS
+        .iter()
+        .map(|s| {
+            let mut v = json!({
+                "id": s.id,
+                "layer": layer_name(s.layer),
+                "kind": kind_name(s.kind),
+                "question": s.question,
+                "effect": s.effect,
+            });
+            if s.id == "messaging" {
+                match crate::setup_messaging::sink_rows() {
+                    Ok(rows) => {
+                        let me = crate::setup_messaging::machine();
+                        v["channels"] = crate::setup_messaging::channel_states(&rows, &me)
+                            .iter()
+                            .map(|(kind, on)| json!({"type": kind, "configured": on}))
+                            .collect();
+                    }
+                    Err(e) => v["error"] = json!(e),
+                }
+            }
+            v
+        })
+        .collect();
+    serde_json::Value::Array(arr)
 }
 
 fn layer_name(l: Layer) -> &'static str {
@@ -2039,6 +2189,10 @@ pub fn run(tail: &[OsString]) -> i32 {
         Ok(o) => o,
         Err(e) => return refuse(e),
     };
+    if opts.help {
+        println!("{USAGE}");
+        return 0;
+    }
     if opts.export && opts.join.is_some() {
         return refuse(
             "--export and --join are exclusive: export writes a profile, join reads one".into(),
@@ -2297,6 +2451,18 @@ pub fn run(tail: &[OsString]) -> i32 {
             (Layer::Global, "groom-agent") => step_groom_agent(&exe, &mut rep, &mut loaded),
             (Layer::Global, "projects") => step_projects(&exe, &root, &mut rep),
             (Layer::Global, "review-merge") => step_review_merge(&mut rep),
+            (Layer::Global, "messaging") => match crate::setup_messaging::sink_rows() {
+                Ok(rows) => rep.skipped.push(crate::setup_messaging::summary_line(
+                    &rows,
+                    &crate::setup_messaging::machine(),
+                )),
+                Err(e) => {
+                    let message = format!("messaging: {e}");
+                    rep.rows
+                        .push(row("needs_human", "messaging_unfinished", message.clone()));
+                    rep.needs_human.push(message);
+                }
+            },
             (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
             (Layer::Global, "permission-rules") => step_permission_rules(&mut rep),
             (Layer::Global, "join") => {

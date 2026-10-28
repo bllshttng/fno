@@ -114,7 +114,7 @@ pub(crate) fn manifest_path(root: &Path, scope: &str) -> Result<PathBuf, String>
         || scope.contains('\\')
         || scope.contains('\0')
     {
-        return Err(format!("unsafe lead scope for manifest path: {scope:?}"));
+        return Err(format!("unsafe lead scope for manifest path: '{scope}'"));
     }
     // `root` is the state root itself (the repo's space), matching Python's
     // lead_manifest_path: leads sit at <root>/leads, NOT <root>/.fno/leads.
@@ -327,7 +327,7 @@ pub fn lead_state(
 
 /// `repo_cwd` is the CHECKOUT the alias map resolves from; `root` is the
 /// space dir the manifests live under. One path each, on purpose.
-fn lead_state_in_repo(
+pub(crate) fn lead_state_in_repo(
     root: &Path,
     repo_cwd: &Path,
     scope: Option<&str>,
@@ -1263,6 +1263,24 @@ pub fn run_org_vacancies(args: &[String]) -> i32 {
 
 /// `fno-agents lead-state`: print one LeadState as JSON, exit 0.
 pub fn run_lead_state(args: &[String]) -> i32 {
+    // The lead user commands ride this action as arguments (law d-fe66560a).
+    match args.first().map(String::as_str) {
+        Some("--manifest-path") => return crate::lead_reads::run_manifest_path(&args[1..]),
+        Some("--faq") => return crate::lead_reads::run_faq(&args[1..]),
+        Some("--init") => return crate::lead_lifecycle::run_init(&args[1..]),
+        Some("--cancel") => return crate::lead_lifecycle::run_cancel(&args[1..]),
+        Some("--term") => return crate::lead_lifecycle::run_term(&args[1..]),
+        Some("--drain") => return crate::lead_ops::run_drain(&args[1..]),
+        Some("--done") => return crate::lead_ops::run_done(&args[1..]),
+        Some("--escalate") => {
+            if let Err(message) = crate::role_cwd::rebind("escalate") {
+                eprintln!("{message}");
+                return 2;
+            }
+            return crate::lead_ops::run_escalate(&args[1..]);
+        }
+        _ => {}
+    }
     let mut scope: Option<String> = None;
     let mut session: Option<String> = None;
     let mut harness: Option<String> = None;
@@ -1340,7 +1358,9 @@ pub fn run_lead_state(args: &[String]) -> i32 {
 /// law bars a second command for this: an argument of an existing action,
 /// never a new action).
 pub fn run_lead_shape_or_term(args: &[String]) -> i32 {
-    if args.iter().any(|a| a == "--term") {
+    if args.iter().any(|a| a == "--user-command") {
+        crate::lead_reads::run_shape_command(args)
+    } else if args.iter().any(|a| a == "--term") {
         run_lead_term(args)
     } else {
         run_lead_shape(args)

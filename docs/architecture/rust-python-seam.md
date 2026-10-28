@@ -104,6 +104,12 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `yard_overlay.rs:50` | infrastructure | the delegation body line, one resolver per crate enforced here |
 | `yard_overlay.rs:57` | conforming | yard fold read through the command owner, fail-open |
 | `spawn_gate_lanes.rs:123` | conforming | pane listing fallback for the same probe, the pane owner's authoritative enumeration |
+| `doctor/report/collectors.rs deployed_config_keys` | conforming | installed-wheel config keys read through `fno-py`, the wheel's own interpreter; the wheel owns the fact and no native import exists |
+| `doctor/report/collectors.rs installed_pkg_dir` | conforming | installed package dir resolved by the interpreter that owns it, so source-vs-deployed comparison never guesses a site-packages layout |
+| `doctor/report/ops.rs run_session_cost` | conforming | session cost computed by the cost module's own `python3 -m` entry point; the billing arithmetic stays single-implementation in Python |
+| `doctor/mod.rs context_audit_run` | conforming | the context census runs as `python -m fno.context_audit` on the wheel's interpreter, all its inputs in one JSON argument; the census stays Python until its family ports |
+
+The last four rows are the interpreter direction, new with the doctor family port. They exec the wheel's interpreter or `python3`, never the literal porcelain. `report::wheel_python` reads that interpreter from the `fno-py` shebang. So the lint above is silent on them and these rows are the record. Each carries the whole fact set in one spawn: one answer, parsed, no decision split across the boundary. The hook probe's interpreter list in `doctor/report/hooks_probe.rs` launches plugin hook scripts, not facts, so it is no crossing.
 
 ## The refusal of consumer-driven scoping
 
@@ -153,8 +159,8 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 10 | test_dispatch_flags (leaf) | 153 | 0 | 3/- | 0 | 1 |
 | 11 | project (leaf) | 182 | 0 | 4/- | 997 | 2 |
 | 12 | conftest (leaf) | 85 | 0 | 5/- | 0 | 3 |
-| 13 | test_worktree_paths (leaf) | 248 | 0 | 5/- | 0 | 1 |
-| 14 | workspace (leaf) | 70 | 0 | 5/- | 5453 | 4 |
+| 13 | test_worktree_paths (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 248 | 0 | 5/- | 0 | 1 |
+| 14 | workspace (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 70 | 0 | 5/- | 5453 | 4 |
 | 15 | paths_testing (leaf) | 75 | 0 | 6/- | 0 | 2 |
 | 16 | __init__ (leaf) | 279 | 0 | 7/- | 0 | 0 |
 | 17 | paths_cli (leaf) | 187 | 0 | 7/- | 0 | 5 |
@@ -167,7 +173,7 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 24 | context_audit | 952 | 1 | 1/- | 0 | 2 |
 | 25 | hook_config | 104 | 1 | 1/- | 0 | 1 |
 | 26 | lint_shellout_drift | 499 | 1 | 1/- | 0 | 1 |
-| 27 | worktree_gate | 62 | 1 | 1/- | 0 | 2 |
+| 27 | worktree_gate (ported to Rust and deleted 2026-10, gone on next regen) | 62 | 1 | 1/- | 0 | 2 |
 | 28 | mcp | 1726 | 1 | 1/- | 17 | 2 |
 | 29 | phase | 91 | 1 | 1/- | 128 | 5 |
 | 30 | bundle | 159 | 1 | 1/- | 262 | 2 |
@@ -191,25 +197,25 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 48 | agent | 1127 | 1 | 14/- | 247 | 12 |
 | 49 | think_inspect | 616 | 1 | 16/1 | 0 | 7 |
 | 50 | route_cli | 646 | 1 | 24/- | 0 | 6 |
-| 51 | worktree_cli | 1092 | 1 | 29/- | 0 | 9 |
+| 51 | worktree_cli (ported to Rust and deleted 2026-10, gone on next regen) | 1092 | 1 | 29/- | 0 | 9 |
 | 52 | test_cmd | 2397 | 1 | 70/- | 0 | 5 |
 | 53 | env_file | 33 | 2 | 0/- | 0 | 2 |
 | 54 | fleet_state | 220 | 2 | 0/- | 0 | 3 |
 | 55 | projects | 359 | 2 | 0/- | 70 | 3 |
 | 56 | research | 860 | 2 | 1/- | 27 | 6 |
-| 57 | setup_cli | 882 | 2 | 2/- | 0 | 5 |
+| 57 | setup_cli (ported to Rust and deleted 2026-10, gone on next regen) | 882 | 2 | 2/- | 0 | 5 |
 | 58 | schemas | 406 | 2 | 2/- | 9 | 3 |
 | 59 | stub_manifest | 356 | 2 | 3/- | 0 | 3 |
 | 60 | wake | 158 | 2 | 3/- | 20 | 3 |
 | 61 | health_monitor | 895 | 2 | 4/- | 0 | 3 |
 | 62 | control_plane | 47 | 2 | 5/- | 0 | 4 |
 | 63 | ledger_show | 178 | 2 | 5/- | 0 | 7 |
-| 64 | worktree_status | 165 | 2 | 5/- | 0 | 3 |
+| 64 | worktree_status (ported to Rust and deleted 2026-10, gone on next regen) | 165 | 2 | 5/- | 0 | 3 |
 | 65 | relay | 1862 | 2 | 5/- | 810 | 9 |
 | 66 | runtime | 415 | 2 | 6/- | 439 | 5 |
 | 67 | branch_provenance_cache | 84 | 2 | 8/- | 0 | 4 |
 | 68 | config_readback | 280 | 2 | 8/- | 0 | 5 |
-| 69 | worktree | 596 | 2 | 9/- | 791 | 6 |
+| 69 | worktree (ported to Rust and deleted 2026-10, gone on next regen) | 596 | 2 | 9/- | 791 | 6 |
 | 70 | doctor_graph | 86 | 2 | 14/1 | 0 | 4 |
 | 71 | resume | 1075 | 2 | 15/- | 228 | 8 |
 | 72 | law | 189 | 2 | 22/- | 2654 | 5 |
@@ -233,7 +239,7 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 90 | _lazy_group | 502 | 4 | 2/- | 0 | 7 |
 | 91 | user | 62 | 4 | 3/- | 588 | 5 |
 | 92 | loops | 202 | 4 | 4/- | 42 | 8 |
-| 93 | worktree_stranded | 419 | 4 | 16/- | 0 | 8 |
+| 93 | worktree_stranded (ported to Rust and deleted 2026-10, gone on next regen) | 419 | 4 | 16/- | 0 | 8 |
 | 94 | cli | 933 | 4 | 17/- | 1183 | 13 |
 | 95 | recovery | 1438 | 4 | 30/1 | 0 | 8 |
 | 96 | evals | 1557 | 4 | 64/- | 97 | 12 |
@@ -254,7 +260,7 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 111 | review (the review family ported to Rust and deleted 2026-10, gone on next regen) | 2373 | 8 | 49/- | 31086 | 14 |
 | 112 | roles | 2025 | 9 | 0/- | 7 | 6 |
 | 113 | state | 922 | 9 | 12/- | 3396 | 13 |
-| 114 | worktree_paths | 487 | 9 | 17/- | 0 | 11 |
+| 114 | worktree_paths (ported to Rust and deleted 2026-10, gone on next regen) | 487 | 9 | 17/- | 0 | 11 |
 | 115 | scoreboard | 3116 | 9 | 29/1 | 68 | 13 |
 | 116 | pr_watch | 6345 | 9 | 191/1 | 0 | 26 |
 | 117 | dispatch_flags | 203 | 10 | 10/- | 0 | 7 |

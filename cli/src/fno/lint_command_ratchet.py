@@ -56,7 +56,6 @@ NATIVE_SERVED_LEAVES = {
     "agents mail show",
     "mail show",
     "agents roles ls",
-    "roles ls",
     "backlog advance",
     "backlog album",
     "backlog archive",
@@ -100,10 +99,27 @@ NATIVE_SERVED_LEAVES = {
     "backlog session close",
     "backlog session open",
     "backlog session reap-open",
+    # The route spellings answer through the front classifier now; the
+    # Python registry dropped every mount in the route-family port.
+    "config route",
+    "config routing",
+    "doctor route",
+    "config schema",
+    # The observer family (sweep | judge | replay) answers from the native
+    # spawn-overlay door now; the doctor group's typer tree no longer mounts it.
+    "doctor observer judge",
+    "doctor observer replay",
+    "doctor observer sweep",
+    # The ci namespace answers through the native front door (the same
+    # classifier handover as the pr spellings below); it has no click child.
+    "do ci status",
     "do review resolve-level",
     "do review post-dispositions",
     "do review classify",
     "do review invocations",
+    "do research",
+    "do think dispatch",
+    "do think inspect",
     # The pr spellings answer through the native front door now; the wheel's
     # pr group keeps only the watch and stub-manifest mounts, whose leaves the
     # enumerator still reads from the live typer tree.
@@ -137,6 +153,14 @@ NATIVE_SERVED_LEAVES = {
     "do pr sync-canonical",
     "do pr verify",
     "do pr wait",
+    # The project family answers from the native spawn-overlay door now
+    # (init/resolve/map); the config group's click tree no longer mounts it.
+    "config project",
+    # `doctor test` moved with the whole test-command family: the fno-agents
+    # binary serves it natively (test-run doctor) and the click leg is gone.
+    # The map row stays; the mux menu binds the leaf and the Rust
+    # command-baseline ratchet reads the same row.
+    "doctor test",
 }
 
 # Two people hit these gates cold within an hour and both reverse-engineered the

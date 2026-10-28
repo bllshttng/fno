@@ -30,18 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from fno.agents.dispatch_errors import DispatchAskError, RouteRestoreRefused
 from fno.agents.rust_spawn import _codex_thread_spawn, _opencode_serve_spawn
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Literal,
-    Mapping,
-    Optional,
-    Sequence,
-)
-
-if TYPE_CHECKING:
-    from fno.agents.account_env import AccountOverlay
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence
 
 from fno import paths
 from fno.agents import events
@@ -1805,7 +1794,7 @@ def _claude_create_path(
                 )
                 role_declined = True
         if entry.role_level is not None and entry.role_scope:
-            from fno.lead.state import arm_lead_manifest
+            from fno.agents.role import arm_lead_manifest
 
             try:
                 lead_loop_armed = arm_lead_manifest(
@@ -2131,10 +2120,10 @@ def _pick_account_overlay(
     *,
     role: Optional[str] = None,
     route_env: Optional[Mapping[str, str]] = None,
-) -> "Optional[AccountOverlay]":
+) -> Optional[Any]:
     """Consult the picker for a spawn that named no account, or None.
 
-    Returns the full :class:`AccountOverlay` (env AND account_id), because the
+    Returns the overlay's ``env`` AND ``account_id``, because the
     spawn seams stamp the picked id on the row's ``launch_account`` ;
     the env alone drops the one fact re-entry needs.
 
@@ -2146,9 +2135,11 @@ def _pick_account_overlay(
     if picked is None:
         return None
     try:
-        from fno.agents.account_env import resolve_account_overlay
+        from types import SimpleNamespace
 
-        return resolve_account_overlay(picked)
+        from fno.agents.spawn_overlay_client import account_overlay
+
+        return SimpleNamespace(**account_overlay(picked))
     except Exception as exc:  # noqa: BLE001 - picking is advisory; never block a spawn
         print(f"account: default (pick unavailable: {exc})", file=sys.stderr)
         return None
@@ -2234,20 +2225,11 @@ def _account_id_for_env(account_env: Optional[Mapping[str, str]]) -> Optional[st
     if not account_env:
         return None
     try:
-        from fno.adapters.providers.loader import load_providers
-        from fno.agents.account_env import resolve_account_overlay
+        from fno.agents.spawn_overlay_client import spawn_overlay_call
 
-        for record in load_providers().records:
-            if record.harness != "claude":
-                continue
-            try:
-                if dict(resolve_account_overlay(record.id).env) == dict(account_env):
-                    return record.id
-            except Exception:  # noqa: BLE001 - an unresolvable record is not a match
-                continue
-    except Exception:  # noqa: BLE001
+        return spawn_overlay_call({"kind": "account-for-env", "env": dict(account_env)})["account"]
+    except Exception:  # noqa: BLE001 - attribution is best-effort
         return None
-    return None
 
 
 def _revival_answer(name: str, harness: str, resume_session_id: str) -> Optional[dict]:
@@ -2494,7 +2476,7 @@ def dispatch_spawn(
             message, role_level, role_scope, succession, take_over, harness, parent_edge,
             name=name, revive=bool(resume_session_id))
         message = promotion["message"]
-        name = adopt_drawn_name(succession, promotion.get("plan"), name)
+        name = adopt_drawn_name(promotion.get("plan"), name)
 
     # 3b. Codex thread spawns are held by the Rust app-server lane. The Python
     # runtime delegates there instead of silently downgrading to a one-shot.
@@ -2624,7 +2606,7 @@ def dispatch_spawn(
                 )
                 if role_refusal is not None:
                     raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
-                name = adopt_drawn_name(succession, role_plan, name)
+                name = adopt_drawn_name(role_plan, name)
 
             # a revive must come back on the route the row was born with
             # unless this invocation resolved one of its own; raises exit 2 when
@@ -5233,19 +5215,18 @@ def _mux_recipient_transcript(entry: "AgentEntry") -> Optional[Path]:
     """Locate the mux recipient's OWN claude transcript by session uuid, the
     confirm target for :func:`_mux_pane_send`'s ``confirm`` mode (node).
 
-    Reuses the resolver `fno.doctor._find_transcript_for` already used for the
-    self-diagnostic surface rather than writing a second transcript-by-uuid
-    walk (the Rust control.sock lane's own mirror is `find_transcript` in
-    `crates/fno-agents/src/claude_drive.rs`). None when the entry carries no
-    resolvable full session uuid, or no matching transcript file exists --
-    both fail the confirm closed, never open.
+    Reads through :func:`fno.rust_binary.find_transcript`, the native doctor
+    op door (`fno doctor --find-transcript`), the same resolver the Rust
+    control.sock lane mirrors as `find_transcript` in claude_drive.rs. None
+    when the entry carries no resolvable full session uuid, or no matching
+    transcript file exists -- both fail the confirm closed, never open.
     """
-    from fno.doctor import _find_transcript_for
+    from fno.rust_binary import find_transcript
 
     session_id = entry.harness_session_id or entry.session_id
     if not session_id:
         return None
-    return _find_transcript_for(session_id)
+    return find_transcript(session_id)
 
 
 def _mux_content_confirm(
@@ -6610,6 +6591,7 @@ def dispatch_send(
         name=name, message=message, from_name=from_name, name_is_address=True
     )
 
+    from fno import paths
     from fno.time_budget import validate_timeout_budget
 
     validate_timeout_budget(
@@ -6898,14 +6880,10 @@ def dispatch_send(
                 family1_attemptable = family1_live or family1_state == "unknown" or (
                     existing.harness == "claude" and not existing.mux)
 
-                # W3 write-ahead: a recipient we will not attempt live is asleep,
-                # so it cannot drain during a live window, and there is no live
-                # window to crash in. Write its durable placeholder BEFORE
-                # anything else so a sender crash before the recipient wakes does
-                # not lose the message. A recipient we WILL attempt live gets its
-                # body row staged just before the inject (stage_before_live
-                # below): the bus row is the body's only home. A drain firing
-                # mid-inject can print a duplicate; a duplicate beats a drop.
+                # W3 write-ahead: a recipient we will not attempt live is asleep, so a
+                # sender crash before it wakes must not lose the message; its durable
+                # placeholder writes first. The live lane stages its row before the inject
+                # (the bus row is the body's only home): a duplicate beats a drop.
                 if durable_recipient is not None and not family1_attemptable:
                     _write_durable()
                 delivery = "durable"
@@ -6920,7 +6898,6 @@ def dispatch_send(
                     live_miss_reason = f"transcript-{family1_state}"
                 if family1_attemptable:
                     from fno import rust_binary
-                    from fno.bus.log import record_hosted_delivery, stage_before_live
                     from fno.mail.envelope import wrap_fno_mail
 
                     record: dict[str, Any] = dict(
@@ -6939,11 +6916,12 @@ def dispatch_send(
                         word_count=rust_binary.style_word_count(message),
                         subject=mail_ctx.subject,
                     )
-                    # Stage before the inject; a staging failure demotes to the
-                    # durable floor. An empty recipient (mcp-only row) stages nothing.
+                    bus_live = str(paths.bus_dir() / "messages.jsonl")
+                    staged_fields = {k: v for k, v in record.items() if v is not None}
+                    # Stage before the inject: a staging failure demotes to the durable floor; an mcp-only row stages nothing.
                     try:
                         if record["recipient"]:
-                            stage_before_live(**record)
+                            rust_binary.chats_command(["stage", bus_live], staged_fields)
                     except Exception as exc:  # noqa: BLE001 - demote to durable
                         print(f"body row not staged; skipping live delivery: {exc}", file=sys.stderr)
                         live_miss_reason = "stage-failed"
@@ -6961,7 +6939,9 @@ def dispatch_send(
                         if _live_delivered:
                             delivery = "hosted"
                             try:
-                                record_hosted_delivery(**record)
+                                rust_binary.chats_command(
+                                    ["stage", bus_live, "--delivery", "hosted"], staged_fields,
+                                )
                             except Exception as exc:  # noqa: BLE001 - delivery already succeeded
                                 print(f"delivery succeeded; receipt row failed; the staged bus row holds the body; do not retry: {exc}", file=sys.stderr)
                         else:

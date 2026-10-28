@@ -138,7 +138,7 @@ reset_events() {
 # keys the row, so the fixture computes the same root the resolver makes,
 # with the same shim + env rather than re-deriving the slug here.
 space_leads() {  # space_leads <dir> - the leads dir of <dir>'s space
-  (cd "$SBX" && SBX="$1" PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'import os; from pathlib import Path; from fno.lead.state import lead_state_root; print(lead_state_root(Path(os.environ["SBX"])) / "leads")')
+  (cd "$SBX" && SBX="$1" PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'import os; from pathlib import Path; from fno.paths import space_dir; print(space_dir(Path(os.environ["SBX"])) / "leads")')
 }
 LEADS_DIR="$(space_leads "$SBX")"
 mkdir -p "$LEADS_DIR"

@@ -17,7 +17,7 @@ const REVIEW_LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 /// Python `repr(str)` for refusal text: single quotes, backslash and quote
 /// escaped. The refusal strings interpolate `{name!r}`, and Rust's `{:?}`
 /// renders double quotes, so every interpolation goes through this.
-fn py_repr(value: &str) -> String {
+pub(crate) fn py_repr(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
     for ch in value.chars() {

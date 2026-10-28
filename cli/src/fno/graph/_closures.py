@@ -11,7 +11,7 @@ def _strandable_epic_ids(entries: list[dict]) -> set[str]:
     """Open epics (parents) that pass ``children_all_closed`` - closeable now.
     Full contract: docs/architecture/backlog-graph-command-contracts.md
     """
-    from fno.graph._reconcile import _reopen_outranks_child_closes, children_all_closed
+    from fno.graph._reconcile import _reopen_holds_epic, children_all_closed
 
     children_by_parent: dict[str, list[dict]] = {}
     for e in entries:
@@ -27,7 +27,7 @@ def _strandable_epic_ids(entries: list[dict]) -> set[str]:
             parent is not None
             and not parent.get("completed_at")
             and children_all_closed(parent, kids)
-            and not _reopen_outranks_child_closes(parent, kids)
+            and not _reopen_holds_epic(parent, kids)
             and not (
                 parent.get("plan_path")
                 and not (parent.get("pr_number") or parent.get("additional_prs"))

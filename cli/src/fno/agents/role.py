@@ -179,7 +179,7 @@ def _graph_index() -> Optional[dict[str, dict]]:
     index: without it a containment or agreement check would silently degrade to
     "not contained" / "not in the graph" on a machine it never read.
     """
-    from fno.tracker.metadata import read_entries
+    from fno.graph.api import read_entries
 
     try:
         entries = read_entries("agents.role")
@@ -205,11 +205,28 @@ def _canonical_project(name: str) -> Optional[str]:
     `a` sit as two live roles over one project (the guard compares scopes by
     equality), and naming both at once would read as a two-project portfolio
     instead of one project named twice.
+
+    The resolver is native (``fno-agents spawn-overlay project resolve``); any
+    failure degrades to None exactly as the in-process import once did.
     """
     try:
-        from fno.projects.resolve import resolve_project_name
+        import subprocess
 
-        return resolve_project_name(name)
+        from fno.rust_binary import resolve_binary
+
+        binary = resolve_binary()
+        if binary is None:
+            return None
+        proc = subprocess.run(
+            [str(binary), "spawn-overlay", "project", "resolve", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            return None
+        return proc.stdout.strip()
     except Exception:
         return None
 
@@ -456,29 +473,84 @@ def _locked_identity(rows, row) -> Any:
     return rows[answer["index"]] if answer.get("matched") else None
 
 
-def emit_role_vacated(
+def lead_loop_enabled() -> bool:
+    """Resolve ``config.lead.enabled``, fail-safe to OFF like every gate here."""
+    try:
+        from fno.config import load_settings
+
+        return bool(load_settings().lead.enabled)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def arm_lead_manifest(
+    scope: str,
+    harness_session_id: str,
     *,
-    scope: Optional[str],
-    level: Optional[int],
-    holder: Optional[str],
-    holder_session: Optional[str],
-    grantor: Optional[str],
-    cause: str,
-    successor: Optional[str] = None,
-) -> None:
-    """Journal one role leaving its holder, after the registry write commits.
+    owner_cwd: Optional[str] = None,
+    role_level: Optional[int] = None,
+    role_scope: Optional[str] = None,
+    role_grantor: Optional[str] = None,
+    model: Optional[str] = None,
+    harness: Optional[str] = None,
+    row: Any = None,
+) -> Optional[str]:
+    """Arm the scope's lead manifest the moment a role becomes authoritative.
 
-    An departure and a role lost to a bug are indistinguishable from outside
-    until one of these lines lands, so the team answers from the record, never
-    from testimony.
+    The Rust creator (``spawn-team`` op ``arm``) checks the session id and
+    writes; with the lead loop off it removes a stale manifest and answers
+    None. A row fills every field the caller left out: the holder's own
+    harness and requested model, never the arming caller's. Every refusal
+    raises ValueError, which the arming callers degrade on.
     """
-    from fno.agents import events
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
-    events.emit(
-        "agent_role_vacated", scope=scope, level=level, holder=holder,
-        holder_session=holder_session, grantor=grantor, cause=cause,
-        successor=successor,
+    if row is not None:
+        owner_cwd = owner_cwd or getattr(row, "cwd", None)
+        role_level = role_level if role_level is not None else getattr(row, "role_level", None)
+        role_scope = role_scope if role_scope is not None else getattr(row, "role_scope", None)
+        role_grantor = role_grantor if role_grantor is not None else getattr(row, "role_grantor", None)
+        model = model or getattr(row, "requested_model", None)
+        harness = harness or getattr(row, "harness", None)
+    try:
+        answer = spawn_overlay_call({
+            "kind": "spawn-team", "op": "arm", "scope": scope, "lead_enabled": lead_loop_enabled(),
+            "harness_session_id": harness_session_id, "owner_cwd": owner_cwd,
+            "role_level": role_level, "role_scope": role_scope, "role_grantor": role_grantor,
+            "model": model, "harness": harness,
+        })
+    except SpawnOverlayUnavailable as exc:
+        raise ValueError(f"lead manifest: {exc}") from exc
+    if answer.get("error"):
+        raise ValueError(answer["error"])
+    return answer.get("path")
+
+
+def lead_manifest_call(op: str, **payload: Any) -> dict[str, Any]:
+    """One round-trip to the Rust lead manifest ops (``spawn-overlay`` kind
+    ``lead``); an unreachable binary answers ``{"error": ...}``."""
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
+
+    try:
+        return spawn_overlay_call({"kind": "lead", "op": op, **payload})
+    except SpawnOverlayUnavailable as exc:
+        return {"error": str(exc)}
+
+
+def remove_lead_manifest(
+    scope: str,
+    *,
+    owner_cwd: Optional[str] = None,
+    expected_harness_session_id: Optional[str] = None,
+) -> bool:
+    """Best-effort cleanup under the manifest lock; a manifest naming another
+    session than ``expected_harness_session_id`` belongs to a successor and
+    stays. Live registry authority never depends on this."""
+    answer = lead_manifest_call(
+        "remove", scope=scope, owner_cwd=owner_cwd or "",
+        expected_session=expected_harness_session_id,
     )
+    return bool(answer.get("removed"))
 
 
 def settle_spawn_role(
@@ -518,9 +590,9 @@ def settle_spawn_role(
     return [updates.get(i, row) for i, row in enumerate(rows)], outcome, vacated
 
 
-def adopt_drawn_name(succession: bool, plan: Optional[dict], name: str) -> str:
-    """Adopt a succession settle's draw: the machine names the successor."""
-    return (plan or {}).get("draw", {}).get("name") or name if succession else name
+def adopt_drawn_name(plan: Optional[dict], name: str) -> str:
+    """Adopt the settle's draw: a succession, or a fresh grant's --name redraw."""
+    return (plan or {}).get("draw", {}).get("name") or name
 
 
 def plan_spawn_role(
@@ -760,8 +832,6 @@ def reclaim_role(handle: Optional[str] = None) -> dict[str, Any]:
         armed = False
         unarmed_reason = ""
         try:
-            from fno.lead.state import arm_lead_manifest
-
             armed = (
                 arm_lead_manifest(
                     scope,
@@ -805,8 +875,6 @@ def reclaim_role(handle: Optional[str] = None) -> dict[str, Any]:
         return rows
 
     update_registry(_reclaim)
-    from fno.lead.state import remove_lead_manifest
-
     remove_lead_manifest(
         scope,
         owner_cwd=getattr(holder_snapshot, "cwd", None),
@@ -981,8 +1049,6 @@ def promote_existing_session(handle: str, scopes: list[str]) -> dict[str, Any]:
             )
 
         try:
-            from fno.lead.state import arm_lead_manifest
-
             manifest_path = arm_lead_manifest(
                 scope,
                 target.harness_session_id or target.cc_session_id or target.short_id or "",
@@ -1028,8 +1094,6 @@ def promote_existing_session(handle: str, scopes: list[str]) -> dict[str, Any]:
     if receipt.get("vacated_scope") and not _same_territory(
         receipt["vacated_scope"], scope
     ):
-        from fno.lead.state import remove_lead_manifest
-
         remove_lead_manifest(
             receipt["vacated_scope"],
             owner_cwd=vacated_owner_cwd,

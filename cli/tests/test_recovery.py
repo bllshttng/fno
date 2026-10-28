@@ -655,7 +655,7 @@ class TestMissionComplete:
         assert recovery.mission_complete(cand) is False
 
     def test_think_name_ignores_a_foreign_manifest(self, monkeypatch, tmp_path):
-        # spawn_think dispatches with --cwd on the node's CANONICAL root, where
+        # The think dispatch spawns with --cwd on the node's CANONICAL root, where
         # an unrelated /target session's manifest can sit; a think worker writes
         # none of its own. Reading that manifest would answer about x-1111 and
         # nudge a design pass that actually finished.
@@ -1061,10 +1061,10 @@ class TestNotifyManualResume:
 
     def test_notify_sends_os_notification_with_command(self, monkeypatch):
         from types import SimpleNamespace
-        from fno.notify import _impl as notify_impl
+        import fno.rust_binary as rust_binary
         sent: dict = {}
-        monkeypatch.setattr(notify_impl, "send_notification",
-                            lambda title, body: sent.update(title=title, body=body) or (0, ""))
+        monkeypatch.setattr(rust_binary, "notify_operator",
+                            lambda title, body, pointer="": sent.update(title=title, body=body) or (0, ""))
         monkeypatch.setattr(recovery, "_resume_command", lambda *a: "claude --resume U-1")
         recovery._notify_manual_resume(self._cand(),
                                        SimpleNamespace(id="claude-secondary"), "U-1")

@@ -1,0 +1,13 @@
+{
+  "reasons": [
+    "cpu_instrument_unreadable",
+    "cpu_share_undecidable",
+    "fleet_cpu_share",
+    "max_live",
+    "no_wait",
+    "no_wait_mutex_held",
+    "provider_cap",
+    "ram_floor",
+    "swap_pressure"
+  ]
+}

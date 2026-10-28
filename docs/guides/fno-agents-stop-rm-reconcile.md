@@ -47,12 +47,12 @@ To override claude's refusal:
 ```bash
 fno agents session rm worker-claude --force
 # WARN: claude rm failed but --force given; removing registry only.
-# Supervisor session is orphaned; `fno agents registry adopt <full-harness-session-id> --cross-project`
+# Supervisor session is orphaned; `fno agents registry adopt <full-harness-session-id>`
 # brings it back under management.
 # removed: worker-claude
 ```
 
-`--force` drops the registry row regardless of claude's exit code, leaving the supervisor session orphaned. Bring it back with `fno agents registry adopt <full-harness-session-id> --cross-project`, which the stderr WARN spells out. For one-step recovery into an existing canonical or replacement checkout, use `fno agents session resume <full-harness-session-id> --cross-project --cwd <existing-checkout>`. A pruned worktree's uncommitted contents are not reconstructed. Do not reap it by hand: that spends the resume handle and buys nothing.
+`--force` drops the registry row regardless of claude's exit code, leaving the supervisor session orphaned. Bring it back with `fno agents registry adopt <full-harness-session-id>`, which the stderr WARN spells out. For one-step recovery into an existing canonical or replacement checkout, use `fno agents session resume <full-harness-session-id> --cwd <existing-checkout>`. A pruned worktree's uncommitted contents are not reconstructed. Do not reap it by hand: that spends the resume handle and buys nothing.
 
 The same ordering holds for **codex**, which tears down its own session record before the registry row is dropped:
 
@@ -201,7 +201,7 @@ A different harness is a handoff doc plus `/fno:agent handoff <doc> <provider>`,
 
 ## Forensics: events.jsonl
 
-Every lifecycle command writes a structured event to `~/.fno/events.jsonl`:
+Every lifecycle command writes a structured event to the daemon's own journal, `~/.fno/agents/events.jsonl`, not the global `~/.fno/events.jsonl` the hooks write. Both journals are store-backed, so read them with `fno doctor event find`, which covers every journal:
 
 - `agent_stopped` — `{name, provider, claude_exit?, short_id?, timed_out?, lock_timeout?}`
 - `agent_removed` — `{name, provider, claude_exit?, force, registry_changed, short_id?, lock_timeout?, error?}`
@@ -209,11 +209,13 @@ Every lifecycle command writes a structured event to `~/.fno/events.jsonl`:
 - `agent_attached` — `{name, provider, short_id?, claude_exit?, error?}`
 - `agent_attach_refused` — `{name, provider, reason}` (codex / gemini path)
 
-Use these to drive a daemon that watches for stuck or idle agents:
+Find one agent's stops in the last day:
 
 ```bash
-tail -f ~/.fno/events.jsonl | jq 'select(.kind == "agent_stopped" or .kind == "reconcile_done")'
+fno doctor event find agent_stopped --field name=<agent> --since 1d
 ```
+
+The quiet-recovery and watch-expiry arms read both journals: watches from the global one, and `agent_stopped`, `agent_exited` and `inside_leg_completed` from the daemon's.
 
 ## Concurrency notes
 

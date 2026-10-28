@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::server::portal_reach::portal_replay_placement;
+use crate::server::portal_reach::{portal_replay_placement, row_answers_key};
 
 // ---- (x-8f9d) portals: the one thread pane becomes an addressable set --
 
@@ -996,6 +996,7 @@ fn thread_pane_tier_rows() {
         vec![
             "fno".to_string(),
             "agents".into(),
+            "session".into(),
             "peek".into(),
             "codex-row".into(),
             "--follow".into()
@@ -1899,6 +1900,11 @@ async fn portal_reach_on_a_witnessed_claude_row_needs_no_plan() {
     row.claude_session_uuid = Some(uuid.into());
     core.agents = vec![row];
 
+    // A loaded runner can list the child before its argv reads back.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while core.live_attach_argv("deadbee1").is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     assert!(
         core.live_attach_argv("deadbee1").is_some(),
         "the live argv witnesses the row"
@@ -3045,7 +3051,7 @@ fn a_vanishing_portal_says_so_and_names_its_row() {
     core.close_pane_reasoned(b_seat, "closed by operator");
     let loss = collect_until_portal_closed(&mut rx, "portal 1").expect("the loss notice arrived");
     assert!(
-        loss.contains("deadbee2") && loss.contains("closed by operator"),
+        loss.contains("target-b") && loss.contains("closed by operator"),
         "the notice names the row and the reason: {loss:?}"
     );
 
@@ -3728,6 +3734,48 @@ fn title_claim_rows() {
     assert!(
         !core.agent_rows().iter().any(|r| r.portal == Some(0)),
         "no row carries the marker, the row named vellum? least of all"
+    );
+    core.reap_pane(seat);
+}
+
+// A portal reached by a title saves the row's id, never the title. After a
+// restart the unnamed thread wears a new title and a resumed session id;
+// the saved key still finds it through the resume lineage, with no
+// register, and the generic title does not unclaim the seat.
+#[test]
+fn portal_saves_the_row_id_and_finds_it_after_a_restart() {
+    set_attach_program(&["/bin/cat"]);
+    let (mut core, client_id, _p1, mut rx) = thread_core();
+    let mut row = bg_row("Claude Code", "/tmp/seen", Some("deadbee1"));
+    row.harness_session_id = Some("sess-a".into());
+    core.agents = vec![row];
+    core.command(client_id, portal_reach_cmd("Claude Code", 0));
+    let seat = core.portals.get(&0).expect("portal 0 open").seat;
+    assert_eq!(
+        core.portals[&0].row_key, "sess-a",
+        "the id is saved, not the title"
+    );
+    drain_notices(&mut rx);
+
+    let mut resumed = bg_row("tidy-otter", "/tmp/seen", Some("deadbee7"));
+    resumed.harness_session_id = Some("sess-b".into());
+    resumed.predecessor_session_ids = vec!["sess-a".into()];
+    core.agents = vec![resumed];
+    assert_eq!(
+        core.portal_marker(Some(seat)),
+        Some(0),
+        "the lineage answers the saved id"
+    );
+    assert!(
+        !row_answers_key(&core.agents[0], "tidy-otter"),
+        "a name never answers a stored key on a row with an id"
+    );
+
+    feed_seat_title(&mut core, seat, "✳ Claude Code");
+    core.follow_portal_viewer_titles();
+    assert_eq!(
+        core.portals[&0].row_key, "sess-a",
+        "a title no row goes by keeps the id"
     );
     core.reap_pane(seat);
 }

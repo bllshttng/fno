@@ -169,6 +169,11 @@ pub fn tick_pages(
         // knows question ids and no-ops on unknown ones), so note items stay
         // on the projection and the mux until the note-closing path ships.
         .filter(|i| !i.id.starts_with("note-"))
+        // A copy of another machine's question gets no page here: the asking
+        // machine writes and settles that page in the synced folder, and a
+        // second writer would race it. It stays in all_open below, so its page
+        // is never closed as gone.
+        .filter(|i| i.host.is_none())
         .collect();
     let all_open: std::collections::HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
     let mut tick = SinkTick::default();
@@ -1257,6 +1262,43 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
             skip = http.skip.clone();
         }
         detail.extend(http.detail);
+        // The chat lane: post, close and read replies on the chat rows this
+        // machine owns. A reply lands as an attention_answer row, so the
+        // answers stage below clears it in this same beat.
+        mark("chat");
+        let (chat_sinks, chat_refused, chat_skipped) = crate::attention_chat::load_chat_sinks(&cwd);
+        for r in &chat_refused {
+            detail.push(format!("chat: refused sink {}: {}", r.name, r.reason));
+        }
+        detail.extend(chat_skipped);
+        let mut http_seams: Vec<crate::attention_chat::CurlHttp> = chat_sinks
+            .iter()
+            .map(|_| crate::attention_chat::CurlHttp)
+            .collect();
+        let mut transports: Vec<Box<dyn crate::attention_chat::ChatTransport + '_>> = chat_sinks
+            .iter()
+            .zip(http_seams.iter_mut())
+            .map(|(s, h)| crate::attention_chat::transport_for(s, h))
+            .collect();
+        let mut lanes: Vec<(
+            &crate::attention_chat::ChatSink,
+            &mut dyn crate::attention_chat::ChatTransport,
+        )> = chat_sinks
+            .iter()
+            .zip(transports.iter_mut())
+            .map(|(s, t)| (s, &mut **t as &mut dyn crate::attention_chat::ChatTransport))
+            .collect();
+        let chat = crate::attention_chat::tick_chat(
+            &items,
+            &mut lanes,
+            &attention_dir().unwrap_or_else(|_| dir.join(".state")),
+            started + std::time::Duration::from_secs(ATTENTION_TICK_BUDGET_S),
+        );
+        acted += chat.acted();
+        if skip.is_none() {
+            skip = chat.skip.clone();
+        }
+        detail.extend(chat.detail);
         // The mux pass: every unsuperseded attention_answer row, whatever its
         // sink, drives one reply ladder (clear while open, mail, resume,
         // team). Runs with no sinks configured - the answer rows are the
@@ -1657,6 +1699,7 @@ impl SinkIo for RealIo {
             sink_name,
             answer,
             "file_edit",
+            "attention_arm",
             &format!("file:{}", item.id),
         )?;
         Ok(receipt)
@@ -1703,6 +1746,7 @@ pub(crate) fn append_answer_row(
     sink: &str,
     answer: &crate::attention_file::FileAnswer,
     authority: &str,
+    mapped_by: &str,
     attested_by: &str,
 ) -> Result<(String, bool), String> {
     let (option, words, done) = match answer {
@@ -1765,11 +1809,6 @@ pub(crate) fn append_answer_row(
             false,
         ) => String::new(),
         (_, true) => "Recorded: superseded by an earlier answer".to_string(),
-    };
-    let mapped_by = if authority == "file_edit" {
-        "attention_arm"
-    } else {
-        "needs_door"
     };
     let mut fields = serde_json::Map::new();
     fields.insert("item_id".into(), serde_json::Value::from(item_id));

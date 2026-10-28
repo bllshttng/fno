@@ -183,9 +183,9 @@ operator-override.sh
 # frontend-craft gate (frontend-craft-gate plan). infer-has-ui.sh and
 # resolve-plan-executor.sh are thin CLIs invoked via `bash <path>` from the
 # stop hook / skill bodies. Both delegate the locked surface matcher to the
-# in-package module fno.executor._surface (the SINGLE source of truth, ported
-# from the retired infer-task-executor.sh) and have no user-facing
-# `fno <command>` surface of their own.
+# native executor-route door behind the fno-agents binary (the SINGLE source
+# of truth since the worker-family port deleted the Python leg) and have no
+# user-facing `fno <command>` surface of their own.
 infer-has-ui.sh
 resolve-plan-executor.sh
 
@@ -251,7 +251,7 @@ rotate-append-log.sh
 # Cross-references a worktree path against ~/.fno/agents/registry.json for
 # its real session name + live/exited status. Invoked by
 # scripts/lib/worktree-lifecycle.sh's `status` case, which IS the wrapped
-# entry point (`fno workspace worktree status` -> cli/src/fno/worktree_cli/cli.py);
+# entry point (`fno workspace worktree status` -> crates/fno/src/worktree_door.rs);
 # a second wrapper here would be a third opinion on one question.
 # tests/test-worktree-status.sh runs it directly. Pure helper, no CLI of its own.
 worktree-status.py
@@ -305,3 +305,10 @@ keeper-reap.sh
 # docs/hooks-fail-open.md) and by tests/hooks/test_hook_budget.sh; the bound
 # and the cache are pure library, no fno command wraps them.
 hook-budget.sh
+
+# The synthetic-process load generator behind tests/lib/test_loadgen.sh:
+# spawns the throwaway `fno-load-...` processes that orphan-sweep and
+# process-hygiene fixtures reap. Driven by `bash <path>` from its test; no
+# fno command wraps it. (Its only cli/src mention used to be a comment in
+# the deleted Python orphans module, which is what satisfied this lint.)
+loadgen.sh

@@ -6,9 +6,10 @@
 //! included, which the Python command never carried (the driver set
 //! `TARGET_TURN_MODE` inline; ruling d-b7ef7d2d puts the flag here).
 //!
-//! The parity contract is `tests/golden/target_start/`, captured from the
-//! Python leg before its deletion, asserted by `tests/target_start_parity.rs`
-//! through the `target-start` door. Every receipt, refusal and timeout keeps
+//! The parity contract was `tests/golden/target_start/`, captured from the
+//! Python leg, asserted by `tests/target_start_parity.rs` until the
+//! orienter's python twin deleted and the suite went with it. Every receipt,
+//! refusal and timeout keeps
 //! the Python text; the 540s deadline and its per-stage grace keep their
 //! values. The claim-acquiring leg stays the init helper's (one acquire per
 //! session, unchanged); this module only reads claims, plus the one
@@ -35,6 +36,7 @@ use std::time::Instant;
 
 use crate::backlog::target_binding::{self, Phase, Request};
 use crate::paths::AgentsHome;
+use crate::state::RegistryEntry;
 
 /// Below the Claude Bash tool's 600s call cap, well below the 10+ minute
 /// stalls this bound targets. Keep the Python value.
@@ -369,6 +371,20 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
         request_codex_native_handoff(&repo_root, &node, &base, deadline);
     }
 
+    // Claim the node BEFORE the slow allocation steps (ensure, setup hook,
+    // init): the 2026-10-17 incident killed init at the 540s bound and left a
+    // half-made worktree with no claim and no manifest, so a re-dispatch read
+    // the node free and no receipt could name a holder. The holder string
+    // matches the init helper's own, and a same-holder acquire re-asserts,
+    // so the helper's later claim stays the single ownership story. Released
+    // when start itself fails before init runs; afterwards the claim belongs
+    // to the helper.
+    let early_claim = if start_node.is_some() {
+        Some(early_node_claim(&node, &repo_root)?)
+    } else {
+        None
+    };
+
     // 1. Create/reuse the worktree off origin/main via the ensure command (the
     //    one create/reuse path). Forward the current session's harness so a
     //    claude cold-start lands harness-native; no ambient marker omits it
@@ -386,16 +402,24 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
     let ens =
         crate::bounded_cmd::output_with_timeout_result(ensure_cmd, stage_timeout_secs(deadline));
     let Ok(ens) = ens else {
+        release_early_claim(&early_claim);
         return Err(refuse(
             "fno do target start: worktree ensure failed (step: ensure): could not run fno",
         ));
     };
     if ens.status.code().is_none() {
-        stage_timeout_exit("ensure", "Nothing was claimed.");
+        release_early_claim(&early_claim);
+        let note = if early_claim.is_some() {
+            "The early node claim was released; nothing was claimed."
+        } else {
+            "Nothing was claimed."
+        };
+        stage_timeout_exit("ensure", note);
     }
     let ens_out = String::from_utf8_lossy(&ens.stdout).trim().to_string();
     let ens_err = String::from_utf8_lossy(&ens.stderr).to_string();
     if !ens.status.success() || ens_out.is_empty() {
+        release_early_claim(&early_claim);
         return Err(refuse(format!(
             "fno do target start: worktree ensure failed (step: ensure): {}",
             if ens_err.trim().is_empty() {
@@ -445,17 +469,18 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
         match remote_base_ref(&repo_root, false) {
             Some(b) => b,
             None => {
+                release_early_claim(&early_claim);
                 return Err(Fail {
                     message: String::new(),
                     code: 1,
-                })
+                });
             }
         }
     };
 
     // Bind an existing manifest (idempotent re-run: never double-claim or
     // error) or fall through to a fresh init against this tree.
-    if bind_worktree(
+    match bind_worktree(
         &node,
         &wt_path,
         &base_label,
@@ -464,8 +489,13 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
         args.beastmode,
         args.no_merge,
         args.steps,
-    )? {
-        return Ok(0);
+    ) {
+        Ok(true) => return Ok(0),
+        Ok(false) => {}
+        Err(f) => {
+            release_early_claim(&early_claim);
+            return Err(f);
+        }
     }
     // 3. Init the session FROM the worktree (binds owner_cwd, claims the node
     //    exactly once - the helper's one-call claim).
@@ -832,11 +862,12 @@ fn read_node_claim(
     (state, rec)
 }
 
-/// True iff `holder` is THIS session's identity (any claim state). Four arms,
+/// True iff `holder` is THIS session's identity (any claim state). Five arms,
 /// mirroring init-target-state.sh's `claim_owner_id`: the driver-assigned run
-/// id, the codex thread id, the resolved self identity, then durable session
-/// pid + machine. An uncapturable own pid reads as not-ours (park /
-/// re-acquire, never assume ownership).
+/// id, the codex thread id, the resolved self identity, the launch-window
+/// handover this session was minted for, then durable session pid + machine.
+/// An uncapturable own pid reads as not-ours (park / re-acquire, never
+/// assume ownership).
 fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     for env_var in ["TARGET_SESSION_ID", "CODEX_THREAD_ID"] {
         if let Ok(own) = std::env::var(env_var) {
@@ -848,10 +879,28 @@ fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     let home = AgentsHome::from_env();
     let owned =
         crate::spawn_context::resolve_self_identity(&|k| std::env::var(k).ok(), None, None, &home);
-    if let Some(sid) = owned.session_id.map(|s| s.trim().to_string()) {
-        if !sid.is_empty() && holder == format!("target-session:{sid}") {
+    let own_sid = owned
+        .session_id
+        .clone()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(sid) = &own_sid {
+        if holder == format!("target-session:{sid}") {
             return true;
         }
+    }
+    // A launch-window claim names its worker, not its session: the spawn
+    // wrote `spawn-handover:<worker>` before this session existed. The
+    // registry row the worker name joins to answers with a session id, and
+    // only an exact match with this session's own adopts the claim - the
+    // same proof init's bash fallback trusts. Without this arm the start
+    // pre-check classifies its own beneficiary as foreign and refuses
+    // before init's adopt fallback can run (measured live 2026-10-26).
+    if let Some(worker) = holder.strip_prefix(crate::claim_commands::HANDOVER_HOLDER_PREFIX) {
+        let entries = crate::state::load_registry(&home.registry_json())
+            .map(|r| r.entries)
+            .unwrap_or_default();
+        return handover_row_is_ours(&entries, worker, own_sid.as_deref());
     }
     if rec.pid_unavailable {
         return false;
@@ -861,6 +910,18 @@ fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     matches!(own_pid, Some(p) if rec.pid == Some(p as i32)) && same_machine
 }
 
+/// True when the registry rows carry a row named `worker` whose session id
+/// equals this session's own. One join: name -> row -> session id, the same
+/// join the liveness reader does for the same holder shape. Rows come from
+/// the caller, so the join stays testable without a store.
+fn handover_row_is_ours(entries: &[RegistryEntry], worker: &str, own_sid: Option<&str>) -> bool {
+    let Some(own) = own_sid.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    entries
+        .iter()
+        .any(|e| e.name == worker && e.harness_session_id.as_deref().map(str::trim) == Some(own))
+}
 /// `(verdict, state word, record)` for `node:<id>` from THIS session's view:
 /// verdict in {ours, foreign_live, dead_predecessor, free}. Liveness is
 /// pid-based, so a busy owner whose TTL lapsed still reads live. Read-only;
@@ -902,8 +963,8 @@ fn print_foreign_holder_park(node_id: &str, rec: &crate::claims::ClaimRecord, wt
     eprintln!(
         "fno do target start: node {node_id} is held by a live session\n\
          \x20 {holder} (pid={pid}, host={host}).\n\
-         \x20 Refusing to share its worktree at {wt} (would corrupt a shared git index).\n\
-         \x20 If this is your session, cd {wt} to continue it;\n\
+         \x20 Refusing to displace a live claim (a shared git index would corrupt both sessions).\n\
+         \x20 If this is your session, cd {wt} to resume from there;\n\
          \x20 otherwise wait for it to release the claim, or pick another node.",
         holder = rec.holder,
         pid = rec.pid.map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
@@ -963,8 +1024,9 @@ fn bind_worktree(
             if mnode != node {
                 return Err(refuse(format!(
                     "fno do target start: {} belongs to node {mnode}, not {node}; \
-                     refusing to run in place under another node's session. Cancel \
-                     it (fno do target cancel) or isolate a worktree.",
+                     refusing to run in place under another node's session. End that \
+                     session from its own harness (touch .fno/.target-cancelled in its \
+                     worktree) or isolate a worktree.",
                     manifest.display()
                 )));
             }
@@ -978,8 +1040,9 @@ fn bind_worktree(
         if find_node(mnode, None).is_none() {
             return Err(refuse(format!(
                 "fno do target start: node {mnode} is not in the backlog graph \
-                 (superseded or removed); refusing to re-acquire its claim. Cancel \
-                 the stale session (fno do target cancel) or pick a live node."
+                 (superseded or removed); refusing to re-acquire its claim. End the \
+                 stale session (touch .fno/.target-cancelled in its worktree) or pick \
+                 a live node."
             )));
         }
     }
@@ -1074,14 +1137,7 @@ fn claim_ttl_ms() -> i64 {
 /// acquire; the native `acquire` emits its own audit event.
 fn reacquire_node_claim(node_id: &str, wt_path: &Path) -> Result<(), Fail> {
     let key = format!("node:{node_id}");
-    let home = AgentsHome::from_env();
-    let owned =
-        crate::spawn_context::resolve_self_identity(&|k| std::env::var(k).ok(), None, None, &home);
-    let Some(session_id) = owned
-        .session_id
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    else {
+    let Some(holder) = session_holder() else {
         // Not the user-cancel sentinel (an identity refusal is not a user
         // cancel), and not the predecessor's manifest either: it is
         // write-once per session with the init hook as sole owner. The
@@ -1091,7 +1147,6 @@ fn reacquire_node_claim(node_id: &str, wt_path: &Path) -> Result<(), Fail> {
              harness session could not be proven, so no successor claim was written."
         )));
     };
-    let holder = format!("target-session:{session_id}");
     let (durable_pid, _harness) =
         crate::spawn_context::session_identity_ambient(std::process::id());
     let mut opts = crate::claims::AcquireOpts {
@@ -1127,6 +1182,63 @@ fn reacquire_node_claim(node_id: &str, wt_path: &Path) -> Result<(), Fail> {
              is unreadable or contended; refusing to risk a duplicate claim. Clear \
              it (fno agents claim release {key} --force -R <why>) and retry."
         ))),
+    }
+}
+
+/// The `(key, holder)` start holds while the allocation steps run.
+type EarlyClaim = (String, String);
+
+/// This session's claim holder string (`target-session:<id>`), or None when
+/// the identity cannot be proven: the same resolution the re-acquire path
+/// refuses on, so the holder both paths write is spelled once.
+fn session_holder() -> Option<String> {
+    let home = AgentsHome::from_env();
+    let owned =
+        crate::spawn_context::resolve_self_identity(&|k| std::env::var(k).ok(), None, None, &home);
+    owned
+        .session_id
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(|sid| format!("target-session:{sid}"))
+}
+
+/// Acquire `node:<id>` under THIS session before any slow allocation step.
+/// A foreign live claim parks (before ensure pays its cost); an ours claim
+/// passes through unchanged, and a dead predecessor is re-acquired: the same
+/// acquire the successor-takeover path uses. Returns the `(key, holder)` the
+/// caller releases on a pre-init failure.
+fn early_node_claim(node_id: &str, park_hint: &Path) -> Result<EarlyClaim, Fail> {
+    let (verdict, _state_word, rec) = classify_node_claim(node_id);
+    if verdict == "foreign_live" {
+        print_foreign_holder_park(
+            node_id,
+            rec.as_ref().expect("foreign_live carries its record"),
+            park_hint,
+        );
+        return Err(Fail {
+            message: String::new(),
+            code: 1,
+        });
+    }
+    if verdict == "ours" {
+        let holder = rec.as_ref().map(|r| r.holder.clone()).unwrap_or_default();
+        return Ok((format!("node:{node_id}"), holder));
+    }
+    // free or a dead predecessor: the same acquire the successor-takeover
+    // path uses; it refuses when this session's identity cannot be proven.
+    reacquire_node_claim(node_id, park_hint)?;
+    let holder = session_holder().unwrap_or_default();
+    Ok((format!("node:{node_id}"), holder))
+}
+
+/// Best-effort release of the early claim: start failed before init ran, so
+/// the claim must not outlive this run for its full TTL. Non-strict: a lost
+/// race or a foreign re-take releases as a no-op.
+fn release_early_claim(claim: &Option<EarlyClaim>) {
+    if let Some((key, holder)) = claim {
+        if !holder.is_empty() {
+            let _ = crate::claims::release(key, holder, None, None);
+        }
     }
 }
 
@@ -1196,8 +1308,8 @@ fn warn_steps_dropped(manifest: &Path) {
     eprintln!(
         "WARNING: --steps did NOT take - the manifest at {} is write-once and \
          does not carry turn_mode: steps. The stop gate keeps its normal \
-         looping posture for this session. To run steps mode, cancel this \
-         session (fno do target cancel) and re-start the node with --steps.",
+         looping posture for this session. To run steps mode, end this \
+         session (touch .fno/.target-cancelled) and re-start the node with --steps.",
         manifest.display()
     );
 }
@@ -2126,11 +2238,19 @@ fn run_bounded_init(
             "fno do target start: could not resolve the init door (own binary)",
         ));
     };
+    // The progress file names the init step in flight for the timeout
+    // receipt: the door and the bash helper append markers when the variable
+    // is set, and this parent reads the last line after the kill. Temp +
+    // pid keeps concurrent starts apart; this process removes it.
+    let progress =
+        std::env::temp_dir().join(format!("fno-init-progress-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&progress);
     let mut cmd = Command::new(self_exe);
     use std::os::unix::process::CommandExt;
     cmd.arg("target-init")
         .args(init_args)
         .current_dir(wt_path)
+        .env("FNO_INIT_PROGRESS_FILE", &progress)
         .process_group(0)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -2169,19 +2289,41 @@ fn run_bounded_init(
         }
     };
     if timed_out {
-        stage_timeout_exit(
-            "init",
-            &format!(
-                "Claim state is unknown: check fno agents claim status node:{node}. \
-                 A rerun of fno do target start {node} resumes idempotently."
+        let note = match last_progress_line(&progress) {
+            Some(line) => format!(
+                "Last init step: {line}. Claim state is unknown: check fno agents \
+                 claim status node:{node}. A rerun of fno do target start {node} \
+                 resumes idempotently (the half-made worktree is reused, not \
+                 recreated)."
             ),
-        );
+            None => format!(
+                "No init step marker was recorded. Claim state is unknown: check \
+                 fno agents claim status node:{node}. A rerun of fno do target \
+                 start {node} resumes idempotently."
+            ),
+        };
+        let _ = std::fs::remove_file(&progress);
+        stage_timeout_exit("init", &note);
     }
+    let _ = std::fs::remove_file(&progress);
     let code = match status.code() {
         Some(c) => c,
         None => status.signal().map(|s| 128 + s).unwrap_or(1),
     };
     Ok(code)
+}
+
+/// The last non-empty marker line in the init progress file, bounded, so the
+/// receipt names the step instead of dumping the log. None when the file is
+/// absent, unreadable, or empty.
+fn last_progress_line(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let line = text.lines().rev().map(str::trim).find(|l| !l.is_empty())?;
+    let mut bounded: String = line.chars().take(120).collect();
+    if bounded.len() < line.len() {
+        bounded.push_str("...");
+    }
+    Some(bounded)
 }
 
 /// Init the session FROM an existing worktree: binds owner_cwd and claims the
@@ -2238,14 +2380,16 @@ fn init_from_worktree(
     let code = run_bounded_init(&init_args, wt_path, deadline, node)?;
     if code != 0 {
         if created_this_run && !in_place {
-            // One receipt line the run currently lacks: the refused init
-            // leaves a fresh tree holding an init-time manifest and no claim,
-            // which a later reader cannot tell from a live session. The tree
-            // is NOT deleted - deletion is the more dangerous mistake.
+            // One receipt line the run currently lacks: a refused init leaves
+            // a fresh tree a later reader cannot always tell from a live
+            // session. The tree is NOT deleted - deletion is the more
+            // dangerous mistake. The receipt leads with the resume path and
+            // keeps archive as the explicit discard.
             eprintln!(
                 "fno do target start: target init failed (step: init, exit {code}); \
-                 worktree at {} is created but unclaimed; reclaim with: fno agents \
-                 workspace worktree archive {}",
+                 worktree at {} is created. A rerun of fno do target start {node} \
+                 resumes in this tree (idempotent, nothing is recreated); to \
+                 discard it instead: fno agents workspace worktree archive {}",
                 wt_path.display(),
                 wt_path.display()
             );
@@ -2274,4 +2418,58 @@ fn init_from_worktree(
     );
     eprintln!("cd {} to continue the pipeline.", wt_path.display());
     Ok(0)
+}
+
+#[cfg(test)]
+mod start_progress_tests {
+    use super::*;
+
+    #[test]
+    fn last_progress_line_reads_last_marker_missing_file_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("progress.txt");
+        std::fs::write(&path, "begin: a\n\nbegin: b\n").unwrap();
+        assert_eq!(last_progress_line(&path), Some("begin: b".to_string()));
+        let missing = dir.path().join("absent.txt");
+        assert_eq!(last_progress_line(&missing), None);
+    }
+
+    #[test]
+    fn empty_file_reads_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.txt");
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(last_progress_line(&path), None);
+    }
+
+    #[test]
+    fn long_marker_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.txt");
+        let long = "begin: step-name-that-keeps-going".repeat(6);
+        std::fs::write(&path, "done: a\n".to_string() + &long + "\n").unwrap();
+        let got = last_progress_line(&path).unwrap();
+        assert!(got.starts_with("begin: step-name"));
+        assert!(got.ends_with("..."));
+        assert_eq!(got.chars().count(), 123);
+    }
+
+    #[test]
+    fn a_handover_row_joins_by_name_and_own_session() {
+        let named = RegistryEntry {
+            name: "t-w".into(),
+            harness_session_id: Some("sid-1".into()),
+            ..Default::default()
+        };
+        let other = RegistryEntry {
+            name: "lead-x".into(),
+            harness_session_id: Some("sid-2".into()),
+            ..Default::default()
+        };
+        let entries = vec![named, other];
+        assert!(handover_row_is_ours(&entries, "t-w", Some("sid-1")));
+        assert!(!handover_row_is_ours(&entries, "t-w", Some("sid-2")));
+        assert!(!handover_row_is_ours(&entries, "t-w", None));
+        assert!(!handover_row_is_ours(&entries, "absent", Some("sid-1")));
+    }
 }

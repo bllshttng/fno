@@ -99,7 +99,7 @@ pub fn receipt(name: &str, result: &Value) -> Option<String> {
                     adopt_hint = Some(format!(
                         "\nthe {harness} session record was the resume handle; \
                          the transcript stays on disk.\nreverse it with: \
-                         fno agents adopt {adopt_key} --cross-project"
+                         fno agents adopt {adopt_key}"
                     ));
                 }
             }

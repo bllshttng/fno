@@ -62,7 +62,6 @@ no-flag: cli/src/fno/graph/triage.py cmd_validate
 no-flag: cli/src/fno/graph/triage.py cmd_apply
 no-flag: cli/src/fno/graph/triage.py cmd_projects
 no-flag: cli/src/fno/inbox/operator_turns.py cmd_ack
-no-flag: cli/src/fno/lead/cli.py drain_cmd
 no-flag: cli/src/fno/mail/cli.py cmd_hold_release
 no-flag: cli/src/fno/pr/cli.py coverage_publish
 no-flag: cli/src/fno/pr/cli.py info
@@ -70,14 +69,10 @@ no-flag: cli/src/fno/pr/cli.py list_cmd
 no-flag: cli/src/fno/pr/cli.py review_hold
 no-flag: cli/src/fno/pr/cli.py evidence_required
 no-flag: cli/src/fno/pr/cli.py bind_created
-no-flag: cli/src/fno/resume/cli.py write_cmd
-no-flag: cli/src/fno/resume/cli.py validate_cmd
-no-flag: cli/src/fno/resume/cli.py show_cmd
 no-flag: cli/src/fno/review/cli.py classify
 no-flag: cli/src/fno/review/cli.py resolve_level
 no-flag: cli/src/fno/route_cli.py set_cmd
 no-flag: cli/src/fno/route_cli.py unset_cmd
-no-flag: cli/src/fno/setup_cli.py plan_cmd
 no-flag: cli/src/fno/state/cli.py show
 no-flag: cli/src/fno/state/cli.py set_field
 no-flag: cli/src/fno/state/cli.py init
@@ -85,10 +80,6 @@ no-flag: cli/src/fno/state/cli.py archive
 no-flag: cli/src/fno/stub_manifest.py cmd_reconcile_validate
 no-flag: cli/src/fno/stub_manifest.py cmd_reconcile_finalize
 no-flag: cli/src/fno/target_cli.py request_self_review_cmd
-no-flag: cli/src/fno/worker/cli.py blueprint
-no-flag: cli/src/fno/worker/cli.py ship
-no-flag: cli/src/fno/worker/cli.py external
-no-flag: cli/src/fno/worker/cli.py reconcile
 format: cli/src/fno/decide/cli.py list_cmd
 format: cli/src/fno/plan/cli.py brief
 format: cli/src/fno/decide/cli.py backlog_decisions (no command decorator, census skips it)

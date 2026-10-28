@@ -976,8 +976,22 @@ fn cached_snapshot(state: &StoreState) -> Result<(String, Arc<Vec<Value>>), Stor
 }
 
 /// A publish drops the read cache; the next SQLite read fills it again.
+/// The publish is also the wake nudge: the drain daemon watches the
+/// sentinel's mtime, and a backlog mutation touches it to wake the drain
+/// loop sooner than the poll floor (a latency optimization - the poll floor
+/// is the correctness guarantee). Best-effort, never wedges the mutation.
 fn refresh_cache_after_publish(state: &StoreState, _outcome: &graph_store::MutateOutcome) {
     *state.cache.write().unwrap_or_else(|e| e.into_inner()) = None;
+    let path = crate::active_backlog::nudge_sentinel_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::File::options()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .and_then(|f| f.set_modified(std::time::SystemTime::now()))
+        .ok();
 }
 
 fn serve_client(
@@ -2531,30 +2545,76 @@ pub(crate) fn session_append(
             && r.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
     });
     if let Some(prior) = prior {
-        // merge_grant joins the fill-if-absent set: the first resolved posture
-        // owns the row, and a re-stamp cannot rewrite a recorded refusal into
-        // a grant in place.
-        for key in ["ended_at", "started_at", "effort", "merge_grant"] {
-            if let Some(v) = row.get(key) {
-                if !v.is_null() && !prior.as_object().unwrap().contains_key(key) {
-                    prior
-                        .as_object_mut()
-                        .unwrap()
-                        .insert(key.to_string(), v.clone());
-                }
-            }
-        }
-        let merged = merge_observed_model(prior.get("observed_model"), row.get("observed_model"));
-        if let Some(merged) = merged {
-            prior
-                .as_object_mut()
-                .unwrap()
-                .insert("observed_model".to_string(), merged);
-        }
+        fill_prior_row(prior, &row);
         return Ok((true, false));
     }
     rows.push(row);
     Ok((true, true))
+}
+
+/// The fill-if-absent write one matched row takes from a re-stamp: the four
+/// keys fill only when absent (merge_grant is among them so a re-stamp cannot
+/// rewrite a recorded refusal into a grant in place), and observed_model
+/// merges. Shared by `session_append` and `session_fill_open` so the two
+/// cannot drift.
+fn fill_prior_row(prior: &mut Value, row: &Value) {
+    for key in ["ended_at", "started_at", "effort", "merge_grant"] {
+        if let Some(v) = row.get(key) {
+            if !v.is_null() && !prior.as_object().unwrap().contains_key(key) {
+                prior
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(key.to_string(), v.clone());
+            }
+        }
+    }
+    let merged = merge_observed_model(prior.get("observed_model"), row.get("observed_model"));
+    if let Some(merged) = merged {
+        prior
+            .as_object_mut()
+            .unwrap()
+            .insert("observed_model".to_string(), merged);
+    }
+}
+
+/// Fill an EXISTING matching row and never append: the release-time stamp
+/// names a window the acquire stamp opened, so a release whose node carries
+/// no matching row records nothing rather than inventing a closed one (a
+/// blueprint or rolled-back claim released after a failure must not gain an
+/// execute completion it never earned). Returns (node found, row filled).
+pub(crate) fn session_fill_open(
+    entries: &mut Vec<Value>,
+    node_id: &str,
+    row: Value,
+) -> Result<(bool, bool), StoreError> {
+    let Some(idx) = find_exact(entries, node_id) else {
+        return Ok((false, false));
+    };
+    let phase = row
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let session_id = row
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let obj = entries[idx].as_object_mut().unwrap();
+    let Some(rows) = obj.get_mut("sessions").and_then(Value::as_array_mut) else {
+        return Ok((true, false));
+    };
+    let prior = rows.iter_mut().find(|r| {
+        r.get("phase").and_then(Value::as_str) == Some(phase.as_str())
+            && r.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
+    });
+    match prior {
+        Some(prior) => {
+            fill_prior_row(prior, &row);
+            Ok((true, true))
+        }
+        None => Ok((true, false)),
+    }
 }
 
 /// The value a re-stamp should write to observed_model, or None to keep
@@ -4067,4 +4127,115 @@ mod tests {
         let fresh = render_trigger_state(graph.clone(), None);
         assert!(render_due(&fresh, &current, None, RENDER_SETTLE));
     }
+}
+/// Live pids advertising a store keeper whose graph tree (file AND parent
+/// dir) is gone: the sweep's candidate scan, factored out so a test can
+/// census the SAME probe before the sweep acts. The parent-dir conjunct
+/// keeps the scan off a live test - a keeper spawned against a graph file
+/// not written yet has an existing parent; every measured orphan lost its
+/// whole tree at once.
+pub fn orphaned_keeper_pids() -> Vec<i32> {
+    let me = std::process::id() as i32;
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-eo", "pid=,command="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let mut pids: Vec<i32> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let line = line.trim();
+        let mut parts = line.splitn(2, char::is_whitespace);
+        let pid = match parts.next().map(|p| p.parse::<i32>()) {
+            Some(Ok(p)) => p,
+            _ => continue,
+        };
+        let cmd = parts.next().unwrap_or("");
+        if pid == me || !cmd.contains("--store-keeper") || !cmd.contains("--graph") {
+            continue;
+        }
+        let toks: Vec<&str> = cmd.split_whitespace().collect();
+        let Some(pos) = toks.iter().position(|t| *t == "--graph") else {
+            continue;
+        };
+        let Some(graph) = toks.get(pos + 1) else {
+            continue;
+        };
+        let graph_path = Path::new(graph);
+        if graph_path.exists() || graph_path.parent().is_some_and(|p| p.exists()) {
+            continue;
+        }
+        pids.push(pid);
+    }
+    pids
+}
+
+/// True when `pid` is a live, non-zombie process. `kill(pid, 0)` cannot be
+/// the probe: a zombie answers it, so a keeper that died on TERM under a
+/// live parent reads as a survivor. An unreadable table reads alive.
+fn keeper_alive(pid: i32) -> bool {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+    else {
+        return true;
+    };
+    let stat = String::from_utf8_lossy(&out.stdout);
+    let stat = stat.trim();
+    if stat.is_empty() {
+        return false;
+    }
+    !stat.starts_with('Z')
+}
+
+/// SIGTERM every live store keeper whose --graph tree is gone, wait
+/// `timeout_secs`, SIGKILL the rest, and return the pids that refused to
+/// die. Covers the populations the spawn ledger is blind to: keepers a CLI
+/// subprocess spawned, and keepers that outlived a session with no reaper
+/// wired (measured 2026-09-04: 8-10 live keepers against deleted pytest
+/// graph paths). The kill decision is the graph path's existence, never
+/// the command line - canonical and leaked keepers share an argv. Every
+/// probe and kill is guarded: an unreadable process table degrades to a
+/// no-op, never an error. Ported from graph/store.py: the only
+/// production caller there was the dying test_cmd's smoke runner, and the
+/// sweep now rides the keeper's own module so conftest can door-call it.
+pub fn sweep_orphaned(timeout_secs: f64) -> Vec<i32> {
+    let candidates = orphaned_keeper_pids();
+    for pid in &candidates {
+        unsafe {
+            libc::kill(*pid, libc::SIGTERM);
+        }
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs_f64(timeout_secs);
+    let mut pending: Vec<i32> = candidates
+        .iter()
+        .copied()
+        .filter(|p| keeper_alive(*p))
+        .collect();
+    while !pending.is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        pending.retain(|p| keeper_alive(*p));
+    }
+    for pid in &pending {
+        unsafe {
+            libc::kill(*pid, libc::SIGKILL);
+        }
+    }
+    let mut survivors: Vec<i32> = pending.into_iter().filter(|p| keeper_alive(*p)).collect();
+    survivors.sort();
+    survivors.dedup();
+    survivors
+}
+
+/// The `keeper-sweep` door's body: SIGTERM/SIGKILL every store keeper whose
+/// --graph tree is gone, printing the survivor count. One optional argv
+/// element overrides the wait seconds (default 15).
+pub fn run_keeper_sweep(args: &[String]) -> i32 {
+    let secs = args
+        .first()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(15.0);
+    let survivors = sweep_orphaned(secs);
+    println!("{}", survivors.len());
+    0
 }

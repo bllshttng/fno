@@ -375,12 +375,11 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
         // else its cwd). Resolving from the caller's cwd minted
         // `internal/<basename>/` strays whenever a promoted session's shell
         // had cd'd once, so a scope with no row refuses instead.
-        let root = scope_project_root(&scope, home).ok_or_else(|| {
+        let directory = scope_handoffs_dir(&scope, home).ok_or_else(|| {
             format!(
                 "no registry row carries role_scope {scope:?}; refusing to key the handoff dir on the cwd basename"
             )
         })?;
-        let directory = resolve_handoffs_dir(None, None, Path::new(&root), home);
         let suffix = format!("-{key}.md");
         let mut best: Option<(std::time::SystemTime, String)> = None;
         if let Ok(rd) = std::fs::read_dir(&directory) {
@@ -433,6 +432,14 @@ fn render_handoff(directory: &Path, filename: &str, name_only: bool) -> String {
     } else {
         directory.join(filename).display().to_string()
     }
+}
+
+/// The handoffs dir a role scope's canon doc lives in. Every canon-doc reader
+/// resolves through this, so a reader cannot miss a doc `config paths
+/// handoff --scope` finds.
+pub(crate) fn scope_handoffs_dir(scope: &str, home: Option<&Path>) -> Option<PathBuf> {
+    let root = scope_project_root(scope, home)?;
+    Some(resolve_handoffs_dir(None, None, Path::new(&root), home))
 }
 
 /// The scope's project root: the newest registry row carrying this exact
@@ -538,7 +545,7 @@ fn live_lookup(cwd: &Path, keys: &[&str]) -> Option<Result<toml::Value, ()>> {
     crate::agents_config::config_lookup(cwd, keys).map(Ok)
 }
 
-fn cfg_str(cwd: &Path, keys: &[&str]) -> Option<String> {
+pub(crate) fn cfg_str(cwd: &Path, keys: &[&str]) -> Option<String> {
     live_lookup(cwd, keys)
         .and_then(|r| r.ok())
         .and_then(|v| v.as_str().map(str::to_string))
@@ -561,11 +568,48 @@ fn state_dir_resolved(cwd: &Path) -> Result<PathBuf, String> {
 /// to the default state root. No `paths.ledger_json` override is consulted:
 /// the journals stopped anchoring on the ledger's folder.
 pub fn global_events_json(cwd: &Path) -> PathBuf {
+    state_root(cwd).join("events.jsonl")
+}
+
+/// The resolved state root, or the default one when `state_dir` is relative
+/// or unresolvable.
+fn state_root(cwd: &Path) -> PathBuf {
     state_dir_resolved(cwd)
         .ok()
         .filter(|d| d.is_absolute())
         .unwrap_or_else(|| crate::decision_index::default_state_path(""))
-        .join("events.jsonl")
+}
+
+/// Python `paths.graph_json()`: the graph anchor under the state root,
+/// templates in `state_dir` resolved.
+pub(crate) fn graph_json(cwd: &Path) -> PathBuf {
+    crate::state_layout::graph_anchor(&state_root(cwd))
+}
+
+/// Python `paths.handoffs_dir()`: the `paths.handoffs_dir` override, else
+/// `<vault>/internal/<project>/handoffs` with obsidian on, else
+/// `<state root>/handoffs/<project>`.
+pub(crate) fn handoffs_dir(cwd: &Path) -> PathBuf {
+    if let Some(raw) = cfg_str(cwd, &["paths", "handoffs_dir"]) {
+        if let Ok(path) = resolve_override_path(&raw) {
+            return path;
+        }
+    }
+    let repo = crate::paths::worktree_repo_root(cwd);
+    let vault = vault_root(cwd).ok();
+    let project =
+        crate::plans_path::project_folder(Some(&repo), vault.is_some()).unwrap_or_else(|_| {
+            repo.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+    match vault {
+        Some(v) => Path::new(&v)
+            .join("internal")
+            .join(project)
+            .join("handoffs"),
+        None => state_root(cwd).join("handoffs").join(project),
+    }
 }
 
 /// Python `paths.ledger_json()`: the cross-project ledger, one row per
@@ -606,6 +650,65 @@ pub fn worktrees_base(cwd: &Path) -> PathBuf {
         .filter(|d| d.is_absolute())
         .unwrap_or_else(|| crate::decision_index::default_state_path(""))
         .join("worktrees")
+}
+
+/// Python `paths.postmortems_dir()`: the `paths.postmortems_dir` override,
+/// else `<state_dir>/postmortems`.
+pub fn postmortems_dir(cwd: &Path) -> PathBuf {
+    if let Some(raw) = cfg_str(cwd, &["paths", "postmortems_dir"]) {
+        if let Ok(p) = resolve_override_path(&raw) {
+            return p;
+        }
+    }
+    state_dir_resolved(cwd)
+        .ok()
+        .filter(|d| d.is_absolute())
+        .unwrap_or_else(|| crate::decision_index::default_state_path(""))
+        .join("postmortems")
+}
+
+/// Python `paths.observer_reports_dir(project_id=...)`: the explicit
+/// override, else the configured Obsidian vault's
+/// `internal/<owner>/observer-reports/`, else
+/// `<state_dir>/observer-reports/<owner>/`. The owner (the skill-id
+/// namespace prefix) pins the report to the project that OWNS the evaluated
+/// skill, so a sweep launched from any cwd lands under internal/<owner>/
+/// instead of the ambient checkout's basename. A caller-supplied id with a
+/// path escape falls back to `fno` (never escapes internal/<project>/).
+pub fn observer_reports_dir(cwd: &Path, project_id: Option<&str>) -> PathBuf {
+    if let Some(raw) = cfg_str(cwd, &["paths", "observer_reports_dir"]) {
+        if let Ok(p) = resolve_override_path(&raw) {
+            return p;
+        }
+    }
+    let owner = project_id
+        .filter(|id| !id.contains('/') && !id.contains(".."))
+        .unwrap_or("fno");
+    if let Some(vault) = obsidian_vault(cwd) {
+        return vault.join("internal").join(owner).join("observer-reports");
+    }
+    state_dir_resolved(cwd)
+        .ok()
+        .filter(|d| d.is_absolute())
+        .unwrap_or_else(|| crate::decision_index::default_state_path(""))
+        .join("observer-reports")
+        .join(owner)
+}
+
+/// The Obsidian vault root from config (`obsidian.enabled` + `obsidian.vault`,
+/// `~`-expanded), `plan._paths.vault_root()`'s read as paths_cli serves it.
+fn obsidian_vault(cwd: &Path) -> Option<PathBuf> {
+    let enabled = live_lookup(cwd, &["obsidian", "enabled"])
+        .and_then(|r| r.ok())
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let vault = cfg_str(cwd, &["obsidian", "vault"])?;
+    Some(crate::plans_path::expanduser(
+        &crate::plans_path::expandvars(&vault),
+    ))
 }
 
 /// One `paths.<key>` override value, the shape Python's emitter shares for
@@ -1130,6 +1233,12 @@ mod tests {
         assert!(
             full.contains(&format!("handoffs/{project}")) && !full.contains("mail-hold"),
             "the scope doc must key on the row's project, got {full}"
+        );
+        // The checkin reader resolves through scope_handoffs_dir: it must name
+        // the dir this command printed, whatever the caller's cwd.
+        assert_eq!(
+            scope_handoffs_dir(scope, Some(&home)).as_deref(),
+            Path::new(full.trim()).parent()
         );
         let _ = std::fs::remove_dir_all(project_cwd.parent().unwrap());
     }

@@ -294,17 +294,27 @@ pub(crate) fn headless_spawn(
     argv: &[String],
     kill_after_secs: u64,
 ) -> Result<(i32, String, String), String> {
-    let mut child = Command::new(crate::scrape::fno_bin())
+    let child = Command::new(crate::scrape::fno_bin())
         .args(argv)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .process_group(0)
         .spawn()
         .map_err(|e| e.to_string())?;
-    // Poll-then-kill (the sandbox_probe shape): `--timeout` only rides argv
-    // to the child harness, which a hung lane ignores, so the enforcement
-    // lives here. The reply is small, so the unread pipes cannot deadlock it.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(kill_after_secs);
+    bounded_wait(child, kill_after_secs)
+}
+
+/// The one bounded-wait implementation both the judge's headless spawn and
+/// the skill-diff proposer's one-shots share: poll-then-kill (the
+/// sandbox_probe shape), `--timeout` only rides argv to the child harness,
+/// which a hung lane ignores, so the enforcement lives here. The reply is
+/// small, so the unread pipes cannot deadlock it. A timeout returns code 124
+/// with a named stderr line when the child wrote none.
+pub(crate) fn bounded_wait(
+    mut child: std::process::Child,
+    timeout_secs: u64,
+) -> Result<(i32, String, String), String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {
         match child.try_wait().map_err(|e| e.to_string())? {
             Some(status) => {
@@ -327,7 +337,7 @@ pub(crate) fn headless_spawn(
                     let out = child.wait_with_output().map_err(|e| e.to_string())?;
                     let err = String::from_utf8_lossy(&out.stderr).into_owned();
                     let named = format!(
-                        "reader timed out after {kill_after_secs}s: model lane slow or provider wait"
+                        "timed out after {timeout_secs}s: model lane slow or provider wait"
                     );
                     return Ok((
                         124,
@@ -892,25 +902,39 @@ fn run_calibration(
     lenses: &Lenses,
     spawn: Spawn,
 ) -> i32 {
+    match calibration_result(labels_path, split, cwd, lenses, spawn) {
+        Ok(v) => {
+            println!("{v}");
+            if v.get("controls_wrong").and_then(Value::as_u64).unwrap_or(0) > 0 {
+                1
+            } else {
+                0
+            }
+        }
+        Err(msg) => {
+            println!("{}", json!({"error": msg}));
+            1
+        }
+    }
+}
+
+/// `run_calibration`'s computation, returning the payload the observer's
+/// labels view renders (the observer port shares the judge's
+/// calibration without re-running the spawn loop twice).
+pub(crate) fn calibration_result(
+    labels_path: &Path,
+    split: &str,
+    cwd: &Path,
+    lenses: &Lenses,
+    spawn: Spawn,
+) -> Result<Value, String> {
     let text = match std::fs::read_to_string(labels_path) {
         Ok(t) => t,
-        Err(e) => {
-            println!(
-                "{}",
-                json!({"error": format!("cannot read {}: {e}", labels_path.display())})
-            );
-            return 1;
-        }
+        Err(e) => Err(format!("cannot read {}: {e}", labels_path.display()))?,
     };
     let rows: Vec<Value> = match serde_yaml_ng::from_str(&text) {
         Ok(Value::Array(v)) => v,
-        _ => {
-            println!(
-                "{}",
-                json!({"error": "labels.yaml did not parse to a list"})
-            );
-            return 1;
-        }
+        _ => return Err("labels.yaml did not parse to a list".to_string()),
     };
     let base = labels_path.parent().unwrap_or(Path::new("."));
 
@@ -1017,15 +1041,11 @@ fn run_calibration(
             )
         })
         .collect();
-    println!(
-        "{}",
-        json!({"dimensions": dimensions, "disagreements": disagreements, "controls_wrong": controls_wrong})
-    );
-    if controls_wrong > 0 {
-        1
-    } else {
-        0
-    }
+    Ok(json!({
+        "dimensions": dimensions,
+        "disagreements": disagreements,
+        "controls_wrong": controls_wrong
+    }))
 }
 
 pub fn run_judge(args: &[String]) -> i32 {

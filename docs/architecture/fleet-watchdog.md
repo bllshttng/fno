@@ -34,7 +34,7 @@ Order is precedence. The top row wins.
 | `spent` | a wake-state row past the wake ceiling whose evidence says finished work: its node reads done/superseded/deferred, or its own tail reads done | `node <id> <status>; quiet <n>h past the 12h wake ceiling; finished row, nothing to triage` |
 | `leave (cap)` | state `blocked`, the transcript tail carries a 429 whose reset window has not opened; the row reads `cap: owned by provider-cap` | `429 resets <utc>, <n>m out; cap: owned by provider-cap` |
 | `leave (cap, passed)` | a wake-state row whose newest 429 window passed: the return is the provider-cap actor's canary, never a clock-only wake | `429 window passed; return owned by provider-cap` |
-| `wake` | any of `working`, `blocked` or `stopped`, a parseable last event under the ceiling, a tail that positively owes its next move, and NO 429 in the tail at all | `<state> <n>m silent, no 429 in tail` |
+| `wake` | any of `working`, `blocked`, `stopped` or `idle`, a parseable last event under the ceiling, a tail that positively owes its next move, and NO 429 in the tail at all | `<state> <n>m silent, no 429 in tail` |
 | `leave` | everything else, including every healthy injectable row | `state <s>, last turn <n>m ago, no lane applies` |
 | `polling_settled` | a leave row whose tail asserts a PR `MERGED` or `CLOSED` and then issues two or more further PR-status reads, with the live state read confirming the PR terminal now | `<n> PR-status reads of #<pr> after the tail read it <state>` |
 | `silence` | a registry row scoped to THIS project (`origin: spawn`, no role, `project_root` under a report root), an open node, and a transcript quiet past `recovery.idle_threshold_seconds` (default 900s) | `open node <id>, transcript quiet <n>m` |
@@ -152,7 +152,7 @@ Manual inspection remains `fno agents fleet watchdog --json`. The base command i
 
 ## The keeper lane
 
-A `--pane` or `--keeper` process of `fno-agents-worker` whose server died belongs to no shipped sweep. The orphan sweep declines it (`orphans.py` `OWN_DAEMONS`) because ppid 1 is a keeper's normal state. The registry-side sweep walks only the thread socket dir (`daemon.rs` `keeper_registry_sweep`). The pane sweep `KeeperAdopt` runs inside the mux server, which is exactly the thing that died. Measured 2026-09-01: seven live keepers at ppid 1, ages to 22.5h, every one a test fixture, zero socket directories, zero claiming rows. A socket walk reported a clean machine over seven live processes.
+A `--pane` or `--keeper` process of `fno-agents-worker` whose server died belongs to no shipped sweep. The orphan sweep declines it (`crates/fno-agents/src/orphans.rs` `OWN_DAEMONS`) because ppid 1 is a keeper's normal state. The registry-side sweep walks only the thread socket dir (`daemon.rs` `keeper_registry_sweep`). The pane sweep `KeeperAdopt` runs inside the mux server, which is exactly the thing that died. Measured 2026-09-01: seven live keepers at ppid 1, ages to 22.5h, every one a test fixture, zero socket directories, zero claiming rows. A socket walk reported a clean machine over seven live processes.
 
 The keeper lane discovers by PROCESS and joins through argv. Every keeper carries `--sock` and `--session` on its own command line. A `psutil` read yields pid, socket, session, cwd and age with no directory walk. The lane lives in `cli/src/fno/agents/keeper_lane.py`. It shares the orphan sweep's enumeration (`iter_processes` - one `psutil.process_iter` call site, or the sweeps drift) and adds a `--only keeper` filter to this command.
 

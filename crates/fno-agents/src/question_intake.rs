@@ -108,6 +108,16 @@ pub struct IntakeRequest {
     /// `fno inbox outstanding`'s render cap, for the does-not-render line.
     #[serde(default)]
     pub render_cap: Option<usize>,
+    /// `append`: the machine-writer door (the lead wake, the branch hook).
+    /// `event` is a caller-built `operator_question` envelope; it is
+    /// validated and written to both sinks, and no ask gate runs. The wake
+    /// and hook lanes ask questions the ask gate would refuse (machine
+    /// markers, option lists with no node pointer), and their rows were
+    /// always raw appends.
+    #[serde(default)]
+    pub op: Option<String>,
+    #[serde(default)]
+    pub event: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -345,7 +355,79 @@ fn targets_operator_retraction(question: &str, laws: &[crate::law_match::LawRow]
     })
 }
 
+/// The machine-writer append door: validate one caller-built
+/// `operator_question` envelope, then the dual write - project journal
+/// fatal, machine index reported. The id must ride the envelope: a writer
+/// that cannot name its row has a bug, and minting here would hide it.
+fn run_append(req: &IntakeRequest) -> IntakeAnswer {
+    let mut answer = IntakeAnswer::exit(0);
+    let Some(event) = req.event.as_ref().filter(|e| e.is_object()) else {
+        answer.lines.push(
+            "outstanding: failed to record question: the append door needs an event envelope"
+                .to_string(),
+        );
+        answer.refusal = Some("write".to_string());
+        answer.exit_code = 2;
+        return answer;
+    };
+    let Some(qid) = event
+        .get("data")
+        .and_then(|d| d.get("question_id"))
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+    else {
+        answer.lines.push(
+            "outstanding: failed to record question: question event has no question_id".to_string(),
+        );
+        answer.refusal = Some("write".to_string());
+        answer.exit_code = 2;
+        return answer;
+    };
+    let qid = qid.to_string();
+    let journal_path = req
+        .journal_path
+        .clone()
+        .unwrap_or_else(|| req.storage_root.join(".fno").join("events.jsonl"));
+    let index = req
+        .index_path
+        .clone()
+        .unwrap_or_else(|| questions_path(&AgentsHome::from_env()));
+    let line = match serde_json::to_string(event) {
+        Ok(l) => l,
+        Err(e) => {
+            answer.lines.push(format!(
+                "outstanding: failed to record question: could not serialize the envelope: {e}"
+            ));
+            answer.refusal = Some("write".to_string());
+            answer.exit_code = 1;
+            return answer;
+        }
+    };
+    if let Err(e) = crate::event_store::append_envelope(&journal_path, &line, None) {
+        answer.lines.push(format!(
+            "outstanding: failed to append question to project journal: {e}"
+        ));
+        answer.refusal = Some("write".to_string());
+        answer.exit_code = 1;
+        return answer;
+    }
+    if let Err(e) = crate::provider_cap::append_questions_row(&index, event) {
+        answer.lines.push(format!(
+            "outstanding: recorded {qid} in the project journal, but the recall index \
+write failed: {e}. Run `fno inbox outstanding reindex`."
+        ));
+        answer.qid = Some(qid);
+        answer.exit_code = 1;
+        return answer;
+    }
+    answer.qid = Some(qid);
+    answer
+}
+
 pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
+    if req.op.as_deref() == Some("append") {
+        return run_append(req);
+    }
     if req.template {
         let mut answer = IntakeAnswer::exit(0);
         answer.lines = vec![QUESTION_TEMPLATE.to_string()];
@@ -410,6 +492,12 @@ question and ask again: only the user may record that retraction.";
     }
 
     let parsed = crate::escalation::parse(&req.question);
+    for name in &parsed.unknown_sections {
+        answer.lines.push(format!(
+            "outstanding: warning: section '## {name}' is not one the page renders, so the user will not see it. \
+Move its text into a known section, or link a vault page from 'Why these options'."
+        ));
+    }
     // A mistyped class would land as an unroutable hop, so it refuses the
     // way the reversible field does: exit 2, the six values named, nothing
     // written.
@@ -442,7 +530,9 @@ words: {}. 'decision' is not a class.",
     if has_options && node.is_none() {
         answer.lines.push(
             "outstanding: refused: a question with options names its node (--node). \
-One line plus a node pointer (law d-59af3235)."
+The ask line stays one line plus the pointer (law d-59af3235); a question \
+file carries the context sections and is not a violation, so pass the file \
+with --question-file and --node together."
                 .to_string(),
         );
         answer.refusal = Some("node_pointer".to_string());
@@ -549,8 +639,8 @@ choice starts>'.",
 to rule. Decide door first: {decide} (--authority agent) - record the \
 ruling, then continue. \
 The user answers only what only a user can: irreversible, spends money or a \
-credential, reaches outside the machine, or a product or taste call - name it \
-with why_user: in the question file."
+credential, reaches outside the machine, changes a law, or is a product or taste \
+call - name it with why_user: in the question file (law-change for a law)."
                 ));
                 answer.refusal = Some("decide_yourself".to_string());
                 answer.exit_code = 2;
@@ -950,6 +1040,8 @@ mod tests {
             journal_path: None,
             display_name: None,
             render_cap: None,
+            op: None,
+            event: None,
         }
     }
 
@@ -1345,6 +1437,105 @@ stops
         assert!(
             open.iter().all(|r| r.id != "q-t1"),
             "a store-only close must unmark the question: {open:?}"
+        );
+    }
+
+    #[test]
+    fn the_append_door_writes_the_envelope_to_both_sinks() {
+        let root = tmp_root("append-ok");
+        let index = root.join("questions.jsonl");
+        let journal = root.join("journal").join("events.jsonl");
+        let event = json!({
+            "ts": "2026-10-24T12:00:00Z",
+            "type": "operator_question",
+            "source": "daemon",
+            "data": {"question_id": "q-ap1", "question": "wake?", "ask": "answer inherit or clean"}
+        });
+        let req = IntakeRequest {
+            op: Some("append".to_string()),
+            event: Some(event),
+            journal_path: Some(journal.clone()),
+            index_path: Some(index.clone()),
+            storage_root: root.clone(),
+            ..req("", &root)
+        };
+        let answer = run_intake(&req, &tmp_home("append-ok"));
+        assert_eq!(answer.exit_code, 0, "{:?}", answer.lines);
+        assert_eq!(answer.qid.as_deref(), Some("q-ap1"));
+        let row = crate::events::committed_journal_text(&journal)
+            .lines()
+            .last()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .unwrap();
+        assert_eq!(
+            row.pointer("/data/question_id").and_then(Value::as_str),
+            Some("q-ap1")
+        );
+        assert_eq!(
+            row.pointer("/source").and_then(Value::as_str),
+            Some("daemon")
+        );
+        let indexed = crate::events::committed_journal_text(&index);
+        assert!(indexed.contains("\"q-ap1\""), "{indexed}");
+    }
+
+    #[test]
+    fn the_append_door_refuses_an_envelope_with_no_question_id() {
+        let root = tmp_root("append-noid");
+        let event = json!({
+            "ts": "2026-10-24T12:00:00Z",
+            "type": "operator_question",
+            "source": "hook",
+            "data": {"question": "no id here"}
+        });
+        let req = IntakeRequest {
+            op: Some("append".to_string()),
+            event: Some(event),
+            journal_path: Some(root.join("events.jsonl")),
+            index_path: Some(root.join("questions.jsonl")),
+            storage_root: root.clone(),
+            ..req("", &root)
+        };
+        let answer = run_intake(&req, &tmp_home("append-noid"));
+        assert_eq!(answer.exit_code, 2);
+        assert_eq!(answer.qid, None);
+        assert!(
+            answer.lines[0].contains("no question_id"),
+            "{:?}",
+            answer.lines
+        );
+        assert!(
+            crate::events::committed_journal_text(&root.join("events.jsonl")).is_empty(),
+            "a refused envelope writes nothing"
+        );
+    }
+
+    #[test]
+    fn a_failed_journal_append_is_fatal_and_reported() {
+        let root = tmp_root("append-jfail");
+        let event = json!({
+            "ts": "2026-10-24T12:00:00Z",
+            "type": "operator_question",
+            "source": "daemon",
+            "data": {"question_id": "q-ap2", "question": "wake?"}
+        });
+        // A journal parked under a plain FILE cannot take the append: both
+        // the store and the journal need that parent to be a directory.
+        std::fs::write(root.join("no-such-dir"), b"not a directory").unwrap();
+        let req = IntakeRequest {
+            op: Some("append".to_string()),
+            event: Some(event),
+            journal_path: Some(root.join("no-such-dir").join("events.jsonl")),
+            index_path: Some(root.join("questions.jsonl")),
+            storage_root: root.clone(),
+            ..req("", &root)
+        };
+        let answer = run_intake(&req, &tmp_home("append-jfail"));
+        assert_eq!(answer.exit_code, 1);
+        assert!(
+            answer.lines[0].contains("failed to append question to project journal"),
+            "{:?}",
+            answer.lines
         );
     }
 }

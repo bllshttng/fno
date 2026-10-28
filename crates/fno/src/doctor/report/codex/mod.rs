@@ -1,0 +1,97 @@
+//! The codex collectors: app-server probe, hooks inspection, context-window
+//! arithmetic, and the plugin freshness verdict.
+
+mod context_window;
+mod hooks;
+
+pub(crate) use context_window::*;
+pub(crate) use hooks::*;
+
+use serde_json::{json, Value};
+
+use super::codex_home;
+
+/// The codex plugin verdict from `fno-agents plugin-install codex --status`,
+/// the engine that converges the plugin, so doctor never reads the state a
+/// second way.
+pub(crate) fn codex_plugin_report() -> Value {
+    plugin_verdict(super::call_binary_json(
+        "plugin-install",
+        &["--status", "codex"],
+        120,
+    ))
+}
+
+fn plugin_verdict((err, verdict): (Option<String>, Value)) -> Value {
+    if err.is_none() && verdict.is_object() {
+        return verdict;
+    }
+    json!({
+        "status": "unknown",
+        "issue": "state-unreadable",
+        "detail": err.unwrap_or_else(|| "plugin-install codex --status: not a JSON object".into()),
+        // The plugin install runs through the same binary, so it cannot be
+        // the repair for a binary that did not answer.
+        "remedy": "fno doctor update --rust",
+    })
+}
+
+/// Whether a codex app-server daemon is listening on its control socket
+/// (doctor.py:3190-3210). The socket file survives its daemon, so liveness is
+/// a bounded connect probe, never the file's existence.
+pub(crate) fn codex_app_server_report() -> Value {
+    let socket_path = codex_home().join("app-server-control/app-server-control.sock");
+    // Bounded connect probe on a worker thread: recv_timeout supplies the one
+    // second the socket-level connect timeout used to, and a hung connect
+    // strands at most this probe's thread until the process exits.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let probe_path = socket_path.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(std::os::unix::net::UnixStream::connect(probe_path).is_ok());
+    });
+    let present = rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap_or(false);
+    json!({
+        "present": present,
+        "socket_path": socket_path.to_string_lossy(),
+    })
+}
+
+/// The surface-report view of the hooks inspection (doctor.py:3812-3825):
+/// dual layers plus any foreign hooks in `~/.codex/hooks.json`.
+pub(crate) fn codex_hooks_dual_and_foreign() -> (bool, Value) {
+    let codex = codex_hooks_report();
+    let duplicate = codex.get("duplicate_layers") == Some(&Value::Bool(true));
+    let footnote = codex
+        .get("footnote_json_hooks")
+        .and_then(Value::as_array)
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    let foreign = codex
+        .get("foreign_json_hooks")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+    (duplicate && footnote, foreign)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_engine_verdict_is_the_doctor_row() {
+        let fresh = json!({"status": "fresh", "channel": "dev"});
+        assert_eq!(plugin_verdict((None, fresh.clone())), fresh);
+    }
+
+    #[test]
+    fn an_unreadable_engine_reads_state_unreadable() {
+        let row = plugin_verdict((Some("plugin-install exited 1: ".into()), Value::Null));
+        assert_eq!(
+            (row["status"].as_str(), row["issue"].as_str()),
+            (Some("unknown"), Some("state-unreadable"))
+        );
+        assert_eq!(row["remedy"], "fno doctor update --rust");
+    }
+}

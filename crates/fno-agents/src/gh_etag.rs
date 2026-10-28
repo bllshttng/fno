@@ -291,7 +291,7 @@ pub(crate) fn conditional_paginated_get_at(
     fetch_all: impl Fn() -> Result<String, String>,
     spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
 ) -> Result<(bool, String, String), String> {
-    let row = read_row_at(root, path, crate::gh_cache::now_secs());
+    let row = read_row_at(root, &paged_key(path), crate::gh_cache::now_secs());
     let mut args: Vec<&str> = vec!["api", "-i", path];
     let cond;
     if let Some(row) = &row {
@@ -345,9 +345,16 @@ pub(crate) fn conditional_paginated_get_at(
         Err(_) => return Ok((true, fetch_all()?, stderr)),
     };
     if let Some(etag) = header_value(&headers, "etag") {
-        write_row_at(root, path, &etag, &body);
+        write_row_at(root, &paged_key(path), &etag, &body);
     }
     Ok((true, body, stderr))
+}
+
+/// The row key for a paged assembly. Its body is a JSON array of pages,
+/// while a plain GET of the same path caches the bare page; one shared key
+/// would let a 304 on either door replay the other door's shape.
+fn paged_key(path: &str) -> String {
+    format!("paged:{path}")
 }
 
 /// The spend-note suffix: `, {n} served 304` once the process has served a
@@ -451,7 +458,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         write_row_at(
             root.path(),
-            "repos/o/r/commits/sha/check-runs",
+            &paged_key("repos/o/r/commits/sha/check-runs"),
             "W/\"abc\"",
             "[{\"a\":1},{\"a\":2}]",
         );
@@ -472,6 +479,10 @@ mod tests {
         assert!(ok);
         assert_eq!(body, "[{\"a\":1},{\"a\":2}]");
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+        // The assembly is an array of pages; the plain door caches a bare
+        // page. It must never see this row, or its 304 replays an array.
+        let now = crate::gh_cache::now_secs();
+        assert!(read_row_at(root.path(), "repos/o/r/commits/sha/check-runs", now).is_none());
     }
 
     #[test]
@@ -485,7 +496,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         write_row_at(
             root.path(),
-            "repos/o/r/commits/sha/check-runs",
+            &paged_key("repos/o/r/commits/sha/check-runs"),
             "W/\"old\"",
             "[{\"a\":1}]",
         );
@@ -507,8 +518,12 @@ mod tests {
         assert!(ok);
         assert_eq!(body, "[{\"a\":1},{\"a\":2},{\"a\":3}]");
         let now = crate::gh_cache::now_secs();
-        let row = read_row_at(root.path(), "repos/o/r/commits/sha/check-runs", now)
-            .expect("the pre-existing row must survive, untouched");
+        let row = read_row_at(
+            root.path(),
+            &paged_key("repos/o/r/commits/sha/check-runs"),
+            now,
+        )
+        .expect("the pre-existing row must survive, untouched");
         assert_eq!(row.etag, "W/\"old\"");
         assert_eq!(row.body, "[{\"a\":1}]");
         assert_eq!(counter.load(Ordering::SeqCst), 0);

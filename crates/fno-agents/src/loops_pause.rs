@@ -675,7 +675,7 @@ fn release_mail(owned_session: Option<&str>) -> (String, String) {
 }
 
 fn loops_usage() {
-    println!("usage: fno-agents loops paused|status [--json] | pause-all [--who W] [--ttl D|--ttl-ms N] [--reason R] [--json] | resume-all [--json] | arm --session <id> --every <N>m|h|d -- <prompt> | disarm --session <id> | armed [--json] | table [--json|--markdown]\nFor a smaller halt: fno agents incident stop --session <full-id>|--territory <scope> --reason <why>");
+    println!("usage: fno-agents loops paused|status [--json] | pause-all [--who W] [--ttl D|--ttl-ms N] [--reason R] [--json] | resume-all [--json] | arm --session <id> --every <N>m|h|d -- <prompt> | disarm --session <id> | armed [--json] | table [--json|--markdown] | skill-diff-tick --skill <name> | skill-diff-reconcile [--pr-number N]\nFor a smaller halt: fno agents incident stop --session <full-id>|--territory <scope> --reason <why>");
 }
 
 /// Compute the `(action, output)` pair through breaker state and the mail
@@ -913,6 +913,23 @@ pub fn run_loops(args: &[String]) -> i32 {
     }
     if args.first().map(String::as_str) == Some("table") {
         return run_loops_table(json_out, args.iter().any(|arg| arg == "--markdown"));
+    }
+    // `loops ls` + `loops level <name>`: the config reads behind `fno do
+    // loops ls` (see loops_config.rs). Direct dispatch inside the group
+    // door; the pause commands keep their arm below.
+    if args.first().map(String::as_str) == Some("ls") {
+        return crate::loops_config::run(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("level") {
+        return crate::loops_config::run_level(&args[1..]);
+    }
+    // The skill-diff proposer loop: tick and its reconcile closer, ported
+    // from cli/src/fno/skill_diff/. They manage their own output and exit.
+    if matches!(
+        args.first().map(String::as_str),
+        Some("skill-diff-tick") | Some("skill-diff-reconcile")
+    ) {
+        return crate::skill_diff::run(args);
     }
     match args.first().map(String::as_str) {
         Some("arm") => return crate::pane_loop::run_arm(&args[1..]),

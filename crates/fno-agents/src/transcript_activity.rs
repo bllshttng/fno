@@ -185,7 +185,7 @@ fn save_cache(cache: &Path, cursors: &BTreeMap<String, Cursor>, activity: &Activ
         slowdowns: activity.slowdowns.clone(),
     })
     .unwrap_or_else(|_| "{}".to_string());
-    let _ = crate::rundown::write_atomic(&cache.to_path_buf(), &body);
+    let _ = crate::rundown::write_atomic(cache, &body);
 }
 
 fn list_files(roots: &Roots, now: DateTime<Utc>, window_days: u64) -> Vec<Listed> {
@@ -279,7 +279,7 @@ pub(crate) fn fold(
     window_days: u64,
     budget: Option<u64>,
 ) -> Result<(Activity, FoldReceipt), String> {
-    let _guard = FileLock::acquire(&lock_path(cache));
+    let _guard = FileLock::try_acquire(&lock_path(cache))?;
     let mut receipt = FoldReceipt::default();
     let bus = BusIndex::load(&roots.bus_log);
     let (mut cursors, mut activity) = match load_cache(cache) {

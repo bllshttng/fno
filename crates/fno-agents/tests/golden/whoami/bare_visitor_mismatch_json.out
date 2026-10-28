@@ -1,0 +1,18 @@
+{
+  "detected_paths": [
+    "<FIXTURE>/project/.fno/target-state.md"
+  ],
+  "fleet": null,
+  "harness": "claude",
+  "harness_session_id": "visitor-session",
+  "mail_handle": "visitor-",
+  "model": null,
+  "project_root": "<FIXTURE>/project",
+  "session": null,
+  "visitor": "manifest names session resident-session, not this one",
+  "walker": null,
+  "warnings": [
+    "not a git repo, using cwd"
+  ],
+  "worker_name": "visitor-session"
+}

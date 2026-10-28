@@ -11,6 +11,8 @@ crates/fno/src/doctor_update.rs::"fno: uv tool install hit the directory race (o
 .claude-plugin/postinstall.sh::err "uv tool install hit the directory race (os error 66) three times. A concurrent fno process is rewriting bytecode into the venv mid-removal. Stop fno processes and re-run."
 crates/fno/src/bootstrap.rs::const RACE_CAP_MSG: &str = "uv tool install hit the directory race (os error 66) three times. \
 cli/src/fno/config/registry.py::"dev.source": Meta("never", "Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) instead of the PyPI wheel when its tool venv is wiped. Unset = PyPI self-provision (end-user default)."),
+# the config schema golden captures the dev.source doc string above as a Markdown row.
+crates/fno/tests/golden/config_schema/markdown.stdout::| `dev.source` | str | `` | never | Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) instead of the PyPI wheel when its tool venv is wiped. Unset = PyPI self-provision (end-user default). |
 cli/tests/smoke/cargo_bootstrap_smoke.sh::else miss "binary:$b" "absent (uv tool install must surface the wheel's shared_scripts)"; fi
 cli/tests/smoke/fno_sh_smoke.sh::else miss "binary:$b" "absent (uv tool install must surface the wheel's shared_scripts)"; fi
 cli/tests/smoke/test_postinstall.sh::for needle in "uv tool install" "pip install --user" "ERROR:"; do

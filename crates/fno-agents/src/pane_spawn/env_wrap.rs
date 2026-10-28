@@ -4,13 +4,12 @@
 //! substrate and seed attribution ride the wrapper as assignments and the
 //! parent's own identity rides out as `-u` unsets.
 //!
-//! Scope, recorded: the role and account legs of the Python pairs are NOT
-//! ported here. Every shape that carries them is seam-carved to Python
-//! (`_is_role_bearing_spawn`) and never reaches an arm. Node provenance is
-//! ported: the spawn guard exports it and the pairs carry it. The route overlay IS: the claude arm (row 8, PR B) hands
-//! its resolved route env to this wrapper through the `overlay` param, which
-//! the pairs append after the claude extras and the unsets answer with the
-//! account_env.py scrub floor when the harness is claude.
+//! Node provenance is ported: the spawn guard exports it and the pairs carry
+//! it. The route, role and account legs arrive composed: each arm hands its
+//! overlay (the account profile under any route) through the `overlay`
+//! param, which the pairs append after the claude extras, and the unsets
+//! answer with the `accounts::credentials` scrub floor when the harness is
+//! claude.
 
 use base64::Engine as _;
 
@@ -62,28 +61,13 @@ pub const SEED_PROVENANCE_KEYS: [&str; 6] = [
     "FNO_SEED_PROV_HARNESS",
 ];
 
-/// account_env.py's `SCRUB_AUTH_VARS` (account_env.py:72-87): the inherited
-/// auth vars a routed claude worker must never keep. The tier-alias remaps
-/// (`MODEL_ENV_KEYS`' tail) ride along because endpoint, auth and model are
-/// ONE provider route; the tuple order is the Python tuple's order - the
-/// goldens pin it byte-equal.
-pub const SCRUB_AUTH_VARS: [&str; 10] = [
-    "ANTHROPIC_API_KEY",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-    "ANTHROPIC_AUTH_TOKEN",
-    "FNO_ROUTE_PROVIDER",
-    "ANTHROPIC_MODEL",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL",
-];
+/// The inherited auth vars a routed claude worker must never keep; the
+/// order is the list's order, and the goldens pin it byte-equal.
+pub use crate::accounts::credentials::SCRUB_AUTH_VARS;
 
-/// `_mesh_env_pairs` for the shapes an arm answers: no role and no account
-/// overlay (seam-carved), so the pairs reduce to identity, substrate, the
-/// pinned session, the claude extras, the caller's route overlay, the node
-/// provenance the guard exported and the seed sidecar. Returns `(unset, pairs)` in the Python
+/// `_mesh_env_pairs`: identity, substrate, the pinned session, the claude
+/// extras, the caller's composed overlay, the node provenance the guard
+/// exported and the seed sidecar. Returns `(unset, pairs)` in the Python
 /// construction order.
 pub fn mesh_env_pairs(
     name: &str,
@@ -140,7 +124,7 @@ pub fn mesh_env_pairs(
         "-u".to_string(),
         crate::spawn_route::ROUTE_PROVIDER_ENV.to_string(),
     ]);
-    // The account_env.py scrub floor, riding with an overlay the way the
+    // The credentials scrub floor, riding with an overlay the way the
     // account/route block rides in Python (mux_spawn.py:1228-1242): claude
     // only, and only when the caller carries an overlay to apply, so a plain
     // pane's unset list stays the golden's. `env -u` on an unset var is a
@@ -261,16 +245,6 @@ fn generate_msg_id() -> String {
     getrandom::fill(&mut bytes).expect("OS CSPRNG unavailable");
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     format!("fmail-{hex}")
-}
-
-/// `enrich_spawn_payload` (`spawn_payload.py:21`): the one payload entry -
-/// first-party brevity guidance appended once to a non-empty seed.
-pub fn enrich_spawn_payload(message: &str) -> String {
-    const BREVITY_BLOCK: &str = "<fno_relay_compression>\nKeep reports and handoffs at 80 words or fewer unless this payload requires a longer artifact or exact output schema. Think fully; write only the requested result, essential reason, and next action. Drop filler, pleasantries, hedges, repeated context, and articles where clear. Fragments work. Keep technical terms, commands, errors, numbers, units, negation, and code blocks exact. Put long detail in durable artifacts when available; return a path or link.\n</fno_relay_compression>";
-    if message.is_empty() || message.contains(BREVITY_BLOCK) {
-        return message.to_string();
-    }
-    format!("{message}\n\n{BREVITY_BLOCK}")
 }
 
 /// `is_command_seed` (`config/_dispatch_commands.py:60`): position 0 is

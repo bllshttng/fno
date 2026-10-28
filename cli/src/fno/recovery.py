@@ -718,7 +718,8 @@ def _node_is_done(node: str) -> bool:
         return False
 
 
-# (provenance/spawn_think.py). Only a birth pass is certified by ``plan_path``.
+# The think dispatch reasons (crates/fno-agents/src/think_dispatch.rs). Only a
+# birth pass is certified by ``plan_path``.
 _NON_BIRTH_THINK_REASONS = ("work-start", "retro", "conversational")
 
 
@@ -763,7 +764,7 @@ def mission_complete(candidate: "Candidate") -> Optional[bool]:
         if entry is None or entry.get("archived_at"):
             return None
         if kind == "think":
-            # Only a BIRTH pass is certified by the node's artifacts (spawn_think:
+            # Only a BIRTH pass is certified by the node's artifacts (think dispatch:
             # a design pass ending without a linked plan_path FAILED). A lifecycle
             # or conversational pass runs on a node that ALREADY carries the link,
             # and a retro fires only once the node is `done` - so those artifacts
@@ -1144,9 +1145,16 @@ def _target_projects_dir(provider_id: str, repo_root: Optional[str]) -> Path:
 def _transcript_visible(session_uuid: str, projects_dir: Path) -> bool:
     """Is ``<session_uuid>.jsonl`` present under ``projects_dir``? (AC3/AC4-FR)."""
     try:
-        from fno.relay.registry import transcript_path_for
+        from fno.rust_binary import call_binary_json
 
-        return transcript_path_for(session_uuid, projects_dir=projects_dir) is not None
+        err, payload = call_binary_json(
+            "provider-cap",
+            ["claude-transcript", "--projects", str(projects_dir), session_uuid],
+            timeout=30,
+        )
+        if err or not isinstance(payload, dict):
+            return False
+        return payload.get("path") is not None
     except Exception:  # noqa: BLE001 - unreadable -> treat as not visible (notify)
         return False
 
@@ -1175,10 +1183,10 @@ def _notify_manual_resume(candidate: "Candidate", snap, session_uuid: str) -> No
     """US5: one OS notification carrying the exact resume command for a session
     footnote could not auto-revive (unshared transcript / interactive). Best-effort."""
     try:
-        from fno.notify._impl import send_notification
+        from fno.rust_binary import notify_operator
 
         cmd = _resume_command(snap.id, getattr(candidate, "cwd", None), session_uuid)
-        send_notification(
+        notify_operator(
             f"footnote: switched to {snap.id}",
             f"Session {candidate.short_id} needs a manual resume:\n{cmd}",
         )
@@ -1296,9 +1304,9 @@ def _notify_close(candidate: "Candidate") -> bool:
     that never reached the operator.
     """
     try:
-        from fno.notify._impl import send_notification
+        from fno.rust_binary import notify_operator
 
-        code, _msg = send_notification(
+        code, _msg = notify_operator(
             f"footnote: {candidate.short_id} finished but still open",
             CLOSE_MESSAGE,
         )

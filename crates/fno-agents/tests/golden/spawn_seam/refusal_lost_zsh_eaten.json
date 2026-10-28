@@ -1,0 +1,3 @@
+{
+  "text": "the payload has 'arget' where '$fno:target' belongs. The shell expanded $fno to nothing inside double quotes, and zsh also drops the first letter of the command. Single-quote the payload: '$fno:target ...'"
+}

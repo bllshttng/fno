@@ -222,15 +222,31 @@ def test_authorized_target_init_journey(clean_machine):
     assert proc.returncode == 0, proc.stderr
     node = json.loads(proc.stdout)["id"]
 
-    # 2. Setup answers through the same CLI before init: `config setup plan`
-    #    (the wizard's scriptable twin) returns a schema-derived question plan.
-    plan = _run_fno(repo, home, "config", "setup", "plan")
+    # 2. Setup answers before init: `config setup plan` (the wizard's
+    #    scriptable twin, native in the front) returns the question plan.
+    plan = _run_front_door(front, repo, "config", "setup", "plan")
     assert plan.returncode == 0, plan.stderr
-    # The banner line precedes the JSON; parse from the first "{".
-    assert json.loads(plan.stdout[plan.stdout.index("{"):])["fields"], plan.stdout
+    assert json.loads(plan.stdout)["fields"], plan.stdout
 
     # 3. Authorized target init: a declared denominator, no plan, no remote.
-    init = _run_fno(repo, home, "do", "target", "init", "--input", node, "--deliverables", "1")
+    #    The command is native now: the compiled front claims `do target` and
+    #    execs the fno-agents door, so the journey drives the front directly,
+    #    keeping _run_fno's env semantics (no fabricated session marker).
+    env = {k: v for k, v in os.environ.items() if k not in _DEV_ENV_KEYS}
+    if _HARNESS_SESSION_ID:
+        env["CLAUDE_CODE_SESSION_ID"] = _HARNESS_SESSION_ID
+    else:
+        env.pop("CLAUDE_CODE_SESSION_ID", None)
+    env["FNO_STATE_DIR"] = str(repo / ".fno")
+    env["FNO_TRACKER_BACKEND"] = "graph"
+    init = subprocess.run(
+        [str(front), "do", "target", "init", "--input", node, "--deliverables", "1"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
     assert init.returncode == 0, f"init rc={init.returncode}\n{init.stdout}\n{init.stderr}"
 
     # 4. The manifest readback: written under the ISOLATED state root and

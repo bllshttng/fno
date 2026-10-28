@@ -4429,13 +4429,6 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
         Some(n) => n.to_string(),
         None => return Response::err(req.id, ErrorCode::InvalidParams, "missing `name`"),
     };
-    // stop shares rm's cross-project grant: its store heal resolves through
-    // the same confinement refusal that names --cross-project.
-    let cross_project = req
-        .params
-        .get("cross_project")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let registry = match load_registry_offloaded(ctx.home.registry_json()).await {
         Ok(r) => r,
         Err(e) => return registry_read_failed(req.id, e),
@@ -4444,7 +4437,6 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
         &registry,
         &requested_name,
         &ctx.home.registry_json(),
-        cross_project,
         true,
     )
     .await
@@ -5050,7 +5042,7 @@ async fn handle_rm(ctx: &Ctx, req: &Request) -> Response {
         req,
         &crate::claude_roster::read_all_agents_union,
         &run_claude_rm,
-        &rm_teardown::claude_stop_confirmed,
+        &rm_teardown::confirmed_claude_stop,
         &run_mux_pane_kill,
         &run_mux_pane_probe,
     )
@@ -5104,7 +5096,7 @@ async fn handle_rm_with(
     req: &Request,
     read_claude_agents: &(dyn Fn() -> crate::claude_roster::ClaudeAgentsSnapshot + Sync),
     claude_rm: &(dyn Fn(&str) -> Result<(), String> + Sync),
-    claude_stop: &(dyn Fn(&str) -> bool + Sync),
+    claude_stop: &(dyn Fn(&str, Option<&str>) -> rm_teardown::StopLeg + Sync),
     mux_pane_kill: &(dyn Fn(&str, u64) -> Result<bool, String> + Sync),
     mux_pane_probe: &(dyn Fn(&str, u64) -> PaneProbe + Sync),
 ) -> Response {
@@ -5117,37 +5109,24 @@ async fn handle_rm_with(
         .get("force")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    // rm is the one lifecycle command whose caller can name a session whose cwd
-    // resolves outside this project (the store heal's refusal prescribes
-    // --cross-project for exactly that case); forward the grant to resolution.
-    let cross_project = req
-        .params
-        .get("cross_project")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let registry = match load_registry_offloaded(ctx.home.registry_json()).await {
         Ok(r) => r,
         Err(e) => return registry_read_failed(req.id, e),
     };
-    let entry = match entry_for_lifecycle(
-        &registry,
-        &requested_name,
-        &ctx.home.registry_json(),
-        cross_project,
-        false,
-    )
-    .await
-    {
-        Ok(Some(entry)) => entry,
-        Ok(None) => {
-            return Response::err(
-                req.id,
-                ErrorCode::AgentNotFound,
-                format!("agent {requested_name} not found"),
-            )
-        }
-        Err(message) => return Response::err(req.id, ErrorCode::InvalidParams, message),
-    };
+    let mut entry =
+        match entry_for_lifecycle(&registry, &requested_name, &ctx.home.registry_json(), false)
+            .await
+        {
+            Ok(Some(entry)) => entry,
+            Ok(None) => {
+                return Response::err(
+                    req.id,
+                    ErrorCode::AgentNotFound,
+                    format!("agent {requested_name} not found"),
+                )
+            }
+            Err(message) => return Response::err(req.id, ErrorCode::InvalidParams, message),
+        };
     let name = entry.name.clone();
     let audit = RemovalAuditContext::from_request(req, &entry);
     // Computed once (self-review finding): every other reference in this
@@ -5176,28 +5155,28 @@ async fn handle_rm_with(
         || claude_row_provably_absent(claude_agents.as_ref(), harness_row_id.as_deref())
         || off_executor(|| pane_provably_absent(entry.mux.as_ref(), mux_pane_probe));
     // Law d-81c6da7e: remove needs no prior stop. rm owns the one exception's
-    // stop - the claude background thread - itself: run the bounded `claude
-    // stop`, then re-read the roster and recompute the death verdict. Every
+    // stop - the claude background thread - itself: ask, and end the proven
+    // process set when the ask does not (the glm escalation). Every
     // other live row is ended by the arms below; no caller composes a stop
     // leg in front of this command anymore.
-    if entry.status == AgentStatus::Live
-        && !force
-        && !provably_gone
-        && crate::gc_native::stop_precedes_removal(&entry)
+    match rm_teardown::run_stop_leg(
+        ctx,
+        req,
+        &mut entry,
+        force,
+        provably_gone,
+        claude_stop,
+        read_claude_agents,
+        harness_row_id.as_deref(),
+    )
+    .await
     {
-        let short = entry.transport_short().map(str::to_string).or_else(|| {
-            entry
-                .harness_session_id
-                .clone()
-                .filter(|session_id| !session_id.trim().is_empty())
-        });
-        if let Some(short) = short {
-            let _ = off_executor(|| claude_stop(&short));
-            let snapshot = off_executor(read_claude_agents);
-            provably_gone = row_death_reason(&entry, &snapshot).is_some()
-                || claude_row_provably_absent(Some(&snapshot), harness_row_id.as_deref());
-            claude_agents = Some(snapshot);
+        Ok(Some(result)) => {
+            provably_gone = result.provably_gone;
+            claude_agents = Some(result.snapshot);
         }
+        Ok(None) => {}
+        Err(response) => return response,
     }
     // Only a claude background thread can still be refused here: every other
     // live row falls through to the arms that end its process.
@@ -6739,56 +6718,32 @@ fn handle_push_to_channel(ctx: &Ctx, req: &Request) -> Response {
             return Response::ok(req.id, json!({"routed": true}));
         }
     };
-    // Deliver via the Python sidecar (`fno agents mcp send`), inheriting its lazy-start
-    // + socket discovery instead of reimplementing it in Rust. `delivered: true`
-    // only when the sidecar accepted the envelope; on failure `reason` is
-    // MANDATORY so a caller can tell route-exists from delivered.
-    match deliver_envelope(&channel_id, &envelope) {
+    // Deliver via the sidecar client in-process (the ported mcp family):
+    // the client inherits lazy-start + socket discovery, and `delivered:
+    // true` only when the sidecar accepted the envelope; on failure
+    // `reason` is MANDATORY so a caller can tell route-exists from
+    // delivered.
+    match crate::mcp::client::send_to_channel(
+        &channel_id,
+        &envelope,
+        None,
+        crate::mcp::client::DEFAULT_TIMEOUT,
+    ) {
         Ok(()) => Response::ok(req.id, json!({"routed": true, "delivered": true})),
-        Err(reason) => Response::ok(
+        Err(e) => Response::ok(
             req.id,
-            json!({"routed": true, "delivered": false, "reason": reason}),
+            json!({"routed": true, "delivered": false, "reason": reason_of(&e)}),
         ),
     }
 }
 
-/// Shell `fno agents mcp send --session <id>` with `envelope` on stdin (never argv - it
-/// can be large). Returns `Err(reason)` on any failure (spawn or non-zero exit),
-/// with the stderr tail as the reason.
-fn deliver_envelope(channel_id: &str, envelope: &Value) -> Result<(), String> {
-    use std::io::Write;
-    use std::process::Stdio;
-    let mut child = crate::loop_dispatch::fno_cmd("fno")
-        .args(["agents", "mcp", "send", "--session-id", channel_id])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn `fno agents mcp send` failed: {e}"))?;
-    // Write + close stdin (drop => EOF) so the child's `stdin.read()` completes.
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "child stdin unavailable".to_string())?;
-        let bytes = serde_json::to_vec(envelope).map_err(|e| format!("serialize envelope: {e}"))?;
-        stdin
-            .write_all(&bytes)
-            .map_err(|e| format!("write envelope to `fno agents mcp send`: {e}"))?;
+/// The machine-stable reason for a delivery failure, matching the shape the
+/// shelled `fno agents mcp send` used to surface (its stderr tail).
+fn reason_of(e: &crate::mcp::client::ClientError) -> String {
+    match e {
+        crate::mcp::client::ClientError::Sidecar { reason } => reason.clone(),
+        crate::mcp::client::ClientError::Unreachable { reason } => reason.clone(),
     }
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("wait for `fno agents mcp send`: {e}"))?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let tail = stderr.trim().rsplit('\n').next().unwrap_or("").trim();
-    Err(if tail.is_empty() {
-        format!("`fno agents mcp send` exited {}", out.status)
-    } else {
-        tail.to_string()
-    })
 }
 
 // ---------------------------------------------------------------------------

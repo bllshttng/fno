@@ -697,6 +697,8 @@ fn run(a: &Args, gh: Gh) -> i32 {
                 a.title.clone(),
                 "--body-file".to_string(),
                 a.body_file.clone(),
+                "--base".to_string(),
+                a.base.clone(),
             ];
             match crate::org_board::budget::run_with_timeout(&cmd, &a.cwd, CREATE_TIMEOUT) {
                 Ok(out) => {

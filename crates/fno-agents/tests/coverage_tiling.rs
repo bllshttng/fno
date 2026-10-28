@@ -2313,7 +2313,7 @@ fn a_verify_fixes_round_clears_an_empty_fix_delta() {
     // text. Without the flags row the identical chain stays blocked.
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
-    let k = "s.rs:82:conventions";
+    let k = "s.rs:82:security";
     let head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let raise = serde_json::json!({
         "ts": "2026-08-26T19:00:00Z",
@@ -2327,7 +2327,7 @@ fn a_verify_fixes_round_clears_an_empty_fix_delta() {
             "invocation_id": "v-raise",
             "reviewed_line_count": 20,
             "reviewed_file_count": 2,
-            "findings": [finding(k, "conventions", None, true)],
+            "findings": [finding(k, "security", None, true)],
         }
     })
     .to_string();

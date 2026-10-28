@@ -252,7 +252,7 @@ struct LawAnswer {
 
 /// One-line, char-safe truncation: collapse whitespace, then cut at a char
 /// boundary so a multi-byte character is never split.
-fn one_line(text: &str, cap: usize) -> String {
+pub(crate) fn one_line(text: &str, cap: usize) -> String {
     let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     match flat.char_indices().nth(cap) {
         Some((i, _)) => flat[..i].to_owned(),
@@ -618,7 +618,7 @@ fn classify_stage(hook: &Value) -> Option<&'static str> {
 }
 
 /// The law's first sentence, split at `". "`, `"! "` or `"? "`.
-fn first_sentence(text: &str) -> &str {
+pub(crate) fn first_sentence(text: &str) -> &str {
     let mut end = text.len();
     for sep in [". ", "! ", "? "] {
         if let Some(pos) = text.find(sep) {
@@ -1515,7 +1515,7 @@ fn mint_retraction_id() -> String {
 
 /// 8 hex chars from getrandom, with a pid+clock fallback. A collision costs
 /// one duplicate id.
-fn random_hex8() -> String {
+pub(crate) fn random_hex8() -> String {
     let mut buf = [0u8; 4];
     if getrandom::fill(&mut buf).is_err() {
         // Fallback entropy: pid + clock. A collision costs one duplicate id.

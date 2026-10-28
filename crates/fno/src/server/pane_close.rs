@@ -297,10 +297,8 @@ impl Core {
         if seat {
             let idx = seat_portal.expect("seat implies a portal");
             if let Some(portal) = self.portals.get(&idx) {
-                self.notice_all(format!(
-                    "portal {idx} ({}) closed: {reason}",
-                    portal.row_key
-                ));
+                let label = self.portal_channel_label(&portal.row_key);
+                self.notice_all(format!("portal {idx} ({label}) closed: {reason}"));
             }
             self.journal_portal_take(idx, cause.word());
         }

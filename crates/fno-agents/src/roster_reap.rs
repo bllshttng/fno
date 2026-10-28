@@ -31,10 +31,13 @@
 //! (the default) is the chain above, `all` widens to rows fno itself
 //! spawned (sessions or registry provenance) whose work is open. The rule
 //! under every value is positive: an unowned session retires only on an
-//! fno-ownership marker - a sessions[] row fno wrote, or a reap receipt
+//! fno-ownership marker - a sessions[] row fno wrote, a reap receipt
 //! an earlier retirement staged for the same session (the
 //! leaked-retirement class: the sweep that leaked a session is the sweep
-//! that staged its receipt). A name
+//! that staged its receipt), or a claimed launch record naming the
+//! launcher session (the record `native_bg_mint` already reads as
+//! `origin: spawn`, written only by a launcher hook or dispatcher that
+//! observed the launch). A name
 //! pattern or a transcript mention is exactly how a hand-started session
 //! acquires a phantom node, so weak provenance keeps. An adopted registry
 //! row is a healer's or `fno agents adopt`'s note about a session, not
@@ -491,11 +494,15 @@ pub(crate) fn run_with_scope_workers(
             .source
             .map(|s| s.as_str())
             .unwrap_or("sessions");
-        // The fno-ownership marker: a sessions[] row fno wrote, or a reap
+        // The fno-ownership marker: a sessions[] row fno wrote, a reap
         // receipt an earlier retirement staged for this session (the same
         // `<harness>-<session id>` key `write_receipt` files under - a
         // stat, not a receipt build, which would walk the transcript store
-        // per row). A name pattern or a transcript mention is exactly how a
+        // per row), or a claimed launch record naming a launcher session -
+        // the record `native_bg_mint` already reads as `origin: spawn`,
+        // written only by a launcher hook or dispatcher that observed the
+        // launch. An empty `launcher_session` names no launcher and is no
+        // evidence. A name pattern or a transcript mention is exactly how a
         // hand-started session acquires a phantom node, so weak provenance
         // is not a marker. Checked only where a retirement is possible.
         // Sessions only: the Registry source reads the entry's stored node
@@ -505,16 +512,18 @@ pub(crate) fn run_with_scope_workers(
             verdict.route.source,
             Some(crate::node_route::NodeSource::Sessions)
         );
-        let receipt_marker = || {
+        let ownership_marker = || {
             entry
                 .harness_session_id
                 .as_deref()
                 .filter(|s| !s.is_empty())
                 .is_some_and(|sid| {
                     crate::receipt::reap_receipt_path_for(home, entry.harness_name(), sid).exists()
+                        || crate::launch_record::claimed_edge(home.root(), sid)
+                            .is_some_and(|record| !record.launcher_session.is_empty())
                 })
         };
-        let marker_class = if strong_source || receipt_marker() {
+        let marker_class = if strong_source || ownership_marker() {
             "fleet"
         } else {
             "unmarked"
@@ -596,7 +605,7 @@ pub(crate) fn run_with_scope_workers(
         };
         let basis: String = match &verdict.work {
             WorkState::AllDone { nodes } => {
-                if strong_source || receipt_marker() {
+                if strong_source || ownership_marker() {
                     format!("every named node done: {} (via {via})", nodes.join(", "),)
                 } else {
                     summary.kept.push(judgement(
@@ -610,7 +619,7 @@ pub(crate) fn run_with_scope_workers(
             }
             WorkState::Open { node: n, status } => {
                 let scope_all_strong = scope == crate::agents_config::RosterScope::All
-                    && (strong_source || receipt_marker());
+                    && (strong_source || ownership_marker());
                 // The open-PR keep at scope all, asked through the one
                 // predicate the registry sweep runs: the graph record names
                 // the candidate and both sweeps read the same answer. No
@@ -669,7 +678,7 @@ pub(crate) fn run_with_scope_workers(
                 // quiet gate every other state takes below. Without the
                 // marker - and for `stopped` and `failed`, which are not
                 // that report - the row keeps.
-                if terminal == Some("done") && receipt_marker() {
+                if terminal == Some("done") && ownership_marker() {
                     format!(
                         "no provenance; harness state {state} is the row's own finished report",
                         state = terminal.unwrap_or_default()
@@ -685,7 +694,7 @@ pub(crate) fn run_with_scope_workers(
                 }
             }
         };
-        let class = if strong_source || receipt_marker() {
+        let class = if strong_source || ownership_marker() {
             "fleet"
         } else {
             "unmarked"
@@ -1010,6 +1019,19 @@ mod tests {
         crate::paths::AgentsHome::at(std::path::Path::new("/nonexistent-roster-reap"))
     }
 
+    /// Stage a claimed launch record under the hermetic home: the file
+    /// `claimed_edge` reads, in the shape a claim writes.
+    fn claim_record(home: &crate::paths::AgentsHome, sid: &str, launcher: &str) {
+        let dir = home.root().join("launches").join("claimed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = serde_json::json!({
+            "harness": "claude", "name": "t-marker", "node": "x-marker", "cwd": "/tmp/proj",
+            "launcher_session": launcher, "launcher_harness": "claude",
+            "launched_at_ms": 0, "child_session": sid,
+        });
+        std::fs::write(dir.join(format!("{sid}.json")), record.to_string()).unwrap();
+    }
+
     // AC4-HP: an unowned session whose provenance resolves only through the
     // row NAME (done, merged, quiet) keeps: a name pattern is exactly how a
     // hand-started session acquires a phantom node, so without an ownership
@@ -1214,9 +1236,13 @@ mod tests {
         home.ensure_root().unwrap();
         let transcript = quiet_transcript(&dir, "sid-1");
         let transcript2 = quiet_transcript(&dir, "sid-2");
+        let transcript3 = quiet_transcript(&dir, "sid-3");
+        let transcript4 = quiet_transcript(&dir, "sid-4");
         let rows = vec![
             row("ab12cd34", Some("sid-1"), Some("hand-typed-name")),
             row("ef56ab78", Some("sid-2"), Some("hand-typed-2")),
+            row("9f8e7d6c", Some("sid-3"), Some("hand-typed-3")),
+            row("5a4b3c2d", Some("sid-4"), Some("hand-typed-4")),
         ];
         // Stage the receipt under a hermetic HOME: the receipt builder reads
         // the harness store index for the resume locator.
@@ -1244,6 +1270,11 @@ mod tests {
                 .expect("receipt builds");
         crate::receipt::write_reap_receipt(&home, &receipt).unwrap();
         crate::keep_mark::set(&home, "sid-2", "hand-typed-2").unwrap();
+        // The claimed launch record is the third marker: written only by a
+        // launcher hook or dispatcher that observed the launch. sid-3's
+        // record names a launcher session, sid-4's names none.
+        claim_record(&home, "sid-3", "bedc000a");
+        claim_record(&home, "sid-4", "");
         let summary = run(
             &home,
             900,
@@ -1253,22 +1284,24 @@ mod tests {
             &[],
             &|| Some(GraphRead::default()),
             &|e| {
-                if crate::gc::row_handle(e) == "sid-2" {
-                    Some(vec![transcript2.clone()])
-                } else {
-                    Some(vec![transcript.clone()])
-                }
+                Some(match crate::gc::row_handle(e).as_str() {
+                    "sid-2" => vec![transcript2.clone()],
+                    "sid-3" => vec![transcript3.clone()],
+                    "sid-4" => vec![transcript4.clone()],
+                    _ => vec![transcript.clone()],
+                })
             },
             &|entries| {
                 entries
                     .iter()
                     .map(|e| {
-                        let t = if crate::gc::row_handle(e) == "sid-2" {
-                            transcript2.clone()
-                        } else {
-                            transcript.clone()
+                        let t = match crate::gc::row_handle(e).as_str() {
+                            "sid-2" => &transcript2,
+                            "sid-3" => &transcript3,
+                            "sid-4" => &transcript4,
+                            _ => &transcript,
                         };
-                        (crate::gc::row_handle(e), mtime_age(&[t]))
+                        (crate::gc::row_handle(e), mtime_age(std::slice::from_ref(t)))
                     })
                     .collect::<HashMap<_, _>>()
             },
@@ -1279,13 +1312,29 @@ mod tests {
             Some(h) => std::env::set_var("HOME", h),
             None => std::env::remove_var("HOME"),
         }
-        assert_eq!(summary.retired.len(), 1, "{summary:?}");
+        assert_eq!(summary.retired.len(), 2, "{summary:?}");
         assert!(
-            summary.retired[0]
-                .reason
-                .contains("no provenance; harness state done"),
+            summary
+                .retired
+                .iter()
+                .all(|j| j.reason.contains("no provenance; harness state done")),
             "{summary:?}"
         );
+        // The claimed-record session retires in the same pass, judged fleet.
+        let claimed = summary
+            .retired
+            .iter()
+            .find(|j| j.short_id == "sid-3")
+            .expect("the claimed-record session retires");
+        assert_eq!(claimed.class, "fleet", "{claimed:?}");
+        // A record with an empty launcher_session names no launcher: no
+        // marker, no provenance, the row keeps.
+        let bare = summary
+            .kept
+            .iter()
+            .find(|j| j.short_id == "sid-4")
+            .expect("the empty-launcher record keeps the row");
+        assert!(bare.reason.contains("no provenance"), "{bare:?}");
 
         // AC3-HP: the marked twin is kept, the reason names the mark.
         let marked = summary

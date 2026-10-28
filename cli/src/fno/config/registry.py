@@ -255,7 +255,7 @@ FIELD_META: dict[str, Meta] = {
         "advanced", "How long after a review dispatch (a sent review_invocation row) with no answering attestation the settle sweep declares the attempt lost and emits one lost attestation row for it (default 15), so the gate reads a named refusal instead of waiting on silence. The doctor report runs the sweep; it is idempotent, so re-running adds nothing.",
     ),
     "review.nonblocking_categories": Meta(
-        "advanced", "Categories a finding may carry and still be non-blocking when its verdict is not CONFIRMED (default: docs, formatting, naming, nit, simplification, style, test-coverage, typo). A configured list EXTENDS that default rather than replacing it, so naming one category cannot silently narrow the gate. A CONFIRMED verdict blocks whatever the category says, and a finding missing a required field blocks too. The gate re-derives blocking from this list itself and never reads the producer's own blocking count.",
+        "advanced", "Categories a finding may carry and still be non-blocking when its verdict is not CONFIRMED (default: altitude, conventions, docs, efficiency, formatting, naming, nit, reuse, simplification, style, test-coverage, typo). A configured list EXTENDS that default rather than replacing it, so naming one category cannot silently narrow the gate. A CONFIRMED verdict blocks whatever the category says, and a finding missing a required field blocks too. The gate re-derives blocking from this list itself and never reads the producer's own blocking count.",
     ),
     "review.hold_ttl_minutes": Meta(
         "advanced", "How long a registered review hold blocks a merge before it ages out (default 90). A review that starts registers review:branch:<branch>; fno do pr status and fno do pr merge refuse while it is live, so a merge cannot land on the pre-review code. A wedge bound, not an estimate: an expired hold clears with a receipt rather than holding the lane forever.",
@@ -629,6 +629,7 @@ FIELD_META: dict[str, Meta] = {
     "store.remote_token": Meta("never", "Bearer token for store.remote_url, when the primary asks for one. Default unset."),
     "store.remote_addrs": Meta("never", "IPs (or IP:port) to dial, in order, when the host in store.remote_url does not answer, such as its Tailscale 100.x IP for when MagicDNS breaks. A bare IP takes the URL's port. Default unset."),
     "store.share_backlog": Meta("never", "true moves the backlog itself to the primary named by store.remote_url; both keys must be set. Default false."),
+    "store.ssh_peers": Meta("never", "Optional plan rescue: a map of host key to ssh destination, e.g. store.ssh_peers.\"macbook\" = \"macbook.lan\". When this host cannot place a plan file from the shared store, the plan carrier asks that peer over ssh (BatchMode, 5s connect timeout). A key is the pushing host's name, a host in the fno_plan_seen ledger, or the store host in store.remote_url. Off by default: the shared store stays the only required transport. Read from the global config only. Default unset."),
     "worktree.prune_done": Meta(
         "advanced",
         "How far the merged sweep's done-node arm goes on a done tree with "
@@ -641,7 +642,7 @@ FIELD_META: dict[str, Meta] = {
     ),
     # --- config.routing.* (config-first routing inventory) ---
     "routing.models": Meta(
-        "never", "The routing inventory: {name, harness, model, route, account, band, effort, cost_per_mtok_in, context, context_measured_at, context_source} rows. A row OVERRIDES the built-in of the same name per field; a new name EXTENDS the set. A row's context counts as a measured window only beside a context_measured_at date; an unmeasured model falls back to the id-based default. Declare none and the grid records no-inventory-declared; the fallback only keeps tier requests answerable. `fno_routing_sample/routing_sample.toml` ships as a labelled sample.",
+        "never", "The routing inventory: {name, harness, model, route, account, band, effort, cost_per_mtok_in, context, context_measured_at, context_source} rows. A row OVERRIDES the built-in of the same name per field; a new name EXTENDS the set. A row's context counts as a measured window only beside a context_measured_at date; an unmeasured model falls back to the id-based default. Declare none and the grid records no-inventory-declared; the fallback only keeps tier requests answerable. The labelled sample ships inside the binary (`fno config route init` appends it).",
     ),
     "routing.objective": Meta(
         "advanced", "How the grid orders candidates that already clear the band: cheapest-that-clears (default), best-available, or prefer-harness. A value outside those three degrades to the default, so a typo can never select an objective nobody named.",
@@ -705,7 +706,7 @@ FIELD_META: dict[str, Meta] = {
     # --- config.lead.* (the lead loop; both default false) ---
     "lead.enabled": Meta("advanced", "Arm the lead loop: hold a lead session open while its board names work it can shrink. Defaults false."),
     "lead.autonomous_merge": Meta("advanced", "Let the lead merge a green mergeable PR. Defaults false; until set, a mergeable PR is reported and never counted as the lead's own work."),
-    "lead.wake_enabled": Meta("advanced", "Arm the pr-watch tick's wake phase: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false."),
+    "lead.wake_enabled": Meta("advanced", "Arm the fno-agents daemon's lead-wake arm: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Runs inside the fno-agents daemon; the pr-watcher LaunchAgent is no longer in the path. Defaults false."),
     "lead.wake_ceiling": Meta("advanced", "Wakes allowed per scope per ROLLING 24h (default 32, ~1.5x the worst measured day). Never a lifetime constant: a lifetime cap strands a long-lived lead."),
     "lead.wake_debounce_seconds": Meta("advanced", "Minimum gap between billed wakes (default 900): a lead woken inside the window is still working under its own in-session arm."),
     "lead.wake_backstop_seconds": Meta("advanced", "Timer-backstop interval (default 1800). An approximation of the mail and board-change triggers, kept so a missed event cannot strand a scope forever; the interval is a policy choice, not a measurement."),

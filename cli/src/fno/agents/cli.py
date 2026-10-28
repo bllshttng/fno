@@ -756,10 +756,6 @@ def cmd_spawn(
         message = read_text_arg(message or None, prompt_file, what="the prompt") or ""
 
     from fno.agents.dispatch import DispatchAskError, SpawnResult, dispatch_spawn
-    from fno.dispatch_flags import (
-        DispatchFlagError,
-        resolve_dispatch_harness,
-    )
 
     workdir = _resolve_dispatch_workdir(cwd, fresh, here)
     # `-c` is `--cwd` on spawn: codex's own `-c key=value` config spelling
@@ -786,11 +782,23 @@ def cmd_spawn(
     # --model, --effort and --permission-mode are the harness's own flags: the
     # pre-pass moves them behind the fence, so this leg never reads them.
     model = effort = permission_mode = None
+    from fno.rust_binary import CommandUnavailable, command_call
+
     try:
-        harness, harness_source = resolve_dispatch_harness(harness)
-    except DispatchFlagError as exc:
-        print(str(exc), file=sys.stderr)
-        raise typer.Exit(code=2) from exc
+        answer = command_call(
+            "route-slot",
+            {"mode": "resolve", "explicit": harness, "env": dict(os.environ)},
+        )
+    except CommandUnavailable:
+        # No binary: the explicit flag stands alone and inference stands
+        # down, so the spawn reaches the gate's own fail-closed refusal
+        # (87, gate_unavailable) instead of dying here.
+        answer = {}
+    if "refusal" in answer:
+        print(answer["refusal"], file=sys.stderr)
+        raise typer.Exit(code=2)
+    harness = answer.get("harness") or harness
+    harness_source = answer.get("source")
     # Provenance rides the pane receipt's harness_source field below - it is
     # the HARNESS axis's provenance, not the vendor's. The bg/once stdout
     # receipts stay byte-parity-locked with the Rust client, so they skip it.
@@ -798,7 +806,7 @@ def cmd_spawn(
     # The substrate axis: an empty value resolves to the built-in default
     # (thread where seated).
     from fno.agents.harness_map import DispatchResolveError, fence_uncarried, thread_seatable
-    uncarried = fence_uncarried(harness, passthrough)
+    uncarried = fence_uncarried(harness or "", passthrough)
     if passthrough and message.startswith("-"):
         # A seed written after the fence lands here: the fence's first token
         # fills the prompt slot, so `-- -m X 'seed'` seeds the worker with `-m`.
@@ -820,7 +828,7 @@ def cmd_spawn(
     # refuses and names the flag instead of opening a pane by surprise.
     if substrate == "thread":
         try:
-            seatable = thread_seatable(harness)
+            seatable = thread_seatable(harness or "")
         except DispatchResolveError:  # an undeclared harness seats no thread
             seatable = False
         why = f"has no carrier for {uncarried}" if uncarried else ""
@@ -854,13 +862,18 @@ def cmd_spawn(
         node_seed_env = seed.env
         node_seed_receipt = seed.receipt
         if cwd is None and not here:
-            ensured = seed.ensure_launch_workdir(harness)
+            ensured = seed.ensure_launch_workdir(harness or "")
             if ensured is None:
                 raise typer.Exit(code=2)
             workdir = ensured.resolve()
             _moved_cwd = str(workdir) if workdir != Path(os.getcwd()).resolve() else None
 
     from fno.agents.spawn_defaults import resolve_spawn_gates, seedless_thread_refusal
+
+    # From here down the transport reads the unset harness as the empty
+    # default: the seed path needed the None distinction (unset resolves its
+    # own config rung), the transport layer does not.
+    harness = harness or ""
 
     # Retired spellings bind the same options; name the replacement when the
     # argv used one. The process argv is exact for the real door; a test
@@ -1082,105 +1095,48 @@ def cmd_spawn(
     # leaves the node dispatchable. Only a non-claude harness was refused above;
     # --account composes with --route/--role.
     account_env: dict[str, str] | None = None
+    from fno.agents.spawn_overlay_client import AccountRefused, SpawnOverlayUnavailable, account_overlay
+
     if account is not None:
-        from fno.agents.account_env import resolve_account_overlay_or_exit
+        try:
+            account_env = account_overlay(account)["env"]
+        except (AccountRefused, SpawnOverlayUnavailable) as exc:
+            print(str(exc), file=sys.stderr)
+            raise typer.Exit(code=2) from exc
 
-        overlay = resolve_account_overlay_or_exit(account)
-        account_env = overlay.env if overlay else None
-
-    # The proven-credential carrier (outage handoff) is claimed unconditionally:
-    # it carries real credential values, so a spawn that somehow sets it without
-    # --dispatch-account must refuse here rather than let the child inherit the
-    # carrier verbatim (a leak outside the one staged overlay that was proved).
+    # The autonomous-cutover carrier, resolved by accounts::launch against the
+    # WORKER's root: the record must exist there and its harness must equal
+    # the resolved one. The proven-credential carrier (outage handoff) is
+    # claimed unconditionally, so a spawn without --dispatch-account refuses
+    # rather than let the child inherit real credential values.
     proven_env_raw = os.environ.pop("FNO_DISPATCH_ACCOUNT_ENV", None)
-    if proven_env_raw is not None and dispatch_account is None:
-        print(
-            "refusing: the proven-credential carrier is set but no "
-            "--dispatch-account was given; no worker launched",
-            file=sys.stderr,
-        )
-        raise typer.Exit(code=2)
-
-    # The autonomous-cutover carrier. Same fail-closed posture as --account, and
-    # deliberately a separate flag: --account's claude-only refusal is an operator
-    # contract, while a cutover's whole point is landing on another harness.
-    if dispatch_account is not None:
-        from fno.adapters.providers.dispatch import dispatch_env
-        from fno.adapters.providers.loader import load_providers
-
-        # The proven-credential carrier (outage handoff): the supervisor's
-        # health canary proved a SPECIFIC env for this account and passed it
-        # through the FNO_DISPATCH_ACCOUNT_ENV environment carrier (never
-        # argv). When present, it IS the dispatch overlay - re-deriving from
-        # the record here could stage different credentials than the ones
-        # proved, which is the exact disconnect that made the canary's proof
-        # decorative. The record still must exist and match the harness: the
-        # env proves the values, this check proves the target.
-        proven_env: dict[str, str] | None = None
-        if proven_env_raw:
-            try:
-                parsed = json.loads(proven_env_raw)
-                if not isinstance(parsed, dict) or not all(
-                    isinstance(k, str) and isinstance(v, str)
-                    for k, v in parsed.items()
-                ):
-                    raise ValueError("carrier payload must be a flat string map")
-                if not parsed:
-                    raise ValueError("carrier payload is empty")
-                proven_env = parsed
-            except (TypeError, ValueError) as exc:
-                print(
-                    f"refusing --dispatch-account {dispatch_account!r}: the "
-                    f"proven-credential carrier is unreadable ({exc}); "
-                    "no worker launched",
-                    file=sys.stderr,
-                )
-                raise typer.Exit(code=2) from exc
+    if dispatch_account is not None or proven_env_raw is not None:
+        from fno.agents.spawn_overlay_client import spawn_overlay_call
 
         try:
-            # Resolve against the WORKER's root, not the dispatcher's cwd: the
-            # record was selected out of the node's project registry, and reading
-            # a different one here would stage another project's account.
-            rec = load_providers(repo_root=workdir).by_id.get(dispatch_account)
-            if rec is None:
-                raise ValueError("not a registered provider record")
-            rec_harness = (getattr(rec, "harness", "") or "").strip()
-            # The overlay and the binary must agree. A codex record's CODEX_HOME
-            # handed to a claude spawn authenticates nothing and launches the
-            # wrong binary - the exact miss this carrier exists to prevent, so it
-            # is checked here rather than assumed from the caller's bookkeeping.
-            # Compare against the RESOLVED harness, not the raw --harness option:
-            # omitting the flag leaves it None, and trusting that would stage a
-            # codex account onto the resolved claude default unchecked.
-            # Require a harness AND exact equality. Treating an empty harness as
-            # "no objection" would wave through the one record we can say least
-            # about, which is the opposite of what a fail-closed guard is for.
-            if rec_harness != harness:
-                raise ValueError(
-                    f"record is a {rec_harness or '<no harness>'} account but "
-                    f"the spawn resolves {harness}"
-                )
-            dispatch_overlay = (
-                proven_env if proven_env is not None
-                else dispatch_env(dispatch_account, repo_root=workdir)
-            )
-            account_env = {
-                **(account_env or {}),
-                **dispatch_overlay,
-            }
-            if proven_env is not None:
-                credential_source = "canary-proven carrier"
-                credential_env_keys = sorted(proven_env)
-            else:
-                credential_source = "record-derived"
-                credential_env_keys = sorted(dispatch_overlay)
-        except Exception as exc:  # noqa: BLE001 - never spawn onto an unresolved record
-            print(
-                f"refusing --dispatch-account {dispatch_account!r}: {exc}; "
-                "no worker launched",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2) from exc
+            answer = spawn_overlay_call({
+                "kind": "dispatch-account", "account": dispatch_account, "harness": harness,
+                "cwd": str(workdir), "carrier": proven_env_raw,
+            })
+        except SpawnOverlayUnavailable as exc:
+            answer = {"refusal": f"refusing --dispatch-account {dispatch_account!r}: {exc}; no worker launched"}
+        if answer.get("refusal") is not None:
+            print(answer["refusal"], file=sys.stderr)
+            raise typer.Exit(code=2)
+        account_env = {**(account_env or {}), **answer["env"]}
+        credential_source = answer["credential_source"]
+        credential_env_keys = answer["credential_env_keys"]
+
+    # The row's launch stamp, the Python lane's half of the seam write the
+    # Rust client's arm does in accounts::launch: the worker's env carries the
+    # id so the row mint stamps it, and an id left by a parent's spawn dies
+    # here rather than labeling a row that launched on something else. The
+    # pick's provenance carrier stays the pick's (launch_provenance.py).
+    label = account if account is not None else dispatch_account
+    if label is not None:
+        os.environ["FNO_LAUNCH_ACCOUNT"] = label
+    else:
+        os.environ.pop("FNO_LAUNCH_ACCOUNT", None)
 
     #: the receipt's credential facts, read off the composed overlays
     # (never off the flags - a caller who typed `--account makers -P zai` reads
@@ -1191,12 +1147,14 @@ def cmd_spawn(
     # byte-identical to main (AC3) because the other overlay is absent.
     credential = None
     if account_env is not None and route_env is not None:
-        from fno.agents.account_env import compose_worker_credentials
+        from types import SimpleNamespace
+
+        from fno.agents.spawn_overlay_client import compose_credentials
 
         account_label = account if account is not None else dispatch_account
-        _, credential = compose_worker_credentials(
+        credential = SimpleNamespace(**compose_credentials(
             account_env, route_env, {}, account_id=account_label
-        )
+        )["decision"])
         print(
             f"account: {account_label} (profile only; auth {credential.auth}, "
             f"bills {credential.bills})",
@@ -1267,15 +1225,28 @@ def cmd_spawn(
     # An undeclared FOREIGN target (explicit --cwd only) pins `never`; an
     # explicit ambient override rides the same overlay, else the pane wrapper
     # strips what the operator set.
-    from fno.worktree_paths import UNDECLARED_REPO_RECEIPT, undeclared_dispatch_pin
+    from fno.rust_binary import call_binary_json
 
-    _pin = (
-        undeclared_dispatch_pin(workdir, Path(os.getcwd()), harness) if cwd else {}
-    )
+    _pin: dict = {}
+    _receipt = None
+    if cwd:
+        _err, _payload = call_binary_json(
+            "worktree-dispatch-pin",
+            [
+                "--target", str(workdir),
+                "--caller", str(Path(os.getcwd())),
+                "--harness", harness or "",
+            ],
+            timeout=30,
+        )
+        if _err is None and isinstance(_payload, dict):
+            _pin = _payload.get("pin") or {}
+            _receipt = _payload.get("receipt")
     if _pin:
         prov_env = dict(prov_env) if prov_env is not None else {}
         prov_env.update(_pin)
-        print(UNDECLARED_REPO_RECEIPT, file=sys.stderr)
+        if _receipt:
+            print(_receipt, file=sys.stderr)
     elif os.environ.get("FNO_WORKTREE_POLICY"):
         prov_env = dict(prov_env) if prov_env is not None else {}
         prov_env["FNO_WORKTREE_POLICY"] = os.environ["FNO_WORKTREE_POLICY"]
@@ -2239,6 +2210,7 @@ def cmd_list(
 ) -> None:
     """List registered agents: ROW NAME SESSION HARNESS MODEL EFFORT PR AGE
     LAST MESSAGE STATUS, JSON when stdout is not a TTY or ``--json`` is passed.
+    The JSON envelope's top-level key is ``agents``.
 
     The ``fno-agents`` client owns this command; the options above document its
     surface. There is no Python list lane left: a missing binary is refused.
@@ -2476,11 +2448,11 @@ def cmd_heal_token(
         hidden=True,
         help="Resolve against the registry and stores as one namespace.",
     ),
-    cross_project: bool = typer.Option(
+    _cross_project: bool = typer.Option(
         False,
         "--cross-project",
         hidden=True,
-        help="Authorize machine-wide store selection after uniqueness checks.",
+        help="Retired: healing is machine-wide; accepted as a silent no-op.",
     ),
 ) -> None:
     """Internal: adopt the session TOKEN names from its harness store, as JSON.
@@ -2513,8 +2485,6 @@ def cmd_heal_token(
             resolved = resolve_agent(
                 token,
                 path=Path(registry) if registry else None,
-                scope_cwd=os.getcwd(),
-                cross_project=cross_project,
             )
             resolved_entry = resolved.entry
         except AgentResolutionError as exc:
@@ -2525,8 +2495,6 @@ def cmd_heal_token(
                 sys.stderr.write(f"{exc}\n")
                 raise typer.Exit(code=HEAL_TOKEN_UNAVAILABLE_EXIT)
             raise typer.Exit(code=HEAL_TOKEN_MISS_EXIT)
-        if cross_project and resolved.matched_by == "harness_store":
-            sys.stderr.write("scope=cross-project\n")
         sys.stdout.write(_json.dumps(asdict(resolved_entry)))
         sys.stdout.write("\n")
         return
@@ -2535,16 +2503,12 @@ def cmd_heal_token(
         entry = resolve_from_harness_store(
             token,
             registry_path=Path(registry) if registry else None,
-            scope_cwd=os.getcwd(),
-            cross_project=cross_project,
         )
     except AgentResolutionError as exc:
         sys.stderr.write(f"{exc}\n")
         raise typer.Exit(code=HEAL_TOKEN_AMBIGUOUS_EXIT)
     if entry is None:
         raise typer.Exit(code=HEAL_TOKEN_MISS_EXIT)
-    if cross_project:
-        sys.stderr.write("scope=cross-project\n")
     sys.stdout.write(_json.dumps(asdict(entry)))
     sys.stdout.write("\n")
 
@@ -2701,121 +2665,15 @@ def cmd_register(
 ) -> None:
     """Join THIS session to the mesh roster so peers can `fno agents mail send` to it.
 
-    The self-service seam behind ``/fno-me``: a session a human started by hand
-    has no spawn-created roster row. This resolves the ambient harness identity
-    (CLAUDE_CODE_SESSION_ID / CODEX_THREAD_ID / ...) and writes an ``idle`` row
-    named by the canonical bare ``<shortid>`` handle, the same string the
-    session self-stamps and drains, so a durable ``fno agents mail send`` to it lands.
-    ``fno agents whoami`` then reports ``registered: true`` via its session-id
-    fallback, no ``FNO_AGENT_SELF`` env needed.
-
-    The handle is ALWAYS the canonical one (no custom-name override): a custom
-    alias would not be drained by ``mail drain-self`` (which scans only the
-    canonical handle), so mail to it would silently strand.
-
-    Idempotent (re-running refreshes the row). Exit 3 for a session with no
-    ambient harness identity (nothing addressable to register).
+    The Rust client command owns register (the owned-identity ladder plus the row
+    mint under the shared registry lock); with an installed binary the runtime
+    router execs it before this function runs. There is no Python register
+    left: a missing binary is refused here.
     """
-    from fno.agents import events
-    from fno.agents.registry import register_existing_session
-    from fno.agents.self_stamp import IdentityAmbiguousError, require_self_identity
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    if delivery_policy is not None and delivery_policy not in ("bus-only", "off"):
-        sys.stderr.write(
-            f"error: --delivery-policy accepts 'bus-only' or 'off', "
-            f"got {delivery_policy!r}\n"
-        )
-        raise typer.Exit(code=2)
-
-    try:
-        ident = require_self_identity()
-    except IdentityAmbiguousError as exc:
-        sys.stderr.write(f"cannot register: {exc}\n")
-        raise typer.Exit(code=4) from exc
-    session_id = ident.session_id
-    harness = ident.harness or ("claude" if session_id else None)
-    if not session_id or not harness:
-        sys.stderr.write(
-            "no ambient harness identity - nothing to register "
-            "(run /fno-me inside a claude/codex session)\n"
-        )
-        raise typer.Exit(code=3)
-
-    try:
-        entry = register_existing_session(
-            harness=harness, session_id=session_id, cwd=os.getcwd(),
-            origin="operator",
-            delivery_policy=delivery_policy,
-        )
-    except Exception as exc:  # a deliberate manual join reports failure (unlike the fail-open hook)
-        sys.stderr.write(f"register failed: {exc}\n")
-        raise typer.Exit(code=1) from exc
-
-    # `origin` is write-once, so a human taking over a pane footnote spawned
-    # keeps `spawned` and this call cannot change it. Silence there reads as
-    # success: the operator believes they are registered as attended, while
-    # mail still treats them as unattended. The refusal is deliberate - a
-    # birth fact is not a claim a later caller gets to revise - so this says
-    # it rather than hiding it.
-    if entry.origin is not None and entry.origin != "operator":
-        sys.stderr.write(
-            f"note: origin stays {entry.origin!r}; it records what created this "
-            "row and is written once. Mail escalation reads it, so this "
-            f"session is still treated as {entry.origin!r}.\n"
-        )
-
-    #: record a clock saying "no expiry" beside a hand-stamped policy.
-    # Not for enforcement - an absent clock already never lapses. This is what
-    # lets the DND column on `fno agents list` say "held" for this row instead
-    # of leaving the operator to guess from a blank cell.
-    if delivery_policy is not None:
-        from fno.harness_identity import session_identity_key
-        from fno.mail.hold import _hold_transport
-
-        # Clock key is the collision-free identity key; the name-keyed clear removes a pre-migration clock.
-        clock_key = session_identity_key(session_id)
-        # Both stamps are the ABSENCE of a clock beside the flag: the native
-        # door's --clear drops any standing clock either way, and the policy
-        # flip also drops a pre-migration name-keyed one.
-        _hold_transport(["--clear", clock_key])
-        if delivery_policy != "bus-only":
-            _hold_transport(["--clear", entry.name])
-        else:
-            # Best effort: the row is already stamped, and an older
-            # fno-agents without --record-stamp must not fail the register.
-            try:
-                _hold_transport(["--record-stamp", session_id])
-            except Exception:  # noqa: BLE001 - the journal never fails the register
-                pass
-
-    events.emit(
-        "session_registered",
-        provider=entry.harness,
-        name=entry.name,
-        session_id=session_id,
-        cwd=entry.cwd,
-    )
-    if json_out or not bool(getattr(sys.stdout, "isatty", lambda: False)()):
-        import json as _json
-
-        sys.stdout.write(
-            _json.dumps({
-                "registered": True,
-                "name": entry.name,
-                "harness": entry.harness,
-                "delivery_policy": entry.delivery_policy,
-            }) + "\n"
-        )
-    else:
-        policy_note = (
-            " [bus-only: mail to this session queues durable, never injects]"
-            if getattr(entry, "delivery_policy", None) == "bus-only"
-            else ""
-        )
-        sys.stdout.write(
-            f"joined the mesh as {entry.name}{policy_note} - peers can now reach you with "
-            f"`fno agents mail send {entry.name} \"...\"`\n"
-        )
+    _ = delivery_policy
+    refuse_without_binary("register")
 
 
 @agents_app.command("top", hidden=True)
@@ -2890,31 +2748,18 @@ def cmd_orphans(
     ``--reap`` kills only what we named ourselves. Attribution is a heuristic,
     and a heuristic must not hold a kill signal.
     """
-    import json as _json
+    # The sweep answers natively (crates/fno-agents/src/orphans.rs, behind the
+    # census action as `fno-agents census --orphans`); the Python body is gone.
+    from fno.agents.rust_runtime import route_to_rust
 
-    from fno.agents.orphans import filter_new, render, scan, seen_path, to_json
-
-    skip = os.environ.get("FNO_ORPHANS_SKIP_PROBE") or None
-    result = scan(reap=reap, skip_probe=skip)
-    speak = True
+    flags = []
+    if reap:
+        flags.append("--reap")
     if quiet_unless_new:
-        # A broken scan always speaks: silence there is the exact failure this
-        # command exists to make impossible.
-        # `filter_new` is called FIRST, never behind a short-circuiting `or`.
-        # Recording this scan's findings is its side effect, and skipping it on
-        # a reaping run left the seen-file stale after exactly the most
-        # interesting sweep. (A BROKEN scan records nothing - `filter_new`
-        # handles that itself, because `render` withheld the list.)
-        is_new = filter_new(result, seen_path())
-        # A reap ALWAYS speaks. A finding reported at 8 minutes is no longer new
-        # when the next sweep kills it past the age gate, and that path
-        # SIGKILLed a process and printed nothing. A broken scan speaks for the
-        # same reason.
-        speak = result.broken or bool(result.reaped) or is_new
-    if speak:
-        print(_json.dumps(to_json(result), indent=2) if as_json else render(result))
-    if result.broken:
-        raise typer.Exit(2)
+        flags.append("--quiet-unless-new")
+    if as_json:
+        flags.append("--json")
+    route_to_rust(["census", "--orphans", *flags])
 
 
 # The pane-identity command moved to fno.agents.pane_identity (file
@@ -3381,7 +3226,7 @@ def cmd_watchdog(
 
         def _apply_and_emit():
             # One move shared by both lanes: apply, then the JSON emit.
-            results = wd.apply_recoverable(scan, scope_cwd=scope_cwd)
+            results = wd.apply_recoverable(scan)
             if json_out:
                 sys.stdout.write(
                     json.dumps(
@@ -3795,8 +3640,10 @@ def cmd_rm(
     the orphan in the receipt. rm needs no prior stop: it ends the
     session's process itself as part of the removal. The one exception is
     a claude background thread, where rm runs `claude stop` first - and
-    runs it itself, so no caller composes one. When the process end
-    cannot be confirmed, rm keeps the row and says why. Do not tear a
+    runs it itself, so no caller composes one. When the ask does not end
+    the session, rm ends the proven process set itself (a glm worker's
+    `claude stop` returns without ending it); only an end rm cannot
+    confirm keeps the row, and then it says why. Do not tear a
     session down by hand: the harness session record IS the resume
     handle, and dropping it directly spends that handle for nothing this
     command has not already done. If one is already orphaned, use the
@@ -3951,58 +3798,6 @@ agents_app.command("resume")(_cmd_resume)
 # ledger. `fno whoami ledger` stays as its hidden alias.
 agents_app.command("history")(history_command)
 agents_app.command("transcript", hidden=True)(transcript_command)
-
-
-@agents_app.command(
-    "yard",
-    hidden=True,
-    help=(
-        "The yard identity fold: species, rarity tier, role, and first-sighting "
-        "per registry citizen.\n\n"
-        "Read-only over the agent registry and the graph archive. Consumed by "
-        "the mux yard overlay (fail-open shell-out); `--json` is the machine "
-        "surface, the text mode is a one-line-per-citizen summary. Outcome "
-        "only - never the rank, the frequency, or the boundary."
-    ),
-)
-def yard(
-    as_json: bool = typer.Option(False, "--json", "-J", help="Emit the fold as JSON."),
-) -> None:
-    """Fold the fleet into yard citizens (the f[no]nimals)."""
-    import json as _json
-
-    from fno import paths
-    from fno.agents.registry import load_registry
-    from fno.graph.store import GraphUnreadableError, read_graph_strict
-    from fno.yard import RARITY_TIERS, fold
-
-    rows = load_registry()
-    archive_path = paths.graph_archive_json()
-    # Strict on purpose: this is a truth-bound fold, not a browse command. The
-    # lenient reader turns a corrupt archive into [], which would mark every
-    # citizen a first-sighting - fabricated outcome on the machine surface the
-    # mux renders. Unreadable history fails the fold so the overlay degrades.
-    try:
-        archive = read_graph_strict(archive_path) if archive_path.exists() else []
-    except GraphUnreadableError as exc:
-        typer.secho(f"agents yard: archive unreadable, fold refused: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    citizens = fold(rows, archive)
-
-    if as_json:
-        typer.echo(_json.dumps({"citizens": citizens}, indent=2))
-        return
-    if not citizens:
-        typer.echo("the yard is empty (no registry rows)")
-        return
-    for c in citizens:
-        mark = " NEW" if c["first_sighting"] else ""
-        role = f" role {c['role_level']}" if c["role_level"] else ""
-        typer.echo(
-            f"{c['name']:<24} species {c['species']:>2}  {c['rarity']:<9}{role}{mark}"
-        )
-    n_new = sum(1 for c in citizens if c["first_sighting"])
-    typer.echo(f"{len(citizens)} citizens, {n_new} first sighting(s); tiers: {'/'.join(RARITY_TIERS)}")
 
 
 #: instruments over the capability table. `probe` measures the live

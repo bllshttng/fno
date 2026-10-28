@@ -24,6 +24,8 @@ use std::path::{Path, PathBuf};
 
 use fno::{bootstrap, cli_args, mux_cli, proto};
 
+mod config_route_cli;
+
 /// Commands removed from the mux front, and what replaced each one.
 ///
 /// A removed command that lands on the bare usage banner makes the caller re-read
@@ -68,9 +70,20 @@ enum Role {
     /// `config setup run` composes on. Native, so the inventory answers
     /// beside the setup command that reads it.
     ConfigDefaults(Vec<OsString>),
+    ConfigRoute(Vec<OsString>),
+    ConfigSchema(Vec<String>),
+    /// The native read-side `config` doors (get, history, build-dir,
+    /// assert-subagent-budget, status-sinks, active-backlog, plugin install).
+    /// One classify, bodies in `config_cli::`; the writer stays with the
+    /// config hub's write surface and the doctor command beside the setup
+    /// family's engine.
+    ConfigCli(fno::config_cli::Door),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
     SetupRun(Vec<OsString>),
+    /// `fno config setup plan|post-merge` and the root `fno setup` twins:
+    /// the wizard question plan and the post-merge scaffold.
+    SetupCmd(fno::setup_cmds::Cmd),
     /// `fno do wizard`: the interactive terminal host for the wizard flow.
     /// Native, because it owns the raw-mode terminal and must run before any
     /// Python wheel exists on a fresh machine.
@@ -179,6 +192,18 @@ enum Role {
     /// emit surface and the other event names until their cutover.
     DoctorEvent(Vec<OsString>),
     DoctorCost(Vec<OsString>),
+    /// `fno doctor skill-diff tick|reconcile` and the deprecated root `fno
+    /// skill-diff`: the whole command execs the native `fno-agents loops`
+    /// skill-diff ops. The op word maps to the loops door's name (`tick` ->
+    /// `skill-diff-tick`, `reconcile` -> `skill-diff-reconcile`); the flags
+    /// ride byte-verbatim. A bare command or --help answers native help
+    /// inside the op door.
+    DoctorSkillDiff(Vec<OsString>),
+    /// `fno doctor observer <op>`: the observer family (sweep | judge |
+    /// replay) execs the native `fno-agents spawn-overlay observer` ops
+    /// door. The tail (op word + flags) rides byte-verbatim; the op door
+    /// refuses an unknown op with usage.
+    DoctorObserver(Vec<OsString>),
     /// `fno doctor lint style ...`: the native style check, exec'd through
     /// the sibling fno-agents `style-check` command. Args from the check name
     /// onward; Python keeps every other lint check until its port.
@@ -191,6 +216,11 @@ enum Role {
     DoctorUpdate(Vec<OsString>),
     /// `fno agents history ... --graph ...`: the native session-card reader.
     AgentsHistory(Vec<OsString>),
+    /// `fno agents lead refresh-canon` (the front's rewrite of
+    /// `fno agents org refresh-canon`): the beat's canon-doc refresh. The
+    /// carried tail is empty by contract; the door resolves the plugin root
+    /// itself and refuses naming every source it tried.
+    AgentsLeadRefreshCanon(Vec<OsString>),
     /// `fno agents transcript ...`: the native session-bundle transfer.
     AgentsTranscript(Vec<OsString>),
     /// `fno agents claim backlog|export ...`: the shared-store commands, run
@@ -211,6 +241,19 @@ enum Role {
     /// `fno do target blast-check <plan>`: the blast classifier is native
     /// (target_blast.rs); the Python command is a thin forward.
     TargetBlastCheck(Vec<OsString>),
+    /// `fno do target|state|phase <command>` and `fno do pr
+    /// stub-manifest <op>`: the target-family commands. The door names the op
+    /// argv under the fno-agents binary; the tail rides byte-verbatim.
+    TargetFamily(&'static [&'static str], Vec<OsString>, Option<&'static str>),
+    /// `fno do research <topic> ...`: exec'd through the sibling fno-agents
+    /// `research` door. No Python leg remains.
+    DoResearch(Vec<OsString>),
+    /// `fno do think inspect ...` and `fno do think dispatch ...`: exec'd
+    /// through the `think-inspect` and `think-dispatch` doors.
+    ThinkInspect(Vec<OsString>),
+    ThinkDispatch(Vec<OsString>),
+    /// Bare `fno do think`, `--help`, or an unknown leaf (named, exit 2).
+    ThinkUsage(Option<String>),
     /// `fno do review post-dispositions ...`: the disposition-comment leaf,
     /// exec'd through the sibling fno-agents `review-level findings post`
     /// door. The tail passes through byte-verbatim, --help included: the
@@ -245,6 +288,10 @@ enum Role {
     /// `fno agents restart ...` and root `fno restart ...`: exec'd as
     /// `fno-agents restart`, the one implementation.
     AgentsRestart(Vec<OsString>),
+    /// `fno agents org chart fold ...` (forwarded as `agents org-fold`):
+    /// exec'd as `fno-agents org-fold`, so the Explorer org tab's read skips
+    /// the Python front.
+    AgentsOrgFold(Vec<OsString>),
     /// `fno agents status ...`: the read command hooks and wait loops spend,
     /// exec'd natively for the same reason as agents_top: the Python front
     /// only turned around and exec'd the same binary. The argv passes
@@ -253,9 +300,25 @@ enum Role {
     /// `fno agents roles <op>` for an op the Rust door owns: exec'd as
     /// `fno-agents spawn-overlay roles`, the group options carried along.
     AgentsRoles(Vec<OsString>),
+    /// `fno whoami` and `fno whoami status`: the render with the session
+    /// receipt (`fno-agents intel --receipt`) appended. The seam runs the
+    /// front door as a marker child; the four leaves other families own
+    /// still forward to the Python leg; see `classify_whoami`.
+    Whoami(Vec<OsString>),
+    /// The retired root `fno status ...`: the move notice the Python
+    /// forwarder printed lands on stderr (byte-identical), then the same
+    /// exec as `fno whoami status`.
+    WhoamiStatusAlias(Vec<OsString>),
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
+    /// `fno doctor test ...` and the deprecated hidden root `fno test`: the
+    /// whole test command (pytest/rust/smoke/changed/census), exec'd as
+    /// `fno-agents test`. The tail rides byte-verbatim; --help answers native
+    /// help inside the command.
+    DoctorTest(Vec<OsString>),
+    DoctorHome(Vec<OsString>),
+    DoctorAgentsExec(&'static str, Vec<OsString>),
     /// `fno agents mail show ...`: the native one-message reader, lexically
     /// classified beside agents_history. The Python CLI keeps the rest of
     /// the mail tree; the carried tail runs `fno-agents chats show`.
@@ -320,19 +383,39 @@ enum Role {
     /// paths commands still forward to Python (one command per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
+    /// The `fno agents org` lead commands and `fno inbox board`, exec'd as
+    /// arguments of existing fno-agents actions. Their Python legs are gone.
+    Lead(fno::lead_route::Claim),
+    /// `fno agents mcp send ...` and the deprecated root `fno mcp send ...`:
+    /// the ported MCP channel family's send command, exec'd through the
+    /// worker's --mcp-exec lane with the tail byte-verbatim. The bool is the
+    /// root spelling, whose move notice prints before the same exec.
+    AgentsMcpRoot(bool, Vec<OsString>),
+    /// The fleet family's claimed command spellings (`fno do loops`, `fno
+    /// agents yard`, `fno agents autonomy`, and their deprecated root
+    /// forms): the ported fleet doors, exec'd with the tail byte-verbatim.
+    /// The struct carries the door, the root-alias flag, and the tail.
+    Fleet(fno::fleet_route::FleetClaim),
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
     /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
     /// The bool is the moved spelling, which prints its one stderr note.
     PluginsCli(Vec<OsString>, bool),
+    /// `fno config project ...` and the moved `fno project ...` spelling: the
+    /// whole project group execs `fno-agents spawn-overlay project`. The bool
+    /// is the moved spelling, which prints its one stderr note.
+    ProjectCli(Vec<OsString>, bool),
     /// `fno backlog ...`: the whole backlog namespace execs the sibling Rust
     /// binary's grouped dispatcher. The argv passes through byte-verbatim
     /// (the sibling's catalog owns grouped and legacy spellings).
     Backlog,
-    /// `fno do pr ...` (except watch and stub-manifest): the whole pr
-    /// namespace execs the sibling Rust binary's pr dispatcher. The argv
-    /// passes through byte-verbatim, the backlog namespace's contract.
+    /// `fno do pr ...` (except watch): the whole pr namespace execs the
+    /// sibling Rust binary's pr dispatcher. The argv passes through
+    /// byte-verbatim, the backlog namespace's contract.
     DoPr,
+    /// `fno do ci ...`: the per-commit CI-state namespace execs the sibling
+    /// binary's ci dispatcher, the same byte-verbatim handover as DoPr.
+    DoCi,
     /// `fno backlog list [<query>]`: the native node-query door (the grammar
     /// and the read model both live in this crate, d-069a9fa1). Args after
     /// `list`.
@@ -350,9 +433,25 @@ enum Role {
     /// `fno inbox user|operator status`: the native queue read; the carried
     /// tail is the `fno-agents compaction` argv.
     InboxUser(Vec<OsString>),
-    /// `fno inbox outstanding [--json|-J]`: the native listing; the carried
-    /// tail is the `fno-agents compaction outstanding` argv.
+    /// `fno inbox outstanding [--json|-J]`: the native listing and its
+    /// subcommands; the carried tail is the `fno-agents compaction
+    /// outstanding` argv.
     InboxOutstanding(Vec<OsString>),
+    /// `fno inbox day start|end`: the native day boundary; the carried tail
+    /// is the `fno-agents day` argv.
+    InboxDay(Vec<OsString>),
+    /// `fno inbox notify TITLE MESSAGE [--pointer P]`: the operator-notice
+    /// command, answered in-process by `notify_dispatch` (the Python wheel's app
+    /// for this spelling is deleted). Also serves `fno notify` after the
+    /// deprecated-move line.
+    InboxNotify(Vec<OsString>),
+    /// `fno notify ...`: the deprecated root spelling; the dispatch prints the
+    /// one stderr move line, then answers as `inbox notify`.
+    NotifyDeprecated(Vec<OsString>),
+    /// `fno status-fanout ...`: the deprecated root spelling of
+    /// `fno doctor event fanout`; the dispatch prints the one stderr move
+    /// line, then runs the fanout door with the remaining args.
+    StatusFanoutDeprecated(Vec<OsString>),
     /// `fno board-render`: the local board's snapshot writer, a native front
     /// command because the page and the read model both live in this crate.
     BoardRender(Vec<String>),
@@ -495,6 +594,22 @@ fn classify_agents_transcript(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_agents_command(args, "transcript")
 }
 
+/// `fno agents org refresh-canon` arrives here as `agents lead
+/// refresh-canon` (the front's rewrite of the org row): the beat's
+/// canon-doc refresh, claimed natively so the door resolves the plugin root
+/// itself. The door takes no deeper words; the tail forwards so the usage
+/// refusal names what was typed.
+fn classify_agents_lead_refresh_canon(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3
+        || args[0].to_str()? != "agents"
+        || args[1].to_str()? != "lead"
+        || args[2].to_str()? != "refresh-canon"
+    {
+        return None;
+    }
+    Some(args[3..].to_vec())
+}
+
 fn classify_agents_command(args: &[OsString], command: &str) -> Option<Vec<OsString>> {
     classify_group_command(args, "agents", command)
 }
@@ -556,12 +671,123 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
     Some(args[2..].to_vec())
 }
 
+/// `fno doctor test ...` and the deprecated hidden root `fno test`: the whole
+/// command claims itself lexically, the tail byte-verbatim. A bare command and
+/// --help claim too (the Python leg dies in this port); the native command owns
+/// its help and its refusals.
+fn classify_test_command(args: &[OsString]) -> Option<Vec<OsString>> {
+    let rest: &[OsString] = match args.first()?.to_str()? {
+        "doctor" if args.get(1)?.to_str()? == "test" => &args[2..],
+        "test" => &args[1..],
+        _ => return None,
+    };
+    Some(rest.to_vec())
+}
+
+/// `fno doctor observer ...` and the deprecated root `fno observer ...`: the
+/// tail rides verbatim to the native ops door.
+fn classify_observer(args: &[OsString]) -> Option<Vec<OsString>> {
+    let rest: &[OsString] = match args.first()?.to_str()? {
+        "doctor" if args.get(1)?.to_str()? == "observer" => &args[2..],
+        "observer" => &args[1..],
+        _ => return None,
+    };
+    Some(rest.to_vec())
+}
+
+/// `fno doctor skill-diff ...` and the deprecated root `fno skill-diff ...`:
+/// the tail execs to the native ops door. The user-facing op word maps to
+/// the name the loops door routes (a bare `tick`/`reconcile` exec'd verbatim
+/// is its "unknown action" refusal); flags ride byte-verbatim. A bare
+/// command and --help claim too (the Python leg dies in this port); an
+/// unknown op word refuses inside the op door.
+fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
+    let rest: &[OsString] = match args.first()?.to_str()? {
+        "doctor" if args.get(1)?.to_str()? == "skill-diff" => &args[2..],
+        "skill-diff" => &args[1..],
+        _ => return None,
+    };
+    let mapped = match rest.first().and_then(|a| a.to_str()) {
+        Some("tick") => Some("skill-diff-tick"),
+        Some("reconcile") => Some("skill-diff-reconcile"),
+        _ => None,
+    };
+    Some(match mapped {
+        Some(op) => std::iter::once(OsString::from(op))
+            .chain(rest[1..].iter().cloned())
+            .collect(),
+        None => rest.to_vec(),
+    })
+}
+
+/// The leaves still owned by other families' Python legs: `fno whoami
+/// context|ledger|scoreboard|cost` forward to them.
+const PYTHON_LEAVES: [&str; 4] = ["context", "ledger", "scoreboard", "cost"];
+
+/// `fno whoami ...` and the retired root `fno status ...`: the summary
+/// render and the status read, exec'd as `fno-agents spawn-overlay whoami`.
+/// The four leaves other families still own (context / ledger / scoreboard /
+/// cost) forward to the Python leg byte-verbatim; the retired `fno status`
+/// root prints the move notice the Python forwarder printed, on the same
+/// stream, before the same exec. A root `-J` before either folds into the
+/// group's own `-J`, byte-for-byte what `fno -J whoami` answered before.
+fn classify_whoami(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    match args.first()?.to_str()? {
+        "whoami" => {
+            // args[0] is `whoami` itself; the exec action re-prefixes the
+            // group name, so the tail is everything after it.
+            let tail = &args[1..];
+            let mut i = 0usize;
+            while i < tail.len() {
+                match tail[i].to_str()? {
+                    "--json" | "-J" | "--no-walker" | "--no-fleet" => {}
+                    "--state-file" => i += 1,
+                    a if a.starts_with("--state-file=") => {}
+                    "status" => return Some((claimed_tail(tail, root_json), false)),
+                    leaf if PYTHON_LEAVES.contains(&leaf) => return None,
+                    leaf if leaf.starts_with('-') => {}
+                    _ => return Some((claimed_tail(tail, root_json), false)),
+                }
+                i += 1;
+            }
+            Some((claimed_tail(tail, root_json), false))
+        }
+        "status" => {
+            let mut tail: Vec<OsString> = std::iter::once(OsString::from("status"))
+                .chain(args[1..].iter().cloned())
+                .collect();
+            let json = root_json.then(|| OsString::from("--json"));
+            let tail = json.into_iter().chain(tail.drain(..)).collect();
+            Some((tail, true))
+        }
+        _ => None,
+    }
+}
+
+/// The claimed tail, with a root `-J` folded into the group's own spelling.
+fn claimed_tail(tail: &[OsString], root_json: bool) -> Vec<OsString> {
+    let json = root_json.then(|| OsString::from("--json"));
+    json.into_iter().chain(tail.iter().cloned()).collect()
+}
+
 /// `fno config plugins ...` or `fno plugins ...`: the args after the group.
 fn classify_plugins(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
     if args.first()?.to_str()? == "plugins" {
         return Some((args[1..].to_vec(), true));
     }
     classify_group_command(args, "config", "plugins").map(|rest| (rest, false))
+}
+
+/// `fno config project ...` or `fno project ...` (moved): the args after the
+/// group. The project family answers natively whole, so both spellings claim
+/// here and never reach the Python forward.
+fn classify_project(args: &[OsString]) -> Option<(Vec<OsString>, bool)> {
+    if args.first()?.to_str()? == "project" {
+        return Some((args[1..].to_vec(), true));
+    }
+    classify_group_command(args, "config", "project").map(|rest| (rest, false))
 }
 
 /// `fno agents claim backlog|export ...`: the shared-store commands live only
@@ -630,6 +856,170 @@ fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
         return None;
     }
     Some(args[3..].to_vec())
+}
+
+/// `fno do target <command> ...`: the nine family commands claim lexically
+/// beside init/start/blast-check, so they never reach the Python forward.
+/// The tail rides to the family door under the fno-agents binary. A root
+/// `-J`/`--json` before the group peels and re-enters the tail only for the
+/// doors that parse it (status, denominator-ratio); the rest read the same
+/// accept-and-ignore the global Python flag kept.
+fn classify_target_family(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    // The grouped form and the deprecated bare spelling both claim; the bare
+    // one announces its move once, the way the retired Python shim did.
+    let leaf_at = if args.len() >= 3 && args[0].to_str()? == "do" && args[1].to_str()? == "target" {
+        2
+    } else if args.len() >= 2 && args[0].to_str()? == "target" {
+        1
+    } else {
+        return None;
+    };
+    let notice = if leaf_at == 1 {
+        Some("fno target is now fno do target")
+    } else {
+        None
+    };
+    let door: &'static [&'static str] = match args[leaf_at].to_str()? {
+        "status" => &["target-status"],
+        "resolve-model" => &["target-gates", "resolve-model"],
+        "request-self-review" => &["target-gates", "request-self-review"],
+        "resolve-owned-identity" => &["target-gates", "resolve-owned-identity"],
+        "check-contained" => &["target-gates", "check-contained"],
+        "check-dispatch-hold" => &["target-gates", "check-dispatch-hold"],
+        "check-review-gate" => &["target-gates", "check-review-gate"],
+        "review-invocation" => &["target-gates", "review-invocation"],
+        "denominator-ratio" => &["target-gates", "denominator-ratio"],
+        _ => return None,
+    };
+    // A root `-J`/`--json` re-enters the tail only for the doors that parse
+    // it: status (the argv mode) and denominator-ratio. The rest read the
+    // same accept-and-ignore the global Python flag kept, so the flag drops.
+    if root_json && matches!(args[leaf_at].to_str()?, "status" | "denominator-ratio") {
+        let mut tail: Vec<OsString> = Vec::with_capacity(args.len() - leaf_at - 1);
+        tail.push(OsString::from("--json"));
+        tail.extend(args[leaf_at + 1..].iter().cloned());
+        return Some((door, tail, notice));
+    }
+    Some((door, args[leaf_at + 1..].to_vec(), notice))
+}
+
+/// `fno do state <anything>` and the deprecated bare `fno state <anything>`:
+/// the whole group claims; the tail rides to the state-cli door. The bare
+/// spelling announces its move once, the way the retired Python shim did. A
+/// root `-J`/`--json` peels and re-enters the tail, which every command parses.
+fn classify_state_family(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    let alias = args.first().and_then(|a| a.to_str()) == Some("state");
+    if !alias
+        && (args.first().and_then(|a| a.to_str()) != Some("do")
+            || args.get(1).and_then(|a| a.to_str()) != Some("state"))
+    {
+        return None;
+    }
+    let mut tail: Vec<OsString> = if alias {
+        args[1..].to_vec()
+    } else {
+        args[2..].to_vec()
+    };
+    if root_json {
+        tail.insert(0, OsString::from("--json"));
+    }
+    let notice = if alias {
+        Some("fno state is now fno do state")
+    } else {
+        None
+    };
+    Some((&["state-cli"], tail, notice))
+}
+
+/// `fno do phase <anything>` and the deprecated bare `fno phase <anything>`:
+/// the whole group claims (kill-check is the group's one command, and it
+/// strips its own name from the tail), so the bare spelling's leaf sits one
+/// word earlier and its tail starts there. A root `-J`/`--json` peels and
+/// drops: kill-check parses no JSON flag, and the global Python flag it
+/// accepted was inert.
+fn classify_phase_family(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    let alias = args.first().and_then(|a| a.to_str()) == Some("phase");
+    if !alias
+        && (args.first().and_then(|a| a.to_str()) != Some("do")
+            || args.get(1).and_then(|a| a.to_str()) != Some("phase"))
+    {
+        return None;
+    }
+    let tail = if alias {
+        args[1..].to_vec()
+    } else {
+        args[2..].to_vec()
+    };
+    let notice = if alias {
+        Some("fno phase is now fno do phase")
+    } else {
+        None
+    };
+    Some((&["kill-check"], tail, notice))
+}
+
+/// `fno do pr stub-manifest <op> ...` and the bare `fno pr stub-manifest
+/// <op> ...` legacy spelling: the manifest commands claim ahead of the do-pr
+/// lexical claims, whose handbacks narrow to watch only. The two spellings
+/// put `stub-manifest` at different offsets, so each matches its own head;
+/// a root `-J`/`--json` peels and drops (the manifest commands emit JSON by
+/// default and ignored the global flag).
+fn classify_pr_stub_manifest(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    let first = args.first()?.to_str()?;
+    let tail: &[OsString] = match (first, args.get(1)?.to_str()?, args.get(2)?.to_str()?) {
+        ("do", "pr", "stub-manifest") => &args[3..],
+        ("pr", "stub-manifest", _) => &args[2..],
+        _ => return None,
+    };
+    Some((&["stub-manifest"], tail.to_vec(), None))
+}
+
+/// The deprecated bare `fno stub-manifest <op> ...` spelling: the
+/// command_moves.py Move row redirected it to `do pr stub-manifest`; the
+/// Move row dies with the wheel, so the front door re-claims the spelling.
+fn classify_bare_stub_manifest(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
+    let root_json = matches!(args.first()?.to_str()?, "-J" | "--json");
+    let args = if root_json { &args[1..] } else { args };
+    if args.first().and_then(|a| a.to_str()) != Some("stub-manifest") {
+        return None;
+    }
+    Some((&["stub-manifest"], args[1..].to_vec(), None))
+}
+
+/// `fno do research <tail>`: the whole leaf is native.
+fn classify_do_research(args: &[OsString]) -> Option<Vec<OsString>> {
+    classify_group_command(args, "do", "research")
+}
+
+/// `fno do think <tail>`: the group is native, so the bare group and its help
+/// claim here too; only the first tail token names a leaf.
+fn classify_do_think(args: &[OsString]) -> Option<Role> {
+    let tail = classify_group_command(args, "do", "think")?;
+    let rest = tail.get(1..).unwrap_or_default().to_vec();
+    Some(match tail.first().and_then(|a| a.to_str()) {
+        Some("inspect") => Role::ThinkInspect(rest),
+        Some("dispatch") => Role::ThinkDispatch(rest),
+        None | Some("--help") | Some("-h") => Role::ThinkUsage(None),
+        Some(other) => Role::ThinkUsage(Some(other.to_string())),
+    })
 }
 
 /// `fno do review post-dispositions ...`: the disposition-comment leaf,
@@ -811,20 +1201,54 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::paths_route::classify(args) {
         return Role::PathsCli(rest);
     }
+    if let Some(claim) = fno::lead_route::classify(args) {
+        return Role::Lead(claim);
+    }
+    if let Some((root_alias, rest)) = fno::agents_mcp_route::classify(args) {
+        return Role::AgentsMcpRoot(root_alias, rest);
+    }
+    if let Some(claim) = fno::fleet_route::classify(args) {
+        return Role::Fleet(claim);
+    }
     if let Some(rest) = fno::accounts_route::classify(args) {
         return Role::AccountsCli(rest);
     }
     if let Some((rest, moved)) = classify_plugins(args) {
         return Role::PluginsCli(rest, moved);
     }
+    if let Some((rest, moved)) = classify_project(args) {
+        return Role::ProjectCli(rest, moved);
+    }
     if let Some(rest) = fno::doctor_update::classify(args) {
         return Role::DoctorUpdate(rest);
+    }
+    if let Some(rest) = classify_skill_diff(args) {
+        return Role::DoctorSkillDiff(rest);
+    }
+    if let Some(rest) = classify_observer(args) {
+        return Role::DoctorObserver(rest);
     }
     if let Some(rest) = classify_group_command(args, "doctor", "builds") {
         return Role::DoctorBuilds(rest);
     }
+    if let Some(rest) = classify_test_command(args) {
+        return Role::DoctorTest(rest);
+    }
+    match fno::doctor::classify(args) {
+        Some(fno::doctor::Claim::Home(rest)) => return Role::DoctorHome(rest),
+        Some(fno::doctor::Claim::AgentsExec(label, argv)) => {
+            return Role::DoctorAgentsExec(label, argv)
+        }
+        None => {}
+    }
     if let Some(rest) = fno::agents_history::classify(args) {
         return Role::AgentsHistory(rest);
+    }
+    if let Some(rest) = fno::whoami_seam::classify(args) {
+        return Role::Whoami(rest);
+    }
+    if let Some(rest) = classify_agents_lead_refresh_canon(args) {
+        return Role::AgentsLeadRefreshCanon(rest);
     }
     if let Some(rest) = classify_agents_transcript(args) {
         return Role::AgentsTranscript(rest);
@@ -843,6 +1267,23 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_target_blast_check(args) {
         return Role::TargetBlastCheck(rest);
+    }
+    // The target-family claims: the nine `do target` commands, the
+    // whole `do state` and `do phase` groups, and `do pr stub-manifest`,
+    // before the do-pr lexical claim whose handback narrows to watch only.
+    if let Some((door, rest, notice)) = classify_target_family(args)
+        .or_else(|| classify_state_family(args))
+        .or_else(|| classify_phase_family(args))
+        .or_else(|| classify_pr_stub_manifest(args))
+        .or_else(|| classify_bare_stub_manifest(args))
+    {
+        return Role::TargetFamily(door, rest, notice);
+    }
+    if let Some(rest) = classify_do_research(args) {
+        return Role::DoResearch(rest);
+    }
+    if let Some(role) = classify_do_think(args) {
+        return role;
     }
     if let Some(rest) = classify_review_post_dispositions(args) {
         return Role::ReviewPostDispositions(rest);
@@ -869,8 +1310,18 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_agents_restart(args) {
         return Role::AgentsRestart(rest);
     }
+    if let Some(rest) = classify_agents_command(args, "org-fold") {
+        return Role::AgentsOrgFold(rest);
+    }
     if let Some(rest) = classify_agents_status(args) {
         return Role::AgentsStatus(rest);
+    }
+    if let Some((rest, alias)) = classify_whoami(args) {
+        return if alias {
+            Role::WhoamiStatusAlias(rest)
+        } else {
+            Role::Whoami(rest)
+        };
     }
     if let Some(rest) = classify_agents_roles(args) {
         return Role::AgentsRoles(rest);
@@ -907,16 +1358,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     // The pr namespace claims itself lexically, like backlog: the sibling
     // dispatcher owns the 29 spellings and the handover stays byte-verbatim
-    // (pr port 7). The two carve-outs stay with the Python wheel: `watch`
-    // and `stub-manifest` are the watcher's own surface, and do_cli.py keeps
-    // their mounts answering under `fno do pr`. Bare `fno do pr` claims too:
-    // the grouped help is native once the Python pr_app is gone.
+    // (pr port 7). The one carve-out stays with the Python wheel: `watch` is
+    // the watcher's own surface, and do_cli.py keeps its mount answering
+    // under `fno do pr`. Bare `fno do pr` claims too: the grouped help is
+    // native once the Python pr_app is gone. (`stub-manifest` joined the
+    // native claim now; its commands route through the family door.)
     if args.first().and_then(|a| a.to_str()) == Some("do")
         && args.get(1).and_then(|a| a.to_str()) == Some("pr")
-        && !matches!(
-            args.get(2).and_then(|a| a.to_str()),
-            Some("watch") | Some("stub-manifest")
-        )
+        && args.get(2).and_then(|a| a.to_str()) != Some("watch")
     {
         return Role::DoPr;
     }
@@ -924,15 +1373,31 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     // hidden lazy entry points at the deleted Python pr_app, so a claim here
     // keeps the muscle-memory spelling answering instead of a traceback.
     if args.first().and_then(|a| a.to_str()) == Some("pr")
-        && !matches!(
-            args.get(1).and_then(|a| a.to_str()),
-            Some("watch") | Some("stub-manifest")
-        )
+        && args.get(1).and_then(|a| a.to_str()) != Some("watch")
     {
         return Role::DoPr;
     }
+    // The ci namespace claims itself lexically, the pr namespace's contract:
+    // the sibling dispatcher owns its spellings and the argv passes through
+    // byte-verbatim. No bare `ci` claim: the root word stays unclaimed.
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("ci")
+    {
+        return Role::DoCi;
+    }
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
+    }
+    if let Some(rest) = fno::notify_dispatch::classify_inbox_notify(args) {
+        return Role::InboxNotify(rest);
+    }
+    if let Some(rest) = fno::notify_dispatch::classify_root_notify(args) {
+        return Role::NotifyDeprecated(rest);
+    }
+    // `fno status-fanout ...`: the deprecated root spelling, moved to
+    // `fno doctor event fanout`. Lexical claim: only the bare first token.
+    if args.first().and_then(|a| a.to_str()) == Some("status-fanout") {
+        return Role::StatusFanoutDeprecated(args.split_first().unwrap().1.to_vec());
     }
     if let Some(rest) = fno::backlog_snapshot::classify(args) {
         return Role::BoardRender(rest);
@@ -946,13 +1411,20 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::inbox_user::classify_inbox_outstanding(args) {
         return Role::InboxOutstanding(rest);
     }
+    if let Some(argv) = fno::inbox_user::classify_inbox_day(args) {
+        return Role::InboxDay(argv);
+    }
     if let Some(argv) = fno::inbox_user::classify_inbox_user(args)
         .or_else(|| fno::inbox_user::classify_inbox_peers(args))
+        .or_else(|| fno::inbox_user::classify_inbox_approvals(args))
     {
         return Role::InboxUser(argv);
     }
     if let Some(rest) = fno::setup_run::classify(args) {
         return Role::SetupRun(rest);
+    }
+    if let Some(cmd) = fno::setup_cmds::classify(args) {
+        return Role::SetupCmd(cmd);
     }
     if args.first().and_then(|a| a.to_str()) == Some("do")
         && args.get(1).and_then(|a| a.to_str()) == Some("wizard")
@@ -964,6 +1436,15 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = fno::config_defaults::classify(args) {
         return Role::ConfigDefaults(rest);
+    }
+    if let Some(rest) = config_route_cli::classify(args) {
+        return Role::ConfigRoute(rest);
+    }
+    if let Some(rest) = fno::config_schema::classify(args) {
+        return Role::ConfigSchema(rest);
+    }
+    if let Some(door) = fno::config_cli::classify(args) {
+        return Role::ConfigCli(door);
     }
     match cli_args::classify(args) {
         FrontDoor::Forward => Role::Forward,
@@ -1104,6 +1585,12 @@ fn main() {
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let env_session = mux_cli::env_server();
     let mut args = args;
+    // The worktree family's door claims before any forwarding: the Python
+    // mounts die with the family port, so these argv shapes must answer
+    // natively or not at all.
+    if let Some(launch) = fno::worktree_door::classify(&args) {
+        std::process::exit(launch.run());
+    }
     // The agents menu claims first: a nested spelling rewrites to the argv
     // that answers today, so every door below still sees the spelling it
     // owns. The cross-machine `org promote <name@host>` hand-off is left for
@@ -1190,6 +1677,7 @@ fn main() {
         Role::Forward => bootstrap::forward(&args),
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
+        Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
         Role::BacklogList(rest) => std::process::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
             // AC1-EDGE: piped/CI bare `fno` gets a notice, not a TUI. Exit 0 -
@@ -1214,7 +1702,25 @@ fn main() {
         Role::Uninstall(opts) => std::process::exit(fno::uninstall::run_uninstall(opts)),
         Role::SetupAutowire => std::process::exit(fno::setup_autowire::run()),
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
+        Role::ConfigRoute(rest) => std::process::exit(config_route_cli::run(&rest)),
+        Role::ConfigSchema(rest) => std::process::exit(fno::config_schema::run(&rest)),
+        Role::ConfigCli(door) => std::process::exit(match door {
+            fno::config_cli::Door::Get(rest) => fno::config_cli::get::run(&rest),
+            fno::config_cli::Door::History(rest) => fno::config_cli::history::run(&rest),
+            fno::config_cli::Door::BuildDir => fno::config_cli::leaves::run_build_dir(&[]),
+            fno::config_cli::Door::Budget(rest) => fno::config_cli::leaves::run_budget(&rest),
+            fno::config_cli::Door::StatusSinks(rest) => {
+                fno::config_cli::leaves::run_status_sinks(&rest)
+            }
+            fno::config_cli::Door::ActiveBacklog => {
+                fno::config_cli::leaves::run_active_backlog(&[])
+            }
+            fno::config_cli::Door::PluginInstall(rest) => {
+                fno::config_cli::plugin_install::run(&rest)
+            }
+        }),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
+        Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),
         Role::MuxLs(json) => exit_mux(mux_cli::ls(json)),
         Role::MuxKill(kill_req) => {
@@ -1252,6 +1758,11 @@ fn main() {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::PathsCli(rest) => std::process::exit(fno::paths_route::run(&rest)),
+        Role::Lead(claim) => std::process::exit(fno::lead_route::run(&claim)),
+        Role::AgentsMcpRoot(root_alias, rest) => {
+            std::process::exit(fno::agents_mcp_route::run(root_alias, &rest))
+        }
+        Role::Fleet(claim) => std::process::exit(fno::fleet_route::run(claim)),
         Role::AccountsCli(rest) => std::process::exit(fno_agents_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],
@@ -1267,8 +1778,22 @@ fn main() {
                 &rest,
             ))
         }
+        Role::ProjectCli(rest, moved) => {
+            if moved {
+                eprintln!("fno project is now fno config project");
+            }
+            std::process::exit(fno_agents_exec(
+                "fno config project",
+                &["spawn-overlay", "project"],
+                &rest,
+            ))
+        }
         Role::DoctorUpdate(rest) => std::process::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => std::process::exit(fno::agents_history::run(&rest)),
+        Role::Whoami(rest) => std::process::exit(fno::whoami_seam::run(&rest)),
+        Role::AgentsLeadRefreshCanon(rest) => {
+            std::process::exit(fno::lead_refresh_canon::run(&rest))
+        }
         Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),
         Role::MailShow(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail show",
@@ -1337,17 +1862,30 @@ fn main() {
         }
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
             "fno agents top",
-            &["census", "--workers"],
+            fno::agents_menu::native_leaf("top"),
             &rest,
         )),
         Role::AgentsRestart(rest) => {
             std::process::exit(fno_agents_exec("fno agents restart", &["restart"], &rest))
         }
+        Role::AgentsOrgFold(rest) => std::process::exit(fno_agents_exec(
+            "fno agents org chart fold",
+            fno::agents_menu::native_leaf("org-fold"),
+            &rest,
+        )),
         Role::AgentsRoles(rest) => std::process::exit(fno_agents_exec(
             "fno agents roles",
             &["spawn-overlay", "roles"],
             &rest,
         )),
+        Role::WhoamiStatusAlias(rest) => {
+            eprintln!("fno status is now fno whoami status");
+            std::process::exit(fno_agents_exec(
+                "fno whoami",
+                &["spawn-overlay", "whoami"],
+                &rest,
+            ))
+        }
         Role::AgentsStatus(rest) => match fno::digest_overlay::fno_agents_bin_auto() {
             Some(bin) => std::process::exit(fno_agents_exec_bin(
                 "fno agents status",
@@ -1369,6 +1907,26 @@ fn main() {
         Role::DoctorBuilds(rest) => std::process::exit(fno_agents_exec(
             "fno doctor builds",
             &["test-run", "builds"],
+            &rest,
+        )),
+        Role::DoctorTest(rest) => {
+            std::process::exit(fno_agents_exec("fno doctor test", &["test"], &rest))
+        }
+        Role::DoctorHome(rest) => std::process::exit(fno::doctor::run(&rest)),
+        Role::DoctorAgentsExec(label, argv) => {
+            let action: Vec<String> = argv
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            let refs: Vec<&str> = action.iter().map(|s| s.as_str()).collect();
+            std::process::exit(fno_agents_exec(label, &refs, &[]))
+        }
+        Role::DoctorSkillDiff(rest) => {
+            std::process::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))
+        }
+        Role::DoctorObserver(rest) => std::process::exit(fno_agents_exec(
+            "fno doctor observer",
+            &["spawn-overlay", "observer"],
             &rest,
         )),
         Role::ClaimStore(rest) => {
@@ -1394,6 +1952,40 @@ fn main() {
             &["target-blast-check"],
             &rest,
         )),
+        Role::TargetFamily(door, rest, notice) => {
+            if let Some(line) = notice {
+                eprintln!("{line}");
+            }
+            std::process::exit(fno_agents_exec("fno do target family", door, &rest))
+        }
+        Role::DoResearch(rest) => {
+            std::process::exit(fno_agents_exec("fno do research", &["research"], &rest))
+        }
+        Role::ThinkInspect(rest) => std::process::exit(fno_agents_exec(
+            "fno do think inspect",
+            &["think-inspect"],
+            &rest,
+        )),
+        Role::ThinkDispatch(rest) => std::process::exit(fno_agents_exec(
+            "fno do think dispatch",
+            &["think-dispatch"],
+            &rest,
+        )),
+        Role::ThinkUsage(unknown) => {
+            if let Some(leaf) = &unknown {
+                eprintln!("fno do think: no such command '{leaf}'");
+            }
+            println!("usage: fno do think <command> [ARGS]...");
+            println!();
+            println!("Read-only discovery inspection and explicit conversational dispatch.");
+            println!();
+            println!("commands:");
+            println!(
+                "  inspect <seed> [--repo DIR] [--json]   collect discovery evidence, no writes"
+            );
+            println!("  dispatch <node> [--json]               hand a node to a bg /think");
+            std::process::exit(if unknown.is_some() { 2 } else { 0 })
+        }
         Role::ReviewPostDispositions(rest) => std::process::exit(fno_agents_exec(
             "fno do review post-dispositions",
             &["review-level", "findings", "post"],
@@ -1458,11 +2050,25 @@ fn main() {
         Role::InboxUser(argv) => {
             std::process::exit(fno_agents_exec("fno inbox", &["compaction"], &argv))
         }
+        Role::InboxNotify(rest) => std::process::exit(fno::notify_dispatch::run(&rest)),
+        Role::NotifyDeprecated(rest) => {
+            eprintln!("{}", fno::notify_dispatch::DEPRECATED_MOVE_LINE);
+            std::process::exit(fno::notify_dispatch::run(&rest))
+        }
+        Role::StatusFanoutDeprecated(rest) => {
+            eprintln!("fno status-fanout is now fno doctor event fanout");
+            let mut argv: Vec<OsString> = vec!["fanout".into()];
+            argv.extend(rest);
+            std::process::exit(fno::event_cli::run(&argv))
+        }
         Role::InboxOutstanding(rest) => std::process::exit(fno_agents_exec(
             "fno inbox outstanding",
             &["compaction", "outstanding"],
             &rest,
         )),
+        Role::InboxDay(argv) => {
+            std::process::exit(fno_agents_exec("fno inbox day", &["day"], &argv))
+        }
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
         Role::MuxStats(json) => std::process::exit(mux_cli::stats(json)),
         Role::MuxNotify(title, message, json) => {
@@ -1590,12 +2196,67 @@ mod tests {
         // wheel's hidden lazy entry died with the Python pr_app.
         assert_eq!(decide_role(&os(&["pr", "status", "41"]), false), Role::DoPr);
         assert_ne!(decide_role(&os(&["pr", "watch"]), false), Role::DoPr);
-        // The two Python mounts stay unclaimed: they forward to the wheel.
+        // The one Python mount stays unclaimed: it forwards to the wheel.
         assert_ne!(decide_role(&os(&["do", "pr", "watch"]), false), Role::DoPr);
+        // `stub-manifest` joined the native claim: the family commands
+        // route through the TargetFamily door, no longer the wheel.
         assert_ne!(
             decide_role(&os(&["do", "pr", "stub-manifest", "list"]), false),
-            Role::DoPr
+            Role::Forward
         );
+        // The deprecated bare spelling re-claimed: it rides to the native
+        // door once the Move row's Python group dies with the wheel.
+        assert_ne!(
+            decide_role(&os(&["stub-manifest", "write", "--node", "x-1"]), false),
+            Role::Forward
+        );
+        // The bare `pr stub-manifest` spelling puts the marker one word
+        // earlier than the grouped form; both claim, neither forwards.
+        assert_ne!(
+            decide_role(&os(&["pr", "stub-manifest", "list"]), false),
+            Role::Forward
+        );
+        assert_eq!(
+            decide_role(&os(&["pr", "stub-manifest", "list"]), false),
+            decide_role(&os(&["do", "pr", "stub-manifest", "list"]), false)
+        );
+        // The root `-J`/`--json` the global Python flag carried peels before
+        // the family claim and re-enters the tail for the JSON doors.
+        assert_eq!(
+            decide_role(&os(&["--json", "do", "state", "show"]), false),
+            decide_role(&os(&["-J", "do", "state", "show"]), false)
+        );
+        assert!(matches!(
+            decide_role(&os(&["--json", "do", "state", "show"]), false),
+            Role::TargetFamily(_, _, _)
+        ));
+        // The bare family spellings the retired Python shims announced: each
+        // re-claims with its one-line move notice, then rides the same native
+        // doors. The bare leaf sits one word earlier, so the tail follows it.
+        assert_eq!(
+            decide_role(&os(&["target", "status"]), false),
+            Role::TargetFamily(
+                &["target-status"],
+                os(&[]),
+                Some("fno target is now fno do target")
+            )
+        );
+        assert!(matches!(
+            decide_role(&os(&["state", "show", "--path", "/x"]), false),
+            Role::TargetFamily(_, _, Some(_))
+        ));
+        assert!(matches!(
+            decide_role(&os(&["phase", "kill-check", "/p"]), false),
+            Role::TargetFamily(_, _, Some(_))
+        ));
+        assert!(matches!(
+            decide_role(&os(&["do", "phase", "kill-check", "/p"]), false),
+            Role::TargetFamily(_, _, None)
+        ));
+        assert!(matches!(
+            decide_role(&os(&["phase", "kill-check", "/p"]), false),
+            Role::TargetFamily(_, _, Some(_))
+        ));
         // A non-pr `do` tree stays with its owners.
         assert_ne!(
             decide_role(&os(&["do", "wizard", "--json"]), false),
@@ -1604,6 +2265,55 @@ mod tests {
         assert_ne!(
             decide_role(&os(&["do", "review", "--help"]), false),
             Role::DoPr
+        );
+    }
+
+    #[test]
+    fn do_ci_claims_its_namespace_and_no_root_word() {
+        assert_eq!(
+            decide_role(&os(&["do", "ci", "status", "main"]), false),
+            Role::DoCi
+        );
+        assert_eq!(decide_role(&os(&["do", "ci", "--help"]), false), Role::DoCi);
+        // Bare `fno do ci` claims too: the grouped help is native.
+        assert_eq!(decide_role(&os(&["do", "ci"]), false), Role::DoCi);
+        // The root word `ci` stays unclaimed: only the do tree carries it.
+        assert_ne!(
+            decide_role(&os(&["ci", "status", "main"]), false),
+            Role::DoCi
+        );
+        // A non-ci `do` tree stays with its owners.
+        assert_ne!(
+            decide_role(&os(&["do", "pr", "status", "41"]), false),
+            Role::DoCi
+        );
+    }
+
+    #[test]
+    fn do_research_and_do_think_claim_their_whole_groups() {
+        assert_eq!(
+            decide_role(&os(&["do", "research", "a topic", "--no-claim"]), false),
+            Role::DoResearch(os(&["a topic", "--no-claim"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "inspect", "x-1", "--json"]), false),
+            Role::ThinkInspect(os(&["x-1", "--json"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "dispatch", "x-1"]), false),
+            Role::ThinkDispatch(os(&["x-1"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think"]), false),
+            Role::ThinkUsage(None)
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "--help"]), false),
+            Role::ThinkUsage(None)
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "think", "ponder"]), false),
+            Role::ThinkUsage(Some("ponder".to_string()))
         );
     }
 
@@ -1628,6 +2338,20 @@ mod tests {
             decide_role(&os(&["agents", "history", "--help"]), false),
             Role::Forward
         );
+        // The canon-refresh door claims the front's rewrite exactly; the
+        // sibling lead commands answer through the lead route.
+        assert_eq!(
+            decide_role(&os(&["agents", "lead", "refresh-canon"]), false),
+            Role::AgentsLeadRefreshCanon(os(&[]))
+        );
+        assert_eq!(
+            decide_role(&os(&["agents", "lead", "refresh-canon", "--extra"]), false),
+            Role::AgentsLeadRefreshCanon(os(&["--extra"]))
+        );
+        assert!(matches!(
+            decide_role(&os(&["agents", "lead", "done"]), false),
+            Role::Lead(_)
+        ));
         // The mail reader claims its command and refuses the renamed one by
         // name; the send port claims local sends, while @host and plain
         // names stay the relay's.
@@ -1782,6 +2506,47 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["do", "wizard", "--json"]), false),
             Role::Wizard(os(&["--json"]))
+        );
+        // So do the wizard plan and the post-merge scaffold.
+        assert_eq!(
+            decide_role(&os(&["config", "setup", "plan", "--advanced"]), false),
+            Role::SetupCmd(fno::setup_cmds::Cmd::Plan(os(&["--advanced"])))
+        );
+    }
+
+    #[test]
+    fn skill_diff_ops_map_to_the_loops_door_names() {
+        // The user-facing op words must arrive at the loops door under the
+        // names it routes to skill_diff::run; a bare `reconcile` exec'd
+        // verbatim is the "unknown action" refusal that broke the
+        // post-merge ritual step on every merge.
+        assert_eq!(
+            decide_role(
+                &os(&["doctor", "skill-diff", "reconcile", "--pr-number", "5"]),
+                false
+            ),
+            Role::DoctorSkillDiff(os(&["skill-diff-reconcile", "--pr-number", "5"]))
+        );
+        assert_eq!(
+            decide_role(
+                &os(&["doctor", "skill-diff", "tick", "--skill", "mail"]),
+                false
+            ),
+            Role::DoctorSkillDiff(os(&["skill-diff-tick", "--skill", "mail"]))
+        );
+        // The deprecated root spelling maps the same way.
+        assert_eq!(
+            decide_role(&os(&["skill-diff", "reconcile"]), false),
+            Role::DoctorSkillDiff(os(&["skill-diff-reconcile"]))
+        );
+        // Bare and --help keep riding verbatim: the loops door answers usage.
+        assert_eq!(
+            decide_role(&os(&["doctor", "skill-diff", "--help"]), false),
+            Role::DoctorSkillDiff(os(&["--help"]))
+        );
+        assert_eq!(
+            decide_role(&os(&["doctor", "skill-diff"]), false),
+            Role::DoctorSkillDiff(os(&[]))
         );
     }
 
@@ -1946,6 +2711,19 @@ mod tests {
         assert_ne!(
             decide_role(&os(&["config", "plugin", "claude"]), false),
             Role::PluginsCli(os(&["claude"]), false)
+        );
+        // The project group is native whole, under both spellings.
+        assert_eq!(
+            decide_role(&os(&["config", "project", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), false)
+        );
+        assert_eq!(
+            decide_role(&os(&["project", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), true)
+        );
+        assert_ne!(
+            decide_role(&os(&["config", "projects", "init", "web"]), false),
+            Role::ProjectCli(os(&["init", "web"]), false)
         );
     }
 

@@ -1,0 +1,7 @@
+{
+  "exit": 2,
+  "stderr": [
+    "fno agents spawn: takes one positional (the prompt); got 2 ('one', 'two'). The agent name moved to --name, so pass `--name <n> \"<prompt>\"`.",
+    "\n"
+  ]
+}

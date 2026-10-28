@@ -33,13 +33,14 @@ _observe_wake_signals
 " 2>/dev/null
 }
 
-# The signals dir the drop helper and the observer both resolve to.
+# The signals dir the observer resolves to (the same space_dir the Rust
+# wake-signals op reads through).
 _signals_dir() {
     local tmpdir="$1"
     FNO_SPACES_DIR="$tmpdir/spaces" uv run --project "$CLI_DIR" python3 -c "
 from pathlib import Path
-from fno.wake.signal import signals_dir
-print(signals_dir(Path('$tmpdir')))
+from fno.paths import space_dir
+print(space_dir(Path('$tmpdir')) / 'wake-signals')
 "
 }
 
@@ -61,19 +62,18 @@ TMP_HP=$(mktemp -d)
 SIG_DIR_HP="$(_signals_dir "$TMP_HP")"
 mkdir -p "$SIG_DIR_HP"
 
-# Drop a signal directly via the Python helper (same spaces pin as the reader)
-FNO_SPACES_DIR="$TMP_HP/spaces" uv run --project "$CLI_DIR" python3 -c "
-from datetime import datetime, timezone
-from pathlib import Path
-from fno.wake.signal import WakeSignal, drop_signal
-sig = WakeSignal(
-    source='inbox-drain', kind='question',
-    msg_id='msg-testac1', from_project='example-pipeline',
-    summary='blocked on parser shape',
-    ts=datetime.now(timezone.utc),
-)
-drop_signal(Path('$TMP_HP'), sig)
-"
+# Drop a signal directly as JSON (no CLI needed; same spaces pin as the reader)
+SIG_FILE_HP="$SIG_DIR_HP/wake-testac1.json"
+cat > "$SIG_FILE_HP" <<SIGEOF
+{
+  "signal_id": "wake-testac1",
+  "kind": "question",
+  "from_project": "example-pipeline",
+  "msg_id": "msg-testac1",
+  "summary": "blocked on parser shape",
+  "ts": "2026-05-05T00:00:00Z"
+}
+SIGEOF
 
 SIGNAL_COUNT_BEFORE=$(find "$SIG_DIR_HP" -name 'wake-*.json' 2>/dev/null | wc -l | tr -d ' ')
 [[ "$SIGNAL_COUNT_BEFORE" -eq 1 ]] || { echo "AC1-HP SETUP FAIL: expected 1 signal before run, got $SIGNAL_COUNT_BEFORE"; exit 1; }

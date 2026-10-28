@@ -231,7 +231,7 @@ max_rounds = 2
 carry_interdiff_lines = 100
 # How long after a review dispatch (a sent review_invocation row) with no answering attestation the settle sweep declares the attempt lost and emits one lost attestation row for it (default 15), so the gate reads a named refusal instead of waiting on silence. The doctor report runs the sweep; it is idempotent, so re-running adds nothing.
 invocation_ttl_minutes = 15
-# Categories a finding may carry and still be non-blocking when its verdict is not CONFIRMED (default: docs, formatting, naming, nit, simplification, style, test-coverage, typo). A configured list EXTENDS that default rather than replacing it, so naming one category cannot silently narrow the gate. A CONFIRMED verdict blocks whatever the category says, and a finding missing a required field blocks too. The gate re-derives blocking from this list itself and never reads the producer's own blocking count.
+# Categories a finding may carry and still be non-blocking when its verdict is not CONFIRMED (default: altitude, conventions, docs, efficiency, formatting, naming, nit, reuse, simplification, style, test-coverage, typo). A configured list EXTENDS that default rather than replacing it, so naming one category cannot silently narrow the gate. A CONFIRMED verdict blocks whatever the category says, and a finding missing a required field blocks too. The gate re-derives blocking from this list itself and never reads the producer's own blocking count.
 # nonblocking_categories = <unset>   # optional; no default
 # How long a registered review hold blocks a merge before it ages out (default 90). A review that starts registers review:branch:<branch>; fno do pr status and fno do pr merge refuse while it is live, so a merge cannot land on the pre-review code. A wedge bound, not an estimate: an expired hold clears with a receipt rather than holding the lane forever.
 hold_ttl_minutes = 90
@@ -317,6 +317,8 @@ preset = "standard"
 # remote_addrs = <unset>   # optional; no default
 # true moves the backlog itself to the primary named by store.remote_url; both keys must be set. Default false.
 share_backlog = false
+# Optional plan rescue: a map of host key to ssh destination, e.g. store.ssh_peers."macbook" = "macbook.lan". When this host cannot place a plan file from the shared store, the plan carrier asks that peer over ssh (BatchMode, 5s connect timeout). A key is the pushing host's name, a host in the fno_plan_seen ledger, or the store host in store.remote_url. Off by default: the shared store stays the only required transport. Read from the global config only. Default unset.
+# ssh_peers = <unset>   # optional; no default
 
 [agents]
 # Seconds a single-flight answer counts as fresh (default 60, one liveness cadence). Callers arriving inside the window read one child's stdout instead of each spawning their own; the latch is keyed on the normalized argv, so two `do pr wait` calls for different PRs stay two flights.
@@ -455,7 +457,7 @@ blueprint_floor = "high"
 objective = "cheapest-that-clears"
 # The harness the prefer-harness objective favors. A tiebreaker WITHIN a band, never a reason to lower one.
 prefer_harness = ""
-# The routing inventory: {name, harness, model, route, account, band, effort, cost_per_mtok_in, context, context_measured_at, context_source} rows. A row OVERRIDES the built-in of the same name per field; a new name EXTENDS the set. A row's context counts as a measured window only beside a context_measured_at date; an unmeasured model falls back to the id-based default. Declare none and the grid records no-inventory-declared; the fallback only keeps tier requests answerable. `fno_routing_sample/routing_sample.toml` ships as a labelled sample.
+# The routing inventory: {name, harness, model, route, account, band, effort, cost_per_mtok_in, context, context_measured_at, context_source} rows. A row OVERRIDES the built-in of the same name per field; a new name EXTENDS the set. A row's context counts as a measured window only beside a context_measured_at date; an unmeasured model falls back to the id-based default. Declare none and the grid records no-inventory-declared; the fallback only keeps tier requests answerable. The labelled sample ships inside the binary (`fno config route init` appends it).
 models = []
 # Opt-in strict inventory: a spawn qualifies against its effective work-kind slot's CONFIG-declared lanes only, and an unresolvable request is a named refusal. A typed --model, -P, or --route is an operator pin and outranks the declared lanes; every axis the operator did not name still qualifies against them. Default off.
 enforce_inventory = false
@@ -789,7 +791,7 @@ short_circuit_backoff_secs = 300
 enabled = false
 # Let the lead merge a green mergeable PR. Defaults false; until set, a mergeable PR is reported and never counted as the lead's own work.
 autonomous_merge = false
-# Arm the pr-watch tick's wake phase: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false.
+# Arm the fno-agents daemon's lead-wake arm: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Runs inside the fno-agents daemon; the pr-watcher LaunchAgent is no longer in the path. Defaults false.
 wake_enabled = false
 # Wakes allowed per scope per ROLLING 24h (default 32, ~1.5x the worst measured day). Never a lifetime constant: a lifetime cap strands a long-lived lead.
 wake_ceiling = 32

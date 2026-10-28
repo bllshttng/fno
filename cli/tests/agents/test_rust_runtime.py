@@ -409,6 +409,10 @@ def test_python_agent_commands_match_registered_commands() -> None:
         # client-side dispatch shape). The Python command stays registered as
         # the FNO_AGENTS_RUNTIME=python / no-binary refusal.
         "registry-json",
+        # register joins the same shape: a daemon-free client command with
+        # goldens and a parity test in the fno-agents crate; the Python
+        # registration stays as the no-binary refusal.
+        "register",
         # Task 1.2: spawn gains a Python implementation (--once / claude plain
         # spawn) but stays in RUST_CLIENT_COMMANDS + AUTO_ROUTE_COMMANDS so the
         # daemon PTY worker path (codex/gemini without --once) still auto-routes
@@ -716,25 +720,24 @@ def test_rust_only_command_no_binary_emits_install_hint(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Spawns carrying a Python-only flag (--role,
-# --dispatch-account) never route to the binary: the Rust client cannot
-# parse them. A --resume spawn DOES route: the binary's grammar knows the
-# flag and refuses it with the retired-axis line. --monitor and
-# --output-format left this list in row 9: the binary parses and
-# refuses/launches them natively. `--help` exercises the make_context
-# routing decision without running a real spawn.
+# Only a spawn with no --as stays on the Python door now: --role, --route
+# with an account flag and an account-bearing pane run in the client. A
+# --resume spawn routes too, and the binary refuses it with the retired-axis
+# line. `--help` exercises the make_context routing decision without
+# running a real spawn.
 # --------------------------------------------------------------------------- #
 
 
-def test_role_bearing_spawn_not_routed_in_forced_rust_mode(monkeypatch, tmp_path) -> None:
-    """Even FNO_AGENTS_RUNTIME=rust must not route a --role spawn to the binary."""
+def test_role_bearing_spawn_routes_in_forced_rust_mode(monkeypatch, tmp_path) -> None:
+    """A --role spawn with an explicit substrate crosses to the binary, which
+    resolves the role route itself (spawn_route::role_seam)."""
     from fno.cli import app
 
     called: list = []
     monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
     monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
-    CliRunner().invoke(app, ["agents", "spawn", "--role=tidy", "--help"])
-    assert called == []
+    CliRunner().invoke(app, ["agents", "spawn", "--as", "thread", "--role=tidy", "--help", "check the role"])
+    assert called and "--role=tidy" in called[0]
 
 
 def test_monitor_bearing_spawn_routes_in_rust_mode(monkeypatch) -> None:
@@ -798,9 +801,9 @@ def test_output_format_spawn_routes_to_installed_rust(monkeypatch, tmp_path) -> 
     assert len(called) == 1 and "--output-format" in called[0]
 
 
-def test_plain_spawn_stays_python_bg_spawn_auto_routes(monkeypatch, tmp_path) -> None:
-    """A plain spawn resolves its lane in the Python body and must NOT route to
-    the binary; a --once spawn still auto-routes."""
+def test_once_spawn_auto_routes_with_the_seam_marker(monkeypatch, tmp_path) -> None:
+    """A --once spawn auto-routes to the binary. The seam marker rides straight
+    after the command: it asserts the crossing upstream."""
     from fno.cli import app
 
     binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
@@ -813,14 +816,6 @@ def test_plain_spawn_stays_python_bg_spawn_auto_routes(monkeypatch, tmp_path) ->
     monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
     monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: binary)
     monkeypatch.setattr(rr, "route_to_rust", fake_route)
-
-    # Plain spawn: stays Python (the pane back half). It will fail inside the
-    # Python dispatch (no mux in this test env), but must never exec the binary.
-    CliRunner().invoke(app, ["agents", "spawn", "--name", "worker", "--harness", "claude"])
-    assert captured == [], "a pane-substrate spawn must not route to the binary"
-
-    # --once: still the binary's lane. The seam marker rides straight after
-    # the command: it asserts the crossing upstream.
     result = CliRunner().invoke(
         app,
         ["agents", "spawn", "--name", "worker", "--harness", "claude", "--once", "hello"],
@@ -847,12 +842,11 @@ def test_is_resume_bearing_spawn_predicate() -> None:
     assert not rr._is_resume_bearing_spawn("ask", ["ask", "w", "--resume", uuid])
 
 
-def test_pane_spawn_routes_to_the_binary(monkeypatch, tmp_path) -> None:
-    """Every pane harness seats a Rust arm, so an explicit --as pane spawn
-    routes to the binary for any harness. The old member-set carve-out is
-    gone; the Python pane back half answers only FNO_AGENTS_RUNTIME=python.
-    A bare spawn is NOT this shape: its default substrate still resolves in
-    the Python door (see test_default_substrate_spawn_stays_python)."""
+@pytest.mark.parametrize("lane", [["--as", "pane"], []], ids=["pane", "bare"])
+def test_spawn_routes_to_the_binary(monkeypatch, tmp_path, lane) -> None:
+    """An explicit --as pane spawn and a bare spawn both route to the binary,
+    which resolves the default substrate itself. The Python cmd_spawn answers
+    only FNO_AGENTS_RUNTIME=python."""
     from fno.cli import app
 
     binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
@@ -867,49 +861,11 @@ def test_pane_spawn_routes_to_the_binary(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(rr, "route_to_rust", fake_route)
     result = CliRunner().invoke(
         app,
-        ["agents", "spawn", "--name", "w", "--as", "pane", "-H", "claude", "do x"],
+        ["agents", "spawn", "--name", "w", *lane, "-H", "claude", "do x"],
     )
     assert result.exit_code == 99
-    assert captured, "a pane spawn must route to the binary"
+    assert captured, "the spawn must route to the binary"
     assert captured[0][0] == "spawn"
-    assert "--as" in captured[0]
-
-
-def test_default_substrate_spawn_stays_python() -> None:
-    """A bare spawn's default substrate (thread, with the thread-seatable
-    refusal and the keeper thread lanes behind it) still resolves in the
-    Python door. Only an explicit --as pane names the shape the binary's
-    pane spine answers; the scan stops at --argv and the -- fence, and the
-    --once headless spelling opts out."""
-    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "seed"])
-    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w"])
-    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "pane"])
-    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as=pane"])
-    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "thread"])
-    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--as", "headless"])
-    assert not rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--once"])
-    # A fenced or payload token is the child's, never fno's routing flag.
-    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--", "--as", "pane"])
-    assert rr._is_default_substrate_spawn("spawn", ["spawn", "w", "--argv", "--as=pane"])
-    assert not rr._is_default_substrate_spawn("ask", ["ask", "w", "--as", "pane"])
-
-
-def test_is_dispatch_account_bearing_spawn_predicate() -> None:
-    # The cutover carrier is Python-only: the Rust spawn parser exits
-    # "unknown flag: --dispatch-account" and the launch dies before it starts.
-    # The rule lives in the router, not at one caller, so every caller is covered.
-    assert rr._is_dispatch_account_bearing_spawn(
-        "spawn", ["spawn", "w", "--dispatch-account", "ccr"]
-    )
-    assert rr._is_dispatch_account_bearing_spawn(
-        "spawn", ["spawn", "--name", "w", "--dispatch-account=ccr"]
-    )
-    assert not rr._is_dispatch_account_bearing_spawn(
-        "spawn", ["spawn", "w", "--account", "ccr"]
-    )
-    assert not rr._is_dispatch_account_bearing_spawn(
-        "ask", ["ask", "w", "--dispatch-account", "ccr"]
-    )
 
 
 def test_routing_predicates_stop_at_argv_boundary() -> None:

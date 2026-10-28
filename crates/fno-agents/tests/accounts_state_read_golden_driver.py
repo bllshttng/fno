@@ -92,29 +92,6 @@ COERCE = {
     },
 }
 
-HEAD = {
-    "provider_health": {
-        "locked": {"rate_limited_until": NOW + 900, "last_error_at": NOW - 10},
-        "lockonly": {"rate_limited_until": NOW + 900, "last_error_at": NOW - 10},
-        "stalelock": {"rate_limited_until": NOW + 900, "last_error_at": OLD},
-        "olderlock": {"rate_limited_until": NOW + 900, "last_error_at": NOW - 120},
-        "stalewin": {"rate_limited_until": NOW + 900, "last_error_at": NOW - 10},
-    },
-    "usage": {
-        "locked": usage(win("5h", 10, NOW + 3600), probed_at=NOW - 30),
-        "olderlock": usage(win("5h", 10, NOW + 3600), probed_at=NOW - 30),
-        "full": usage(win("5h", 100, NOW + 3600), win("weekly", 100, NOW + 7200)),
-        "partial": usage(win("5h", 10, NOW + 3600), win("weekly", 20, NOW + 1800), partial=True),
-        "reset": usage(win("5h", 100, NOW - 10)),
-        "hot": usage(win("5h", 85, NOW + 3600), win("weekly", 50, NOW + 9000)),
-        "cool": usage(win("5h", 30, NOW + 3600)),
-        "stale": usage(win("5h", 99, NOW + 3600), probed_at=NOW - 900),
-        "empty": usage(),
-        "noreset": usage(win("5h", 100)),
-        "stalewin": usage(win("weekly", 100, NOW + 86400), probed_at=NOW - 30 * 86400),
-    },
-}
-
 MODELS = {"provider_health": {
     "m": {"last_error_at": FRESH, "model_locks": {"opus": NOW + 300, "sonnet": NOW + 300}},
 }}
@@ -132,9 +109,6 @@ def read_state(state):
 def cooldown(pid, model=None, state=None):
     return dict(op="is_in_cooldown", state=state or FULL, id=pid, model=model)
 
-
-def head(pid, ttl=300.0, threshold=90.0):
-    return dict(op="headroom", state=HEAD, id=pid, ttl=ttl, threshold=threshold)
 
 
 CASES = {
@@ -158,22 +132,6 @@ CASES = {
     "read_usage_fresh": dict(op="read_usage", state=FULL, id="a1", ttl=300.0),
     "read_usage_stale_past_ttl": dict(op="read_usage", state=FULL, id="a1", ttl=30.0),
     "read_usage_absent": dict(op="read_usage", state=FULL, id="ghost", ttl=300.0),
-    "headroom_lock_newer_than_probe": head("locked"),
-    "headroom_newer_probe_overrides_older_lock": head("olderlock"),
-    "headroom_exhausted_window": head("full"),
-    "headroom_partial_is_low": head("partial"),
-    "headroom_reset_window_reads_ok": head("reset"),
-    "headroom_hot_window_is_low_at_threshold": head("hot", threshold=80.0),
-    "headroom_hot_window_is_ok_below_threshold": head("hot"),
-    "headroom_cool_window_is_ok": head("cool"),
-    "headroom_lock_without_usage_is_exhausted": head("lockonly"),
-    "headroom_stale_usage_is_unknown": head("stale"),
-    "headroom_absent_is_unknown": head("ghost"),
-    "headroom_empty_windows_is_unknown": head("empty"),
-    "headroom_stale_lock_record_is_unknown": head("stalelock"),
-    "headroom_resetless_full_window_is_exhausted": head("noreset"),
-    "headroom_short_ttl_makes_usage_stale": head("cool", ttl=10.0),
-    "headroom_live_lock_beside_stale_window_is_exhausted": head("stalewin"),
     "read_cursor_valid": dict(op="read_cursor", state=FULL, combo="fast", hash="h1"),
     "read_cursor_edited_combo": dict(op="read_cursor", state=FULL, combo="fast", hash="other"),
     "read_cursor_stale": dict(op="read_cursor", state=FULL, combo="stale", hash="h2"),
@@ -231,29 +189,37 @@ def run_case(case: dict, path: Path):
         return rs.is_in_cooldown(case["id"], model=case["model"], now=NOW)
     if op == "read_usage":
         return _snapshot(rs.read_usage(case["id"], ttl_seconds=case["ttl"], now=NOW))
-    if op == "headroom":
-        h = rs.headroom(
-            case["id"], now=NOW, ttl_seconds=case["ttl"], threshold_pct=case["threshold"]
-        )
-        return {
-            "state": h.state.value,
-            "resets_at": h.resets_at,
-            "source": h.source,
-            "observed_at": h.observed_at,
-        }
     if op == "read_cursor":
         return _cursor(rs.read_cursor(case["combo"], case["hash"], now=NOW))
     raise ValueError(op)
 
 
 # Cases whose Python oracle is deleted: runtime_state.project_window went
-# with the window port. Their goldens stay frozen, and the Rust parity
-# replays them; a re-run never rewrites or removes them.
+# with the window port, and the headroom verdict went with the quota-signal
+# deletion (the verdict lives in accounts::state now). Their goldens stay
+# frozen, and the Rust parity replays them; a re-run never rewrites or
+# removes them.
 FROZEN = {
     "project_window_nothing_recorded",
     "project_window_without_a_length",
     "project_window_rolled_window",
     "project_window_open_window",
+    "headroom_lock_newer_than_probe",
+    "headroom_newer_probe_overrides_older_lock",
+    "headroom_exhausted_window",
+    "headroom_partial_is_low",
+    "headroom_reset_window_reads_ok",
+    "headroom_hot_window_is_low_at_threshold",
+    "headroom_hot_window_is_ok_below_threshold",
+    "headroom_cool_window_is_ok",
+    "headroom_lock_without_usage_is_exhausted",
+    "headroom_stale_usage_is_unknown",
+    "headroom_absent_is_unknown",
+    "headroom_empty_windows_is_unknown",
+    "headroom_stale_lock_record_is_unknown",
+    "headroom_resetless_full_window_is_exhausted",
+    "headroom_short_ttl_makes_usage_stale",
+    "headroom_live_lock_beside_stale_window_is_exhausted",
 }
 
 

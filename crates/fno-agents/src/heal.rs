@@ -1499,11 +1499,9 @@ fn behind_numbers(out: &str) -> (String, String) {
     (grab("behind-before="), grab("behind-after="))
 }
 
-/// The push command's conflict exit: the integrate leg refused because the branch
-/// is not safely rebasable (needs_resolver, refused, or a merge the command
-/// aborted). The command's other exit-3 refusals (protected branch, dirty tree) are NOT conflicts.
-fn is_rebase_conflict(stderr: &str) -> bool {
-    stderr.contains("not safely rebasable")
+/// The push command's conflict exit: the fold merge conflicted and the door left it in progress for the caller. The command's other exit-3 refusals (protected branch, dirty tree, a merge that refused to start) are NOT conflicts.
+fn is_fold_conflict(stderr: &str) -> bool {
+    stderr.contains("not safely mergeable")
 }
 
 /// The conflicting file list out of the push command's conflict stderr
@@ -2103,6 +2101,11 @@ fn emit_flake_row(
     fields.insert("sha".to_string(), serde_json::json!(sha));
     fields.insert("run_id".to_string(), serde_json::json!(run));
     fields.insert("check".to_string(), serde_json::json!(check));
+    // Readers scope flake evidence per repo: a check name like `unit` in one
+    // repo says nothing about the same name in another.
+    if let Some(repo) = origin_slug_key(a) {
+        fields.insert("repo".to_string(), serde_json::json!(repo));
+    }
     if let Some(n) = node_id {
         fields.insert("node_id".to_string(), serde_json::json!(n));
     }
@@ -2615,22 +2618,27 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                         "rebased",
                         &format!("{trigger}; behind {before} -> {after}"),
                     );
-                    // The conflict cleared: the task heal filed for it closes.
-                    if let Err(e) = crate::fleet_task::close(
-                        &questions_store(a),
-                        "heal",
-                        &format!("PR {pr} rebase conflict"),
-                        a.cwd.to_string_lossy().as_ref(),
-                        "rebased",
-                        "heal",
-                    ) {
-                        eprintln!("pr-heal: task close refused: {e}");
+                    // The conflict cleared: the task heal filed for it closes, under the new key and, across an upgrade window, under the pre-rename key.
+                    for key in [
+                        format!("PR {pr} fold conflict"),
+                        format!("PR {pr} rebase conflict"),
+                    ] {
+                        if let Err(e) = crate::fleet_task::close(
+                            &questions_store(a),
+                            "heal",
+                            &key,
+                            a.cwd.to_string_lossy().as_ref(),
+                            "rebased",
+                            "heal",
+                        ) {
+                            eprintln!("pr-heal: task close refused: {e}");
+                        }
                     }
                     // The push restarted CI; classifying the old sha's checks
                     // would classify a dead run.
                     continue;
                 }
-                Ok((false, _, err)) if is_rebase_conflict(&err) => {
+                Ok((false, _, err)) if is_fold_conflict(&err) => {
                     // A conflict spends the per-run budget, never the 24h
                     // cap: the owner may resolve and need the retry this
                     // tick, and the journal cannot tell a resolved tree
@@ -2638,11 +2646,20 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     rebased_this_run += 1;
                     let files = conflict_files(&err);
                     println!(
-                        "skip rebase_conflict: PR {pr} conflicts rebasing onto origin/main; the owner decides"
+                        "skip fold_conflict: PR {pr} conflicts folding origin/main by merge; the owner decides"
                     );
-                    bump(&mut counts, "skip_rebase_conflict");
-                    receipt(&pr, "skip_rebase_conflict", &files);
-                    let key = format!("PR {pr} rebase conflict");
+                    bump(&mut counts, "skip_fold_conflict");
+                    receipt(&pr, "skip_fold_conflict", &files);
+                    let key = format!("PR {pr} fold conflict");
+                    // The pre-rename key: an open task under it would orphan once the new key files, so the upgrade retires it beside the new filing.
+                    let _ = crate::fleet_task::close(
+                        &questions_store(a),
+                        "heal",
+                        &format!("PR {pr} rebase conflict"),
+                        a.cwd.to_string_lossy().as_ref(),
+                        "superseded",
+                        "heal",
+                    );
                     let at = (!files.is_empty())
                         .then(|| format!(" in: {files}"))
                         .unwrap_or_default();
@@ -2650,13 +2667,9 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     let seg = err.split("). ").nth(1);
                     let door = seg.unwrap_or("resolve by hand, then re-run `fno do pr push`");
                     let text = format!("heal: {key} onto origin/main{at}. {door}");
-                    let run = if err.contains("already merges origin/main") {
-                        format!("fno do pr push --pr {pr}")
-                    } else {
-                        format!("fno do pr rebase {pr}")
-                    };
+                    let run = format!("fno do pr push --pr {pr}");
                     if file_task(a, &key, &text, &run, &head_ref) {
-                        println!("escalated: PR {pr} rebase conflict is now a fleet task");
+                        println!("escalated: PR {pr} fold conflict is now a fleet task");
                     }
                     continue;
                 }

@@ -14,6 +14,29 @@ pub fn escape_text(text: &str) -> String {
     text.replace('<', "&lt;").replace('>', "&gt;")
 }
 
+/// A clause the page joins with ". ": its own closing period is dropped, so
+/// a template-shaped "<choice>." never renders "choice.. Next:".
+fn clause(text: &str) -> String {
+    let text = text.trim_end();
+    match text.strip_suffix('.') {
+        Some(rest) if !rest.ends_with('.') => escape_text(rest),
+        _ => escape_text(text),
+    }
+}
+
+/// The recommendation's reason without the "Option N, " lead the template
+/// asks for, which the page already prints as "Recommended: N, because".
+fn reason<'a>(why: &'a str, option: &str) -> &'a str {
+    let Some(rest) = why.strip_prefix(format!("Option {option}").as_str()) else {
+        return why;
+    };
+    if let Some(rest) = rest.strip_prefix(',') {
+        let rest = rest.trim_start();
+        return rest.strip_prefix("because ").unwrap_or(rest);
+    }
+    rest.strip_prefix(" because ").unwrap_or(why)
+}
+
 pub fn unescape_text(text: &str) -> String {
     text.replace("&lt;", "<").replace("&gt;", ">")
 }
@@ -256,19 +279,15 @@ pub fn render_page(item: &AttentionItem, routing: &Routing) -> String {
     if !item.options.is_empty() {
         out.push_str("\n## Options\n\n");
         for option in &item.options {
-            out.push_str(&format!(
-                "- [ ] {}. {}",
-                option.n,
-                escape_text(&option.text)
-            ));
+            out.push_str(&format!("- [ ] {}. {}", option.n, clause(&option.text)));
             if let Some(next) = option.next.as_deref().filter(|n| !n.is_empty()) {
-                out.push_str(&format!(". Next: {}", escape_text(next)));
+                out.push_str(&format!(". Next: {}", clause(next)));
             }
             if !option.pros.is_empty() {
-                out.push_str(&format!(". Pro: {}", escape_text(&option.pros.join("; "))));
+                out.push_str(&format!(". Pro: {}", clause(&option.pros.join("; "))));
             }
             if !option.cons.is_empty() {
-                out.push_str(&format!(". Con: {}", escape_text(&option.cons.join("; "))));
+                out.push_str(&format!(". Con: {}", clause(&option.cons.join("; "))));
             }
             out.push('\n');
         }
@@ -286,10 +305,10 @@ pub fn render_page(item: &AttentionItem, routing: &Routing) -> String {
             let mut line = format!(
                 "Recommended: {}, because {}",
                 rec.option,
-                escape_text(&rec.why)
+                clause(reason(&rec.why, &rec.option.to_string()))
             );
             if let Some(d) = rec.downside.as_deref().filter(|d| !d.is_empty()) {
-                line.push_str(&format!(". Downside: {}", escape_text(d)));
+                line.push_str(&format!(". Downside: {}", clause(d)));
             }
             line.push('.');
             context.push(line);
@@ -399,6 +418,27 @@ fn section<'a>(body: &'a str, name: &str) -> Option<Vec<&'a str>> {
     None
 }
 
+/// One typed answer: a single letter (a, b, c) or digit maps to its option,
+/// any other text reads as words. The page cell and the chat lane both read
+/// through here, so a reply means the same thing on every surface.
+pub fn parse_answer_text(text: &str) -> FileAnswer {
+    let cell = text.trim();
+    let lowered = cell.to_ascii_lowercase();
+    if lowered.len() == 1 {
+        let c = lowered.as_bytes()[0];
+        if c.is_ascii_lowercase() {
+            return FileAnswer::Option(u32::from(c - b'a' + 1));
+        }
+        if c.is_ascii_digit() {
+            return cell
+                .parse::<u32>()
+                .map(FileAnswer::Option)
+                .unwrap_or(FileAnswer::Words(unescape_text(cell)));
+        }
+    }
+    FileAnswer::Words(unescape_text(cell))
+}
+
 /// The user's answer read out of one page. The typed `answer` cell in the
 /// frontmatter reads first: a letter (a, b, c) or a number maps to its
 /// option, any other words read as the answer, and an empty cell is never an
@@ -415,20 +455,7 @@ pub fn read_page_answer(text: &str) -> FileAnswer {
         .map(str::trim)
         .filter(|a| !a.is_empty())
     {
-        let lowered = cell.to_ascii_lowercase();
-        if lowered.len() == 1 {
-            let c = lowered.as_bytes()[0];
-            if c.is_ascii_lowercase() {
-                return FileAnswer::Option(u32::from(c - b'a' + 1));
-            }
-            if c.is_ascii_digit() {
-                return cell
-                    .parse::<u32>()
-                    .map(FileAnswer::Option)
-                    .unwrap_or(FileAnswer::Words(unescape_text(cell)));
-            }
-        }
-        return FileAnswer::Words(unescape_text(cell));
+        return parse_answer_text(cell);
     }
     let mut ticked: Vec<u32> = Vec::new();
     if let Some(lines) = section(&body, "Options") {
@@ -711,6 +738,7 @@ mod tests {
 
     fn item() -> AttentionItem {
         AttentionItem {
+            host: None,
             recovery_batch: None,
             id: "q-e5e5520b".into(),
             kind: "question".into(),
@@ -833,6 +861,30 @@ mod tests {
         assert!(body.contains("Reversible: yes. Cost if wrong: one wasted release"));
         assert!(body.contains("Meanwhile: proceeds on the strict reading"));
         assert!(body.contains("<!-- Tick one option above"));
+
+        // The question template's own shape: each clause closes with a
+        // period and the reason leads with "Option N,". The page reads the same.
+        let mut shaped = item();
+        shaped.options[0].text = "Yes, net zero needs no grant.".into();
+        shaped.options[0].next = Some("open the gate.".into());
+        shaped.options[1].text = "Stay strict...".into();
+        if let Some(rec) = shaped.recommendation.as_mut() {
+            rec.why = "Option 2, the strict reading blocks the least.".into();
+        }
+        let (_, shaped_body) = parse_page(&render_page(&shaped, &routing())).unwrap();
+        assert!(shaped_body
+            .contains("- [ ] 1. Yes, net zero needs no grant. Next: open the gate. Pro: fast"));
+        assert!(shaped_body.contains("Recommended: 2, because the strict reading blocks the least. Downside: one release carries the shim."));
+        assert!(
+            shaped_body.contains("- [ ] 2. Stay strict...\n"),
+            "an ellipsis keeps its dots"
+        );
+        // Free prose that only starts with the option name keeps every word.
+        assert_eq!(
+            reason("Option 2 is the safest", "2"),
+            "Option 2 is the safest"
+        );
+        assert_eq!(reason("Option 2 because it is safe", "2"), "it is safe");
     }
 
     #[test]
@@ -996,6 +1048,8 @@ mod tests {
         // A typed letter records its option.
         let b = page.replacen("answer: ''", "answer: b", 1);
         assert_eq!(read_page_answer(&b), FileAnswer::Option(2));
+        // The chat lane reads a reply through the same parser.
+        assert_eq!(parse_answer_text(" b "), FileAnswer::Option(2));
         let c = page.replacen("answer: ''", "answer: C", 1);
         assert_eq!(read_page_answer(&c), FileAnswer::Option(3));
         // A typed number too.

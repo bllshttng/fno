@@ -1,0 +1,46 @@
+{
+ "expected": [
+  {
+   "dimension": "structural_validity",
+   "run_id": "r1",
+   "skill_id": "fno:blueprint",
+   "verdict": "fail"
+  },
+  {
+   "dimension": "structural_validity",
+   "run_id": "r1",
+   "skill_id": "fno:blueprint",
+   "verdict": "pass"
+  }
+ ],
+ "input": [
+  {
+   "data": {
+    "dimension": "structural_validity",
+    "run_id": "r1",
+    "skill_id": "fno:blueprint",
+    "verdict": "fail"
+   },
+   "type": "skill_eval_finding"
+  },
+  {
+   "data": {
+    "dimension": "structural_validity",
+    "run_id": "r1",
+    "skill_id": "fno:blueprint",
+    "tool_fault": true,
+    "verdict": "fail"
+   },
+   "type": "skill_eval_finding"
+  },
+  {
+   "data": {
+    "dimension": "structural_validity",
+    "run_id": "r1",
+    "skill_id": "fno:blueprint",
+    "verdict": "pass"
+   },
+   "type": "skill_eval_finding"
+  }
+ ]
+}

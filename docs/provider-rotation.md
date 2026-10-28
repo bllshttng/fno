@@ -632,15 +632,15 @@ So the same dict means two different things, and the receiver decides which. Han
 
 Two rules follow. Which one applies depends on whether the launch has an argv carrier.
 
-**Prefer the carrier.** `fno agents spawn --dispatch-account <record>` takes the record id on argv. It resolves the overlay inside `cmd_spawn` and applies it where the harness is exec'd. The record id travels. The credentials do not. `backlog.advance` uses this for every cross-harness cutover. `_spawn_worker` refuses an `extra_env` carrying any key in `STATE_ROOT_ENV_KEYS`, and names the carrier in the refusal.
+**Prefer the carrier.** `fno agents spawn --dispatch-account <record>` takes the record id on argv. `accounts::launch` resolves the overlay in the spawn arm and applies it where the harness is exec'd. The record id travels. The credentials do not. `backlog.advance` uses this for every cross-harness cutover.
 
-**Seal what must forward.** `_codex_thread_spawn` has no argv carrier, because the env is its only channel to the app-server child. It calls `fno.agents.account_env.seal_state_root`. That pins `FNO_AGENTS_HOME`, `FNO_CLAIMS_ROOT` and `FNO_STATE_DIR` to the roots the current process resolves, whenever a mapping moves `HOME`. The registry row, the claim, the locks and the graph stay findable. `FNO_STATE_DIR` is the carrier that `state_dir` and `locks_dir` honor ahead of their config/`$HOME` defaults. The Rust default graph path reads it ahead of `FNO_HOME`, so a sealed Rust child reads the graph its parent wrote.
+**Seal what must forward.** `_codex_thread_spawn` has no argv carrier, because the env is its only channel to the app-server child. It calls the `state-root-seal` kind of `fno-agents spawn-overlay`, which `accounts::credentials::seal` answers. That pins `FNO_AGENTS_HOME`, `FNO_CLAIMS_ROOT` and `FNO_STATE_DIR` to the roots the current process resolves, whenever a mapping moves `HOME`. The registry row, the claim, the locks and the graph stay findable. `FNO_STATE_DIR` is the carrier that `state_dir` and `locks_dir` honor ahead of their config/`$HOME` defaults. The Rust default graph path reads it ahead of `FNO_HOME`, so a sealed Rust child reads the graph its parent wrote.
 
 The remaining limit: a root the seal does not pin still follows the moved `HOME`. That includes the `FNO_HOME`-anchored sidecars (push-stamps, the corrections log, the decision index), whose carrier the seal leaves free. Prefer the argv carrier over the seal wherever a launch has one.
 
 A lane that can carry neither refuses. The codex one-shot path threads no overlay, so a pinned account there raises rather than launching on the ambient account.
 
-`STATE_ROOT_ENV_KEYS` names the axis, and holds `HOME` alone today. It sits beside `SCRUB_AUTH_VARS` and `SECRET_ROUTE_VARS` in `account_env.py` on purpose. Three sets ask three different questions about the same env dict, so a new variable has to be weighed against each.
+`accounts::credentials` holds the seal beside `SCRUB_AUTH_VARS` and `SECRET_ROUTE_VARS` on purpose. The three ask three different questions about the same env map, so a new variable has to be weighed against each.
 
 ---
 
@@ -1237,28 +1237,15 @@ is absent or stale, behavior is byte-for-byte the reactive baseline.
   under the existing `.update.lock` (no schema bump - the `model_locks`
   precedent). Every existing writer carries it through so a health/cursor write
   never drops it. A snapshot older than `probe_ttl_seconds` reads as absent.
-- **Headroom predicate** (`runtime_state.headroom`): `OK | LOW | EXHAUSTED |
-  UNKNOWN`. A window whose `resets_at` is already past never binds (its limit
-  has reset even if the snapshot is stale). No data is `UNKNOWN`, which orders
-  **with** `OK` - absence of a probe is not evidence of trouble.
+- **Headroom predicate** (`crates/fno-agents/src/fallback_chain.rs` `headroom_at`): `OK | LOW | EXHAUSTED | UNKNOWN`. A window whose `resets_at` is already past never binds: the limit reset, even on a stale snapshot. No data is `UNKNOWN`, which orders **with** `OK` - absence of a probe is not evidence of trouble.
 
 ### Consumers
 
-- **Node dispatcher** (`dispatch._dispatch_one`, `backlog.advance`): both go
-  through the one shared route selector,
-  `fno.agents.autonomous_route.select_autonomous_route`, so they cannot
-  disagree. With `defer_dispatch` on, a ready node whose resolved provider is
-  `EXHAUSTED` (or `LOW` with a reset inside `defer_horizon_minutes`) is **not**
-  dispatched here - it either cuts over to another record (below) or leaves a
-  `quota-deferred` receipt + one decision event, node left in `ready`, the first
-  tick after the reset dispatching it. `p0` and explicit human dispatch commands
-  always fire. This is the one probe site (refresh-on-stale).
-- **Lane routing** (review panel `alternate` selection): a kind whose records
-  are all `EXHAUSTED` is stably demoted below kinds with headroom. Explicit
-  per-agent pins and role→provider config mappings are never overridden.
+- **Node dispatcher** (`backlog.advance`): the one shared route selector, `crates/fno-agents/src/backlog/quota_route.rs` `select_autonomous_route`, so every launcher resolves the same destination. With `defer_dispatch` on, a ready node whose resolved provider is `EXHAUSTED` (or `LOW` with a reset inside `defer_horizon_minutes`) is **not** dispatched here - it either cuts over to another record (below) or leaves a `quota-deferred` receipt + one decision event, node left in `ready`, the first tick after the reset dispatching it. `p0` and explicit human dispatch commands always fire. This is the one probe site (refresh-on-stale).
+- **Lane routing** (review panel `alternate` selection): a kind whose records are all `EXHAUSTED` is stably demoted below kinds with headroom. Explicit per-agent pins and role→provider config mappings are never overridden.
 - **Promise-time warning** (`fno config accounts required-bot-check`): read-only. When every account behind a `config.review` required bot is `EXHAUSTED`, it warns. It names the reset, so a coming review-gate wedge surfaces at once.
 
-Looking at quota and acting on it are two decisions, and they have two knobs. `observe` arms the probe and the snapshot write and changes no dispatch decision. `defer_dispatch` arms the verdicts that hold or reroute a dispatch, and implies `observe`, because deferring requires looking. With neither set, `evaluate_quota_signal` short-circuits to `UNKNOWN` (reason `quota-observation-off`) before it ever calls the probe, so a fresh install makes no network call. With `observe` on and `defer_dispatch` off, the probe runs and the snapshot lands. Both verdicts stay false, and the reason reads `observed` rather than `probed`. That is a working meter with no behavioural change to dispatch. One knob used to decide both, so an operator who wanted the meter had to accept automatic deferral, and the safe choice was blindness.
+Looking at quota and acting on it are two decisions, and they have two knobs. `observe` arms the probe and the snapshot write and changes no dispatch decision. `defer_dispatch` arms the verdicts that hold or reroute a dispatch, and implies `observe`, because deferring requires looking. With neither set, `evaluate_quota_signal` (`crates/fno-agents/src/backlog/quota_route.rs`) short-circuits to `UNKNOWN` (reason `quota-observation-off`) before it ever calls the probe, so a fresh install makes no network call. With `observe` on and `defer_dispatch` off, the probe runs and the snapshot lands. Both verdicts stay false, and the reason reads `observed` rather than `probed`. That is a working meter with no behavioural change to dispatch. One knob used to decide both, so an operator who wanted the meter had to accept automatic deferral, and the safe choice was blindness.
 
 When the resolved signal is `UNKNOWN` for any reason and the launch proceeds anyway, one `quota_rotation_declined` event fires. It names the reason and the age of any usage snapshot. A launch that went out blind is now distinguishable in the journal from a system that never needed to rotate.
 
@@ -1376,7 +1363,7 @@ So a two-record queue of `readyrule` + `makers`, both `auth: managed`, is not re
 
 The fix is not more `managed` records. It is one `api_key` record as the last-resort rung.
 
-The lane is already wired end to end. `resolve_account_overlay` returns the `api-key` lane and `pick_account` accepts it. This needs no code, only registration.
+The lane is already wired end to end. The `--account` overlay (`accounts::env::overlay`) returns the `api-key` lane and `pick_account` accepts it. This needs no code, only registration.
 
 ```bash
 fno config accounts add anthropic-key \

@@ -8,9 +8,27 @@ case "${1:-} ${2:-} ${3:-}" in
   "agents admit guard") set -- agents spawn-guard "${@:4}" ;;
   "agents admit capabilities") set -- agents capabilities "${@:4}" ;;
   "agents org chart") set -- agents lead "${@:4}" ;;
+  "agents org done"|"agents org escalate"|"agents org drain") set -- agents lead "${@:3}" ;;
   *)
     case "${1:-} ${2:-}" in
       "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit")
         set -- agents "${@:3}" ;;
     esac ;;
+esac
+# The lead commands have no Python leg: the front door execs these fno-agents
+# argvs (crates/fno/src/lead_route.rs), so the fake does too.
+case "${1:-} ${2:-} ${3:-}" in
+  "agents lead history") exec fno-agents lead-history "${@:4}" ;;
+  "agents lead verdict") exec fno-agents lead-history --verdict --user-command "${@:4}" ;;
+  "agents lead faq") exec fno-agents lead-state --faq "${@:4}" ;;
+  "agents lead shape") exec fno-agents lead-shape --user-command "${@:4}" ;;
+  "agents lead manifest-path") exec fno-agents lead-state --manifest-path "${@:4}" ;;
+  "agents lead init") exec fno-agents lead-state --init "${@:4}" ;;
+  "agents lead checkin") exec fno-agents lead-checkin --user-command "${@:4}" ;;
+  "agents lead cancel") exec fno-agents lead-state --cancel "${@:4}" ;;
+  "agents lead term") exec fno-agents lead-state --term "${@:4}" ;;
+  "agents lead done") exec fno-agents lead-state --done "${@:4}" ;;
+  "agents lead escalate") exec fno-agents lead-state --escalate "${@:4}" ;;
+  "agents lead drain") exec fno-agents lead-state --drain "${@:4}" ;;
+  "agents lead ledger") exec fno-agents lead-rundown --ledger "${@:4}" ;;
 esac

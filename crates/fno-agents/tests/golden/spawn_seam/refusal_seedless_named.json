@@ -1,0 +1,3 @@
+{
+  "text": "refusing a claude thread spawn with no message. Claude starts that session with no prompt, it waits for one forever, and its row holds a worker slot. Put the work in the message: fno agents spawn '/fno:target x-9a6b' --name w1 --node x-9a6b. A revival needs no message. No worker launched."
+}

@@ -58,6 +58,9 @@ pub struct Question {
     pub blocks: Vec<String>,
     pub subject: Option<String>,
     pub live: Option<bool>,
+    /// The asking machine on a copy pulled from another machine of the
+    /// store; `None` (JSON null) for a question asked here.
+    pub host: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -228,7 +231,7 @@ fn str_list(data: &Map<String, Value>, key: &str) -> Vec<String> {
 
 /// `<space>/<name>` for a project log, or the pre-space `<root>/.fno/<name>`
 /// a checkout still holds before its first migrating write.
-fn project_log(root: &Path, name: &str) -> PathBuf {
+pub(crate) fn project_log(root: &Path, name: &str) -> PathBuf {
     if let Some(space) = crate::paths::space_dir_opt(root) {
         let path = space.join(name);
         if path.exists() || crate::event_store::store_path(&path).exists() {
@@ -307,23 +310,28 @@ fn read_carveouts(root: &Path) -> Result<(u64, Vec<(String, u64)>, Option<String
     Ok((total, by_kind, oldest))
 }
 
+/// Neither the event store nor the journal file exists for `index`.
+fn index_missing(index: &Path) -> bool {
+    let store_present = crate::event_store::try_store_path(index)
+        .map(|s| s.is_file())
+        .unwrap_or(false);
+    !store_present
+        && matches!(std::fs::symlink_metadata(index), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
 /// Fold `operator_question` minus `operator_question_closed` from the
-/// machine-wide index. A missing index reads as no questions with a recovery
-/// hint on stderr; an unreadable one is an error naming it.
+/// machine-wide index. A missing index reads as no questions (the command,
+/// not this reader, prints the recovery hint: the board reads it in-process);
+/// an unreadable one is an error naming it.
 pub fn read_open_questions(index: &Path) -> Result<Vec<Question>, String> {
+    if index_missing(index) {
+        return Ok(Vec::new());
+    }
     let store_present = crate::event_store::try_store_path(index)
         .map(|s| s.is_file())
         .unwrap_or(false);
     if !store_present {
         match std::fs::symlink_metadata(index) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!(
-                    "outstanding: question index {} is missing; run \
-`fno inbox outstanding reindex` to recover project questions.",
-                    index.display()
-                );
-                return Ok(Vec::new());
-            }
             Err(e) => {
                 return Err(format!(
                     "cannot read question index {}: {e}",
@@ -383,6 +391,11 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                         blocks: str_list(data, "blocks"),
                         subject: opt_str(data, "subject"),
                         live: None,
+                        host: opt_str(data, "origin_machine")
+                            .filter(|m| *m != crate::claims::machine_id())
+                            .map(|_| {
+                                opt_str(data, "host").unwrap_or_else(|| "another machine".into())
+                            }),
                     },
                 );
             }
@@ -409,7 +422,9 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
 /// lane. No asker is stale; an asker missing from `answers` is unknown.
 pub fn apply_liveness(questions: &mut [Question], answers: &HashMap<String, bool>) {
     for q in questions.iter_mut() {
+        // A copy's asker runs on its own machine, where no probe here reaches.
         q.live = match &q.asker {
+            _ if q.host.is_some() => None,
             None => Some(false),
             Some(a) => answers.get(a).copied(),
         };
@@ -447,7 +462,7 @@ fn resolve_liveness(questions: &[Question], budget: Duration) -> HashMap<String,
 /// This root plus every project root the backlog names (each node's `cwd`
 /// and `source_cwd` that is still a directory). The backlog is advisory
 /// here: an unreadable store reads as this root alone.
-fn capture_project_roots(src: &Sources) -> Vec<PathBuf> {
+pub(crate) fn capture_project_roots(src: &Sources) -> Vec<PathBuf> {
     let mut roots: BTreeSet<PathBuf> = BTreeSet::new();
     roots.insert(crate::paths::resolve_loose(&src.root));
     let mut locations: Vec<Value> = Vec::new();
@@ -934,6 +949,9 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
                 })
             });
             let mut details: Vec<String> = where_.into_iter().collect();
+            if let Some(host) = &q.host {
+                details.push(format!("on {host}"));
+            }
             if stale_row {
                 details.push(match age_days(&q.ts, ctx.now) {
                     Some(age) => format!("{} old", plural(age, "day")),
@@ -1004,7 +1022,7 @@ fn env_nonempty(key: &str) -> Option<String> {
 }
 
 /// The canonical root that owns the project stores.
-fn storage_root(cwd: &Path) -> PathBuf {
+pub(crate) fn storage_root(cwd: &Path) -> PathBuf {
     if let Some(pin) = env_nonempty("FNO_REPO_ROOT") {
         return crate::paths::resolve_loose(Path::new(&pin));
     }
@@ -1025,7 +1043,7 @@ fn storage_root(cwd: &Path) -> PathBuf {
 
 /// This session's id: the target manifest's `fno_id` or `session_id`, else
 /// `CLAUDECODE_SESSION_ID`.
-fn session_id(cwd: &Path) -> Option<String> {
+pub(crate) fn session_id(cwd: &Path) -> Option<String> {
     let manifest = crate::state_path::resolve("target-state", cwd);
     if let Some(Ok(text)) = manifest.map(std::fs::read_to_string) {
         let mut lines = text.lines();
@@ -1089,8 +1107,37 @@ fn prove_it_rows() -> Result<Vec<Value>, String> {
     crate::prove_it_verdicts::prove_it_verdict_rows()
 }
 
+/// The run-path `Sources`: the listing and the reindex arm resolve the same
+/// stores once, through one builder.
+pub(crate) fn sources(cwd: &Path) -> Sources {
+    let home = crate::paths::AgentsHome::from_env();
+    Sources {
+        root: storage_root(cwd),
+        questions: crate::provider_cap::questions_path(&home),
+        lane: crate::org_board::scope::operator_lane_path(cwd),
+        graph: crate::graph_get::default_graph_path(),
+        backend: env_nonempty("FNO_TRACKER_BACKEND").unwrap_or_else(|| "graph".to_string()),
+        sidecar_dir: crate::tracker::sidecar::root(cwd),
+        home: std::env::var_os("HOME").map(PathBuf::from),
+    }
+}
+
+/// The listing for `cwd`, liveness resolved within `liveness`. The board
+/// calls this in-process, so its read cannot drift from the command's.
+pub(crate) fn read(cwd: &Path, liveness: Duration) -> Result<Outstanding, String> {
+    let mut o = collect(&sources(cwd), prove_it_rows())?;
+    let answers = resolve_liveness(&o.questions, liveness);
+    apply_liveness(&mut o.questions, &answers);
+    Ok(o)
+}
+
 /// `fno-agents compaction outstanding [--json|-J]`, the native `fno inbox outstanding`.
 pub fn run_outstanding(args: &[String]) -> i32 {
+    if let Some((word, rest)) = args.split_first() {
+        if let Some(code) = crate::outstanding_cmds::dispatch(word, rest) {
+            return code;
+        }
+    }
     let mut as_json = false;
     for a in args {
         match a.as_str() {
@@ -1106,25 +1153,20 @@ pub fn run_outstanding(args: &[String]) -> i32 {
         }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let home = crate::paths::AgentsHome::from_env();
-    let src = Sources {
-        root: storage_root(&cwd),
-        questions: crate::provider_cap::questions_path(&home),
-        lane: crate::org_board::scope::operator_lane_path(&cwd),
-        graph: crate::graph_get::default_graph_path(),
-        backend: env_nonempty("FNO_TRACKER_BACKEND").unwrap_or_else(|| "graph".to_string()),
-        sidecar_dir: crate::tracker::sidecar::root(&cwd),
-        home: std::env::var_os("HOME").map(PathBuf::from),
-    };
-    let mut o = match collect(&src, prove_it_rows()) {
+    let o = match read(&cwd, LIVENESS_BUDGET) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("outstanding: failed to read: {e}");
             return 1;
         }
     };
-    let answers = resolve_liveness(&o.questions, LIVENESS_BUDGET);
-    apply_liveness(&mut o.questions, &answers);
+    if index_missing(Path::new(&o.questions_store)) {
+        eprintln!(
+            "outstanding: question index {} is missing; run \
+`fno inbox outstanding reindex` to recover project questions.",
+            o.questions_store
+        );
+    }
     let mut out = std::io::stdout().lock();
     if as_json {
         let _ = writeln!(out, "{}", o.as_json());
@@ -1132,7 +1174,7 @@ pub fn run_outstanding(args: &[String]) -> i32 {
     }
     let ctx = RenderCtx {
         session_id: session_id(&cwd),
-        promoted: is_promoted(&home),
+        promoted: is_promoted(&crate::paths::AgentsHome::from_env()),
         cwd_name: cwd
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

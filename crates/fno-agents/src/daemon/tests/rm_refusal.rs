@@ -25,7 +25,7 @@ async fn rm_unknown_roster_refusal_names_the_reads_own_reason() {
             warnings: vec!["claude agents --json --all timed out after 15s".into()],
         },
         &|_| Ok(()),
-        &|_| true,
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
         &|_, _| Ok(true),
         &|_, _| PaneProbe::Unknown,
     )
@@ -59,7 +59,7 @@ async fn rm_absence_is_not_proof_on_a_warning_carrying_list() {
             warnings: vec!["one malformed row".into()],
         },
         &|_| Ok(()),
-        &|_| true,
+        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
         &|_, _| Ok(true),
         &|_, _| PaneProbe::Unknown,
     )
@@ -102,9 +102,9 @@ async fn rm_refuses_a_blocked_claude_row_after_its_own_stop() {
             ])
         },
         &|_| panic!("the refusal returns before the harness cascade"),
-        &|_| {
+        &|_, _| {
             stops.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            true
+            crate::daemon::rm_teardown::StopLeg::Asked
         },
         &|_, _| panic!("the refusal returns before the pane arms"),
         &|_, _| PaneProbe::Unknown,
@@ -151,7 +151,7 @@ async fn rm_keeps_the_row_when_the_mux_pane_kill_fails() {
         &request,
         &|| panic!("a non-claude row must not read the claude roster"),
         &|_| panic!("rm must not reach claude rm"),
-        &|_| panic!("no claude stop may run for a non-claude row"),
+        &|_, _| panic!("no claude stop may run for a non-claude row"),
         &|session, pane_id| {
             assert_eq!((session, pane_id), ("main", 33));
             Err("pane server unreachable".into())
@@ -197,7 +197,7 @@ async fn rm_keeps_the_row_when_the_pane_stop_cannot_be_proven() {
         &request,
         &|| crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
         &|_| panic!("rm must not reach claude rm"),
-        &|_| panic!("no claude stop may run for a pane-substrate row"),
+        &|_, _| panic!("no claude stop may run for a pane-substrate row"),
         &|_, _| panic!("a pane-substrate row takes the pane arm, not the mux kill"),
         &|_, _| PaneProbe::Unknown,
     )
@@ -254,9 +254,9 @@ async fn rm_refuses_a_row_the_roster_still_carries_and_names_no_force() {
             ])
         },
         &|_| panic!("a genuinely live row must not reach claude rm"),
-        &|_| {
+        &|_, _| {
             stops.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            true
+            crate::daemon::rm_teardown::StopLeg::Asked
         },
         &|_, _| panic!("a genuinely live row must not reach mux kill"),
         &|_, _| PaneProbe::Unknown,
@@ -326,9 +326,9 @@ async fn rm_refusal_on_a_claude_row_without_a_row_id_names_no_stop_and_no_force(
         &request,
         &|| crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
         &|_| panic!("an unresolvable row must not reach claude rm"),
-        &|_| {
+        &|_, _| {
             stops.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            true
+            crate::daemon::rm_teardown::StopLeg::Asked
         },
         &|_, _| panic!("an unresolvable row must not reach mux kill"),
         &|_, _| PaneProbe::Unknown,

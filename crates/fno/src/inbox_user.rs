@@ -99,22 +99,59 @@ pub fn classify_inbox_peers(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(argv)
 }
 
-/// Classify `fno inbox outstanding [--json|-J]`, and the hidden legacy
-/// `fno outstanding` spelling of it: `Some(rest)` is the flag tail for
-/// `fno-agents compaction outstanding`. A subcommand (`mine`, `ask`, `clear`,
-/// `reindex`), `--help`, or an unknown flag forwards to Python.
+/// Classify `fno inbox outstanding ...` and the hidden legacy `fno
+/// outstanding` spelling: `Some(rest)` is the argv tail for `fno-agents
+/// compaction outstanding`. The whole group runs native now the Python
+/// package is deleted: the listing, its subcommands (`mine`, `ask`, `clear`,
+/// `reindex`), and any unknown flag refuse through the runtime's own usage
+/// line.
 pub fn classify_inbox_outstanding(args: &[OsString]) -> Option<Vec<OsString>> {
     let rest = match args.first()?.to_str()? {
         "inbox" if args.get(1)?.to_str()? == "outstanding" => &args[2..],
         "outstanding" => &args[1..],
         _ => return None,
     };
-    for a in rest {
-        if !matches!(a.to_str()?, "--json" | "-J") {
-            return None;
-        }
-    }
     Some(rest.to_vec())
+}
+
+/// Classify `fno inbox approvals ls|show|decide ...`: the argv tail for
+/// `fno-agents compaction approvals`. Any `--help` forwards to the Python
+/// group, which only lists the commands; the runtime owns every other argument.
+pub fn classify_inbox_approvals(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() < 3 || args[0].to_str()? != "inbox" || args[1].to_str()? != "approvals" {
+        return None;
+    }
+    if !matches!(args[2].to_str()?, "ls" | "show" | "decide") {
+        return None;
+    }
+    if args[3..]
+        .iter()
+        .any(|a| matches!(a.to_str(), Some("--help" | "-h")))
+    {
+        return None;
+    }
+    let mut argv = vec![OsString::from("approvals")];
+    argv.extend_from_slice(&args[2..]);
+    Some(argv)
+}
+
+/// Classify `fno inbox day start|end`: the argv for `fno-agents day --kind
+/// <k> --commit`. Only the two boundary words claim; anything else forwards,
+/// where Python answers a group it no longer mounts with its own usage
+/// refusal.
+pub fn classify_inbox_day(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.len() != 3 || args[0].to_str()? != "inbox" || args[1].to_str()? != "day" {
+        return None;
+    }
+    let kind = args[2].to_str()?;
+    if !matches!(kind, "start" | "end") {
+        return None;
+    }
+    Some(vec![
+        OsString::from("--kind"),
+        OsString::from(kind),
+        OsString::from("--commit"),
+    ])
 }
 
 #[cfg(test)]
@@ -184,8 +221,47 @@ mod tests {
             classify_inbox_outstanding(&mk(&["outstanding", "--json"])),
             Some(mk(&["--json"]))
         );
-        for sub in ["mine", "ask", "clear", "reindex", "--help"] {
-            assert!(classify_inbox_outstanding(&mk(&["inbox", "outstanding", sub])).is_none());
+        for sub in [
+            "mine",
+            "mine do add text",
+            "ask",
+            "clear",
+            "reindex",
+            "--help",
+            "--bogus",
+        ] {
+            let words: Vec<&str> = sub.split_whitespace().collect();
+            let mut argv = mk(&["inbox", "outstanding"]);
+            argv.extend(mk(&words));
+            assert!(
+                classify_inbox_outstanding(&argv).is_some(),
+                "the whole outstanding group claims natively: {sub}"
+            );
         }
+        assert!(classify_inbox_outstanding(&mk(&["inbox", "law", "status"])).is_none());
+        for sub in ["start", "end"] {
+            assert_eq!(
+                classify_inbox_day(&mk(&["inbox", "day", sub])),
+                Some(mk(&["--kind", sub, "--commit"]))
+            );
+        }
+        assert!(classify_inbox_day(&mk(&["inbox", "day"])).is_none());
+        assert!(classify_inbox_day(&mk(&["inbox", "day", "nope"])).is_none());
+        assert!(classify_inbox_day(&mk(&["inbox", "day", "start", "--json"])).is_none());
+    }
+
+    #[test]
+    fn approvals_commands_run_native_and_help_forwards() {
+        assert_eq!(
+            classify_inbox_approvals(&mk(&["inbox", "approvals", "ls", "--pending", "-J"])),
+            Some(mk(&["approvals", "ls", "--pending", "-J"]))
+        );
+        assert_eq!(
+            classify_inbox_approvals(&mk(&["inbox", "approvals", "decide", "d", "--as", "p"])),
+            Some(mk(&["approvals", "decide", "d", "--as", "p"]))
+        );
+        assert!(classify_inbox_approvals(&mk(&["inbox", "approvals", "ls", "--help"])).is_none());
+        assert!(classify_inbox_approvals(&mk(&["inbox", "approvals"])).is_none());
+        assert!(classify_inbox_approvals(&mk(&["inbox", "approvals", "nope"])).is_none());
     }
 }

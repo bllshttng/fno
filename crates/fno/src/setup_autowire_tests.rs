@@ -37,9 +37,9 @@ fn auto_wire_pure_contracts_hold() {
     assert_eq!(
         outcome_line(
             "Codex CLI",
-            &Outcome::Already("fno@footnote 0.4.0; start a new Codex session".into())
+            &Outcome::Already("fno@fno 0.4.0; start a new Codex session".into())
         ),
-        "  Codex CLI: already installed (fno@footnote 0.4.0; start a new Codex session)"
+        "  Codex CLI: already installed (fno@fno 0.4.0; start a new Codex session)"
     );
     assert_eq!(
         outcome_line(
@@ -50,9 +50,9 @@ fn auto_wire_pure_contracts_hold() {
     );
 
     // claude plugin-list rows decide installed; garbage reads as absent.
-    assert!(claude_list_has_fno(
-        r#"[{"id": "fno@footnote"}, {"id": "x@y"}]"#
-    ));
+    assert!(claude_list_has_fno(r#"[{"id": "fno@fno"}, {"id": "x@y"}]"#));
+    // An install from before the marketplace rename still counts.
+    assert!(claude_list_has_fno(r#"[{"id": "fno@footnote"}]"#));
     assert!(claude_list_has_fno(r#"[{"id": "fno@skills-dir"}]"#));
     assert!(!claude_list_has_fno(r#"[{"id": "x@footnote"}]"#));
     assert!(!claude_list_has_fno("not json"));
@@ -101,7 +101,7 @@ fn auto_wire_pure_contracts_hold() {
     );
     assert_eq!(
         parse_codex_receipt("not json"),
-        Outcome::Failed("unreadable receipt from the fno-py engine".into())
+        Outcome::Failed("unreadable receipt from the codex arm".into())
     );
 
     // The opencode receipt decides by status, note rendered either way.

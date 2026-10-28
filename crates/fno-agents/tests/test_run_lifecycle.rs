@@ -1127,18 +1127,38 @@ fn a_cargo_under_the_holding_cargo_is_admitted_at_once() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A fake cargo holder: an `sh` whose only child execs a symlink to
-/// `/bin/sleep`, so the census sees one child with a chosen argv0. Its own
-/// process group lets the test killpg the whole holder at the end.
+/// A fake cargo holder: an `sh` whose only child is a rustc-built stub named
+/// for the chosen argv0, so the census sees one child with that name. A real
+/// binary, never a symlink to `/bin/sleep`: ubuntu-26 ships the multicall
+/// coreutils, which dispatches on argv0 and refuses a name it does not know,
+/// and a shebang script would show the interpreter's argv, which `is_compile`
+/// never matches. Its own process group lets the test killpg the whole holder
+/// at the end.
 fn spawn_holder(root: &std::path::Path, dir: &str, name: &str) -> std::process::Child {
     let link_dir = root.join(dir);
     std::fs::create_dir_all(&link_dir).unwrap();
-    let link = link_dir.join(name);
-    std::os::unix::fs::symlink("/bin/sleep", &link).expect("symlink the chosen argv0");
+    let stub = link_dir.join(name);
+    let source = link_dir.join(format!("{name}.rs"));
+    std::fs::write(
+        &source,
+        "fn main() {\n    let secs: u64 = std::env::args().nth(1).and_then(|a| a.parse().ok()).unwrap_or(60);\n    std::thread::sleep(std::time::Duration::from_secs(secs));\n}\n",
+    )
+    .unwrap();
+    let built = std::process::Command::new("rustc")
+        .arg("-o")
+        .arg(&stub)
+        .arg(&source)
+        .output()
+        .expect("run rustc for the holder stub");
+    assert!(
+        built.status.success(),
+        "rustc failed: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
     Command::new("/bin/sh")
         .arg("-c")
         .arg("\"$0\" 60; true")
-        .arg(&link)
+        .arg(&stub)
         .process_group(0)
         .spawn()
         .expect("spawn the holder sh")

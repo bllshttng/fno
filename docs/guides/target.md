@@ -78,7 +78,6 @@ Old flags still work. `--lean` and `--quick` are aliases for `-S`. Individual sk
 
 | Flag | Effect |
 |------|--------|
-| `--cross-project` | Orchestrate across multiple repos |
 | `--resume` | Continue from saved state |
 | `--cancel` | Stop an active target session |
 | `--max-iterations N` | Iteration cap |
@@ -110,16 +109,6 @@ The stop hook is what makes target autonomous. When target is running (status: I
 **Session-scoped state preservation:** `init-target-state.sh` runs before the first tool call of every session. If it finds a `COMPLETE` or `BLOCKED` state file, it checks the `created_at` timestamp. State files newer than 300 seconds are left untouched - this prevents the hook from looping infinitely when a session completes normally within a short period. State files older than 300 seconds are treated as stale (left over from a previous session) and reset.
 
 This is the core innovation. Other tools suggest code. Target ships it.
-
-## Cross-project mode
-
-```
-/fno:target --cross-project "add auth to API and frontend"
-```
-
-This creates matching worktrees in each project, dispatches parallel subagents, and creates linked PRs. Projects execute in dependency order (backend first, frontend second).
-
-Requires workspace configuration in `~/.fno/config.toml`. Run `/fno:setup` to configure.
 
 ## Resume after interruption
 

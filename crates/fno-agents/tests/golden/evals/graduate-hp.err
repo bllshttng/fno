@@ -1,0 +1,4 @@
+Usage: fno-py doctor evals [OPTIONS] COMMAND [ARGS]...
+Try 'fno-py doctor evals --help' for help.
+
+Error: No such option: --bank

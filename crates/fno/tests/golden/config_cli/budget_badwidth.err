@@ -1,0 +1,4 @@
+Usage: fno config assert-subagent-budget [OPTIONS]
+Try 'fno config assert-subagent-budget --help' for help.
+
+Error: Invalid value for '--width' / '-w': 'abc' is not a valid integer.

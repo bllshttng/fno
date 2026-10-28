@@ -47,6 +47,13 @@ RUST_CLIENT_EVENT_SOURCES = {
     "triage_applied": "backlog",
     # The native archive sweep emits from the backlog archive command.
     "graph_archive_swept": "backlog",
+    # A standalone research round records its DoneAdvisory terminal under the
+    # hook source, as its Python twin did.
+    "termination": "hook",
+    # The native observer (fno doctor observer) emits its findings and run
+    # close under the observer source its Python twin declared.
+    "skill_eval_finding": "observer",
+    "skill_eval_run_complete": "observer",
 }
 
 

@@ -684,6 +684,8 @@ fn an_open_do_row_on_a_done_node_holds_the_retirement_and_a_closed_one_retires_b
 }
 
 /// The origin and team protections, and the tree buckets on a retired row.
+/// The operator row sits on open work: on done work quiet past the hour the
+/// done rule retires it.
 #[test]
 fn operator_and_teamed_rows_never_retire_and_tree_buckets_only_keep_trees() {
     let home = tmp_home("gc-protect");
@@ -718,7 +720,7 @@ fn operator_and_teamed_rows_never_retire_and_tree_buckets_only_keep_trees() {
     .unwrap();
     let graph = graph_read(
         &[
-            ("sess-o", "N1", "done"),
+            ("sess-o", "N2", "in_progress"),
             ("sess-k", "N1", "done"),
             ("sess-t", "N1", "done"),
         ],
@@ -1577,7 +1579,6 @@ async fn lifecycle_name_resolution_never_falls_back_on_ambiguity() {
         &reg,
         "deadbeef",
         std::path::Path::new("/nonexistent/registry.json"),
-        false,
         false,
     )
     .await

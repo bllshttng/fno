@@ -1563,7 +1563,7 @@ fn valid_chat_id(id: &str) -> bool {
 
 fn usage() -> i32 {
     eprintln!(
-        "usage: fno-agents chats <append|bus-append|stage|migrate|rebuild|list|read|resolve|show> ..."
+        "usage: fno-agents chats <append|bus-append|stage|bus-read|migrate|rebuild|list|read|resolve|show> ..."
     );
     eprintln!(
         "  migrate --envelopes: one-time rewrite of stored legacy <fno_mail> bodies \
@@ -1689,19 +1689,74 @@ pub fn run_chats(args: &[String]) -> i32 {
             // fail-closed before the bus write. The envelope contract lives
             // here; the Python caller stays a thin call. The id is the
             // caller's: the receipt row (record_hosted_delivery) must share
-            // it, so nothing is minted on this side.
+            // it, so nothing is minted on this side. `--delivery hosted`
+            // re-mints that receipt row from the same fields, and
+            // `--delivery typed` the pane receipt, so the audit-only rows the
+            // Python send lane wrote come from the one minting body too.
+            let mut live_arg: Option<String> = None;
+            let mut delivery: Option<String> = None;
+            let mut pane_id: Option<String> = None;
+            let mut mux_session: Option<String> = None;
+            let mut it = args[1..].iter();
+            while let Some(arg) = it.next() {
+                match arg.as_str() {
+                    "--delivery" => match it.next() {
+                        Some(v) if v == "hosted" || v == "typed" => delivery = Some(v.clone()),
+                        _ => {
+                            eprintln!("chats stage: --delivery wants hosted or typed");
+                            return 2;
+                        }
+                    },
+                    "--delivery=hosted" => delivery = Some("hosted".into()),
+                    "--delivery=typed" => delivery = Some("typed".into()),
+                    "--pane-id" => match it.next() {
+                        Some(v) => pane_id = Some(v.clone()),
+                        None => {
+                            eprintln!("chats stage: --pane-id wants a value");
+                            return 2;
+                        }
+                    },
+                    "--mux-session" => match it.next() {
+                        Some(v) => mux_session = Some(v.clone()),
+                        None => {
+                            eprintln!("chats stage: --mux-session wants a value");
+                            return 2;
+                        }
+                    },
+                    other => {
+                        if live_arg.is_none() && !other.starts_with('-') {
+                            live_arg = Some(other.to_string());
+                        } else {
+                            eprintln!("chats stage: unknown argument {other:?}");
+                            return 2;
+                        }
+                    }
+                }
+            }
+            if (pane_id.is_some() || mux_session.is_some()) && delivery.as_deref() != Some("typed")
+            {
+                eprintln!("chats stage: --pane-id/--mux-session need --delivery typed");
+                return 2;
+            }
             let mut input = String::new();
             if std::io::stdin().read_to_string(&mut input).is_err() {
                 eprintln!("chats stage: could not read the fields from stdin");
                 return 1;
             }
-            let fields: Value = match serde_json::from_str(input.trim()) {
+            let mut fields: Value = match serde_json::from_str(input.trim()) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("chats stage: not a JSON object: {e}");
                     return 1;
                 }
             };
+            // The receipt mark rides the fields, not a special minting path:
+            // the tag loop below copies it in canonical order.
+            if let Some(d) = &delivery {
+                if let Some(slot) = fields.as_object_mut() {
+                    slot.insert("delivery".into(), json!(d));
+                }
+            }
             let obj = match fields.as_object() {
                 Some(o) => o,
                 None => {
@@ -1748,12 +1803,15 @@ pub fn run_chats(args: &[String]) -> i32 {
             line.insert("kind".into(), json!("send"));
             // Optional tags ride the envelope's additive shape; absent stays
             // absent so lines stay scannable. to_session/to_harness fold into
-            // meta, the copy the landed check reads.
+            // meta, the copy the landed check reads. A `--delivery` receipt
+            // carries the mark in its canonical tag slot, and the typed one
+            // names the pane the bytes were typed into.
             for tag in [
                 "from_harness",
                 "to_harness",
                 "request_id",
                 "in_reply_to",
+                "delivery",
                 "from_session",
                 "from_model",
                 "to_kind",
@@ -1790,9 +1848,19 @@ pub fn run_chats(args: &[String]) -> i32 {
                     }
                 }
             }
+            if delivery.as_deref() == Some("typed") {
+                let pane = pane_id.unwrap_or_default();
+                let meta = line.entry("meta").or_insert_with(|| json!({}));
+                if let Some(m) = meta.as_object_mut() {
+                    m.insert("transport".into(), json!("pane"));
+                    m.insert("pane_id".into(), json!(pane));
+                    if let Some(s) = mux_session.filter(|s| !s.is_empty()) {
+                        m.insert("mux_session".into(), json!(s));
+                    }
+                }
+            }
             line.insert("body".into(), json!(body));
-            let live = args
-                .get(1)
+            let live = live_arg
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(bus_append_live_path);
             match crate::announce::append_line_open(&live, &Value::Object(line), &dir) {
@@ -1806,6 +1874,7 @@ pub fn run_chats(args: &[String]) -> i32 {
                 }
             }
         }
+        "bus-read" => run_bus_read(&args[1..]),
         "migrate" => {
             if args.iter().any(|a| a == "--envelopes") {
                 return match migrate_envelopes_at(&dir, &index_path()) {
@@ -2016,6 +2085,241 @@ pub fn run_chats(args: &[String]) -> i32 {
         }
         _ => usage(),
     }
+}
+
+/// The bus log's read door, the native home of the deleted Python read leg
+/// (`bus.log.iter_messages`, `bus.cursor.scan_unread`, `read_cursor`,
+/// `withdrawn_ids` and `landed_ids`): rows, the cursor-bounded unread scan,
+/// the two control-id sets, and a cursor read, all as one JSON answer. The
+/// live path rides `--bus` so a caller's resolver (config.paths.bus_dir and
+/// both env legs) stays the single source, exactly the bus-append contract.
+fn run_bus_read(args: &[String]) -> i32 {
+    let Some(mode) = args.first() else {
+        eprintln!("chats bus-read: name a mode: rows, unread, sets or cursor");
+        return 2;
+    };
+    let mut bus: Option<std::path::PathBuf> = None;
+    let mut names: Vec<String> = Vec::new();
+    let mut exclude: Vec<String> = Vec::new();
+    let mut dedupe: Option<bool> = None;
+    let mut it = args[1..].iter();
+    while let Some(arg) = it.next() {
+        let mut take_value = |flag: &str| match it.next() {
+            Some(v) => Ok(v.clone()),
+            None => Err(format!("chats bus-read: {flag} wants a value")),
+        };
+        match arg.as_str() {
+            "--bus" => match take_value("--bus") {
+                Ok(v) => bus = Some(std::path::PathBuf::from(v)),
+                Err(e) => {
+                    eprintln!("{e}");
+                    return 2;
+                }
+            },
+            "--name" => match take_value("--name") {
+                Ok(v) => names.push(v),
+                Err(e) => {
+                    eprintln!("{e}");
+                    return 2;
+                }
+            },
+            "--exclude" => match take_value("--exclude") {
+                Ok(v) => {
+                    exclude = v
+                        .split(',')
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    return 2;
+                }
+            },
+            "--dedupe" => match take_value("--dedupe") {
+                Ok(v) if v == "first" => dedupe = Some(false),
+                Ok(v) if v == "last" => dedupe = Some(true),
+                _ => {
+                    eprintln!("chats bus-read: --dedupe wants first or last");
+                    return 2;
+                }
+            },
+            other => {
+                eprintln!("chats bus-read: unknown argument {other:?}");
+                return 2;
+            }
+        }
+    }
+    let live = bus.unwrap_or_else(bus_append_live_path);
+    let bus_dir = match live.parent() {
+        Some(p) => p.to_path_buf(),
+        None => std::path::PathBuf::from("."),
+    };
+    let (raw, mut warnings) = crate::announce::read_bus_segments_reported(&live);
+    // The envelope contract the Python read leg froze: a row without its
+    // required address/identity fields is malformed and skips with a named
+    // warning, so every mode answers over the rows the old leg would read.
+    let mut rows: Vec<Value> = Vec::new();
+    for m in &raw {
+        if required_fields_present(&m.row) {
+            rows.push(m.row.clone());
+        } else {
+            warnings.push(format!(
+                "bus log: skipping malformed line {}:{} (ValueError)",
+                m.source, m.line
+            ));
+        }
+    }
+    match mode.as_str() {
+        "rows" => {
+            if let Some(last) = dedupe {
+                rows = dedupe_rows(&rows, last);
+            }
+            for w in &warnings {
+                eprintln!("{w}");
+            }
+            println!(
+                "{}",
+                serde_json::to_string(&json!({ "rows": rows })).unwrap_or_default()
+            );
+            0
+        }
+        "sets" => {
+            let mut withdrawn: Vec<String> = crate::mail_control_drain::withdrawn_ids(&rows)
+                .into_iter()
+                .collect();
+            withdrawn.sort();
+            let mut landed: Vec<String> = crate::mail_control_drain::landed_ids(&rows)
+                .into_iter()
+                .collect();
+            landed.sort();
+            for w in &warnings {
+                eprintln!("{w}");
+            }
+            println!(
+                "{}",
+                serde_json::to_string(&json!({
+                    "withdrawn": withdrawn.into_iter().collect::<Vec<_>>(),
+                    "landed": landed.into_iter().collect::<Vec<_>>(),
+                }))
+                .unwrap_or_default()
+            );
+            0
+        }
+        "unread" => {
+            if names.is_empty() {
+                eprintln!("chats bus-read: unread needs at least one --name");
+                return 2;
+            }
+            for name in &names {
+                if let Err(e) = valid_cursor_name(name) {
+                    eprintln!("chats bus-read: {e}");
+                    return 2;
+                }
+            }
+            for w in &warnings {
+                eprintln!("{w}");
+            }
+            // The scan's own cursor read is silent (the drain paths share
+            // it); the oracle warned on a corrupt cursor here, so the door
+            // names the corruption before the rescan answer.
+            for name in &names {
+                let (_cursor, cursor_warnings) = crate::mail_control_drain::read_cursor_file(
+                    &bus_dir.join("cursors").join(format!("{name}.json")),
+                );
+                for w in &cursor_warnings {
+                    eprintln!("{w}");
+                }
+            }
+            let mut out = serde_json::Map::new();
+            for name in &names {
+                let unread = crate::mail_control_drain::unread_messages_excluding(
+                    &bus_dir, &rows, name, &exclude,
+                );
+                out.insert(
+                    name.clone(),
+                    Value::Array(unread.into_iter().cloned().collect()),
+                );
+            }
+            println!(
+                "{}",
+                serde_json::to_string(&Value::Object(out)).unwrap_or_default()
+            );
+            0
+        }
+        "cursor" => {
+            if names.len() != 1 {
+                eprintln!("chats bus-read: cursor needs exactly one --name");
+                return 2;
+            }
+            let name = &names[0];
+            if let Err(e) = valid_cursor_name(name) {
+                eprintln!("chats bus-read: {e}");
+                return 2;
+            }
+            let (cursor, cursor_warnings) = crate::mail_control_drain::read_cursor_file(
+                &bus_dir.join("cursors").join(format!("{name}.json")),
+            );
+            for w in &cursor_warnings {
+                eprintln!("{w}");
+            }
+            println!(
+                "{}",
+                serde_json::to_string(&json!({ "name": name, "last_seen_id": cursor }),)
+                    .unwrap_or_default()
+            );
+            0
+        }
+        other => {
+            eprintln!("chats bus-read: unknown mode {other:?} (rows, unread, sets, cursor)");
+            2
+        }
+    }
+}
+
+/// The envelope contract the serializer froze: id, from, to and kind are
+/// required; everything else reads with a fallback.
+pub(crate) fn required_fields_present(m: &Value) -> bool {
+    ["id", "from", "to", "kind"]
+        .iter()
+        .all(|k| m.get(k).and_then(Value::as_str).is_some())
+}
+
+/// One row per id; `last` keeps the final occurrence (an outbox or unclaimed
+/// scan reads the receipt row's final state) and the default keeps the first
+/// (a staged row wins over the twin that supersedes it in a drain).
+fn dedupe_rows(rows: &[Value], last: bool) -> Vec<Value> {
+    if last {
+        let mut last_at: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (i, m) in rows.iter().enumerate() {
+            if let Some(id) = m.get("id").and_then(Value::as_str) {
+                last_at.insert(id, i);
+            }
+        }
+        let keep: std::collections::HashSet<usize> = last_at.into_values().collect();
+        rows.iter()
+            .enumerate()
+            .filter(|(i, _)| keep.contains(i))
+            .map(|(_, m)| m.clone())
+            .collect()
+    } else {
+        let mut done: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        rows.iter()
+            .filter_map(|m| {
+                let id = m.get("id").and_then(Value::as_str)?;
+                done.insert(id).then(|| m.clone())
+            })
+            .collect()
+    }
+}
+
+/// The cursor-name rule the cursor files freeze: non-empty, no separators,
+/// no traversal.
+fn valid_cursor_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." {
+        return Err(format!("invalid cursor name: {name:?}"));
+    }
+    Ok(())
 }
 
 /// One JSON line per chat, index rollup fields (the thread read model's API).

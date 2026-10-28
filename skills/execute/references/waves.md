@@ -212,18 +212,20 @@ if [[ -n "${NODE_ID:-}" ]]; then
 fi
 # A joined worker filters the pull to its own band. Neither env export
 # (FNO_WORKER_BAND, FNO_WORKER_NAME) reaches a daemon-forked worker, so the
-# fallback resolves the roster name from the registry binding (whoami's
-# worker_name - the same rung resolve_task_holder reads) and looks up the
-# band table the join brief carries. The brief exists only in a joined
-# worktree, which gates the whole path; a lone target matches no row and
-# stays unfiltered.
+# fallback resolves the roster name from the registry binding (`fno agents
+# whoami`'s name field - the registry row resolve_task_holder also reads)
+# and looks up the band table the join brief carries. The brief exists only
+# in a joined worktree, which gates the whole path; a lone target matches no
+# row and stays unfiltered.
 WORKER_BAND="${FNO_WORKER_BAND:-}"
 if [[ -z "$WORKER_BAND" && -n "$NODE_ID" && -f ".fno/join-briefs/${NODE_ID}.md" ]]; then
-    WORKER=$(fno whoami --json 2>/dev/null | python3 -c \
-        "import json,sys; print(json.load(sys.stdin).get('worker_name') or '')" 2>/dev/null)
-    WORKER_BAND=$(awk -F'|' -v w="$WORKER" \
-        'tolower($2) ~ tolower(w) {gsub(/ /, "", $3); print $3; exit}' \
-        ".fno/join-briefs/${NODE_ID}.md" 2>/dev/null)
+    WORKER=$(fno agents whoami 2>/dev/null | python3 -c \
+        "import json,sys; print(json.load(sys.stdin).get('name') or '')" 2>/dev/null || true)
+    if [[ -n "$WORKER" ]]; then
+        WORKER_BAND=$(awk -F'|' -v w="$WORKER" \
+            '{cell = tolower($2); gsub(/ /, "", cell); want = tolower(w); gsub(/ /, "", want); if (cell == want && cell != "") {gsub(/ /, "", $3); print $3; exit}}' \
+            ".fno/join-briefs/${NODE_ID}.md" 2>/dev/null)
+    fi
 fi
 if [[ -n "$WORKER_BAND" ]]; then
     READY_ARGS+=(--band "$WORKER_BAND")
@@ -274,7 +276,7 @@ Use Task tool to spawn fresh executors for each task. The executor loads `fno:te
 #   1. Explicit `executor:` on the task block (highest)
 #   2. Explicit `executor:` on the plan frontmatter
 #   3. Surface inference from the task's file list
-#      (fno.executor._surface)
+#      (fno-agents executor-route surface)
 #   4. 'do' (default)
 TASK_EXECUTOR=$(TASK_EXEC="$task_executor_field" \
                 PLAN_EXEC="$plan_executor_field" \

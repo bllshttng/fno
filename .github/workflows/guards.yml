@@ -69,7 +69,7 @@ permissions:
 
 jobs:
   plugin-tree:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +86,7 @@ jobs:
   # regression that breaks either arm must fail CI rather than surface on a
   # user's upgraded OpenCode.
   extension-suites:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -117,7 +117,7 @@ jobs:
 
   main-python-static:
     name: Python static correctness (495 sources)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -214,6 +214,18 @@ jobs:
           bash tests/ci/test_seam_crossings.sh
           (cd cli && uv run fno-py doctor lint seam-crossings)
 
+      # The JSON-stdout house contract: a -J command prints exactly one JSON
+      # document on stdout ([] on empty, {ok:false} on a refused read), so an
+      # agent parses output without a wrapper. Selftest first, so the checker
+      # is positive-controlled before it is trusted on the real table.
+      - name: JSON-stdout contract (selftest, then check)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          bash scripts/ci/check-json-stdout.sh --selftest
+          bash scripts/ci/check-json-stdout.sh
+
       # Flag + env-var registries (x-72fc): the flag check measures the
       # change against its own base (merge base on a PR, the previous tip on
       # push), so two PRs from one base cannot race on a stored count; every
@@ -238,7 +250,7 @@ jobs:
   # event. Sourced from: control-plane-doc-colocation.yml, oos-tracked.yml.
   guards-pr:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -310,7 +322,7 @@ jobs:
   # matches (closure-trailer signature) is unchanged.
   check-pr-node-closure:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
@@ -357,7 +369,7 @@ jobs:
   # review-invocation-single-source.yml, skill-local-evals.yml,
   # tracker-partition.yml, uv-install-bytecode.yml.
   guards:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read

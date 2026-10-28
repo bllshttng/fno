@@ -22,6 +22,8 @@ def test_repo_loader_preserves_a_real_worktree_config_file(monkeypatch, tmp_path
     )
     monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "global.toml"))
     monkeypatch.delenv("FNO_CONFIG", raising=False)
+    # The hermetic env drops the canonical candidate this test reads.
+    monkeypatch.delenv("FNO_NO_CANONICAL_CONFIG", raising=False)
     monkeypatch.setattr(
         "fno.paths.resolve_canonical_worktree",
         lambda root=None, timeout=None: canonical,
@@ -31,3 +33,34 @@ def test_repo_loader_preserves_a_real_worktree_config_file(monkeypatch, tmp_path
 
     assert settings.review.max_rounds == 7
     assert settings.review.github_approval_satisfies is False
+
+
+def test_merge_read_climbs_to_the_canonical_project_from_a_worktree(
+    monkeypatch, tmp_path: Path
+):
+    # The PR 1628 shape: the merge runs inside a worker worktree that carries
+    # no config of its own. The read must climb to the canonical project tier,
+    # never fall straight through to the global default - the global key is
+    # the fleet default, never a kill switch over a project decision.
+    worktree = tmp_path / "worktree"
+    canonical = tmp_path / "canonical"
+    worktree.mkdir()
+    (worktree / ".git").touch()
+    (canonical / ".fno").mkdir(parents=True)
+    (tmp_path / "global.toml").write_text(
+        "[auto_merge]\nenabled = false\n", encoding="utf-8"
+    )
+    (canonical / ".fno" / "config.toml").write_text(
+        "[auto_merge]\nenabled = true\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(tmp_path / "global.toml"))
+    monkeypatch.delenv("FNO_CONFIG", raising=False)
+    monkeypatch.delenv("FNO_NO_CANONICAL_CONFIG", raising=False)
+    monkeypatch.setattr(
+        "fno.paths.resolve_canonical_worktree",
+        lambda root=None, timeout=None: canonical,
+    )
+
+    settings = config.load_settings_for_repo(worktree)
+
+    assert settings.auto_merge.enabled is True

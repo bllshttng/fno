@@ -40,18 +40,6 @@ def test_orphan_sorts_after_linked_peer_in_the_same_band():
     )
 
 
-def test_orphan_rate_threshold_default_never_breaches():
-    """A backlog starts near-total orphan; day one must be quiet."""
-    from fno.health_monitor import DEFAULT_CONFIG, evaluate_thresholds
-
-    report = {"orphan_feature_rate": 1.0}
-    breaches = evaluate_thresholds(report, config=DEFAULT_CONFIG)
-    assert [b for b in breaches if b.key == "orphan_feature_rate"] == []
-
-
-# -- review findings: per-project scoping, rate severity --
-
-
 def test_per_project_board_does_not_invent_orphans():
     """Orphanhood is a whole-graph property.
 

@@ -10,6 +10,7 @@
 
 pub mod acquire;
 pub mod list;
+pub mod manifest_refresh;
 pub mod reap;
 pub mod refresh;
 pub mod release;
@@ -305,7 +306,10 @@ pub fn stamp_do_on_acquire(key: &str, claim: &crate::claims::ClaimRecord, holder
 }
 
 /// Close the do lifecycle row the acquire stamp opened: fills `ended_at`
-/// (mirrors `_stamp_do_on_release`). Best-effort: a graph failure or missing
+/// (mirrors `_stamp_do_on_release`). The fill never appends: a release whose
+/// node carries no matching row records nothing, so a claim released without
+/// running the work (a blueprint release, a rollback a caller forgot to mark)
+/// cannot gain an execute completion. Best-effort: a graph failure or missing
 /// identity is a named stderr skip and never fails the release.
 pub fn stamp_do_on_release(key: &str, claim: &crate::claims::ClaimRecord, holder: &str) {
     let Some((node_id, harness, session_id, started, effort)) =
@@ -331,11 +335,13 @@ pub fn stamp_do_on_release(key: &str, claim: &crate::claims::ClaimRecord, holder
         }
     };
     let found = std::cell::Cell::new(false);
+    let filled = std::cell::Cell::new(false);
     let graph = crate::backlog::settings::graph_path();
-    let ok = crate::backlog::mutate_single_row(&graph, "session_append", |rows| {
-        let (f, _added) = crate::graph_keeper::session_append(rows, &node_id, row.clone())
+    let ok = crate::backlog::mutate_single_row(&graph, "session_fill_open", |rows| {
+        let (f, filled_now) = crate::graph_keeper::session_fill_open(rows, &node_id, row.clone())
             .map_err(|e| e.to_string())?;
         found.set(f);
+        filled.set(filled_now);
         Ok(f)
     });
     if let Err(e) = ok {
@@ -346,6 +352,11 @@ pub fn stamp_do_on_release(key: &str, claim: &crate::claims::ClaimRecord, holder
         eprintln!(
             "claim release: execute provenance stamp skipped for {node_id} \
              (node not in graph); the row was not written. Skipped."
+        );
+    } else if !filled.get() {
+        eprintln!(
+            "claim release: no open execute row to close for {node_id} \
+             (none was opened, or it is already closed); nothing was stamped. Skipped."
         );
     }
 }
@@ -459,5 +470,145 @@ pub(crate) fn spaced(v: &Value) -> String {
             format!("[{}]", parts.join(", "))
         }
         other => serde_json::to_string(other).unwrap_or_else(|_| "null".into()),
+    }
+}
+
+#[cfg(test)]
+mod release_stamp_tests {
+    use super::*;
+    use crate::claims::SCHEMA_VERSION;
+
+    fn fill_claim() -> crate::claims::ClaimRecord {
+        crate::claims::ClaimRecord {
+            schema_version: SCHEMA_VERSION,
+            key: "node:rel-fill".into(),
+            holder: "target-session:sess-r".into(),
+            acquired_at: 1_760_000_000_000,
+            pid: None,
+            host: "test-host".into(),
+            pid_unavailable: false,
+            expires_at: None,
+            reason: None,
+            harness: Some("claude".into()),
+            session_id: Some("sess-r".into()),
+            pid_provenance: None,
+            machine_id: None,
+            metadata: serde_json::Map::new(),
+        }
+    }
+
+    fn isolate_graph() -> (tempfile::TempDir, std::path::PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("db/graph.db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        let backup = std::env::var_os("FNO_STATE_DIR");
+        std::env::set_var("FNO_STATE_DIR", root.path());
+        (root, backup.unwrap_or_default().into())
+    }
+
+    fn restore_graph(root: tempfile::TempDir, backup: std::path::PathBuf) {
+        match backup.as_os_str().is_empty() {
+            true => std::env::remove_var("FNO_STATE_DIR"),
+            false => std::env::set_var("FNO_STATE_DIR", backup),
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn seed_node(db: &std::path::Path, sessions: Value) {
+        crate::graph_store::seed_rows(
+            db,
+            &[serde_json::json!({
+                "id": "rel-fill",
+                "title": "release stamp fixture",
+                "status": "ready",
+                "project": "fno",
+                "slug": "release-stamp-fixture",
+                "sessions": sessions,
+            })],
+        )
+        .unwrap();
+    }
+
+    fn read_sessions(db: &std::path::Path) -> Vec<Value> {
+        crate::graph_store::read_rows_strict(db)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.get("id").and_then(Value::as_str) == Some("rel-fill"))
+            .map(|e| {
+                e.get("sessions")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The release stamp closes the row acquire opened: `ended_at` lands on
+    /// the matched row, no second row appears.
+    #[test]
+    fn release_stamp_fills_the_open_row_acquire_opened() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (root, backup) = isolate_graph();
+        let db = root.path().join("db/graph.db");
+        seed_node(
+            &db,
+            serde_json::json!([
+                {"session_id": "sess-r", "phase": "execute", "harness": "claude",
+                 "started_at": "2026-10-25T00:00:00Z"},
+            ]),
+        );
+        stamp_do_on_release("node:rel-fill", &fill_claim(), "target-session:sess-r");
+        let rows = read_sessions(&db);
+        assert_eq!(rows.len(), 1, "the fill must not add a row: {rows:?}");
+        assert!(
+            rows[0].get("ended_at").and_then(Value::as_str).is_some(),
+            "the fill must close the row: {rows:?}"
+        );
+        restore_graph(root, backup);
+    }
+
+    /// A release whose node carries no matching row records nothing: the
+    /// append here is the completion a rolled-back or blueprint release never
+    /// earned, which is the defect this fill-only shape exists to prevent.
+    #[test]
+    fn release_stamp_never_appends_a_row_that_is_not_there() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (root, backup) = isolate_graph();
+        let db = root.path().join("db/graph.db");
+        seed_node(&db, serde_json::json!([]));
+        stamp_do_on_release("node:rel-fill", &fill_claim(), "target-session:sess-r");
+        let rows = read_sessions(&db);
+        assert!(rows.is_empty(), "the stamp must not append: {rows:?}");
+        restore_graph(root, backup);
+    }
+
+    /// An already-closed matching row stays closed and stays one row: the
+    /// fill is idempotent on a re-release shape.
+    #[test]
+    fn release_stamp_leaves_a_closed_row_closed() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (root, backup) = isolate_graph();
+        let db = root.path().join("db/graph.db");
+        seed_node(
+            &db,
+            serde_json::json!([
+                {"session_id": "sess-r", "phase": "execute", "harness": "claude",
+                 "started_at": "2026-10-25T00:00:00Z", "ended_at": "2026-10-25T01:00:00Z"},
+            ]),
+        );
+        stamp_do_on_release("node:rel-fill", &fill_claim(), "target-session:sess-r");
+        let rows = read_sessions(&db);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].get("ended_at").and_then(Value::as_str),
+            Some("2026-10-25T01:00:00Z")
+        );
+        restore_graph(root, backup);
     }
 }

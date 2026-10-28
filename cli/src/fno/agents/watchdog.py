@@ -268,10 +268,8 @@ def _recovery_transcript_readback(candidate: Any) -> tuple[Optional[dict], Optio
 def apply_recoverable(
     scan: Any,
     *,
-    scope_cwd: Path,
     registry_path: Optional[Path] = None,
     adopt_fn: Optional[Callable] = None,
-    confine_fn: Optional[Callable] = None,
     load_registry_fn: Optional[Callable] = None,
     update_registry_fn: Optional[Callable] = None,
     should_apply: Optional[Callable[[], bool]] = None,
@@ -289,7 +287,6 @@ def apply_recoverable(
     from fno.agents.registry import load_registry, update_registry
 
     adopt = adopt_fn or store_fallback.adopt_store_hit
-    confine = confine_fn or store_fallback.confine_store_hits
     load = load_registry_fn or load_registry
     update = update_registry_fn or update_registry
     results: list[dict] = []
@@ -319,14 +316,6 @@ def apply_recoverable(
         try:
             from fno import paths
 
-            hits = confine(
-                session_id,
-                [store_fallback.StoreHit("codex", session_id, candidate.cwd)],
-                scope_cwd=str(scope_cwd),
-                cross_project=False,
-            )
-            if len(hits) != 1:
-                raise ValueError("project confinement did not return one verified hit")
             # The follow-up path rides the adoption write itself: patching it
             # in a second update afterward left a window where a failed patch
             # refused the batch while the row - missing its resume path -
@@ -335,7 +324,7 @@ def apply_recoverable(
                 paths.state_dir() / "agents" / session_id / "output.jsonl"
             )
             adopt(
-                hits[0],
+                store_fallback.StoreHit("codex", session_id, candidate.cwd),
                 registry_path=registry_path,
                 token=session_id,
                 log_path=str(recovery_log_path),
@@ -443,7 +432,9 @@ _GHOST_STATES = frozenset({"working", "busy", "blocked"})
 #: fifteen minutes later). ``stopped`` belongs for the mirror reason: a
 #: session that dies mid-turn is exactly a stopped row, and the stalled
 #: check - not candidacy - is what guards a worker the operator stopped.
-_WAKE_STATES = frozenset({"working", "blocked", "stopped"})
+#: ``idle`` is the harness's word for a parked live session; the stalled
+#: check, not the state word, separates such a row from one that finished.
+_WAKE_STATES = frozenset({"working", "blocked", "stopped", "idle"})
 
 #: Graph statuses that mean the work is over, so an absent claim is the system
 #: working rather than a gap. Read from the node, never from the row: the row
@@ -1671,6 +1662,28 @@ ROSTER_REFUSAL = (
 )
 
 
+def _route_fallback_identity(entry, entries) -> tuple[Optional[str], Optional[str]]:
+    """Route identity from the OBSERVED model (transcript first, then the
+    spawn-time model_name intent) when the declared fields are absent - the
+    cap actor's observed-first precedence. (None, None) leaves the named
+    refusal standing."""
+    model = None
+    if entries:
+        for record in reversed(entries):
+            msg = record.get("message") if isinstance(record, dict) else None
+            if isinstance(msg, dict) and msg.get("model"):
+                model = str(msg["model"])
+                break
+    if not model:
+        model = getattr(entry, "model_name", None)
+    if not model:
+        return None, None
+    return (
+        getattr(entry, "route_provider_id", None) or model,
+        getattr(entry, "account_record_id", None) or model,
+    )
+
+
 def measure_provider_outages(
     rows: list[Row], *, now_s: float,
     settings: Any = None,
@@ -1714,11 +1727,14 @@ def measure_provider_outages(
     mux_by_row: dict[str, dict[str, Any]] = {}
     for row in rows:
         entry = by_session.get(row.row_id)
+        fallback_provider, fallback_account = _route_fallback_identity(
+            entry, entries_for(row.row_id) if entries_for is not None else None
+        )
         identities.append(EvidenceIdentity(
             row_id=row.row_id,
             harness=str(getattr(entry, "harness", "") or ""),
-            provider=getattr(entry, "route_provider_id", None),
-            account=getattr(entry, "account_record_id", None),
+            provider=getattr(entry, "route_provider_id", None) or fallback_provider,
+            account=getattr(entry, "account_record_id", None) or fallback_account,
             session_id=str(getattr(entry, "harness_session_id", "") or row.row_id),
             cwd=str(getattr(entry, "cwd", "") or row.cwd),
         ))

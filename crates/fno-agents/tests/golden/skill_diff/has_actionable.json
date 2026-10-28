@@ -1,0 +1,25 @@
+{
+ "expected": {
+  "actionable": true
+ },
+ "input": [
+  {
+   "data": {
+    "dimension": "structural_validity",
+    "run_id": "r1",
+    "skill_id": "fno:blueprint",
+    "verdict": "pass"
+   },
+   "type": "skill_eval_finding"
+  },
+  {
+   "data": {
+    "dimension": "other",
+    "run_id": "r1",
+    "skill_id": "fno:blueprint",
+    "verdict": "degraded"
+   },
+   "type": "skill_eval_finding"
+  }
+ ]
+}

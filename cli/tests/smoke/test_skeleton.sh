@@ -7,7 +7,13 @@ test -f cli/src/fno/__init__.py
 test -f cli/src/fno/cli.py
 # `gates` removed: the package was deleted by the control-plane collapse
 # wedge (ab-d0337fbc); `claims` stands in as the structural probe.
-for sub in state graph runtime worker events claims; do
+# `worker` removed: the worker-family port retired the package; the parser
+# answers from crates (`fno-agents executor-route`).
+# `runtime` removed: the worktree-family port moved its registry into
+# crates/fno-agents/src/worktree/.
+# `state` removed: the target-family port retired the package; the manifest
+# contract is replayed by `crates/fno-agents/tests/target_family_parity.rs`.
+for sub in graph events claims; do
   test -f "cli/src/fno/${sub}/__init__.py"
 done
 echo "PASS: skeleton complete"

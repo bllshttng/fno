@@ -366,6 +366,10 @@ dual_owner_kinds = {
     # worktree_removed: the archive path emits it (Python) and the merge
     # reaper emits it (Rust) at the same removal boundary.
     "worktree_removed",
+    # termination: the Python emit schema still declares the terminal row,
+    # and the standalone research round writes its DoneAdvisory row (Rust)
+    # under the same entry.
+    "termination",
     "control_plane_tick",
     "state_reap",
     # role_manifest_arm_failed: the manifest rebind at a promoted row's
@@ -496,6 +500,21 @@ dual_owner_kinds = {
     "attention_delivery",
     "day_boundary",
     "legacy_journal_retired",
+    # The observer family port: the skill-eval sweep now emits these from
+    # Rust (observer/mod.rs). schema.yaml keeps the rows for the validator.
+    "skill_eval_finding",
+    "skill_eval_run_complete",
+    # session_registered: the Rust register command is the one writer; the
+    # Python side carries it in schema.yaml for the validator and
+    # `doctor event find`, the way pr_watch_unparked above does.
+    "session_registered",
+    # lead_woken / lead_wake_refused / lead_spawned_successor: the daemon's
+    # lead_wake arm is the one writer; the Python side carries them in
+    # schema.yaml for the validator and `doctor event find`, the way
+    # session_registered above does.
+    "lead_spawned_successor",
+    "lead_wake_refused",
+    "lead_woken",
 }
 collisions -= dual_owner_kinds
 if collisions:

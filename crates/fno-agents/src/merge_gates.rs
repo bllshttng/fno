@@ -360,13 +360,15 @@ fn breadcrumb(message: &str) {
 
 /// The overlap gate (parallel-mode G4, LD#9), polarity kept: only arms while
 /// live lanes run; `_behind_by` miss disarms; base-move and PR-file misses
-/// HOLD (fail closed) because the base already moved.
+/// HOLD (fail closed) because the base already moved. Its remedy pulls main
+/// into a branch GitHub calls mergeable, so it rides `require_fresh_ci`
+/// (default off) with `ci_base_stale`: by default only a conflict pulls main.
 pub(crate) fn overlap_blocker<P: Probes>(
     probes: &P,
     cwd: &Path,
     facts_number: u64,
 ) -> Option<Blocker> {
-    if probes.live_lanes(cwd) == 0 {
+    if !probes.require_fresh_ci(cwd) || probes.live_lanes(cwd) == 0 {
         return None;
     }
     let behind = behind_by(probes, cwd, facts_number);

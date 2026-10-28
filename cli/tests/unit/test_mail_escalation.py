@@ -49,15 +49,43 @@ def emitted_events(monkeypatch):
 
 
 def _unread_count(runner, name: str) -> int:
-    # Store-layer count via the bus log's own read primitives: the unread read
-    # command is the native binary's leaf, and the pytest smoke shard runs without
-    # that binary by design. No acks happen in these tests, so deliverable
-    # minus withdrawn is exactly what the reader would report.
-    from fno.bus.log import is_deliverable, iter_messages, withdrawn_ids
+    # A plain parse of the seeded log, the same read the deleted Python
+    # helpers made: no binary, no cursor, so the count holds in any shard.
+    # No acks happen in these tests, so deliverable minus withdrawn is
+    # exactly what the unread reader would report.
+    import json
 
-    msgs = [m for m in iter_messages() if m.to == name]
-    withdrawn = withdrawn_ids(msgs)
-    return sum(1 for m in msgs if is_deliverable(m) and m.id not in withdrawn)
+    from fno import paths
+
+    live = paths.bus_dir() / "messages.jsonl"
+    msgs: list[dict] = []
+    if live.exists():
+        for raw in live.read_text(encoding="utf-8").splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                m = json.loads(raw)
+            except ValueError:
+                continue
+            if m.get("to") == name:
+                msgs.append(m)
+    by_id = {m["id"]: m for m in msgs if isinstance(m.get("id"), str)}
+    withdrawn: set[str] = set()
+    for m in msgs:
+        if m.get("kind") != "withdraw":
+            continue
+        withdrawn.add(m["id"])
+        target = by_id.get((m.get("meta") or {}).get("withdraws"))
+        if target is not None and target.get("from") == m.get("from") and target.get("to") == m.get("to"):
+            withdrawn.add(target["id"])
+    return sum(
+        1
+        for m in msgs
+        if m.get("kind") not in ("withdraw", "landed")
+        and m.get("delivery") not in ("hosted", "typed", "cross-session")
+        and m["id"] not in withdrawn
+    )
 
 
 def test_question_send_emits_one_valid_overlay_event(runner, mailbox, monkeypatch):
@@ -92,7 +120,7 @@ def test_escalation_failure_never_breaks_the_send(runner, mailbox, monkeypatch):
     def boom(title: str, message: str):
         raise RuntimeError("no display")
 
-    monkeypatch.setattr("fno.notify._impl.send_notification", boom)
+    monkeypatch.setattr("fno.rust_binary.notify_operator", boom)
     res = runner.invoke(
         app,
         ["mail", "send", "--to-project", "web", "--kind", "question",

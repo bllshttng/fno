@@ -4,9 +4,10 @@
 //! helper environment, run the helper, propagate its exit, and print the
 //! orientation report.
 //!
-//! The parity contract is `tests/golden/target_init/`, frozen from the
-//! Python leg before its deletion and asserted by
-//! `tests/target_init_parity.rs` through the `target-init` door. The
+//! The parity contract was `tests/golden/target_init/`, frozen from the
+//! Python leg and asserted by `tests/target_init_parity.rs` until the
+//! python `status` command repointed to this orienter and both deleted
+//! (the orienter is now the one implementation). The
 //! review-capability, dispatch-hold, and containment preflights are NOT
 //! ported: when a node resolves they stay unset-stamped, so the helper's own
 //! `fno do target check-*` gate calls (the one Python implementation) refuse
@@ -233,10 +234,12 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
     // layer needs the root for graph reads and the manifest).
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+    init_progress("begin: door: graph read");
     // 6. One graph read feeds the resolver and the gates. A named dispatch
     // against an unreadable graph refuses: the hold state cannot be read,
     // and failing to read it must not read as unheld.
     let entries = graph_rows(&cwd);
+    init_progress("done: door: graph read");
     if entries.is_none()
         && (args
             .input
@@ -266,6 +269,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         entries.as_deref(),
     );
 
+    init_progress("begin: door: binding gates");
     // 8. The binding transport: a DECLARED required binding revalidates
     // natively before the claim. A refused verdict exits 1, a fork exits 3.
     let binding = dispatch_node.as_ref().map(|node| {
@@ -293,6 +297,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         }
     }
 
+    init_progress("done: door: binding gates");
     // 8.5 Blast-radius modulation: a deterministic read of the plan's File
     // Ownership Map floors the size profile at M (high blast) or downgrades
     // an unpinned size to S (low) BEFORE the immutable manifest is written.
@@ -336,6 +341,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         }
     }
 
+    init_progress("begin: door: plan pointer");
     // 9. Plan pointer: explicit --plan-path must resolve; a node-bound plan
     // is back-filled when it resolves too.
     let plan_path = resolve_plan_pointer_stage(
@@ -344,6 +350,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         &cwd,
         &crate::plan_carry::fetch_one,
     )?;
+    init_progress("done: door: plan pointer");
 
     // 10. Scope denominator: a plan-less code node states its own scope.
     let mut deliverables = args.deliverables;
@@ -376,6 +383,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
         }
     }
 
+    init_progress("begin: init helper");
     // 12. Build the exact helper environment and run the bash helper. The
     // gate stamp rides on whether a node resolved (see step 7).
     let code = run_helper(
@@ -891,7 +899,7 @@ fn resolve_plan_pointer_stage(
     args: &Args,
     node: Option<&serde_json::Value>,
     cwd: &Path,
-    fetch: &dyn Fn(&str) -> Result<Option<String>, String>,
+    fetch: &dyn Fn(&str, &str) -> Result<Option<String>, String>,
 ) -> Result<Option<String>, Fail> {
     if let Some(explicit) = &args.plan_path {
         if !explicit.is_empty() {
@@ -918,7 +926,7 @@ fn resolve_plan_pointer_stage(
         .trim()
         .to_string();
     let node_id = node_str(Some(node), "id");
-    let carried = || match fetch(&node_id) {
+    let carried = || match fetch(&node_id, &bound_plan) {
         Ok(path) => (path.and_then(|p| resolve_plan_pointer(&p, cwd)), None),
         Err(why) => (None, Some(why)),
     };
@@ -1079,7 +1087,7 @@ mod plan_carry_miss_tests {
         let dir = tempfile::tempdir().unwrap();
         let plan = dir.path().join("p.md");
         let plan_s = plan.to_str().unwrap().to_string();
-        let fetch_writes = |_: &str| -> Result<Option<String>, String> {
+        let fetch_writes = |_: &str, _: &str| -> Result<Option<String>, String> {
             std::fs::write(&plan, "---\nstatus: ready\n---\n").unwrap();
             Ok(Some(plan_s.clone()))
         };
@@ -1095,7 +1103,7 @@ mod plan_carry_miss_tests {
         // No copy anywhere: the refusal says so.
         std::fs::remove_file(&plan).unwrap();
         let node = serde_json::json!({"id": "x-1", "plan_path": plan_s});
-        let none = |_: &str| -> Result<Option<String>, String> {
+        let none = |_: &str, _: &str| -> Result<Option<String>, String> {
             Err("no host pushed a plan for it".to_string())
         };
         let Err(fail) = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &none) else {
@@ -1106,5 +1114,25 @@ mod plan_carry_miss_tests {
             "{}",
             fail.message
         );
+    }
+}
+
+/// Append one progress marker when a start-bounded run handed down
+/// FNO_INIT_PROGRESS_FILE. Best-effort: a marker failure never changes the
+/// run, and the parent's timeout receipt degrades to "no step recorded".
+fn init_progress(mark: &str) {
+    let Ok(path) = std::env::var("FNO_INIT_PROGRESS_FILE") else {
+        return;
+    };
+    if path.is_empty() {
+        return;
+    };
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "{mark}");
     }
 }

@@ -689,7 +689,7 @@ pub(crate) fn turn_policy(
 /// resolution can never break the spawn.
 fn granted_roots(cwd: &Path, state_dirs: &[String]) -> Vec<String> {
     let mut roots = state_dirs.to_vec();
-    if let Some(git_dir) = crate::provider::git_common_dir(cwd) {
+    for git_dir in crate::provider::git_write_roots(cwd) {
         if !roots.iter().any(|root| root == &git_dir) {
             roots.push(git_dir);
         }
@@ -2868,7 +2868,7 @@ mod tests {
     /// detail and the wire field is what the app-server reads.
     #[test]
     fn permission_mode_yolo_reaches_a_full_access_frame() {
-        let yolo = resolve_thread_posture(None, Some("yolo")).expect("yolo maps");
+        let yolo = resolve_thread_posture(None, Some("yolo"), None).expect("yolo maps");
         let frame: Value = serde_json::from_str(&thread_start_request_with_options(
             1,
             std::path::Path::new("/tmp/w"),
@@ -2882,8 +2882,8 @@ mod tests {
         assert_eq!(frame["params"]["approvalPolicy"], "never");
 
         // The explicit pair form resolves off its halves, not its name.
-        let paired =
-            resolve_thread_posture(None, Some("danger-full-access:never")).expect("pair maps");
+        let paired = resolve_thread_posture(None, Some("danger-full-access:never"), None)
+            .expect("pair maps");
         let frame: Value = serde_json::from_str(&thread_start_request_with_options(
             1,
             std::path::Path::new("/tmp/w"),
@@ -3078,6 +3078,19 @@ mod tests {
         assert!(!wired
             .iter()
             .any(|root| root.as_str() == Some(linked_git.as_str())));
+        // codex marks the worktree's own gitdir read-only inside the common
+        // root, so the gitdir must be named on its own or `git add` fails.
+        assert!(
+            wired.iter().any(|root| root
+                .as_str()
+                .is_some_and(|r| r.ends_with(".git/worktrees/linked"))),
+            "the linked worktree's own gitdir rides the grant: {wired:?}"
+        );
+        assert_eq!(
+            crate::provider::git_write_roots(canonical.path()).len(),
+            1,
+            "a main checkout grants only the common dir"
+        );
     }
 
     /// An ungranted spawn must build TODAY's frame, byte for byte. A new

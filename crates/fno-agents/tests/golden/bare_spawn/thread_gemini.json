@@ -1,0 +1,5 @@
+{
+  "fenced": [],
+  "harness": "gemini",
+  "line": "fno agents spawn: the gemini thread lane is not seatable; add --as pane"
+}

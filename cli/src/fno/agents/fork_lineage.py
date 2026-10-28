@@ -65,10 +65,12 @@ def wake_route(src, session_id):
 
 def launch_overlay(account_id):
     """The env of the account a resumed session launched on, so it bills there."""
-    from fno.agents.account_env import AccountResolutionError, resolve_account_overlay
+    from fno.agents.spawn_overlay_client import (
+        AccountRefused, SpawnOverlayUnavailable, account_overlay,
+    )
     try:
-        return dict(resolve_account_overlay(account_id).env)
-    except AccountResolutionError as exc:
+        return dict(account_overlay(account_id)["env"])
+    except (AccountRefused, SpawnOverlayUnavailable) as exc:
         raise ResumeUnpinned(f"account {account_id!r} does not resolve: {exc}", exit_code=2) from exc
 
 

@@ -1546,8 +1546,8 @@ pub const HOST_MODE_INTERACTIVE: &str = "interactive";
 /// The env key the Python spawn seam sets when an account overlay was applied
 ///. An `--account` bg spawn execs into this binary with the overlay
 /// in `os.environ`; the account ID itself has no argv carrier, so the seam
-/// publishes it here for the row mint to stamp. Absent on route-bearing and
-/// pane spawns, which never leave Python.
+/// publishes it here for the row mint to stamp. The client's account step
+/// sets it too, and a pane carries it through its env wrapper.
 pub const LAUNCH_ACCOUNT_ENV_KEY: &str = "FNO_LAUNCH_ACCOUNT";
 
 /// The launch-account value a Rust mint seam stamps. Three-valued,
@@ -3509,6 +3509,8 @@ pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<
 
 #[cfg(test)]
 mod tests;
+
+pub mod cli;
 
 // ---------------------------------------------------------------------------
 // v23: the substitution verdict. The Rust twin of

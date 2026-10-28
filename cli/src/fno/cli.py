@@ -61,24 +61,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Delivery work: plans, targets, reviews, PRs, state, and supporting operations.",
         {"hidden": True},
     ),
-    "state": ("fno.state.cli:cli", "manage fno do state files", {"hidden": True}),
-    "target": (
-        "fno.target_cli:target_app",
-        "Target sessions: status, resolve-model, and check gates",
-        {"hidden": True},
-    ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
-    "autonomy": (
-        "fno.autonomy_cli:autonomy_app",
-        "Inspect every path that can start a session without an operator asking.",
-        {"hidden": True},
-    ),
-    "lead": (
-        "fno.lead.cli:lead_app",
-        "The lead's board and its session manifest.",
-        {"hidden": True},
-    ),
-    "worker": ("fno.worker.cli:cli", "manage delivery worker phases", {"hidden": True}),
     "event": ("fno.events.cli:cli", "emit and audit events", {"hidden": True}),
     "inbox": (
         "fno.inbox.cli:inbox_app",
@@ -91,12 +74,12 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     # moved-spellings block no longer renders, so the row teaches
     # nothing and exists only for the release clock.
     "approvals": (
-        "fno.approvals.cli:approvals_app",
+        "fno.approvals_cli:approvals_app",
         "Inspect and decide pending approvals for consequential effects.",
         {"hidden": True},
     ),
     "delivery": (
-        "fno.delivery.cli:delivery_app",
+        "fno.do_cli:delivery_app",
         "Evaluate generic delivery evidence.",
         {"hidden": True},
     ),
@@ -106,35 +89,19 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     # the entries between this comment and `agents` below whose names
-    # sit in COMMAND_MOVES are one-release shims kept reachable for muscle
-    # memory; their canonical homes are the move destinations.
-    "mcp": (
-        "fno.mcp.cli:mcp_app",
-        "MCP sidecar client commands (send an envelope to a channel).",
-        {"hidden": True},
-    ),
+    # sit in COMMAND_MOVES are one-release shims in their canonical homes;
+    # their move rows stay in command_moves.py.
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
-    "stub-manifest": (
-        "fno.stub_manifest:stub_manifest_app",
-        "Stub-manifest for contract-tier dependents (emit/validate/check-pr).",
-        {"hidden": True},
-    ),
-    "status-fanout": (
-        "fno.status_fanout:status_fanout_app",
-        "Sweep events.jsonl and route status events to configured sinks (tick).",
-        {"hidden": True},
-    ),
-    "bundle": ("fno.bundle:bundle_app", "Skill bundle build + lint.", {"hidden": True}),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
-    "claim": ("fno.claims.cli:cli", "Work-claim coordination primitive", {"hidden": True}),
-    "project": (
-        "fno.project:project_app",
-        "Isolated per-project fno environments (now `fno config project`).",
+    "bundle": (
+        "fno.doctor_forward:bundle_signpost",
+        "Skill bundle build + lint; moved to `fno doctor bundle`.",
         {"hidden": True},
     ),
+    "claim": ("fno.claims.cli:cli", "Work-claim coordination primitive", {"hidden": True}),
     "resume": (
-        "fno.resume.cli:cli",
+        "fno.resume_receipt_cli:cli",
         "Durable typed resume receipts (evidence, never write authority)",
         {"hidden": True},
     ),
@@ -143,63 +110,21 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Capture left-out work (deferred decisions, out-of-scope bugs) for retro-triage.",
         {"hidden": True},
     ),
-    "outstanding": (
-        "fno.outstanding:outstanding_app",
-        "What is waiting on a human: unharvested carve-outs and open questions.",
-        {"hidden": True},
-    ),
     "annotate": (
         "fno.annotate:annotate_app",
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
         {"hidden": True},
     ),
-    "think": (
-        "fno.provenance.cli:think_app",
-        "Think inspection and explicit conversational dispatch.",
-        {"hidden": True},
-    ),
-    "phase": (
-        "fno.phase:phase_app",
-        "Phase utilities (kill-check via the fno-agents binary)",
-        {"hidden": True},
-    ),
-    "roles": (
-        "fno.roles.cli:roles_app",
-        "Inspect bounded business-role definitions and resolutions.",
-        {"hidden": True},
-    ),
-    "config": ("fno.config_cli:app", "Configuration management"),
-    "notify": (
-        "fno.notify:notify_app",
-        "OS notification helper (in-package; macOS osascript / Linux notify-send)",
-        {"hidden": True},
-    ),
+    "config": ("fno.config_writer_cli:app", "Configuration management"),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
-    "setup": (
-        "fno.setup_cli:app",
-        "Interactive settings.yaml wizard",
-        {"hidden": True},
-    ),
     "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
-    "worktree": ("fno.worktree_cli:app", "Worktree management", {"hidden": True}),
-    "workspace": (
-        "fno.workspace.cli:cli",
-        "Worktree lifecycle and worker registration (now `fno agents workspace`).",
-        {"hidden": True},
-    ),
-    "route": (
-        "fno.route_cli:route_app",
-        "Provider route lanes: ls / set / unset / env (GLM build lane).",
-        {"hidden": True},
-    ),
+    # `fno route` (the hidden root spelling of the provider route lanes)
+    # answers natively: the front classifies it onto route-slot's
+    # config-route mode, so no Python mount remains. The worktree family's
+    # root spellings joined the same way with its port.
     "evals": (
-        "fno.evals.cli:evals_app",
+        "fno.evals_cli:evals_app",
         "Golden-task efficacy evals (run / report / diff)",
-        {"hidden": True},
-    ),
-    "observer": (
-        "fno.observer.cli:observer_app",
-        "Skill eval over a recorded corpus (sweep / replay).",
         {"hidden": True},
     ),
     "pr-watch": (
@@ -207,23 +132,17 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "PR-state watcher: auto-fire /fno:ship pr check + /fno:ship pr merged for open-PR backlog nodes",
         {"hidden": True},
     ),
-    "loops": (
-        "fno.loops:loops_app",
-        "Loop level config + pause-all kill switch (pause-all/resume-all/status/ls)",
-        {"hidden": True},
-    ),
-    "skill-diff": (
-        "fno.skill_diff.cli:skill_diff_app",
-        "Skill-diff proposer: observer failure patterns -> cited SKILL.md diff -> PR (tick/reconcile).",
-        {"hidden": True},
-    ),
     # Individual commands (plain functions wrapped as single-command apps) -
+    # `fno whoami` itself is native; this lazy row hosts the four hidden
+    # leaves other families still own (fno.whoami_leaves). `status` and
+    # `cost` are move-intercepted spellings; their rows stay for the release
+    # clock, now pointing at the leaf stub they land on.
     "whoami": (
-        "fno.agent.cli:whoami_app",
+        "fno.whoami_leaves:whoami_app",
         "Operating-stack summary: project + fleet + walker + session + harness.",
     ),
     "status": (
-        "fno.agent.cli:status_command",
+        "fno.whoami_leaves:whoami_app",
         "Session gate satisfaction + bounded events tail + inconsistencies.",
         {"hidden": True},
     ),
@@ -233,36 +152,27 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "cost": (
-        "fno.agent.cli:cost_command",
+        "fno.whoami_leaves:cost_command",
         "Cost + usage metrics from session transcripts and ledger.json.",
         {"hidden": True},
-    ),
-    "doctor": (
-        "fno.doctor_cli:doctor_app",
-        "Diagnose installed-vs-source fno skew (network-free).",
     ),
     "done": (
         "fno.done.cli:done_command",
         "Deprecated done shim; use `fno backlog done` (its flag surface is now identical).",
         {"hidden": True},
     ),
-    "research": (
-        "fno.research:research_command",
-        "Retrieve + store: ddgs backbone -> self-fetch -> sources.jsonl.",
-        {"hidden": True},
+    "doctor": (
+        "fno.doctor_forward:doctor_app",
+        "Foreign doctor leaves (test, event, evals, lint, harness); the family's own surfaces are native.",
+        {},
     ),
     "scoreboard": (
         "fno.scoreboard.cli:scoreboard_command",
         "Read-only telemetry: stop-cause, spend, autonomy, survival, coverage.",
         {"hidden": True},
     ),
-    "test": (
-        "fno.test_cmd:test_command",
-        "Run pytest honestly (now `fno doctor test`): worktree-pinned PYTHONPATH, rtk-bypassed, real exit code.",
-        {"hidden": True},
-    ),
     "update": (
-        "fno.doctor_cli:_update_signpost",
+        "fno.rust_binary:_update_signpost",
         "The updater is native: the Rust front door answers `update` and `doctor update`.",
         {"hidden": True},
     ),
@@ -277,7 +187,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "annotate": {"list"},
     "approvals": set(),
     "backlog": {"advance", "done", "get", "next", "queued"},
-    "bundle": set(),
     "carveout": set(),
     "claim": {"release"},
     "config": {"accounts", "get", "set"},
@@ -285,23 +194,11 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "doctor": set(),
     "evals": set(),
     "event": {"emit"},
-    "loops": {"resume-all"},
     "mail": {"send"},
-    "observer": set(),
     "paths": set(),
     "plan": set(),
     "pr-watch": set(),
     "resume": set(),
-    "roles": set(),
-    "route": set(),
-    "setup": set(),
-    "skill-diff": set(),
-    "state": set(),
-    "stub-manifest": set(),
-    "target": set(),
-    "think": set(),
-    "worker": set(),
-    "worktree": set(),
 }
 
 for _group_name, _keep in COLLAPSE_KEEP.items():
@@ -358,8 +255,7 @@ def _check_migration() -> None:
     """Fast-path stat check; runs migration on first invocation post-upgrade.
 
     The try/except Exception: pass is intentional - this migration is a
-    best-effort startup convenience, not load-bearing.  Hard-fail path
-    remains ``fno config setup migrate-paths`` (called explicitly).
+    best-effort startup convenience, not load-bearing.
 
     Guarded by FNO_SKIP_MIGRATION=1 (explicit opt-out) or PYTEST_CURRENT_TEST
     (pytest sets this automatically in all test processes) for isolation.

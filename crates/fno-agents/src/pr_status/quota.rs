@@ -4,7 +4,7 @@
 //! byte-for-byte where an operator or a test read them.
 
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io::Read as _;
 use std::os::fd::AsRawFd;
@@ -69,6 +69,20 @@ fn resolve_lenient(path: &Path) -> PathBuf {
         // cheap: canonicalize already did the real work when the path exists.
         PathBuf::from(path)
     })
+}
+
+/// The spelling-stable key for a proxy dir. macOS owns both `/var/folders/...`
+/// (raw, what a PATH part or a not-yet-created dir carries) and
+/// `/private/var/folders/...` (what canonicalize answers), so equality folds
+/// the `private` component away and keeps the root slash; `/tmp` and
+/// `/private/tmp` collapse the same way.
+fn dir_key(path: &Path) -> String {
+    let key = resolve_lenient(path).to_string_lossy().into_owned();
+    let folded = match key.strip_prefix("/private/") {
+        Some(rest) => format!("/{rest}"),
+        None => key,
+    };
+    folded.trim_end_matches('/').to_string()
 }
 
 /// Is this `gh` our own broker shim, judged by content rather than location?
@@ -206,6 +220,7 @@ fn non_empty_env(key: &str) -> Option<String> {
 /// markers the inherited env may carry.
 pub(crate) fn delegate_environment() -> Result<BTreeMap<String, String>, ProxyIdentityError> {
     let proxy_dirs = proxy_dirs()?;
+    let proxy_keys: BTreeSet<String> = proxy_dirs.iter().map(|d| dir_key(d)).collect();
     let current = std::env::var("PATH").unwrap_or_default();
     let path_sep = if cfg!(windows) { ';' } else { ':' };
     let scrubbed: Vec<&str> = current
@@ -215,7 +230,7 @@ pub(crate) fn delegate_environment() -> Result<BTreeMap<String, String>, ProxyId
                 return false;
             }
             let resolved = resolve_lenient(Path::new(part));
-            if proxy_dirs.contains(&resolved) {
+            if proxy_keys.contains(&dir_key(&resolved)) {
                 return false;
             }
             // By basename: a shim two hops down a symlinked dir still matches.
@@ -234,6 +249,7 @@ pub(crate) fn delegate_environment() -> Result<BTreeMap<String, String>, ProxyId
 /// shim and deadlock under the flock. (The `_quota.resolve_real_gh` port.)
 pub(crate) fn resolve_real_gh() -> Result<Option<String>, ProxyIdentityError> {
     let proxy_dirs = proxy_dirs()?;
+    let proxy_keys: BTreeSet<String> = proxy_dirs.iter().map(|d| dir_key(d)).collect();
     if let Some(configured) = std::env::var("FNO_REAL_GH")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -242,7 +258,7 @@ pub(crate) fn resolve_real_gh() -> Result<Option<String>, ProxyIdentityError> {
         let is_shim = is_proxy_shim(&candidate);
         let parent_in_proxy = candidate
             .parent()
-            .map(|p| proxy_dirs.contains(&resolve_lenient(p)))
+            .map(|p| proxy_keys.contains(&dir_key(p)))
             .unwrap_or(false);
         let executable = candidate.is_file() && is_executable(&candidate);
         if executable && !parent_in_proxy && !is_shim {
@@ -261,8 +277,7 @@ pub(crate) fn resolve_real_gh() -> Result<Option<String>, ProxyIdentityError> {
         if !candidate.is_file() || !is_executable(&candidate) {
             continue;
         }
-        if proxy_dirs.contains(&resolve_lenient(Path::new(directory))) || is_proxy_shim(&candidate)
-        {
+        if proxy_keys.contains(&dir_key(Path::new(directory))) || is_proxy_shim(&candidate) {
             continue;
         }
         return Ok(Some(
@@ -360,11 +375,8 @@ pub(crate) fn command_args(args: &[String]) -> Vec<String> {
     normalized
 }
 
-fn quota_parse(payload: &str) -> Option<(i64, i64)> {
-    let row = serde_json::from_str::<Value>(payload)
-        .ok()?
-        .pointer("/resources/graphql")?
-        .clone();
+fn quota_parse(payload: &Value) -> Option<(i64, i64)> {
+    let row = payload.pointer("/resources/graphql")?.clone();
     let remaining = row.get("remaining")?.as_i64()?;
     let reset = row.get("reset")?.as_i64()?;
     Some((remaining, reset))
@@ -420,11 +432,20 @@ fn probe_quota(
     }
     let argv = vec![gh.to_string(), "api".to_string(), "rate_limit".to_string()];
     let probe = run(&argv, cwd, Some(env.clone()), Duration::from_secs(30)).ok()?;
-    let parsed = if probe.ok() {
-        quota_parse(&probe.stdout)
+    let payload: Option<Value> = if probe.ok() {
+        serde_json::from_str(&probe.stdout).ok()
     } else {
         None
     };
+    // A LIVE probe answer is a fresh account-wide observation of BOTH
+    // buckets; the core half feeds the fleet ledger (the broker runs this
+    // probe before every discretionary call, so the ledger's core reading
+    // now moves with traffic instead of only at conditional-read moments).
+    // A cache hit is up to a TTL old and stamps nothing.
+    if let Some(payload) = &payload {
+        crate::gh_budget::record_core_from_rate_limit(payload);
+    }
+    let parsed = payload.as_ref().and_then(quota_parse);
     if let (Some(cache), Some((remaining, reset))) = (cache, parsed) {
         if remaining > GRAPHQL_RESERVE {
             cache.write(remaining, reset);
@@ -524,8 +545,12 @@ pub(crate) fn iso_utc(epoch_secs: i64) -> String {
 /// stderr carrying HTTP 403/429 qualifies; the local `gh budget:` refusal
 /// line deliberately says "rate limit" without either marker. A drained
 /// primary bucket never reaches here (the caller gates on the live probe),
-/// so a core-worded refusal against a measured positive bucket reads
-/// secondary. (The `_quota.record_refusal` port.)
+/// so a core-worded refusal against a measured, FRESH positive bucket reads
+/// secondary. A STALE positive reading never downgrades: the bucket is
+/// account-wide, so a reading from before the other machine (or any plain
+/// read) spent it is a memory, not a measurement - on 2026-10-25 the stale
+/// positive held every real core refusal open as secondary for hours, and
+/// no core gate ever engaged. (The `_quota.record_refusal` port.)
 pub(crate) fn record_refusal(stderr: &str) {
     if !stderr.contains("HTTP 403") && !stderr.contains("HTTP 429") {
         return;
@@ -545,7 +570,7 @@ pub(crate) fn record_refusal(stderr: &str) {
             &crate::gh_budget::ledger_path(),
             crate::gh_budget::now_ms(),
         );
-        if snapshot.core_remaining > 0 {
+        if snapshot.core_remaining > 0 && snapshot.core_reading_fresh {
             kind = "secondary";
         }
     }
@@ -838,6 +863,25 @@ mod tests {
     }
 
     #[test]
+    fn proxy_dir_equality_survives_the_macos_spelling_split() {
+        // canonicalize answers /private/var/... while a PATH part or a
+        // not-yet-created dir carries the raw /var/... spelling; a
+        // prefix-string sibling is never equal.
+        assert_eq!(
+            dir_key(Path::new("/var/folders/ab/T/fno/uid/github-cli")),
+            dir_key(Path::new("/private/var/folders/ab/T/fno/uid/github-cli")),
+        );
+        assert_eq!(
+            dir_key(Path::new("/private/tmp/fno-501/github-cli")),
+            dir_key(Path::new("/tmp/fno-501/github-cli/")),
+        );
+        assert_ne!(
+            dir_key(Path::new("/tmpextra/fno-501/github-cli")),
+            dir_key(Path::new("/tmp/fno-501/github-cli")),
+        );
+    }
+
+    #[test]
     fn helper_names_run_fno_agents_subcommands_and_paths_run_as_given() {
         let words = |cmd: &std::process::Command| -> (String, Vec<String>) {
             let args = cmd
@@ -902,5 +946,74 @@ mod tests {
         assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
         // 2026-10-21T00:00:00Z
         assert_eq!(iso_utc(1_792_540_800), "2026-10-21T00:00:00Z");
+    }
+
+    /// One env var set for a test, restored on drop, so a failing assert
+    /// cannot poison the process env for sibling tests.
+    struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl EnvGuard {
+        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let guard = EnvGuard(vec![(key, std::env::var_os(key))]);
+            std::env::set_var(key, value);
+            guard
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                match value {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn record_refusal_downgrades_core_only_on_a_fresh_positive_reading() {
+        // The downgrade consults the ledger's core reading; a STALE
+        // positive is a memory of a bucket the other machine has since
+        // drained, so a real core refusal against it must record as core
+        // (2026-10-25: the stale positive held every refusal open as
+        // secondary for hours and no core gate engaged). Only a FRESH
+        // positive downgrades.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _state = EnvGuard::set("FNO_STATE_DIR", tmp.path().as_os_str());
+        let ledger = crate::gh_budget::ledger_path();
+        let stderr = "gh: API rate limit exceeded for user ID 4994564. (HTTP 403)";
+        let now = crate::gh_budget::now_ms();
+        let stage = |core_remaining: i64, core_seen_ms: i64| {
+            std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+            // core_reset_ms is stored in MILLIS (the ledger field the core
+            // gate compares against now_ms()); an epoch-seconds value here
+            // reads as a passed window and the fresh leg never downgrades.
+            std::fs::write(
+                &ledger,
+                format!(
+                    r#"{{"stamps":[],"backoff_until_ms":0,"backoff_step":0,"refusal_kind":"unknown","last_refusal_ms":0,"last_half_open_ms":0,"core_remaining":{core_remaining},"core_reset_ms":{core_reset_ms},"core_seen_ms":{core_seen_ms}}}"#,
+                    core_reset_ms = now + 3_000,
+                ),
+            )
+            .unwrap();
+        };
+        let kind = || -> String {
+            let row: Value =
+                serde_json::from_str(&std::fs::read_to_string(&ledger).unwrap()).unwrap();
+            row.get("refusal_kind")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+
+        stage(4706, now - crate::gh_budget::CORE_READING_FRESH_MS - 60_000);
+        record_refusal(stderr);
+        assert_eq!(kind(), "core", "a stale positive never downgrades");
+
+        stage(4706, now - 1_000);
+        record_refusal(stderr);
+        assert_eq!(kind(), "secondary", "a fresh positive downgrades");
     }
 }

@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 import typer
 
-from fno.config_cli import _report_band_routing
+from fno.setup.config_doctor import _report_band_routing
 
 requires_rust = pytest.mark.dev_build
 
@@ -27,15 +27,22 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def _pin_inventory(monkeypatch: pytest.MonkeyPatch, *, declared: bool):
-    """Pin `resolve_inventory` to a declared / undeclared answer."""
-    from fno import route_resolve
+    """Stub the route-slot door's inventory answer: a declared run carries one
+    row, an undeclared run none (the built-ins stay out so the count reads 0).
+    Every other ask refuses, so the states fold reads empty slots."""
+    from fno import rust_binary
 
-    inv = route_resolve.resolve_inventory()
-    monkeypatch.setattr(
-        route_resolve,
-        "resolve_inventory",
-        lambda **kw: route_resolve.Inventory(rows=inv.rows, declared=declared),
-    )
+    def fake_call(command, payload, *a, **k):
+        if command == "route-slot" and payload.get("mode") == "inventory":
+            rows = (
+                [{"name": "declared-row", "harness": "claude", "model": "m"}]
+                if declared
+                else []
+            )
+            return {"rows": rows, "verbs": []}
+        raise rust_binary.CommandUnavailable(f"{command} hermetic in tests")
+
+    monkeypatch.setattr(rust_binary, "command_call", fake_call)
 
 
 def _pin_roles(monkeypatch: pytest.MonkeyPatch, roles: dict):
@@ -118,7 +125,7 @@ def test_doctor_names_a_profile_scalar_the_spawn_no_longer_reads(monkeypatch):
     """A permission or effort scalar on the target profile gets one line
     naming its path and value: the spawn axis is retired, so the lane
     template owns the launch line and the scalar is inert."""
-    from fno.config_cli import _report_harness_overlays
+    from fno.setup.config_doctor import _report_harness_overlays
 
     _pin_overlay_settings(
         monkeypatch,

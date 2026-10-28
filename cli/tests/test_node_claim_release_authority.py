@@ -9,9 +9,9 @@ constructs the ``target-session:<sid>`` holder and releases the node claim, or
 an exit handler that unlinks it).
 
 The target self-handoff shell must not release a ``node:<id>`` claim directly.
-It delegates archive plus exact-holder release to
-``fno.state.target_handoff.prepare_manifest_and_release`` so shell and target
-handoffs share one recoverable custody operation.
+It delegates archive plus exact-holder release to the native
+target-handoff-prepare op so shell and target handoffs share one recoverable
+custody operation.
 
 A "node-release site" is a ``claim release`` invocation whose released KEY
 resolves to a ``node:`` prefix (a literal, or a local variable / ``format!``
@@ -108,6 +108,16 @@ ALLOWLIST = {
     # name in the receipt. Single authority at the explicit operator
     # `unclaim` boundary.
     "crates/fno-agents/src/backlog/cutover.rs",
+    # crates/fno-agents/src/target_start.rs release_early_claim: the start
+    # orchestrator releases the EARLY claim it acquired itself, minutes
+    # earlier, before the slow allocation steps - and only when start itself
+    # fails before init runs (ensure refusal/timeout, bind refusal). The
+    # release is holder-bound (`claims::release` drops only a matching
+    # holder, silently no-ops otherwise), so it can never release the
+    # parent's or a foreign session's claim: the inverse of ab-588326a7,
+    # same shape as the init-helper acquire-then-refuse site above. Not
+    # releasing would strand a 2h claim on a node whose allocation failed.
+    "crates/fno-agents/src/target_start.rs",
 }
 
 _EXTS = {".py", ".sh", ".bash", ".rs"}

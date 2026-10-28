@@ -828,6 +828,9 @@ pub struct HarnessFlags<'a> {
     /// A resolved `--route`: its env rides `extra_env`; this carries the
     /// settings file the daemon-forked session reads and the row's route axes.
     pub route: Option<RouteStamp<'a>>,
+    /// An unrouted spawn's own `--settings` file (a sandbox write policy
+    /// alone owes one). A route's file wins when both are set.
+    pub settings: Option<&'a str>,
 }
 
 /// The value a fenced passthrough gives one flag (`--flag V`, `--flag=V`, or
@@ -1625,10 +1628,11 @@ pub fn bg_create(
             }
         }
     }
-    if let Some(route) = flags.route {
+    if let Some(settings) = flags.route.map(|r| r.settings).or(flags.settings) {
         // The route owns the settings slot (the floor stood down above), at
-        // the same argv position Python's bg_create puts it.
-        argv.splice(4..4, ["--settings".to_string(), route.settings.to_string()]);
+        // the same argv position Python's bg_create puts it. A sandbox file
+        // already folds the scrub floor.
+        argv.splice(4..4, ["--settings".to_string(), settings.to_string()]);
     } else if !floor.is_empty() {
         match crate::model_env_scrub::write_scrub_settings(&floor) {
             Ok(path) => {
@@ -2716,6 +2720,7 @@ pub fn dispatch_claude_headless(
     effort: Option<&str>,
     output_format: Option<&str>,
     flags: HarnessFlags,
+    extra_env: &[(&str, &str)],
 ) -> AskOutcome {
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -2734,6 +2739,11 @@ pub fn dispatch_claude_headless(
     // --dangerously-skip-permissions for the headless lane; unset keeps the
     // skip (a headless one-shot cannot answer permission prompts).
     let mut argv: Vec<String> = vec!["claude".into(), "-p".into()];
+    // A routed one-shot carries the route's settings file, as bg_create does.
+    if let Some(settings) = flags.route.map(|r| r.settings).or(flags.settings) {
+        argv.push("--settings".to_string());
+        argv.push(settings.to_string());
+    }
     match permission_mode.filter(|m| !m.is_empty()) {
         Some(m) => {
             argv.push("--permission-mode".into());
@@ -2772,9 +2782,13 @@ pub fn dispatch_claude_headless(
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
     cmd.current_dir(cwd);
-    // Same scrub + ordering rationale as bg_create above; no overlay env and
-    // no daemon fork on this one-shot arm, so no settings floor is needed.
-    crate::model_env_scrub::scrub_onto(&mut cmd, &[]);
+    // Same scrub + ordering rationale as bg_create above: the route env
+    // lands after the scrub, so it wins. No daemon fork on this one-shot
+    // arm, so no settings floor is needed.
+    crate::model_env_scrub::scrub_onto(&mut cmd, extra_env);
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
     crate::claims::stamp_command_env(&mut cmd, Some(name), "claude", None);
     cmd.env("FNO_AGENT_FROM", from_name);
     // No row unless the caller opted in to watch: the opt-in is this spawn's
@@ -3362,7 +3376,10 @@ fn create(
         role_level: None,
         role_scope: None,
         role_grantor: None,
-        route_settings_path: route.map(|r| r.settings.to_string()),
+        route_settings_path: route
+            .map(|r| r.settings)
+            .or(flags.settings)
+            .map(str::to_string),
         delivery_policy: None,
         sandbox_posture: None,
         git_grant: None,
@@ -3848,6 +3865,7 @@ mod tests {
             disallowed_tools: Some("Bash"),
             passthrough: &[],
             route: None,
+            settings: None,
         };
         assert_eq!(
             build_argv("a", "hi", false, None, None, None, flags),

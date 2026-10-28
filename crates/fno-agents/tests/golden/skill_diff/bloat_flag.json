@@ -1,0 +1,24 @@
+{
+ "expected": {
+  "over": {
+   "net_growth": 190,
+   "threshold": 120,
+   "window": 1
+  },
+  "under": null
+ },
+ "input": {
+  "over": [
+   {
+    "added_lines": 200,
+    "removed_lines": 10
+   }
+  ],
+  "under": [
+   {
+    "added_lines": 10,
+    "removed_lines": 5
+   }
+  ]
+ }
+}
