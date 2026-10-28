@@ -398,8 +398,7 @@ function tick(alpha) {
 const toScreen = (n) => ({x: n.x * cam.k + cam.x + W / 2, y: n.y * cam.k + cam.y + (H + TOP) / 2});
 function star(x, y, r, host) { ctx.beginPath(); if (hosts[0] && host !== hosts[0].host) { const q = r * 1.25; ctx.moveTo(x, y - q); ctx.lineTo(x + q, y); ctx.lineTo(x, y + q); ctx.lineTo(x - q, y); ctx.closePath(); } else ctx.arc(x, y, r, 0, 7); }
 function pick(mx, my) { let best = null, bd = 1e9; nodes.forEach((n) => { if (!shown(n)) return; const p = toScreen(n), d = Math.hypot(p.x - mx, p.y - my); if (d < radius(n) * cam.k + 8 && d < bd) { bd = d; best = n; } }); return best; }
-function fitK() { let mx = 1, my = 1; const xs = [], ys = []; nodes.forEach((n) => { if (!shown(n)) return; if (n.kind !== "session" || leadName(n.r)) { mx = Math.max(mx, Math.abs(n.x)); my = Math.max(my, Math.abs(n.y)); } else { xs.push(Math.abs(n.x)); ys.push(Math.abs(n.y)); } });
-  const p90 = (a) => a.length ? a.sort((u, v) => u - v)[Math.floor(a.length * .9)] : 0; mx = Math.max(mx, p90(xs)); my = Math.max(my, p90(ys)); return Math.min(1.6, Math.max(.3, Math.min((W / 2 - Math.min(110, W * .08)) / mx, ((H - TOP) / 2 - 70) / my))); }
+function fitK() { let mx = 1, my = 1; nodes.forEach((n) => { if (!shown(n)) return; mx = Math.max(mx, Math.abs(n.x)); my = Math.max(my, Math.abs(n.y)); }); return Math.min(1.6, Math.max(.02, Math.min((W / 2 - Math.min(110, W * .08)) / mx, ((H - TOP) / 2 - 70) / my))); }
 function tipLines(n) {
   if (n.kind === "host") { const h = n.h; return [h.host, rows.filter((r) => r.host === h.host).length + " sessions · spawn cap " + (h.cap ?? "?") + " · memory " + Math.round((h.mem_used || 0) * 100) + "%", (h.fresh ? "online" : "stale") + " · beat " + ago(h.age_s) + " ago · " + (h.takes_work ? "takes work" : "no new work")]; }
   if (n.kind === "territory") { const c = rows.filter((r) => proj(r) === n.label); return ["Project · " + n.label, c.length + " sessions · " + c.filter((r) => r.s.status === "writing").length + " writing"]; }
@@ -416,7 +415,7 @@ cv.addEventListener("pointerleave", () => { hover = null; tip.classList.remove("
 cv.addEventListener("pointerdown", (e) => { drag = {x: e.clientX, y: e.clientY, cx: cam.tx, cy: cam.ty, moved: false}; cv.classList.add("dragging"); cv.setPointerCapture(e.pointerId); });
 cv.addEventListener("pointerup", (e) => { cv.classList.remove("dragging"); const moved = drag && drag.moved; drag = null; if (moved) return;
   const b = cv.getBoundingClientRect(), n = pick(e.clientX - b.left, e.clientY - b.top); if (n && n.kind === "session") openSeat(n.r); });
-cv.addEventListener("wheel", (e) => { e.preventDefault(); cam.auto = false; cam.tk = Math.min(3, Math.max(.3, cam.tk * Math.exp(-e.deltaY * .0015))); }, {passive: false});
+cv.addEventListener("wheel", (e) => { e.preventDefault(); cam.auto = false; cam.tk = Math.min(3, Math.max(Math.min(.3, cam.tk), cam.tk * Math.exp(-e.deltaY * .0015))); }, {passive: false});
 cv.addEventListener("dblclick", () => { cam.tx = cam.ty = 0; cam.auto = true; });
 function arc(x, cx, cy, r, a0, a1, color, w) { x.strokeStyle = color; x.lineWidth = w; x.lineCap = "round"; x.beginPath(); x.arc(cx, cy, r, a0, a1); x.stroke(); }
 // The machine orb: a memory ring, a ring split by seat state, and, on the card, one dot per seat in orbit.
