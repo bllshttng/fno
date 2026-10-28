@@ -17,8 +17,9 @@ pub const SCHEMA: u64 = 1;
 /// Subjects of `git log --first-parent <base>..<sha>`; injectable for tests.
 type GitLog<'a> = &'a dyn Fn(&str, &str) -> Result<Vec<String>, String>;
 
-/// Moves the freeze sha; `merge_freeze::repin_sha` in production.
-type Repin<'a> = &'a dyn Fn(&str) -> Result<Option<String>, String>;
+/// Moves the freeze sha for (sha, repo); `merge_freeze::repin_sha` in
+/// production.
+type Repin<'a> = &'a dyn Fn(&str, &str) -> Result<Option<String>, String>;
 
 /// Run one release op from an `authorized-merge` payload. `repo_dir` names
 /// the checkout the included PRs are read from (default: the cwd).
@@ -78,12 +79,26 @@ fn pin(
     let Some(by) = payload_str(payload, "by").filter(|b| !b.trim().is_empty()) else {
         return receipt("refused", 2, "pin needs a non-blank --by").to_string();
     };
+    // The repo scopes the freeze move: the freeze record holds one repo.
+    let Some(repo) = payload_str(payload, "repo").filter(|r| r.contains('/')) else {
+        return receipt("refused", 2, "pin needs --repo <owner/repo>").to_string();
+    };
     let mut record = current.unwrap_or_else(
         || json!({"schema": SCHEMA, "release": release, "pins": [], "included": [], "joiners": []}),
     );
     if let Some(base) = payload_str(payload, "base_tag").filter(|b| !b.trim().is_empty()) {
+        // A leading '-' would reach git log as an option, not a revision.
+        if base.starts_with('-') {
+            return receipt(
+                "refused",
+                2,
+                format!("--base-tag must name a tag, got '{base}'"),
+            )
+            .to_string();
+        }
         record["base_tag"] = json!(base);
     }
+    record["repo"] = json!(repo);
     let Some(base) = record
         .get("base_tag")
         .and_then(Value::as_str)
@@ -118,7 +133,7 @@ fn pin(
     if let Err(e) = write(path, &record) {
         return receipt("error", 2, e).to_string();
     }
-    let (code, freeze) = match repin(&sha) {
+    let (code, freeze) = match repin(&sha, repo) {
         Ok(Some(lift)) => (0, format!("moved; lift at {lift}")),
         Ok(None) => (0, "none".to_string()),
         Err(e) => (
@@ -285,7 +300,7 @@ mod tests {
             Ok::<_, String>(subjects)
         };
         let repinned = RefCell::new(Vec::new());
-        let repin = |sha: &str| {
+        let repin = |sha: &str, _repo: &str| {
             repinned.borrow_mut().push(sha.to_string());
             Ok::<Option<String>, String>(None)
         };
@@ -296,11 +311,14 @@ mod tests {
         assert_eq!(
             op(
                 "release-pin",
-                json!({"release": "v0.4.1rc1", "sha": A, "by": "lead"})
+                json!({"release": "v0.4.1rc1", "sha": A, "by": "lead", "repo": "o/r"})
             )["detail"],
             "the first pin needs --base-tag"
         );
-        let first = json!({"release": "v0.4.1rc1", "base_tag": "v0.4.0", "sha": A, "by": "lead"});
+        let dash = json!({"release": "v0.4.1rc1", "base_tag": "--output=x", "sha": A,
+                          "by": "lead", "repo": "o/r"});
+        assert_eq!(op("release-pin", dash)["exit_code"], 2);
+        let first = json!({"release": "v0.4.1rc1", "base_tag": "v0.4.0", "sha": A, "by": "lead", "repo": "o/r"});
         assert_eq!(op("release-pin", first)["included"], json!([10, 11]));
 
         // AC2: a joiner already in the pin is refused and named.
@@ -322,7 +340,7 @@ mod tests {
         // AC1: a moved pin appends; the history reads both pins in order.
         let moved = op(
             "release-pin",
-            json!({"release": "v0.4.1rc1", "sha": B, "by": "lead",
+            json!({"release": "v0.4.1rc1", "sha": B, "by": "lead", "repo": "o/r",
                                              "reason": "late fix"}),
         );
         assert_eq!(

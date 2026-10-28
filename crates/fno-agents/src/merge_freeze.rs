@@ -681,15 +681,15 @@ fn check_in(store: &Store, payload: &Value, laws: Laws) -> String {
     }
 }
 
-/// Moves a live freeze's sha to `sha` when the release record pins it.
-/// `Ok(None)` is no freeze. Only `pin.sha` changes: the sha admits no PR,
+/// Moves a live freeze's sha to `sha` when the release record pins it for
+/// `repo`. `Ok(None)` is no freeze, or a freeze over another repo. Only `pin.sha` changes: the sha admits no PR,
 /// so the move never widens the freeze, and the new pin key gives a new
 /// lift subject, so a lifted freeze re-arms.
-pub(crate) fn repin_sha(sha: &str) -> Result<Option<String>, String> {
-    repin_sha_in(&Store::from_env()?, sha)
+pub(crate) fn repin_sha(sha: &str, repo: &str) -> Result<Option<String>, String> {
+    repin_sha_in(&Store::from_env()?, sha, repo)
 }
 
-fn repin_sha_in(store: &Store, sha: &str) -> Result<Option<String>, String> {
+fn repin_sha_in(store: &Store, sha: &str, repo: &str) -> Result<Option<String>, String> {
     let Some((text, path)) = store.read_text()? else {
         return Ok(None);
     };
@@ -698,6 +698,10 @@ fn repin_sha_in(store: &Store, sha: &str) -> Result<Option<String>, String> {
         return Err(format!(
             "{path} is not a version-{STATE_VERSION} freeze; it has no sha pin"
         ));
+    }
+    let frozen = v.get("repo").and_then(Value::as_str).unwrap_or("");
+    if !frozen.eq_ignore_ascii_case(repo) {
+        return Ok(None);
     }
     v["pin"]["sha"] = json!(sha);
     store.write(&format!("{v}\n"))?;
@@ -937,14 +941,15 @@ mod tests {
         let (_dir, home) = home("repin");
         let empty = store(vec![]);
         let moved = "def456def456def456def456def456def456def4";
-        assert_eq!(repin_sha_in(&home, moved), Ok(None));
+        assert_eq!(repin_sha_in(&home, moved, "o/r"), Ok(None));
         assert_eq!(set(&home, SHA, &empty)["outcome"], "frozen");
         let old_lift = format!("merge-freeze:o/r@sha:{},prs:7", &SHA[..12]);
 
         // AC3: the freeze reads B, admits the same PRs, and the old lift no
         // longer clears it.
         let new_lift = format!("merge-freeze:o/r@sha:{},prs:7", &moved[..12]);
-        assert_eq!(repin_sha_in(&home, moved), Ok(Some(new_lift)));
+        assert_eq!(repin_sha_in(&home, moved, "p/q"), Ok(None));
+        assert_eq!(repin_sha_in(&home, moved, "o/r"), Ok(Some(new_lift)));
         let record = read_record(&home).unwrap().unwrap();
         assert_eq!(record.sha.as_deref(), Some(moved));
         assert_eq!(record.prs, vec![7]);
