@@ -1585,6 +1585,12 @@ fn main() {
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let env_session = mux_cli::env_server();
     let mut args = args;
+    // The name table answers first: a root word no live row lists refuses
+    // here, before any door or the Python fallback can answer it.
+    if let Some(line) = fno::command_names::root_refusal(&args) {
+        eprintln!("{line}");
+        std::process::exit(2);
+    }
     // The worktree family's door claims before any forwarding: the Python
     // mounts die with the family port, so these argv shapes must answer
     // natively or not at all.
