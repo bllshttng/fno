@@ -158,7 +158,14 @@ pub fn run(args: &[OsString]) -> i32 {
             }
         }
     }
-    let results = match set_values(&items, scope, None) {
+    // A caller with its own deadline (the a2a first-use persist) bounds the
+    // lock wait through FNO_CONFIG_LOCK_TIMEOUT, in seconds; unset blocks.
+    let budget = std::env::var("FNO_CONFIG_LOCK_TIMEOUT")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<f64>().ok())
+        .filter(|secs| secs.is_finite() && *secs > 0.0)
+        .map(Duration::from_secs_f64);
+    let results = match set_values(&items, scope, budget) {
         Ok(results) => results,
         Err(refusal) => {
             eprintln!("error: {}", refusal.message);
