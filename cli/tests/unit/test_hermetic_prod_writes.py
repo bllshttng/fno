@@ -110,30 +110,6 @@ def test_gate_escape_failure_log_respects_the_sandbox(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The operator's screen
-# ---------------------------------------------------------------------------
-
-
-def test_notification_is_suppressed_in_a_hermetic_run(monkeypatch):
-    """No test may reach the operator's screen, on either notifier.
-
-    Reported as delivered because a caller that branches on a non-zero code
-    (``fno.mail.cli`` escalates on one) would otherwise take a path the test
-    never asked for.
-    """
-    import fno.notify._impl as impl
-
-    def _boom(*a, **k):  # noqa: ANN002, ANN003
-        raise AssertionError("a hermetic run dispatched a real OS notification")
-
-    monkeypatch.setattr(impl.subprocess, "run", _boom)
-    monkeypatch.setattr(impl.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(impl.shutil, "which", lambda _n: "/usr/bin/notify-send")
-    monkeypatch.setenv("FNO_TEST_HERMETIC", "1")
-    assert impl.send_notification("t", "m") == (0, "")
-
-
-# ---------------------------------------------------------------------------
 # The third declaration state: no pin at all, under a test runner (x-3d21)
 # ---------------------------------------------------------------------------
 #

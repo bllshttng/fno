@@ -43,7 +43,6 @@ from fno.codemap_cli import app as codemap_app  # noqa: E402
 from fno.evals_cli import evals_app  # noqa: E402
 from fno.events.cli import cli as event_app  # noqa: E402
 from fno.scratch_cli import scratch_app  # noqa: E402
-from fno.status_fanout import status_fanout_app  # noqa: E402
 from fno.doctor_bash_census import bash_census_command  # noqa: E402
 from fno.doctor_footprint import footprint_command  # noqa: E402
 from fno.doctor_lanes import lanes_command  # noqa: E402
@@ -56,7 +55,6 @@ doctor_event_app = typer.Typer(name="event", no_args_is_help=True, add_completio
 doctor_event_app.registered_callback = event_app.registered_callback
 doctor_event_app.registered_commands.extend(event_app.registered_commands)
 doctor_event_app.registered_groups.extend(event_app.registered_groups)
-doctor_event_app.add_typer(status_fanout_app, name="fanout")
 doctor_app.add_typer(doctor_event_app, name="event")
 doctor_app.add_typer(scratch_app, name="scratch")
 doctor_app.command("lint")(lint)

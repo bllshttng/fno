@@ -120,7 +120,7 @@ def test_escalation_failure_never_breaks_the_send(runner, mailbox, monkeypatch):
     def boom(title: str, message: str):
         raise RuntimeError("no display")
 
-    monkeypatch.setattr("fno.notify._impl.send_notification", boom)
+    monkeypatch.setattr("fno.rust_binary.notify_operator", boom)
     res = runner.invoke(
         app,
         ["mail", "send", "--to-project", "web", "--kind", "question",

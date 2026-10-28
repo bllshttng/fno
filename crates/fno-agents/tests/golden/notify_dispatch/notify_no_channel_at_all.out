@@ -1,0 +1,1 @@
+{"code": 1, "journal_ok": false, "local_tool": false, "message": "M", "msg": "fno inbox notify: no OS notification tool available (need osascript on macOS or notify-send on Linux); notification not sent.", "mux_clients": null, "pointer": "", "sink_routes": false, "title": "T"}
