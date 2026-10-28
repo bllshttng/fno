@@ -52,7 +52,8 @@
 #      crates/fno-agents/src/plans_path.rs reads Claude Code's own
 #      plansDirectory setting to resolve the user-selected plan location; it
 #      writes no footnote state under .claude/.
-#      context_audit.py reads project-owned .claude/rules/*.md to census the
+#      context_audit.rs (the ported census; was context_audit.py) reads
+#      project-owned .claude/rules/*.md to census the
 #      exact progressive instructions Claude loads; it never writes there.
 #      guard-corpus-sweep.py joins ~/.claude/projects for the same reason: it
 #      READS Claude Code's own transcripts to replay every real Bash command
@@ -360,10 +361,11 @@ crates/fno-agents/src/backlog/maintenance_tests.rs
 crates/fno-agents/src/review_capability.rs
 cli/src/fno/backlog/batch.py
 cli/src/fno/claims/session_pid.py
-cli/src/fno/context_audit.py
+crates/fno-agents/src/context_audit.rs
 cli/src/fno/graph/cli.py
 cli/src/fno/inbox/drain.py
 crates/fno-agents/src/observer/fold.rs
+crates/fno-agents/src/footprint_cause.rs
 cli/src/fno/paths.py
 cli/src/fno/scratch_cli.py
 cli/src/fno/provenance/resolver.py

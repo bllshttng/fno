@@ -207,6 +207,11 @@ def test_every_moved_spelling_is_hidden():
             # the tail byte-verbatim, so a python registration would forward
             # into nothing.
             "test",
+            # `context` joined when the diag family ported: the front door
+            # claims both spellings (classify_context: root and whoami
+            # context) and execs context-run --probe, so a python
+            # registration would forward into nothing.
+            "context",
         ):
             assert cmd is None, f"{name}'s registration was removed with the move"
             continue
