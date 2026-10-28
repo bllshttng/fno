@@ -643,8 +643,8 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         .unwrap_or_default();
     let mut detail = format!(
         "PR {pr} touches the paint surface the config lists ({}); full CI is held at \
-         this head, and the daemon cancels every run but the look shots until the look \
-         clears, then reruns them. The user's look is the only clear: an answered question page naming the PR and its head sha, or a role-recorded \
+         this head, and the daemon cancels every run but rust-ci (the shots) until the \
+         look clears, then reruns them. The user's look is the only clear: an answered question page naming the PR and its head sha, or a role-recorded \
          decision whose rationale attests the chat and whose text names the PR and \
          its head sha (`fno backlog decide <node> 'Approved: PR {pr} at {head}' \
          --authority role --rationale 'user in chat: <the user's words>'`). Ask via \

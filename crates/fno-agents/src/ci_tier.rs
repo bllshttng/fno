@@ -48,7 +48,7 @@ pub(crate) struct Plan {
     pub rerun: Vec<(u64, Vec<u64>)>,
 }
 
-fn word<'a>(v: &'a Value, pointer: &str) -> &'a str {
+pub(crate) fn word<'a>(v: &'a Value, pointer: &str) -> &'a str {
     v.pointer(pointer).and_then(Value::as_str).unwrap_or("")
 }
 

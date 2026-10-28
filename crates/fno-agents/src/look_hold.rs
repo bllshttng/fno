@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::ci_tier::Head;
+use crate::ci_tier::{word, Head};
 use crate::paths::AgentsHome;
 
 const INTERVAL: Duration = Duration::from_secs(120);
@@ -19,8 +19,9 @@ const WINDOW_MS: i64 = 7 * 24 * 3_600_000;
 const PAINT_CACHE_CAP: usize = 2_000;
 pub(crate) const CANCEL_EVENT: &str = "look_hold_cancel";
 pub(crate) const RELEASE_EVENT: &str = "look_hold_release";
-/// The one workflow a held head keeps: the shots the user looks at.
-const SHOTS_WORKFLOW: &str = "look-shots.yml";
+/// The workflow a held head keeps when `merge.visual_shot_workflows` is
+/// unset: footnote's cheap build (fmt, check) and the shots the user looks at.
+const SHOT_WORKFLOWS: &str = "rust-ci.yml";
 
 type PaintCache = Arc<Mutex<HashMap<String, bool>>>;
 
@@ -32,15 +33,30 @@ pub struct Arm {
     paint: PaintCache,
 }
 
-fn word<'a>(v: &'a Value, pointer: &str) -> &'a str {
-    v.pointer(pointer).and_then(Value::as_str).unwrap_or("")
+/// The workflow files a held head keeps running, by file name.
+fn shot_workflows(root: &Path) -> Vec<String> {
+    let keys = ["merge", "visual_shot_workflows"];
+    match crate::agents_config::config_value_deep(root, &keys) {
+        Some(toml::Value::Array(items)) => items
+            .iter()
+            .filter_map(|i| i.as_str().map(str::to_string))
+            .collect(),
+        _ => vec![SHOT_WORKFLOWS.to_string()],
+    }
 }
 
-/// One head's runs, the shots workflow left out: the hold never touches it.
-pub(crate) fn head_of(runs: &[Value]) -> Head {
+/// One head's runs, the shot workflows left out: the hold never touches them.
+pub(crate) fn head_of(runs: &[Value], keep: &[String]) -> Head {
+    let file = |r: &Value| {
+        word(r, "/path")
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
     let held: Vec<Value> = runs
         .iter()
-        .filter(|r| !word(r, "/path").ends_with(SHOTS_WORKFLOW))
+        .filter(|r| !keep.contains(&file(r)))
         .cloned()
         .collect();
     crate::ci_tier::head_of(&held)
@@ -132,6 +148,7 @@ fn pass_repo(root: &Path, slug: &str, path: &Path, paint: &PaintCache) -> Result
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect();
     let emitter = crate::events::EventEmitter::new(path.to_path_buf(), "daemon");
+    let keep = shot_workflows(root);
     let pulls = crate::pr_push::gh_api_pages_conditional(
         "gh",
         root,
@@ -143,7 +160,8 @@ fn pass_repo(root: &Path, slug: &str, path: &Path, paint: &PaintCache) -> Result
         if pr == 0 || sha.is_empty() {
             continue;
         }
-        let head = head_of(&crate::ci_tier::runs_of(root, &format!("head_sha={sha}"))?);
+        let runs = crate::ci_tier::runs_of(root, &format!("head_sha={sha}"))?;
+        let head = head_of(&runs, &keep);
         let ours = ours(&rows, slug, sha);
         if head.in_flight.is_empty() && !head.cancelled.iter().any(|r| ours.contains(r)) {
             continue;
@@ -210,82 +228,45 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
 mod tests {
     use super::*;
 
-    fn run(id: u64, name: &str, path: &str, status: &str, conclusion: &str) -> Value {
-        json!({"id": id, "name": name, "path": path, "status": status, "conclusion": conclusion})
+    fn run(id: u64, workflow: &str, status: &str, conclusion: &str) -> Value {
+        let path = format!(".github/workflows/{workflow}.yml");
+        json!({"id": id, "name": workflow, "path": path, "status": status, "conclusion": conclusion})
     }
 
     #[test]
     fn a_held_head_keeps_its_shots_and_cancels_the_rest() {
-        let runs = vec![
-            run(
-                1,
-                "cli-ci",
-                ".github/workflows/cli-ci.yml",
-                "in_progress",
-                "",
-            ),
-            run(
-                2,
-                "look shots",
-                ".github/workflows/look-shots.yml",
-                "in_progress",
-                "",
-            ),
-            run(3, "guards", ".github/workflows/guards.yml", "queued", ""),
-            run(
-                4,
-                "merge-queue-gate",
-                ".github/workflows/merge-queue-gate.yml",
-                "queued",
-                "",
-            ),
+        let runs = [
+            run(1, "cli-ci", "in_progress", ""),
+            run(2, "rust-ci", "in_progress", ""),
+            run(3, "guards", "queued", ""),
+            run(4, "merge-queue-gate", "queued", ""),
         ];
-        let head = head_of(&runs);
-        let (cancel, rerun) = decide(&head, &HashSet::new(), Some(true));
-        assert_eq!(cancel, vec![1, 3]);
-        assert!(rerun.is_empty());
+        let head = head_of(&runs, &["rust-ci.yml".to_string()]);
+        assert_eq!(
+            decide(&head, &HashSet::new(), Some(true)),
+            (vec![1, 3], vec![])
+        );
         // An unreadable gate neither holds nor releases.
         assert_eq!(decide(&head, &HashSet::new(), None), (vec![], vec![]));
     }
 
     #[test]
     fn the_answer_reruns_only_the_runs_this_arm_cancelled_at_that_head() {
-        let row = |kind: &str, sha: &str, runs: Value| json!({"type": kind, "data": {"slug": "o/r", "sha": sha, "runs": runs}});
-        let rows = vec![
-            row(
-                CANCEL_EVENT,
-                "aaa",
-                json!([{"run": 1, "ok": true}, {"run": 2, "ok": false}]),
-            ),
-            row(CANCEL_EVENT, "aaa", json!([{"run": 5, "ok": true}])),
-            row(RELEASE_EVENT, "aaa", json!([{"run": 5, "ok": true}])),
-            row(CANCEL_EVENT, "bbb", json!([{"run": 3, "ok": true}])),
+        let row = |kind: &str, sha: &str, run: u64, ok: bool| json!({"type": kind, "data": {"slug": "o/r", "sha": sha, "runs": [{"run": run, "ok": ok}]}});
+        let rows = [
+            row(CANCEL_EVENT, "aaa", 1, true),
+            row(CANCEL_EVENT, "aaa", 2, false),
+            row(CANCEL_EVENT, "aaa", 5, true),
+            row(RELEASE_EVENT, "aaa", 5, true),
+            row(CANCEL_EVENT, "bbb", 3, true),
         ];
         let ours = ours(&rows, "o/r", "aaa");
         assert_eq!(ours, HashSet::from([1]));
-        let head = head_of(&[
-            run(
-                1,
-                "cli-ci",
-                ".github/workflows/cli-ci.yml",
-                "completed",
-                "cancelled",
-            ),
-            run(
-                2,
-                "guards",
-                ".github/workflows/guards.yml",
-                "completed",
-                "cancelled",
-            ),
-            run(
-                5,
-                "rust-ci",
-                ".github/workflows/rust-ci.yml",
-                "completed",
-                "cancelled",
-            ),
-        ]);
+        let done = |id, workflow| run(id, workflow, "completed", "cancelled");
+        let head = head_of(
+            &[done(1, "cli-ci"), done(2, "guards"), done(5, "release")],
+            &[],
+        );
         // 2 was cancelled by hand, and 5 was already rerun once.
         assert_eq!(decide(&head, &ours, Some(false)), (vec![], vec![1]));
         assert_eq!(decide(&head, &ours, Some(true)), (vec![], vec![]));
