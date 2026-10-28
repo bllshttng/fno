@@ -8611,6 +8611,14 @@ event_types:
     description: "The ci_tier arm found a held push whose hold cleared and woke the session to push again."
     sources: [daemon]
     data: {required: [slug, branch, held_ms]}
+  - name: look_hold_cancel
+    description: "The look_hold arm cancelled a paint PR's runs, all but the look shots, because the head waits for the user's look."
+    sources: [daemon]
+    data: {required: [slug, pr, sha, runs]}
+  - name: look_hold_release
+    description: "The user's look cleared at the head, so the look_hold arm reran the runs it had cancelled there."
+    sources: [daemon]
+    data: {required: [slug, pr, sha, runs]}
   - name: mcp_channel_demoted_to_socket
     description: "Legacy agents-family telemetry kind, envelope-mapped by the shared emitter."
     sources: [daemon, agents]

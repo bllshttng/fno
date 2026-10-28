@@ -50,6 +50,7 @@ pub(super) struct FleetArms {
     ci_cadence: crate::ci_cadence::Arm,
     main_revert: crate::main_revert::Arm,
     ci_tier: crate::ci_tier::Arm,
+    look_hold: crate::look_hold::Arm,
     pr_idle: crate::pr_idle::Arm,
     codex_watch: crate::codex_watch::Arm,
     lead_wake: crate::lead_wake::Arm,
@@ -143,6 +144,7 @@ impl FleetArms {
             ci_cadence: crate::ci_cadence::Arm::default(),
             main_revert: crate::main_revert::Arm::default(),
             ci_tier: crate::ci_tier::Arm::default(),
+            look_hold: crate::look_hold::Arm::default(),
             pr_idle: crate::pr_idle::Arm::default(),
             codex_watch: crate::codex_watch::Arm::default(),
             lead_wake: crate::lead_wake::Arm::new(opts.agents_config_cwd.clone()),
@@ -355,6 +357,8 @@ impl FleetArms {
         crate::main_revert::maybe_tick(&self.main_revert, ctx.home.clone());
         // The CI tier: open PRs run CI six at a time (opt-in, ci_tier.rs).
         crate::ci_tier::maybe_tick(&self.ci_tier, ctx.home.clone());
+        // A paint PR waiting on the user's look runs only its shots (look_hold.rs).
+        crate::look_hold::maybe_tick(&self.look_hold, ctx.home.clone());
         // A PR green, mergeable and reviewed past 2h alarms every lead and the phone.
         crate::pr_idle::maybe_tick(&self.pr_idle, ctx.home.clone());
         // The settle waker: on CI settle it wakes the parked session

@@ -319,6 +319,7 @@ pub mod lock_queue;
 pub mod logs;
 pub mod logs_args;
 pub mod logs_client;
+pub mod look_hold;
 pub mod loop_dispatch;
 pub mod loop_lead;
 pub mod loop_readiness;
@@ -1890,6 +1891,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "ci_tier_pass",
     "ci_tier_held",
     "ci_tier_wake",
+    // The look_hold arm's cancel of a paint head's CI and its rerun when the
+    // user's look clears (look_hold.rs).
+    "look_hold_cancel",
+    "look_hold_release",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
