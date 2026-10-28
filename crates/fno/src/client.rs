@@ -7417,7 +7417,7 @@ async fn attach_and_run(
         }
         // task 2.3: kick a queued answer; refresh the projection and index.
         questions::maybe_kick(&mut view, &questions_tx, &questions_index_tx);
-        questions::kick_action(&mut view, &question_act_tx);
+        questions::kick_action(&mut view, &question_act_tx, &link_tx);
         if view.yard_want && !view.yard_inflight {
             view.yard_want = false;
             view.yard_inflight = true;

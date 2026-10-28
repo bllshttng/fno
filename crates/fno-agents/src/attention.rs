@@ -7,6 +7,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::Path;
 
 /// One `operator_question_closed` fold row: the last close per question id.
 #[derive(Debug, Clone, PartialEq)]
@@ -204,6 +205,9 @@ pub struct AttentionItem {
     /// store; `None` for a question asked here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// Absolute paths of the screenshots the ask copied into the vault.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub images: Vec<String>,
 }
 
 /// Every defect, so the asker fixes the row instead of a sink dropping it
@@ -438,7 +442,26 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
                 .map(str::to_string),
         })
     });
+    // A question asked on another machine names that machine's vault; a
+    // path missing here re-roots onto this machine's synced copy.
+    let images: Vec<String> = arr_field(row, "images")
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(|p| {
+                    if Path::new(p).exists() {
+                        return p.to_string();
+                    }
+                    let cwd = std::env::current_dir().unwrap_or_default();
+                    crate::escalation::rebase_vault_path(p, &cwd)
+                        .filter(|local| local.exists())
+                        .map_or_else(|| p.to_string(), |l| l.to_string_lossy().into_owned())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let mut item = AttentionItem {
+        images,
         host: crate::question_bus::peer_origin(row).map(|_| {
             str_field(row, "host")
                 .unwrap_or("another machine")
@@ -551,6 +574,7 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
         missing: vec![],
         state: "open".to_string(),
         settled: false,
+        images: vec![],
     };
     item.seal_readiness();
     Some(item)
@@ -607,6 +631,7 @@ fn mine_items(lane_text: &str) -> Vec<AttentionItem> {
             missing: vec![],
             state: "open".to_string(),
             settled: false,
+            images: vec![],
         });
     }
     out

@@ -926,11 +926,12 @@ fn run_ask(args: &[String]) -> i32 {
     let mut blocks: Vec<String> = Vec::new();
     let mut node: Option<String> = None;
     let mut subject: Option<String> = None;
+    let mut images: Vec<PathBuf> = Vec::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "-h" | "--help" => {
-                println!("usage: fno inbox outstanding ask [QUESTION] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>]");
+                println!("usage: fno inbox outstanding ask [QUESTION] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--image <path>]...");
                 return 0;
             }
             "--question-file" => match args.get(index + 1) {
@@ -990,6 +991,16 @@ fn run_ask(args: &[String]) -> i32 {
                 }
                 None => {
                     eprintln!("outstanding: --subject needs a value");
+                    return 2;
+                }
+            },
+            "--image" => match args.get(index + 1) {
+                Some(value) => {
+                    images.push(PathBuf::from(value));
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --image needs a value");
                     return 2;
                 }
             },
@@ -1086,6 +1097,9 @@ fn run_ask(args: &[String]) -> i32 {
         render_cap: None,
         op: None,
         event: None,
+        screens_dir: (!images.is_empty())
+            .then(|| crate::escalation::questions_dir(&cwd).join("screens")),
+        images,
     };
     let answer = crate::question_intake::run_intake(&request, &home);
     for line in &answer.lines {
