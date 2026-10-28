@@ -343,7 +343,7 @@ pub fn receipt_reached(line: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn msg(id: &str, delivery: Option<&str>) -> Value {
+    fn bus_row(id: &str, delivery: Option<&str>) -> Value {
         let mut m = json!({"id": id, "kind": "send", "from": "a", "to": "b", "body": "x"});
         if let Some(d) = delivery {
             m["delivery"] = json!(d);
@@ -369,17 +369,17 @@ mod tests {
 
     #[test]
     fn a_newer_state_row_outranks_the_legacy_delivery_field() {
-        let rows = vec![msg("fmail-1", Some("typed")), st("fmail-1", &steer())];
+        let rows = vec![bus_row("fmail-1", Some("typed")), st("fmail-1", &steer())];
         assert_eq!(newest_state(&rows, "fmail-1"), steer());
     }
 
     #[test]
     fn a_legacy_hosted_row_reads_accepted_new_turn() {
-        let got = newest_state(&[msg("fmail-1", Some("hosted"))], "fmail-1");
+        let got = newest_state(&[bus_row("fmail-1", Some("hosted"))], "fmail-1");
         assert_eq!(got.word(), "accepted-new-turn");
         assert_eq!(got.evidence().unwrap().record, "legacy:hosted");
         assert_eq!(
-            newest_state(&[msg("fmail-2", None)], "fmail-2"),
+            newest_state(&[bus_row("fmail-2", None)], "fmail-2"),
             DeliveryState::Queued
         );
     }
@@ -388,7 +388,7 @@ mod tests {
     fn an_acceptance_is_never_lowered_by_a_retry() {
         let accepted = DeliveryState::accepted(false, Evidence::default());
         let rows = vec![
-            msg("fmail-1", None),
+            bus_row("fmail-1", None),
             st(
                 "fmail-1",
                 &DeliveryState::Parked {
