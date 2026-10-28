@@ -117,8 +117,8 @@ esac"#,
     );
     let events = event_text(&project_events(&cwd));
     assert!(
-        events.contains("loop_check_merged_stamp"),
-        "the stamp row must name its evidence; events: {events}"
+        events.contains("retiring the fire without the REST read"),
+        "the termination row must name its evidence; events: {events}"
     );
     assert!(
         !events.contains("loop_check_gh_error"),
@@ -179,7 +179,7 @@ esac"#,
     assert_eq!(code, 0, "a block decision still exits 0");
     let events = event_text(&project_events(&cwd));
     assert!(
-        !events.contains("loop_check_merged_stamp"),
+        !events.contains("retiring the fire without the REST read"),
         "no stamp row while local work is unshipped; events: {events}"
     );
 }
@@ -244,7 +244,7 @@ esac"#,
     assert_eq!(code, 0, "a block decision still exits 0");
     let events = event_text(&project_events(&cwd));
     assert!(
-        !events.contains("loop_check_merged_stamp"),
+        !events.contains("retiring the fire without the REST read"),
         "no stamp row while a finding is open; events: {events}"
     );
 }
@@ -297,7 +297,7 @@ fn x0d87_live_replacement_pr_holds_the_early_allow() {
     );
     let events = event_text(&project_events(&cwd));
     assert!(
-        !events.contains("loop_check_merged_stamp"),
+        !events.contains("retiring the fire without the REST read"),
         "no stamp row while a live PR row is open; events: {events}"
     );
 }
@@ -345,7 +345,7 @@ fn x0d87_open_node_keeps_rest_read() {
     assert!(d.termination_reason.is_none());
     let events = event_text(&project_events(&cwd));
     assert!(
-        !events.contains("loop_check_merged_stamp"),
+        !events.contains("retiring the fire without the REST read"),
         "no stamp row for an open node; events: {events}"
     );
 }

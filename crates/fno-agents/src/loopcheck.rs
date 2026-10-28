@@ -891,16 +891,9 @@ pub(crate) fn decide_with_payload(
                     node = node_id.as_deref().unwrap_or(""),
                     n = pr_number
                 );
-                emit(
-                    "loop_check_merged_stamp",
-                    serde_json::json!({
-                        "session_id": session_id,
-                        "node": node_id,
-                        "pr_number": pr_number,
-                        "decision": "allow",
-                        "reason": "DonePRGreen"
-                    }),
-                );
+                // The termination row is the only journal row: a custom event
+                // type would need the schema.yaml inventory plus its cargo
+                // regen, and an unregistered type is rejected by the judge.
                 emit(
                     "termination",
                     serde_json::json!({
