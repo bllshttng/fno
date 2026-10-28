@@ -361,13 +361,17 @@ fn seams(
 }
 
 /// Fold the temp root and the space slug out of every string in the run.
+/// `spaces/` sits beside the project root in the temp dir, so the temp dir
+/// folds to `<ROOT>` too, the way the capture's one root did.
 fn fold(value: &mut Value, root: &Path) {
     match value {
         Value::String(text) => {
             let slug = root.to_string_lossy().replace('/', "-");
+            let base = root.parent().unwrap_or(root).to_string_lossy().into_owned();
             *text = text
                 .replace(&slug, "<ROOTSLUG>")
-                .replace(&root.to_string_lossy().into_owned(), "<ROOT>");
+                .replace(&root.to_string_lossy().into_owned(), "<ROOT>")
+                .replace(&base, "<ROOT>");
         }
         Value::Array(items) => items.iter_mut().for_each(|v| fold(v, root)),
         Value::Object(map) => map.values_mut().for_each(|v| fold(v, root)),
@@ -1120,8 +1124,7 @@ fn first_observation_seeds_the_cursor_and_the_board_hash() {
         "project": "proj",
         "status": "done",
         "completed_at": "2026-09-06T00:00:00Z",
-        // _BOARD_A_QUIET keeps its ready column through the close.
-        "_kanban_column": "ready",
+        "_kanban_column": "done",
         "priority": "p2",
     })];
     let rec = Rec::default();
@@ -1197,7 +1200,9 @@ fn the_pass_stops_under_its_floor_and_names_what_it_evaluated() {
     let world = World::new();
     let rows = multi_role_world(&world, 5);
     let rec = Rec::default();
-    let budget = Arc::new(Mutex::new(vec![100.0, 100.0, 100.0, 100.0, 14.0]));
+    // pop() reads from the end: team, answers and two truth reads get 100s,
+    // and the fifth read, truth:epic-4, falls under the floor.
+    let budget = Arc::new(Mutex::new(vec![14.0, 100.0, 100.0, 100.0, 100.0]));
     let mut base = seams(
         &world,
         rows,
