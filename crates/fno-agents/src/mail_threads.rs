@@ -250,10 +250,12 @@ fn delivery_states(
                 ),
                 false,
             ),
-            word => match DeliveryState::from_json(&json!({"state": word})) {
-                Some(state) => (state, false),
-                None => (DeliveryState::from_legacy(word), true),
-            },
+            word => {
+                match DeliveryState::from_json(&json!({"state": word, "reason": v.get("reason")})) {
+                    Some(state) => (state, false),
+                    None => (DeliveryState::from_legacy(word), true),
+                }
+            }
         };
         let accepted = out.get(id).is_some_and(DeliveryState::is_accepted);
         if legacy && (accepted || stated.contains(id)) {
@@ -266,6 +268,26 @@ fn delivery_states(
             stated.insert(id.to_string());
         }
         out.insert(id.to_string(), state);
+    }
+    out
+}
+
+/// How many delivery lines read `failed` for each message: one failure is
+/// the first send, more mean a retry failed too, and the tab then offers the
+/// copy rung.
+fn failure_counts(texts: &[String]) -> std::collections::HashMap<String, u64> {
+    let mut out: std::collections::HashMap<String, u64> = Default::default();
+    for line in texts.iter().flat_map(|t| t.lines()) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) == Some("delivery")
+            && v.get("how").and_then(Value::as_str) == Some("failed")
+        {
+            if let Some(id) = v.get("id").and_then(Value::as_str) {
+                *out.entry(id.to_string()).or_default() += 1;
+            }
+        }
     }
     out
 }
@@ -325,6 +347,7 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
         .collect();
     let aliases = store_aliases(&texts, registry);
     let states = delivery_states(&texts);
+    let failures = failure_counts(&texts);
     for text in &texts {
         let mut rows: Vec<Value> = Vec::new();
         for line in text.lines() {
@@ -390,6 +413,13 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
                 "in_reply_to": v.get("in_reply_to").and_then(Value::as_str),
                 "delivery": v.get("delivery").and_then(Value::as_str),
                 "state": state_word(&states, &v),
+                "state_reason": v.get("id").and_then(Value::as_str)
+                    .and_then(|id| states.get(id))
+                    .and_then(|s| s.reason()),
+                "state_failures": v.get("id").and_then(Value::as_str)
+                    .and_then(|id| failures.get(id))
+                    .copied()
+                    .unwrap_or(0),
                 "system": system_row,
             });
             match v.get("kind").and_then(Value::as_str) {
@@ -658,8 +688,9 @@ pub fn run_mail_threads(args: &[String]) -> i32 {
         }
         "details" => run_details(&args[1..]),
         "journal-reply" => run_journal_reply(&args[1..]),
+        "retry" => crate::mail_cli::send::retry::run(&args[1..]),
         _ => {
-            eprintln!("usage: fno-agents mail-threads [--format json | details --session <id> | journal-reply --to <name> --to-session <id> --in-reply-to <msg-id>]");
+            eprintln!("usage: fno-agents mail-threads [--format json | details --session <id> | journal-reply --to <name> --to-session <id> --in-reply-to <msg-id> | retry <msg-id>]");
             2
         }
     }

@@ -431,6 +431,7 @@ pub(crate) fn record_at(
             "id": id,
             "session": session,
             "how": how,
+            "reason": meta.get("reason").and_then(Value::as_str),
             "ts": line.get("ts").and_then(Value::as_str)
                 .map(str::to_string)
                 .unwrap_or_else(crate::announce::now_iso),
@@ -1029,6 +1030,7 @@ fn migrate_import(chats_dir: &Path, bus: &Path) -> Result<MigrationReceipt, Stri
                 "id": id,
                 "session": session,
                 "how": how,
+                "reason": meta.get("reason").and_then(Value::as_str),
                 "ts": line.get("ts").and_then(Value::as_str)
                     .map(str::to_string)
                     .unwrap_or_else(crate::announce::now_iso),

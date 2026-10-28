@@ -39,6 +39,7 @@ use std::path::{Path, PathBuf};
 mod engine;
 pub(crate) mod lanes;
 pub(crate) mod resolve;
+pub(crate) mod retry;
 mod verify;
 
 use lanes::*;
