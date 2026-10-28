@@ -57,7 +57,7 @@ if [[ "${1:-}" == "target-gates" ]]; then
     check-dispatch-hold|check-contained)
       exit 0 ;;
     resolve-owned-identity)
-      # Canned only on opt-in: the old fno stubs answered this verb with
+      # Canned only on opt-in: the old fno stubs answered this command with
       # nothing and the helper degraded to its own provider detection, which
       # is the fiction harnesses like the session-id orphan case pin. A
       # harness that wants the proven block sets FNO_TEST_OWNED_IDENTITY_CANNED.
