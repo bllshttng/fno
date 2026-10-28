@@ -14,6 +14,23 @@ pub fn escape_text(text: &str) -> String {
     text.replace('<', "&lt;").replace('>', "&gt;")
 }
 
+/// A clause the page joins with ". ": its own closing period is dropped, so
+/// a template-shaped "<choice>." never renders "choice.. Next:".
+fn clause(text: &str) -> String {
+    escape_text(text.trim_end().trim_end_matches('.'))
+}
+
+/// The recommendation's reason without the "Option N, " lead the template
+/// asks for, which the page already prints as "Recommended: N, because".
+fn reason<'a>(why: &'a str, option: &str) -> &'a str {
+    let lead = format!("Option {option}");
+    why.strip_prefix(lead.as_str())
+        .filter(|rest| rest.starts_with([',', ' ']))
+        .map(|rest| rest.trim_start_matches([',', ' ']))
+        .map(|rest| rest.strip_prefix("because ").unwrap_or(rest))
+        .unwrap_or(why)
+}
+
 pub fn unescape_text(text: &str) -> String {
     text.replace("&lt;", "<").replace("&gt;", ">")
 }
@@ -256,19 +273,15 @@ pub fn render_page(item: &AttentionItem, routing: &Routing) -> String {
     if !item.options.is_empty() {
         out.push_str("\n## Options\n\n");
         for option in &item.options {
-            out.push_str(&format!(
-                "- [ ] {}. {}",
-                option.n,
-                escape_text(&option.text)
-            ));
+            out.push_str(&format!("- [ ] {}. {}", option.n, clause(&option.text)));
             if let Some(next) = option.next.as_deref().filter(|n| !n.is_empty()) {
-                out.push_str(&format!(". Next: {}", escape_text(next)));
+                out.push_str(&format!(". Next: {}", clause(next)));
             }
             if !option.pros.is_empty() {
-                out.push_str(&format!(". Pro: {}", escape_text(&option.pros.join("; "))));
+                out.push_str(&format!(". Pro: {}", clause(&option.pros.join("; "))));
             }
             if !option.cons.is_empty() {
-                out.push_str(&format!(". Con: {}", escape_text(&option.cons.join("; "))));
+                out.push_str(&format!(". Con: {}", clause(&option.cons.join("; "))));
             }
             out.push('\n');
         }
@@ -286,10 +299,10 @@ pub fn render_page(item: &AttentionItem, routing: &Routing) -> String {
             let mut line = format!(
                 "Recommended: {}, because {}",
                 rec.option,
-                escape_text(&rec.why)
+                clause(reason(&rec.why, &rec.option.to_string()))
             );
             if let Some(d) = rec.downside.as_deref().filter(|d| !d.is_empty()) {
-                line.push_str(&format!(". Downside: {}", escape_text(d)));
+                line.push_str(&format!(". Downside: {}", clause(d)));
             }
             line.push('.');
             context.push(line);
@@ -842,6 +855,19 @@ mod tests {
         assert!(body.contains("Reversible: yes. Cost if wrong: one wasted release"));
         assert!(body.contains("Meanwhile: proceeds on the strict reading"));
         assert!(body.contains("<!-- Tick one option above"));
+
+        // The question template's own shape: each clause closes with a
+        // period and the reason leads with "Option N,". The page reads the same.
+        let mut shaped = item();
+        shaped.options[0].text = "Yes, net zero needs no grant.".into();
+        shaped.options[0].next = Some("open the gate.".into());
+        if let Some(rec) = shaped.recommendation.as_mut() {
+            rec.why = "Option 2, the strict reading blocks the least.".into();
+        }
+        let (_, shaped_body) = parse_page(&render_page(&shaped, &routing())).unwrap();
+        assert!(shaped_body
+            .contains("- [ ] 1. Yes, net zero needs no grant. Next: open the gate. Pro: fast"));
+        assert!(shaped_body.contains("Recommended: 2, because the strict reading blocks the least. Downside: one release carries the shim."));
     }
 
     #[test]
