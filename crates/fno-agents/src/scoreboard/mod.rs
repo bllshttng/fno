@@ -437,11 +437,12 @@ fn survival(
     by_id: &BTreeMap<String, &Map<String, Value>>,
     now: Option<&str>,
     followup_days: i64,
+    w4_available: bool,
 ) -> Value {
-    let w4 = by_id
-        .values()
-        .any(|n| n.contains_key("reverted") || n.contains_key("caused_by"));
-    if !w4 {
+    // Python `w4_available = any("reverted" in n or n.get("caused_by") for n
+    // in graph_nodes)`: the gate scans the WHOLE graph, never the project
+    // scope, so causal telemetry outside the project still arms survival.
+    if !w4_available {
         return json!({"available": false, "reason": "no causal telemetry (Wave 4 not shipped)"});
     }
     if !by_node.values().any(|c| c["delivered"] == true) {
@@ -713,6 +714,14 @@ pub fn classify(params: &Value) -> Result<Value, String> {
         .values()
         .filter(|c| c["class"] == "inferred")
         .count();
+    // Python's w4 gate reads the whole graph, not the project scope.
+    let w4_available = all_entries.iter().any(|n| {
+        n.get("reverted").is_some()
+            || n.get("caused_by")
+                .and_then(Value::as_str)
+                .map(|s| !s.is_empty())
+                .unwrap_or(false)
+    });
     let survival = survival(
         &by_node,
         &by_id,
@@ -721,6 +730,7 @@ pub fn classify(params: &Value) -> Result<Value, String> {
             .get("followup_days")
             .and_then(Value::as_i64)
             .unwrap_or(14),
+        w4_available,
     );
     let vocab_terms: Vec<&str> = doc
         .iter()
