@@ -182,14 +182,6 @@ impl World {
 }
 
 fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
-    // The registry refuses two rows with one session id, so each extra row
-    // gets its own; the pass reads the lead session from the manifest.
-    let session = if name == "lead-x" {
-        SESSION.to_string()
-    } else {
-        let tag: String = name.bytes().map(|b| format!("{b:02x}")).collect();
-        format!("11111111-2222-3333-4444-{tag:0>12}")
-    };
     json!({
         "name": name,
         "status": "live",
@@ -198,7 +190,7 @@ fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
         "role_scope": scope,
         "role_level": 1,
         "created_at": "2026-08-28T12:00:00Z",
-        "harness_session_id": session,
+        "harness_session_id": SESSION,
     })
 }
 
