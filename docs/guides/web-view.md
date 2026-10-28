@@ -22,7 +22,9 @@ The bridge also serves the backlog as JSON through the same token. `/backlog/mod
 
 The **rundown** page serves `rundown.html` (`/role` and `term.html` stay as the one-release aliases). If it is older than five minutes, the bridge re-renders it.
 
-`/command/model.json` serves the org view's fleet fold through the same token: every machine, its leads and seats, and the open questions. The first read waits for one `fno agents fleet top --machines --json` read. After that, the bridge answers from its last read at once. When that read is older than 60 seconds, the bridge also starts one background refresh. A failed refresh keeps the last good fold and names the failure in `fleet_error`. A failed question read says why in `waiting.questions_error`, never an empty list.
+The **command** page (`/command`) shows what waits on you and every machine of the fleet. It reads `/command/model.json` every 60 seconds while the tab is visible. Questions group by the machine that asked them, each with the command that answers it. The page offers no write control. When a read fails, the page names the failure and keeps what it can show.
+
+`/command/model.json` serves the org view's fleet fold through the same token: every machine, its leads and seats, the open questions and the PRs in review. The first read waits for one `fno agents fleet top --machines --json` read. After that, the bridge answers from its last read at once. When that read is older than 60 seconds, the bridge also starts one background refresh. A failed refresh keeps the last good fold and names the failure in `fleet_error`. A failed question read says why in `waiting.questions_error`, never an empty list.
 
 The bridge also writes these values to `<mux dir>/web-<session>.json` at mode 0600. You can get the URL again from this file. The bridge removes the file on exit.
 

@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fno command</title>
+<style>
+:root{--bg:#07080D;--bg2:#0D1018;--line:rgba(150,170,220,.14);--fg:#E9ECF5;--muted:#9AA2B8;--faint:#8A93A8;
+--writing:#5CE1FF;--parked:#FFB547;--quiet:#9A8CFF;--unknown:#6B7286;--ok:#57D990;--warn:#FFB547;color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,sans-serif}
+.wrap{max-width:1200px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:14px}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:12px 16px;border-radius:16px;background:var(--bg2);border:1px solid var(--line)}
+.bar h1{margin:0 auto 0 0;font-size:20px;font-weight:700}
+.count{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);font-size:12.5px;font-variant-numeric:tabular-nums}
+.dot{width:8px;height:8px;border-radius:50%}
+.age{font:12px ui-monospace,Menlo,monospace;color:var(--muted)}
+.banner{padding:10px 14px;border-radius:12px;border:1px solid rgba(255,181,71,.35);background:rgba(255,181,71,.08);color:var(--warn)}
+section{border-radius:16px;border:1px solid var(--line);background:var(--bg2);padding:14px 16px}
+h2{margin:0 0 10px;font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.1em}
+h3{margin:12px 0 6px;font-size:13px;color:var(--muted);font-weight:600}
+.row{display:flex;flex-wrap:wrap;gap:4px 12px;padding:8px 0;border-top:1px solid var(--line)}
+.row b{font-weight:600;flex:1 1 260px;min-width:0;overflow-wrap:anywhere}
+.mono{font:12px ui-monospace,Menlo,monospace;color:var(--muted);overflow-wrap:anywhere}
+.empty{color:var(--muted)}
+.machines{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px}
+.host{padding:14px;border-radius:14px;border:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.host b{font-size:17px}
+.stale{color:var(--warn)}
+.fresh{color:var(--ok)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="bar"><h1>Command</h1><span id="counts"></span><span class="age" id="age"></span></header>
+  <div id="banners"></div>
+  <section aria-label="Waiting on you"><h2>Waiting on you</h2><div id="waiting"></div></section>
+  <section aria-label="Machines"><h2>Machines</h2><div id="machines" class="machines"></div></section>
+</div>
+<script>
+(() => {
+const COLORS = {writing:"--writing", quiet:"--quiet", parked:"--parked", unknown:"--unknown"};
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+};
+const ago = (s) => s == null ? "unknown" : s < 90 ? s + "s" : s < 5400 ? Math.round(s / 60) + "m" : Math.round(s / 3600) + "h";
+const since = (iso) => { const t = Date.parse(iso); return isNaN(t) ? null : Math.max(0, Math.round((Date.now() - t) / 1000)); };
+const seats = (m) => m.leads.flatMap((l) => l.seats);
+
+function header(model) {
+  const all = model.machines.flatMap(seats);
+  const counts = document.getElementById("counts");
+  counts.replaceChildren();
+  const q = model.waiting.questions;
+  const add = (text, color) => {
+    const c = el("span", "count");
+    if (color) { const d = el("i", "dot"); d.style.background = "var(" + color + ")"; c.append(d); }
+    c.append(text);
+    counts.append(c, " ");
+  };
+  add(model.machines.length + " machines");
+  for (const s of ["writing", "quiet", "parked", "unknown"]) add(all.filter((x) => x.status === s).length + " " + s, COLORS[s]);
+  add((q ? q.length : "?") + " questions");
+  document.getElementById("age").textContent = model.age_s == null ? "fleet not read" : "read " + ago(model.age_s) + " ago";
+}
+
+function banners(model) {
+  const box = document.getElementById("banners");
+  box.replaceChildren();
+  const add = (text) => box.append(el("div", "banner", text));
+  const e = model.fleet_error;
+  if (e && model.machines.length) add("fleet read failed " + ago(e.failed_age_s) + " ago: " + e.reason + "; showing the read from " + ago(model.age_s) + " ago");
+  if (model.notice) add(model.notice);
+  if (model.seat_error) add(model.seat_error);
+}
+
+function waiting(model) {
+  const box = document.getElementById("waiting");
+  box.replaceChildren();
+  const w = model.waiting;
+  if (w.questions_error) box.append(el("p", "empty", "questions not read: " + w.questions_error));
+  const qs = w.questions || [];
+  const hosts = [...new Set(qs.map((q) => q.host))].sort((a, b) => (a != null) - (b != null) || String(a).localeCompare(String(b)));
+  for (const host of hosts) {
+    box.append(el("h3", null, host == null ? "this machine" : host));
+    for (const q of qs.filter((x) => x.host === host)) {
+      const r = el("div", "row");
+      r.append(el("b", null, q.title || q.id));
+      if (q.node) r.append(el("span", "mono", q.node));
+      r.append(el("span", "mono", ago(since(q.created_at)) + " old"));
+      r.append(el("span", "mono", "fno inbox outstanding answer " + q.id + (host == null ? "" : " (on " + host + ")")));
+      box.append(r);
+    }
+  }
+  const prs = w.prs || [];
+  if (prs.length) box.append(el("h3", null, "PRs in review"));
+  for (const p of prs) {
+    const r = el("div", "row");
+    r.append(el("b", null, "#" + p.number + " " + (p.title || "")));
+    r.append(el("span", "mono", p.node + " · " + (p.merge_status || "merge state not recorded")));
+    box.append(r);
+  }
+  if (!qs.length && !prs.length && !w.questions_error) box.append(el("p", "empty", "Nothing waits on you (read " + ago(model.age_s) + " ago)"));
+}
+
+function machines(model) {
+  const box = document.getElementById("machines");
+  box.replaceChildren();
+  if (!model.machines.length) {
+    box.append(el("p", "empty", "fleet not read: " + (model.fleet_error ? model.fleet_error.reason : "no machines")));
+    return;
+  }
+  for (const m of model.machines) {
+    const c = el("div", "host");
+    c.append(el("b", null, m.host));
+    c.append(el("span", m.fresh ? "fresh" : "stale", m.fresh ? "fresh" : "stale " + ago(m.age_s)));
+    c.append(el("span", "mono", "cap " + (m.cap ?? "not published") + " · memory " + (m.mem_used == null ? "not sampled" : Math.round(m.mem_used * 100) + "%") + " · cpu " + (m.cpu == null ? "not sampled" : Math.round(m.cpu) + "%")));
+    for (const l of m.leads) c.append(el("span", "mono", l.name + ": " + l.seats.length + (l.seats.length === 1 ? " seat" : " seats")));
+    box.append(c);
+  }
+}
+
+const nav = document.querySelector("nav.fno-nav");
+const token = new URLSearchParams(location.search).get("t") || "";
+const url = (nav ? nav.dataset.base : "./") + "command/model.json?t=" + encodeURIComponent(token);
+async function load() {
+  let res;
+  try { res = await fetch(url, {cache: "no-store"}); } catch (e) { res = {ok: false, status: e.message}; }
+  if (!res.ok) {
+    document.getElementById("banners").replaceChildren(el("div", "banner", "model.json not reachable: " + res.status));
+    return;
+  }
+  const model = await res.json();
+  header(model); banners(model); waiting(model); machines(model);
+}
+load();
+setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
+})();
+</script>
+</body>
+</html>
