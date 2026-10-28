@@ -427,6 +427,42 @@ fn row_key(table: &str, row: &[SqlValue]) -> String {
 /// updates go before the inserts, so a key freed by one row is free before
 /// another row takes it and a parent row exists before the update that
 /// names it.
+/// Trim every update change to the columns that moved plus the row's key
+/// columns. The triggers record full row images, so a one-column rename
+/// otherwise ships 40-odd unchanged values twice per row, and the primary's
+/// newest-100 average reads that weight, not the work. The CAS still guards
+/// the row: its WHERE names the key columns and the moved columns' old
+/// values, so a primary row that moved under this machine still refuses.
+fn narrow_updates(connection: &Connection, changes: &mut [Change]) -> Result<(), String> {
+    for change in changes.iter_mut() {
+        if change.op != Op::Update {
+            continue;
+        }
+        let info = column_info(connection, &change.table)?;
+        let keep: Vec<usize> = change
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(i, column)| {
+                change.old[*i] != change.new[*i]
+                    || info.iter().any(|(name, pk)| name == *column && *pk > 0)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if keep.len() == change.columns.len() {
+            continue;
+        }
+        let pick = |row: &Vec<SqlValue>| keep.iter().map(|&i| row[i].clone()).collect();
+        *change = Change {
+            columns: keep.iter().map(|&i| change.columns[i].clone()).collect(),
+            old: pick(&change.old),
+            new: pick(&change.new),
+            ..change.clone()
+        };
+    }
+    Ok(())
+}
+
 fn net(changes: Vec<Change>) -> Vec<Change> {
     let mut by_old: std::collections::HashMap<String, Vec<usize>> = Default::default();
     let mut news = std::collections::HashSet::new();
@@ -791,7 +827,7 @@ fn send(remote: &Remote, db: &Path, connection: &mut Connection) -> Result<Optio
     let Some(&(last, _)) = rows.last() else {
         return Ok(Some(0));
     };
-    let changes = net(rows
+    let mut changes = net(rows
         .iter()
         .map(|(_, text)| {
             serde_json::from_str(text)
@@ -799,6 +835,7 @@ fn send(remote: &Remote, db: &Path, connection: &mut Connection) -> Result<Optio
                 .and_then(|v| Change::from_json(&v))
         })
         .collect::<Result<Vec<_>, _>>()?);
+    narrow_updates(&*connection, &mut changes)?;
     let clear = |connection: &Connection| {
         connection
             .execute_batch(&format!(
@@ -1037,6 +1074,10 @@ fn repair(
             key.into_iter().map(|(i, _)| i).collect()
         };
         let names: Vec<String> = key.iter().map(|&i| change.columns[i].clone()).collect();
+        // The restore reads and writes the row's every column: a narrowed
+        // update change lists only what moved, and restoring from that list
+        // would amputate the columns it does not name.
+        let all_columns: Vec<String> = info.iter().map(|(name, _)| name.clone()).collect();
         // An update whose target the primary lacks keeps its local row; a
         // delete completed there, so its absence removes the local row.
         let keep_on_empty = change.op == Op::Update;
@@ -1047,7 +1088,7 @@ fn repair(
             let values: Vec<SqlValue> = key.iter().map(|&i| row[i].clone()).collect();
             let target = (
                 change.table.clone(),
-                change.columns.clone(),
+                all_columns.clone(),
                 names.clone(),
                 values,
                 keep_on_empty,
@@ -1533,6 +1574,74 @@ fn row_exists(connection: &Connection, change: &Change, row: &[SqlValue]) -> Res
         .map_err(|e| format!("{}: {e}", change.table))
 }
 
+/// The row images a replica applies: full-width columns, the row to delete,
+/// the row to write. A narrowed update names its moved columns and the key,
+/// so the rest of the new row comes from the replica's own row; the log is
+/// in order, so that row is the one the primary saw. A row the replica
+/// lacks cannot rebuild, and the error says so instead of writing a row
+/// with half its columns.
+fn whole_row(
+    connection: &Connection,
+    change: &Change,
+) -> Result<(Vec<String>, Vec<SqlValue>, Vec<SqlValue>), String> {
+    if change.op != Op::Update {
+        return Ok((
+            change.columns.clone(),
+            change.old.clone(),
+            change.new.clone(),
+        ));
+    }
+    let info = column_info(connection, &change.table)?;
+    let columns: Vec<String> = info.iter().map(|(name, _)| name.clone()).collect();
+    let keys: Vec<String> = info
+        .iter()
+        .filter(|(_, pk)| *pk > 0)
+        .map(|(name, _)| name.clone())
+        .collect();
+    let key_args: Vec<SqlValue> = keys
+        .iter()
+        .map(|name| {
+            change
+                .columns
+                .iter()
+                .position(|c| c == name)
+                .and_then(|i| change.old.get(i))
+                .cloned()
+                .ok_or_else(|| format!("{}: the update drops key column {name}", change.table))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let local: Vec<SqlValue> = connection
+        .query_row(
+            &format!(
+                "SELECT {} FROM \"{}\" WHERE {}",
+                quoted(&columns),
+                change.table,
+                match_all(&keys, 1)
+            ),
+            rusqlite::params_from_iter(key_args),
+            |row| {
+                (0..columns.len())
+                    .map(|i| row.get_ref(i).map(SqlValue::from))
+                    .collect::<Result<Vec<_>, _>>()
+            },
+        )
+        .optional()
+        .map_err(|e| format!("{}: {e}", change.table))?
+        .ok_or_else(|| {
+            format!(
+                "{}: the change log updates a row this replica does not hold",
+                change.table
+            )
+        })?;
+    let mut new = local.clone();
+    for (i, name) in change.columns.iter().enumerate() {
+        if let Some(pos) = columns.iter().position(|c| c == name) {
+            new[pos] = change.new[i].clone();
+        }
+    }
+    Ok((columns, local, new))
+}
+
 /// Apply one logged change. The primary already decided it, and the log is
 /// in order, so the replica takes the new row whatever it held: the old row
 /// goes, and the new one replaces any row it collides with. `false` means
@@ -1548,16 +1657,17 @@ fn apply(connection: &Connection, change: &Change) -> Result<bool, String> {
     match change.op {
         Op::Insert | Op::Update if present(&change.new)? => return Ok(false),
         Op::Delete if !present(&change.old)? => return Ok(false),
+        _ => {}
+    }
+    let (columns, old, new) = whole_row(connection, change)?;
+    match change.op {
         Op::Insert => {}
-        Op::Update | Op::Delete => remove(
-            connection,
-            &change.table,
-            &match_all(&change.columns, 1),
-            &change.old,
-        )?,
+        Op::Update | Op::Delete => {
+            remove(connection, &change.table, &match_all(&columns, 1), &old)?
+        }
     }
     if change.op != Op::Delete {
-        replace(connection, &change.table, &change.columns, &change.new)?;
+        replace(connection, &change.table, &columns, &new)?;
     }
     Ok(true)
 }
@@ -2397,13 +2507,16 @@ mod tests {
         add_node(&a, "fb-4908", "shared");
         flush(&a.graph).unwrap();
 
-        // A peer moved the row on the primary behind this machine's back.
+        // A peer moved the row's status on the primary behind this
+        // machine's back. A column the local write also names, so the
+        // narrowed guard watches it; a peer move outside the write's
+        // columns lands beside it now.
         primary
             .db
             .lock()
             .unwrap()
             .execute(
-                &format!("UPDATE {NODES} SET title = 'peer' WHERE id = 'fb-4908'"),
+                &format!("UPDATE {NODES} SET status = 'blocked' WHERE id = 'fb-4908'"),
                 [],
             )
             .unwrap();
@@ -2441,7 +2554,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             (plan_path.as_deref(), status.as_str()),
-            (None, "idea"),
+            (None, "blocked"),
             "the update was taken back, so the writer must be told"
         );
         assert_eq!(outbox(&a), 0);
@@ -2701,6 +2814,68 @@ mod tests {
             "{probed}"
         );
         assert!(probed["write_ms"].is_u64(), "{probed}");
+    }
+
+    #[test]
+    fn an_update_ships_only_its_moved_columns() {
+        // The triggers record full row images; the batch carries the moved
+        // columns and the row's key, not 40-odd unchanged values twice.
+        let primary = test_primary::start();
+        let a = machine();
+        on(&primary, &a);
+        let rows = vec![serde_json::json!({"id": "x-n", "slug": "x-n",
+                               "title": "first", "type": "feature",
+                               "status": "idea", "priority": "p2", "domain": "code"})];
+        crate::graph_store::seed_rows(&a.graph, &rows).unwrap();
+        seed(&a.graph).unwrap();
+        crate::graph_store::mutate_rows(
+            &a.graph,
+            std::time::Duration::from_secs(5),
+            None,
+            None,
+            |working| {
+                for row in working.iter_mut() {
+                    if row.get("id").and_then(Value::as_str) == Some("x-n") {
+                        if let Some(obj) = row.as_object_mut() {
+                            obj.insert("title".into(), Value::String("renamed".into()));
+                        }
+                    }
+                }
+                Ok(true)
+            },
+        )
+        .unwrap()
+        .expect("the write lands");
+        let ops: String = primary
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT ops FROM backlog_changes ORDER BY seq DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let changes: Vec<Value> = serde_json::from_str(&ops).unwrap();
+        let update = changes
+            .iter()
+            .find(|c| c.get("t").and_then(Value::as_str) == Some("nodes") && c["n"] != json!([]))
+            .expect("the batch ships the nodes update");
+        let columns: Vec<&str> = update["c"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        assert!(
+            columns.contains(&"id") && columns.contains(&"title"),
+            "the key and the moved column ride along: {columns:?}"
+        );
+        assert!(
+            !columns.contains(&"priority") && !columns.contains(&"domain"),
+            "untouched columns stay home: {columns:?}"
+        );
+        route_to_primary(None);
     }
 
     #[test]
