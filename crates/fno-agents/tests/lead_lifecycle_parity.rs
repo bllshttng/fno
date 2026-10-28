@@ -244,6 +244,17 @@ fn term_matches_the_python_goldens() {
     // cwd, never the process cwd.
     rows_live_in_the_repo(p);
     arm_manifest(p);
+    // The fixture's fixed created_at ages past the default term, which turns
+    // this declaration into a replacement refusal; the lead is born now.
+    let manifest_path = space(p).join("leads/epic-y.md");
+    let born = fs::read_to_string(&manifest_path).unwrap().replace(
+        "created_at: 2026-10-24T08:55:00Z",
+        &format!(
+            "created_at: {}",
+            chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
+        ),
+    );
+    fs::write(&manifest_path, born).unwrap();
     case_in(
         "term declares the holder's own term",
         p,
