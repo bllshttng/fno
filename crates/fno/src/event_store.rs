@@ -2175,8 +2175,10 @@ pub fn journal_text(journal: &Path, types: &[&str]) -> String {
         // The degrade answers from the whole family, never the live file
         // alone: a live-only answer dropped every committed row and read
         // zero verdicts while the journals held the chain. The notice names
-        // the failed store and the family that answered.
-        let fallback = family_fallback_text(&live);
+        // the failed store and the family that answered. A family file that
+        // itself cannot be read leaves the degrade empty: the store failure
+        // above is the named cause and the read must not fail twice.
+        let fallback = family_fallback_text(&live).unwrap_or_default();
         eprintln!("{}", degrade_notice(&store_path(&live), &err, &live));
         fallback
     })
@@ -2215,11 +2217,12 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
         // generations and reads each one separately; a family answer here
         // would multiply-count every row). A caller naming the live path
         // answers from the whole family - a live-only answer is how a
-        // rotated legacy chain read as zero verdicts.
+        // rotated legacy chain read as zero verdicts. An unreadable file is
+        // the error it always was.
         if journal.file_name() != live.file_name() {
             return read_journal_text_direct(journal, &live);
         }
-        return Ok(family_fallback_text(&live));
+        return family_fallback_text(&live);
     }
     let conn = open_read(&store)?;
     if !store_has_events(&conn)? {
@@ -2234,8 +2237,9 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
         // some writer created) can never serve the query: prepare would fail
         // with "no such table" and route every read through the caller's
         // Err fallback. The family read is the honest shape for a store that
-        // never was one: the raw journal bytes are the only order of record.
-        return Ok(family_fallback_text(&live));
+        // never was one: the raw journal bytes are the only order of record,
+        // and an unreadable file is the error it always was.
+        return family_fallback_text(&live);
     }
     let recovery = has_recovery_history(&conn)?;
     let (sql, args) = q.build_sql(recovery);
@@ -2410,11 +2414,13 @@ fn append_uningested_lines(
     Ok(())
 }
 
-/// The no-store-answer degrade: every generation of the family plus the live
+/// The no-store-answer read: every generation of the family plus the live
 /// file, oldest first, raw. Answers from the journal the process CAN read,
-/// so a failed store read is never shorter than the store's own answer; the
-/// caller names the failed store and this family on stderr.
-fn family_fallback_text(live: &Path) -> String {
+/// so a failed store read is never shorter than the store's own answer. A
+/// generation that is absent is skipped; a file that exists and cannot be
+/// read (a directory parked on the name, invalid UTF-8) is the error it
+/// always was - fail closed, never a silent empty.
+fn family_fallback_text(live: &Path) -> Result<String, String> {
     let mut text = String::new();
     let mut sources = generation_files(live)
         .into_iter()
@@ -2430,10 +2436,10 @@ fn family_fallback_text(live: &Path) -> String {
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => eprintln!("event store: family read {}: {e}", path.display()),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
         }
     }
-    text
+    Ok(text)
 }
 
 /// The one-line degrade notice: which store failed, why, and which journal

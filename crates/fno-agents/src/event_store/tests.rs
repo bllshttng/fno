@@ -752,7 +752,10 @@ fn journal_text_serves_a_rotated_generation_the_store_never_ingested() {
     // the store has not taken, hash-deduped like the live tail.
     let dir = tempfile::tempdir().unwrap();
     let live = dir.path().join("events.jsonl");
-    let legacy = attestation("2026-09-17T12:00:00Z", "h1", "pass");
+    // Two distinguishable rows under the judge's allowed verdicts: the
+    // legacy `fail` rides the un-ingested generation, the committed `pass`
+    // rides the store.
+    let legacy = attestation("2026-09-17T12:00:00Z", "h1", "fail");
     append(
         &live,
         &[serde_json::from_str::<serde_json::Value>(&legacy).unwrap()],
@@ -762,7 +765,7 @@ fn journal_text_serves_a_rotated_generation_the_store_never_ingested() {
     // restarts empty. Neither the store nor the live tail holds the chain.
     append_envelope(
         &live,
-        &attestation("2026-09-17T12:01:00Z", "h1", "round-2"),
+        &attestation("2026-09-17T12:01:00Z", "h1", "pass"),
         None,
     )
     .unwrap();
@@ -772,7 +775,7 @@ fn journal_text_serves_a_rotated_generation_the_store_never_ingested() {
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2, "both rows answer: {text}");
     assert!(
-        lines[0].contains("pass") && lines[1].contains("round-2"),
+        lines[0].contains("fail") && lines[1].contains("pass"),
         "legacy generation first, committed row second: {text}"
     );
 }
