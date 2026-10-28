@@ -13,7 +13,6 @@ use fno_agents::drift::{drift_warning, DriftState};
 use fno_agents::paths::AgentsHome;
 use fno_agents::protocol::{ErrorCode, Request, ResponsePayload};
 use fno_agents::provider::{known_providers_csv, KNOWN_PROVIDERS};
-use fno_agents::spawn_gate::machine_reading_notes;
 use fno_agents::usage::{command_help, command_usage, CLIENT_COMMAND_USAGE};
 use serde_json::{json, Map, Value};
 use std::io::IsTerminal;
@@ -1264,6 +1263,26 @@ async fn run(args: Vec<String>) -> i32 {
                 .cloned()
                 .collect();
             return fno_agents::liveness_cmd::run(&sub, &AgentsHome::from_env());
+        }
+        // The notify port's two ops ride `status` as arguments, the same
+        // group-action shape as --liveness: the front door's
+        // `fno doctor event fanout tick` execs `status --fanout`, and
+        // scripts/lib/wake-signals.sh execs `status --wake-signals`.
+        if rest.iter().any(|a| a.as_str() == "--fanout") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--fanout")
+                .cloned()
+                .collect();
+            return fno_agents::status_fanout::run_tick_command(&sub);
+        }
+        if rest.iter().any(|a| a.as_str() == "--wake-signals") {
+            let sub: Vec<String> = rest
+                .iter()
+                .filter(|a| a.as_str() != "--wake-signals")
+                .cloned()
+                .collect();
+            return fno_agents::wake_read::run_wake_signals(&sub);
         }
         if has_family {
             let sub: Vec<String> = rest
@@ -2834,7 +2853,7 @@ fn retired_command_pointer(command: &str) -> Option<&'static str> {
 /// but the arms rows print either way.
 async fn run_status(json_out: bool) -> i32 {
     let home = AgentsHome::from_env();
-    let (mut arms, trace) = arms_readout(&home);
+    let (mut arms, trace) = fno_agents::status_render::arms_readout(&home);
     let req = Request::new(1, "agent.status", Value::Object(Map::new()));
     match call_if_running(&home, &req).await {
         Ok(resp) => match resp.payload {
@@ -2865,7 +2884,8 @@ async fn run_status(json_out: bool) -> i32 {
                     // every consumer reads the same verdict.
                     obj.insert(
                         "arms_attention".into(),
-                        serde_json::to_value(arms_attention(&arms)).unwrap_or(Value::Null),
+                        serde_json::to_value(fno_agents::status_render::arms_attention(&arms))
+                            .unwrap_or(Value::Null),
                     );
                     // What work is stuck right now: hung commands and dead
                     // flight holders, from the one stuck_work read.
@@ -2890,7 +2910,7 @@ async fn run_status(json_out: bool) -> i32 {
                         serde_json::to_string_pretty(&result).unwrap_or_default()
                     );
                 } else {
-                    print_status_human(&result, &arms);
+                    fno_agents::status_render::print_status_human(&result, &arms);
                 }
                 // Drift warning, stderr-only so --json/automation
                 // consumers of stdout are never contaminated. We already hold the
@@ -2914,14 +2934,14 @@ async fn run_status(json_out: bool) -> i32 {
                 &fno_agents::tick_ledger::DaemonFacts::Down,
                 &trace,
             );
-            let payload = degraded_status_payload(&arms);
+            let payload = fno_agents::status_render::degraded_status_payload(&arms);
             if json_out {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&payload).unwrap_or_default()
                 );
             } else {
-                print_status_human(&payload, &arms);
+                fno_agents::status_render::print_status_human(&payload, &arms);
             }
             eprintln!("fno-agents: daemon not running");
             13
@@ -2936,116 +2956,18 @@ async fn run_status(json_out: bool) -> i32 {
                 &fno_agents::tick_ledger::DaemonFacts::Unknown,
                 &trace,
             );
-            let payload = degraded_status_payload(&arms);
+            let payload = fno_agents::status_render::degraded_status_payload(&arms);
             if json_out {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&payload).unwrap_or_default()
                 );
             } else {
-                print_status_human(&payload, &arms);
+                fno_agents::status_render::print_status_human(&payload, &arms);
             }
             eprintln!("fno-agents: {e}");
             1
         }
-    }
-}
-
-/// The control-plane arms rows from the arm journals plus the pr_watch tick
-/// trace the readout's cause rules consult.
-fn arms_readout(
-    home: &AgentsHome,
-) -> (
-    Vec<fno_agents::tick_ledger::ArmStatus>,
-    fno_agents::tick_ledger::TickTrace,
-) {
-    let now_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // The journal list is owned by tick_ledger::journals, so the readout
-    // and the arm_watch fold the same files and cannot drift.
-    let journals = fno_agents::tick_ledger::journals(home);
-    let arms = fno_agents::tick_ledger::read_arms_starved(&journals, now_unix);
-    let trace = fno_agents::tick_ledger::read_tick_trace_live(&journals, &arms, now_unix);
-    (arms, trace)
-}
-
-/// The Rust-owned attention set: rows needing operator attention (unobserved,
-/// stale, or failing), selected by the one predicate in `tick_ledger`. The
-/// Python doctor consumes this list as its `red` set and never re-derives the
-/// verdict from the legacy booleans.
-fn arms_attention(
-    arms: &[fno_agents::tick_ledger::ArmStatus],
-) -> Vec<fno_agents::tick_ledger::ArmStatus> {
-    arms.iter()
-        .filter(|r| fno_agents::tick_ledger::needs_attention(r))
-        .cloned()
-        .collect()
-}
-
-/// The degraded status payload (daemon down or unreachable): the arms readout
-/// stands on its own, carrying both the full row list and the Rust-owned
-/// attention set, so a daemon's health never changes the payload schema.
-fn degraded_status_payload(arms: &[fno_agents::tick_ledger::ArmStatus]) -> Value {
-    json!({
-        "schema_version": 1,
-        "daemon": null,
-        "arms": arms,
-        "arms_attention": arms_attention(arms),
-        "stuck_work": fno_agents::stuck_work::status_value(
-            &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-        ),
-    })
-}
-
-/// The human render: one owned line per arm (red rows first-class), then the
-/// daemon block the JSON payload carries. `explain` filled every row's
-/// `line`, so the render prints them without re-formatting.
-fn print_status_human(result: &Value, arms: &[fno_agents::tick_ledger::ArmStatus]) {
-    println!("control-plane arms:");
-    for arm in arms {
-        println!("  {}", arm.line);
-    }
-    // The readout teaches its own detail command (the loops table).
-    println!("  loop detail: fno agents loops table");
-    if let Some(stuck) = result.get("stuck_work") {
-        for line in fno_agents::stuck_work::render_lines(stuck) {
-            println!("{line}");
-        }
-    }
-    let Some(daemon) = result.get("daemon").and_then(Value::as_object) else {
-        return;
-    };
-    let state = daemon.get("state").and_then(Value::as_str).unwrap_or("?");
-    let pid = daemon.get("pid").and_then(Value::as_u64);
-    let uptime = daemon.get("uptime_secs").and_then(Value::as_u64);
-    println!(
-        "daemon: {state}{}{}",
-        pid.map(|p| format!(" pid={p}")).unwrap_or_default(),
-        uptime
-            .map(|u| format!(" uptime={}s", u))
-            .unwrap_or_default(),
-    );
-    if let Some(agents) = result.get("agents").and_then(Value::as_object) {
-        println!(
-            "agents: total={} by_status={}",
-            agents.get("total").and_then(Value::as_u64).unwrap_or(0),
-            agents
-                .get("by_status")
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "{}".into())
-        );
-    }
-    // Best-effort: a machine whose footprint cannot be read prints no line
-    // rather than a stale or fabricated one. The keeper note names the path
-    // the live store keeper runs from, beside the footer (AC13).
-    let (machine_line, keeper_note) = machine_reading_notes();
-    if let Some(line) = machine_line {
-        println!("machine: {line}");
-    }
-    if let Some(note) = keeper_note {
-        println!("{note}");
     }
 }
 
