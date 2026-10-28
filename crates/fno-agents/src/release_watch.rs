@@ -144,13 +144,17 @@ fn head_lead_scope() -> Option<String> {
 /// Mail the head lead. With no head lead, or a refused send, file one fleet
 /// task instead, so it lands on the lead board. True when either landed.
 fn mail_head_lead(root: &Path, key: &str, text: &str, url: &str) -> bool {
-    // Same cargo-test refusal as the operator notice: unpinned means real mail.
-    if cfg!(test) && std::env::var_os("FNO_BIN").is_none() {
+    // Under cargo test the running binary is the test harness, never mail.
+    if cfg!(test) {
         return false;
     }
     let sent = head_lead_scope().is_some_and(|scope| {
-        let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
-        cmd.args(["agents", "mail", "send", "--from-name", SENDER])
+        // The running fno-agents binary owns mail send natively.
+        let Ok(exe) = std::env::current_exe() else {
+            return false;
+        };
+        let mut cmd = std::process::Command::new(exe);
+        cmd.args(["mail", "send", "--from-name", SENDER])
             .args(["--origin", "scheduler", "--to-lead", &scope, text])
             .stdin(std::process::Stdio::null());
         crate::bounded_cmd::output_with_timeout(cmd, 30).is_some_and(|o| o.status.success())
