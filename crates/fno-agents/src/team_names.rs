@@ -2077,7 +2077,7 @@ mod tests {
             );
             assert_eq!(
                 team_line_text(None, "L1 fno", "fno"),
-                "unnamed lead - name it once: fno agents org checkin --name <name>"
+                "unnamed lead - name it once: fno agents org checkin --name redraw"
             );
         }
 
