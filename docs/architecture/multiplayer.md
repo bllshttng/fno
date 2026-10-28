@@ -147,11 +147,11 @@ A machine that stays offline past its lease loses the claim, and a peer can take
 
 ## The person beside the machine
 
-Decision rows, question rows and the mail `from_id` name a person and a machine. Every decision door and question door stamps `person` and `machine_id` into the row's data. `crates/fno-agents/src/identity.rs` holds the one resolver: `fleet.owner` from `~/.fno/config.toml`, else `$USER`, else `$LOGNAME`. The fleet beacon's `owner` column and the user part of the mail `from_id` read the same resolver. `machine_id` is the claim store's machine id. A machine with no readable id writes no `machine_id` key, and the hostname never stands in for it.
+Decision rows, question rows and the mail `from_id` name a person and a machine. Every decision door and question door stamps `person` and `machine_id` into the row's data. `crates/fno-agents/src/identity.rs` holds the one resolver: `fleet.owner` from `~/.fno/config.toml`, else `$USER`, else `$LOGNAME`. The fleet beacon's `owner` column and the user part of the mail `from_id` read the same resolver. The mail label takes the person only as a plain token: ASCII letters, digits, `-`, `_` and `.`. A display name such as `Jason Smith` keeps the login name there, because the reply parser routes only a token. `machine_id` is the claim store's machine id. A machine with no readable id writes no `machine_id` key, and the hostname never stands in for it.
 
 The person is a display name the owner states. It is never proof, and no gate reads it (operator ruling d-e9f3c5e2). `decided_by` keeps its meaning: the session handle, a stated name, `operator` or `unattributed-caller`. A signed machine key will prove the person later. A caller that already set `person` keeps its value.
 
-Set the name by hand under `[fleet]`, as `owner = "<name>"`. `fno config set fleet.owner` refuses the key until the config registry ports. With the key unset, one person on several machines reads as one name, because the login name is the same on each. A changed `fleet.owner` changes the raw mail head to `<person>@<host>`. Update `agents.remote.raw_senders` on every peer that lists the old head in the same change.
+Set the name by hand under `[fleet]`, as `owner = "<name>"`. `fno config set fleet.owner` refuses the key until the config registry ports. With the key unset, one person on several machines reads as one name, because the login name is the same on each. A changed token-shaped `fleet.owner` changes the raw mail head to `<person>@<host>`. Update `agents.remote.raw_senders` on every peer that lists the old head in the same change.
 
 ## Test it
 

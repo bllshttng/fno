@@ -191,12 +191,31 @@ pub(crate) fn person() -> String {
     crate::agents_config::config_lookup_global(&["fleet", "owner"])
         .and_then(|v| v.as_str().map(str::to_string))
         .filter(|v| !v.trim().is_empty())
-        .or_else(|| {
-            // A launchd-started daemon can carry LOGNAME without USER.
-            ["USER", "LOGNAME"]
-                .iter()
-                .find_map(|k| std::env::var(k).ok().filter(|u| !u.is_empty()))
-        })
+        .unwrap_or_else(login_name)
+}
+
+/// The person as a mail sender token: the user part of a `from_id` and the
+/// raw allowlist head. A display name that is no plain token (`Jason Smith`,
+/// `José`) keeps the login name, because the reply parser routes only a
+/// token there.
+pub(crate) fn person_token() -> String {
+    Some(person())
+        .filter(|p| is_sender_token(p))
+        .unwrap_or_else(login_name)
+}
+
+/// The one sender-token rule, shared by the writer and the reply parser.
+pub(crate) fn is_sender_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+fn login_name() -> String {
+    // A launchd-started daemon can carry LOGNAME without USER.
+    ["USER", "LOGNAME"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|u| !u.is_empty()))
         .unwrap_or_else(|| "unknown".into())
 }
 
@@ -322,5 +341,9 @@ mod tests {
         assert_eq!(super::person(), "jason");
         std::fs::write(&config, "[fleet]\nowner = \"  \"\n").unwrap();
         assert_eq!(super::person(), "bb16", "a blank owner falls to USER");
+        // A display name stays the person, but the mail token keeps the login.
+        std::fs::write(&config, "[fleet]\nowner = \"Jason Smith\"\n").unwrap();
+        assert_eq!(super::person(), "Jason Smith");
+        assert_eq!(super::person_token(), "bb16");
     }
 }

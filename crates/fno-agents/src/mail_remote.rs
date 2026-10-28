@@ -275,7 +275,7 @@ Omit --from-name to self-stamp."
     if let Some(handle) = own {
         return Ok(FromName::SelfName(handle));
     }
-    Ok(FromName::Person(crate::identity::person()))
+    Ok(FromName::Person(crate::identity::person_token()))
 }
 
 /// The CLI form: reads the proven own session id from the same resolver
@@ -406,7 +406,7 @@ fn cmd_send(args: &[String]) -> i32 {
                 &name,
                 &tail.rest,
                 &from_name,
-                &crate::identity::person(),
+                &crate::identity::person_token(),
                 &local_host,
             );
             // The original message arg: everything after the target that is
@@ -447,7 +447,7 @@ the message directly after the target; none was found"
                 );
                 return 2;
             }
-            let from_id = sender_id(&crate::identity::person(), &local_host, &name_part);
+            let from_id = sender_id(&crate::identity::person_token(), &local_host, &name_part);
             // Sender-side style check: the receiver's door refuses an
             // unvetted body after transit, where only the sender's `mail
             // status` shows the loss. A refused body exits 1 having
@@ -638,10 +638,7 @@ pub(crate) fn reply_route(from: &str) -> ReplyRoute {
     }
     // A colon is common in other ids, so the user part must read as an OS
     // user name before `a:b/c` counts as the relay's label.
-    if !user
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-    {
+    if !crate::identity::is_sender_token(user) {
         return ReplyRoute::Forward;
     }
     let host = mail_bus::normalize_host(host);
@@ -695,7 +692,7 @@ pub(crate) fn reply_cross_host(
                 .map(|f| match f {
                     FromName::Given(v) | FromName::SelfName(v) | FromName::Person(v) => v,
                 })
-                .unwrap_or_else(|_| crate::identity::person());
+                .unwrap_or_else(|_| crate::identity::person_token());
             if kind {
                 eprintln!("note: a cross-host reply carries no kind; --kind dropped");
             }
@@ -991,7 +988,7 @@ mod tests {
         let plain = SendTail::default();
         assert_eq!(
             resolve_from_name_with(None, &plain),
-            Ok(FromName::Person(crate::identity::person())),
+            Ok(FromName::Person(crate::identity::person_token())),
             "no proven session resolves to the person"
         );
         // The ssh fallback stamps the sender locally in the full
@@ -1043,7 +1040,7 @@ mod tests {
         // A blank session falls through, never stamps a blank.
         assert_eq!(
             resolve_from_name_with(Some("  "), &plain),
-            Ok(FromName::Person(crate::identity::person()))
+            Ok(FromName::Person(crate::identity::person_token()))
         );
         // Sender identity normalizes the host part.
         assert_eq!(
