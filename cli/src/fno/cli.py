@@ -93,11 +93,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     # their move rows stay in command_moves.py.
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
-    "status-fanout": (
-        "fno.status_fanout:status_fanout_app",
-        "Sweep events.jsonl and route status events to configured sinks (tick).",
-        {"hidden": True},
-    ),
     "lint": ("fno.lint_cli:lint", "Repository lint checks", {"hidden": True}),
     "bundle": (
         "fno.doctor_forward:bundle_signpost",
@@ -121,11 +116,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "config": ("fno.config_writer_cli:app", "Configuration management"),
-    "notify": (
-        "fno.notify:notify_app",
-        "OS notification helper (in-package; macOS osascript / Linux notify-send)",
-        {"hidden": True},
-    ),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
     "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
     # `fno route` (the hidden root spelling of the provider route lanes)

@@ -442,6 +442,18 @@ enum Role {
     /// `fno inbox day start|end`: the native day boundary; the carried tail
     /// is the `fno-agents day` argv.
     InboxDay(Vec<OsString>),
+    /// `fno inbox notify TITLE MESSAGE [--pointer P]`: the operator-notice
+    /// command, answered in-process by `notify_dispatch` (the Python wheel's app
+    /// for this spelling is deleted). Also serves `fno notify` after the
+    /// deprecated-move line.
+    InboxNotify(Vec<OsString>),
+    /// `fno notify ...`: the deprecated root spelling; the dispatch prints the
+    /// one stderr move line, then answers as `inbox notify`.
+    NotifyDeprecated(Vec<OsString>),
+    /// `fno status-fanout ...`: the deprecated root spelling of
+    /// `fno doctor event fanout`; the dispatch prints the one stderr move
+    /// line, then runs the fanout door with the remaining args.
+    StatusFanoutDeprecated(Vec<OsString>),
     /// `fno board-render`: the local board's snapshot writer, a native front
     /// command because the page and the read model both live in this crate.
     BoardRender(Vec<String>),
@@ -1402,6 +1414,17 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::law_cli::classify_inbox_law(args) {
         return Role::InboxLaw(rest);
     }
+    if let Some(rest) = fno::notify_dispatch::classify_inbox_notify(args) {
+        return Role::InboxNotify(rest);
+    }
+    if let Some(rest) = fno::notify_dispatch::classify_root_notify(args) {
+        return Role::NotifyDeprecated(rest);
+    }
+    // `fno status-fanout ...`: the deprecated root spelling, moved to
+    // `fno doctor event fanout`. Lexical claim: only the bare first token.
+    if args.first().and_then(|a| a.to_str()) == Some("status-fanout") {
+        return Role::StatusFanoutDeprecated(args.split_first().unwrap().1.to_vec());
+    }
     if let Some(rest) = fno::backlog_snapshot::classify(args) {
         return Role::BoardRender(rest);
     }
@@ -2054,6 +2077,17 @@ fn main() {
         Role::InboxDecide(rest) => std::process::exit(fno::law_cli::run_decide(&rest)),
         Role::InboxUser(argv) => {
             std::process::exit(fno_agents_exec("fno inbox", &["compaction"], &argv))
+        }
+        Role::InboxNotify(rest) => std::process::exit(fno::notify_dispatch::run(&rest)),
+        Role::NotifyDeprecated(rest) => {
+            eprintln!("{}", fno::notify_dispatch::DEPRECATED_MOVE_LINE);
+            std::process::exit(fno::notify_dispatch::run(&rest))
+        }
+        Role::StatusFanoutDeprecated(rest) => {
+            eprintln!("fno status-fanout is now fno doctor event fanout");
+            let mut argv: Vec<OsString> = vec!["fanout".into()];
+            argv.extend(rest);
+            std::process::exit(fno::event_cli::run(&argv))
         }
         Role::InboxOutstanding(rest) => std::process::exit(fno_agents_exec(
             "fno inbox outstanding",

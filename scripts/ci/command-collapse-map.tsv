@@ -283,7 +283,6 @@ doctor event audit	T1	doctor event audit	5
 doctor event emit	T1	doctor event emit	37
 doctor event find	T1	doctor event find	0
 event find	T1	event find	0
-doctor event fanout tick	T1	doctor event fanout tick	0
 doctor event gate-escape	T1	doctor event gate-escape	2
 doctor event gc	T1	doctor event gc	4
 doctor event push-parent	T1	doctor event push-parent	2
@@ -335,7 +334,6 @@ mail triage	T1	mail triage	8
 mail unread	T1	mail unread	16
 mail show	T1	mail show	2
 mail withdraw	T1	mail withdraw	2
-notify	KEEP	notify	18	single-leaf group
 paths handoff	T1	paths handoff	9
 plan brief	T1	plan brief	4
 plan fidelity	T1	plan fidelity	5
@@ -361,7 +359,6 @@ resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2
 config plugin	T1	config plugin	0
 doctor reclaim	T1	doctor reclaim	0
-status-fanout tick	KEEP	status-fanout tick	4	single-leaf group
 test	KEEP	test	108	single-leaf group
 update	KEEP	update	88	single-leaf group
 version	KEEP	version	15	single-leaf group

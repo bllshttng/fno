@@ -77,7 +77,6 @@ help
 inbox approvals decide
 inbox approvals ls
 inbox approvals show
-inbox notify
 inbox operator ack
 inbox operator list
 inbox operator status
@@ -88,12 +87,10 @@ lint
 mail
 mail send !--origin !--provider
 mux
-notify
 paths
 plan
 pr-watch
 resume
-status-fanout tick
 test
 uninstall
 update
