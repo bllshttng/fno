@@ -29,7 +29,8 @@ fn stamped_rig(
     std::env::set_var("FNO_HOME", tmp.path());
     fno_agents::graph_store::seed_rows(&tmp.path().join("graph.json"), std::slice::from_ref(&row))
         .unwrap();
-    (tmp, manifest_path, cwd.join("transcript.jsonl"))
+    let transcript_path = cwd.join("transcript.jsonl");
+    (tmp, manifest_path, transcript_path)
 }
 
 /// A done node whose recorded PR reads merged retires the fire on
