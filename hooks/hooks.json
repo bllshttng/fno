@@ -60,6 +60,16 @@
         ]
       },
       {
+        "matcher": "Edit|Write|Bash|Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/rules-dispatch.sh\" pre-tool",
+            "timeout": 4
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -173,7 +183,7 @@
           },
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/rules-dispatch.sh\" prompt",
             "timeout": 4
           },
           {
@@ -288,25 +298,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 FNO_HOOK_ASYNC=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
-            "async": true,
-            "timeout": 12
-          },
-          {
-            "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-join-prompt.sh\"",
             "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 FNO_HOOK_ASYNC=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/law-stage-inject.sh\"",
-            "async": true,
-            "timeout": 12
           }
         ]
       },

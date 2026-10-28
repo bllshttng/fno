@@ -22,7 +22,7 @@ Three probes sit outside the budget because their EXIT CODE is the data. `frontd
 
 ## Which hooks ride the budget
 
-The optional families: context, nudge, inject, announce. That covers `prompt-outstanding`, `born-with-why-offer-inject`, `inject-mail-notify`, `inject-announce`, `law-stage-inject`, `inject-fno-agent-whoami`, `inject-mail-drain-session-start`, `outstanding-session-start`, `worktree-peers-session-start`, `frontdoor-nudge-session-start`, `agy-team-inject`, `context-nudge` (reads), and `operator-capture-nudge`. Both `hooks/hooks.json` and `hooks/codex-hooks.json` set each one's `timeout` entry as a BACKSTOP just above the internal budget. A wedged hook that ignores its own bound still dies at the harness layer.
+The optional families: context, nudge, inject, announce. That covers `prompt-outstanding`, `born-with-why-offer-inject`, `inject-mail-notify`, `inject-announce`, `inject-fno-agent-whoami`, `inject-mail-drain-session-start`, `outstanding-session-start`, `worktree-peers-session-start`, `frontdoor-nudge-session-start`, `agy-team-inject`, `context-nudge` (reads), and `operator-capture-nudge`. Both `hooks/hooks.json` and `hooks/codex-hooks.json` set each one's `timeout` entry as a BACKSTOP just above the internal budget. A wedged hook that ignores its own bound still dies at the harness layer.
 
 Two Stop-path context reads also serve from a stale-while-revalidate cache: the context nudge probe and the operator-capture queue depth. A fresh copy costs milliseconds. A served copy past two thirds of its life arms a detached refresher, so the refresh happens off the turn path. A live read that skipped or expired under load serves the stale copy rather than nothing. The nudge probe carries a fingerprint of the transcript (size and mtime) inside the cache file. A grown transcript always re-measures, so the gate never serves pressure truth stale by choice. Keys are per session or per transcript. Files live under `~/.fno/cache/hook-budget/`.
 
@@ -45,7 +45,7 @@ Only fixed-trigger checks belong in block. The gate also reads the manifest flag
 
 Per harness:
 
-- **Claude.** All four classes are native. Two runs of `law-stage-inject.sh` are next-turn: the PostToolUse `Skill` and `Edit|Write` matchers. The law context arrives at the next model request. The tool call does not wait for the read. They carry `FNO_HOOK_ASYNC=1`, so `hook_budget_secs` gives them a 10s budget that load does not shorten. The overload skip still applies. The UserPromptSubmit run stays wait, because a law must arrive before the reply. No fno hook is rewake yet.
+- **Claude.** All four classes are native. Several hooks are next-turn: they carry `FNO_HOOK_ASYNC=1`, so `hook_budget_secs` gives them a 10s budget that load does not shorten. The overload skip still applies. `rules-dispatch.sh` is block at PreToolUse and wait at UserPromptSubmit, because a rule must arrive before the tool runs or the reply starts. No fno hook is rewake yet.
 - **Codex.** `hooks/codex-hooks.json` has no async flag, so every Codex row is block or wait. A next-turn or rewake result on Codex has to ride the mail bus and arrive through the turn-boundary delivery ([mail-push-first-delivery](architecture/mail-push-first-delivery.md)). No Codex hook does that yet.
 - **fnh.** fnh runs block (with fail closed), next-turn, and rewake natively. A rewake that ends after the fnh process exits is lost. A wake across processes needs the launcher.
 - **OpenCode and Pi.** Their hooks are in-process plugin callbacks, not manifest entries, so the table does not cover them.

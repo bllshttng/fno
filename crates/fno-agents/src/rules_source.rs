@@ -21,8 +21,9 @@ pub(crate) const SHIPPED: &str = include_str!("rules-defaults.toml");
 /// the trigger count, so a future resident host can cache on it.
 pub struct RuleSet {
     pub rules: Vec<Rule>,
-    /// The law subject behind each law-sourced rule id, for the stage lines.
-    pub subjects: BTreeMap<String, String>,
+    /// The live law rows the set was built from, newest first: the stage
+    /// block renders a law fire from its row.
+    pub laws: decision_index::Index,
     /// Per-source reasons a source answered nothing; callers render `Unread:`.
     pub unread: Vec<String>,
     pub version: String,
@@ -40,17 +41,25 @@ pub fn rule_set(cwd: &Path) -> Result<RuleSet, String> {
     let jsonl = decision_index::default_state_path("decisions.jsonl");
     let (rows, damaged) = decision_index::read_store_rows(&graph, &jsonl)?;
     let laws = decision_index::laws_of(decision_index::derive_rows(rows, damaged));
-    let mut unread = Vec::new();
-    let triggers = match decision_index::read_law_triggers(&jsonl) {
-        Ok(t) => t,
-        Err(reason) => {
-            unread.push(format!("the law_trigger journal ({reason})"));
-            BTreeMap::new()
-        }
+    let (triggers, unread) = match decision_index::read_law_triggers(&jsonl) {
+        Ok(t) => (t, Vec::new()),
+        Err(reason) => (
+            BTreeMap::new(),
+            vec![format!("the law_trigger journal ({reason})")],
+        ),
     };
+    assemble(cwd, laws, &triggers, unread)
+}
 
+/// The set from an already-read law index and its triggers: the shipped
+/// table, the project files, then one rule per live law.
+pub fn assemble(
+    cwd: &Path,
+    laws: decision_index::Index,
+    triggers: &BTreeMap<String, Value>,
+    mut unread: Vec<String>,
+) -> Result<RuleSet, String> {
     let mut rules = Vec::new();
-    let mut subjects: BTreeMap<String, String> = BTreeMap::new();
 
     // (a) The shipped table, with `event_rules.<id>` config flips.
     let shipped = parse_file(SHIPPED).map_err(|e| format!("the shipped rule table: {e}"))?;
@@ -62,7 +71,7 @@ pub fn rule_set(cwd: &Path) -> Result<RuleSet, String> {
     }
 
     // (b) The project's own rule files.
-    if let Some(dir) = project_rules_dir(cwd) {
+    if let Some(dir) = project_rules_dir(cwd).filter(|d| d.is_dir()) {
         let mut files: Vec<PathBuf> = match std::fs::read_dir(&dir) {
             Ok(rd) => rd
                 .filter_map(|e| e.ok().map(|e| e.path()))
@@ -93,7 +102,6 @@ pub fn rule_set(cwd: &Path) -> Result<RuleSet, String> {
             continue;
         };
         let subject = row.get("subject").and_then(Value::as_str).unwrap_or("");
-        subjects.insert(id.to_string(), subject.to_string());
         if let Some(tr) = triggers.get(id) {
             match tr.get("trigger_kind").and_then(Value::as_str) {
                 // grant, retire and superseded-pair are record-keeping; the
@@ -111,7 +119,7 @@ pub fn rule_set(cwd: &Path) -> Result<RuleSet, String> {
             }
             continue;
         }
-        let paths = row_paths(row);
+        let paths = law_paths(row);
         let scope = decision_index::row_scope(row);
         let scope_line = if scope == "global" {
             String::new()
@@ -148,10 +156,61 @@ pub fn rule_set(cwd: &Path) -> Result<RuleSet, String> {
     let version = format!("laws={};triggers={}", laws.rows.len(), triggers.len());
     Ok(RuleSet {
         rules,
-        subjects,
+        laws,
         unread,
         version,
     })
+}
+
+/// One decision as a door or hook sees it: the answer, plus the sources
+/// that could not be read. Rules never fail a door closed: an unreadable
+/// rule set answers allow, and the reason rides `unread`.
+pub struct Ruling {
+    pub decision: fno::rules::Decision,
+    pub unread: Vec<String>,
+}
+
+/// Build the set, decide one event, and log every fire as a `rule`
+/// decision span. The one call every decision point makes.
+pub fn rule(cwd: &Path, ev: &fno::rules::Event) -> Ruling {
+    let today = chrono::Local::now().date_naive();
+    let (decision, unread) = match rule_set_fast(cwd) {
+        Ok(set) => (fno::rules::decide(&set.rules, ev, today), set.unread),
+        Err(reason) => (
+            fno::rules::decide(&[], ev, today),
+            vec![format!("the rule set ({reason})")],
+        ),
+    };
+    log_fires(ev, &decision);
+    Ruling { decision, unread }
+}
+
+/// One `decision_span` per fire, `span_kind = "rule"`: the rows the
+/// rules report reads. Best-effort; a lost row never changes the answer.
+fn log_fires(ev: &fno::rules::Event, decision: &fno::rules::Decision) {
+    if decision.fires.is_empty() {
+        return;
+    }
+    let trace_id = crate::decision_trace::new_span_id();
+    for fire in &decision.fires {
+        let trace = crate::decision_trace::Trace {
+            trace_id: trace_id.clone(),
+            span_id: crate::decision_trace::new_span_id(),
+            parent_span_id: None,
+            actor_session: ev.session.clone(),
+            actor_kind: "worker",
+            comms: "chat",
+            recipient_session: None,
+            recipient_kind: None,
+        };
+        let mut attrs = serde_json::Map::new();
+        attrs.insert("rule".into(), Value::from(fire.rule.clone()));
+        attrs.insert("law".into(), fire.law.clone().map(Value::from).unwrap_or(Value::Null));
+        attrs.insert("event".into(), Value::from(ev.kind.clone()));
+        attrs.insert("verdict".into(), Value::from(fire.action.clone()));
+        attrs.insert("tool".into(), ev.tool.clone().map(Value::from).unwrap_or(Value::Null));
+        let _ = crate::decision_trace::emit_span("rule", &trace, &attrs);
+    }
 }
 
 /// One config read per assembly: the whole `event_rules` table, the same
@@ -187,7 +246,7 @@ fn cap_law_deny(rule: &mut Rule) {
     }
 }
 
-fn row_paths(row: &Value) -> Vec<String> {
+fn law_paths(row: &Value) -> Vec<String> {
     row.get("paths")
         .and_then(Value::as_array)
         .map(|a| {
@@ -208,10 +267,19 @@ fn toml_rule(text: &str) -> Option<Rule> {
     file.rule.pop()
 }
 
-/// A TOML basic-string body: the two escapes a law subject or decision can
-/// carry. Control characters do not survive the record door, so no more.
+/// A TOML basic-string body: a backslash, a quote, or a control character
+/// (an older law row can carry a newline) is escaped.
 fn toml_escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// `until <node> closes` resolves at build time: a node close is a store
@@ -354,10 +422,7 @@ mod tests {
             Some("release tags no release tag until the TUI is proven")
         );
         assert_eq!(implicit.scope.as_deref(), None, "global scope rides open");
-        assert!(set
-            .subjects
-            .get("d-bbbb2222")
-            .is_some_and(|s| s == "release tags"));
+        assert_eq!(set.laws.rows.len(), 2);
         match prev {
             Some(v) => std::env::set_var("FNO_HOME", v),
             None => std::env::remove_var("FNO_HOME"),

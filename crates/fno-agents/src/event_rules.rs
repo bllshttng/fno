@@ -867,9 +867,13 @@ pub fn run_hook(args: &[String]) -> i32 {
             }
         }
     }
-    if event != "stop" {
-        eprintln!("fno-agents hook rules: only --event stop is wired");
-        return 2;
+    match event.as_str() {
+        "stop" => {}
+        "prompt" | "skill" | "pre-tool" => return crate::hook::rules::run(&event),
+        _ => {
+            eprintln!("fno-agents hook rules: --event takes stop, prompt, skill or pre-tool");
+            return 2;
+        }
     }
     let payload = crate::hook::read_stdin();
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
