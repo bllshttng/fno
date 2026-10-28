@@ -130,3 +130,39 @@ fn sideline_menu_names_the_sweep_entry_off_dead() {
         "the global detach slot remains distinct"
     );
 }
+
+#[test]
+fn agents_tab_space_toggles_a_settings_checkbox() {
+    let mut v = two_pane_view();
+    v.settings_tab = SettingsTab::General;
+    let mut modal = v.build_settings_modal();
+    modal.popup.sel = modal
+        .actions
+        .iter()
+        .position(|a| *a == AuxAction::ToggleSidelineLayout)
+        .unwrap();
+    v.aux = Some(modal);
+    assert_eq!(
+        settings_modal::space_toggle(&v),
+        Some(AuxAction::ToggleSidelineLayout),
+        "space on a checkbox row flips it"
+    );
+    // A space coalesced with another key in one read still reaches the
+    // modal as its own token, where the toggle arm reads it.
+    let toks = fold_modal_keys(&mut Vec::new(), b" \x1b[B");
+    assert!(
+        matches!(toks.as_slice(), [ModalKey::Byte(b' '), ModalKey::Down]),
+        "{toks:?}"
+    );
+
+    // A non-checkbox row keeps today's keys.
+    v.settings_tab = SettingsTab::Theme;
+    let mut modal = v.build_settings_modal();
+    modal.popup.sel = modal
+        .actions
+        .iter()
+        .position(|a| matches!(a, AuxAction::ApplyTheme(_)))
+        .unwrap();
+    v.aux = Some(modal);
+    assert_eq!(settings_modal::space_toggle(&v), None);
+}

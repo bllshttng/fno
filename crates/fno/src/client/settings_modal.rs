@@ -263,6 +263,27 @@ pub(super) fn back(view: &mut View) -> bool {
     true
 }
 
+/// The checkbox row a space flips: the selected settings row when it is a
+/// toggle. An open text field takes its keys before the modal sees them
+/// (`field_keys`), so this reads only the selection. Every other row keeps
+/// its keys.
+pub(super) fn space_toggle(view: &View) -> Option<AuxAction> {
+    if !is_settings(view) {
+        return None;
+    }
+    let m = view.aux.as_ref()?;
+    match m.actions.get(m.popup.sel)? {
+        a @ (AuxAction::ToggleHoverFocus
+        | AuxAction::ToggleStatus
+        | AuxAction::ToggleResourceMeter
+        | AuxAction::ToggleConfirmLifecycle
+        | AuxAction::ToggleSidelineLayout
+        | AuxAction::ToggleReserveAuto
+        | AuxAction::ToggleExperimental(_)) => Some(a.clone()),
+        _ => None,
+    }
+}
+
 /// Feed one read to the open settings text field. `None` when none is open,
 /// so the caller runs its own keys. Every chunk ends with a rebuild, so the
 /// field row always paints the text so far.
