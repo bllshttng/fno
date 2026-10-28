@@ -1117,6 +1117,15 @@ pub(crate) fn sources(cwd: &Path) -> Sources {
     }
 }
 
+/// The listing for `cwd`, liveness resolved within `liveness`. The board
+/// calls this in-process, so its read cannot drift from the command's.
+pub(crate) fn read(cwd: &Path, liveness: Duration) -> Result<Outstanding, String> {
+    let mut o = collect(&sources(cwd), prove_it_rows())?;
+    let answers = resolve_liveness(&o.questions, liveness);
+    apply_liveness(&mut o.questions, &answers);
+    Ok(o)
+}
+
 /// `fno-agents compaction outstanding [--json|-J]`, the native `fno inbox outstanding`.
 pub fn run_outstanding(args: &[String]) -> i32 {
     if let Some((word, rest)) = args.split_first() {
@@ -1139,16 +1148,13 @@ pub fn run_outstanding(args: &[String]) -> i32 {
         }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let src = sources(&cwd);
-    let mut o = match collect(&src, prove_it_rows()) {
+    let o = match read(&cwd, LIVENESS_BUDGET) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("outstanding: failed to read: {e}");
             return 1;
         }
     };
-    let answers = resolve_liveness(&o.questions, LIVENESS_BUDGET);
-    apply_liveness(&mut o.questions, &answers);
     let mut out = std::io::stdout().lock();
     if as_json {
         let _ = writeln!(out, "{}", o.as_json());

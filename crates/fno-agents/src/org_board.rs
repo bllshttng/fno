@@ -708,7 +708,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     // what actually fixes it rather than reassigning it.
 
     // The reads that can take real wall time run concurrently: gh pr
-    // list, `fno inbox outstanding`, the batched truth
+    // list, the outstanding fold (in-process), the batched truth
     // probe, the ready selection (in-process; its plan-document disk reads
     // still cost the slice), and the needs fold (in-process, but its refused-worker leg batch
     // probes the whole registry and measured ~7s on a busy fleet). Their
@@ -892,13 +892,11 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                 if bound.is_zero() {
                     return SourceRead::over_budget(spent_err);
                 }
-                let mut cmd = fno_py_cmd();
-                cmd.extend(
-                    ["inbox", "outstanding", "--json"]
-                        .iter()
-                        .map(|s| s.to_string()),
-                );
-                run_json(cmd, &cwd, bound)
+                match crate::outstanding::read(&cwd, bound.min(crate::outstanding::LIVENESS_BUDGET))
+                {
+                    Ok(o) => SourceRead::ok(o.as_json()),
+                    Err(e) => SourceRead::err(e),
+                }
             })
         });
         // ONE batched truth probe for every holder the lead cares about (the
