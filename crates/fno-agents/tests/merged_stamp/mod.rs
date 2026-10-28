@@ -262,6 +262,7 @@ fn x0d87_live_replacement_pr_holds_the_early_allow() {
     ]);
     std::env::set_var("FNO_HOME", restore_home);
 
+    assert_eq!(code, 0, "a block decision still exits 0");
     assert_eq!(
         d.decision, "block",
         "a live replacement PR must hold the gate: {}",
@@ -310,6 +311,7 @@ fn x0d87_open_node_keeps_rest_read() {
     ]);
     std::env::set_var("FNO_HOME", restore_home);
 
+    assert_eq!(code, 0, "a block decision still exits 0");
     assert_eq!(
         d.decision, "block",
         "an open node must keep the REST read: {}",
