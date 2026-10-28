@@ -266,6 +266,7 @@ use posture::{
 };
 #[cfg(test)]
 use pr_read::manifest_node_pr_selector;
+use pr_read::node_done_pr_merged;
 pub(crate) use pr_read::CiConclusion;
 use pr_read::{read_pr_info, PrInfo, PrState};
 pub use review_coverage_command::{run_review_coverage, run_review_coverage_capture};
@@ -822,6 +823,54 @@ pub(crate) fn decide_with_payload(
             holds::QuestionGateStop::Terminate { reason, message } => {
                 return (0, allow_output("allow", Some(reason), &message, 0, None));
             }
+        }
+    }
+    // ── Done-node early allow ─────────────────────────────────────────────────
+    // A finished worker must not re-fight its own stop gate: once the graph
+    // store records the node done and its PR merged, the REST read can only
+    // re-learn a known fact, and under a loaded machine that read is the one
+    // thing that can still time out - each timeout re-blocked the finished
+    // session so it never went idle and never took its queued mail. Retire
+    // the fire on the store's own stamp, before the probe and done()
+    // can pay for a read. Batched units ship via the batch PR (their terminal
+    // is DoneBatched) and advisory/plan units have their own folds, so none of
+    // them take this verdict. A failed store read or an open node keeps the
+    // REST read, which is the pre-existing behavior (fail-open).
+    if !manifest.batched && !manifest.planned && !manifest.advisory && !manifest.no_ship {
+        if let Some(pr_number) = node_done_pr_merged(&cwd, node_id.as_deref()) {
+            let reason = format!(
+                "node {node} done and PR #{n} recorded merged in the graph store; retiring the fire without the REST read",
+                node = node_id.as_deref().unwrap_or(""),
+                n = pr_number
+            );
+            emit(
+                "loop_check_merged_stamp",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "node": node_id,
+                    "pr_number": pr_number,
+                    "decision": "allow",
+                    "reason": "DonePRGreen"
+                }),
+            );
+            emit(
+                "termination",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "reason": "DonePRGreen",
+                    "message": reason
+                }),
+            );
+            return (
+                0,
+                allow_output(
+                    "allow",
+                    Some(TerminationReason::DonePRGreen),
+                    &reason,
+                    0,
+                    None,
+                ),
+            );
         }
     }
     // ── Check gh binary availability ──────────────────────────────────────────

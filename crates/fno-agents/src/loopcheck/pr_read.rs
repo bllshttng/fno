@@ -233,6 +233,65 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
     rows.first().map(|(number, _, _)| number.to_string())
 }
 
+/// The manifest node's work reads finished in the graph store alone: the node
+/// is done (or superseded), at least one of its recorded PRs is stamped
+/// merged, and no live row is left open. Returns the newest merged PR number
+/// so the caller can name its evidence.
+///
+/// This is the done-worker early allow: once the store records the merge, the
+/// gate's REST read can only re-learn a fact it already knows, and under a
+/// loaded machine that read is the one thing that can still fail - each
+/// timeout re-blocking a finished session that never goes idle, so queued
+/// mail never lands. An unreadable store, a missing row, an open node, or an
+/// unstamped live row keeps the REST read exactly as before (fail-open); the
+/// live-row rule is the selector's own (an unstamped row at or below the
+/// newest terminal stamp is reopen history, a marked `history` row sinks
+/// regardless), so a replacement PR in flight holds the gate.
+pub(super) fn node_done_pr_merged(cwd: &Path, node_id: Option<&str>) -> Option<i64> {
+    use crate::backlog::model::Status;
+    let node_id = node_id?;
+    let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
+    let node = match crate::backlog::api::node(&store, node_id) {
+        Ok(Some(n)) => n,
+        _ => return None,
+    };
+    if !matches!(node.status, Status::Done | Status::Superseded) {
+        return None;
+    }
+    let rows: Vec<(i64, Option<&str>, bool)> = node
+        .primary_pr
+        .iter()
+        .chain(node.additional_prs.iter().flatten())
+        .filter_map(|pr| {
+            pr.number.filter(|number| *number > 0).map(|n| {
+                (
+                    n,
+                    pr.merge_status.as_deref(),
+                    pr.extras.get("history").and_then(Value::as_bool) == Some(true),
+                )
+            })
+        })
+        .collect();
+    let terminal = |status: &Option<&str>| {
+        status.is_some_and(|s| s.eq_ignore_ascii_case("merged") || s.eq_ignore_ascii_case("closed"))
+    };
+    let max_terminal = rows
+        .iter()
+        .filter(|(_, status, _)| terminal(status))
+        .map(|(number, _, _)| *number)
+        .max();
+    let has_live = rows.iter().any(|(number, status, history)| {
+        !history && !terminal(status) && !max_terminal.is_some_and(|bound| *number <= bound)
+    });
+    if has_live {
+        return None;
+    }
+    rows.iter()
+        .filter(|(_, status, _)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
+        .map(|(number, _, _)| *number)
+        .max()
+}
+
 /// The node's live replacement PR when the bound one reads CLOSED: the
 /// manifest is write-once and a replacement on another branch never reaches
 /// the node row, so the gate asks GitHub for the newest open or merged PR
