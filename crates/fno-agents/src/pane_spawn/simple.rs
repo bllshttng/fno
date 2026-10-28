@@ -93,7 +93,7 @@ pub(crate) fn seed_text(ctx: &PaneContext) -> String {
     } else {
         message.to_owned()
     };
-    crate::spawn_payload::finalize_spawn_payload(&base).0
+    crate::spawn_payload::finalize_spawn_payload_at(&base, &ctx.cwd).0
 }
 
 /// The pinned session id for the preassigned-binding harnesses

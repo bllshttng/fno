@@ -307,6 +307,13 @@ pub(crate) fn active_freeze_line(home: &AgentsHome, repo: Option<&str>) -> Optio
 
 /// `active_freeze_line` over injected parts (tests).
 fn active_freeze_line_in(store: &Store, repo: Option<&str>, laws: Laws) -> Option<String> {
+    // An unknown slug sees only a version-1 record, which freezes every
+    // repo; a repo-scoped freeze is not asked about a repo nobody named.
+    // (verdict_for_in's repo=None reads as inside, the pr-watch contract -
+    // the seed line needs the strict reading, so it gates here.)
+    if let (Some(_), None) = (read_record(store).ok().flatten().and_then(|r| r.repo), repo) {
+        return None;
+    }
     match verdict_for_in(store, None, repo, laws) {
         Verdict::Frozen {
             subject,
@@ -777,6 +784,9 @@ mod tests {
         assert!(line.contains(&format!("pinned at {lift}")), "{line}");
         assert!(active_freeze_line_in(&home, Some("o/r"), &lifted).is_none());
         assert!(active_freeze_line_in(&home, Some("p/q"), &empty).is_none());
+        // An unknown slug is not inside a repo-scoped freeze: it renders
+        // none, and only a version-1 all-repo record could bind it.
+        assert!(active_freeze_line_in(&home, None, &empty).is_none());
         // Any harness session can mint a chat_attested row, so it holds.
         let chat = store(vec![row("d-4", &lift, "chat_attested")]);
         assert!(matches!(

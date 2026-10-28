@@ -2030,11 +2030,11 @@ fn validate_spawn_placement(params: &Value, substrate: &str) -> Result<(), Strin
     Ok(())
 }
 
-fn effective_spawn_message(message: &str, substrate: &str) -> (String, Vec<String>) {
+fn effective_spawn_message(message: &str, substrate: &str) -> String {
     if substrate == "pane" {
-        (message.to_owned(), Vec::new())
+        message.to_owned()
     } else {
-        fno_agents::spawn_payload::finalize_spawn_payload(message)
+        fno_agents::spawn_payload::enrich_spawn_payload(message)
     }
 }
 
@@ -2354,19 +2354,10 @@ fn maybe_run_spawn(
         }
     }
 
-    let (message, fleet_laws) = effective_spawn_message(
+    let enriched_message = effective_spawn_message(
         params.get("message").and_then(|v| v.as_str()).unwrap_or(""),
         substrate,
     );
-    if !fleet_laws.is_empty() {
-        // The receipt names the laws the seed carries: stderr keeps
-        // stdout/JSON clean for the line-by-line receipt consumers.
-        eprintln!(
-            "fno-agents spawn: seed carries {} active fleet law(s): {}",
-            fleet_laws.len(),
-            fleet_laws.join("; ")
-        );
-    }
     let from_name_stamped =
         fno_agents::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));
     let from_name = from_name_stamped.as_str();
@@ -2403,6 +2394,25 @@ fn maybe_run_spawn(
             Ok(None) => fno_agents::spawn_cwd::resolve_dispatch_cwd(params),
         }
     };
+
+    // The fleet-law block composes for the WORKER's cwd (a --cwd foreign-repo
+    // spawn must not inherit the spawner's repo freezes), after the dispatch
+    // cwd resolves. A pane composes nowhere here: its Python leg or the
+    // server arm owns it with the true seat cwd.
+    let (message, fleet_laws) = if substrate == "pane" {
+        (enriched_message, Vec::new())
+    } else {
+        fno_agents::spawn_payload::finalize_spawn_payload_at(&enriched_message, &cwd)
+    };
+    if !fleet_laws.is_empty() {
+        // The receipt names the laws the seed carries: stderr keeps
+        // stdout/JSON clean for the line-by-line receipt consumers.
+        eprintln!(
+            "fno-agents spawn: seed carries {} active fleet law(s): {}",
+            fleet_laws.len(),
+            fleet_laws.join("; ")
+        );
+    }
     let timeout = opt_timeout(params);
 
     // Validate the provider FIRST so an unknown provider is a client-side

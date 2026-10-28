@@ -11,11 +11,12 @@ pub fn enrich_spawn_payload(message: &str) -> String {
 }
 
 /// The full payload entry: brevity guidance once, then the fleet-law block
-/// last, nearest the worker's eye. The vec names what was delivered, for the
-/// spawn receipt; empty means no active fleet constraint rode the seed.
-pub fn finalize_spawn_payload(message: &str) -> (String, Vec<String>) {
+/// last, nearest the worker's eye, read for a worker seated at `cwd`. The
+/// vec names what was delivered, for the spawn receipt; empty means no
+/// active fleet constraint rode the seed.
+pub fn finalize_spawn_payload_at(message: &str, cwd: &std::path::Path) -> (String, Vec<String>) {
     let enriched = enrich_spawn_payload(message);
-    crate::fleet_law::append_fleet_laws(&enriched)
+    crate::fleet_law::append_fleet_laws_at(&enriched, cwd)
 }
 
 #[cfg(test)]

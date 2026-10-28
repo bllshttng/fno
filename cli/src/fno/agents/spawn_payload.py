@@ -47,10 +47,12 @@ def prepare_spawn_payload(message: str) -> tuple[str, dict]:
             payload = f"{payload}\n\n{block}"
             measures = {"task_context": True, "payload_bytes": len(payload.encode("utf-8"))}
     if FLEET_LAW_MARKER not in payload:
+        import os
+
         from fno.rust_binary import CommandUnavailable, command_call
 
         try:
-            block = command_call("fleet-law-payload", {}).get("block")
+            block = command_call("fleet-law-payload", {"cwd": os.getcwd()}).get("block")
         except CommandUnavailable:
             block = None
         if block:

@@ -28,11 +28,19 @@ pub struct Delivered {
 /// clear (or resolves no home: a test that declared no state root has no
 /// incident to observe, the same degrade `fleet_incident::verdict` takes).
 /// `repo` is the spawn cwd's `owner/repo` slug; a None slug sees only a
-/// version-1 freeze record, which freezes every repo.
-pub fn active_laws_for(home: &AgentsHome, repo: Option<&str>) -> Option<Delivered> {
+/// version-1 freeze record, which freezes every repo. `subject` is the
+/// worker being seated: a targeted hold binds the seed only when it names
+/// this subject (its territory, its node's territory membership, or its
+/// session ids - empty for an unborn worker), the same match
+/// `fleet_incident::verdict_for_subject` runs for the loop.
+pub fn active_laws_for(
+    home: &AgentsHome,
+    subject: &fleet_incident::Subject<'_>,
+    repo: Option<&str>,
+) -> Option<Delivered> {
     let mut lines: Vec<String> = Vec::new();
     machine_wide_lines(home, &mut lines);
-    targeted_lines(home, &mut lines);
+    targeted_lines(home, subject, &mut lines);
     if let Some(line) = crate::merge_freeze::active_freeze_line(home, repo) {
         lines.push(line);
     }
@@ -60,25 +68,32 @@ pub fn active_laws_for(home: &AgentsHome, repo: Option<&str>) -> Option<Delivere
     Some(Delivered { block, subjects })
 }
 
-/// The active fleet constraints of this machine, from the resolved home and
-/// the spawn cwd's git remote.
-pub fn active_laws() -> Option<Delivered> {
+/// Append the block to a spawn payload for a worker seated at `cwd`: brevity
+/// guidance first (the caller's `enrich_spawn_payload`), the laws last,
+/// nearest the worker's eye. Empty messages stay empty and an already-marked
+/// payload is never double-marked. The subjects name what was appended, for
+/// the receipt; an empty vec means nothing was.
+pub fn append_fleet_laws_at(message: &str, cwd: &std::path::Path) -> (String, Vec<String>) {
+    append_fleet_laws_with(message, active_laws_at(cwd).as_ref())
+}
+
+/// The active fleet constraints of this machine, read for a worker seated at
+/// `cwd` (its git remote names the repo; its node and territory are unknown
+/// at the payload seam, so territory targets match only by explicit scope).
+pub fn active_laws_at(cwd: &std::path::Path) -> Option<Delivered> {
     let home = AgentsHome::from_env_opt()?;
-    let repo = crate::finalize::slug_from_git_remote(&std::env::current_dir().unwrap_or_default());
-    active_laws_for(&home, repo.as_deref())
+    let repo = crate::finalize::slug_from_git_remote(cwd);
+    let subject = fleet_incident::Subject {
+        session_ids: Vec::new(),
+        node: None,
+        territory: None,
+        cwd,
+    };
+    active_laws_for(&home, &subject, repo.as_deref())
 }
 
-/// Append the block to a spawn payload: brevity guidance first (the caller's
-/// `enrich_spawn_payload`), the laws last, nearest the worker's eye. Empty
-/// messages stay empty and an already-marked payload is never double-marked.
-/// The subjects name what was appended, for the receipt; an empty vec means
-/// nothing was.
-pub fn append_fleet_laws(message: &str) -> (String, Vec<String>) {
-    append_fleet_laws_with(message, active_laws().as_ref())
-}
-
-/// `append_fleet_laws` over injected laws (tests; the env wrapper above is
-/// the production entry).
+/// `append_fleet_laws_at` over injected laws (tests; the cwd wrapper above
+/// is the production entry).
 pub fn append_fleet_laws_with(
     message: &str,
     delivered: Option<&Delivered>,
@@ -98,9 +113,14 @@ pub fn append_fleet_laws_with(
 pub fn run_payload(args: &[String]) -> i32 {
     crate::task_context::run_stdin_command(
         args,
-        "fleet-law-payload  (one JSON request on stdin; the fields are the machine's own state)",
-        |_req| {
-            let delivered = active_laws();
+        "fleet-law-payload  (one JSON request on stdin: cwd? - the seated worker's dir)",
+        |req| {
+            let cwd = req
+                .get("cwd")
+                .and_then(Value::as_str)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            let delivered = active_laws_at(&cwd);
             let answer = json!({
                 "ok": true,
                 "block": delivered.as_ref().map(|d| d.block.clone()),
@@ -128,36 +148,47 @@ fn machine_wide_lines(home: &AgentsHome, lines: &mut Vec<String>) {
     incident_line("fleet-stop (machine-wide)", &record, lines);
 }
 
-fn targeted_lines(home: &AgentsHome, lines: &mut Vec<String>) {
+fn targeted_lines(
+    home: &AgentsHome,
+    subject: &fleet_incident::Subject<'_>,
+    lines: &mut Vec<String>,
+) {
     for (path, verdict) in fleet_incident::targeted_records(home) {
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let filename_target = fleet_incident::target_from_path(&path);
         let record = match &verdict {
             Verdict::Stopped(record) => record.clone(),
             Verdict::Unavailable(detail) => {
-                let name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                lines.push(format!(
-                    "- fleet-stop:{name} (hold): the record is unreadable ({detail}); treat the hold as armed"
-                ));
+                // A hold may sit behind the unreadable record and name this
+                // subject, so the fail-closed line renders only when the
+                // target itself matches; another subject's hold stays theirs.
+                if filename_target
+                    .as_deref()
+                    .is_some_and(|t| fleet_incident::target_matches(t, subject).unwrap_or(false))
+                {
+                    lines.push(format!(
+                        "- fleet-stop:{name} (hold): the record is unreadable ({detail}); treat the hold as armed"
+                    ));
+                }
                 continue;
             }
             Verdict::Clear(_) => continue,
         };
-        let target = record.target.clone().or_else(|| {
-            path.file_stem()
-                .and_then(|s| s.to_str())
-                .map(str::to_string)
-        });
-        incident_line(
-            &format!(
-                "fleet-stop:{} (hold)",
-                target.unwrap_or_else(|| "unknown".into())
-            ),
-            &record,
-            lines,
-        );
+        let target = record
+            .target
+            .clone()
+            .or(filename_target)
+            .unwrap_or_else(|| "unknown".into());
+        // The hold binds this seed only when it names this subject; another
+        // session's or territory's hold never rides a foreign worker's seed.
+        if !fleet_incident::target_matches(&target, subject).unwrap_or(false) {
+            continue;
+        }
+        incident_line(&format!("fleet-stop:{target} (hold)"), &record, lines);
     }
 }
 
@@ -218,7 +249,13 @@ mod tests {
     }
 
     fn laws(home: &AgentsHome) -> Option<Delivered> {
-        active_laws_for(home, Some("o/r"))
+        let subject = crate::fleet_incident::Subject {
+            session_ids: Vec::new(),
+            node: None,
+            territory: None,
+            cwd: std::path::Path::new("/tmp/x"),
+        };
+        active_laws_for(home, &subject, Some("o/r"))
     }
 
     #[test]
@@ -260,22 +297,36 @@ mod tests {
     }
 
     #[test]
-    fn targeted_hold_names_its_target() {
+    fn targeted_hold_binds_only_its_named_subject() {
         let dir = tempfile::TempDir::new_in(std::env::temp_dir()).unwrap();
         let home = AgentsHome::at(dir.path());
         write_record(
             &home,
-            "t-mbp3",
-            &stopped(&["builds"], "territory build stop.", Some("mbp3")),
+            "territory-fnh",
+            &stopped(&["builds"], "territory build stop.", Some("territory:fnh")),
         );
-        let delivered = laws(&home).expect("a targeted hold renders a block");
+        let subject_in = crate::fleet_incident::Subject {
+            session_ids: Vec::new(),
+            node: None,
+            territory: Some("fnh".to_string()),
+            cwd: std::path::Path::new("/tmp/x"),
+        };
+        let subject_out = crate::fleet_incident::Subject {
+            session_ids: Vec::new(),
+            node: None,
+            territory: Some("elsewhere".to_string()),
+            cwd: std::path::Path::new("/tmp/x"),
+        };
+        let delivered =
+            active_laws_for(&home, &subject_in, Some("o/r")).expect("the named seat renders");
         let line = delivered
             .block
             .lines()
-            .find(|l| l.starts_with("- fleet-stop:mbp3"))
+            .find(|l| l.starts_with("- fleet-stop:territory:fnh"))
             .expect("the targeted line");
         assert!(line.contains("hold, scope: builds"));
         assert!(line.contains("territory build stop."));
+        assert!(active_laws_for(&home, &subject_out, Some("o/r")).is_none());
     }
 
     #[test]
