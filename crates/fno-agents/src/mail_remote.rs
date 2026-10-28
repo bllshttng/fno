@@ -879,6 +879,11 @@ cross-host target answered over the ssh fallback leave no bus rows"
 /// Binary-direct entry from `fno-agents mail-remote <send|peek|status|reply> ...`.
 /// The dispatcher holds `Vec<String>`, so the tail rides as `&[String]`.
 pub fn run(args: &[String]) -> i32 {
+    let depth = hop_depth(std::env::var(HOP_ENV).ok().as_deref());
+    if depth >= HOP_LIMIT {
+        eprintln!("{}", hop_refusal(depth));
+        return 2;
+    }
     match args.first().map(|a| a.as_str()) {
         Some("send") => cmd_send(&args[1..]),
         Some("peek") => cmd_peek(&args[1..]),
@@ -898,14 +903,44 @@ pub fn run(args: &[String]) -> i32 {
 /// and every send recurses until the process table fills.
 pub const LOCAL_FORWARD_ENV: &str = "FNO_MAIL_LOCAL_FORWARD";
 
-/// Exec an argv, inherit stdio, return the exit code (same-host forwards).
+/// The relay depth a mail forward stamps on the process it starts. The
+/// front door clears it on every route but the relay's own, so only a
+/// forward that re-enters the relay counts up. The re-entry marker above is
+/// the first guard; this count is the backstop when a new route loses it.
+pub const HOP_ENV: &str = "FNO_MAIL_HOP";
+
+/// The depth the relay refuses at: one forward is the design, a second is
+/// already a bug, a third never runs.
+pub const HOP_LIMIT: u32 = 3;
+
+/// This entry's depth: the stamped count plus one. A missing or malformed
+/// count reads as a first entry.
+pub fn hop_depth(stamped: Option<&str>) -> u32 {
+    stamped
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+
+pub fn hop_refusal(depth: u32) -> String {
+    format!(
+        "fno agents mail: relay hop limit: this send entered the mail relay at depth \
+{depth} ({HOP_ENV}={}); a forward looped back into the relay, so it stops here \
+instead of filling the process table",
+        depth - 1
+    )
+}
+
 /// The relay family's shared same-host forward: exec an argv, inherit stdio,
-/// return the exit code. `mail_env` stamps the mail-only re-entry marker.
+/// return the exit code. `mail_env` stamps the mail-only re-entry marker and
+/// this entry's hop depth.
 pub fn exec_forward(argv: &[OsString], label: &str, mail_env: bool) -> i32 {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
     if mail_env {
         cmd.env(LOCAL_FORWARD_ENV, "1");
+        let depth = hop_depth(std::env::var(HOP_ENV).ok().as_deref());
+        cmd.env(HOP_ENV, depth.to_string());
     }
     match cmd.status() {
         Ok(status) => status.code().unwrap_or(1),
@@ -934,6 +969,14 @@ mod tests {
         assert!(split_target("@imac2d2").is_err());
         assert!(split_target("nemo@").is_err());
         assert!(split_target("nemo").is_err());
+        // Hop depth: an unstamped entry is depth 1, a garbled stamp reads
+        // as unstamped, and the refusal names the limit and the env.
+        assert_eq!(hop_depth(None), 1);
+        assert_eq!(hop_depth(Some("garbage")), 1);
+        assert_eq!(hop_depth(Some("2")), HOP_LIMIT);
+        let refusal = hop_refusal(HOP_LIMIT);
+        assert!(refusal.contains("relay hop limit"), "{refusal}");
+        assert!(refusal.contains("FNO_MAIL_HOP=2"), "{refusal}");
         // Remote-shell quoting: plain words wrap; the quote escapes; the
         // -lc script itself rides quoted so ssh's space-join cannot split
         // it (the round-1 regression).
