@@ -2646,7 +2646,15 @@ fn render_lines_with(
 // faq prompt + emit
 
 pub(crate) fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String> {
-    let mut entries: Vec<(SystemTime, String)> = Vec::new();
+    faq_files_for_scope(faqs_dir, scope)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect()
+}
+
+/// [`faq_entries_for_scope`] with each entry's file, oldest first.
+pub(crate) fn faq_files_for_scope(faqs_dir: &Path, scope: &str) -> Vec<(PathBuf, String)> {
+    let mut entries: Vec<(SystemTime, PathBuf, String)> = Vec::new();
     let Ok(it) = std::fs::read_dir(faqs_dir) else {
         return Vec::new();
     };
@@ -2666,11 +2674,11 @@ pub(crate) fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String>
                 .metadata()
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
-            entries.push((mtime, text.trim().to_string()));
+            entries.push((mtime, path.clone(), text.trim().to_string()));
         }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
-    entries.into_iter().map(|(_, t)| t).collect()
+    entries.into_iter().map(|(_, p, t)| (p, t)).collect()
 }
 
 /// The `scope:` line of a simple `---` frontmatter block, or None.

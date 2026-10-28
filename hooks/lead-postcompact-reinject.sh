@@ -33,15 +33,11 @@ else
     PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-$SOURCE_ROOT}}"
 fi
 CARRIER_LIB="$PLUGIN_ROOT/scripts/lib/postcompact-carrier.sh"
-MARKER_LIB="$PLUGIN_ROOT/scripts/lib/canon-doc-marker.sh"
 BRIEF="$PLUGIN_ROOT/skills/lead/references/postcompact-brief.md"
 
 [[ -r "$CARRIER_LIB" ]] || exit 0
 # shellcheck source=../scripts/lib/postcompact-carrier.sh
 source "$CARRIER_LIB"
-# The user-block reader degrades to silence when its lib is unreadable; the
-# brief above still rides. Never a failed hook.
-[[ -r "$MARKER_LIB" ]] && source "$MARKER_LIB"
 
 # Read the hook event through the shared lib (TTY-guarded; one python pass).
 EVENT="$(postcompact_read_event)"
@@ -89,84 +85,42 @@ TEAM_LEVEL="$(printf '%s' "$MY_ROW" | jq -r '.role_level // empty' 2>/dev/null)"
 TEAM_SCOPE="$(printf '%s' "$MY_ROW" | jq -r '.role_scope // empty' 2>/dev/null)"
 [[ -n "$TEAM_LEVEL" || -n "$TEAM_SCOPE" ]] || exit 0
 
-# Never truncate: a brief that outgrew its budget fails the byte-budget test
-# rather than arriving silently mangled. HTML comment lines are lint metadata
-# (style-exception markers), not rules; they stay in the file and never ride
-# into model context.
+# Pointers, not prose: every file the lead needs after a compact is named on
+# one line, and the lead reads it. A byte-capped paste in doc order cut the
+# canon doc's Workarounds section on every compaction, and the lead re-asked
+# the user for a command the doc held. Only the node re-resolve table below
+# stays inline: it is computed here and exists in no file.
 CONTEXT="## You are still the lead
 
-Team: level ${TEAM_LEVEL:-?} over ${TEAM_SCOPE:-?}. Confirm with \`fno whoami\`.
+Team: level ${TEAM_LEVEL:-?} over ${TEAM_SCOPE:-?}. Confirm with \`fno whoami\`. Read every file below in full before your first lever.
 
-$(sed '/^<!--/d' "$BRIEF")"
+Read this file: ${BRIEF}"
 
-# This team's own FAQ, appended after the static brief: bounded on both axes
-# (the command caps entry COUNT; FAQ_MAX_BYTES below caps the aggregate payload,
-# since one detailed entry - or several - can still outgrow context on their
-# own) and degrade-safe (silence on a missing directory, an unreadable one, or
-# no entry for this scope - never a failed hook).
-FAQ_MAX_BYTES=4000
-if [[ -n "$TEAM_SCOPE" ]]; then
-    FAQ_ENTRIES="$(fno agents org faq list --scope "$TEAM_SCOPE" 2>/dev/null || true)"
-    FAQ_BYTES="$(printf '%s' "$FAQ_ENTRIES" | wc -c | tr -d ' ')"
-    if [[ "$FAQ_BYTES" -gt "$FAQ_MAX_BYTES" ]]; then
-        # A raw `head -c` cut can split a multi-byte UTF-8 character mid-
-        # sequence, landing an invalid byte in the payload. Decode first and
-        # drop the trailing partial character instead of splitting it.
-        FAQ_ENTRIES="$(printf '%s' "$FAQ_ENTRIES" | python3 -c "
-import sys
-sys.stdout.write(sys.stdin.buffer.read(${FAQ_MAX_BYTES}).decode('utf-8', errors='ignore'))
-")
-
-_(truncated at ${FAQ_MAX_BYTES}B; \`fno agents org faq list --scope \"${TEAM_SCOPE}\"\` has the rest)_"
-    fi
-    if [[ -n "$(printf '%s' "$FAQ_ENTRIES" | tr -d '[:space:]')" ]]; then
-        CONTEXT="$CONTEXT
-
-## This team's FAQ
-
-$FAQ_ENTRIES"
-    fi
-fi
-
-# Canon pointer: the PreCompact hook wrote this team's rolling handoff doc,
-# and its judgment halves (merge order, open decisions, gaps, workarounds)
-# exist in no other channel. The hook names the doc and says read it; it
-# never pastes it. A byte-capped paste in doc order cut the Workarounds
-# section off a 10KB doc on every compaction, and the lead re-asked the user
-# for a command the doc held. Degrade-safe: no resolvable doc, no line.
-CANON_MAX_BYTES=4000
+# The canon doc the PreCompact hook wrote, then this team's FAQ entries. Both
+# degrade to no line: no resolvable doc, no FAQ entry, never a failed hook.
 if [[ -n "$TEAM_SCOPE" ]]; then
     CANON_PATH="$(fno config paths handoff --scope "$TEAM_SCOPE" 2>/dev/null || true)"
     if [[ -n "$CANON_PATH" && -f "$CANON_PATH" ]]; then
         CONTEXT="$CONTEXT
+Read this file: ${CANON_PATH}"
+    fi
+    while IFS= read -r FAQ_FILE; do
+        [[ -n "$FAQ_FILE" && -f "$FAQ_FILE" ]] || continue
+        CONTEXT="$CONTEXT
+Read this file: ${FAQ_FILE}"
+    done < <(fno agents org faq list --scope "$TEAM_SCOPE" --paths 2>/dev/null || true)
+fi
 
-## Your team's handoff (written before the compact)
-
-Read \`${CANON_PATH}\` in full before your first lever. Its Workarounds in force and Open decisions hold commands and rulings you already own; do not ask the user for them."
-
-        # The fno:user block rides back too: the machine never writes it, so
-        # anything beyond the seed placeholder is the user's own words and is
-        # surfaced verbatim - never paraphrased, never summarized. Byte-capped
-        # like the canon sections; silent when empty or placeholder-only.
-        if command -v canon_doc_extract_marker >/dev/null 2>&1; then
-            USER_NOTES="$(canon_doc_extract_marker "$CANON_PATH" user 2>/dev/null)" || USER_NOTES=""
-            if [[ -n "$USER_NOTES" ]] && ! canon_doc_is_placeholder "$USER_NOTES"; then
-                USER_BYTES="$(printf '%s' "$USER_NOTES" | wc -c | tr -d ' ')"
-                if [[ "$USER_BYTES" -gt "$CANON_MAX_BYTES" ]]; then
-                    USER_NOTES="$(printf '%s' "$USER_NOTES" | python3 -c "
-import sys
-sys.stdout.write(sys.stdin.buffer.read(${CANON_MAX_BYTES}).decode('utf-8', errors='ignore'))
-")
-
-_(truncated at ${CANON_MAX_BYTES}B; \`${CANON_PATH}\` has the rest)_"
-                fi
-                CONTEXT="$CONTEXT
-
-## User notes (from your canon doc)
-
-$USER_NOTES"
-            fi
-        fi
+# A tenured lead (its scope manifest reports a shape AND names this session)
+# also re-reads the lead skill: the beat, the stop arm and the levers live
+# there. A missing manifest or a foreign session id adds no line.
+LEAD_MANIFEST="$(fno agents org chart manifest-path --harness-session-id "$SID" 2>/dev/null || true)"
+if [[ -n "$LEAD_MANIFEST" && -f "$LEAD_MANIFEST" ]]; then
+    LEAD_SHAPE="$(sed -n 's/^shape:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"
+    LEAD_SID="$(sed -n 's/^harness_session_id:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"
+    if [[ -n "$LEAD_SHAPE" && "$LEAD_SID" == "$SID" && -f "$PLUGIN_ROOT/skills/lead/SKILL.md" ]]; then
+        CONTEXT="$CONTEXT
+Read this file: $PLUGIN_ROOT/skills/lead/SKILL.md"
     fi
 fi
 
@@ -237,8 +191,8 @@ out = '\n'.join(lines)
 cap = int(os.environ.get('CAP') or '2000')
 payload = out.encode('utf-8')
 if len(payload) > cap:
-    # Same UTF-8-safe cut as the FAQ: decode, drop the trailing partial
-    # character, never split one mid-sequence.
+    # UTF-8-safe cut: decode, drop the trailing partial character, never
+    # split one mid-sequence.
     out = payload[:cap].decode('utf-8', errors='ignore') + '\n\n_(truncated at %dB)_' % cap
 sys.stdout.write(out)
 " 2>/dev/null || true)"
@@ -254,23 +208,6 @@ $BOARD_BLOCK"
     fi
 fi
 
-# Lead limb: when the teamed scope's manifest reports a shape AND
-# names THIS session, this is a tenured lead, and its beat needs re-teaching
-# after a compact. Reads the same manifest every lead arm resolves; a missing
-# manifest or a foreign session id means the brief above is the
-# whole teaching, so nothing is appended (fail to the narrower rule).
-LEAD_MANIFEST="$(fno agents org chart manifest-path --harness-session-id "$SID" 2>/dev/null || true)"
-if [[ -n "$LEAD_MANIFEST" && -f "$LEAD_MANIFEST" ]]; then
-    LEAD_SHAPE="$(sed -n 's/^shape:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"
-    LEAD_SID="$(sed -n 's/^harness_session_id:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"
-    if [[ -n "$LEAD_SHAPE" && "$LEAD_SID" == "$SID" ]]; then
-        CONTEXT="$CONTEXT
-
-## You are still leading (shape: ${LEAD_SHAPE})
-
-The beat and stop arm survive a compact: \`fno-agents harness-beat\` names the beat; on \`loop\`, verify the loop receipt. The daemon mails this team when a covered PR settles green or its node closes (\`lead_settle\`), so no watch is armed or re-armed. Re-read the lead skill's Arm the beat section on a wake; mail, board, team liveness, main CI, capacity and \`fno agents org verdict\` are demand reads, not beats. The \`loop\` beat's self-injected command is \`/loop <lead.checkin_interval> <lead.checkin_text>\`. The check-in beat is one command: \`fno agents org checkin\` gathers the readings, prints them, diffs the last beat, and journals \`lead_checkin\` itself; then act on the printout. Levers in order: mail the stalled worker, \`fno backlog encounter <id> --evidence\` and \`fno backlog update <id> priority=<p>\` (rank is the user's pin and refuses you), undefer or supersede, ask the user. Dispatch only on a red dispatching arm, journaled as \`lead_dispatch_exception\`."
-    fi
-fi
 # The read-command lesson rides the post-compact brief: a compaction boundary
 # newer than the taught one re-teaches it once, and the door prints nothing
 # when the session is current. Best-effort - a stale or absent binary
