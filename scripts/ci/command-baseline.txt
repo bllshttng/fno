@@ -63,6 +63,7 @@ config
 config accounts
 config get
 config set
+context
 cost
 delivery evaluate
 do
