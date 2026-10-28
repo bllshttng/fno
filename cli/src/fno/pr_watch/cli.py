@@ -130,11 +130,11 @@ def _emit_tick_row(arm: str, *, interval_s: int, acted: int = 0,
 def _notify_parked(message: str) -> None:
     """Send an OS notification for a parked PR.
 
-    Calls send_notification with (title, message) -- two positional args.
+    Calls notify_operator with (title, message) -- two positional args.
     On failure, logs a warning instead of silently passing.
     """
     try:
-        send_notification("pr-watch", message)
+        notify_operator("pr-watch", message)
     except Exception as exc:
         log.warning("pr-watch: notify failed: %s", exc)
 
@@ -372,7 +372,7 @@ class ClaimAdapter:
 
 from fno.claims.core import claim_status  # noqa: E402
 from fno.config import load_settings, load_settings_for_repo  # noqa: E402
-from fno.notify._impl import send_notification  # noqa: E402
+from fno.rust_binary import notify_operator  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

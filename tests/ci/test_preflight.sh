@@ -164,7 +164,7 @@ if [[ $rc -eq 0 && "${PREFLIGHT_TEST_SIGNAL_LOCK:-0}" == "1" \
 fi
 exit "$rc"
 EOF
-# preflight calls `uv run --project cli fno-py doctor test smoke [flags]`; stub uv to
+# preflight calls `fno-agents test-run doctor smoke [flags]`; stub the binary to
 # behave like the retired smoke.sh stub (red iff POISON is checked out).
 # The changed packet is a distinct invocation (--changed) and must be stubbable
 # independently of the full run: several cases below turn one red while the
@@ -182,7 +182,34 @@ esac
 if [[ -f POISON ]]; then echo "smoke: POISON step failed"; exit 1; fi
 echo "smoke: all green (stub)"; exit 0
 EOF
-chmod +x "$BIN/fno" "$BIN/cargo" "$BIN/cargo-audit" "$BIN/rustup" "$BIN/mkdir" "$BIN/uv"
+cat > "$BIN/fno-agents" <<'EOF'
+#!/usr/bin/env bash
+# preflight invokes the native runner directly since the test-command family
+# ported (`test-run doctor smoke --changed`): route the smoke tail through the
+# uv stub so the scenario sentinel files keep working. Every OTHER call passes
+# through to the real binary: the wait-queue scenarios assert on the real
+# `claim queue` tickets, and a stubbed silence passes the capability probe
+# while no ticket can ever land. $BIN is this test's own first PATH entry, so
+# stripping it finds the job's build - which smoke-setup deliberately keeps
+# OFF PATH, so usually there is none: then `claim queue` answers exit 2 (the
+# documented old-binary code), the capability probe reads QUEUE_OK=0 and the
+# queue scenarios SKIP the way they do with no binary at all, and every other
+# command keeps preflight's uncontended degrade.
+case " $* " in
+  *" smoke "*)
+    shift 3
+    exec "$(dirname "$0")/uv" "$@" ;;
+esac
+real="$(PATH="${PATH#*:}" command -v fno-agents 2>/dev/null || true)"
+if [[ -n "$real" ]]; then
+    exec "$real" "$@"
+fi
+case " $* " in
+  *" claim queue "*) exit 2 ;;
+esac
+exit 0
+EOF
+chmod +x "$BIN/fno" "$BIN/fno-agents" "$BIN/cargo" "$BIN/cargo-audit" "$BIN/rustup" "$BIN/mkdir" "$BIN/uv"
 export PATH="$BIN:$PATH"
 
 # --- build the fixture repo -------------------------------------------------

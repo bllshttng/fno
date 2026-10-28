@@ -1,0 +1,7 @@
+[user]
+	name = fno doctor test
+	email = fno-test@localhost
+[init]
+	defaultBranch = main
+[commit]
+	gpgsign = false

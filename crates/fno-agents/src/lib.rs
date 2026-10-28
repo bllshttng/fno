@@ -206,6 +206,7 @@ pub mod finalize_run_summary;
 pub mod first_check;
 pub mod fleet_beacon;
 pub mod fleet_incident;
+pub mod fleet_law;
 pub mod fleet_load;
 pub mod fleet_page;
 pub mod fleet_state;
@@ -437,6 +438,7 @@ pub mod pr_create;
 pub mod pr_door;
 pub mod pr_draft_ready;
 pub mod pr_front;
+pub(crate) mod pr_idle;
 pub mod pr_info;
 pub mod pr_list;
 pub mod pr_merge_result;
@@ -594,6 +596,8 @@ pub mod state_layout;
 pub mod state_layout_sqlite;
 pub mod state_path;
 pub mod state_root_drift;
+pub mod status_fanout;
+pub mod status_render;
 pub mod status_sinks;
 pub mod store_conn;
 pub mod store_exec;
@@ -632,11 +636,24 @@ pub mod terminal_run;
 pub mod terminal_stop;
 pub mod terminal_vocab;
 pub mod territory;
+pub mod test_census;
+pub mod test_changed;
+pub mod test_command;
+#[cfg(test)]
+#[path = "test_command_goldens_tests.rs"]
+mod test_command_goldens_tests;
 pub mod test_delta;
+pub mod test_env;
 pub mod test_hold;
 pub mod test_run;
 mod test_run_journal;
 mod test_run_pins;
+pub mod test_smoke;
+pub mod test_smoke_discovery;
+pub mod test_smoke_registry;
+#[cfg(test)]
+#[path = "test_smoke_tests.rs"]
+mod test_smoke_tests;
 pub mod text_or_file;
 pub mod think_daily;
 pub mod think_dispatch;
@@ -656,6 +673,7 @@ pub mod version;
 pub mod wait;
 pub mod wake_meter;
 pub mod wake_name;
+pub mod wake_read;
 pub mod watch_expiry;
 pub mod wave;
 pub mod whoami;
@@ -1866,8 +1884,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "ci_cadence_check",
     // The main_revert arm's read of a red main (main_revert.rs).
     "main_revert_check",
-    // A ci_tier arm pass that cancelled or reran runs (ci_tier.rs).
+    // A ci_tier arm pass, a push it held, and the wake when a slot freed
+    // (ci_tier.rs).
     "ci_tier_pass",
+    "ci_tier_held",
+    "ci_tier_wake",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
