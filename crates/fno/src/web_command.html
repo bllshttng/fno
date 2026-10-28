@@ -72,7 +72,7 @@ function waiting(model) {
       r.append(el("b", null, q.title || q.id));
       if (q.node) r.append(el("span", "mono", q.node));
       r.append(el("span", "mono", ago(since(q.created_at)) + " old"));
-      r.append(el("span", "mono", "fno inbox outstanding answer " + q.id + (host == null ? "" : " (on " + host + ")")));
+      r.append(el("span", "mono", "fno inbox outstanding clear " + q.id + " --answer \"…\"" + (host == null ? "" : " (on " + host + ")")));
       box.append(r);
     }
   }
