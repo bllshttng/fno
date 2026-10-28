@@ -1319,9 +1319,11 @@ fn manifest_field(manifest: &Path, key: &str) -> String {
 pub(crate) fn birth_cursor(manifest: &Path) -> String {
     let raw = manifest_field(manifest, "created_at");
     match chrono::NaiveDateTime::parse_from_str(&raw, "%Y-%m-%dT%H:%M:%SZ") {
+        // The sidecar cursor keeps the Python leg's +00:00 spelling: the
+        // frozen parity goldens are the surviving contract for the field.
         Ok(stamp) => stamp
             .and_utc()
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
         Err(_) => String::new(),
     }
 }
