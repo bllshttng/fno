@@ -119,8 +119,9 @@ impl CommandCache {
     }
 }
 
-/// The machines with each seat's attach command and, when its plan sits in
-/// the vault, the `obsidian://` link, so the page builds neither.
+/// The machines with each seat's attach command and its plan link, so the
+/// page builds neither. With obsidian on, a plan in the vault gets its
+/// `obsidian://` link; any other plan gets a plain `file://` link.
 fn machines_json(fleet: &Fleet, obsidian: &ObsidianCfg) -> Value {
     let mut machines = json!(fleet.machines);
     let rows = machines
@@ -132,8 +133,15 @@ fn machines_json(fleet: &Fleet, obsidian: &ObsidianCfg) -> Value {
     for (row, seat) in rows.zip(fleet.seats()) {
         row["attach"] = json!(attach_command(seat));
         let plan = seat.work.as_ref().and_then(|w| w.plan.as_deref());
-        if let PlanLink::Obsidian { uri } = plan_link(plan.map(Path::new), obsidian) {
-            row["plan_uri"] = json!(uri);
+        match (plan_link(plan.map(Path::new), obsidian), plan) {
+            (PlanLink::Obsidian { uri }, _) => row["plan_uri"] = json!(uri),
+            (_, Some(plan)) if Path::new(plan).is_absolute() => {
+                row["plan_file"] = json!(format!(
+                    "file://{}",
+                    crate::link::percent_encode_query(plan)
+                ))
+            }
+            _ => {}
         }
     }
     machines
