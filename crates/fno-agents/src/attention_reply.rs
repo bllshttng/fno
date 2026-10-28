@@ -773,6 +773,7 @@ mod tests {
                 rank: None,
                 live: None,
                 reach: None,
+                person: None,
             }),
             node: Some("x-1".into()),
             blocked_because: None,
