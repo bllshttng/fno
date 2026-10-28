@@ -52,6 +52,17 @@ pub(crate) async fn terminal_stop_sweep(home: &AgentsHome, emitter: &EventEmitte
         None => return,
     };
     for marker in markers {
+        // A pinned session stays up: the marker is spent with a receipt, so
+        // an unpin later hands the session to the registry sweep, not to a
+        // stop that fires the moment the pin lifts.
+        if let Some(keep) = crate::keep_mark::for_session(home, &marker.uuid) {
+            let _ = emitter.emit(
+                "bg_worker_terminal_stop_kept",
+                &json!({"session_id": marker.uuid, "reason": marker.reason, "keep": keep}),
+            );
+            crate::terminal_stop::remove_marker(home, &marker.uuid);
+            continue;
+        }
         let short = roster.find(&marker.uuid).map(|w| w.short_id().to_string());
         match crate::terminal_stop::stop_decision(short) {
             crate::terminal_stop::StopAction::Stop(short) => {

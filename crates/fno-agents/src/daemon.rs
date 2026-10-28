@@ -35,6 +35,8 @@ mod terminal_stop_sweep;
 pub(super) use terminal_stop_sweep::terminal_stop_sweep;
 mod fleet_arms;
 mod lifecycle;
+mod removal_audit;
+use self::removal_audit::RemovalAuditContext;
 mod rm_codex_rollback;
 mod rm_refusal_detail;
 mod rm_teardown;
@@ -747,55 +749,6 @@ pub(crate) fn rm_take_worktree(entry: &state::RegistryEntry) -> Option<PruneOutc
                 }
             })
     })
-}
-
-#[derive(Debug, Clone)]
-struct RemovalAuditContext {
-    actor: String,
-    reason: String,
-    request_id: String,
-    worktree_touched: Option<bool>,
-    reclaimed_bytes: Option<u64>,
-}
-
-impl RemovalAuditContext {
-    fn from_request(req: &Request, entry: &state::RegistryEntry) -> Self {
-        let string_param = |key: &str| {
-            req.params
-                .get(key)
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(str::to_owned)
-        };
-        let actor = string_param("audit_actor").unwrap_or_else(|| {
-            [
-                "FNO_HARNESS_SESSION_ID",
-                "CLAUDE_CODE_SESSION_ID",
-                "CODEX_THREAD_ID",
-            ]
-            .iter()
-            .find_map(|key| std::env::var(key).ok())
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| format!("session:{value}"))
-            .unwrap_or_else(|| "operator".into())
-        });
-        let reason = string_param("audit_reason").unwrap_or_else(|| "operator-requested".into());
-        let request_id = string_param("audit_request_id")
-            .unwrap_or_else(|| format!("agent-rm:{}:{}", entry.name, entry.created_at));
-        Self {
-            actor,
-            reason,
-            request_id,
-            worktree_touched: req
-                .params
-                .get("audit_worktree_touched")
-                .and_then(Value::as_bool),
-            reclaimed_bytes: req
-                .params
-                .get("audit_reclaimed_bytes")
-                .and_then(Value::as_u64),
-        }
-    }
 }
 
 use crate::liveness_sweep;
@@ -5129,6 +5082,12 @@ async fn handle_rm_with(
         };
     let name = entry.name.clone();
     let audit = RemovalAuditContext::from_request(req, &entry);
+    if let Some(held) = audit.pin_hold(&ctx.home, &entry) {
+        let _ = ctx
+            .emitter
+            .emit("rm_kept", &json!({"name": name, "reason": audit.reason}));
+        return Response::err(req.id, ErrorCode::InvalidStatus, held);
+    }
     // Computed once (self-review finding): every other reference in this
     // handler reuses this allocation instead of re-deriving the same short id.
     let harness_row_id = claude_row_id(&entry);
