@@ -11,7 +11,7 @@
 # stale-base invoking tree -> lock -> reset the worktree to the invoking HEAD
 # (caches preserved) ->
 # build a hermetic env -> changed packet (CHANGED SUBSET, fail-fast, partial) ->
-# fno-py doctor test smoke --keep-going -> rust-ci legs (pinned fmt, cargo test,
+# fno-agents test-run doctor smoke --keep-going -> rust-ci legs (pinned fmt, cargo test,
 # advisory audit) -> one summary + exit.
 #
 # The changed packet is early feedback only: its failure stops the run at the
@@ -1107,7 +1107,7 @@ if [[ -n "$CHANGED_BASE" ]]; then
     # this leg - the earliest actionable signal preflight produces - spend a
     # cold build plus twenty 35.9s trials before the real gate has started.
     # cli-ci pins its own changed-smoke step to 1 for exactly this.
-    run_hermetic env STRESS_TRIALS=1 uv run --project cli fno-py doctor test smoke --changed \
+    run_hermetic env STRESS_TRIALS=1 fno-agents test-run doctor smoke --changed \
         --base "$CHANGED_BASE" --head "$CANDIDATE_SHA"
     creq=$?
     case $creq in
@@ -1161,7 +1161,7 @@ if retry_run_leg smoke; then
     # cargo-test e2e legs below, so the full denominator here is duplication on
     # a pre-push gate. One trial proves the harness still runs; rust-ci owns the
     # 20.
-    run_hermetic env STRESS_TRIALS=1 uv run --project cli fno-py doctor test smoke "${SMOKE_ARGS[@]}"
+    run_hermetic env STRESS_TRIALS=1 fno-agents test-run doctor smoke "${SMOKE_ARGS[@]}"
     sreq=$?
     REQUIRED_EXECUTED=$((REQUIRED_EXECUTED + 1))
     [[ $sreq -eq 0 ]] && record_leg smoke "smoke suite" pass $(( SECONDS - s0 )) || { record_leg smoke "smoke suite" fail $(( SECONDS - s0 )); FAIL=1; }

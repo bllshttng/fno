@@ -703,36 +703,29 @@ async fn run(args: Vec<String>) -> i32 {
     // treatment as `probe-run`/`state` so it stays out of CLIENT_COMMAND_USAGE /
     // RUST_CLIENT_COMMANDS and the routable-command parity guard: not an `fno
     // agents` command; callers are `cli/src/fno/test_runner.py` and the wrapper.
+    // `test-run`: the bounded suite runner, plus the test family's raw
+    // doors as its arguments (the shrink law allows no new action, so
+    // `env`, `sweep` and `command` are arguments, not actions): `test-run env`
+    // is the hermetic child env door, `test-run sweep` the orphaned-keeper
+    // sweep for the pytest conftest, and `test-run doctor <argv>` the whole
+    // native test command (pytest/rust/smoke/census; the advertised surface is
+    // the `fno doctor test` front).
     if command == "test-run" {
-        return fno_agents::test_run::run_test_run(&args[1..]);
+        let rest = &args[1..];
+        match rest.first().map(String::as_str) {
+            Some("env") => return fno_agents::test_env::run_test_env(&rest[1..]),
+            Some("sweep") => return fno_agents::graph_keeper::run_keeper_sweep(&rest[1..]),
+            Some("doctor") => return fno_agents::test_command::run_test_command(&rest[1..]),
+            _ => {}
+        }
+        return fno_agents::test_run::run_test_run(rest);
     }
 
     // `fleet-incident`: the durable fleet incident breaker (see
-    // fleet_incident.rs doc). Direct dispatch, no daemon RPC: a stop must be
-    // writable even when the daemon is the thing wedged. Python's `fno agents
-    // incident` adapter relays it; the admission gates call the library in
-    // process. Same `==` dispatch + ALL_CLIENT_ACTIONS registration as
-    // `test-run`, so the parity tests stay in sync. The fleet GitHub request
-    // budget rides THIS action as its `gh-budget` argument (law d-fe66560a
-    // allows no new client action): an admit must answer before every gh
-    // call, including when the daemon is the thing wedged, so it dispatches
-    // here with no daemon RPC either.
+    // fleet_incident.rs doc). Direct dispatch, no daemon RPC; the routing
+    // body lives in the module beside the breaker.
     if command == "fleet-incident" {
-        if args.get(1).map(String::as_str) == Some("gh-budget") {
-            return fno_agents::gh_budget::run_gh_budget(&args[2..]);
-        }
-        // `cutover` quiesces the writers and snapshots the stores for a
-        // machine move; it rides this action for the same reason.
-        if args.get(1).map(String::as_str) == Some("cutover") {
-            return fno_agents::cutover::run_cutover(&args[2..]).await;
-        }
-        if args.len() < 2 {
-            match fno_agents::gh_budget::run_gh_budget_stdin_door() {
-                -1 => {}
-                code => return code,
-            }
-        }
-        return fno_agents::fleet_incident::run_fleet_incident(&args[1..]);
+        return fno_agents::fleet_incident::run_dispatch(&args[1..]).await;
     }
 
     if command == "compaction" {
@@ -2273,7 +2266,7 @@ fn maybe_run_spawn(
         }
     }
 
-    let message = effective_spawn_message(
+    let enriched_message = effective_spawn_message(
         params.get("message").and_then(|v| v.as_str()).unwrap_or(""),
         substrate,
     );
@@ -2313,6 +2306,25 @@ fn maybe_run_spawn(
             Ok(None) => fno_agents::spawn_cwd::resolve_dispatch_cwd(params),
         }
     };
+
+    // The fleet-law block composes for the WORKER's cwd (a --cwd foreign-repo
+    // spawn must not inherit the spawner's repo freezes), after the dispatch
+    // cwd resolves. A pane composes nowhere here: its Python leg or the
+    // server arm owns it with the true seat cwd.
+    let (message, fleet_laws) = if substrate == "pane" {
+        (enriched_message, Vec::new())
+    } else {
+        fno_agents::spawn_payload::finalize_spawn_payload_at(&enriched_message, &cwd)
+    };
+    if !fleet_laws.is_empty() {
+        // The receipt names the laws the seed carries: stderr keeps
+        // stdout/JSON clean for the line-by-line receipt consumers.
+        eprintln!(
+            "fno-agents spawn: seed carries {} active fleet law(s): {}",
+            fleet_laws.len(),
+            fleet_laws.join("; ")
+        );
+    }
     let timeout = opt_timeout(params);
 
     // Validate the provider FIRST so an unknown provider is a client-side

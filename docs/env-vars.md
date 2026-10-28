@@ -13,8 +13,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CARGO_BUILD_BUILD_DIR` | rs | unclear: crates/fno-agents/src/hook/stop.rs:519 |
 | `CARGO_HOME` | py+rs | Cargo install root; the default is ~/.cargo. |
 | `CARGO_MANIFEST_DIR` | rs | Cargo sets it on each process that it starts. The live-store fence then refuses to open a store under the operator home `.fno`. Only the admission call of the rustc wrapper removes it. |
-| `CENSUS_DEFERRED_FILE` | py | unclear: cli/src/fno/test_cmd.py:2250 |
-| `CENSUS_KILL_BOUND_S` | py | unclear: cli/src/fno/test_cmd.py:2297 |
+| `CENSUS_DEFERRED_FILE` | rs | Overrides the census deferred set for a targeted run: crates/fno-agents/src/test_census.rs |
+| `CENSUS_KILL_BOUND_S` | rs | Ceiling for each census entry before its group is killed: crates/fno-agents/src/test_census.rs |
 | `CI` | py+rs | unclear: cli/src/fno/llm.py:40 |
 | `CLAUDECODE` | rs | unclear: crates/fno-agents/src/hook/stop.rs:440 |
 | `CLAUDECODE_SESSION_ID` | py+rs | unclear: crates/fno-agents/src/backlog/workflows.rs |
@@ -271,8 +271,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TEST_PR_WATCH_LAUNCH_AGENTS_DIR` | rs | Test seam: the LaunchAgents dir the `pr-watch status` command reads the plist from, standing in for `$HOME/Library/LaunchAgents` so the parity fixtures pin the plist the way the Python leg's `launch_agents_dir` parameter did. |
 | `FNO_TEST_PR_WATCH_LOADED` | rs | Test seam: pins the launchctl load state the `pr-watch status` command reports (`1` loaded, anything else not loaded) so the parity goldens do not depend on the capture machine's own registration. |
 | `FNO_TEST_PR_WATCH_TICK_PID` | rs | Test seam: pins the tick-in-flight answer the `pr-watch refresh` command defers on (`0` reads as no tick, a positive pid defers the bounce) so the parity goldens never probe the real launchd. |
-| `FNO_TEST_TIMEOUT_SECONDS` | py | unclear: cli/src/fno/test_runner.py:31 |
-| `FNO_THINK_SPAWN` | rs | Forces the born-with-why /think spawner on or off above `think_spawn.enabled`, below the autonomy master switch; `fno agents admit autonomy status` reports it as the `env` rank. |
+| `FNO_TEST_TIMEOUT_SECONDS` | rs | Overrides the suite timeout the native test command passes the bounded owner: crates/fno-agents/src/test_command.rs |
+| `FNO_THINK_SPAWN` | rs | Forces the born-with-why /think spawner on or off above `think_spawn.enabled`, below the autonomy master switch; `fno agents admit autonomy status` reports it as the `env` rank. The native test command pins it to 0 in every hermetic child: crates/fno-agents/src/test_env.rs. |
 | `FNO_THINK_SPAWN_WAVE0` | rs | unclear: crates/fno-agents/src/backlog/decompose.rs:2382 |
 | `FNO_THREAD_TURN_REFRESH_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:105 |
 | `FNO_TOUCH_EMIT` | rs | unclear: crates/fno/src/server.rs:10464 |
@@ -290,7 +290,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_WORKTREE_POLICY` | py+rs | Overrides the resolved worktree policy from env, above every config layer; the dispatcher sets it to never for a spawn into an undeclared repo. |
 | `GEMINI_SANDBOX` | rs | unclear: crates/fno-agents/src/gemini_ask.rs:103 |
 | `GEMINI_SESSION_ID` | rs | Gemini's provider session id, used by exact-session loop readiness. |
-| `GITHUB_ACTIONS` | py | unclear: cli/src/fno/test_cmd.py:1859 |
+| `GITHUB_ACTIONS` | rs | Folds the smoke step headers into ::group:: in CI: crates/fno-agents/src/test_smoke.rs |
 | `GITHUB_EVENT_BEFORE` | py | unclear: cli/src/fno/lint_cli.py:622 |
 | `GLOBAL_EVENTS_PATH` | rs | unclear: crates/fno-agents/src/hook/stop.rs:462 |
 | `GROK_HOME` | rs | grok's base directory, sessions live under its `sessions` child: crates/fno-agents/src/grok_store.rs:18 |
@@ -323,9 +323,9 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `SCCACHE_DISABLE` | rs | Set to `1` to force bare rustc everywhere; the rustc wrapper reads it ahead of every opt-in, and the daemon's sccache server keep-alive reads it the same way, so a disabled machine runs no server even with `build.sccache = true` or `FNO_SCCACHE=1` set. |
 | `SCCACHE_IDLE_TIMEOUT` | rs | `fill_sccache_env` and the rustc wrapper default this to `0` (never stop on idle): a server that exits on idle mid-build fell compiles back to local rustc under fleet load. A shorter operator-set value survives both defaults. The daemon's `ensure_sccache_server` starts a replacement with `0` when it finds no live server on an opted-in machine. |
 | `SHELL` | rs | The user's login shell. |
-| `SMOKE_CHANGED_RECEIPT` | py | unclear: cli/src/fno/test_cmd.py:1726 |
-| `SMOKE_FAILURE_RECORD` | py | unclear: cli/src/fno/test_cmd.py:2066 |
-| `SMOKE_REGISTRY_FILE` | py | unclear: cli/src/fno/test_cmd.py:2046 |
+| `SMOKE_CHANGED_RECEIPT` | rs | Overrides the changed-mode receipt path: crates/fno-agents/src/test_changed.rs |
+| `SMOKE_FAILURE_RECORD` | rs | Overrides the failure-record path: crates/fno-agents/src/test_smoke.rs |
+| `SMOKE_REGISTRY_FILE` | rs | Test seam naming a JSON registry ({"steps": [[name, cwd, cmd], ...]}): crates/fno-agents/src/test_smoke.rs |
 | `SSH_CONNECTION` | rs | Set by sshd to `client_ip client_port server_ip server_port`. `fno mux serve --observe` names the watcher `user from client_ip` from it. |
 | `STATE_FILE` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:57 |
 | `TARGET_ABORT_REASON` | rs | unclear: crates/fno-agents/src/ledger_register.rs:617 |

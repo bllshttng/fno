@@ -572,9 +572,9 @@ echo ""
 echo "--- AC10: Answerer Enumeration ---"
 
 # The shape check shells the fno-agents binary. The literal
-# `target/debug/fno-agents` is the marker `_needs_rust_binary`
-# (cli/src/fno/test_cmd.py) reads to schedule the build step, so CI has a
-# fresh binary before this section runs.
+# `target/debug/fno-agents` is the marker `needs_rust_binary`
+# (crates/fno-agents/src/test_changed.rs) reads to schedule the build step,
+# so CI has a fresh binary before this section runs.
 FNO_AGENTS_BIN="$SCRIPT_DIR/../crates/fno-agents/target/debug/fno-agents"
 export FNO_AGENTS_BIN
 

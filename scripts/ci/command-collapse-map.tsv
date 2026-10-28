@@ -360,7 +360,6 @@ resume receipt write	T1	resume receipt write	2
 scoreboard	KEEP	scoreboard	13	single-leaf group
 config plugin	T1	config plugin	0
 doctor reclaim	T1	doctor reclaim	0
-test	KEEP	test	108	single-leaf group
 update	KEEP	update	88	single-leaf group
 version	KEEP	version	15	single-leaf group
 agents stale-escalate	T1	agents stale-escalate	6
