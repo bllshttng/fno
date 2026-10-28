@@ -19,6 +19,8 @@ pub(crate) enum BRole {
     Pill,
     /// The active tab cell of a tab strip (inverted).
     Tab,
+    /// A line that needs the reader, such as a failed delivery.
+    Warn,
 }
 
 /// One styled segment.
@@ -256,6 +258,7 @@ pub(crate) fn role_of(role: BRole) -> Role {
         BRole::Body => Role::PanelBody,
         BRole::Pill => Role::PanelPill,
         BRole::Tab => Role::PanelTab,
+        BRole::Warn => Role::PanelWarn,
     }
 }
 

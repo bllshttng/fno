@@ -260,7 +260,7 @@ pub(crate) enum ChatRow {
         partner_key: String,
         last: String,
         unread: bool,
-        /// The last row is parked or failed: it waits on the sender.
+        /// A message this agent sent is parked or failed: it waits on the sender.
         stuck: bool,
         ts: String,
     },
@@ -482,8 +482,14 @@ impl MessagesBoard {
                 let ts = last_row.map(|r| text_of(r, "ts")).unwrap_or("");
                 let unread =
                     !chat_id.is_empty() && marks.get(chat_id).map(String::as_str) < Some(ts);
-                let stuck =
-                    last_row.is_some_and(|r| matches!(text_of(r, "state"), "parked" | "failed"));
+                // Any message this agent sent that is still parked or failed
+                // waits on the sender, wherever it sits in the chat.
+                let stuck = rows_of.is_some_and(|rs| {
+                    rs.iter().any(|r| {
+                        text_of(r, "from_key") == agent
+                            && matches!(text_of(r, "state"), "parked" | "failed")
+                    })
+                });
                 rows.push(ChatRow::Thread {
                     chat_id: chat_id.to_string(),
                     partner: other_name,
@@ -681,18 +687,10 @@ impl MessagesBoard {
                     stuck,
                     ..
                 } => BLine::of(&[
-                    // `!` outranks `*`: the last message is parked or failed
-                    // and waits on the sender, not the reader.
-                    seg(
-                        if *stuck {
-                            "!"
-                        } else if *unread {
-                            "*"
-                        } else {
-                            " "
-                        },
-                        BRole::Meta,
-                    ),
+                    // Two slots: `!` (a sent message waits on the sender)
+                    // never hides `*` (unread for the reader).
+                    seg(if *stuck { "!" } else { " " }, BRole::Warn),
+                    seg(if *unread { "*" } else { " " }, BRole::Meta),
                     seg(partner.clone(), BRole::Body),
                     seg(format!(" \u{b7} {last}"), BRole::Meta),
                 ]),
@@ -892,14 +890,21 @@ impl MessagesBoard {
                 lines.push(line);
                 owners.push(Some(index));
             }
-            // A sent row says what the recipient's harness did with it.
-            let state = text_of(r, "state");
-            if mine_row && !state.is_empty() {
-                let pad = w.saturating_sub(1).saturating_sub(state.chars().count());
-                let mut line = BLine::meta(format!("{}{state}", " ".repeat(pad)));
-                line.band = selected;
-                lines.push(line);
-                owners.push(Some(index));
+            // A sent row says what the recipient's harness did with it, and
+            // a stuck one names the key that moves it.
+            if let Some((text, role)) = mine_row.then(|| state_line(r)).flatten() {
+                for mut line in BLine::of(&[seg(text, role)]).wrap(wrap_w) {
+                    let pad = w
+                        .saturating_sub(1)
+                        .saturating_sub(line.text.chars().count());
+                    line.text = format!("{}{}", " ".repeat(pad), line.text);
+                    // The roles walk the chars, so the pad shifts them too.
+                    line.roles
+                        .splice(0..0, std::iter::repeat_n(BRole::Meta, pad));
+                    line.band = selected;
+                    lines.push(line);
+                    owners.push(Some(index));
+                }
             }
         }
         (lines, owners)
@@ -1077,7 +1082,7 @@ pub(crate) fn paint(
     // The context help line (item 8), on the row the three panels leave
     // free. Truncated to the width: at a degenerate terminal the keys still
     // work, only the hint shortens.
-    let help = "h/l or \u{2190}/\u{2192} columns \u{b7} j/k move \u{b7} enter open \u{b7} esc back \u{b7} a/b filter \u{b7} s sort \u{b7} d details \u{b7} m id \u{b7} y copy \u{b7} q close";
+    let help = "h/l or \u{2190}/\u{2192} columns \u{b7} j/k move \u{b7} enter open \u{b7} esc back \u{b7} a/b filter \u{b7} s sort \u{b7} d details \u{b7} r retry \u{b7} m id \u{b7} y copy \u{b7} q close";
     let help: String = help.chars().take(width.saturating_sub(1)).collect();
     for (i, ch) in help.chars().enumerate() {
         if let Some(cell) = cells.get_mut((height - 1) * cols + i) {
@@ -1445,6 +1450,7 @@ pub(crate) async fn keys(
                     b.col = b.col.next();
                 }
             }
+            ModalKey::Byte(b'r') if b.col == Col::Thread => retry_selected(view),
             ModalKey::Byte(b'm') => open_chat_popup(view),
             ModalKey::Byte(b'y') => copy_bubble(view, false),
             ModalKey::Byte(b'Y') => copy_bubble(view, true),
@@ -1475,7 +1481,7 @@ fn thread_len(b: &MessagesBoard) -> usize {
 /// Enter on the active column's row.
 async fn act(
     view: &mut View,
-    _sock: &mut (impl tokio::io::AsyncWrite + Unpin),
+    sock: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
     let Some(b) = view.messages_board.as_mut() else {
         return Ok(());
@@ -1534,6 +1540,9 @@ async fn act(
             }
         }
         Col::Thread => {
+            if let Some(sent) = selected_sent_row(b).filter(|r| text_of(r, "state") == "parked") {
+                return submit_parked(view, sock, &sent).await;
+            }
             let row = b
                 .conversation_rows()
                 .get(b.cursors[2])
@@ -1641,6 +1650,17 @@ fn copy_bubble(view: &mut View, whole_body: bool) {
         }
         return;
     }
+    // The last rung for a stuck message: its text, to paste by hand into
+    // the recipient's session.
+    if let Some(sent) =
+        selected_sent_row(b).filter(|r| matches!(text_of(r, "state"), "parked" | "failed"))
+    {
+        let body = text_of(&sent, "body").to_string();
+        if !body.is_empty() {
+            super::feed_detail::copy_value(view, body);
+        }
+        return;
+    }
     let row = b
         .conversation_rows()
         .get(b.cursors[2])
@@ -1655,6 +1675,134 @@ fn copy_bubble(view: &mut View, whole_body: bool) {
         return;
     }
     super::feed_detail::copy_value(view, value);
+}
+
+/// The line under a sent message: its delivery state, and for a stuck one
+/// the cause and the keys that act on it. Submit or retry comes first; copy
+/// and paste by hand is the last rung, offered once a retry failed too.
+fn state_line(r: &Value) -> Option<(String, BRole)> {
+    let reason = text_of(r, "state_reason");
+    let failures = r.get("state_failures").and_then(Value::as_u64).unwrap_or(0);
+    match text_of(r, "state") {
+        "" => None,
+        "parked" => Some(("parked \u{b7} enter submit".to_string(), BRole::Meta)),
+        "failed" => {
+            let cause = if reason.is_empty() {
+                String::new()
+            } else {
+                format!(": {reason}")
+            };
+            let text = if failures > 1 {
+                format!("retry failed{cause} \u{b7} r retry \u{b7} y copy")
+            } else {
+                format!("failed{cause} \u{b7} r retry")
+            };
+            Some((text, BRole::Warn))
+        }
+        word => Some((word.to_string(), BRole::Meta)),
+    }
+}
+
+/// The selected thread row when it is a message this agent sent, with its
+/// delivery state: the target of r, enter-on-parked and the copy rung.
+fn selected_sent_row(b: &MessagesBoard) -> Option<Value> {
+    if b.sel_thread
+        .as_deref()
+        .is_some_and(|s| s.starts_with("you:"))
+    {
+        return None;
+    }
+    let mine = b.sel_agent.as_deref()?;
+    let row = b
+        .conversation_rows()
+        .get(b.cursors[2])
+        .map(|r| (**r).clone())?;
+    (text_of(&row, "from_key") == mine).then_some(row)
+}
+
+/// Enter on a parked sent message: one Enter into the recipient's pane, so
+/// the text already waiting there submits. A resend would type it twice.
+async fn submit_parked(
+    view: &mut View,
+    sock: &mut (impl tokio::io::AsyncWrite + Unpin),
+    row: &Value,
+) -> Result<(), String> {
+    let session = text_of(row, "to_key").to_string();
+    let name = view
+        .messages_board
+        .as_ref()
+        .map(|b| b.participant_name(&session))
+        .unwrap_or_else(|| session.clone());
+    let Some((pane, expected_identity)) =
+        super::messages_reply::endpoint_pane(view, &name, &session)
+    else {
+        view.set_notice(format!(
+            "submit: {name} has no pane on screen; open a portal first, or press y to copy the message"
+        ));
+        return Ok(());
+    };
+    let request_id = view.next_reply_request_id;
+    view.next_reply_request_id = view.next_reply_request_id.wrapping_add(1).max(1);
+    write_msg(
+        sock,
+        &ClientMsg::PaneInput(crate::proto::pane_input::PaneInputRequest {
+            request_id,
+            pane,
+            expected_identity,
+            bytes: b"\r".to_vec(),
+        }),
+    )
+    .await
+    .map_err(|e| format!("submit input send failed: {e}"))?;
+    view.set_notice(format!(
+        "submit sent to {name}; the state moves once its turn record holds the message"
+    ));
+    Ok(())
+}
+
+/// r on a failed sent message: run the live ladder again for the same
+/// message id, off the input path, and report the result as a notice.
+fn retry_selected(view: &mut View) {
+    let Some(row) = view.messages_board.as_ref().and_then(selected_sent_row) else {
+        return;
+    };
+    let state = text_of(&row, "state");
+    if state != "failed" {
+        view.set_notice(format!("r retries a failed message; this one is {state}"));
+        return;
+    }
+    let id = text_of(&row, "id").to_string();
+    let tx = view.reply_notice_tx.clone();
+    view.set_notice(format!("retrying {id}"));
+    tokio::spawn(async move {
+        let out = tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())
+            .args(["mail-threads", "retry", &id])
+            .output()
+            .await;
+        let notice = match out {
+            Ok(out) => retry_notice(&String::from_utf8_lossy(&out.stdout)),
+            Err(e) => format!("retry could not run: {e}; press y to copy the message"),
+        };
+        if let Some(tx) = tx {
+            let _ = tx.send(notice);
+        }
+    });
+}
+
+/// The notice for one retry answer: the state it reached, or the cause and
+/// the next step when it failed again.
+fn retry_notice(stdout: &str) -> String {
+    let Ok(v) = serde_json::from_str::<Value>(stdout.trim()) else {
+        return "retry gave no answer; press y to copy the message".to_string();
+    };
+    let reason = text_of(&v, "reason");
+    match text_of(&v, "state") {
+        "failed" => format!(
+            "retry failed: {reason}. Next: r to try again, or y to copy it and paste it into the recipient's session"
+        ),
+        "refused" => format!("retry did not run: {reason}"),
+        word => format!("retry: {word}"),
+    }
 }
 
 /// The agent key a chat-list row resolves to, for the details modal.
