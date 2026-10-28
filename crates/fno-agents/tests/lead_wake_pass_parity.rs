@@ -346,6 +346,11 @@ fn fold(value: &mut Value, root: &Path) {
             *text = text
                 .replace(&slug, "<ROOTSLUG>")
                 .replace(&root.to_string_lossy().into_owned(), "<ROOT>");
+            // The spaces dir sits beside the project, under the same temp
+            // base, so the base folds to <ROOT> too.
+            if let Some(base) = root.parent() {
+                *text = text.replace(&base.to_string_lossy().into_owned(), "<ROOT>");
+            }
         }
         Value::Array(items) => items.iter_mut().for_each(|v| fold(v, root)),
         Value::Object(map) => map.values_mut().for_each(|v| fold(v, root)),
@@ -1101,23 +1106,32 @@ fn five_quiet_roles_skip_the_truth_read_one_mail_role_pays_it() {
     let world = World::new();
     let rows = multi_role_world(&world, 6);
     let rec = Rec::default();
+    let probes: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = Arc::clone(&probes);
+    let done = truth_done();
+    let truth: TruthStub = Arc::new(move |handles, deadline| {
+        seen.lock().unwrap().extend(handles.iter().cloned());
+        done(handles, deadline)
+    });
     let outcome = run_with(
         &armed(),
         seams(
             &world,
             rows,
             &rec,
-            truth_done(),
+            truth,
             vec!["lead-3".into()],
             no_answers(),
             static_entries(Vec::new()),
             scope_of(&[]),
         ),
     );
+    let mut run = run_json(&outcome, &rec, &world, "epic-3", false);
+    run["truth_probes"] = json!(*probes.lock().unwrap());
     assert_run(
         "five quiet roles skip the truth read one mail role pays it",
         0,
-        run_json(&outcome, &rec, &world, "epic-3", false),
+        run,
         world.root().as_path(),
     );
 }
