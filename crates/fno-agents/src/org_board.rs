@@ -2467,7 +2467,7 @@ mod tests {
 
     #[test]
     fn a_slow_source_is_killed_inside_the_whole_board_budget() {
-        // A scripted `fno` that sleeps 5 seconds under a
+        // A scripted `gh` that sleeps 5 seconds under a
         // 4,000ms board budget must be killed at its deadline-derived spawn
         // bound, so the collector returns inside ~4.75s and the over-budget
         // source reads as unreadable - never the measured 40,776ms-against-
@@ -2488,13 +2488,13 @@ mod tests {
         crate::paths::pin_test_claims_root(dir.path());
         let script =
             crate::write_exec_stub(dir.path(), "sleepy-fno-py", "#!/bin/sh\nexec sleep 5\n");
-        // `gh` answers with an empty-open-PR listing: the prs reads must
-        // never reach the network, whose discretionary GraphQL quota is
-        // shared machine-wide and reads exit 75 under a lock (measured: the
-        // quota refusal surfaced here as an unreadable undriven_pr).
+        // `gh` is the slow source: the operator questions read in-process
+        // now, so the PR listing is the one read still riding a subprocess.
+        // The stub never reaches the network, whose GraphQL quota is shared
+        // machine-wide.
         let stub_dir = dir.path().join("stub-bin");
         std::fs::create_dir_all(&stub_dir).unwrap();
-        crate::write_exec_stub(&stub_dir, "gh", "#!/bin/sh\necho '[]'\n");
+        crate::write_exec_stub(&stub_dir, "gh", "#!/bin/sh\nexec sleep 5\n");
         let prev = std::env::var_os("FNO_PY");
         let prev_path = std::env::var_os("PATH");
         std::env::set_var("FNO_PY", &script);
