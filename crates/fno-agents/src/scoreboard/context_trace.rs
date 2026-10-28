@@ -474,7 +474,13 @@ pub(crate) fn build_context_outcome_trace(
             .cloned()
             .unwrap_or(Value::Null);
     }
-    let reverted_value = graph_node.get("reverted").cloned().unwrap_or(Value::Null);
+    // Python reads graph rows through the Node dataclass, whose `reverted`
+    // field defaults to false; a row without the key still answers a bool,
+    // so the observed probe is true on every real node.
+    let reverted_value = graph_node
+        .get("reverted")
+        .cloned()
+        .unwrap_or(Value::Bool(false));
     let revert_observed =
         !revert_events.is_empty() || !reverted_at.is_null() || reverted_value.is_boolean();
     let reverted =

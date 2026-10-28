@@ -11,8 +11,8 @@
    "duration_minutes": 30,
    "pr_number": 11,
    "pr_url": "https://github.com/ex/repo/pull/11",
-   "summary_path": "/Users/bb16/.fno/worktrees/footnote/x-08d8/crates/fno-agents/tests/golden/scoreboard/cases/calibration_insufficient/repo/plans/SUMMARY-p1.md",
-   "plan_path": "/Users/bb16/.fno/worktrees/footnote/x-08d8/crates/fno-agents/tests/golden/scoreboard/cases/calibration_insufficient/repo/plans/p1.md",
+   "summary_path": "<CAPTURE>/repo/plans/SUMMARY-p1.md",
+   "plan_path": "<CAPTURE>/repo/plans/p1.md",
    "project": "ex/repo",
    "sessions": [
     "11111111-1111-1111-1111-111111111111"
@@ -54,9 +54,9 @@
    "termination_reason": "DonePlanned",
    "graph_node_id": "x-4",
    "cost_usd": 0.5,
-   "plan_path": "/Users/bb16/.fno/worktrees/footnote/x-08d8/crates/fno-agents/tests/golden/scoreboard/cases/calibration_insufficient/repo/plans/p1.md",
+   "plan_path": "<CAPTURE>/repo/plans/p1.md",
    "project": "ex/repo",
-   "summary_path": "/Users/bb16/.fno/worktrees/footnote/x-08d8/crates/fno-agents/tests/golden/scoreboard/cases/calibration_insufficient/repo/plans/SUMMARY-p1.md",
+   "summary_path": "<CAPTURE>/repo/plans/SUMMARY-p1.md",
    "pr_number": 12,
    "pr_url": "https://github.com/ex/repo/pull/12",
    "phases_completed": [

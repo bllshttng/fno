@@ -15,9 +15,10 @@
 //! copy and asserts byte parity, with three documented normalizers:
 //!
 //! - both sides normalize their own case-root absolute path to `<CASE>` (the
-//!   plan_path echo and the refusal stderr name the state root); the replay
-//!   rewrites the capture host's frozen paths inside the text fixtures to
-//!   the sandbox root first, so the same normalizer answers on both sides;
+//!   plan_path echo and the refusal stderr name the state root); the
+//!   fixtures hold the capture host's paths as a `<CAPTURE>` placeholder,
+//!   which the replay maps to the sandbox root first, so the same
+//!   normalizer answers on both sides;
 //! - the event-coverage slug names the repo root flattened (`/` to `-`);
 //!   the goldens froze the capture host's slug, so the replay maps its own
 //!   flattened token to `<SPACEREPO>` and the goldens hold that placeholder;
@@ -128,12 +129,11 @@ fn sort_delivery_classes(text: &str) -> String {
     format!("{}\n", serde_json::to_string_pretty(&doc).unwrap())
 }
 
-/// The capture driver froze the capture host's absolute case-root paths
-/// inside the text fixtures (the ledger's plan/summary paths); a replay
-/// sandbox lives elsewhere, so mirror the capture's scrub inside the tree:
-/// point every UTF-8 fixture at the sandbox root before the door runs.
-/// Binary fixtures (the graph store) fail the UTF-8 check and keep their
-/// capture bytes.
+/// The fixtures hold the capture host's case-root paths as the `<CAPTURE>`
+/// placeholder (the ledger's plan/summary paths); a replay sandbox lives
+/// elsewhere, so point every UTF-8 fixture at the sandbox root before the
+/// door runs. Binary fixtures (the graph store) fail the UTF-8 check and
+/// keep their capture bytes.
 fn rewrite_fixture_paths(dir: &Path, from: &str, to: &str) {
     for entry in std::fs::read_dir(dir).expect("read fixture dir") {
         let entry = entry.expect("fixture entry");
@@ -162,11 +162,7 @@ fn run_case(label: &str, argv: &[String]) -> (i32, String, String) {
     let _ = std::fs::remove_dir_all(&tmp);
     copy_dir(&golden, &tmp);
     rebuild_git(&tmp.join("repo"));
-    rewrite_fixture_paths(
-        &tmp,
-        golden.to_str().expect("utf8 golden"),
-        tmp.to_str().expect("utf8 tmp"),
-    );
+    rewrite_fixture_paths(&tmp, "<CAPTURE>", tmp.to_str().expect("utf8 tmp"));
     let bin = env!("CARGO_BIN_EXE_fno-agents");
     let mut cmd = Command::new(bin);
     // The capture driver ran the leg with cwd at the case REPO (the same
