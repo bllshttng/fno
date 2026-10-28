@@ -137,30 +137,96 @@ pub(crate) fn help_distress_held(reason: String, evidence: Option<String>) -> He
     }
 }
 
+/// Copy `text` with every byte inside fenced code blocks and inline code
+/// spans replaced by a space, so the scan that follows reads identical text
+/// outside code and nothing at all inside it. A backtick-quoted `<help>` is
+/// a worker talking about the protocol, not a distress; a fenced tag is a
+/// quotation the same way.
+pub(crate) fn blank_code_spans_and_fences(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_fence = false;
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            out.push_str(line);
+            continue;
+        }
+        if in_fence {
+            for c in line.chars() {
+                out.push(if c == '\n' { '\n' } else { ' ' });
+            }
+            continue;
+        }
+        // A maximal run of n backticks is one inline-code delimiter, and the
+        // next run of exactly n closes it, so a double-backtick span does
+        // not cancel itself out. A run never crosses a line in the markdown
+        // the transcripts carry, so the span state resets per line: one
+        // unclosed run blanks only to the end of its line.
+        let mut open_len = 0usize;
+        let mut it = line.chars().peekable();
+        while let Some(c) = it.next() {
+            if c == '`' {
+                let mut run = 1usize;
+                while it.peek() == Some(&'`') {
+                    it.next();
+                    run += 1;
+                }
+                if open_len == 0 {
+                    open_len = run;
+                } else if run == open_len {
+                    open_len = 0;
+                }
+                for _ in 0..run {
+                    out.push('`');
+                }
+            } else if open_len > 0 && c != '\n' {
+                out.push(' ');
+            } else {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// The opening tag must carry at least one `name=` attribute: the protocol
+/// block always does, and a bare `<help>` in running text is prose naming
+/// the protocol, not a distress.
+pub(crate) fn carries_an_attribute(tag_body: &str) -> bool {
+    tag_body
+        .as_bytes()
+        .windows(2)
+        .any(|w| w[1] == b'=' && (w[0].is_ascii_alphanumeric() || w[0] == b'_'))
+}
+
 /// First `<help ...>` opening tag whose name is exactly `help` (a raw
-/// `find("<help")` would also match `<helper>`). An empty or missing reason
-/// still parses: the events schema permits a reason-less blocked row, and the
-/// distress itself is the signal.
+/// `find("<help")` would also match `<helper>`), that carries at least one
+/// attribute, and that sits outside inline code spans and fenced code
+/// blocks: a tag a worker merely quotes or fences is prose, not a distress.
+/// The closing `</help>` is optional - the wait directive's machine tag
+/// ships without one and must still parse. An empty attribute VALUE still
+/// parses (the events schema permits a reason-less blocked row); a bare
+/// attribute-less tag does not.
 pub(crate) fn extract_help_distress(text: &str) -> Option<HelpDistress> {
+    let text = &blank_code_spans_and_fences(text);
     let mut from = 0usize;
     while let Some(rel) = text[from..].find("<help") {
         let start = from + rel;
         let after = &text[start + "<help".len()..];
-        let boundary = after
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_whitespace() || c == '>' || c == '/');
+        let boundary = after.chars().next().is_some_and(|c| c.is_whitespace());
         if boundary {
             let tag_end = after.find('>')?;
             let tag = &text[start..start + "<help".len() + tag_end + 1];
-            return Some(HelpDistress {
-                reason: parse_xml_attr(tag, "reason").unwrap_or_default(),
-                evidence: parse_xml_attr(tag, "evidence"),
-                kind: DistressKind::Help,
-                class: parse_xml_attr(tag, "class")
-                    .map(|c| HelpClass::parse(&c))
-                    .unwrap_or(HelpClass::Unclassified),
-            });
+            if carries_an_attribute(&tag["<help".len()..tag.len() - 1]) {
+                return Some(HelpDistress {
+                    reason: parse_xml_attr(tag, "reason").unwrap_or_default(),
+                    evidence: parse_xml_attr(tag, "evidence"),
+                    kind: DistressKind::Help,
+                    class: parse_xml_attr(tag, "class")
+                        .map(|c| HelpClass::parse(&c))
+                        .unwrap_or(HelpClass::Unclassified),
+                });
+            }
         }
         from = start + "<help".len();
     }
@@ -836,13 +902,36 @@ mod tests {
         .expect("documented shape must parse");
         assert_eq!(d.reason, "missing dependency");
         assert_eq!(d.evidence.as_deref(), Some("plan 4.2"));
-        // Reason-less and evidence-less tags still parse (schema permits).
-        let bare = extract_help_distress("<help>").expect("bare tag parses");
-        assert_eq!(bare.reason, "");
-        assert_eq!(bare.evidence, None);
+        // Reason-less and evidence-less tags still parse (schema permits):
+        // an empty attribute VALUE parses, and a missing attribute parses
+        // when another attribute is present. A bare attribute-less tag is
+        // prose naming the protocol, not a distress: the block always
+        // carries at least one attribute, and leniency here mailed the lead
+        // an unclassified help for a worker that merely quoted the tag.
+        let empty = extract_help_distress(r#"<help reason="">"#).expect("empty reason parses");
+        assert_eq!(empty.reason, "");
+        assert_eq!(extract_help_distress("<help>"), None);
         let reason_only =
             extract_help_distress(r#"<help reason="x">"#).expect("reason-only parses");
         assert_eq!(reason_only.reason, "x");
+        // The measured specimen: the tag inside inline code is prose.
+        assert_eq!(
+            extract_help_distress(
+                "Not `<help>`-worthy: this is the wait class with a live watcher"
+            ),
+            None
+        );
+        // A classed tag inside a fenced block is a quotation, not a distress.
+        assert_eq!(
+            extract_help_distress("```yaml\n<help class=\"wait\" reason=\"ci\">\n```"),
+            None
+        );
+        // A double-backtick span blanks as one span: the run of two is one
+        // delimiter, not two toggles cancelling out.
+        assert_eq!(
+            extract_help_distress("see ``<help reason=\"example\">`` here"),
+            None
+        );
         // Typographic and single quotes delimit values like ASCII double quotes.
         for tag in [
             "<help class=\u{201c}wait\u{201d} reason=\u{201c}quota\u{201d} evidence=\u{201c}rate limit\u{201d}>",

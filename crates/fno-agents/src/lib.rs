@@ -72,6 +72,7 @@ pub mod attach;
 pub(crate) mod attended;
 pub mod attention;
 pub mod attention_arm;
+pub mod attention_chat;
 pub mod attention_file;
 pub mod attention_http;
 pub mod attention_reply;
@@ -105,6 +106,7 @@ pub mod chats;
 pub mod check_supersession;
 pub mod ci_cadence;
 pub mod ci_front;
+pub mod ci_tier;
 pub mod claim_cli;
 pub mod claim_commands;
 pub mod claim_lanes_cli;
@@ -300,6 +302,7 @@ pub mod lead_term;
 pub mod lead_termination;
 pub mod lead_verdict_inputs;
 pub mod lead_wake;
+pub mod lead_wake_triggers;
 pub mod lease_heartbeat;
 pub mod ledger_axes;
 pub(crate) mod ledger_register;
@@ -460,6 +463,7 @@ pub mod provider_key;
 pub mod provider_route;
 pub mod publish_review;
 pub mod quarantine;
+pub mod question_bus;
 pub mod question_clear;
 pub mod question_intake;
 pub mod question_sweep;
@@ -510,6 +514,7 @@ pub mod revival_check;
 pub mod revive_proof;
 pub mod rm_receipt;
 pub mod rm_tombstone;
+pub mod role_cwd;
 pub mod role_migration;
 pub mod roles;
 pub mod roster_progress;
@@ -555,6 +560,7 @@ pub mod spawn;
 pub mod spawn_admission;
 pub mod spawn_axes;
 pub mod spawn_backends;
+pub mod spawn_bare;
 pub mod spawn_compose;
 pub mod spawn_context;
 pub mod spawn_contract;
@@ -640,6 +646,7 @@ pub mod test_smoke_registry;
 #[cfg(test)]
 #[path = "test_smoke_tests.rs"]
 mod test_smoke_tests;
+pub mod text_or_file;
 pub mod think_daily;
 pub mod think_dispatch;
 pub mod think_inspect;
@@ -667,6 +674,7 @@ pub mod worktree;
 pub mod worktree_reapable;
 pub mod write_queue;
 pub mod yard;
+pub mod you_threads;
 pub mod zcode;
 pub mod zcode_ask;
 
@@ -1856,12 +1864,19 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The lead-wake arm's receipt: one row per daemon wake episode, the
     // dedupe memory the arm folds before it wakes again (lead_wake.rs).
     "lead_wake",
+    // The trigger leg's receipts (lead_wake_triggers.rs): the refill-respawn
+    // side of the arm, ported from the pr-watch tick's Python wake phase.
+    "lead_woken",
+    "lead_wake_refused",
+    "lead_spawned_successor",
     "worker_wake",
     // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
     "pr_push_landed",
     "ci_cadence_check",
     // The main_revert arm's read of a red main (main_revert.rs).
     "main_revert_check",
+    // A ci_tier arm pass that cancelled or reran runs (ci_tier.rs).
+    "ci_tier_pass",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.

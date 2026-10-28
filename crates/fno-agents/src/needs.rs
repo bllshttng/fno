@@ -967,6 +967,11 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
         eprintln!("fno-agents: not open: {item_id} (state {})", item.state);
         return 2;
     }
+    // The clear door refuses a copy, so an answer recorded here never lands.
+    if let Some(host) = &item.host {
+        eprintln!("fno-agents: {item_id} was asked on {host}; answer it there");
+        return 2;
+    }
     let answer = if let Some(n) = args.option {
         if n as usize > item.options.len() {
             eprintln!(
@@ -991,7 +996,14 @@ fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) ->
     } else {
         crate::attention_file::FileAnswer::Words(args.words.clone().unwrap_or_default())
     };
-    match crate::attention_arm::append_answer_row(item_id, "mux", &answer, "sink", "mux") {
+    match crate::attention_arm::append_answer_row(
+        item_id,
+        "mux",
+        &answer,
+        "sink",
+        "needs_door",
+        "mux",
+    ) {
         Ok((_, superseded)) => {
             println!(
                 "{}",
@@ -2683,6 +2695,7 @@ mod tests {
             "questions",
             &crate::attention_file::FileAnswer::Words("narrow".to_string()),
             "file_edit",
+            "attention_arm",
             "file:q-sup",
         )
         .unwrap();
@@ -2692,6 +2705,7 @@ mod tests {
             "mux",
             &crate::attention_file::FileAnswer::Words("wide".to_string()),
             "sink",
+            "needs_door",
             "mux",
         )
         .unwrap();
@@ -2702,6 +2716,7 @@ mod tests {
             "mux",
             &crate::attention_file::FileAnswer::Delegate,
             "sink",
+            "needs_door",
             "mux",
         )
         .unwrap();

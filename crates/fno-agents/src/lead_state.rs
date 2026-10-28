@@ -1272,7 +1272,13 @@ pub fn run_lead_state(args: &[String]) -> i32 {
         Some("--term") => return crate::lead_lifecycle::run_term(&args[1..]),
         Some("--drain") => return crate::lead_ops::run_drain(&args[1..]),
         Some("--done") => return crate::lead_ops::run_done(&args[1..]),
-        Some("--escalate") => return crate::lead_ops::run_escalate(&args[1..]),
+        Some("--escalate") => {
+            if let Err(message) = crate::role_cwd::rebind("escalate") {
+                eprintln!("{message}");
+                return 2;
+            }
+            return crate::lead_ops::run_escalate(&args[1..]);
+        }
         _ => {}
     }
     let mut scope: Option<String> = None;

@@ -373,8 +373,11 @@ def test_every_positional_seed_push_is_fenced_value_form_or_exempt() -> None:
     # ritual's own text) must precede the fence. Sixteen: the pi pane arm's
     # builder in pane_spawn/simple.rs, on the same probed pi reason as
     # pi_run_tail - the seed is a trailing positional after the flag block
-    # and the row-8 golden pins the unfenced form. Fifteen in all, after the
-    # hermes adapter left.
-    assert counts.get("exempt", 0) == 15, counts
+    # and the row-8 golden pins the unfenced form. Seventeen: the
+    # you-threads splitter's open_new call in you_threads.rs, a plain Rust
+    # closure argument the scanner's bracket walk misreads as an argv
+    # element; no launcher parser exists on that path. Sixteen in all,
+    # after the hermes adapter left.
+    assert counts.get("exempt", 0) == 16, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts

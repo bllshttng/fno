@@ -22,6 +22,7 @@ impl View {
         self.peek_esc.clear();
         self.peek_input = None;
         self.peek_input_esc.clear();
+        self.peek_docked = false;
     }
 }
 
@@ -54,6 +55,10 @@ pub(super) async fn peek_input_keys(
                 }
                 view.peek_input = None;
                 view.peek_input_esc.clear();
+                // The dock is the reply: Esc closes it whole.
+                if view.peek_docked {
+                    view.clear_peek();
+                }
                 break;
             }
             SearchKey::Byte(b) => match b {

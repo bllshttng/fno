@@ -1,0 +1,9 @@
+{
+  "exit": 2,
+  "policy": {
+    "sandbox": {
+      "enabled": false
+    }
+  },
+  "stderr": "sandbox write policy <path> carries no enabled sandbox block\n"
+}
