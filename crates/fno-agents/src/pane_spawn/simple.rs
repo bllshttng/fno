@@ -7,8 +7,7 @@
 //! does not touch.
 
 use super::env_wrap::{
-    enrich_spawn_payload, is_command_seed, mesh_env_wrapper, normalize_command, qos_wrap_for,
-    seed_provenance_env,
+    is_command_seed, mesh_env_wrapper, normalize_command, qos_wrap_for, seed_provenance_env,
 };
 use super::readiness::{
     await_interactive_readiness, submit_spawn_seed, ReadinessState, SeedOutcome,
@@ -84,16 +83,17 @@ pub(crate) fn grant_tokens(harness: &str) -> Vec<String> {
 }
 
 /// The per-spawn seed text: normalize a command seed, then the one payload
-/// entry (brevity block once) - the Python leg's render_seed/prepare ordering.
+/// entry (brevity block once, fleet-law block last) - the Python leg's
+/// render_seed/prepare ordering.
 /// `pub(crate)` for the claude arm, which composes the same seed.
 pub(crate) fn seed_text(ctx: &PaneContext) -> String {
     let message = ctx.message.as_str();
-    if is_command_seed(message) {
-        let normalized = normalize_command(message, ctx.provider.as_str());
-        enrich_spawn_payload(&normalized)
+    let base = if is_command_seed(message) {
+        normalize_command(message, ctx.provider.as_str())
     } else {
-        enrich_spawn_payload(message)
-    }
+        message.to_owned()
+    };
+    crate::spawn_payload::finalize_spawn_payload_at(&base, &ctx.cwd).0
 }
 
 /// The pinned session id for the preassigned-binding harnesses

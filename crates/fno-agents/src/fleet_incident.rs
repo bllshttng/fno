@@ -202,7 +202,7 @@ fn scope_verdict(verdict: Verdict, scope: &str) -> Verdict {
     }
 }
 
-fn target_from_path(path: &Path) -> Option<String> {
+pub(crate) fn target_from_path(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_str()?.strip_suffix(".json")?;
     let (kind, value) = if let Some(value) = name.strip_prefix("session-") {
         ("session", value.to_string())
@@ -418,7 +418,7 @@ fn print_machine_status(record: &IncidentRecord, state: &str, targets: &[TargetS
     }
 }
 
-fn target_matches(target: &str, subject: &Subject<'_>) -> Result<bool, String> {
+pub(crate) fn target_matches(target: &str, subject: &Subject<'_>) -> Result<bool, String> {
     let (kind, value) = target
         .split_once(':')
         .ok_or_else(|| format!("invalid target {target:?}"))?;

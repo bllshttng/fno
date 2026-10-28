@@ -291,6 +291,48 @@ pub(crate) fn holds_pr(home: &AgentsHome, pr: u64, repo: Option<&str>) -> bool {
     })
 }
 
+/// The spawn-time freeze line for `repo`, or None. Same record + lift read
+/// as `holds_pr`, asked about the repo (pr None) instead of one PR; an
+/// unreadable record or store renders nothing, because this line informs a
+/// seed while the merge gate still fails closed on its own read.
+pub(crate) fn active_freeze_line(home: &AgentsHome, repo: Option<&str>) -> Option<String> {
+    let store = crate::store_remote::configured()
+        .ok()
+        .map(|primary| Store {
+            file: record_path(&home.root()),
+            primary,
+        })?;
+    active_freeze_line_in(&store, repo, &decision_index::default_store_live)
+}
+
+/// `active_freeze_line` over injected parts (tests).
+fn active_freeze_line_in(store: &Store, repo: Option<&str>, laws: Laws) -> Option<String> {
+    // An unknown slug sees only a version-1 record, which freezes every
+    // repo; a repo-scoped freeze is not asked about a repo nobody named.
+    // (verdict_for_in's repo=None reads as inside, the pr-watch contract -
+    // the seed line needs the strict reading, so it gates here.)
+    if let (Some(_), None) = (read_record(store).ok().flatten().and_then(|r| r.repo), repo) {
+        return None;
+    }
+    match verdict_for_in(store, None, repo, laws) {
+        Verdict::Frozen {
+            subject,
+            set_by,
+            lift,
+        } => {
+            let who = if set_by.is_empty() {
+                String::new()
+            } else {
+                format!(", set_by {set_by}")
+            };
+            Some(format!(
+                "- {subject} (merge freeze{who}): pinned at {lift}; only the user lifts it"
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// The merge owner's probe. Frozen refuses (the owner's fail_closed reads it
 /// as held, because the user's lift clears it) and disarms an armed queue, which
 /// would otherwise merge server side with no fno read. Unavailable is
@@ -733,6 +775,18 @@ mod tests {
             verdict_for_in(&home, Some(8), Some("o/r"), &lifted),
             Verdict::Clear
         );
+
+        // The spawn-time seed line: a frozen repo renders it with its pin, a
+        // lifted one renders none, and another repo sees none either.
+        let line = active_freeze_line_in(&home, Some("o/r"), &empty)
+            .expect("a frozen repo renders the seed line");
+        assert!(line.contains("rc (merge freeze, set_by team)"), "{line}");
+        assert!(line.contains(&format!("pinned at {lift}")), "{line}");
+        assert!(active_freeze_line_in(&home, Some("o/r"), &lifted).is_none());
+        assert!(active_freeze_line_in(&home, Some("p/q"), &empty).is_none());
+        // An unknown slug is not inside a repo-scoped freeze: it renders
+        // none, and only a version-1 all-repo record could bind it.
+        assert!(active_freeze_line_in(&home, None, &empty).is_none());
         // Any harness session can mint a chat_attested row, so it holds.
         let chat = store(vec![row("d-4", &lift, "chat_attested")]);
         assert!(matches!(
