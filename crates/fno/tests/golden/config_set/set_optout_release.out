@@ -1,0 +1,1 @@
+set review.self_review_required = True (global: <FIXTURE>/fake_home/.fno/config.toml)

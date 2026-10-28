@@ -768,16 +768,14 @@ pub fn run(args: &[String]) -> i32 {
     i32::from(!summary.reap_failed.is_empty())
 }
 
-/// The opt-out restore fold (cli.py's `restore_reaped_optouts` extend,
-/// cli.py:1502-1505): config files are written through the Python config
-/// writer, so each reaped `config-optout:` claim restores via a
-/// `python -m fno.claims._optout_restore` subprocess carrying the fresh
-/// record as JSON. The child folds its own failure into one stderr line
-/// (`opt-out restore failed: ...`), the exact string Python's fold appends.
-/// Failures land in `reap_failed` after the sweep's own failures and before
-/// render, so the FAILED lines and the exit code match the Python order.
+/// The opt-out restore fold: each reaped `config-optout:` claim restores the
+/// value its metadata recorded through the native config writer, behind
+/// `fno config unset --restore-optout <record>` (this crate does not link
+/// the fno crate). The child folds its own failure into one stderr line
+/// (`opt-out restore failed: ...`). Failures land in `reap_failed` after the
+/// sweep's own failures and before render, so the FAILED lines and the exit
+/// code keep their order.
 fn restore_reaped_optouts(summary: &mut ReapSummary) {
-    let cwd = std::env::current_dir().unwrap_or_default();
     for claim in std::mem::take(&mut summary.optout_sink) {
         let payload = match serde_json::to_string(&claim) {
             Ok(payload) => payload,
@@ -788,9 +786,11 @@ fn restore_reaped_optouts(summary: &mut ReapSummary) {
                 continue;
             }
         };
-        let mut cmd = crate::finalize::py_module(&cwd);
-        cmd.args(["-m", "fno.claims._optout_restore", "--claim", &payload]);
-        match cmd.output() {
+        let output = std::process::Command::new(crate::scrape::fno_bin())
+            .args(["config", "unset", "--restore-optout", payload.as_str()])
+            .stdin(std::process::Stdio::null())
+            .output();
+        match output {
             Ok(output) if output.status.success() => {}
             Ok(output) => {
                 let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();

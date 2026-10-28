@@ -72,11 +72,10 @@ enum Role {
     ConfigDefaults(Vec<OsString>),
     ConfigRoute(Vec<OsString>),
     ConfigSchema(Vec<String>),
-    /// The native read-side `config` doors (get, history, build-dir,
-    /// assert-subagent-budget, status-sinks, active-backlog, plugin install).
-    /// One classify, bodies in `config_cli::`; the writer stays with the
-    /// config hub's write surface and the doctor command beside the setup
-    /// family's engine.
+    /// The native `config` doors (get, history, build-dir,
+    /// assert-subagent-budget, status-sinks, active-backlog, plugin install,
+    /// set, unset, rm). One classify and one dispatch in `config_cli::`; the
+    /// doctor command stays beside the setup family's engine.
     ConfigCli(fno::config_cli::Door),
     /// `fno config setup run`: the one run-once setup over the one step
     /// table, with a no-prompt path (`--yes`, non-TTY stdin, agent env).
@@ -1708,21 +1707,7 @@ fn main() {
         Role::ConfigDefaults(rest) => std::process::exit(fno::config_defaults::run(&rest)),
         Role::ConfigRoute(rest) => std::process::exit(config_route_cli::run(&rest)),
         Role::ConfigSchema(rest) => std::process::exit(fno::config_schema::run(&rest)),
-        Role::ConfigCli(door) => std::process::exit(match door {
-            fno::config_cli::Door::Get(rest) => fno::config_cli::get::run(&rest),
-            fno::config_cli::Door::History(rest) => fno::config_cli::history::run(&rest),
-            fno::config_cli::Door::BuildDir => fno::config_cli::leaves::run_build_dir(&[]),
-            fno::config_cli::Door::Budget(rest) => fno::config_cli::leaves::run_budget(&rest),
-            fno::config_cli::Door::StatusSinks(rest) => {
-                fno::config_cli::leaves::run_status_sinks(&rest)
-            }
-            fno::config_cli::Door::ActiveBacklog => {
-                fno::config_cli::leaves::run_active_backlog(&[])
-            }
-            fno::config_cli::Door::PluginInstall(rest) => {
-                fno::config_cli::plugin_install::run(&rest)
-            }
-        }),
+        Role::ConfigCli(door) => std::process::exit(fno::config_cli::run(door)),
         Role::SetupRun(rest) => std::process::exit(fno::setup_run::run(&rest)),
         Role::SetupCmd(cmd) => std::process::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => std::process::exit(fno::wizard_term::run(&rest)),

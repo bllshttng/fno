@@ -1,0 +1,24 @@
+{
+ "agents_calls": [
+  "claim release config-optout:review.self_review_required --holder sess-fixture --with-claim --json"
+ ],
+ "claims": [],
+ "global": {},
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [
+  {
+   "attester_session_id": "sess-fixture",
+   "attester_witness": "env_only",
+   "config_path": "<FIXTURE>/fake_home/.fno/config.toml",
+   "journal": "events.jsonl",
+   "key": "review.self_review_required",
+   "old_value": false,
+   "present_after": false,
+   "present_before": true,
+   "root_kind": "operator",
+   "scope": "global"
+  }
+ ],
+ "shared": null
+}
