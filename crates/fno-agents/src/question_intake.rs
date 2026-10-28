@@ -546,6 +546,23 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
         _ => req.question.clone(),
     };
     let retraction_ask = targets_operator_retraction(&closing_text, &req.laws);
+    // A retraction ask names its own target: exactly one cited live
+    // operator-retraction law stamps the machine subject, so the board
+    // answer performs the retraction in the same step. A question citing
+    // several laws names no single target and gets no stamp.
+    let retraction_stamp: Option<String> = if retraction_ask {
+        let cited: Vec<&crate::law_match::LawRow> = req
+            .laws
+            .iter()
+            .filter(|l| {
+                l.retraction_needs_operator()
+                    && cites_retraction(&closing_text, std::slice::from_ref(&l.decision_id))
+            })
+            .collect();
+        (cited.len() == 1).then(|| format!("law-retract:{}", cited[0].decision_id.to_lowercase()))
+    } else {
+        None
+    };
     let law_verdict = crate::law_match::ask_answer(&crate::law_match::AskRequest {
         question: req.question.clone(),
         subject: req.subject.clone(),
@@ -762,11 +779,13 @@ judges. Pass each screenshot with --image <path>; the page embeds them under ## 
     }
 
     // Dedup: an open question on the same subject and node already waits.
-    let subject = req
-        .subject
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let subject: Option<String> = retraction_stamp.clone().or_else(|| {
+        req.subject
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    });
     let index = req
         .index_path
         .clone()
@@ -774,7 +793,7 @@ judges. Pass each screenshot with --image <path>; the page embeds them under ## 
     // One read serves the dedup and the supersede after the write: the
     // open rows a re-ask closes are the ones this read saw.
     let open = open_rows(&index);
-    if let (Some(s), Some(n)) = (subject, node) {
+    if let (Some(s), Some(n)) = (subject.as_deref(), node) {
         let dup = open.iter().find(|row| {
             row.subject.as_deref().map(str::trim) == Some(s) && row.node.as_deref() == Some(n)
         });
@@ -916,7 +935,7 @@ already waits ({}). Answer it or clear it; do not ask twice.",
             data.insert("options".into(), json!(req.options));
         }
     }
-    if let Some(subject) = subject {
+    if let Some(subject) = &subject {
         data.insert("subject".into(), json!(subject));
     }
     let why_user = parsed.why_user.trim();
@@ -1022,12 +1041,17 @@ would mint a second id for the same question."
         "outstanding: recorded {qid}. The user answers it on the question board, \
 and the answer closes it. To withdraw it yourself: fno inbox outstanding clear {qid}"
     ));
+    if let Some(stamp) = &retraction_stamp {
+        answer.lines.push(format!(
+            "outstanding: retraction target {stamp} stamped; the board answer performs the retraction as the operator"
+        ));
+    }
 
     // A re-ask at a new head closes the older head's open question on the
     // same node, whoever asked: the older head can no longer be approved
     // or refused, so one open question per head family stays. Best-effort;
     // a close that fails here waits for the hourly sweep.
-    if let (Some(s), Some(n)) = (subject, node) {
+    if let (Some(s), Some(n)) = (subject.as_deref(), node) {
         if let Some((new_family, new_head)) = crate::question_sweep::head_scoped(s) {
             let olds: Vec<(&str, &str)> = open
                 .iter()
@@ -1448,6 +1472,61 @@ stops
             ts: Some("2026-08-29T19:20:10Z".to_string()),
             lane: Some("law".to_string()),
         }
+    }
+
+    #[test]
+    fn a_single_law_retraction_ask_stamps_the_machine_subject() {
+        // Exactly one cited live operator-retraction law stamps
+        // law-retract:<id> on the recorded question, so the board answer
+        // performs the retraction in the same step. Two cited laws name no
+        // single target: no stamp, the caller's subject stands.
+        let home = tmp_home("retract-stamp");
+        let root = tmp_root("retract-stamp");
+        let question = QUESTION_FILE
+            .replace("## Reversible\ncostly", "## Reversible\nyes")
+            .replace(
+                "Is a net-zero Python repair legal with no grant?",
+                "Retract d-junk0001: the junk law ruling on junk-law?",
+            );
+        let mut r = req(&question, &root);
+        r.subject = Some("junk-law".to_string());
+        r.node = Some("x-aaaa".to_string());
+        r.laws = vec![junk_law()];
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        let row = journal_text(&root);
+        assert!(
+            row.contains("\"law-retract:d-junk0001\""),
+            "stamped subject: {row}"
+        );
+        assert!(
+            answer
+                .lines
+                .iter()
+                .any(|l| l.contains("retraction target law-retract:d-junk0001")),
+            "{:?}",
+            answer.lines
+        );
+
+        let mut second = junk_law();
+        second.decision_id = "d-junk0002".to_string();
+        let home = tmp_home("retract-stamp-2");
+        let root = tmp_root("retract-stamp-2");
+        let mut r = req(&question, &root);
+        r.subject = Some("junk-law".to_string());
+        r.node = Some("x-aaaa".to_string());
+        r.laws = vec![junk_law(), second];
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        let row = journal_text(&root);
+        assert!(
+            !row.contains("law-retract"),
+            "no stamp on a two-law ask: {row}"
+        );
+        assert!(
+            row.contains("\"junk-law\""),
+            "the caller's subject stands: {row}"
+        );
     }
 
     #[test]
