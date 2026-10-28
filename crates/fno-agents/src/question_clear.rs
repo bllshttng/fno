@@ -577,6 +577,20 @@ mod tests {
         );
     }
     #[test]
+    fn a_negated_or_punctuated_retraction_answer_never_reads_affirmative() {
+        assert!(is_affirmative_retraction_answer(
+            "Retract it as a junk row."
+        ));
+        assert!(!is_affirmative_retraction_answer("Retract? No."));
+        assert!(!is_affirmative_retraction_answer("Do not retract it."));
+        assert!(!is_affirmative_retraction_answer("keep it for now"));
+        assert!(is_affirmative_retraction_answer("yes"));
+        // The fallback path names the verb; a bare yes arms nothing there.
+        assert!(!retraction_intent_lead("yes"));
+        assert!(retraction_intent_lead("Retract it."));
+    }
+
+    #[test]
     fn an_answered_retraction_question_retracts_the_law_in_the_same_step() {
         // The retraction writer resolves the machine default store, so the
         // test pins FNO_HOME/FNO_REPO_ROOT the way the law door tests do.
@@ -1166,12 +1180,15 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     });
                 }
             }
+            let stamped = retraction_subject(question_event).is_some();
             if let Some((subject, target_id)) = retraction_subject(question_event)
                 .or_else(|| retraction_fallback(question_event))
                 .filter(|_| operator_can_grant(req))
             {
-                if retraction_answer_grants(question_event, &text) {
-                    if was_resumed {
+                if retraction_answer_grants(question_event, &text, stamped) {
+                    if let Err(reason) = validate_live_law_target(&target_id) {
+                        answer.lines.push(format!("outstanding: {reason}"));
+                    } else if was_resumed {
                         answer.lines.push(format!(
                             "outstanding: operator retraction recorded for {target_id} (the law reads RETRACTED)"
                         ));
@@ -1643,13 +1660,62 @@ fn merge_answer_grants(question_event: &Value, answer: &str) -> bool {
 }
 
 /// True when an answer on a retraction question reads as the affirmative
-/// retraction: an intent-verb lead ("Retract it as a junk row") without a
-/// negation, a generic affirmative, or the recommended option pick. Same
-/// polarity discipline as the merge set: an answer outside the shape records
-/// law at the subject and retracts nothing.
-fn retraction_answer_grants(question_event: &Value, answer: &str) -> bool {
-    is_affirmative_retraction_answer(answer)
+/// retraction. `stamped` distinguishes the machine subject from the text
+/// fallback: the subject names the action, free text must.
+fn retraction_answer_grants(question_event: &Value, answer: &str, stamped: bool) -> bool {
+    if stamped {
+        return is_affirmative_retraction_answer(answer)
+            || picks_recommended_option(question_event, answer, RETRACT_OPTION_LEADS);
+    }
+    // The fallback asks the free text to name the action: a bare yes on a
+    // status-phrased question ("was d-X retracted?") answers the question
+    // and retracts nothing. The verb is the intent.
+    retraction_intent_lead(answer)
         || picks_recommended_option(question_event, answer, RETRACT_OPTION_LEADS)
+}
+
+/// The intent-verb lead: an affirmative reads only when the answer opens
+/// with a retraction verb and no negation follows it. Shared by both
+/// polarity paths; the generic tail below is the stamped path's extra.
+fn retraction_intent_lead(answer: &str) -> bool {
+    let normalized = answer
+        .trim()
+        .trim_end_matches(['.', '!', '?', ';', ',', ':'])
+        .to_lowercase();
+    const NEGATIONS: [&str; 5] = ["no", "not", "never", "don't", "dont"];
+    const INTENT: [&str; 5] = ["retract", "repeal", "rescind", "revoke", "overturn"];
+    for lead in INTENT {
+        if let Some(rest) = normalized.strip_prefix(lead) {
+            let rest = rest
+                .trim_start()
+                .trim_start_matches(['?', '!', '.', ',', ';', ':'])
+                .trim_start();
+            let negated = rest.starts_with("n't")
+                || NEGATIONS
+                    .iter()
+                    .any(|n| rest == *n || rest.starts_with(&format!("{n} ")));
+            if !negated {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The closed retraction vocabulary. The intent verbs lead the way the ask
+/// gate's `cites_retraction` words the action; a negation right after the
+/// verb ("retract nothing", "retract? no") never reads affirmative, and the
+/// generic tail is the merge set minus the merge-only words.
+fn is_affirmative_retraction_answer(answer: &str) -> bool {
+    let normalized = answer
+        .trim()
+        .trim_end_matches(['.', '!', '?', ';', ',', ':'])
+        .to_lowercase();
+    retraction_intent_lead(answer)
+        || matches!(
+            normalized.as_str(),
+            "yes" | "y" | "approve" | "approved" | "go ahead" | "do it"
+        )
 }
 
 /// The closed retraction vocabulary. The intent verbs lead the way the ask
@@ -1665,7 +1731,10 @@ fn is_affirmative_retraction_answer(answer: &str) -> bool {
     const INTENT: [&str; 5] = ["retract", "repeal", "rescind", "revoke", "overturn"];
     for lead in INTENT {
         if let Some(rest) = normalized.strip_prefix(lead) {
-            let rest = rest.trim_start();
+            let rest = rest
+                .trim_start()
+                .trim_start_matches(['?', '!', '.', ',', ';', ':'])
+                .trim_start();
             let negated = rest.starts_with("n't")
                 || NEGATIONS
                     .iter()
@@ -1679,6 +1748,37 @@ fn is_affirmative_retraction_answer(answer: &str) -> bool {
         normalized.as_str(),
         "yes" | "y" | "approve" | "approved" | "go ahead" | "do it"
     )
+}
+
+/// The subject path validates its target the way the retract door does: a
+/// live law row must exist for the id, or the answer records law at the
+/// subject and retracts nothing. A subject can name anything; the store
+/// decides what the retraction may land on.
+fn validate_live_law_target(target_id: &str) -> Result<(), String> {
+    let (rows, _) = crate::law_match::all_decision_rows().map_err(|e| {
+        format!("{target_id} names no verifiable target (the decision store is unreadable: {e}); nothing retracted")
+    })?;
+    let row = rows
+        .iter()
+        .filter(|r| !crate::law_match::is_retraction_row(r))
+        .find(|r| {
+            r.get("decision_id")
+                .and_then(Value::as_str)
+                .map(|v| v.eq_ignore_ascii_case(target_id))
+                == Some(true)
+        })
+        .ok_or_else(|| format!("{target_id} names no live decision; nothing retracted"))?;
+    if !crate::decision_index::is_law(row) {
+        return Err(format!(
+            "{target_id} is not a law-lane decision; nothing retracted"
+        ));
+    }
+    if crate::decision_index::retirement_map(&rows).contains_key(target_id) {
+        return Err(format!(
+            "{target_id} is already retired; nothing to retract"
+        ));
+    }
+    Ok(())
 }
 
 /// The board answer's retraction: write through the shared writer, receipt
