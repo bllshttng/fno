@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] = {
     "accounts": ("fno.adapters.providers.cli:cli", "Manage account records."),
     # Folded under config (unit 6). The old top-level spellings stay
-    # one-release shims (fno.command_moves); these mounts are the canonical
+    # retired at the front door (command-names.tsv); these mounts are the canonical
     # homes. Lazy for the same reason `accounts` is: `fno config get` runs
     # from shell dozens of times per phase and must not pay for their imports.
     # Hidden: the menu cap is 12 and config already curates nine visible

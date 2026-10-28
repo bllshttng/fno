@@ -170,3 +170,46 @@ fno do target cancel|end the session from its own harness, or touch .fno/.target
 # session id ever needed the flag. The parsers accept it as a silent no-op for
 # one release; no caller-facing string may teach it.
 --cross-project|nothing: a session id resolves from any project, so the flag has no work|d-460ea8c7
+fno annotate|fno backlog note|d-aef0ed7b
+fno approvals|fno inbox approvals|d-aef0ed7b
+fno autonomy|fno agents admit autonomy|d-aef0ed7b
+fno board-render|fno backlog publish --local-snapshot|d-aef0ed7b
+fno bundle|fno doctor bundle|d-aef0ed7b
+fno carveout|fno backlog carveout|d-aef0ed7b
+fno claim|fno agents claim|d-aef0ed7b
+fno codemap|nothing: codegraph answers code-map questions now|d-aef0ed7b
+fno context|fno whoami context|d-aef0ed7b
+fno cost|fno whoami cost|d-aef0ed7b
+fno delivery|fno do delivery|d-aef0ed7b
+fno evals|fno doctor evals|d-aef0ed7b
+fno event|fno doctor event|d-aef0ed7b
+fno help|fno --help|d-aef0ed7b
+fno lead|fno agents org|d-aef0ed7b
+fno lint|fno doctor lint|d-aef0ed7b
+fno loops|fno agents loop control|d-aef0ed7b
+fno mcp|fno agents mail admin mcp|d-aef0ed7b
+fno notify|fno inbox notify|d-aef0ed7b
+fno observer|fno doctor observer|d-aef0ed7b
+fno outstanding|fno inbox outstanding|d-aef0ed7b
+fno paths|fno config paths|d-aef0ed7b
+fno phase|fno do phase|d-aef0ed7b
+fno plan|fno do plan|d-aef0ed7b
+fno plugins|fno config plugins|d-aef0ed7b
+fno pr|fno do pr|d-aef0ed7b
+fno pr-watch|fno do pr watch|d-aef0ed7b
+fno research|fno do research|d-aef0ed7b
+fno resume|fno do resume|d-aef0ed7b
+fno retro|fno backlog retro|d-aef0ed7b
+fno review|fno do review|d-aef0ed7b
+fno roles|fno agents org roles|d-aef0ed7b
+fno route|fno config route|d-aef0ed7b
+fno scoreboard|fno whoami scoreboard|d-aef0ed7b
+fno setup|fno config setup|d-aef0ed7b
+fno skill-diff|fno doctor skill-diff|d-aef0ed7b
+fno state|fno do state|d-aef0ed7b
+fno status|fno whoami status|d-aef0ed7b
+fno status-fanout|fno doctor event fanout|d-aef0ed7b
+fno stub-manifest|fno do pr stub-manifest|d-aef0ed7b
+fno target|fno do target|d-aef0ed7b
+fno think|fno do think|d-aef0ed7b
+fno worktree|fno agents workspace worktree|d-aef0ed7b

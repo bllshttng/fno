@@ -452,7 +452,7 @@ enum Role {
     /// `fno doctor event fanout`; the dispatch prints the one stderr move
     /// line, then runs the fanout door with the remaining args.
     StatusFanoutDeprecated(Vec<OsString>),
-    /// `fno board-render`: the local board's snapshot writer, a native front
+    /// `fno backlog publish --local-snapshot`: the local board's snapshot writer, a native front
     /// command because the page and the read model both live in this crate.
     BoardRender(Vec<String>),
     /// Any other args: the Python-CLI forwarding path.
@@ -1353,6 +1353,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::backlog_list::classify(args) {
         return Role::BacklogList(rest);
     }
+    if let Some(rest) = fno::backlog_snapshot::classify(args) {
+        return Role::BoardRender(rest);
+    }
     if args.first().and_then(|a| a.to_str()) == Some("backlog") {
         return Role::Backlog;
     }
@@ -1398,9 +1401,6 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     // `fno doctor event fanout`. Lexical claim: only the bare first token.
     if args.first().and_then(|a| a.to_str()) == Some("status-fanout") {
         return Role::StatusFanoutDeprecated(args.split_first().unwrap().1.to_vec());
-    }
-    if let Some(rest) = fno::backlog_snapshot::classify(args) {
-        return Role::BoardRender(rest);
     }
     if let Some(rest) = fno::law_cli::classify_inbox_decisions(args) {
         return Role::InboxDecisions(rest);

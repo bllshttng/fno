@@ -268,7 +268,7 @@ const REMEDIES: &[Remedy] = &[
         "existing: agents spawn --wait; hidden agents gate-status", "low", report_only),
     remedy!("liveness", "Is this worker alive",
         "no command today: fno agents liveness <handle> -J with transcript mtime + pid and a self-row positive control (rank 2)", "medium",
-        ["help", "agents", "--all"], r"(?im)^\s*liveness\s"),
+        ["agents", "fleet", "--help"], r"(?im)^\s*liveness\s"),
     remedy!("transcript", "Transcript search and tail",
         "existing: agents peek --grep with -A/--all", "low", report_only),
     remedy!("events", "Events journal query",
@@ -291,7 +291,7 @@ const REMEDIES: &[Remedy] = &[
     remedy!("config", "Config probe", "none: one-off", "medium", report_only),
     remedy!("copy_for_diff", "Copy a file at a revision to compare sides",
         "no command today: fno do show <rev>:<path> and fno do diff <rev-a> <rev-b> -- <path>, worktree-Bash safe (rank 12)", "medium",
-        ["help", "do", "--all"], r"(?im)^\s*show\s"),
+        ["do", "--help"], r"(?im)^\s*show\s"),
 ];
 
 const UNKNOWN_REMEDY: Remedy = remedy!(
