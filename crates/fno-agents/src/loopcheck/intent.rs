@@ -95,10 +95,11 @@ pub(super) fn detect_intent_from_text(text: &str) -> Intent {
         }
         from = w_start + "<watching".len();
     }
-    // The promise is the one attribute-less tag, so the closer is the
-    // discriminator: a real promise ships its closing tag, and prose
-    // mentioning the bare opener holds nothing.
-    if text.contains("<promise>") && text.contains("</promise>") {
+    // The promise is the one attribute-less tag, and the bare opener is the
+    // signal: the delivery evaluator accepts a final message that ships
+    // nothing but `<promise>`. A quoted mention dies in the blanked copy
+    // above, which is the whole prose-vs-signal boundary.
+    if text.contains("<promise>") {
         return Intent::Promise;
     }
     Intent::None
