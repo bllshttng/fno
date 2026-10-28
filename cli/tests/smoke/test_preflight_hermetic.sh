@@ -84,7 +84,7 @@ PYEOF
 # earliest signal off the 20-trial denominator) reported that the packet had
 # left run_hermetic entirely. The contract here is the wrapper and the explicit
 # revisions below, never the argv between them.
-grep -Eq 'run_hermetic .*doctor test smoke --changed' "$PF" \
+grep -Eq 'run_hermetic .*test-run doctor smoke --changed' "$PF" \
   || fail "changed packet does not run inside run_hermetic"
 grep -Fqe '--base "$CHANGED_BASE" --head "$CANDIDATE_SHA"' "$PF" \
   || fail "changed packet does not pin an explicit base/head"

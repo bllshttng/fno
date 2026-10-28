@@ -4133,3 +4133,114 @@ mod tests {
         assert!(render_due(&fresh, &current, None, RENDER_SETTLE));
     }
 }
+/// Live pids advertising a store keeper whose graph tree (file AND parent
+/// dir) is gone: the sweep's candidate scan, factored out so a test can
+/// census the SAME probe before the sweep acts. The parent-dir conjunct
+/// keeps the scan off a live test - a keeper spawned against a graph file
+/// not written yet has an existing parent; every measured orphan lost its
+/// whole tree at once.
+pub fn orphaned_keeper_pids() -> Vec<i32> {
+    let me = std::process::id() as i32;
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-eo", "pid=,command="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let mut pids: Vec<i32> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let line = line.trim();
+        let mut parts = line.splitn(2, char::is_whitespace);
+        let pid = match parts.next().map(|p| p.parse::<i32>()) {
+            Some(Ok(p)) => p,
+            _ => continue,
+        };
+        let cmd = parts.next().unwrap_or("");
+        if pid == me || !cmd.contains("--store-keeper") || !cmd.contains("--graph") {
+            continue;
+        }
+        let toks: Vec<&str> = cmd.split_whitespace().collect();
+        let Some(pos) = toks.iter().position(|t| *t == "--graph") else {
+            continue;
+        };
+        let Some(graph) = toks.get(pos + 1) else {
+            continue;
+        };
+        let graph_path = Path::new(graph);
+        if graph_path.exists() || graph_path.parent().is_some_and(|p| p.exists()) {
+            continue;
+        }
+        pids.push(pid);
+    }
+    pids
+}
+
+/// True when `pid` is a live, non-zombie process. `kill(pid, 0)` cannot be
+/// the probe: a zombie answers it, so a keeper that died on TERM under a
+/// live parent reads as a survivor. An unreadable table reads alive.
+fn keeper_alive(pid: i32) -> bool {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+    else {
+        return true;
+    };
+    let stat = String::from_utf8_lossy(&out.stdout);
+    let stat = stat.trim();
+    if stat.is_empty() {
+        return false;
+    }
+    !stat.starts_with('Z')
+}
+
+/// SIGTERM every live store keeper whose --graph tree is gone, wait
+/// `timeout_secs`, SIGKILL the rest, and return the pids that refused to
+/// die. Covers the populations the spawn ledger is blind to: keepers a CLI
+/// subprocess spawned, and keepers that outlived a session with no reaper
+/// wired (measured 2026-09-04: 8-10 live keepers against deleted pytest
+/// graph paths). The kill decision is the graph path's existence, never
+/// the command line - canonical and leaked keepers share an argv. Every
+/// probe and kill is guarded: an unreadable process table degrades to a
+/// no-op, never an error. Ported from graph/store.py: the only
+/// production caller there was the dying test_cmd's smoke runner, and the
+/// sweep now rides the keeper's own module so conftest can door-call it.
+pub fn sweep_orphaned(timeout_secs: f64) -> Vec<i32> {
+    let candidates = orphaned_keeper_pids();
+    for pid in &candidates {
+        unsafe {
+            libc::kill(*pid, libc::SIGTERM);
+        }
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs_f64(timeout_secs);
+    let mut pending: Vec<i32> = candidates
+        .iter()
+        .copied()
+        .filter(|p| keeper_alive(*p))
+        .collect();
+    while !pending.is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        pending.retain(|p| keeper_alive(*p));
+    }
+    for pid in &pending {
+        unsafe {
+            libc::kill(*pid, libc::SIGKILL);
+        }
+    }
+    let mut survivors: Vec<i32> = pending.into_iter().filter(|p| keeper_alive(*p)).collect();
+    survivors.sort();
+    survivors.dedup();
+    survivors
+}
+
+/// The `keeper-sweep` door's body: SIGTERM/SIGKILL every store keeper whose
+/// --graph tree is gone, printing the survivor count. One optional argv
+/// element overrides the wait seconds (default 15).
+pub fn run_keeper_sweep(args: &[String]) -> i32 {
+    let secs = args
+        .first()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(15.0);
+    let survivors = sweep_orphaned(secs);
+    println!("{}", survivors.len());
+    0
+}

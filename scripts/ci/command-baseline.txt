@@ -91,7 +91,6 @@ paths
 plan
 pr-watch
 resume
-test
 uninstall
 update
 version

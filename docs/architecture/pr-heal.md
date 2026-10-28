@@ -82,7 +82,15 @@ A real red cancels the head's runs still in flight, through the same reader `fno
 
 The shared runners serve a few PRs at a time. With 30 PRs open, every push queues behind the rest. The daemon's `ci_tier` arm runs open PRs through CI in tiers instead. It is off by default. Turn it on per repo with `[ci_tier] enabled = true`. The tier holds 6 PRs.
 
-Every 3 minutes the arm ranks the open PRs: a `main-repair` node first, drafts last, then node priority, then the older PR. A PR takes a slot only while it wants a runner: runs in flight, or runs the tier cancelled. A green PR takes no slot. Neither does a PR that waits only on review, or an idle red PR. So a merge frees a slot on the next pass. A PR in the tier gets the runs the tier cancelled rerun in full. A run cancelled by hand stays cancelled. A PR outside it has its runs in flight cancelled, unless 80 percent of its head already passed. A `merge-queue-gate` run is never cancelled and holds one slot. A pass that cancels or reruns a run writes one `ci_tier_pass` row.
+Every 3 minutes the arm ranks the open PRs: a `main-repair` node first, drafts last, then node priority, then the older PR. A PR takes a slot only while it wants a runner: runs in flight, or runs the tier cancelled. A green PR takes no slot. Neither does a PR that waits only on review, or an idle red PR. So a merge frees a slot on the next pass. A PR in the tier gets the runs the tier cancelled rerun in full. A run cancelled by hand stays cancelled. A PR outside it has its runs in flight cancelled, unless 80 percent of its head already passed. A `merge-queue-gate` run is never cancelled and holds one slot. Three things make a pass write one `ci_tier_pass` row: an act on a run, a change to the tier or ranking, and a 10-minute heartbeat. The row names each ranked PR and its branch.
+
+`fno do pr push` reads the newest row before it pushes. Three facts hold a push: the row is under 20 minutes old, the tier is full, and the PR ranks below every PR in it. The held push exits 3. A push into a full tier only queues runs that the next pass cancels. The hold writes one `ci_tier_held` row. When a later pass clears the hold, the arm mails the session to run `fno do pr push` again and writes one `ci_tier_wake` row. A main-repair PR ranks first, so only other main-repair PRs can hold it.
+
+## The idle-PR alarm
+
+On 2026-10-16 the user found 37 open PRs. Several were green and mergeable for days, and nothing raised an alarm. The owning worker merges its own PR. The daemon's `pr_idle` arm is the backstop for a worker that left. Every 15 minutes it lists the open PRs of each registry repo. It reads each non-draft PR through the status door, so the read rides the shared status cache and the account poller. It reads the merge gate's `ready` verdict. A PR that is held, uncovered or waiting on the user's visual look never reads ready.
+
+The first ready read of a head starts a clock in `<agents home>/pr-idle/`. After 2 hours every live lead gets one mail, and the phone sink gets one `operator_notice`. Each one names the PR, its age and `fno do pr merge <n>`. After 6 hours both go out once more. A new head, a not-ready read or a closed PR resets the clock. A failed send retries the next pass, and only to the recipients it missed.
 
 ## How to add a signature
 

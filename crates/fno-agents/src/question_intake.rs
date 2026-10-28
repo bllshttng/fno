@@ -492,6 +492,12 @@ question and ask again: only the user may record that retraction.";
     }
 
     let parsed = crate::escalation::parse(&req.question);
+    for name in &parsed.unknown_sections {
+        answer.lines.push(format!(
+            "outstanding: warning: section '## {name}' is not one the page renders, so the user will not see it. \
+Move its text into a known section, or link a vault page from 'Why these options'."
+        ));
+    }
     // A mistyped class would land as an unroutable hop, so it refuses the
     // way the reversible field does: exit 2, the six values named, nothing
     // written.
@@ -633,8 +639,8 @@ choice starts>'.",
 to rule. Decide door first: {decide} (--authority agent) - record the \
 ruling, then continue. \
 The user answers only what only a user can: irreversible, spends money or a \
-credential, reaches outside the machine, or a product or taste call - name it \
-with why_user: in the question file."
+credential, reaches outside the machine, changes a law, or is a product or taste \
+call - name it with why_user: in the question file (law-change for a law)."
                 ));
                 answer.refusal = Some("decide_yourself".to_string());
                 answer.exit_code = 2;

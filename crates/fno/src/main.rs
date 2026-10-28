@@ -319,6 +319,11 @@ enum Role {
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
     /// (`fno-agents test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
+    /// `fno doctor test ...` and the deprecated hidden root `fno test`: the
+    /// whole test command (pytest/rust/smoke/changed/census), exec'd as
+    /// `fno-agents test`. The tail rides byte-verbatim; --help answers native
+    /// help inside the command.
+    DoctorTest(Vec<OsString>),
     DoctorHome(Vec<OsString>),
     DoctorAgentsExec(&'static str, Vec<OsString>),
     /// `fno agents mail show ...`: the native one-message reader, lexically
@@ -705,6 +710,19 @@ fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Opti
         return None;
     }
     Some(args[2..].to_vec())
+}
+
+/// `fno doctor test ...` and the deprecated hidden root `fno test`: the whole
+/// command claims itself lexically, the tail byte-verbatim. A bare command and
+/// --help claim too (the Python leg dies in this port); the native command owns
+/// its help and its refusals.
+fn classify_test_command(args: &[OsString]) -> Option<Vec<OsString>> {
+    let rest: &[OsString] = match args.first()?.to_str()? {
+        "doctor" if args.get(1)?.to_str()? == "test" => &args[2..],
+        "test" => &args[1..],
+        _ => return None,
+    };
+    Some(rest.to_vec())
 }
 
 /// `fno doctor observer ...` and the deprecated root `fno observer ...`: the
@@ -1253,6 +1271,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_group_command(args, "doctor", "builds") {
         return Role::DoctorBuilds(rest);
+    }
+    if let Some(rest) = classify_test_command(args) {
+        return Role::DoctorTest(rest);
     }
     match fno::doctor::classify(args) {
         Some(fno::doctor::Claim::Home(rest)) => return Role::DoctorHome(rest),
@@ -1940,6 +1961,9 @@ fn main() {
             &["test-run", "builds"],
             &rest,
         )),
+        Role::DoctorTest(rest) => {
+            std::process::exit(fno_agents_exec("fno doctor test", &["test"], &rest))
+        }
         Role::DoctorHome(rest) => std::process::exit(fno::doctor::run(&rest)),
         Role::DoctorAgentsExec(label, argv) => {
             let action: Vec<String> = argv
