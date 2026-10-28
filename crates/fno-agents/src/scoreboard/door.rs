@@ -331,10 +331,19 @@ pub fn run_scoreboard(args: &[String]) -> i32 {
         super::views::build_scoreboard(&inputs, &touch, parsed.since_days, chrono::Local::now());
     // The Python project view handed survival no `now`: its frozen answer is
     // the gate ladder ending at the n/a on an unusable now, never the
-    // clock-driven rate the unscoped main view ships.
+    // clock-driven rate the unscoped main view ships. The state roll-up
+    // re-runs over the served sections, exactly Python's one-line formula.
     if project_mode {
         if let Some(ps) = inputs.classified.get("project_survival") {
             sb["survival"] = ps.clone();
+            let full = sb["coverage"]["termination_reason_pct"] == json!(100)
+                && sb["autonomy"]["available"] == json!(true)
+                && ps["available"] == json!(true);
+            sb["state"] = if full {
+                json!("full")
+            } else {
+                json!("partial")
+            };
         }
     }
     sb["event_coverage"] = coverage;
