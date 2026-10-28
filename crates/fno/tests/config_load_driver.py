@@ -283,11 +283,11 @@ def capture(golden: Path) -> None:
 
 
 RETIRED_FILES = {
-    "toml_both": ("config.toml", '[dispatch]\nallowed_verbs = ["a"]\nverb_registry = "x"\nkeep = 1\n'),
-    "toml_one": ("config.toml", "[dispatch]\nallowed_verbs = []\n\n[review]\nmax_rounds = 2\n"),
-    "yaml_one": ("settings.yaml", "dispatch:\n  verb_registry: x\nreview:\n  max_rounds: 2\n"),
+    "toml_both": ("config.toml", '[dispatch]\nallowed_verbs = ["a"]\nverb_registry = "x"\nkeep = 1\n'),  # verb-wording: allow
+    "toml_one": ("config.toml", "[dispatch]\nallowed_verbs = []\n\n[review]\nmax_rounds = 2\n"),  # verb-wording: allow
+    "yaml_one": ("settings.yaml", "dispatch:\n  verb_registry: x\nreview:\n  max_rounds: 2\n"),  # verb-wording: allow
     "toml_none": ("config.toml", "[review]\nmax_rounds = 2\n"),
-    "toml_mention_only": ("config.toml", '[review]\nposture = "allowed_verbs"\n'),
+    "toml_mention_only": ("config.toml", '[review]\nposture = "allowed_verbs"\n'),  # verb-wording: allow
 }
 
 
