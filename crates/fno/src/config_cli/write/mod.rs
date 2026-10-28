@@ -714,11 +714,9 @@ fn write_atomic(target: &Path, text: &str) -> std::io::Result<()> {
     result
 }
 
-/// The file after one locked update: its real path and both parsed states.
+/// The file after one locked update: its real path.
 pub(crate) struct Written {
     pub path: PathBuf,
-    pub before: Value,
-    pub after: Value,
 }
 
 /// `_locked_update`: lock, re-read, mutate, write only on a parsed change,
@@ -774,11 +772,7 @@ where
     }
     drop(lock);
     emit_receipts(&before, &after, &real, scope);
-    Ok(Written {
-        path: real,
-        before,
-        after,
-    })
+    Ok(Written { path: real })
 }
 
 // ---------------------------------------------------------------------------
@@ -1155,7 +1149,7 @@ fn live_or_suspect(status: &Value) -> bool {
 
 /// What a held lease reports on the `lease:` line.
 #[derive(Clone, Debug)]
-pub(crate) struct Lease {
+pub struct Lease {
     pub holder: String,
     pub expires_at: Value,
 }
