@@ -480,6 +480,7 @@ mod tests {
             &Outcome::Armed {
                 head: "abc123".into(),
                 merge_grant: None,
+                queued: false,
             },
         );
         let mut finalize = request.clone();
@@ -491,6 +492,7 @@ mod tests {
             &Outcome::Armed {
                 head: "abc123".into(),
                 merge_grant: None,
+                queued: false,
             },
         );
 

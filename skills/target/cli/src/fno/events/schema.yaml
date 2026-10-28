@@ -8611,6 +8611,14 @@ event_types:
     description: "The ci_tier arm found a held push whose hold cleared and woke the session to push again."
     sources: [daemon]
     data: {required: [slug, branch, held_ms]}
+  - name: merge_queue_entry
+    description: "authorized_merge queued a PR head in place of merging it, because merge_queue.enabled is on. The merge queue arm lands it in a batch tested on main."
+    sources: [daemon, rust]
+    data: {required: [slug, pr, head]}
+  - name: merge_queue_step
+    description: "One merge queue act on a batch. step names it: build, rerun, land, split, eject, rebuild or hold."
+    sources: [daemon]
+    data: {required: [slug, step, batch]}
   - name: mcp_channel_demoted_to_socket
     description: "Legacy agents-family telemetry kind, envelope-mapped by the shared emitter."
     sources: [daemon, agents]

@@ -135,6 +135,8 @@ pub enum Outcome {
     Armed {
         head: String,
         merge_grant: Option<String>,
+        /// The fno merge queue, not GitHub, owns the landing.
+        queued: bool,
     },
     /// The decision cleared and the caller asked to stop there. Nothing ran.
     Authorized { head: String },
@@ -168,6 +170,9 @@ impl Outcome {
     pub fn detail(&self) -> String {
         match self {
             Outcome::Merged { head, .. } => head.clone(),
+            Outcome::Armed {
+                head, queued: true, ..
+            } => format!("{head} queued in the fno merge queue, which lands it"),
             Outcome::Armed { head, .. } | Outcome::Authorized { head } => head.clone(),
             Outcome::Held { reason }
             | Outcome::Refused { reason }
@@ -204,8 +209,15 @@ impl Outcome {
                     out["merge_grant"] = json!(g);
                 }
             }
-            Outcome::Armed { head, merge_grant } => {
+            Outcome::Armed {
+                head,
+                merge_grant,
+                queued,
+            } => {
                 out["head"] = json!(head);
+                if *queued {
+                    out["queued"] = json!(true);
+                }
                 if let Some(g) = merge_grant {
                     out["merge_grant"] = json!(g);
                 }
@@ -465,6 +477,18 @@ pub trait Probes {
     /// that does not read GitHub reviews inert.
     fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, _reviewed_head: &str) -> ProbeOutcome {
         ProbeOutcome::Clear
+    }
+    /// Queue this head in place of the merge. `None`: no queue owns this
+    /// base (`merge_queue.enabled` off), so the effect merges. `Some(Ok(None))`
+    /// queued; `Some(Ok(Some(reason)))` the queue ejected this head. Default
+    /// `None` keeps every impl that does not read the config merging.
+    fn merge_queue(
+        &self,
+        _cwd: &Path,
+        _facts: &PrFacts,
+        _head: &str,
+    ) -> Option<Result<Option<String>, String>> {
+        None
     }
 }
 
@@ -1482,6 +1506,7 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
             Effect::Arm => Outcome::Armed {
                 head: authorized.head.clone(),
                 merge_grant: authorized.merge_grant.clone(),
+                queued: false,
             },
             // Merging now would race the queue that already owns this PR.
             Effect::Merge => Outcome::Held {
@@ -1490,6 +1515,19 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
                      the queue merges it when checks pass"
                 ),
             },
+        };
+    }
+
+    // Every gate above still decided. The queue only changes who lands it.
+    if let Some(queued) = probes.merge_queue(cwd, &authorized.facts, &authorized.head) {
+        return match queued {
+            Ok(None) => Outcome::Armed {
+                head: authorized.head.clone(),
+                merge_grant: authorized.merge_grant.clone(),
+                queued: true,
+            },
+            Ok(Some(reason)) => Outcome::Held { reason },
+            Err(reason) => Outcome::Unknown { reason },
         };
     }
 
@@ -1517,6 +1555,7 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
             Effect::Arm => Outcome::Armed {
                 head: authorized.head.clone(),
                 merge_grant: authorized.merge_grant.clone(),
+                queued: false,
             },
             Effect::Merge => Outcome::Merged {
                 head: authorized.head.clone(),
@@ -2088,6 +2127,33 @@ refusing to assume no review is running"
             text.push_str(&String::from_utf8_lossy(&out.stderr));
         }
         Ok((out.status.success(), text))
+    }
+    fn merge_queue(
+        &self,
+        cwd: &Path,
+        facts: &PrFacts,
+        head: &str,
+    ) -> Option<Result<Option<String>, String>> {
+        let _step = step_timer::step("merge_queue");
+        if facts.base_ref != crate::merge_queue::QUEUE_BASE || !crate::merge_queue::enabled(cwd) {
+            return None;
+        }
+        let node = pr_bound_entry(cwd, facts.number);
+        let repair = node
+            .as_ref()
+            .is_some_and(|e| node_carries_tag(e, MAIN_REPAIR_TAG));
+        let priority = node
+            .as_ref()
+            .and_then(|e| e.get("priority")?.as_str()?.strip_prefix('p')?.parse().ok())
+            .unwrap_or(2);
+        Some(crate::merge_queue::enqueue(
+            cwd,
+            facts.number,
+            head,
+            &facts.head_ref,
+            repair,
+            priority,
+        ))
     }
 }
 
