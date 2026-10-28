@@ -51,7 +51,7 @@ STUB
 # 1. DEAD manifest -> archived + note printed.
 dir="$(make_sandbox dead)"
 echo "attended: false" > "$dir/.fno/target-state.md"
-out="$(cd "$dir" && PATH="$dir/bin:$PATH" bash "$HELPER" .fno/target-state.md 2>&1)"
+out="$(cd "$dir" && PATH="$dir/bin:$PATH" FNO_AGENTS_BIN="$dir/bin/fno-agents" bash "$HELPER" .fno/target-state.md 2>&1)"
 archived=0
 [[ -f "$dir/.fno/target-state.md.archived.test.md" && ! -f "$dir/.fno/target-state.md" ]] && archived=1
 check_eq "dead manifest is archived (moved aside)" "1" "$archived"
@@ -61,7 +61,7 @@ rm -rf "$dir"
 # 2. LIVE manifest -> left in place (AC2-EDGE: never archive a running session).
 dir="$(make_sandbox live)"
 echo "attended: false" > "$dir/.fno/target-state.md"
-(cd "$dir" && PATH="$dir/bin:$PATH" bash "$HELPER" .fno/target-state.md) >/dev/null 2>&1
+(cd "$dir" && PATH="$dir/bin:$PATH" FNO_AGENTS_BIN="$dir/bin/fno-agents" bash "$HELPER" .fno/target-state.md) >/dev/null 2>&1
 kept=0
 [[ -f "$dir/.fno/target-state.md" && ! -f "$dir/.fno/target-state.md.archived.test.md" ]] && kept=1
 check_eq "live manifest is left in place" "1" "$kept"
@@ -70,7 +70,7 @@ rm -rf "$dir"
 # 3. No manifest -> clean no-op (advisory, exit 0).
 dir="$(make_sandbox dead)"
 rc=0
-(cd "$dir" && PATH="$dir/bin:$PATH" bash "$HELPER" .fno/target-state.md) || rc=$?
+(cd "$dir" && PATH="$dir/bin:$PATH" FNO_AGENTS_BIN="$dir/bin/fno-agents" bash "$HELPER" .fno/target-state.md) || rc=$?
 check_eq "no manifest is a clean no-op" "0" "$rc"
 rm -rf "$dir"
 
