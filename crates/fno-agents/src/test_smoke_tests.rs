@@ -186,10 +186,11 @@ fn the_control_matcher_does_not_accept_a_wiring_testcase() {
 fn write_canary_script(root: &Path, body: &str) {
     let dir = root.join("scripts/ci");
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("check-state-canary.sh");
-    std::fs::write(&path, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
-    #[allow(deprecated)]
-    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    crate::write_exec_stub(
+        &dir,
+        "check-state-canary.sh",
+        &format!("#!/usr/bin/env bash\n{body}\n"),
+    );
 }
 
 #[test]
