@@ -582,6 +582,7 @@ mod tests {
             "Retract it as a junk row."
         ));
         assert!(!is_affirmative_retraction_answer("Retract? No."));
+        assert!(!is_affirmative_retraction_answer("Retract nothing."));
         assert!(!is_affirmative_retraction_answer("Do not retract it."));
         assert!(!is_affirmative_retraction_answer("keep it for now"));
         assert!(is_affirmative_retraction_answer("yes"));
@@ -1186,14 +1187,16 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .filter(|_| operator_can_grant(req))
             {
                 if retraction_answer_grants(question_event, &text, stamped) {
-                    if let Err(reason) = validate_live_law_target(&target_id) {
-                        answer.lines.push(format!("outstanding: {reason}"));
-                    } else if was_resumed {
-                        answer.lines.push(format!(
-                            "outstanding: operator retraction recorded for {target_id} (the law reads RETRACTED)"
-                        ));
-                    } else {
-                        perform_retraction(&mut answer, &qid, &subject, &target_id, &text);
+                    // The validate gate decides, first pass or resumed
+                    // repair alike: a live target writes now, an already
+                    // retired target receipts its refusal, and a partial
+                    // clear's rerun performs the retraction it once
+                    // promised.
+                    match validate_live_law_target(&target_id) {
+                        Err(reason) => answer.lines.push(format!("outstanding: {reason}")),
+                        Ok(()) => {
+                            perform_retraction(&mut answer, &qid, &subject, &target_id, &text)
+                        }
                     }
                 } else {
                     answer.lines.push(format!(
@@ -1647,6 +1650,11 @@ fn retraction_fallback(question_event: &Value) -> Option<(String, String)> {
         }
         from = abs;
     }
+    // One cited live law is the fallback's whole contract: an ambiguous
+    // question names no single target and retracts nothing.
+    if cited.len() != 1 {
+        return None;
+    }
     let id = cited.into_iter().next()?;
     Some((format!("{LAW_RETRACT_SUBJECT}:{id}"), id))
 }
@@ -1682,7 +1690,9 @@ fn retraction_intent_lead(answer: &str) -> bool {
         .trim()
         .trim_end_matches(['.', '!', '?', ';', ',', ':'])
         .to_lowercase();
-    const NEGATIONS: [&str; 5] = ["no", "not", "never", "don't", "dont"];
+    const NEGATIONS: [&str; 8] = [
+        "no", "not", "never", "don't", "dont", "nothing", "none", "neither",
+    ];
     const INTENT: [&str; 5] = ["retract", "repeal", "rescind", "revoke", "overturn"];
     for lead in INTENT {
         if let Some(rest) = normalized.strip_prefix(lead) {
