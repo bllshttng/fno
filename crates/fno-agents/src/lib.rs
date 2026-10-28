@@ -437,6 +437,7 @@ pub mod pr_create;
 pub mod pr_door;
 pub mod pr_draft_ready;
 pub mod pr_front;
+pub(crate) mod pr_idle;
 pub mod pr_info;
 pub mod pr_list;
 pub mod pr_merge_result;

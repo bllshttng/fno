@@ -84,6 +84,12 @@ The shared runners serve a few PRs at a time. With 30 PRs open, every push queue
 
 Every 3 minutes the arm ranks the open PRs: a `main-repair` node first, drafts last, then node priority, then the older PR. A PR takes a slot only while it wants a runner: runs in flight, or runs the tier cancelled. A green PR takes no slot. Neither does a PR that waits only on review, or an idle red PR. So a merge frees a slot on the next pass. A PR in the tier gets the runs the tier cancelled rerun in full. A run cancelled by hand stays cancelled. A PR outside it has its runs in flight cancelled, unless 80 percent of its head already passed. A `merge-queue-gate` run is never cancelled and holds one slot. A pass that cancels or reruns a run writes one `ci_tier_pass` row.
 
+## The idle-PR alarm
+
+On 2026-10-16 the user found 37 open PRs. Several were green and mergeable for days, and nothing raised an alarm. The owning worker merges its own PR. The daemon's `pr_idle` arm is the backstop for a worker that left. Every 15 minutes it lists the open PRs of each registry repo. It reads each non-draft PR through the status door, so the read rides the shared status cache and the account poller. It reads the merge gate's `ready` verdict. A PR that is held, uncovered or waiting on the user's visual look never reads ready.
+
+The first ready read of a head starts a clock in `<agents home>/pr-idle/`. After 2 hours every live lead gets one mail, and the phone sink gets one `operator_notice`. Each one names the PR, its age and `fno do pr merge <n>`. After 6 hours both go out once more. A new head, a not-ready read or a closed PR resets the clock. A failed send retries the next pass, and only to the recipients it missed.
+
 ## How to add a signature
 
 Make two edits, both in `crates/fno-agents/src/heal.rs`. Add one row to the `SIGNATURES` table. Add one test that carries a real log excerpt.
