@@ -141,7 +141,7 @@ pub(crate) fn spare_claimed(command: &str) -> bool {
     let marks: Vec<usize> = argv
         .iter()
         .enumerate()
-        .filter(|(_, t)| **t == "--bg-spare")
+        .filter(|(_, t)| **t == "bg-spare" || **t == "--bg-spare")
         .map(|(i, _)| i)
         .collect();
     let Some(last) = marks.last() else {

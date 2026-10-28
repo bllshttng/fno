@@ -63,7 +63,6 @@ config
 config accounts
 config get
 config set
-context
 cost
 delivery evaluate
 do
@@ -95,7 +94,6 @@ scoreboard
 uninstall
 update
 version
-whoami context
 whoami cost
 whoami ledger
 whoami scoreboard
