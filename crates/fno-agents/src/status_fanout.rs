@@ -1313,6 +1313,32 @@ fn py_json_string(s: &str) -> String {
     out
 }
 
+/// `json.dumps(value, sort_keys=True)`: the capture driver froze the parity
+/// records in this shape, so the tests render their expected bytes with the
+/// same function. Sorted keys over the spaced `", "` / `": "` separators,
+/// ensure_ascii escapes.
+pub fn python_json_sorted(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => py_json_string(s),
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().map(python_json_sorted).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let parts: Vec<String> = keys
+                .into_iter()
+                .map(|k| format!("{}: {}", py_json_string(k), python_json_sorted(&map[k])))
+                .collect();
+            format!("{{{}}}", parts.join(", "))
+        }
+    }
+}
+
 fn dispatch_json_webhook(
     sink: &SinkConfig,
     event: &Value,

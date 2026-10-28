@@ -19,9 +19,10 @@ mod common;
 
 use common::{assert_golden, env_mutex, Golden};
 use fno_agents::status_fanout::{
-    run_tick, DispatchFn, FanoutTuning, HttpPost, HttpResult, SinkConfig, StreamFn, TickResult,
+    python_json_sorted, run_tick, DispatchFn, FanoutTuning, HttpPost, HttpResult, SinkConfig,
+    StreamFn, TickResult,
 };
-use fno_agents::wake_read::python_json_default;
+
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -303,7 +304,7 @@ fn run_tick_case(sb: &Sandbox, label: &str, rows: &[Value], sinks: &[SinkConfig]
         Some(&mut *stream_seam),
     );
     let record = projection(&result, &sb.state, label);
-    let dumped = python_json_default(&record);
+    let dumped = python_json_sorted(&record);
     assert_fanout_golden(
         label,
         &Golden {
@@ -344,7 +345,7 @@ fn tick_result_value(result: &TickResult) -> Value {
 /// cursor at the fixture event's instant with occurrence 0, the single event
 /// as the journal, one tick, then the frozen `{"calls": [...]}` record. The
 /// driver serialized with `json.dumps(..., sort_keys=True)` default
-/// separators, so keys go in sorted order through `python_json_default`.
+/// separators, so keys go in sorted order through `python_json_sorted`.
 fn adapter_case(sb: &Sandbox, label: &str, sink: SinkConfig, post: &mut RecordingPost, ev: &Value) {
     let _ = std::fs::remove_dir_all(&sb.state);
     std::fs::create_dir_all(&sb.state).unwrap();
@@ -391,7 +392,7 @@ fn adapter_case(sb: &Sandbox, label: &str, sink: SinkConfig, post: &mut Recordin
         label,
         &Golden {
             exit: Some(0),
-            streams: vec![python_json_default(&record)],
+            streams: vec![python_json_sorted(&record)],
         },
     );
 }
@@ -693,7 +694,7 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
             &format!("template {label}"),
             &Golden {
                 exit: Some(0),
-                streams: vec![python_json_default(&record)],
+                streams: vec![python_json_sorted(&record)],
             },
         );
     }
@@ -733,7 +734,7 @@ fn fanout_adapter_and_template_cases_match_the_captured_goldens() {
         "eof cursor values",
         &Golden {
             exit: Some(0),
-            streams: vec![python_json_default(&record)],
+            streams: vec![python_json_sorted(&record)],
         },
     );
 

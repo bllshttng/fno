@@ -57,6 +57,11 @@ fn wake_read_cases_match_the_captured_goldens() {
     std::env::set_var("HOME", &home);
     std::env::set_var("USERPROFILE", &home);
     std::env::remove_var("FNO_SPACES_DIR");
+    // The CI workflow exports FNO_AGENTS_HOME job-wide; the spaces ladder
+    // reads it before HOME, so the capture-shaped `$HOME/.fno/spaces` root
+    // only resolves with it unset. Restored below, under the same mutex.
+    let pinned_agents_home = std::env::var_os("FNO_AGENTS_HOME");
+    std::env::remove_var("FNO_AGENTS_HOME");
 
     let root = sandbox.join("wakeproj");
     let dir = fno_agents::paths::space_dir(&root).join("wake-signals");
@@ -101,4 +106,8 @@ fn wake_read_cases_match_the_captured_goldens() {
         None,
     );
     let _ = std::fs::remove_dir_all(&sandbox);
+    match pinned_agents_home {
+        Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+        None => std::env::remove_var("FNO_AGENTS_HOME"),
+    }
 }
