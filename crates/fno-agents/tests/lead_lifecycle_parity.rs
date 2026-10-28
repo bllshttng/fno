@@ -123,6 +123,26 @@ fn arm_manifest(root: &Path) {
     let leads = space(root).join("leads");
     fs::create_dir_all(&leads).unwrap();
     fs::copy(fixture("manifest-epic-y.md"), leads.join("epic-y.md")).unwrap();
+    // The fixture's committed created_at ages past the undeclared term's
+    // default span:96h ceiling, and from then on every reading returns
+    // Reached on the wall clock, refusing the very declaration these cases
+    // record. Re-stamp it young so the cases exercise the state machine,
+    // never the calendar.
+    let path = leads.join("epic-y.md");
+    let young = format!(
+        "created_at: {}",
+        (chrono::Utc::now() - chrono::Duration::hours(1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    );
+    let mut text = fs::read_to_string(&path).unwrap();
+    if let Some(start) = text.find("created_at: ") {
+        let value_at = start + "created_at: ".len();
+        let line_end = text[value_at..]
+            .find('\n')
+            .map_or(text.len(), |i| value_at + i);
+        text.replace_range(start..line_end, &young);
+    }
+    fs::write(&path, text).unwrap();
 }
 
 /// Move every registry row's cwd into this world's repo, so the role's
