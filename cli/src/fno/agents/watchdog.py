@@ -432,7 +432,10 @@ _GHOST_STATES = frozenset({"working", "busy", "blocked"})
 #: fifteen minutes later). ``stopped`` belongs for the mirror reason: a
 #: session that dies mid-turn is exactly a stopped row, and the stalled
 #: check - not candidacy - is what guards a worker the operator stopped.
-_WAKE_STATES = frozenset({"working", "blocked", "stopped"})
+#: ``idle`` is the word the harness wears AFTER parking a live session (a
+#: lifted test hold, an undelivered turn); the stalled check, not the state
+#: word, separates such a row from one that finished and went home.
+_WAKE_STATES = frozenset({"working", "blocked", "stopped", "idle"})
 
 #: Graph statuses that mean the work is over, so an absent claim is the system
 #: working rather than a gap. Read from the node, never from the row: the row
@@ -1660,6 +1663,27 @@ ROSTER_REFUSAL = (
 )
 
 
+def _route_fallback_identity(entry, entries) -> tuple[Optional[str], Optional[str]]:
+    """Route identity from the observed model when the declared fields are
+    absent: both axes carry the model so the (provider, account) pair stays
+    consistent per route - the cap actor's own convention (provider_cap trap 2:
+    declared route fields are NULL fleet-wide, membership keys on
+    ``observed_model``). (None, None) leaves the named refusal standing."""
+    model = getattr(entry, "model_name", None)
+    if not model and entries:
+        for record in reversed(entries):
+            msg = record.get("message") if isinstance(record, dict) else None
+            if isinstance(msg, dict) and msg.get("model"):
+                model = str(msg["model"])
+                break
+    if not model:
+        return None, None
+    return (
+        getattr(entry, "route_provider_id", None) or model,
+        getattr(entry, "account_record_id", None) or model,
+    )
+
+
 def measure_provider_outages(
     rows: list[Row], *, now_s: float,
     settings: Any = None,
@@ -1703,11 +1727,14 @@ def measure_provider_outages(
     mux_by_row: dict[str, dict[str, Any]] = {}
     for row in rows:
         entry = by_session.get(row.row_id)
+        fallback_provider, fallback_account = _route_fallback_identity(
+            entry, entries_for(row.row_id) if entries_for is not None else None
+        )
         identities.append(EvidenceIdentity(
             row_id=row.row_id,
             harness=str(getattr(entry, "harness", "") or ""),
-            provider=getattr(entry, "route_provider_id", None),
-            account=getattr(entry, "account_record_id", None),
+            provider=getattr(entry, "route_provider_id", None) or fallback_provider,
+            account=getattr(entry, "account_record_id", None) or fallback_account,
             session_id=str(getattr(entry, "harness_session_id", "") or row.row_id),
             cwd=str(getattr(entry, "cwd", "") or row.cwd),
         ))
