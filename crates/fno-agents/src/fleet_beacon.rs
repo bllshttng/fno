@@ -186,18 +186,6 @@ fn config_text(key: &str) -> Option<String> {
         .filter(|v| !v.trim().is_empty())
 }
 
-/// The person who owns this machine: `fleet.owner`, else the login name.
-fn owner() -> String {
-    config_text("owner")
-        .or_else(|| {
-            // A launchd-started daemon can carry LOGNAME without USER.
-            ["USER", "LOGNAME"]
-                .iter()
-                .find_map(|k| std::env::var(k).ok().filter(|u| !u.is_empty()))
-        })
-        .unwrap_or_else(|| "unknown".into())
-}
-
 /// The short host name: the part before the first dot.
 fn short_host() -> String {
     let host = crate::claims::hostname();
@@ -223,7 +211,7 @@ pub fn local_machine(home: &AgentsHome, now: i64) -> Machine {
             machine_id
         },
         host,
-        owner: owner(),
+        owner: crate::identity::person(),
         role: config_text("role").unwrap_or_else(|| "worker".into()),
         beat_at: now,
         cpu: num("busy_fraction"),

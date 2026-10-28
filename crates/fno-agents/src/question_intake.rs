@@ -462,6 +462,13 @@ fn run_append(req: &IntakeRequest) -> IntakeAnswer {
         return answer;
     };
     let qid = qid.to_string();
+    // Stamp once, before the serialize: the journal line and the index row
+    // must stay identical.
+    let mut event = event.clone();
+    if let Some(data) = event.get_mut("data").and_then(Value::as_object_mut) {
+        crate::identity::stamp_person(data);
+    }
+    let event = &event;
     let journal_path = req
         .journal_path
         .clone()
@@ -866,6 +873,7 @@ already waits ({}). Answer it or clear it; do not ask twice.",
             data.insert(key.into(), json!(v));
         }
     }
+    crate::identity::stamp_person(&mut data);
     if let Some(n) = node {
         data.insert("node".into(), json!(n));
     }
@@ -1257,10 +1265,15 @@ stops
                 .and_then(Value::as_u64),
             Some(1)
         );
-        // The index row landed too.
+        // The index row landed too, with the same person stamp.
         let index =
             crate::event_store::journal_text(&questions_path(&home), &["operator_question"]);
         assert!(index.contains(&qid));
+        let person = data.get("person").and_then(Value::as_str).unwrap();
+        assert!(
+            index.contains(&format!("\"person\":{}", json!(person))),
+            "{index}"
+        );
         assert_eq!(answer.position, Some(1));
         assert_eq!(answer.total, Some(1));
     }
@@ -1632,7 +1645,7 @@ stops
             "ts": "2026-10-24T12:00:00Z",
             "type": "operator_question",
             "source": "daemon",
-            "data": {"question_id": "q-ap1", "question": "wake?", "ask": "answer inherit or clean"}
+            "data": {"question_id": "q-ap1", "question": "wake?", "ask": "answer inherit or clean", "person": "caller"}
         });
         let req = IntakeRequest {
             op: Some("append".to_string()),
@@ -1658,8 +1671,11 @@ stops
             row.pointer("/source").and_then(Value::as_str),
             Some("daemon")
         );
+        // The stamp keeps the caller's person, in both sinks.
+        assert_eq!(row.pointer("/data/person"), Some(&json!("caller")));
         let indexed = crate::events::committed_journal_text(&index);
         assert!(indexed.contains("\"q-ap1\""), "{indexed}");
+        assert!(indexed.contains("\"person\":\"caller\""), "{indexed}");
     }
 
     #[test]
