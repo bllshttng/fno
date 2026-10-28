@@ -216,6 +216,7 @@ pub(super) async fn mouse_pre_pass(
         // The questions view paints next and owns every cell it covers: off
         // the chip, a click reaches no pane and no sideline row under it.
         if view.question_detail.is_some() {
+            super::questions::mouse(view, rep);
             continue;
         }
         if super::file_viewer::mouse(view, rep) {
