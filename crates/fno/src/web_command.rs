@@ -217,51 +217,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_refresh_keeps_the_good_fold_and_names_the_failure() {
+    async fn a_failed_read_names_its_reason_and_keeps_the_last_good_fold() {
         let cache = CommandCache::default();
+        let fail = |r: &str| Err::<Value, String>(r.into());
         cache
-            .record(Ok(two_machines()), Ok(questions(&[])), &backlog(), 100)
+            .record(fail("no primary"), Ok(questions(&[None])), &backlog(), 1)
+            .await;
+        let m = cache.model().await;
+        assert_eq!(m["machines"], json!([]));
+        assert_eq!(m["fleet_error"]["reason"], "no primary");
+        assert_eq!(m["waiting"]["questions"].as_array().unwrap().len(), 1);
+        cache
+            .record(Ok(two_machines()), Err("timed out".into()), &backlog(), 100)
             .await;
         cache
             .record(
-                Err("fleet top timed out after 30s".into()),
-                Ok(questions(&[])),
+                fail("fleet top timed out after 30s"),
+                Err("timed out".into()),
                 &backlog(),
                 200,
             )
             .await;
         let m = cache.model().await;
-        assert_eq!(m["machines"].as_array().unwrap().len(), 2);
-        assert_eq!(m["measured_at"], 100);
+        assert_eq!(
+            (m["machines"].as_array().unwrap().len(), &m["measured_at"]),
+            (2, &json!(100))
+        );
         assert_eq!(m["fleet_error"]["reason"], "fleet top timed out after 30s");
         assert!(m["age_s"].is_u64());
-    }
-
-    #[tokio::test]
-    async fn no_good_read_still_carries_the_questions_and_a_failed_question_read_says_why() {
-        let cache = CommandCache::default();
-        cache
-            .record(
-                Err("fleet top exited 1: no primary".into()),
-                Ok(questions(&[None])),
-                &backlog(),
-                1,
-            )
-            .await;
-        let m = cache.model().await;
-        assert_eq!(m["machines"], json!([]));
-        assert_eq!(m["fleet_error"]["reason"], "fleet top exited 1: no primary");
-        assert_eq!(m["waiting"]["questions"].as_array().unwrap().len(), 1);
-        cache
-            .record(
-                Ok(two_machines()),
-                Err("timed out after 5000ms".into()),
-                &backlog(),
-                2,
-            )
-            .await;
-        let m = cache.model().await;
         assert!(m["waiting"].get("questions").is_none());
-        assert_eq!(m["waiting"]["questions_error"], "timed out after 5000ms");
+        assert_eq!(m["waiting"]["questions_error"], "timed out");
     }
 }
