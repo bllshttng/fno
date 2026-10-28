@@ -317,7 +317,12 @@ fn wake_held(path: &Path, slug: &str, pass_row: &Value, now_ms: i64) -> Result<(
         }
         let pr = held.pointer("/data/pr").cloned().unwrap_or(Value::Null);
         let mut row = json!({"slug": slug, "branch": branch, "pr": pr, "held_ms": held_ms});
-        if let Some(sid) = held.pointer("/data/session_id").and_then(Value::as_str) {
+        let ranked = pass_row.pointer("/data/ranked").and_then(Value::as_array);
+        let open = ranked.is_some_and(|r| r.iter().any(|p| word(p, "/branch") == branch));
+        // A closed PR clears its hold too; its session has nothing to push.
+        row["closed"] = json!(!open);
+        let sid = held.pointer("/data/session_id").and_then(Value::as_str);
+        if let Some(sid) = sid.filter(|_| open) {
             let text = format!(
                 "The CI tier has a free slot for PR #{pr} ({branch}). Run fno do pr push again \
                  to push the commits it held."
