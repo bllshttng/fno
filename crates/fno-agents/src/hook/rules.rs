@@ -250,8 +250,8 @@ mod tests {
         let cwd = Path::new("/");
         assert!(event_of("pre-tool", &json!({"tool_input": {}}), cwd).is_none());
         assert!(event_of("prompt", &json!({}), cwd).is_none());
-        let ev = event_of("prompt", &json!({"prompt": "/fno:blueprint x-39e7"}), cwd).unwrap();
+        let ev = event_of("prompt", &json!({"prompt": "/fno:blueprint x-aaaa"}), cwd).unwrap();
         assert_eq!(ev.skill.as_deref(), Some("fno:blueprint"));
-        assert_eq!(ev.node.as_deref(), Some("x-39e7"));
+        assert_eq!(ev.node.as_deref(), Some("x-aaaa"));
     }
 }

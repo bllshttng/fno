@@ -60,13 +60,13 @@ Two modes on `fno inbox law match` read a rule file. `{"mode":"rules-check","fil
 
 `fno::rules::decide(rules, event, today)` answers one decision point. It is pure, so the hooks, the doors and the fnh harness reach the same answer. The answer carries `verdict`, `fires`, `reasons` and `unevaluated`.
 
-- A rule takes part when its scope fits the event and its `expires` date has not passed. A rule with `predicates` belongs to the Stop engine and never takes part.
-- Tier 0 runs `matches`. Tier 1 runs only at `prompt` and `skill` events: BM25 over the tier-1 `retrieval` texts against the event text, the top three at a score of at least `TIER1_FLOOR`. Tier 2 is listed in `unevaluated` and never decided.
-- A tier-1 or tier-2 fire that asks to deny is downgraded to `warn`, so a ranked match never refuses a tool.
+- If its scope fits the event and its `expires` date has not passed, a rule takes part. A rule with `predicates` belongs to the Stop engine and never takes part.
+- Tier 0 runs `matches`. Tier 1 runs only at `prompt` and `skill` events. It ranks the tier-1 `retrieval` texts against the event text with BM25. At most three fire, each with a score of at least `TIER1_FLOOR`. Tier 2 is listed in `unevaluated` and never decided.
+- A tier-1 or tier-2 deny fire becomes `warn`, so a ranked match never refuses a tool.
 - `require-ack` blocks until the event's `acks` name the rule.
 - The verdict is the strongest fire: `block`, then `warn`, then `inject` (an inform delivered as context), then `allow`. A block verdict carries only the refusals.
 
-`rules_source::rule_set(cwd)` builds the set from three sources: the shipped table (`crates/fno-agents/src/rules-defaults.toml`), the tracked `.fno-rules/*.toml` files, and the live laws. A law with an imported `law_trigger` fires on that trigger, capped at `warn` until its family binds. A law with `paths` becomes a pre-tool rule on `Edit` and `Write`. Any other live law is an implicit tier-1 inform rule over `{subject} {decision}`. An unreadable store is an error the caller renders as an `Unread:` line; rules never fail a decision point closed. Every fire writes a `decision_span` with `span_kind = "rule"` and the attrs `rule`, `law`, `event`, `verdict` and `tool`.
+`rules_source::rule_set(cwd)` builds the set from three sources: the shipped table (`crates/fno-agents/src/rules-defaults.toml`), the tracked `.fno-rules/*.toml` files, and the live laws. A law with an imported `law_trigger` fires on that trigger, capped at `warn` until its family binds. A law with `paths` becomes a pre-tool rule on `Edit` and `Write`. Any other live law is an implicit tier-1 inform rule over `{subject} {decision}`. The caller renders an unreadable store as an `Unread:` line. Rules never fail a decision point closed. Every fire writes a `decision_span` with `span_kind = "rule"` and the attrs `rule`, `law`, `event`, `verdict` and `tool`.
 
 The hook decision points run through `hooks/rules-dispatch.sh`: `--event prompt` at `UserPromptSubmit` and `--event pre-tool` at `PreToolUse`, where a Skill call is the skill event. A block prints the PreToolUse deny with the rule ids. A warn or an inform prints `## Rules governing this <event>` as `additionalContext`. An inform at a pre-tool event prints once per session.
 

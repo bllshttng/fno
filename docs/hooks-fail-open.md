@@ -45,7 +45,7 @@ Only fixed-trigger checks belong in block. The gate also reads the manifest flag
 
 Per harness:
 
-- **Claude.** All four classes are native. Several hooks are next-turn: they carry `FNO_HOOK_ASYNC=1`, so `hook_budget_secs` gives them a 10s budget that load does not shorten. The overload skip still applies. `rules-dispatch.sh` is block at PreToolUse and wait at UserPromptSubmit, because a rule must arrive before the tool runs or the reply starts. No fno hook is rewake yet.
+- **Claude.** All four classes are native. Several hooks are next-turn: they carry `FNO_HOOK_ASYNC=1`, so `hook_budget_secs` gives them a 10s budget that load does not shorten. The overload skip still applies. `rules-dispatch.sh` is block at PreToolUse and wait at UserPromptSubmit. A rule must arrive before the tool runs or the reply starts. No fno hook is rewake yet.
 - **Codex.** `hooks/codex-hooks.json` has no async flag, so every Codex row is block or wait. A next-turn or rewake result on Codex has to ride the mail bus and arrive through the turn-boundary delivery ([mail-push-first-delivery](architecture/mail-push-first-delivery.md)). No Codex hook does that yet.
 - **fnh.** fnh runs block (with fail closed), next-turn, and rewake natively. A rewake that ends after the fnh process exits is lost. A wake across processes needs the launcher.
 - **OpenCode and Pi.** Their hooks are in-process plugin callbacks, not manifest entries, so the table does not cover them.

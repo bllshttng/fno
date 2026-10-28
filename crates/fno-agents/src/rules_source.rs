@@ -242,9 +242,9 @@ fn imported_rule(trigger: &Value) -> Option<Rule> {
     file.rule.pop()
 }
 
-/// Law-sourced deny rules wait until x-3284 lifts the cap per family: the
-/// engine ships without changing what binds today (Handoff answer 1). The
-/// class clears too, so it derives from the warn action.
+/// Law-sourced deny rules are capped at warn until their family is made to
+/// bind, so the engine ships without changing what binds today. The class
+/// clears too, so it derives from the warn action.
 fn cap_law_deny(rule: &mut Rule) {
     if rule.law.is_some() && matches!(rule.action.as_str(), "block" | "require-ack") {
         rule.action = "warn".to_string();
