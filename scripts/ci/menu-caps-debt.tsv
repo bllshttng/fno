@@ -10,3 +10,4 @@ do pr	31	nest the pr commands under typed groups
 doctor	19	nest under typed groups
 fno-agents	137	nest the binary commands under typed groups (spawn-remote joins mail-remote/org-remote)
 mux	21	nest under typed groups
+config accounts	15	the native accounts door; nest the window, combos and benchmark reads under one group
