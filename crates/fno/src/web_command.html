@@ -31,8 +31,9 @@
 .stage{position:relative;height:min(76vh,780px);min-height:420px;overflow:hidden;border:1px solid var(--surface0);background:var(--base)}.stage canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}.stage canvas.dragging{cursor:grabbing}
 .layouts{position:absolute;top:10px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:5px 8px;background:var(--mantle);border:1px solid var(--surface0);z-index:2;max-width:calc(100% - 24px);overflow-x:auto}.layouts .lbl{font-size:12px;color:var(--overlay1);padding:0 2px;white-space:nowrap}.layouts .chip{white-space:nowrap}
 .lnote{position:absolute;top:52px;left:50%;transform:translateX(-50%);font-size:11.5px;color:var(--overlay1);text-align:center;max-width:calc(100% - 24px);pointer-events:none;z-index:2;margin:0}
-.legend{position:absolute;left:10px;bottom:10px;display:flex;flex-wrap:wrap;gap:4px 12px;padding:5px 10px;background:var(--mantle);border:1px solid var(--surface0);font-size:11px;color:var(--overlay1);max-width:calc(100% - 20px)}.legend span{display:inline-flex;align-items:center;gap:6px}.shp{width:9px;height:9px;display:inline-block;background:var(--subtext0)}.shp.circle{border-radius:50%}.shp.diamond{clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}.shp.triangle{clip-path:polygon(50% 0,100% 100%,0 100%)}.shp.hexagon{clip-path:polygon(25% 6%,75% 6%,100% 50%,75% 94%,25% 94%,0 50%)}.hint{position:absolute;right:10px;bottom:10px;font-size:11px;color:var(--overlay1);pointer-events:none}
+.legend{position:absolute;left:10px;bottom:10px;display:flex;flex-wrap:wrap;gap:4px 12px;padding:5px 10px;background:var(--mantle);border:1px solid var(--surface0);font-size:11px;color:var(--overlay1);max-width:calc(100% - 20px)}.legend span{display:inline-flex;align-items:center;gap:6px}.shp{width:9px;height:9px;display:inline-block;background:var(--subtext0)}.shp.circle{border-radius:50%}.shp.diamond{clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}.shp.triangle{clip-path:polygon(50% 0,100% 100%,0 100%)}.shp.down{clip-path:polygon(0 0,100% 0,50% 100%)}.hint{position:absolute;right:10px;bottom:10px;font-size:11px;color:var(--overlay1);pointer-events:none}
 .tip{position:absolute;pointer-events:none;min-width:220px;max-width:300px;padding:7px 10px;background:var(--mantle);border:1px solid var(--surface1);opacity:0;transition:opacity .15s;font-size:12px;line-height:1.4;z-index:3}.tip.on{opacity:1}.tip .t1{font-weight:700;margin-bottom:3px}.tip .t2{font-size:11px;color:var(--overlay1)}
+.fleet.many{grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr))}.many .host{grid-template-columns:56px minmax(0,1fr);gap:10px;padding:8px 10px}.many .host canvas{width:56px;height:56px}.many .meter{grid-template-columns:62px minmax(0,1fr) auto;gap:6px;font-size:10.5px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 @media (max-width:640px){.stage{height:62vh}.hint{display:none}.bar{position:static}}@media (max-width:480px){.host{grid-template-columns:88px minmax(0,1fr)}.host canvas{width:88px;height:88px}}
 .tablewrap{border:1px solid var(--surface0);background:var(--mantle)}.ttools{display:flex;flex-wrap:wrap;gap:10px;padding:8px 12px;border-bottom:1px solid var(--surface0);align-items:center}.ttools input{flex:1 1 220px;min-width:0;background:var(--base);border:1px solid var(--surface1);color:var(--text);padding:4px 8px;min-height:26px;font:12px var(--mono)}.ttools input:focus{border-color:var(--text);outline:none}.ttools span{font-size:11.5px;color:var(--overlay1)}
@@ -160,6 +161,7 @@ let cards = [];
 function machines(model) {
   const box = document.getElementById("machines");
   box.replaceChildren();
+  box.classList.toggle("many", model.machines.length > 3);
   cards = [];
   if (!model.machines.length) {
     box.append(el("p", "empty", "fleet not read: " + (model.fleet_error ? model.fleet_error.reason : "no machines")));
@@ -322,7 +324,7 @@ function readTokens() {
   TCOL.splice(0, TCOL.length, T.subtext0, T.overlay1, T.surface2, T.text);
   Object.keys(tcolor).forEach((p, i) => { tcolor[p] = TCOL[i % TCOL.length]; });
 }
-let nodes = [], links = [], byId = {}, hosts = [], tcolor = {}, W = 0, H = 0, TOP = 84, DPR = 1, layout = "constellation", hover = null, drag = null, born = performance.now(), pulses = [], lastSpark = 0;
+let nodes = [], links = [], byId = {}, hosts = [], tcolor = {}, W = 0, H = 0, TOP = 84, BOT = 48, DPR = 1, layout = "constellation", hover = null, drag = null, born = performance.now(), pulses = [], lastSpark = 0;
 const cam = {x: 0, y: 0, k: 1, tx: 0, ty: 0, tk: 1, ox: 0, oy: 0, tox: 0, toy: 0, sx: 1, tsx: 1, auto: true};
 readTokens(); matchMedia("(prefers-color-scheme: light)").addEventListener("change", readTokens);
 const proj = (r) => r.s.project || "unassigned";
@@ -365,7 +367,7 @@ function graph(model) {
     cam.k = cam.tk = fitK() * .6; cam.ox = cam.tox; cam.oy = cam.toy; cam.sx = cam.tsx; setTimeout(() => { cam.tk = fitK(); }, 50);
   }
 }
-function capBottom() { const c = document.getElementById("lnote"); TOP = c.offsetTop + c.offsetHeight + 12; }
+function capBottom() { const c = document.getElementById("lnote"), lg = stage.querySelector(".legend"); TOP = c.offsetTop + c.offsetHeight + 12; BOT = stage.clientHeight - lg.offsetTop + 8; }
 function resize() { const b = cv.getBoundingClientRect(); if (!b.width) return; capBottom(); DPR = Math.min(2, devicePixelRatio || 1); W = b.width; H = b.height; cv.width = W * DPR; cv.height = H * DPR; if (nodes.length) setTargets(); }
 addEventListener("resize", resize);
 document.getElementById("tab-synapse").addEventListener("click", () => requestAnimationFrame(resize));
@@ -386,7 +388,7 @@ function setTargets() {
     const ry = Math.max(260, (terrs.length - 1) * 60 + 200), rx = Math.max(ry, 350 * AR());
     hns.forEach((n, i) => { const a = Math.PI + i / hns.length * Math.PI * 2; n.tx = Math.cos(a) * rx; n.ty = hosts.length < 3 ? 0 : Math.sin(a) * ry; });
     terrs.forEach((t) => hosts.forEach((h) => { const s = rows.filter((r) => proj(r) === t.label && r.host === h.host).sort((a, b) => (since(a.s.started_at) || 0) - (since(b.s.started_at) || 0));
-      s.forEach((r, k) => { const f = .15 + .7 * (k + 1) / (s.length + 1); r._n.tx = h._n.tx * f; r._n.ty = t.band + (h._n.ty - t.band) * f + Math.sin(f * Math.PI * 2 + t.band) * 18; }); }));
+      s.forEach((r, k) => { const f = .12 + .6 * (k + 1) / (s.length + 1); r._n.tx = h._n.tx * f; r._n.ty = t.band + (h._n.ty - t.band) * f + Math.sin(f * Math.PI * 2 + t.band) * 18; }); }));
     nodes.filter((n) => n.kind === "epic").forEach((n) => { const t = byId["P:" + n.project]; n.tx = 0; n.ty = (t ? t.band : 0) + 44; });
   }
 }
@@ -411,8 +413,8 @@ function tick(alpha) {
   nodes.forEach((n) => { if (n.kind === "territory" || n.kind === "host") { n.x += ((n.tx ?? n.x) - n.x) * .1; n.y += ((n.ty ?? n.y) - n.y) * .1; n.vx = n.vy = 0; return; }
     n.vx += -n.x * .002 * alpha; n.vy += -n.y * .002 * alpha; n.vx *= .82; n.vy *= .82; n.x += n.vx; n.y += n.vy; });
 }
-const toScreen = (n) => ({x: (n.x - cam.ox) * cam.k * cam.sx + cam.x + W / 2, y: (n.y - cam.oy) * cam.k + cam.y + (H + TOP) / 2});
-const SHAPES = {circle: null, diamond: [4, 1.25, -Math.PI / 2], square: [4, 1.25, -Math.PI / 4], triangle: [3, 1.4, -Math.PI / 2], hexagon: [6, 1.12, 0]};
+const toScreen = (n) => ({x: (n.x - cam.ox) * cam.k * cam.sx + cam.x + W / 2, y: (n.y - cam.oy) * cam.k + cam.y + (H + TOP - BOT) / 2});
+const SHAPES = {circle: null, diamond: [4, 1.25, -Math.PI / 2], square: [4, 1.25, -Math.PI / 4], triangle: [3, 1.4, -Math.PI / 2], down: [3, 1.4, Math.PI / 2]};
 const shapeOf = (host) => Object.keys(SHAPES)[Math.max(0, hosts.findIndex((h) => h.host === host)) % 5];
 function star(x, y, r, host) { ctx.beginPath(); const k = SHAPES[shapeOf(host)]; if (!k) { ctx.arc(x, y, r, 0, 7); return; }
   for (let i = 0; i < k[0]; i++) { const a = k[2] + i / k[0] * Math.PI * 2; ctx[i ? "lineTo" : "moveTo"](x + Math.cos(a) * r * k[1], y + Math.sin(a) * r * k[1]); } ctx.closePath(); }
@@ -422,7 +424,7 @@ function pick(mx, my) { let best = null, bd = 1e9; nodes.forEach((n) => { if (!s
 // sideways to the canvas width; stars stay round, only their places spread.
 function fitK() { let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; nodes.forEach((n) => { if (!shown(n)) return; x0 = Math.min(x0, n.x); x1 = Math.max(x1, n.x); y0 = Math.min(y0, n.y); y1 = Math.max(y1, n.y); });
   if (x0 > x1) return cam.tk; cam.tox = (x0 + x1) / 2; cam.toy = (y0 + y1) / 2;
-  const kx = (W - 2 * Math.min(110, W * .08)) / Math.max(2, x1 - x0), ky = (H - TOP - 140) / Math.max(2, y1 - y0), k = Math.min(1.6, Math.max(.02, Math.min(kx, ky)));
+  const kx = (W - 2 * Math.min(110, W * .08)) / Math.max(2, x1 - x0), ky = (H - TOP - BOT - 140) / Math.max(2, y1 - y0), k = Math.min(1.6, Math.max(.02, Math.min(kx, ky)));
   cam.tsx = layout === "constellation" ? Math.min(2.2, Math.max(1, kx / k)) : 1; return k; }
 function tipLines(n) {
   if (n.kind === "host") { const h = n.h; return [h.host, rows.filter((r) => r.host === h.host).length + " sessions · spawn cap " + (h.cap ?? "?") + " · memory " + Math.round((h.mem_used || 0) * 100) + "%", (h.fresh ? "online" : "stale") + " · beat " + ago(h.age_s) + " ago · " + (h.takes_work ? "takes work" : "no new work")]; }
@@ -456,7 +458,8 @@ function drawHost(x, h, cx, cy, r, now, inGraph) {
     x.fillStyle = COL[st]; x.globalAlpha = st === "unknown" ? .5 : 1; x.beginPath(); x.arc(cx + Math.cos(ang) * R3, cy + Math.sin(ang) * R3, leadName(q) ? 2.8 : 2, 0, 7); x.fill(); x.globalAlpha = 1; });
   x.fillStyle = T.text; x.textAlign = "center"; x.font = "600 " + Math.max(10, r * .42) + "px " + UI; x.fillText(seats.length, cx, cy + r * .16);
   x.fillStyle = T.overlay1; x.font = "500 " + Math.max(8, r * .22) + "px " + DATA; x.fillText("sessions", cx, cy + r * .5);
-  if (inGraph) { x.fillStyle = T.text; x.font = "600 14px " + UI; x.fillText(h.host, cx, cy + R2 + 26); x.fillStyle = T.overlay1; x.font = "500 11px " + DATA; x.fillText("cap " + (h.cap ?? "?") + " · mem " + Math.round(mem * 100) + "%", cx, cy + R2 + 42); }
+  // On the Subway ring a machine above the middle puts its label above the orb, clear of the lines that leave it downward.
+  if (inGraph) { const up = layout === "transit" && h._n && h._n.y < -1, ly = up ? cy - R2 - 30 : cy + R2 + 26; x.fillStyle = T.text; x.font = "600 14px " + UI; x.fillText(h.host, cx, ly); x.fillStyle = T.overlay1; x.font = "500 11px " + DATA; x.fillText("cap " + (h.cap ?? "?") + " · mem " + Math.round(mem * 100) + "%", cx, ly + 16); }
 }
 function lightning(x1, y1, x2, y2, disp, out) { if (disp < 4) { out.push([x2, y2]); return; } const mx = (x1 + x2) / 2 + (Math.random() - .5) * disp, my = (y1 + y2) / 2 + (Math.random() - .5) * disp; lightning(x1, y1, mx, my, disp / 2, out); lightning(mx, my, x2, y2, disp / 2, out); }
 function curve(a, b) { const p = toScreen(a), q = toScreen(b); return [p, {x: (p.x + q.x) / 2 - (q.y - p.y) * .12, y: (p.y + q.y) / 2 + (q.x - p.x) * .12}, q]; }
