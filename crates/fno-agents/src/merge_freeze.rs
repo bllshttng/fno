@@ -291,6 +291,41 @@ pub(crate) fn holds_pr(home: &AgentsHome, pr: u64, repo: Option<&str>) -> bool {
     })
 }
 
+/// The spawn-time freeze line for `repo`, or None. Same record + lift read
+/// as `holds_pr`, asked about the repo (pr None) instead of one PR; an
+/// unreadable record or store renders nothing, because this line informs a
+/// seed while the merge gate still fails closed on its own read.
+pub(crate) fn active_freeze_line(home: &AgentsHome, repo: Option<&str>) -> Option<String> {
+    let store = crate::store_remote::configured()
+        .ok()
+        .map(|primary| Store {
+            file: record_path(&home.root()),
+            primary,
+        })?;
+    active_freeze_line_in(&store, repo, &decision_index::default_store_live)
+}
+
+/// `active_freeze_line` over injected parts (tests).
+fn active_freeze_line_in(store: &Store, repo: Option<&str>, laws: Laws) -> Option<String> {
+    match verdict_for_in(store, None, repo, laws) {
+        Verdict::Frozen {
+            subject,
+            set_by,
+            lift,
+        } => {
+            let who = if set_by.is_empty() {
+                String::new()
+            } else {
+                format!(", set_by {set_by}")
+            };
+            Some(format!(
+                "- {subject} (merge freeze{who}): pinned at {lift}; only the user lifts it"
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// The merge owner's probe. Frozen refuses (the owner's fail_closed reads it
 /// as held, because the user's lift clears it) and disarms an armed queue, which
 /// would otherwise merge server side with no fno read. Unavailable is

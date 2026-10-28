@@ -265,7 +265,7 @@ fn print_refusal(reason: &str) {
 
 /// Shared transport shape: request rides stdin, answer prints on stdout, a
 /// semantic refusal is data (exit 0), only an unreadable request is exit 2.
-fn run_stdin_command(args: &[String], usage: &str, f: impl FnOnce(Value)) -> i32 {
+pub(crate) fn run_stdin_command(args: &[String], usage: &str, f: impl FnOnce(Value)) -> i32 {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("usage: fno-agents {usage}");
         return 0;
