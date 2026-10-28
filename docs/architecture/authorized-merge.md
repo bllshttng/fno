@@ -134,7 +134,7 @@ Only a live `operator` ruling at the lift subject lifts the freeze:
 fno inbox decide 'merge-freeze:<owner/repo>@<pin key>' 'lift' --authority operator
 ```
 
-The user records that row at their own terminal. A `chat_attested` row does not lift it: any process a harness session started can mint one, so it cannot show the user ruled. This is the trust shape of the merge grant and the waiver. A team or agent row at the subject does not lift it either. A row at another pin's subject does not lift it. A retracted lift row freezes the window again. An unreadable record or decision store holds the merge.
+The user records that row at a terminal (an `operator` row), or says lift in chat and a session records their words. The chat row is a `chat_attested` law row whose rationale starts `user in chat:` or that stores a `quote` (`decision_index::is_user_ruling`). A bare `chat_attested` row does not lift it. Any process a harness session started can mint one, so only the user's words show the user ruled. The merge grant keeps the operator-only shape. A team or agent row at the subject does not lift it either. A row at another pin's subject does not lift it. A retracted lift row freezes the window again. An unreadable record or decision store holds the merge.
 
 The `freeze-clear` op only tidies the record. It removes the primary row and the local file. Its `evidence` must be the decision id of a live `operator` ruling at the current lift subject. Free text refuses, and the refusal names the user's terminal door.
 
