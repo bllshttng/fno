@@ -95,6 +95,17 @@ while IFS= read -r line || [ -n "$line" ]; do
     CMDS+=("$cmd"); INSTEAD+=("$instead"); RULING+=("$ruling")
 done <"$REGISTRY"
 
+# The name table's retired root words join the registry, so one file says
+# what the front door refuses and the same file says what no string teaches.
+NAMES="crates/fno/command-names.tsv"
+[ -f "$NAMES" ] || fail "name table not found at $NAMES"
+while IFS=$'\t' read -r path state replacement note; do
+    case "$path" in ''|'#'*|*' '*) continue ;; esac
+    [ "$state" = retired ] || continue
+    [ "$replacement" = - ] && instead="nothing: $note" || instead="fno $replacement"
+    CMDS+=("fno $path"); INSTEAD+=("$instead"); RULING+=("d-aef0ed7b")
+done <"$NAMES"
+
 [ "${#CMDS[@]}" -gt 0 ] || fail "$REGISTRY holds no entries; nothing to police"
 
 # --- 1a. Parse retired configuration leaves -------------------------------
