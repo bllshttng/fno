@@ -33,7 +33,6 @@ Usage (via the factory)
 from __future__ import annotations
 
 import importlib
-import sys
 from types import MethodType
 from typing import TYPE_CHECKING, Any, Mapping
 
