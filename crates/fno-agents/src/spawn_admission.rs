@@ -1253,6 +1253,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("agents-home");
         std::fs::create_dir_all(&home).unwrap();
+        crate::registry_store::seed_raw(
+            &home.join("registry.json"),
+            serde_json::json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
+                .to_string(),
+        );
         let prior = std::env::var_os(crate::paths::HOME_ENV);
         std::env::set_var(crate::paths::HOME_ENV, &home);
         let argv: Vec<String> = ["spawn", "--promote", "x-aaaa", "lead it"]
