@@ -1336,6 +1336,60 @@ pub async fn deliver_via_codex_daemon(thread_id: &str, text: &str) -> Result<(),
     deliver(thread_id, text, None).await
 }
 
+/// How long the mail lane reads the rollout for the envelope after
+/// `turn/start` answers. Measured on codex 0.164.0: the user message lands
+/// in the rollout within a second, busy or idle.
+const ROLLOUT_CONFIRM_BUDGET: Duration = Duration::from_secs(10);
+
+/// The mail lane: `turn/start`, then the rollout read that turns the turn
+/// id into a state. A turn id alone is `parked` (the harness may hold it
+/// behind the running turn); the rollout's user message carrying the
+/// envelope is the acceptance. On a busy thread `turn/start` folds the
+/// message into the running turn, so the item's turn id equal to the turn
+/// running at inject reads `accepted-steer`.
+pub async fn deliver_state_via_codex_daemon(
+    thread_id: &str,
+    text: &str,
+) -> crate::mail_delivery_state::DeliveryState {
+    use crate::mail_delivery_state::{DeliveryState, Parked};
+    let rollout = crate::codex_store::codex_rollout_path(None, thread_id);
+    let baseline = rollout
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let running = rollout
+        .as_deref()
+        .and_then(crate::mail_inject::codex_running_turn);
+    if let Err(e) = deliver(thread_id, text, None).await {
+        return DeliveryState::failed(e.to_string());
+    }
+    let marker = crate::mail_inject::typed_marker(text);
+    let deadline = tokio::time::Instant::now() + ROLLOUT_CONFIRM_BUDGET;
+    loop {
+        // A thread with no rollout at inject writes its first one now.
+        let (path, since) = match &rollout {
+            Some(p) => (Some(p.clone()), baseline),
+            None => (crate::codex_store::codex_rollout_path(None, thread_id), 0),
+        };
+        if let Some(path) = path {
+            if let Ok(Some(state)) =
+                crate::mail_inject::landing_after(&path, &marker, since, running.as_deref())
+            {
+                if state.is_accepted() {
+                    return state;
+                }
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return DeliveryState::Parked {
+                where_: Parked::HarnessQueue,
+            };
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 /// Sync form of [`deliver_via_codex_daemon`] for the daemon's blocking arms
 /// (the codex-watch waker). Same try-current guard as [`thread_loaded`].
 pub fn deliver_via_codex_daemon_sync(thread_id: &str, text: &str) -> Result<(), ReviewStartError> {

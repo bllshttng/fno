@@ -5,6 +5,7 @@
 //! accepted turn - never a transport success, and never paint: draft echo,
 //! fragmented frames and a same-prefix sibling must all stay unconfirmed.
 
+use fno_agents::mail_delivery_state::DeliveryState;
 use fno_agents::mail_inject::deliver_via_keeper_socket_in;
 use fno_agents::pane_keeper::{decode, Decode, Frame};
 use fno_agents::paths::AgentsHome;
@@ -246,7 +247,10 @@ fn accepted_turn_after_painted_draft_confirms_exactly_once() {
         25,
         0,
     );
-    assert_eq!(outcome, Ok(()), "the accepted turn is the delivery proof");
+    assert!(
+        outcome.as_ref().is_ok_and(DeliveryState::is_accepted),
+        "the accepted turn is the delivery proof: {outcome:?}"
+    );
     let frames = handle.join().unwrap();
     assert_eq!(
         submit_count(&frames),
@@ -278,7 +282,7 @@ fn painted_draft_without_acceptance_stays_unconfirmed() {
         20,
         0,
     );
-    assert_eq!(outcome, Err("not-confirmed"));
+    assert_eq!(outcome, Ok(DeliveryState::failed("not-confirmed")), "withdrawn on silence");
     // flatten write + CR + the ONE resubmit CR at half budget; the
     // unconfirmable arm never withdraws and never re-Enters again.
     assert_eq!(submit_count(&handle.join().unwrap()), 3);
@@ -309,7 +313,7 @@ fn fragmented_paint_stays_unconfirmed() {
         20,
         0,
     );
-    assert_eq!(outcome, Err("not-confirmed"));
+    assert_eq!(outcome, Ok(DeliveryState::failed("not-confirmed")), "withdrawn on silence");
     // The same 3-write shape: flatten write + CR + the one resubmit CR.
     assert_eq!(submit_count(&handle.join().unwrap()), 3);
     std::fs::remove_dir_all(&rig.dir).ok();
@@ -342,7 +346,7 @@ fn same_prefix_paint_stays_unconfirmed() {
         20,
         0,
     );
-    assert_eq!(outcome, Err("not-confirmed"));
+    assert_eq!(outcome, Ok(DeliveryState::failed("not-confirmed")), "withdrawn on silence");
     // flatten write + CR + the ONE resubmit CR at half budget.
     assert_eq!(submit_count(&handle.join().unwrap()), 3);
     std::fs::remove_dir_all(&rig.dir).ok();
@@ -367,7 +371,7 @@ fn stale_accepted_record_before_the_send_stays_unconfirmed() {
         20,
         0,
     );
-    assert_eq!(outcome, Err("not-confirmed"));
+    assert_eq!(outcome, Ok(DeliveryState::failed("not-confirmed")), "withdrawn on silence");
     // flatten write + CR + the one resubmit CR, then the bounded DEL
     // withdraw: the rig records no typing, so silence is provable.
     assert_eq!(submit_count(&handle.join().unwrap()), 4);
@@ -399,7 +403,7 @@ fn newly_accepted_record_confirms_past_an_existing_baseline() {
         25,
         0,
     );
-    assert_eq!(outcome, Ok(()));
+    assert!(outcome.as_ref().is_ok_and(DeliveryState::is_accepted), "{outcome:?}");
     assert_eq!(submit_count(&handle.join().unwrap()), 2);
     std::fs::remove_dir_all(&rig.dir).ok();
 }
@@ -427,7 +431,7 @@ fn wrong_session_record_stays_unconfirmed() {
         20,
         0,
     );
-    assert_eq!(outcome, Err("not-confirmed"));
+    assert_eq!(outcome, Ok(DeliveryState::failed("not-confirmed")), "withdrawn on silence");
     // The same 4-write shape as the stale-baseline half: flatten write +
     // CR, the one resubmit CR, then the DEL withdraw on provable silence.
     assert_eq!(submit_count(&handle.join().unwrap()), 4);
@@ -487,7 +491,7 @@ fn unconfirmable_lane_keeps_draining_keeper_output() {
         25,
         0,
     );
-    assert_eq!(outcome, Err("not-confirmed"));
+    assert_eq!(outcome, Ok(DeliveryState::Injected), "typed, no record to read");
     rx.recv_timeout(Duration::from_secs(5))
         .expect("the injector must drain keeper Output while unconfirmable");
     // flatten write + CR + exactly ONE resubmit CR at half the budget; the

@@ -32,6 +32,7 @@ use crate::acp_stdio::{
 };
 use crate::claude_ask::AskOutcome;
 use crate::footnote_transcript::LaunchSpec;
+use crate::mail_delivery_state::{DeliveryState, Parked};
 use crate::paths::AgentsHome;
 use crate::protocol::{ErrorCode, Request, Response};
 use crate::state::{load_registry, update_registry, RegistryEntry};
@@ -161,6 +162,7 @@ fn work(session: Arc<AcpSession>, host: Arc<Host>) {
             }
         };
         host.busy.store(true, Ordering::SeqCst);
+        record_mail_accepted(next.meta.as_ref());
         let ran = session.prompt_with_meta(&next.text, next.meta);
         host.busy.store(false, Ordering::SeqCst);
         session.take_notifications();
@@ -178,6 +180,34 @@ fn work(session: Arc<AcpSession>, host: Arc<Host>) {
             }
         }
     }
+}
+
+/// A mail prompt leaves the host queue as its own `session/prompt`: that is
+/// the turn record, written here because the deliver RPC answered long ago.
+/// ACP has no steer, so it is always a new turn.
+fn record_mail_accepted(meta: Option<&Value>) {
+    use crate::mail_delivery_state::{DeliveryState, Evidence};
+    let origin = meta.and_then(|m| m.get("footnote/origin"));
+    let Some(id) = origin
+        .and_then(|o| o.get("message_id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    else {
+        return;
+    };
+    let from = origin
+        .and_then(|o| o.get("sender_session_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let state = DeliveryState::accepted(
+        false,
+        Evidence {
+            record: "acp:session/prompt".to_string(),
+            at: crate::graph_store::now_isoformat(),
+            ..Evidence::default()
+        },
+    );
+    crate::mail_delivery_state::record(id, &state, from, "");
 }
 
 /// Answer socket requests until SIGINT, SIGTERM or a lost session.
@@ -591,13 +621,13 @@ pub fn deliver_rpc(home: &AgentsHome, req: &Request) -> Response {
     let Some(entry) = reg.find(name) else {
         return Response::ok(
             req.id,
-            json!({"delivered": false, "reason": "no-such-agent"}),
+            failed_answer("no-such-agent"),
         );
     };
     let Some(socket) = host_socket(entry) else {
         return Response::ok(
             req.id,
-            json!({"delivered": false, "reason": "no-deliver-lane"}),
+            failed_answer("no-deliver-lane"),
         );
     };
     // The RPC names the sender; its row holds the full id.
@@ -621,13 +651,34 @@ pub fn deliver_rpc(home: &AgentsHome, req: &Request) -> Response {
     Response::ok(
         req.id,
         match reply {
-            Ok(r) if r["ok"] == true => json!({"delivered": true, "queued": r["queued"]}),
-            Ok(r) => json!({"delivered": false, "reason": r["error"]}),
-            Err(e) => {
-                json!({"delivered": false, "reason": format!("footnote-host-unreachable: {e}")})
+            Ok(r) if r["ok"] == true => {
+                // The host runs one prompt at a time: behind a running turn or
+                // another queued prompt, ours waits in the host queue.
+                let waiting = r["busy"] == true || r["queued"].as_u64().unwrap_or(0) > 1;
+                let state = if waiting {
+                    DeliveryState::Parked {
+                        where_: Parked::HarnessQueue,
+                    }
+                } else {
+                    DeliveryState::Injected
+                };
+                let mut v = state.to_json();
+                v["delivered"] = json!(true);
+                v["queued"] = r["queued"].clone();
+                v
             }
+            Ok(r) => failed_answer(r["error"].as_str().unwrap_or("host-refused")),
+            Err(e) => failed_answer(&format!("footnote-host-unreachable: {e}")),
         },
     )
+}
+
+/// The deliver answer for a refusal: `failed` with its reason, plus the
+/// `delivered: false` the pre-state readers parse.
+fn failed_answer(reason: &str) -> Value {
+    let mut v = DeliveryState::failed(reason).to_json();
+    v["delivered"] = json!(false);
+    v
 }
 
 /// `fno agents ask <name> [<message>] [--answer allow_once|deny]` on a live

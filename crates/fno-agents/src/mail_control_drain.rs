@@ -205,7 +205,10 @@ pub(crate) fn is_control(body: &str) -> bool {
 
 pub(crate) fn deliverable(m: &Value) -> bool {
     let kind = m.get("kind").and_then(Value::as_str).unwrap_or("");
-    if kind == WITHDRAW_KIND || kind == LANDED_KIND {
+    if kind == WITHDRAW_KIND
+        || kind == LANDED_KIND
+        || kind == crate::mail_delivery_state::STATE_KIND
+    {
         return false;
     }
     let delivery = m.get("delivery").and_then(Value::as_str).unwrap_or("");
