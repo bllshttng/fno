@@ -183,20 +183,17 @@ fn read_repo(root: &Path) -> Result<Repo, String> {
     Ok((ranked, order, gates.len()))
 }
 
-/// POST `action` on one run; the row records what gh refused.
-pub(crate) fn post(root: &Path, run: &u64, action: &str) -> Value {
-    let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/{action}");
-    match crate::pr_push::gh_api("gh", root, &path, &["-X", "POST"]) {
-        Ok(_) => json!({"run": run, "ok": true}),
-        Err(e) => json!({"run": run, "ok": false, "error": e}),
-    }
-}
-
 /// POST `action` on each run; the journal records what gh refused.
-fn act(root: &Path, list: &[(u64, Vec<u64>)], action: &str) -> Vec<Value> {
-    let one = |run: &u64| post(root, run, action);
+pub(crate) fn act(root: &Path, list: &[(u64, Vec<u64>)], action: &str) -> Vec<Value> {
+    let post = |run: &u64| {
+        let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/{action}");
+        match crate::pr_push::gh_api("gh", root, &path, &["-X", "POST"]) {
+            Ok(_) => json!({"run": run, "ok": true}),
+            Err(e) => json!({"run": run, "ok": false, "error": e}),
+        }
+    };
     list.iter()
-        .map(|(pr, runs)| json!({"pr": pr, "runs": runs.iter().map(one).collect::<Vec<_>>()}))
+        .map(|(pr, runs)| json!({"pr": pr, "runs": runs.iter().map(post).collect::<Vec<_>>()}))
         .collect()
 }
 

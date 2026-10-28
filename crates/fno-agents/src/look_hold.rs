@@ -16,7 +16,6 @@ use crate::paths::AgentsHome;
 const INTERVAL: Duration = Duration::from_secs(120);
 // A look can wait days for the user.
 const WINDOW_MS: i64 = 7 * 24 * 3_600_000;
-const PAINT_CACHE_CAP: usize = 2_000;
 pub(crate) const CANCEL_EVENT: &str = "look_hold_cancel";
 pub(crate) const RELEASE_EVENT: &str = "look_hold_release";
 /// The workflow a held head keeps when `merge.visual_shot_workflows` is
@@ -107,27 +106,23 @@ pub(crate) fn decide(head: &Head, ours: &HashSet<u64>, held: Option<bool>) -> (V
 fn held(paint: &PaintCache, root: &Path, slug: &str, pr: u64, sha: &str) -> Option<bool> {
     let probes = crate::authorized_merge::RealProbes;
     let key = format!("{slug}#{pr}@{sha}");
-    let cached = paint
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&key)
-        .copied();
-    let touches = match cached {
-        Some(touches) => touches,
+    let mut cache = paint.lock().unwrap_or_else(|e| e.into_inner());
+    let touches = match cache.get(&key) {
+        Some(touches) => *touches,
         None => {
             let files = crate::merge_gates::pr_file_paths(&probes, root, pr)?;
             let paths = crate::agents_config::visual_paint_paths(root);
             let touches = files
                 .iter()
                 .any(|f| crate::merge_gates::path_matches_paint(f, &paths));
-            let mut cache = paint.lock().unwrap_or_else(|e| e.into_inner());
-            if cache.len() >= PAINT_CACHE_CAP {
+            if cache.len() > 2_000 {
                 cache.clear();
             }
             cache.insert(key, touches);
             touches
         }
     };
+    drop(cache);
     if !touches {
         return Some(false);
     }
@@ -174,10 +169,7 @@ fn pass_repo(root: &Path, slug: &str, path: &Path, paint: &PaintCache) -> Result
             if list.is_empty() {
                 continue;
             }
-            let runs: Vec<Value> = list
-                .iter()
-                .map(|run| crate::ci_tier::post(root, run, action))
-                .collect();
+            let runs = &crate::ci_tier::act(root, &[(pr, list)], action)[0]["runs"];
             let data = json!({"slug": slug, "pr": pr, "sha": sha, "runs": runs});
             emitter
                 .emit(kind, &data)
@@ -187,7 +179,7 @@ fn pass_repo(root: &Path, slug: &str, path: &Path, paint: &PaintCache) -> Result
     Ok(())
 }
 
-pub(crate) fn run_pass(home: &AgentsHome, paint: &PaintCache) -> Result<(), String> {
+pub(crate) fn run_pass(home: &AgentsHome, paint: &PaintCache) {
     let path = crate::daemon::global_events_path(home);
     let mut slugs = HashSet::new();
     for root in crate::daemon::worktree_sweep::registry_repo_roots(home) {
@@ -202,7 +194,6 @@ pub(crate) fn run_pass(home: &AgentsHome, paint: &PaintCache) -> Result<(), Stri
             eprintln!("look-hold: {slug}: {e}");
         }
     }
-    Ok(())
 }
 
 pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
@@ -218,9 +209,7 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
     let paint = Arc::clone(&arm.paint);
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
-        if let Err(error) = run_pass(&home, &paint) {
-            eprintln!("look-hold: {error}");
-        }
+        run_pass(&home, &paint);
     });
 }
 
