@@ -177,7 +177,8 @@ fn now_stamp() -> String {
 /// regex crate rides in for it.
 fn valid_name(name: &str) -> bool {
     let b = name.as_bytes();
-    b.len() >= 2
+    !is_reserved_word(name)
+        && b.len() >= 2
         && b.len() <= 24
         && b[0].is_ascii_alphabetic()
         && b[1..]
@@ -197,7 +198,15 @@ pub fn display(name: &str, _generation: u32) -> String {
 
 /// A hand-off names a person, never a dispatch slug or a numbered label.
 pub fn valid_person_name(name: &str) -> bool {
-    (2..=24).contains(&name.len()) && name.bytes().all(|c| c.is_ascii_alphabetic())
+    !is_reserved_word(name)
+        && (2..=24).contains(&name.len())
+        && name.bytes().all(|c| c.is_ascii_alphabetic())
+}
+
+/// `--name redraw` asks the machine for a draw. It is a request, never a
+/// name, so no bind may record it.
+pub fn is_reserved_word(name: &str) -> bool {
+    name.trim().eq_ignore_ascii_case("redraw")
 }
 
 /// The people title for a level (L0 Chief of a portfolio, L1 Head of a
@@ -415,10 +424,87 @@ pub(crate) fn history_append_locked(
 /// This machine's rows plus every peer's from the shared ledger. A
 /// configured ledger that cannot be read is an error, never "no names".
 fn history_all(store_path: &Path) -> Result<Vec<NameHistoryEntry>, String> {
-    let mut rows = history_read(store_path)?.names;
+    let mut rows = local_rows(store_path)?;
     let shared = crate::name_ledger::read_merged(store_path, &rows)?;
     rows.extend(shared);
     Ok(rows)
+}
+
+/// The history file plus the names the registry snapshots still hold. A
+/// registry row can name a lead that never reached the history (a Wren from
+/// before the history existed), and the live registry forgets it once the
+/// row is pruned. The snapshots remember it, and through this read the name
+/// lands in the shared ledger.
+fn local_rows(store_path: &Path) -> Result<Vec<NameHistoryEntry>, String> {
+    let mut rows = history_read(store_path)?.names;
+    rows.extend(snapshot_rows(store_path));
+    Ok(rows)
+}
+
+/// One `bound` row per person name in `registry-snapshots/`, skipping the
+/// names the live registry still carries (those already count, with the
+/// live row's own exemptions). Best-effort: an unreadable snapshot or live
+/// registry answers nothing here.
+fn snapshot_rows(store_path: &Path) -> Vec<NameHistoryEntry> {
+    let Some(dir) = store_path.parent().map(|p| p.join("registry-snapshots")) else {
+        return Vec::new();
+    };
+    let Ok(listing) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    // Sorted, so a name's row (scope, session, ts) is the same on every
+    // read and the ledger push dedups it.
+    let mut entries: Vec<PathBuf> = listing.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    let Ok(live) = crate::state::load_registry(&store_path.with_file_name("registry.json")) else {
+        return Vec::new();
+    };
+    let live: BTreeSet<String> = live
+        .entries
+        .iter()
+        .flat_map(|row| std::iter::once(&row.name).chain(row.aliases.iter()))
+        .map(|n| n.to_ascii_lowercase())
+        .collect();
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for entry in entries {
+        let Ok(bytes) = std::fs::read(&entry) else {
+            continue;
+        };
+        let Ok(doc) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        let rows: Vec<&serde_json::Value> = match doc.get("agents").unwrap_or(&doc) {
+            serde_json::Value::Array(rows) => rows.iter().collect(),
+            serde_json::Value::Object(rows) => rows.values().collect(),
+            _ => continue,
+        };
+        for row in rows {
+            let text = |key: &str| row.get(key).and_then(serde_json::Value::as_str);
+            let names = text("name").into_iter().chain(
+                row.get("aliases")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str),
+            );
+            for name in names.map(str::trim).filter(|n| valid_person_name(n)) {
+                let lowered = name.to_ascii_lowercase();
+                if live.contains(&lowered) || !seen.insert(lowered.clone()) {
+                    continue;
+                }
+                out.push(NameHistoryEntry {
+                    name: lowered,
+                    scope: text("role_scope").unwrap_or("registry").to_string(),
+                    session: text("harness_session_id").map(str::to_string),
+                    kind: "bound".into(),
+                    ts: text("created_at").unwrap_or_default().to_string(),
+                    host: None,
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Every name in the fleet's history, lowercased: the never-reuse floor.
@@ -432,7 +518,7 @@ pub fn history_names(store_path: &Path) -> Result<BTreeSet<String>, String> {
 /// Push this machine's history rows the shared ledger lacks (the daemon
 /// sweep's migration step). Answers how many rows it pushed.
 pub fn history_sync(store_path: &Path) -> Result<usize, String> {
-    crate::name_ledger::sync(store_path, &history_read(store_path)?.names)
+    crate::name_ledger::sync(store_path, &local_rows(store_path)?)
 }
 
 /// Who used `name` and when, from the newest history row on any machine:
@@ -457,7 +543,7 @@ pub fn used_by(store_path: &Path, name: &str) -> String {
                 .as_deref()
                 .map(|s| format!("session {s}, "))
                 .unwrap_or_default(),
-            e.host.unwrap_or_else(crate::claims::hostname),
+            e.host.unwrap_or_else(crate::name_ledger::host_label),
             e.ts
         ),
         None => "an earlier lead, worker or draw used it".to_string(),
@@ -474,6 +560,24 @@ pub fn pending_draw(store_path: &Path, scope: &str) -> Result<Option<String>, St
         .rev()
         .find(|e| e.scope == canon && e.kind == "drawn")
         .map(|e| e.name))
+}
+
+/// [`pending_draw`] while no bind on any machine has consumed it yet: a draw
+/// that a later `bound` row names is a retired name, never an accept.
+pub fn unconsumed_draw(store_path: &Path, scope: &str) -> Result<Option<String>, String> {
+    let canon = crate::territory::canonical_scope(scope);
+    let rows = history_all(store_path)?;
+    let Some(draw) = rows
+        .iter()
+        .filter(|e| e.scope == canon && e.kind == "drawn")
+        .max_by(|a, b| a.ts.cmp(&b.ts))
+    else {
+        return Ok(None);
+    };
+    let consumed = rows
+        .iter()
+        .any(|e| e.kind == "bound" && e.name.eq_ignore_ascii_case(&draw.name) && e.ts >= draw.ts);
+    Ok((!consumed).then(|| draw.name.clone()))
 }
 
 /// Every name this host must not reuse, lowercased: the history ledger, the
@@ -649,6 +753,20 @@ fn session_own_names(
     Ok(own)
 }
 
+/// The `name:` claim root a checkin draw takes. A test keeps its claims
+/// beside its tempdir store; a real run takes the shared default.
+fn draw_claims_root(store_path: &Path) -> Option<&Path> {
+    #[cfg(test)]
+    {
+        store_path.parent()
+    }
+    #[cfg(not(test))]
+    {
+        let _ = store_path;
+        None
+    }
+}
+
 /// Name an un-named live team. Refusals (pattern, a duplicate live name,
 /// a retired name, an already-named team) name the holder so the lead can
 /// pick again.
@@ -660,15 +778,33 @@ pub fn name_team(
     scope: &str,
     name: &str,
 ) -> Result<String, String> {
-    let name = name.trim();
+    let canon = crate::territory::canonical_scope(scope);
+    let mut drawn = String::new();
+    let name = if is_reserved_word(name) {
+        drawn = crate::name_draw::draw_successor_name(
+            store_path,
+            registry_path,
+            scope,
+            None,
+            true,
+            draw_claims_root(store_path),
+            &[],
+        )?;
+        drawn.as_str()
+    } else {
+        name.trim()
+    };
     if !valid_name(name) {
         return Err(format!(
-            "a team name is 2-24 letters (apostrophes and hyphens allowed after the first), got {name:?}"
+            "a team name is 2-24 letters (apostrophes and hyphens allowed after the first), got {name:?}; or pass --name redraw and the machine draws one"
         ));
     }
-    let canon = crate::territory::canonical_scope(scope);
     let live = live_index(registry_path)?;
     let mut used = used_for_canon(store_path, registry_path, &canon, &live)?;
+    // The draw this call just took is fresh by construction; its own
+    // `drawn` row is the only history entry naming it. An older draw over
+    // the scope may since have been bound, so it earns no exemption.
+    used.remove(&drawn.to_ascii_lowercase());
     // A resumed lead lost its store record but not its identity: the names
     // its own session bound or carries are its own, not a reuse.
     if let Some(session) = live.get(&canon).and_then(|c| c.holder_session.as_deref()) {
@@ -1467,7 +1603,7 @@ pub fn set_theme(
     update(store_path, |store| {
         let names = live_names_in(store, &live);
         if !names.contains_key(&canon) {
-            return Err("every live team needs a name; check in with --name <name>".into());
+            return Err("every live team needs a name; check in with --name redraw and the machine draws a fresh one".into());
         }
         if live.get(&canon).is_some_and(|c| c.level == 1) {
             return Err("Head of <project> takes the project name; no theme".into());
@@ -1760,7 +1896,7 @@ pub fn apply_team_naming(
         set_theme(&store_path, &registry_path, scope, theme)?;
     }
     if !ensure_named_team(&store_path, &registry_path, scope)? {
-        return Err("every live team needs a name; check in with --name <name>".into());
+        return Err("every live team needs a name; check in with --name redraw and the machine draws a fresh one".into());
     }
     if matches!(level, Some(0) | Some(2)) && theme_for(&store_path, scope).is_none() {
         return Err(
@@ -1775,7 +1911,7 @@ pub fn apply_team_naming(
 pub fn team_line_text(name: Option<&str>, title_txt: &str, scope: &str) -> String {
     match name {
         Some(name) => format!("{name}, {title_txt} ({scope})"),
-        None => "unnamed lead - name it once: fno agents org checkin --name <name>".to_string(),
+        None => "unnamed lead - name it once: fno agents org checkin --name redraw".to_string(),
     }
 }
 
@@ -1797,6 +1933,38 @@ mod tests {
             )
             .unwrap_err();
             assert!(err.contains("every live team needs a name"), "{err}");
+            // `--name redraw` is the machine's draw, never the name: the team
+            // binds a pool name and no history row records the word.
+            let snaps = tmp.path().join("registry-snapshots");
+            std::fs::create_dir_all(&snaps).unwrap();
+            let pre_ledger = json!({"agents": [
+                team_row("wren", "x-old", 1, "sess-w"),
+                team_row("lead-a", "fno", 1, "sess-a"),
+            ]});
+            std::fs::write(snaps.join("registry.json.legacy"), pre_ledger.to_string()).unwrap();
+            apply_team_naming(
+                &store_path(tmp.path()),
+                &registry_path(tmp.path()),
+                Some("redraw"),
+                None,
+                None,
+                Some(1),
+                "fno",
+            )
+            .unwrap();
+            let bound = read(&store_path(tmp.path())).unwrap().teams["fno"]
+                .name
+                .clone();
+            assert!(
+                crate::name_draw::NAME_POOL
+                    .iter()
+                    .any(|n| n.eq_ignore_ascii_case(&bound)),
+                "{bound}"
+            );
+            let used = history_names(&store_path(tmp.path())).unwrap();
+            assert!(!used.contains("redraw") && used.contains(&bound.to_ascii_lowercase()));
+            // A pruned row's name in a registry snapshot stays used.
+            assert!(used.contains("wren"), "{used:?}");
         }
 
         fn a_successor_checkin_carries_the_name_into_its_registry_label() {
@@ -1927,7 +2095,7 @@ mod tests {
             );
             assert_eq!(
                 team_line_text(None, "L1 fno", "fno"),
-                "unnamed lead - name it once: fno agents org checkin --name <name>"
+                "unnamed lead - name it once: fno agents org checkin --name redraw"
             );
         }
 
@@ -2174,6 +2342,10 @@ mod tests {
             );
             assert_eq!(
                 carry_holder_name(&store, "", 1, "x-ffff", "marlow").unwrap(),
+                None
+            );
+            assert_eq!(
+                carry_holder_name(&store, "sess-f", 1, "x-ffff", "Redraw").unwrap(),
                 None
             );
             assert!(snapshot(&store).unwrap()["teams"].get("x-eeee").is_none());

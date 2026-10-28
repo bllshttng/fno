@@ -244,9 +244,8 @@ def _fill_spawn_record(owned):
 
 
 #: Manifest body/frontmatter fields that carry an identity every fno process
-#: in the worktree can read. Read directly rather than through
-#: ``fno.target.manifest`` - claims sits at the bottom of the stack and must
-#: not import the target layer.
+#: in the worktree can read. Read directly from the manifest text - claims
+#: sits at the bottom of the stack and must not import the target layer.
 _MANIFEST_IDENTITY_FIELDS = (
     "harness_session_id",
     "claude_session_id",

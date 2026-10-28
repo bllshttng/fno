@@ -37,7 +37,9 @@ admit() {
         # fence reads it as "a cargo-launched build" and refuses the claims
         # store, so with it set every build ran claimless. Only this call
         # drops it: the compiler and the test binary keep it.
-        env -u CARGO_MANIFEST_DIR FNO_CARGO_RUN_PROGRAM="$program" fno-agents test-run "${mode}-admit" --cargo-pid "$PPID" --worktree "$repo_root" || rc=$?
+        # The run door prints a test binary's state-root pins on stdout, one
+        # FNO_*=<temp path> line each; the run branch exports them.
+        door_pins="$(env -u CARGO_MANIFEST_DIR FNO_CARGO_RUN_PROGRAM="$program" fno-agents test-run "${mode}-admit" --cargo-pid "$PPID" --worktree "$repo_root")" || rc=$?
         if [[ "$rc" -eq 86 ]]; then
             # Slot-busy, and an agent's test binary, are policy, not
             # breakage: the door printed the answer ("commit, push, CI runs
@@ -98,7 +100,16 @@ if [[ "${1:-}" == "--run" ]]; then
         echo "cargo-rustc-wrapper: --run needs a program" >&2
         exit 2
     fi
+    door_pins=""
     admit run "$1"
+    # A test binary links fno-agents without cfg(test), so a bare cargo test
+    # resolved the live ~/.fno. The door hands it a temp state tree instead,
+    # and refuses (exit 86 above) a root pinned into the live one.
+    while IFS= read -r pin; do
+        case "$pin" in
+            FNO_*=*) export "$pin" ;;
+        esac
+    done <<<"$door_pins"
     exec "$@"
 fi
 
