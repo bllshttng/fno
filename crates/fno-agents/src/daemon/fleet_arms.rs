@@ -37,7 +37,6 @@ pub(super) struct FleetArms {
     symptom_recheck: crate::symptom_recheck::Arm,
     team_ledger: crate::rundown::Arm,
     lead_eval: crate::lead_eval::Arm,
-    fleet_page: crate::fleet_page::Arm,
     fleet_beacon: crate::fleet_beacon::Arm,
     arm_watch: crate::arm_watch::Arm,
     provider_cap: crate::provider_cap_commands::Arm,
@@ -129,7 +128,6 @@ impl FleetArms {
             symptom_recheck: crate::symptom_recheck::Arm::default(),
             team_ledger: crate::rundown::Arm::default(),
             lead_eval: crate::lead_eval::Arm::default(),
-            fleet_page: crate::fleet_page::Arm::new(opts.agents_config_cwd.clone()),
             fleet_beacon: crate::fleet_beacon::Arm::default(),
             arm_watch: crate::arm_watch::Arm::new(opts.agents_config_cwd.clone()),
             provider_cap: crate::provider_cap_commands::Arm::new(opts.agents_config_cwd.clone()),
@@ -334,7 +332,6 @@ impl FleetArms {
         crate::board_render_arm::maybe_tick(&self.board_render, ctx.home.clone());
         crate::rundown::maybe_tick(&self.team_ledger, ctx.home.clone());
         crate::lead_eval::maybe_tick(&self.lead_eval, ctx.home.clone());
-        crate::fleet_page::maybe_tick(&self.fleet_page, ctx.home.clone());
         crate::fleet_beacon::maybe_tick(&self.fleet_beacon, ctx.home.clone());
         crate::arm_watch::maybe_tick(&self.arm_watch, ctx.home.clone());
         crate::provider_cap_commands::maybe_tick(&self.provider_cap, ctx.home.clone());

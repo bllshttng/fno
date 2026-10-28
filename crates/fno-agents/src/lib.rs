@@ -206,7 +206,6 @@ pub mod first_check;
 pub mod fleet_beacon;
 pub mod fleet_incident;
 pub mod fleet_load;
-pub mod fleet_page;
 pub mod fleet_state;
 pub mod fleet_task;
 pub mod flight_gate;
