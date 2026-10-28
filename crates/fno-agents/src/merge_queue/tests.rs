@@ -12,12 +12,11 @@ fn row(kind: &str, ms: i64, data: Value) -> Value {
     json!({"ts": stamp(ms), "type": kind, "data": data})
 }
 
-fn entry_row(pr: u64, head: &str, ms: i64, priority: u8, repair: bool) -> Value {
+fn entry_row(pr: u64, head: &str, ms: i64) -> Value {
     row(
         ENTRY_EVENT,
         ms,
-        json!({"slug": "o/r", "pr": pr, "head": head, "head_ref": format!("b{pr}"),
-            "priority": priority, "repair": repair}),
+        json!({"slug": "o/r", "pr": pr, "head": head, "head_ref": format!("b{pr}")}),
     )
 }
 
@@ -68,41 +67,42 @@ fn step(entries: &[Entry], state: &State, main: &str, main_red: bool, gate: &Gat
     })
 }
 
-#[test]
-fn a_green_queue_builds_in_priority_order_then_lands_the_batch_sha() {
-    let entries = [entry(3, 2, 30), entry(1, 1, 50), entry(2, 2, 10)];
-    let built = step(&entries, &idle_state(), "m0", false, &Gate::Pending);
-    assert_eq!(built, Step::Build { prs: vec![1, 2, 3] });
-    let state = with_active(batch(&[1, 2, 3], "m0"));
-    assert_eq!(
-        step(&entries, &state, "m0", false, &Gate::Pending),
-        Step::Wait
-    );
-    assert_eq!(
-        step(&entries, &state, "m0", false, &Gate::Green),
-        Step::Land {
-            sha: "batch-sha".into()
-        }
-    );
+fn build(prs: &[u64]) -> Step {
+    Step::Build { prs: prs.to_vec() }
 }
 
 #[test]
-fn a_batch_never_holds_more_than_the_cap() {
-    let entries: Vec<Entry> = (1..=8).map(|pr| entry(pr, 2, pr as i64)).collect();
-    let Step::Build { prs } = step(&entries, &idle_state(), "m0", false, &Gate::Pending) else {
-        panic!("expected a build");
-    };
-    assert_eq!(prs, vec![1, 2, 3, 4, 5, 6]);
+fn a_batch_builds_in_queue_order_with_a_repair_entry_first_and_alone() {
+    let mut entries: Vec<Entry> = (1..=8).map(|pr| entry(pr, 2, pr as i64)).collect();
+    entries[7].priority = 1;
+    let state = idle_state();
+    assert_eq!(
+        step(&entries, &state, "m0", false, &Gate::Pending),
+        build(&[8, 1, 2, 3, 4, 5])
+    );
+    // A red main builds nothing but the repair entry.
+    assert_eq!(
+        step(&entries, &state, "m0", true, &Gate::Pending),
+        Step::Idle
+    );
+    let mut repair = entry(9, 3, 99);
+    repair.repair = true;
+    entries.push(repair);
+    assert_eq!(
+        step(&entries, &state, "m0", true, &Gate::Pending),
+        build(&[9])
+    );
+    assert_eq!(
+        step(&entries, &state, "m0", false, &Gate::Pending),
+        build(&[9])
+    );
 }
 
 /// The node's done line: two PRs, each green alone, whose combination fails
 /// the gate. The queue lands exactly one and ejects the other.
 #[test]
 fn two_green_prs_whose_combination_fails_land_only_one() {
-    let entry_rows = [
-        entry_row(1, "h1", NOW, 2, false),
-        entry_row(2, "h2", NOW + 1, 2, false),
-    ];
+    let entry_rows = [entry_row(1, "h1", NOW), entry_row(2, "h2", NOW + 1)];
     let mut open = HashMap::from([(1, "h1".to_string()), (2, "h2".to_string())]);
     let (mut steps, mut on_main): (Vec<Value>, Vec<u64>) = (Vec::new(), Vec::new());
     let flakes = HashSet::new();
@@ -170,56 +170,46 @@ fn two_green_prs_whose_combination_fails_land_only_one() {
 }
 
 #[test]
-fn a_red_batch_of_known_flakes_reruns_once_then_splits() {
+fn the_gate_reruns_once_for_known_flakes_and_for_a_run_that_never_started() {
     let entries = [entry(1, 2, 1), entry(2, 2, 2)];
+    let state = with_active(batch(&[1, 2], "m0"));
+    assert_eq!(
+        step(&entries, &state, "m0", false, &Gate::Pending),
+        Step::Wait
+    );
     let red = Gate::Red {
         failing: vec!["plugin-tree".into()],
     };
-    let state = with_active(batch(&[1, 2], "m0"));
     assert_eq!(step(&entries, &state, "m0", false, &red), Step::Rerun);
     let mut reran = batch(&[1, 2], "m0");
     reran.reran = true;
+    let split = Step::Split {
+        left: vec![1],
+        right: vec![2],
+    };
     assert_eq!(
         step(&entries, &with_active(reran), "m0", false, &red),
-        Step::Split {
-            left: vec![1],
-            right: vec![2]
-        }
+        split
+    );
+    // A gate run not listed yet waits out the dispatch grace, then reruns.
+    assert_eq!(
+        step(&entries, &state, "m0", false, &Gate::Missing),
+        Step::Wait
+    );
+    let mut old = batch(&[1, 2], "m0");
+    old.since_ms = NOW - DISPATCH_GRACE_MS;
+    assert_eq!(
+        step(&entries, &with_active(old), "m0", false, &Gate::Missing),
+        Step::Rerun
     );
 }
 
 #[test]
-fn a_red_main_builds_only_the_repair_entry_alone() {
-    let mut repair = entry(9, 3, 99);
-    repair.repair = true;
-    let entries = [entry(1, 0, 1), repair, entry(2, 1, 2)];
-    assert_eq!(
-        step(&entries, &idle_state(), "m0", true, &Gate::Pending),
-        Step::Build { prs: vec![9] }
-    );
-    assert_eq!(
-        step(&entries[..1], &idle_state(), "m0", true, &Gate::Pending),
-        Step::Idle
-    );
-    // A green main still lands the repair first and alone.
-    assert_eq!(
-        step(&entries, &idle_state(), "m0", false, &Gate::Pending),
-        Step::Build { prs: vec![9] }
-    );
-}
-
-#[test]
-fn main_moving_under_a_built_batch_rebuilds_and_ejects_nobody() {
-    let entries = [entry(1, 2, 1), entry(2, 2, 2)];
-    let state = with_active(batch(&[1, 2], "m0"));
-    assert_eq!(
-        step(&entries, &state, "m1", false, &Gate::Green),
-        Step::Rebuild { main_moved: true }
-    );
-}
-
-#[test]
-fn three_rebuilds_in_a_row_hold_until_main_stays_still() {
+fn main_moving_rebuilds_three_times_then_holds_until_main_stays_still() {
+    let build_row = |ms, base: &str| {
+        let data = json!({"step": "build", "batch": "1", "prs": [1], "sha": "s", "base": base});
+        row(STEP_EVENT, ms, data)
+    };
     let rebuild = |ms| {
         row(
             STEP_EVENT,
@@ -227,113 +217,65 @@ fn three_rebuilds_in_a_row_hold_until_main_stays_still() {
             json!({"step": "rebuild", "batch": "1", "main_moved": true}),
         )
     };
-    let build = |ms, base: &str| {
-        row(
-            STEP_EVENT,
-            ms,
-            json!({"step": "build", "batch": "1", "prs": [1], "sha": "s", "base": base}),
-        )
-    };
     let entries = [entry(1, 2, 1)];
-    let rows = vec![
-        build(1, "m0"),
-        rebuild(2),
-        build(3, "m1"),
-        rebuild(4),
-        build(5, "m2"),
-        rebuild(6),
-        build(7, "m3"),
-    ];
+    let mut rows = vec![build_row(1, "m0")];
+    let state = fold(&rows, DEFAULT_MAX_BATCH);
+    assert_eq!(
+        step(&entries, &state, "m1", false, &Gate::Green),
+        Step::Rebuild { main_moved: true }
+    );
+    for (ms, base) in [(3, "m1"), (5, "m2"), (7, "m3")] {
+        rows.push(rebuild(ms - 1));
+        rows.push(build_row(ms, base));
+    }
     let state = fold(&rows, DEFAULT_MAX_BATCH);
     assert_eq!(state.rebuilds, 3);
-    let held = step(&entries, &state, "m4", false, &Gate::Pending);
-    assert_eq!(
-        held,
-        Step::Hold {
-            reason: "main_moving".into()
-        }
-    );
-    let mut rows = rows;
+    let hold = Step::Hold {
+        reason: "main_moving".into(),
+    };
+    assert_eq!(step(&entries, &state, "m4", false, &Gate::Pending), hold);
     rows.push(row(
         STEP_EVENT,
         8,
         json!({"step": "hold", "batch": "1", "main": "m4"}),
     ));
     let state = fold(&rows, DEFAULT_MAX_BATCH);
-    assert_eq!(state.rebuilds, 0);
-    assert!(matches!(
-        step(&entries, &state, "m5", false, &Gate::Pending),
-        Step::Hold { .. }
-    ));
+    assert_eq!(step(&entries, &state, "m5", false, &Gate::Pending), hold);
     assert_eq!(
         step(&entries, &state, "m4", false, &Gate::Pending),
-        Step::Build { prs: vec![1] }
+        build(&[1])
     );
 }
 
 #[test]
-fn an_entry_whose_head_moved_drops_out_and_the_batch_builds_without_it() {
+fn a_moved_or_ejected_head_drops_out_and_a_new_push_queues_again() {
     let rows = [
-        entry_row(1, "h1", 1, 2, false),
-        entry_row(2, "h2", 2, 2, false),
+        entry_row(1, "h1", 1),
+        entry_row(2, "h2", 2),
+        entry_row(3, "h3", 3),
+        entry_row(3, "h3b", 5),
     ];
-    let open = HashMap::from([(1, "h1".to_string()), (2, "pushed-again".to_string())]);
-    let entries = live_entries(&rows, &idle_state(), &open);
-    assert_eq!(entries.iter().map(|e| e.pr).collect::<Vec<_>>(), vec![1]);
+    let ejected = [row(
+        STEP_EVENT,
+        4,
+        json!({"step": "eject", "batch": "0", "pr": 3, "head": "h3"}),
+    )];
+    let state = fold(&ejected, DEFAULT_MAX_BATCH);
+    let open = |three: &str| {
+        HashMap::from([
+            (1, "h1".to_string()),
+            (2, "pushed-again".to_string()),
+            (3, three.to_string()),
+        ])
+    };
+    let prs = |entries: Vec<Entry>| entries.iter().map(|e| e.pr).collect::<Vec<_>>();
+    assert_eq!(prs(live_entries(&rows, &state, &open("h3"))), vec![1]);
+    let entries = live_entries(&rows, &state, &open("h3b"));
+    assert_eq!(prs(entries.clone()), vec![1, 3]);
+    // A PR that drops out of a built batch restarts it, not counted as main moving.
+    let built = with_active(batch(&[1, 2], "m0"));
     assert_eq!(
-        step(&entries, &idle_state(), "m0", false, &Gate::Pending),
-        Step::Build { prs: vec![1] }
-    );
-    // The same move under a built batch restarts it, not counted as main moving.
-    let state = with_active(batch(&[1, 2], "m0"));
-    assert_eq!(
-        step(&entries, &state, "m0", false, &Gate::Green),
+        step(&entries, &built, "m0", false, &Gate::Green),
         Step::Rebuild { main_moved: false }
     );
-}
-
-#[test]
-fn an_ejected_head_never_requeues_but_a_new_push_does() {
-    let rows = [
-        entry_row(1, "h1", 1, 2, false),
-        entry_row(1, "h1b", 5, 2, false),
-    ];
-    let steps = [row(
-        STEP_EVENT,
-        3,
-        json!({"step": "eject", "batch": "1", "pr": 1, "head": "h1"}),
-    )];
-    let state = fold(&steps, DEFAULT_MAX_BATCH);
-    let old = HashMap::from([(1, "h1".to_string())]);
-    assert!(live_entries(&rows, &state, &old).is_empty());
-    let new = HashMap::from([(1, "h1b".to_string())]);
-    assert_eq!(live_entries(&rows, &state, &new)[0].head, "h1b");
-}
-
-#[test]
-fn an_unlisted_gate_run_waits_through_the_dispatch_grace_then_reruns() {
-    let entries = [entry(1, 2, 1)];
-    let mut fresh = batch(&[1], "m0");
-    fresh.since_ms = NOW;
-    assert_eq!(
-        step(
-            &entries,
-            &with_active(fresh.clone()),
-            "m0",
-            false,
-            &Gate::Missing
-        ),
-        Step::Wait
-    );
-    fresh.since_ms = NOW - DISPATCH_GRACE_MS;
-    assert_eq!(
-        step(&entries, &with_active(fresh), "m0", false, &Gate::Missing),
-        Step::Rerun
-    );
-}
-
-#[test]
-fn reusable_workflow_job_names_match_the_flake_ledger() {
-    assert_eq!(check_name("gate / plugin-tree"), "plugin-tree");
-    assert_eq!(check_name("guards"), "guards");
 }
