@@ -432,9 +432,8 @@ _GHOST_STATES = frozenset({"working", "busy", "blocked"})
 #: fifteen minutes later). ``stopped`` belongs for the mirror reason: a
 #: session that dies mid-turn is exactly a stopped row, and the stalled
 #: check - not candidacy - is what guards a worker the operator stopped.
-#: ``idle`` is the word the harness wears AFTER parking a live session (a
-#: lifted test hold, an undelivered turn); the stalled check, not the state
-#: word, separates such a row from one that finished and went home.
+#: ``idle`` is the harness's word for a parked live session; the stalled
+#: check, not the state word, separates such a row from one that finished.
 _WAKE_STATES = frozenset({"working", "blocked", "stopped", "idle"})
 
 #: Graph statuses that mean the work is over, so an absent claim is the system
@@ -1664,18 +1663,19 @@ ROSTER_REFUSAL = (
 
 
 def _route_fallback_identity(entry, entries) -> tuple[Optional[str], Optional[str]]:
-    """Route identity from the observed model when the declared fields are
-    absent: both axes carry the model so the (provider, account) pair stays
-    consistent per route - the cap actor's own convention (provider_cap trap 2:
-    declared route fields are NULL fleet-wide, membership keys on
-    ``observed_model``). (None, None) leaves the named refusal standing."""
-    model = getattr(entry, "model_name", None)
-    if not model and entries:
+    """Route identity from the OBSERVED model (transcript first, then the
+    spawn-time model_name intent) when the declared fields are absent - the
+    cap actor's observed-first precedence. (None, None) leaves the named
+    refusal standing."""
+    model = None
+    if entries:
         for record in reversed(entries):
             msg = record.get("message") if isinstance(record, dict) else None
             if isinstance(msg, dict) and msg.get("model"):
                 model = str(msg["model"])
                 break
+    if not model:
+        model = getattr(entry, "model_name", None)
     if not model:
         return None, None
     return (

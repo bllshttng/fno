@@ -113,10 +113,20 @@ def _entry(**overrides):
     return SimpleNamespace(**fields)
 
 
-def test_route_fallback_prefers_the_registry_model_name():
+def test_route_fallback_prefers_the_observed_transcript_model():
+    # The transcript names the vendor that actually answered; the spawn-time
+    # model_name is intent and loses to it, matching provider_cap's
+    # observed-first precedence.
     entry = _entry(model_name="claude-opus-5-5")
     entries = [{"message": {"model": "glm-5.3-flash"}}]
     assert _route_fallback_identity(entry, entries) == (
+        "glm-5.3-flash", "glm-5.3-flash",
+    )
+
+
+def test_route_fallback_uses_registry_model_name_without_observation():
+    entry = _entry(model_name="claude-opus-5-5")
+    assert _route_fallback_identity(entry, []) == (
         "claude-opus-5-5", "claude-opus-5-5",
     )
 
