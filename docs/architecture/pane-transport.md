@@ -46,7 +46,7 @@ There are THREE cases here and only two flags, which is how one of them got lost
 
 ## Receipt vocabulary
 
-A live send reports one of six states, in this order. A send reaches an accepted state only when the receiving harness's own turn record holds the envelope id. A turn that started is not that proof: it may be an earlier queued prompt, with our message still behind it. Text in the composer is a draft, not a delivery.
+A live send reports one of six states, in this order. The receiving harness's own turn record must hold the envelope id before a send reaches an accepted state. A turn that started is not that proof: it can be an earlier queued prompt, with our message still behind it. Text in the composer is a draft, not a delivery.
 
 | State | What it asserts | What it does not assert |
 |-------|-----------------|-------------------------|
@@ -58,7 +58,7 @@ A live send reports one of six states, in this order. A send reaches an accepted
 | `accepted-steer` | The same record, folded into the turn that was running at send | That the agent acted on it. A steer means it was read mid-turn |
 | `failed (<reason>)` | Nothing sits with the recipient: a refusal before any byte, or a typed line withdrawn on silence | Anything about the recipient's health. The bus copy stays drainable |
 
-Each lane reads its own proof source. A claude pane or thread reads the session transcript: a `user` record is a new turn, a `queued_command` attachment is a steer, and a `queue-operation` row alone is the harness queue. A codex pane or thread reads the rollout: the user message item carries a `turn_id`, and that id equal to the turn running at send is a steer (measured on codex 0.164.0: the rollout holds a busy-turn submit within a second). An ACP host (footnote) writes `accepted-new-turn` when its queued prompt starts as `session/prompt`; ACP has no steer. A Muse thread reports the state its MSP events fold to. opencode serve has no steer read, so it reports `accepted-new-turn` for both.
+Each lane reads its own proof source. A claude pane or thread reads the session transcript. There a `user` record is a new turn, and a `queued_command` attachment is a steer. A `queue-operation` row alone is the harness queue. A codex pane or thread reads the rollout, where the user message item carries a `turn_id`. That id equal to the turn running at send is a steer. On codex 0.164.0 the rollout held a busy-turn submit within a second. An ACP host (footnote) writes `accepted-new-turn` as its queued prompt starts its `session/prompt`. ACP has no steer. A Muse thread reports the state its MSP events fold to. opencode serve has no steer read, so it reports `accepted-new-turn` for both.
 
 The bus keeps the history as append-only `kind: state` rows (`meta.of` names the message, `meta.state` the word). Readers fold them with `mail_delivery_state::newest_state`: an accepted row is terminal, so a retry never lowers it. A row from before the states reads through its `delivery` mark: `hosted` reads `accepted-new-turn`, `typed` reads `injected`, and no mark reads `queued`. `fno agents mail admin sent` prints the state of every message you sent, and its `--json` rows carry `state`. The mux Messages tab prints the state under each sent message and marks a chat whose last message is parked or failed with `!`.
 

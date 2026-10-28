@@ -101,7 +101,7 @@ The runtime serializes three teammate states. Read them precisely - the failure 
 Two states that are **not** death and must never be treated as such:
 
 - **unknown / unregistered but alive.** A teammate can finish work, ship a PR, and never register a row or send a report. Silence proves nothing. Before declaring death, `peek` the pane, check the node claim (`fno agents claim`), and check open PRs (`gh pr list --head <branch>`). Only a confirmed-dead pane with no claim and no PR is a corpse.
-- **queued (durable), not confirmed delivered.** A mail receipt that is not `accepted-new-turn` or `accepted-steer` is sitting in a queue the recipient may never drain - treat it as undelivered. But `peek` the handle first: a `queued (durable)` can be a timed-out live inject that already landed. Re-resolve and re-send only if the peek shows it absent.
+- **queued (durable), not confirmed delivered.** A receipt other than `accepted-new-turn` or `accepted-steer` sits in a queue the recipient can leave undrained. Treat it as undelivered. But `peek` the handle first: a `queued (durable)` can be a timed-out live inject that already landed. Re-resolve and re-send only on a peek that shows it absent.
 
 ## Recipes
 

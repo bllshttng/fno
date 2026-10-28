@@ -2,7 +2,9 @@
 
 `fno agents mail send <name> "<message>"` is the async sibling of `ask`.
 It attempts a live inject first and falls back to a durable envelope only when that misses, returning without waiting for a reply.
-A live delivery writes nothing to the bus; a durable one is the recovery copy, not delivery, so read the receipt (a live state such as `accepted-new-turn`, or `queued (durable)`) rather than the exit code.
+
+A live delivery writes nothing to the bus. A durable one is the recovery copy, not delivery. So read the receipt, not the exit code: a live state such as `accepted-new-turn`, or `queued (durable)`.
+
 `queued (durable)` means the live inject was not CONFIRMED, which is not proof it failed: a busy recipient can record the turn past the confirm budget and receive it anyway, so `peek` before re-sending.
 Unlike `ask`, it does not require a registry row - it resolves a live session across the registry, the daemon roster, and disk - but a name that resolves to nothing exits 16 with a "spawn it first" hint (Locked Decision 1 from the cross-agent bus epic: ask and send never create peers).
 

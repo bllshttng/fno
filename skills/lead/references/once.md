@@ -200,7 +200,9 @@ Add `--from-self` to stamp your own reply handle so the answer comes back to you
 
 The fallbacks, and why they rank below: `fno agents mail send <name>` reaches a registered agent (fine when the name resolves); `--to-project <X>` is anycast that queues durable into what may be a ghost inbox when no live peer resolves - the receipt now names the routing-reason (`[live-miss]`, `[param-forced: --to-project]`) so a durable demotion is legible rather than reading like success, but a durable queue is still not a live delivery.
 A live inject writes nothing to the bus; the durable envelope is written only when the inject misses, so it survives a dead recipient as recovery, not delivery.
+
 **Treat a `queued` or `failed` receipt as not delivered: re-resolve the handle and send again, do not re-queue. A `parked` or `injected` receipt means the bytes already sit with the recipient: peek, never resend.**
+
 And do not settle for the queue when the peer is merely idle - the handle you mailed is the same id these take, so bring it back and get the answer now:
 
 `fno agents session peek <short-id>` (alive?) · `resume <short-id>` (wakes it, claude, or resumes it, other harnesses, then re-send) · `attach <short-id>` (drive it yourself, claude).
@@ -450,7 +452,7 @@ fno agents spawn --name <node-name> "$payload" --substrate pane --at current --s
 
 The coordination contract is two-sided: your duties are worthless if the teammate does not know its own. End every spawn payload with the canonical minion clause - **paste it verbatim from [minion-clause.md](minion-clause.md)**, the single source. Do not compose it freehand: the Director did, three times, and each drift dropped something load-bearing (once the delivery doctrine itself, so reports rested undelivered on the durable bus). The clause covers five behaviors:
 
-1. **Report.** On finishing a unit of work or blocking, mail the lead a `RESULT: ...` line with `--from-self`, and treat any receipt that is not `accepted-new-turn` or `accepted-steer` as undelivered - peek; only if it did not already land, re-resolve and re-send; never re-queue. The verbatim report line and the full delivery doctrine live in the template.
+1. **Report.** On finishing a unit of work or blocking, mail the lead a `RESULT: ...` line with `--from-self`. Treat any receipt other than `accepted-new-turn` or `accepted-steer` as undelivered. Peek first. Re-resolve and re-send only on a confirmed miss, and never re-queue. The verbatim report line and the full delivery doctrine live in the template.
 2. **Ask for help.** A question the minion cannot answer from its own scope goes to its lead by mail (with `<help reason>` in-session for the loop machinery). Guessing an executive call is a contract violation; answering it is the lead's job.
 3. **Review inline.** Run `$fno:review <level> --comment` in Codex or `/fno:review <level> --comment` in Claude before you report a completed diff. Use `medium` below 300 lines, `high` at 300 or more, and `xhigh` for risky state or protocol changes. Fix valid findings. Run round two with `--verify-fixes`. Never mail the lead to fire a review command or spawn a reviewer.
 
@@ -501,7 +503,7 @@ Context pressure is not a handoff trigger. A harness compacts its current sessio
 - **Backstop sweep at boundaries you can name, never on a repeating clock.** A poll costs a context re-read every pass; `fno agents fleet top` + `peek` on quiet panes, findings landed as node notes. `fno-agents needs --json` is the complementary loop-wedge signal, never a pane-completion report.
 - **Never end a turn with a live teammate and no armed wake.** Arm one bounded wake per live teammate you have not yet reconciled: `fno-agents wait` for one, one `fno-agents subscribe` stream for several. Always `--state done`, never `idle`; a `--state blocked` wait never fires (the push leg covers blocks). Launch it harness-tracked, never with a trailing `&`, and never hand-roll a timed loop - the decoded doctrine, the reconciliation rule, and the specimens: [workflow-routes.md](workflow-routes.md).
 
-- **Delivery truth:** treat any mail receipt other than `accepted-new-turn` or `accepted-steer` as undelivered. `peek` the handle (both for liveness and to confirm the report did not already land - a busy-but-alive recipient must not be double-delivered), and only on a confirmed miss re-resolve it from `fno agents internal discovered-json` / `top` and re-send before processing the next report. Never park a miss as a "check later" note.
+- **Delivery truth:** treat any mail receipt other than `accepted-new-turn` or `accepted-steer` as undelivered. `peek` the handle for liveness and to confirm the report did not already land. A busy-but-alive recipient must not get a second copy. On a confirmed miss, re-resolve it from `fno agents internal discovered-json` / `top`. Re-send it before you process the next report. Never park a miss as a "check later" note.
 - **Silence is not death.** Before declaring a teammate dead, `peek` the pane and check its node claim and open PRs - a worker once had shipped a PR unregistered, and a reflex respawn built a duplicate. Respawn only from the last graph-encoded artifact, or `<help>` if that artifact is missing.
 
 ### Reconcile on every report, then encode
