@@ -2047,7 +2047,7 @@ impl View {
             yard_gen: 0,
             org: crate::org_overlay::Panel::default(),
             digest: None,
-            notice: None,
+            notice: view_store::take_legacy_pins().map(agent_sort::legacy_pin_notice),
             reply_notice_tx: None,
             details_tx: None,
             next_reply_request_id: 1,

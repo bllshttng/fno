@@ -915,6 +915,32 @@ async fn agents_tab_ctrl_t_pins_the_session_and_the_row_shows_it() {
 }
 
 #[test]
+fn a_keep_marker_pins_its_session_and_the_sessions_it_resumed() {
+    // The pin reads the lineage the reapers read: the row's own id or a
+    // recorded predecessor. An unmarked row stays plain.
+    let dir = std::env::temp_dir().join(format!("keep-marks-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for sid in ["own-1", "old-2"] {
+        std::fs::write(dir.join(format!("{sid}.json")), "{}").unwrap();
+    }
+    let row = |sid: &str, pred: &[&str]| crate::agents_view::RegistryAgent {
+        harness_session_id: Some(sid.into()),
+        predecessor_session_ids: pred.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    };
+    let mut rows = vec![
+        row("own-1", &[]),
+        row("new-2", &["old-2"]),
+        row("plain-3", &[]),
+    ];
+    crate::agents_view::overlay_keep_marks_at(&mut rows, &dir);
+    let pinned: Vec<bool> = rows.iter().map(|r| r.pinned).collect();
+    assert_eq!(pinned, vec![true, true, false]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn agents_tab_selector_hint_names_pin_and_move() {
     let hint = crate::keys::selector_hint();
     for word in [

@@ -24,6 +24,15 @@ pub(super) fn toggle_pin(view: &mut View, cur: usize) {
     pin_agent(view, &agent);
 }
 
+/// The one-time notice for pins saved before a pin became the session's keep
+/// mark: those rows no longer sort first until pinned again.
+pub(super) fn legacy_pin_notice(n: usize) -> (String, Instant) {
+    let text = format!(
+        "{n} old sideline pin(s) were cleared: pins now keep the session; pin again with ctrl+t"
+    );
+    (text, Instant::now())
+}
+
 /// The `fno-agents reap` argv that flips a row's pin. The pin IS the keep
 /// mark every reaper reads, keyed by session id, so a row with no session
 /// yet has nothing to pin.
