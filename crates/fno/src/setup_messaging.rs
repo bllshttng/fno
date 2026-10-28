@@ -55,8 +55,7 @@ pub fn sink_rows() -> Result<Vec<Value>, String> {
         .unwrap_or_default())
 }
 
-/// A row's id as text: TOML allows a string or an integer, as the runtime
-/// loader does.
+/// A row's id as text, string or integer, as the runtime loader reads it.
 fn id_text(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -132,8 +131,7 @@ impl Http for Curl {
                 child.wait_with_output()
             })
             .ok()?;
-        // A failed transfer still prints `000` for --write-out; it is no
-        // answer, not a refusal.
+        // A failed transfer still prints `000`: no answer, not a refusal.
         if !out.status.success() {
             return None;
         }
