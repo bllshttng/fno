@@ -2,14 +2,14 @@
 //! client parses it: [`crate::spawn_admission::admit`] (the seed refusals, the
 //! node seed rewrite, normalization, the compose and the account pick), then
 //! the duties the Python front door ran around it before it exec'd this
-//! client: the codex git-grant refusal, the worker writable-dir export, the
-//! codex sandbox probe, the worktree-policy pin and the ambient identity
-//! scrub. A non-spawn argv passes through untouched.
+//! client: the codex git-grant refusal, the loop gate, the worker
+//! writable-dir export, the codex sandbox probe, the worktree-policy pin and
+//! the ambient identity scrub. A non-spawn argv passes through untouched.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::spawn_admission::{flag_value, has_flag, HARNESS_FLAGS};
+use crate::spawn_admission::{flag_value, has_flag, seed_of, HARNESS_FLAGS};
 
 /// The env carrier the worker argv builders read the write grants from.
 pub const WORKER_ADD_DIRS_ENV: &str = "FNO_WORKER_ADD_DIRS";
@@ -53,6 +53,12 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
         crate::claude_ask::emit_event(&home.events_jsonl(), "model_vendor_mismatch", &fields);
     }
     let argv = admitted.argv;
+    if let Some(refusal) = seed_of(&argv[1..])
+        .and_then(|seed| crate::capability_leaves::loop_refusal(&spawn_harness(&argv), &seed, None))
+    {
+        eprintln!("{refusal}");
+        return Err(2);
+    }
 
     let cwd = spawn_cwd(&argv, &here);
     export_worker_dirs(&cwd);
@@ -89,6 +95,16 @@ fn spawn_cwd(args: &[String], here: &Path) -> PathBuf {
         .unwrap_or_else(|| here.to_path_buf())
 }
 
+/// The harness a spawn dispatches to: the flag, else the ambient harness,
+/// else claude.
+fn spawn_harness(args: &[String]) -> String {
+    flag_value(&args[1..], HARNESS_FLAGS)
+        .map(|h| h.trim().to_lowercase())
+        .filter(|h| !h.is_empty())
+        .or_else(|| crate::claims::resolve_harness().map(|h| h.to_lowercase()))
+        .unwrap_or_else(|| "claude".to_string())
+}
+
 /// A codex spawn whose payload is a code workflow: a `--node` dispatch, or a
 /// token whose first word names a fno command. The scan reads every token,
 /// the fenced seed included.
@@ -122,12 +138,7 @@ fn is_codex_code_payload(args: &[String]) -> bool {
 /// neither the git grant nor the probe applies to them.
 fn is_bounded_codex_code_spawn(args: &[String]) -> bool {
     let tail = &args[1..];
-    let harness = flag_value(tail, HARNESS_FLAGS)
-        .map(|h| h.trim().to_lowercase())
-        .filter(|h| !h.is_empty())
-        .or_else(|| crate::claims::resolve_harness().map(|h| h.to_lowercase()))
-        .unwrap_or_else(|| "claude".to_string());
-    if harness != "codex" || !is_codex_code_payload(args) {
+    if spawn_harness(args) != "codex" || !is_codex_code_payload(args) {
         return false;
     }
     if has_flag(

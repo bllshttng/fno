@@ -14,7 +14,6 @@ crates/fno/src/provider_key.rs	crates/fno-agents/src/provider_key.rs	cargo build
 crates/fno/src/effect_map.rs	crates/fno-agents/src/effect_map.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/src/footnote_transcript.rs	crates/fno-agents/src/footnote_transcript.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
 cli/src/fno/agents/merge_posture.toml	crates/fno-agents/src/merge_posture.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
-cli/src/fno/agents/spawn_phase.toml	crates/fno-agents/src/spawn_phase.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
 cli/src/fno/agents/registry_schema.toml	crates/fno-agents/src/registry_schema.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno-agents/src/events_limits.toml	cli/src/fno/events/schema.yaml	cargo build --manifest-path crates/fno-agents/Cargo.toml
 docs/harnesses/capability-matrix.md	crates/fno-agents/src/harness_capabilities.toml	cd cli && uv run fno-py doctor harness-matrix --write

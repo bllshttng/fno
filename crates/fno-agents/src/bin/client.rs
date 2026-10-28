@@ -843,8 +843,8 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::codex_posture::run_permission_tokens(&args[1..]);
     }
 
-    // `sandbox-probe`: the pre-seating verdict; Python's spawn gate owns the
-    // exit-85 refusal - the command answers, the caller judges.
+    // `sandbox-probe`: the pre-seating verdict as a command. The spawn seam
+    // calls the probe in process and owns the exit-85 refusal.
     if command == "sandbox-probe" {
         return fno_agents::sandbox_probe::run_sandbox_probe(&args[1..]);
     }
