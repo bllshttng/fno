@@ -20,8 +20,6 @@ agents spawn !--recorded-provider
 agents spawn !--mux-session
 do resume receipt validate !--session
 do resume receipt write !--session
-do state init !--allow-stub
-do target resolve-model !--provider
 doctor footprint !--cause-only
 doctor event find !--session
 event find !--session
@@ -33,8 +31,6 @@ resume receipt validate !--session
 resume receipt write !--session
 agents pane-identity !--session
 agents pane-identity !--session-id
-state init !--allow-stub
-target resolve-model !--provider
 # the spawn axis stubs: hidden options whose only job is the refusal
 agents spawn !--deny-tools
 agents spawn !--provider

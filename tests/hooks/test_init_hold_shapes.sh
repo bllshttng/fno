@@ -56,14 +56,20 @@ make_repo() {
 
 # Run init with fno ABSENT: PATH carries only the OS dirs, so `command -v fno`
 # fails and the script takes the degraded branch under test. HOME is the
-# scratch repo so nothing real is touched.
+# scratch repo so nothing real is touched. The gates resolve through the
+# agents binary now, so the degraded fiction pins a path that does not exist:
+# the runner exports FNO_AGENTS_BIN job-wide, and without this pin the real
+# hold gate would read an ambient graph store the sandbox does not have and
+# refuse with the wrong shape.
 run_no_fno() {
     local cwd="$1"; shift
     (
         cd "$cwd"
         unset TARGET_START TARGET_INPUT TARGET_PLAN_PATH FNO_TARGET_INIT_GATED
         env TARGET_START=1 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" HOME="$cwd" \
-            PATH="$TMP_BASE/bin:/usr/bin:/bin" "$@" bash "$INIT_SCRIPT" 2>&1
+            PATH="$TMP_BASE/bin:/usr/bin:/bin" \
+            FNO_AGENTS_BIN="$TMP_BASE/bin/absent-fno-agents" \
+            "$@" bash "$INIT_SCRIPT" 2>&1
     )
     return $?
 }

@@ -828,6 +828,9 @@ pub struct HarnessFlags<'a> {
     /// A resolved `--route`: its env rides `extra_env`; this carries the
     /// settings file the daemon-forked session reads and the row's route axes.
     pub route: Option<RouteStamp<'a>>,
+    /// An unrouted spawn's own `--settings` file (a sandbox write policy
+    /// alone owes one). A route's file wins when both are set.
+    pub settings: Option<&'a str>,
 }
 
 /// The value a fenced passthrough gives one flag (`--flag V`, `--flag=V`, or
@@ -1625,10 +1628,11 @@ pub fn bg_create(
             }
         }
     }
-    if let Some(route) = flags.route {
+    if let Some(settings) = flags.route.map(|r| r.settings).or(flags.settings) {
         // The route owns the settings slot (the floor stood down above), at
-        // the same argv position Python's bg_create puts it.
-        argv.splice(4..4, ["--settings".to_string(), route.settings.to_string()]);
+        // the same argv position Python's bg_create puts it. A sandbox file
+        // already folds the scrub floor.
+        argv.splice(4..4, ["--settings".to_string(), settings.to_string()]);
     } else if !floor.is_empty() {
         match crate::model_env_scrub::write_scrub_settings(&floor) {
             Ok(path) => {
@@ -2736,9 +2740,9 @@ pub fn dispatch_claude_headless(
     // skip (a headless one-shot cannot answer permission prompts).
     let mut argv: Vec<String> = vec!["claude".into(), "-p".into()];
     // A routed one-shot carries the route's settings file, as bg_create does.
-    if let Some(route) = flags.route {
+    if let Some(settings) = flags.route.map(|r| r.settings).or(flags.settings) {
         argv.push("--settings".to_string());
-        argv.push(route.settings.to_string());
+        argv.push(settings.to_string());
     }
     match permission_mode.filter(|m| !m.is_empty()) {
         Some(m) => {
@@ -3372,7 +3376,10 @@ fn create(
         role_level: None,
         role_scope: None,
         role_grantor: None,
-        route_settings_path: route.map(|r| r.settings.to_string()),
+        route_settings_path: route
+            .map(|r| r.settings)
+            .or(flags.settings)
+            .map(str::to_string),
         delivery_policy: None,
         sandbox_posture: None,
         git_grant: None,
@@ -3858,6 +3865,7 @@ mod tests {
             disallowed_tools: Some("Bash"),
             passthrough: &[],
             route: None,
+            settings: None,
         };
         assert_eq!(
             build_argv("a", "hi", false, None, None, None, flags),
