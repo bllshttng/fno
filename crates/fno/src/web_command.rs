@@ -1,7 +1,6 @@
 //! `/command/model.json`: the org view's fleet fold as JSON. The bridge keeps
 //! the last good read and refreshes it off the request path.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -15,8 +14,6 @@ pub(crate) const REFRESH_AFTER: Duration = Duration::from_secs(60);
 #[derive(Default)]
 pub(crate) struct CommandCache {
     state: tokio::sync::Mutex<Cached>,
-    /// Set while a background refresh runs, so a burst of reads starts one.
-    refreshing: AtomicBool,
     /// The first read: every request before it waits on the same one.
     pub(crate) first: tokio::sync::OnceCell<()>,
 }
@@ -26,23 +23,20 @@ struct Cached {
     good: Option<(Fleet, Instant)>,
     failure: Option<(String, Instant)>,
     questions: Option<Result<Vec<Value>, String>>,
+    /// The last refresh, or the last claimed attempt.
     read_at: Option<Instant>,
 }
 
 impl CommandCache {
-    /// True when the caller should start the one background refresh.
+    /// True when the caller should start a refresh. Claiming stamps the
+    /// attempt, so a burst of reads starts one and a lost refresh retries.
     pub(crate) async fn claim_refresh(&self) -> bool {
-        let stale = self
-            .state
-            .lock()
-            .await
-            .read_at
-            .is_none_or(|at| at.elapsed() >= REFRESH_AFTER);
-        stale
-            && self
-                .refreshing
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
+        let mut st = self.state.lock().await;
+        if st.read_at.is_some_and(|at| at.elapsed() < REFRESH_AFTER) {
+            return false;
+        }
+        st.read_at = Some(Instant::now());
+        true
     }
 
     /// Store one refresh. A failed fleet read keeps the last good fold.
@@ -80,7 +74,6 @@ impl CommandCache {
                 .collect()
         }));
         st.read_at = Some(now);
-        self.refreshing.store(false, Ordering::Release);
     }
 
     pub(crate) async fn model(&self) -> Value {
