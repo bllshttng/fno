@@ -2209,9 +2209,15 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
             // name) reads as the refusal it is.
             return read_journal_text_direct(journal, &live);
         }
-        // No store: answer from the whole family, never the named file
-        // alone - a live-only answer is how a rotated legacy chain read as
-        // zero verdicts.
+        // No store: a caller that NAMED a rotated path keeps the
+        // single-segment read it always got (the day arm enumerates
+        // generations and reads each one separately; a family answer here
+        // would multiply-count every row). A caller naming the live path
+        // answers from the whole family - a live-only answer is how a
+        // rotated legacy chain read as zero verdicts.
+        if journal.file_name() != live.file_name() {
+            return read_journal_text_direct(journal, &live);
+        }
         return Ok(family_fallback_text(&live));
     }
     let conn = open_read(&store)?;
@@ -2303,9 +2309,11 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
 }
 
 /// Every rotated generation of one journal family, oldest first: the
-/// `{stem}.{n}` files beside `live`, numeric suffix ascending. One
-/// discovery walk shared by the import and the read unions, so the two
-/// never disagree about what a generation is.
+/// `{stem}.{n}` files beside `live`, numeric suffix DESCENDING - the
+/// logrotate convention the retired Python relay and every sibling segment
+/// reader share, where a higher suffix is an older file. One discovery walk
+/// shared by the import and the read unions, so the two never disagree
+/// about what a generation is, or about which one is older.
 fn generation_files(live: &Path) -> Vec<(u64, PathBuf)> {
     let mut generations: Vec<(u64, PathBuf)> = Vec::new();
     if let (Some(dir), Some(name)) = (live.parent(), live.file_name()) {
@@ -2323,7 +2331,7 @@ fn generation_files(live: &Path) -> Vec<(u64, PathBuf)> {
             }
         }
     }
-    generations.sort_by_key(|(gen, _)| *gen);
+    generations.sort_by_key(|(gen, _)| std::cmp::Reverse(*gen));
     generations
 }
 

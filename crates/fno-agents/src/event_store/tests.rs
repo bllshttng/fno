@@ -784,16 +784,18 @@ fn journal_text_degrade_answers_from_the_whole_family_oldest_first() {
     // read zero verdicts while the journals held the chain.
     let dir = tempfile::tempdir().unwrap();
     let live = dir.path().join("events.jsonl");
-    let gen1 = attestation("2026-09-17T12:00:00Z", "h1", "gen1");
-    let gen2 = attestation("2026-09-17T12:00:01Z", "h1", "gen2");
+    let older = attestation("2026-09-17T12:00:00Z", "h1", "older");
+    let newer = attestation("2026-09-17T12:00:01Z", "h1", "newer");
     let tail = attestation("2026-09-17T12:00:02Z", "h1", "tail");
+    // Numeric rotation is logrotate-shaped: a higher suffix is an older
+    // file, so `.2` precedes `.1` in the oldest-first answer.
     append(
         &dir.path().join("events.jsonl.1"),
-        &[serde_json::from_str::<serde_json::Value>(&gen1).unwrap()],
+        &[serde_json::from_str::<serde_json::Value>(&newer).unwrap()],
     );
     append(
         &dir.path().join("events.jsonl.2"),
-        &[serde_json::from_str::<serde_json::Value>(&gen2).unwrap()],
+        &[serde_json::from_str::<serde_json::Value>(&older).unwrap()],
     );
     append(
         &live,
@@ -809,7 +811,7 @@ fn journal_text_degrade_answers_from_the_whole_family_oldest_first() {
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 3, "every generation and the live tail: {text}");
     assert!(
-        lines[0].contains("gen1") && lines[1].contains("gen2") && lines[2].contains("tail"),
+        lines[0].contains("older") && lines[1].contains("newer") && lines[2].contains("tail"),
         "family order is oldest generation first: {text}"
     );
     let notice = degrade_notice(
