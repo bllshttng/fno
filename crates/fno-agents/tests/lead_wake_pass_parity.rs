@@ -37,8 +37,11 @@ const SESSION: &str = "11111111-2222-3333-4444-555555555555";
 const BIRTH: &str = "2026-08-28T12:00:00Z";
 const CURSOR_SEED: &str = "2026-08-29T10:00:00Z";
 const PROMPT: &str =
-    r#"Answer to your question q-ab12cd34 "what does the operator want for epic-x?": ship it"#;
+    r#"Answer to your question q-ab12cd34 "what does the operator want for epic-x?": ship it."#;
 const ANSWER_CURSOR: &str = r#"{"ts":"2026-08-29T11:00:00Z","id":"q-ab12cd34","seq":2}"#;
+/// The capture journals landed the answer at different journal positions
+/// per case; the stored cursor pins the matched record's own position.
+const ANSWER_CURSOR_SEQ1: &str = r#"{"ts":"2026-08-29T11:00:00Z","id":"q-ab12cd34","seq":1}"#;
 
 /// Serializes the env-mutating fixtures. The lib's `claims::test_env_lock`
 /// is #[cfg(test)]-gated, so an integration binary carries its own.
@@ -182,6 +185,14 @@ impl World {
 }
 
 fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
+    row_session(name, cwd, short_id, scope, SESSION)
+}
+
+/// `row` with an explicit registry session id: `load_registry` refuses two
+/// live rows on one session identity, so every multi-row fixture hands each
+/// row its own. A row's session never surfaces in the goldens; the
+/// manifest's session (the escalation delivery address) stays SESSION.
+fn row_session(name: &str, cwd: &Path, short_id: &str, scope: &str, session: &str) -> Value {
     json!({
         "name": name,
         "status": "live",
@@ -190,7 +201,7 @@ fn row(name: &str, cwd: &Path, short_id: &str, scope: &str) -> Value {
         "role_scope": scope,
         "role_level": 1,
         "created_at": "2026-08-28T12:00:00Z",
-        "harness_session_id": SESSION,
+        "harness_session_id": session,
     })
 }
 
@@ -253,6 +264,9 @@ struct Rec {
     successor: Arc<Mutex<Vec<bool>>>,
     asks: Arc<Mutex<Vec<Value>>>,
     unread_calls: Arc<Mutex<Vec<String>>>,
+    /// The holders the truth read was called with, when a case records
+    /// them; `None` keeps the field out of the run JSON, as the goldens do.
+    truth_probes: Arc<Mutex<Option<Vec<String>>>>,
 }
 
 impl Rec {
@@ -274,6 +288,22 @@ impl Rec {
 
     fn unread(&self) -> Vec<String> {
         self.unread_calls.lock().unwrap().clone()
+    }
+
+    fn truth_probes(&self) -> Option<Vec<String>> {
+        self.truth_probes.lock().unwrap().clone()
+    }
+
+    /// The truth stub wrapped to record the holders it was called with.
+    fn recording_truth(&self, inner: TruthStub) -> TruthStub {
+        let log = Arc::clone(&self.truth_probes);
+        Arc::new(move |handles: &[String], deadline: Option<Instant>| {
+            log.lock()
+                .unwrap()
+                .get_or_insert_with(Vec::new)
+                .extend(handles.iter().cloned());
+            inner(handles, deadline)
+        })
     }
 }
 
@@ -377,17 +407,25 @@ fn run_json(
     } else {
         json!({"armed": false})
     };
-    json!({
-        "summary": summary,
-        "events": rec.events(),
-        "dispatches": rec.dispatches(),
-        "successor_flags": rec.successor(),
-        "asks": rec.asks(),
-        "unread_calls": rec.unread(),
-        "sidecar": world.read_sidecar(scope),
-        "wake_times": world.wake_times(scope),
-        "wake_log": if wake_log { world.wake_log(scope) } else { None },
-    })
+    // The capture omitted absent fields rather than serializing nulls, so
+    // `wake_log` (present only for the real-walk case) and `truth_probes`
+    // (present only where a case recorded it) stay out when empty.
+    let mut run = serde_json::Map::new();
+    run.insert("summary".into(), summary);
+    run.insert("events".into(), json!(rec.events()));
+    run.insert("dispatches".into(), json!(rec.dispatches()));
+    run.insert("successor_flags".into(), json!(rec.successor()));
+    run.insert("asks".into(), json!(rec.asks()));
+    run.insert("unread_calls".into(), json!(rec.unread()));
+    if let Some(probes) = rec.truth_probes() {
+        run.insert("truth_probes".into(), json!(probes));
+    }
+    run.insert("sidecar".into(), json!(world.read_sidecar(scope)));
+    run.insert("wake_times".into(), json!(world.wake_times(scope)));
+    if let Some(log) = wake_log.then(|| world.wake_log(scope)).flatten() {
+        run.insert("wake_log".into(), json!(log));
+    }
+    Value::Object(run)
 }
 
 /// Compare one pass against the golden's run at `index`.
@@ -429,7 +467,14 @@ fn no_answers() -> Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, Str
 
 fn answer_due() -> Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String) + Send + Sync>
 {
-    Arc::new(|_addresses, _records, _cursor| (Some(PROMPT.to_string()), ANSWER_CURSOR.to_string()))
+    answer_due_at(ANSWER_CURSOR)
+}
+
+fn answer_due_at(
+    cursor: &str,
+) -> Arc<dyn Fn(&[String], &[Value], &str) -> (Option<String>, String) + Send + Sync> {
+    let cursor = cursor.to_string();
+    Arc::new(move |_addresses, _records, _stored| (Some(PROMPT.to_string()), cursor.clone()))
 }
 
 fn static_entries(rows: Vec<Value>) -> Arc<dyn Fn() -> Result<Vec<Value>, String> + Send + Sync> {
@@ -483,7 +528,7 @@ fn the_answer_trigger_fires_despite_the_debounce() {
             &rec,
             truth_done(),
             vec!["lead-x".into()],
-            answer_due(),
+            answer_due_at(ANSWER_CURSOR_SEQ1),
             static_entries(Vec::new()),
             scope_of(&[]),
         ),
@@ -534,7 +579,9 @@ fn a_ceiling_refused_answer_keeps_the_cursor_so_it_stays_a_trigger() {
         run_json(&outcome, &rec, &world, "epic-x", false),
         world.root().as_path(),
     );
-    // The window rolled; the answer waits and then wakes.
+    // The window rolled; the answer waits and then wakes. Same ledger as
+    // the capture: the 32 aged stamps fall outside the 24h window, so the
+    // admitted bill is the only stamp the ledger keeps.
     let rec2 = Rec::default();
     let mut seams2 = seams(
         &world,
@@ -542,7 +589,7 @@ fn a_ceiling_refused_answer_keeps_the_cursor_so_it_stays_a_trigger() {
         &rec2,
         truth_done(),
         vec![],
-        answer_due(),
+        answer_due_at(ANSWER_CURSOR_SEQ1),
         static_entries(Vec::new()),
         scope_of(&[]),
     );
@@ -632,7 +679,9 @@ fn present_holder_states_never_wake() {
                 rows,
                 &rec,
                 truth_of(state, reason),
-                vec!["lead-x".into()],
+                // The capture's unread seam answered for every address, so
+                // the first sorted probe (the short id) is the hit.
+                vec!["aa11bb22".into()],
                 no_answers(),
                 static_entries(Vec::new()),
                 scope_of(&[]),
@@ -693,7 +742,9 @@ fn a_fresh_wake_is_debounced_and_bills_nothing() {
             rows,
             &rec,
             truth_done(),
-            vec!["lead-x".into()],
+            // The capture's unread seam answered for every address, so the
+            // first sorted probe (the short id) is the hit.
+            vec!["aa11bb22".into()],
             no_answers(),
             static_entries(Vec::new()),
             scope_of(&[]),
@@ -711,11 +762,12 @@ fn a_fresh_wake_is_debounced_and_bills_nothing() {
 fn the_33rd_wake_is_refused_naming_ceiling_and_asks_once() {
     let world = World::new();
     let rows = world.set_registry(json!([row("lead-x", &world.root(), "aa11bb22", "epic-x")]));
-    // 32 real bills, ages 30m..1270m at 40m spacing: all inside 24h, all
-    // past the debounce.
+    // 32 real bills, ages 1270m..30m at 40m spacing, written oldest first
+    // the way the native bill-wake kept the ledger line: all inside 24h,
+    // all past the debounce.
     let stamps: Vec<String> = (0..32)
         .map(|i| {
-            let secs = NOW - (30 + 40 * i) * 60;
+            let secs = NOW - (1270 - 40 * i) * 60;
             stamp(secs)
         })
         .collect();
@@ -728,7 +780,9 @@ fn the_33rd_wake_is_refused_naming_ceiling_and_asks_once() {
             rows,
             &rec,
             truth_done(),
-            vec!["lead-x".into()],
+            // The capture's unread seam answered for every address, so the
+            // first sorted probe (the short id) is the hit.
+            vec!["aa11bb22".into()],
             no_answers(),
             static_entries(Vec::new()),
             scope_of(&[]),
@@ -746,8 +800,20 @@ fn the_33rd_wake_is_refused_naming_ceiling_and_asks_once() {
 fn a_conflicted_scope_is_skipped() {
     let world = World::new();
     let rows = world.set_registry(json!([
-        row("lead-a", &world.root(), "", "epic-x"),
-        row("lead-b", &world.root(), "", "epic-x"),
+        row_session(
+            "lead-a",
+            &world.root(),
+            "",
+            "epic-x",
+            "11111111-2222-3333-4444-000000000001"
+        ),
+        row_session(
+            "lead-b",
+            &world.root(),
+            "",
+            "epic-x",
+            "11111111-2222-3333-4444-000000000002"
+        ),
     ]));
     let rec = Rec::default();
     let outcome = run_with(
@@ -782,8 +848,20 @@ fn stamp(epoch: i64) -> String {
 fn the_receipt_names_refusals_and_dropped_roles() {
     let world = World::new();
     let rows = world.set_registry(json!([
-        row("lead-x", &world.root(), "aa11bb22", "epic-x"),
-        row("lead-y", &world.root(), "cc33dd44", "epic-y"),
+        row_session(
+            "lead-x",
+            &world.root(),
+            "aa11bb22",
+            "epic-x",
+            "11111111-2222-3333-4444-000000000001"
+        ),
+        row_session(
+            "lead-y",
+            &world.root(),
+            "cc33dd44",
+            "epic-y",
+            "11111111-2222-3333-4444-000000000002"
+        ),
     ]));
     world.manifest("epic-x", "");
     let rec = Rec::default();
@@ -895,12 +973,14 @@ fn an_empty_board_stores_an_observation_so_its_first_node_is_a_change() {
         ),
     );
     let quiet_refill = vec![
+        // x-1 is _BOARD_A_QUIET: closed done but still in its ready column,
+        // the capture's row shape.
         json!({
             "id": "x-1",
             "project": "proj",
             "status": "done",
             "completed_at": "2026-09-06T00:00:00Z",
-            "_kanban_column": "done",
+            "_kanban_column": "ready",
             "priority": "p2",
         }),
         json!({
@@ -1040,7 +1120,8 @@ fn first_observation_seeds_the_cursor_and_the_board_hash() {
         "project": "proj",
         "status": "done",
         "completed_at": "2026-09-06T00:00:00Z",
-        "_kanban_column": "done",
+        // _BOARD_A_QUIET keeps its ready column through the close.
+        "_kanban_column": "ready",
         "priority": "p2",
     })];
     let rec = Rec::default();
@@ -1069,11 +1150,12 @@ fn first_observation_seeds_the_cursor_and_the_board_hash() {
 fn multi_role_world(world: &World, count: usize) -> Vec<fno_agents::state::RegistryEntry> {
     let mut agents = Vec::new();
     for i in 0..count {
-        agents.push(row(
+        agents.push(row_session(
             &format!("lead-{i}"),
             &world.root(),
             &format!("aaaa{i:04}"),
             &format!("epic-{i}"),
+            &format!("11111111-2222-3333-4444-{i:012}"),
         ));
         world.manifest(&format!("epic-{i}"), "");
         world.write_sidecar(
@@ -1095,7 +1177,7 @@ fn five_quiet_roles_skip_the_truth_read_one_mail_role_pays_it() {
             &world,
             rows,
             &rec,
-            truth_done(),
+            rec.recording_truth(truth_done()),
             vec!["lead-3".into()],
             no_answers(),
             static_entries(Vec::new()),
@@ -1121,12 +1203,15 @@ fn the_pass_stops_under_its_floor_and_names_what_it_evaluated() {
         rows,
         &rec,
         truth_done(),
+        // The capture's unread seam answered for every address ("all"), so
+        // each role's first sorted probe - its short id - is the hit, one
+        // probe per role.
         vec![
-            "lead-0".into(),
-            "lead-1".into(),
-            "lead-2".into(),
-            "lead-3".into(),
-            "lead-4".into(),
+            "aaaa0000".into(),
+            "aaaa0001".into(),
+            "aaaa0002".into(),
+            "aaaa0003".into(),
+            "aaaa0004".into(),
         ],
         no_answers(),
         static_entries(Vec::new()),
@@ -1137,7 +1222,9 @@ fn the_pass_stops_under_its_floor_and_names_what_it_evaluated() {
     assert_run(
         "the pass stops under its floor and names what it evaluated",
         0,
-        run_json(&outcome, &rec, &world, "epic-2", false),
+        // The capture read the world at epic-0, the rotation's first role,
+        // which the budget stop never reaches: seed-only sidecar, no bill.
+        run_json(&outcome, &rec, &world, "epic-0", false),
         world.root().as_path(),
     );
 }
@@ -1174,8 +1261,20 @@ fn a_refused_spawn_says_so_in_the_feed() {
 fn a_blocked_truth_read_yields_the_role_and_still_wakes_the_next() {
     let world = World::new();
     let rows = world.set_registry(json!([
-        row("lead-a", &world.root(), "aa11bb22", "epic-a1"),
-        row("lead-b", &world.root(), "cc22dd33", "epic-b1"),
+        row_session(
+            "lead-a",
+            &world.root(),
+            "aa11bb22",
+            "epic-a1",
+            "11111111-2222-3333-4444-000000000001"
+        ),
+        row_session(
+            "lead-b",
+            &world.root(),
+            "cc22dd33",
+            "epic-b1",
+            "11111111-2222-3333-4444-000000000002"
+        ),
     ]));
     world.manifest("epic-a1", "");
     world.manifest("epic-b1", "");
@@ -1217,7 +1316,9 @@ fn a_blocked_truth_read_yields_the_role_and_still_wakes_the_next() {
         rows,
         &rec,
         truth,
-        vec!["lead-a".into(), "lead-b".into()],
+        // The capture's unread seam hit each role's short id, so the probe
+        // stops after one address per role.
+        vec!["aa11bb22".into(), "cc22dd33".into()],
         no_answers(),
         static_entries(Vec::new()),
         scope_of(&[]),
@@ -1236,8 +1337,20 @@ fn a_blocked_truth_read_yields_the_role_and_still_wakes_the_next() {
 fn a_blocked_graph_read_degrades_and_mail_still_wakes() {
     let world = World::new();
     let rows = world.set_registry(json!([
-        row("lead-a", &world.root(), "aa11bb22", "epic-a1"),
-        row("lead-b", &world.root(), "cc22dd33", "epic-b1"),
+        row_session(
+            "lead-a",
+            &world.root(),
+            "aa11bb22",
+            "epic-a1",
+            "11111111-2222-3333-4444-000000000001"
+        ),
+        row_session(
+            "lead-b",
+            &world.root(),
+            "cc22dd33",
+            "epic-b1",
+            "11111111-2222-3333-4444-000000000002"
+        ),
     ]));
     world.manifest("epic-a1", "");
     world.manifest("epic-b1", "");
@@ -1251,7 +1364,7 @@ fn a_blocked_graph_read_degrades_and_mail_still_wakes() {
         rows,
         &rec,
         truth_done(),
-        vec!["lead-b".into(), "cc22dd33".into(), "epic-b1".into()],
+        vec!["cc22dd33".into()],
         no_answers(),
         entries,
         scope_of(&[]),

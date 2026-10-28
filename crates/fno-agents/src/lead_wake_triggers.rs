@@ -298,10 +298,12 @@ pub fn run_with(config: &TriggerConfig, seams: Seams) -> TriggerOutcome {
 
     // One answered-questions read per pass, shared by every scope. An
     // unreadable journal is not a trigger.
-    if budget_exhausted(seconds_left.as_deref_mut()) {
+    // One clock reading here, as every bounded step spends: the floor check
+    // reads the same value the wait cap uses.
+    let left = read_seconds_left(seconds_left.as_deref_mut());
+    if left.is_some_and(|l| l < STEP_FLOOR_S) {
         return budget_stop(summary, "answers");
     }
-    let left = read_seconds_left(seconds_left.as_deref_mut());
     let (answered, answers_timed_out) = bounded(move || answered(), wait_cap(left, truth_wait_s));
     let _ = answers_timed_out;
     let answered_records = answered.unwrap_or_default();
@@ -367,10 +369,10 @@ pub fn run_with(config: &TriggerConfig, seams: Seams) -> TriggerOutcome {
         if reason.is_none() {
             // The board lane: poll the shared graph read on its wait cap.
             if graph.is_none() && !graph_cut {
-                if budget_exhausted(seconds_left.as_deref_mut()) {
+                let left = read_seconds_left(seconds_left.as_deref_mut());
+                if left.is_some_and(|l| l < STEP_FLOOR_S) {
                     return budget_stop(summary, "graph");
                 }
-                let left = read_seconds_left(seconds_left.as_deref_mut());
                 match graph_rx.recv_timeout(Duration::from_secs_f64(wait_cap(left, truth_wait_s))) {
                     Ok(GraphOutcome::Rows(rows)) => graph = Some(rows),
                     Ok(GraphOutcome::Failed(e)) => {
@@ -859,9 +861,11 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
         laws: Vec::new(),
         storage_root: target.root.clone(),
         index_path: None,
-        // The write belongs to the question-intake door; this line only names
-        // its append target, the space journal the Python leg supplied.
-        journal_path: Some(crate::paths::space_dir(&target.root).join("events.jsonl")), // events-discipline:allow
+        // This line only names the question-intake door's append target,
+        // the space journal the Python leg supplied; intake does the write.
+        journal_path: Some(crate::paths::space_dir(&target.root).join("events.jsonl")),
+        // events-discipline:allow: the raw writes in this window are the
+        // walk's wake log, never an event journal.
         display_name: None,
         render_cap: None,
         op: Some("append".to_string()),
@@ -1316,9 +1320,10 @@ fn manifest_field(manifest: &Path, key: &str) -> String {
 pub(crate) fn birth_cursor(manifest: &Path) -> String {
     let raw = manifest_field(manifest, "created_at");
     match chrono::NaiveDateTime::parse_from_str(&raw, "%Y-%m-%dT%H:%M:%SZ") {
+        // `+00:00`, the journal's isoformat spelling the cursor stores.
         Ok(stamp) => stamp
             .and_utc()
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
         Err(_) => String::new(),
     }
 }
