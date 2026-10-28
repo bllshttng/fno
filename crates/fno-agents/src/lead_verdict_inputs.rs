@@ -235,10 +235,31 @@ fn heal_from_manifest(registry_path: &Path, spaces_root: &Path, session: &str) -
             let ours = manifest_field(content, "harness_session_id").as_deref() == Some(session);
             let user = manifest_field(content, "role_grantor").as_deref() == Some("human");
             let scope = manifest_field(content, "role_scope").filter(|s| !s.trim().is_empty())?;
-            let level = manifest_field(content, "role_level").and_then(|l| l.parse::<u32>().ok());
+            let level =
+                manifest_field(content, "role_level").and_then(|l| l.parse::<u32>().ok())?;
             (ours && user).then_some((scope, level))
         })?;
     crate::state::update_registry(registry_path, |doc| {
+        // Another live holder of the territory means a real conflict, not a
+        // dropped stamp: healing would mint a second holder.
+        let key = crate::lead_state::territory_key(&scope);
+        let mine = |r: &crate::state::RegistryEntry| {
+            [
+                r.harness_session_id.as_deref(),
+                r.cc_session_id.as_deref(),
+                r.session_id.as_deref(),
+            ]
+            .contains(&Some(session))
+        };
+        if doc.entries.iter().any(|r| {
+            !mine(r)
+                && !crate::lead_state::is_terminal(r)
+                && r.role_scope
+                    .as_deref()
+                    .is_some_and(|s| crate::lead_state::territory_key(s) == key)
+        }) {
+            return None;
+        }
         let row = doc.entries.iter_mut().find(|r| {
             [
                 r.harness_session_id.as_deref(),
@@ -255,7 +276,7 @@ fn heal_from_manifest(registry_path: &Path, spaces_root: &Path, session: &str) -
             return None;
         }
         row.role_scope = Some(scope.clone());
-        row.role_level = level.or(row.role_level);
+        row.role_level = Some(level);
         row.role_grantor = Some("human".to_string());
         eprintln!(
             "lead: re-stamped the registry row for {session} over {scope:?} from its lead manifest"
@@ -1015,6 +1036,16 @@ mod tests {
             assert!(!err.contains(&["attended", " shell"].concat()), "{err}");
         });
         manifest("human");
+        let mut rival = teamed_row(serde_json::json!({
+            "name": "rival", "harness_session_id": "ses-rival", "role_scope": "fno-books",
+        }));
+        rival["pid"] = serde_json::json!(std::process::id());
+        let contested = write_registry(&dir, serde_json::json!([unstamped(), rival]));
+        with_teamed_identity(|| {
+            resolve_scope_in(None, &contested, &dir.join("spaces"))
+                .expect_err("a live rival holds the territory");
+        });
+        let path = write_registry(&dir, serde_json::json!([unstamped()]));
         with_teamed_identity(|| {
             let scope = resolve_scope_in(None, &path, &dir.join("spaces")).expect("heals");
             assert_eq!(scope, crate::territory::canonical_scope("fno-books"));
