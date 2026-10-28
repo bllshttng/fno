@@ -586,7 +586,7 @@ mod tests {
         assert!(!is_affirmative_retraction_answer("Do not retract it."));
         assert!(!is_affirmative_retraction_answer("keep it for now"));
         assert!(is_affirmative_retraction_answer("yes"));
-        // The fallback path names the verb; a bare yes arms nothing there.
+        // The fallback path names the action; a bare yes arms nothing there.
         assert!(!retraction_intent_lead("yes"));
         assert!(retraction_intent_lead("Retract it."));
     }
@@ -1677,13 +1677,13 @@ fn retraction_answer_grants(question_event: &Value, answer: &str, stamped: bool)
     }
     // The fallback asks the free text to name the action: a bare yes on a
     // status-phrased question ("was d-X retracted?") answers the question
-    // and retracts nothing. The verb is the intent.
+    // and retracts nothing. The action word is the intent.
     retraction_intent_lead(answer)
         || picks_recommended_option(question_event, answer, RETRACT_OPTION_LEADS)
 }
 
-/// The intent-verb lead: an affirmative reads only when the answer opens
-/// with a retraction verb and no negation follows it. Shared by both
+/// The intent-lead rule: an affirmative reads only when the answer opens
+/// with a retraction action word and no negation follows it. Shared by both
 /// polarity paths; the generic tail below is the stamped path's extra.
 fn retraction_intent_lead(answer: &str) -> bool {
     let normalized = answer
@@ -1712,9 +1712,9 @@ fn retraction_intent_lead(answer: &str) -> bool {
     false
 }
 
-/// The closed retraction vocabulary. The intent verbs lead the way the ask
+/// The closed retraction vocabulary. The intent words lead the way the ask
 /// gate's `cites_retraction` words the action; a negation right after the
-/// verb ("retract nothing", "retract? no") never reads affirmative, and the
+/// lead word ("retract nothing", "retract? no") never reads affirmative, and the
 /// generic tail is the merge set minus the merge-only words.
 fn is_affirmative_retraction_answer(answer: &str) -> bool {
     let normalized = answer
