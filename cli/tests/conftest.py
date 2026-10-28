@@ -219,9 +219,6 @@ _NEEDS_STORE_KEEPER = (
     "tests/test_pr_watch_dispatch.py::TestDurableGrantExecution",
     "tests/unit/test_cli_wrappers.py::test_get_one_id_never_invokes_the_binary",
     "tests/unit/test_pr_closure_producer.py::test_supersede_keeps_the_human_reason",
-    "tests/unit/test_target_cli.py::test_check_dispatch_hold_is_wired_for_direct_shell_bootstrap",
-    "tests/unit/test_target_cli.py::test_shared_plan_path_resolves_to_the_delivery_unit",
-    "tests/unit/test_target_cli.py::test_check_contained_refuses_with_the_shell_gates_own_code",
 )
 
 

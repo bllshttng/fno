@@ -562,6 +562,24 @@ pub fn pending_draw(store_path: &Path, scope: &str) -> Result<Option<String>, St
         .map(|e| e.name))
 }
 
+/// [`pending_draw`] while no bind on any machine has consumed it yet: a draw
+/// that a later `bound` row names is a retired name, never an accept.
+pub fn unconsumed_draw(store_path: &Path, scope: &str) -> Result<Option<String>, String> {
+    let canon = crate::territory::canonical_scope(scope);
+    let rows = history_all(store_path)?;
+    let Some(draw) = rows
+        .iter()
+        .filter(|e| e.scope == canon && e.kind == "drawn")
+        .max_by(|a, b| a.ts.cmp(&b.ts))
+    else {
+        return Ok(None);
+    };
+    let consumed = rows
+        .iter()
+        .any(|e| e.kind == "bound" && e.name.eq_ignore_ascii_case(&draw.name) && e.ts >= draw.ts);
+    Ok((!consumed).then(|| draw.name.clone()))
+}
+
 /// Every name this host must not reuse, lowercased: the history ledger, the
 /// store's records (live or stale), every registry row's name and aliases
 /// (any status), the bus's names and @mentions, the handoffs dir's file
