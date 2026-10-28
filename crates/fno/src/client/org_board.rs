@@ -368,7 +368,7 @@ impl OrgBoard {
         if matches!(item, Item::Host(_) | Item::Lead(..) | Item::Seat(..)) {
             keys.push("u up");
         }
-        keys.extend(["F full", "? keys", "esc close"]);
+        keys.extend(["W web", "F full", "? keys", "esc close"]);
         let mut keys = keys.join(" \u{b7} ");
         if !focused {
             keys = format!("tap to focus \u{b7} {keys}");
@@ -631,6 +631,13 @@ pub(crate) async fn keys(
                 crate::view_store::save_board_full(view.board_full);
             }
             ModalKey::Byte(b'?') => b.keys_help = !b.keys_help,
+            ModalKey::Byte(b'W') => {
+                let bridge = crate::web::live_bridge(&view.session);
+                let host = crate::agents_view::hostname();
+                let opened = command_url(bridge, crate::link::is_remote_session(), &host)
+                    .and_then(|url| crate::link::open_url_for_session(&url).map(|_| url));
+                view.set_notice(opened.map_or_else(|e| e, |url| format!("opened {url}")));
+            }
             ModalKey::Up | ModalKey::Byte(b'k') => b.step(-1),
             ModalKey::Down | ModalKey::Byte(b'j') => b.step(1),
             ModalKey::Left | ModalKey::Byte(b'h') => b.set_tab(b.tab.step(false)),
@@ -670,6 +677,27 @@ pub(crate) async fn keys(
     }
     Ok(StdinFlow::Continue)
 }
+/// The bridge's `/command` URL for `W`, or why it opens nothing. Over ssh a
+/// loopback bridge is unreachable from the user's browser, and a wide one is
+/// reached by this machine's name.
+pub(crate) fn command_url(
+    bridge: Result<crate::web::LiveBridge, String>,
+    remote: bool,
+    host: &str,
+) -> Result<String, String> {
+    let b = bridge?;
+    if remote && b.loopback {
+        return Err(format!(
+            "the web bridge listens on loopback of {host}; restart it with --bind 0.0.0.0 to reach it from here"
+        ));
+    }
+    let base = match remote {
+        true => b.base.replace("127.0.0.1", host),
+        false => b.base,
+    };
+    Ok(format!("{base}/command?t={}", b.token))
+}
+
 /// Enter attaches, space peeks, `x` stops and `P` opens the portal picker.
 /// The callers pass only a seat joined to this mux's registry by its full
 /// session id, so no key ever acts on a seat by name.
