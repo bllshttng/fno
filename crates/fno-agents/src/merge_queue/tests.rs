@@ -96,6 +96,12 @@ fn a_batch_builds_in_queue_order_with_a_repair_entry_first_and_alone() {
         step(&entries, &state, "m0", false, &Gate::Pending),
         build(&[9])
     );
+    // A batch built before main turned red stands down, so the repair builds.
+    let parked = with_active(batch(&[1, 2], "m0"));
+    assert_eq!(
+        step(&entries, &parked, "m0", true, &Gate::Green),
+        Step::Rebuild { main_moved: false }
+    );
 }
 
 /// The node's done line: two PRs, each green alone, whose combination fails

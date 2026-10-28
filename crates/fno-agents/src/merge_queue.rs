@@ -130,8 +130,10 @@ pub(crate) fn decide(view: &View) -> Step {
         if batch.prs.iter().any(|pr| !live.contains(pr)) {
             return Step::Rebuild { main_moved: false };
         }
+        // A red main lands only a repair, and a parked batch would keep the
+        // repair entry from building.
         if view.main_red && !batch.repair {
-            return Step::Wait;
+            return Step::Rebuild { main_moved: false };
         }
         return match view.gate {
             Gate::Pending => Step::Wait,
@@ -593,12 +595,14 @@ fn apply(
                     let prs = active.map(|b| b.prs.clone()).unwrap_or_default();
                     emit(step_row("land", &id, json!({"prs": prs, "sha": sha})));
                 }
-                // A refused fast-forward means main moved under the batch.
-                Err(e) => emit(step_row(
+                // A refused fast-forward over a moved main rebuilds. Any other
+                // refusal keeps the green batch, and the next tick lands again.
+                Err(e) if main_sha(root).is_ok_and(|now| now != view.main) => emit(step_row(
                     "rebuild",
                     &id,
                     json!({"main_moved": true, "error": e}),
                 )),
+                Err(e) => return Err(format!("batch {id}: landing refused: {e}")),
             }
             delete_ref(root, &id);
         }
