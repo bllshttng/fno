@@ -453,6 +453,7 @@ pub mod pr_worktree;
 pub mod process_owner;
 pub mod process_probe;
 pub mod project;
+pub(crate) mod pr_idle;
 pub(crate) mod prompt_wait;
 pub mod protocol;
 pub mod prove_it_verdicts;
