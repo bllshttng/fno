@@ -361,6 +361,7 @@ pub mod merge_grant;
 pub mod merge_hold;
 pub mod merge_posture;
 pub mod merge_provenance;
+pub mod merge_queue;
 pub mod merge_reap;
 #[cfg(test)]
 #[path = "mint_guard_tests.rs"]
@@ -1890,6 +1891,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "ci_tier_pass",
     "ci_tier_held",
     "ci_tier_wake",
+    // A PR queued in place of a merge, and the merge queue arm's acts
+    // (merge_queue.rs).
+    "merge_queue_entry",
+    "merge_queue_step",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
