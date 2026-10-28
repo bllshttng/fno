@@ -470,7 +470,6 @@ fn fire(args: &[&str]) -> (i32, Decision) {
     ));
     (code, d)
 }
-
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 mod awaiting_merge_ruling;
