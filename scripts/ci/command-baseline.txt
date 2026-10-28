@@ -44,7 +44,7 @@ agents loop-check
 agents needs
 agents resume !--cross-project
 agents rm !--audit-actor !--audit-reason !--audit-reclaimed-bytes !--audit-request-id !--audit-worktree-touched
-agents spawn !--bounded-placement !--deny-tools !--mux-session !--output-format !--provider !--recorded-provider !--resume !--yolo
+agents spawn
 annotate
 annotate list
 approvals
