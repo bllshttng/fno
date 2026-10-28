@@ -27,7 +27,7 @@ impl Jv {
     }
 }
 
-/// Python `json.dumps` byte shape: `", "` separators, `": "` after keys,
+/// Byte shape: `", "` separators, `": "` after keys,
 /// `ensure_ascii` escapes, lowercase hex.
 fn python_json(v: &Jv) -> String {
     match v {

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 /// The default check-in interval (`config.lead.checkin_interval`, "55m").
 const DEFAULT_CHECKIN_SECS: i64 = 3300;
-/// The window is three check-in intervals (Python `verdict_counts`).
+/// The window is three check-in intervals.
 const WINDOW_INTERVALS: i64 = 3;
 /// The default compaction ceiling for a harness with no override.
 pub(crate) const DEFAULT_COMPACTION_CEILING: i64 = 3;
@@ -26,7 +26,7 @@ const DEFAULT_COMPACTION_CEILING_CODEX: i64 = 12;
 
 /// A sortable instant: the `Z` and `+00:00` UTC spellings must compare equal,
 /// so a Z-suffixed manifest date and a +00:00 graph date cannot misorder at
-/// the same-second teaming boundary (Python `_ts_key`, scope.py).
+/// the same-second teaming boundary.
 fn ts_key(raw: &str) -> String {
     if let Some(stripped) = raw.strip_suffix('Z') {
         format!("{stripped}+00:00")

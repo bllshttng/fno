@@ -90,7 +90,7 @@ use overlay_paint::{
 };
 use theme_ground::LaunchTheme;
 // Re-exported for the test module's glob; the layout fns are the only callers.
-#[allow(unused_imports)]
+#[cfg(test)]
 pub(crate) use overlay_paint::family_b_origin;
 
 mod row_stamp;

@@ -321,7 +321,3 @@ pub fn land_candidates(candidates: &[Candidate], opts: &LandOptions) -> Vec<Land
     }
     results
 }
-
-pub fn has_failures(results: &[LandResult]) -> bool {
-    results.iter().any(|r| r.outcome == OUTCOME_FAILED)
-}

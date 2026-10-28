@@ -85,7 +85,7 @@ fn state_root(payload: &Value, owner_cwd: Option<&str>) -> PathBuf {
     crate::paths::space_dir(&cwd)
 }
 
-/// Python `write_manifest`: one manifest at an explicit path.
+/// One manifest at an explicit path.
 fn manifest_op(payload: &Value) -> Value {
     let written = manifest_spec(payload).and_then(|spec| {
         let path = payload["path"]

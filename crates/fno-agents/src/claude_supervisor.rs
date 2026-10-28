@@ -9,7 +9,7 @@
 //! hosted session for the supervisor's whole life and left the birth
 //! session's identity readable in `ps eww` output.
 //!
-//! Python `bg_create` enters through `run_birth_exec`, which applies this
+//! Enters through `run_birth_exec`, which applies this
 //! guard before the client command. The guard is birth-scoped: it cleans a
 //! supervisor fno births itself. A client that runs after the probe and finds
 //! no supervisor (the upgrade self-restart leaves one such window) births it
