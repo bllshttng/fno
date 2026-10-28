@@ -634,9 +634,20 @@ pub(crate) async fn keys(
             ModalKey::Byte(b'W') => {
                 let bridge = crate::web::live_bridge(&view.session);
                 let host = crate::agents_view::hostname();
-                let opened = command_url(bridge, crate::link::is_remote_session(), &host)
-                    .and_then(|url| crate::link::open_url_for_session(&url).map(|_| url));
-                view.set_notice(opened.map_or_else(|e| e, |url| format!("opened {url}")));
+                let notice = match command_url(bridge, crate::link::is_remote_session(), &host) {
+                    Err(e) => e,
+                    // Off-loop: a slow browser launch must not stall input.
+                    Ok(url) => {
+                        let launched = url.clone();
+                        tokio::task::spawn_blocking(move || {
+                            crate::link::open_url_for_session(&launched)
+                        })
+                        .await
+                        .unwrap_or_else(|_| Err("opener task failed".to_string()))
+                        .map_or_else(|e| format!("open failed: {e}"), |o| o.notice(&url))
+                    }
+                };
+                view.set_notice(notice);
             }
             ModalKey::Up | ModalKey::Byte(b'k') => b.step(-1),
             ModalKey::Down | ModalKey::Byte(b'j') => b.step(1),
