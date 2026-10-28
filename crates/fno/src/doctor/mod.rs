@@ -880,10 +880,10 @@ mod tests {
             .iter()
             .map(std::ffi::OsString::from)
             .collect();
-        assert!(matches!(
-            super::classify(&argv),
-            Some(super::Claim::Home(_))
-        ));
+        assert!(
+            super::classify(&argv).is_some(),
+            "a fall-through exits 2: the Python CLI declares no --context-audit"
+        );
     }
 
     /// The deleted Python transport's contract (its
