@@ -334,7 +334,7 @@ JSON
 
 HOME="${TMP_H}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
   fno agents claim acquire "node:tst-deadbe1" \
-  --holder "spawn-handover:bp-dead-launcher" --ttl 15m --pid 999999999 \
+  --holder "spawn-handover:bp-stopped-planner" --ttl 15m --pid 999999999 \
   --reason "dead launcher stage" >/dev/null 2>&1 \
   || fail "(h): staging the dead-launcher window claim failed"
 

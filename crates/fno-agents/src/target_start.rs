@@ -971,6 +971,13 @@ fn rebind_manifest_content_for_child(content: &str, child: &str, holder: &str) -
 /// The claim already landed, so a failed rewrite leaves the claim live and
 /// the tree's manifest stale - named on stderr, never fatal to the receipt.
 fn rebind_manifest_for_child(manifest: &Path, child: &str, holder: &str) {
+    if holder.is_empty() {
+        // reacquire_node_claim already refused an unattributable session, so
+        // this is defense, not the expected path: an empty holder line would
+        // poison the manifest the stop gate reads.
+        eprintln!("target start: child manifest rebind skipped for {child}: no holder");
+        return;
+    }
     let Some(_lock) = crate::claim_cli::manifest_refresh::lock_manifest(manifest) else {
         eprintln!(
             "target start: child manifest rebind skipped: {} stayed locked",
@@ -1166,25 +1173,6 @@ fn bind_worktree(
     // A successor inheriting a predecessor's worktree, or a stale-free claim:
     // re-acquire under this session so the lockfile names a live holder.
     reacquire_node_claim(node, wt_path)?;
-    if child_rebind {
-        // The child claim is the serialization point: rewrite the manifest
-        // only after it lands, so a refused claim never re-points a tree.
-        let holder = session_holder().unwrap_or_default();
-        rebind_manifest_for_child(&manifest, node, &holder);
-        println!(
-            "worktree={}  base={}  node=reacquired (child rebind: manifest re-pointed from parent {})",
-            wt_path.display(),
-            truthful_base(wt_path, base_label, false),
-            mnode.as_deref().unwrap_or("?"),
-        );
-        if beastmode {
-            warn_if_authority_not_granted(wt_path);
-        }
-        if no_merge {
-            warn_no_merge_dropped();
-        }
-        return Ok(true);
-    }
     let prior = match claim_info.as_ref() {
         Some(r) => format!(
             "prior holder {} (state={state_word})",
@@ -1196,8 +1184,20 @@ fn bind_worktree(
         ),
         None => "no prior claim".to_string(),
     };
+    let outcome_note = if child_rebind {
+        // The child claim is the serialization point: rewrite the manifest
+        // only after it lands, so a refused claim never re-points a tree.
+        let holder = session_holder().unwrap_or_default();
+        rebind_manifest_for_child(&manifest, node, &holder);
+        format!(
+            "child rebind: manifest re-pointed from parent {}",
+            mnode.as_deref().unwrap_or("?")
+        )
+    } else {
+        format!("successor took over from {prior}")
+    };
     println!(
-        "worktree={}  base={}  node=reacquired (successor took over from {prior})",
+        "worktree={}  base={}  node=reacquired ({outcome_note})",
         wt_path.display(),
         truthful_base(wt_path, base_label, false),
     );
