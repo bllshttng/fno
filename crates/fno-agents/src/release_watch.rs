@@ -85,10 +85,6 @@ pub(crate) fn error_line(annotations: &Value) -> Option<String> {
         .map(|m| m.to_string())
 }
 
-pub(crate) fn body(slug: &str, label: &str, line: &str) -> String {
-    format!("{WORKFLOW} run {label} failed on {slug}: {line}")
-}
-
 fn gh_json(root: &Path, path: &str) -> Option<Value> {
     let out = run_captured("gh", &["api", path], root, Duration::from_secs(30))?;
     serde_json::from_str(out.trim()).ok()
@@ -97,12 +93,8 @@ fn gh_json(root: &Path, path: &str) -> Option<Value> {
 /// `(slug, verdict)` for one repo, or None when it cannot be read or holds
 /// no settled run yet. A repo with no `release.yml` reads as None too.
 fn sample(root: &Path) -> Option<(String, Verdict)> {
-    let url = run_captured(
-        "git",
-        &["remote", "get-url", "origin"],
-        root,
-        Duration::from_secs(10),
-    )?;
+    let remote = ["remote", "get-url", "origin"];
+    let url = run_captured("git", &remote, root, Duration::from_secs(10))?;
     let slug = slug_from_remote(url.trim());
     if slug.is_empty() {
         return None;
@@ -208,7 +200,7 @@ pub(crate) fn pass(
     }
     let line = fetch_error_line(root, &slug, id)
         .unwrap_or_else(|| "no error annotation; open the run".to_string());
-    let body = body(&slug, &label, &line);
+    let body = format!("{WORKFLOW} run {label} failed on {slug}: {line}");
     // The mail rides its own mark, written before the page: a page held by
     // the rate floor retries next pass and must not mail the lead twice.
     if mark_once(path, &mail_key, &token) {
@@ -274,11 +266,10 @@ mod tests {
             error_line(&annotations).as_deref(),
             Some("v0.4.1 is released; bump main with sync-version.sh")
         );
-        let generic = json!([{"annotation_level": "failure",
-                              "message": "Process completed with exit code 1."}]);
+        let generic = json!([annotations[0].clone()]);
         assert_eq!(
-            error_line(&generic).as_deref(),
-            Some("Process completed with exit code 1.")
+            error_line(&generic).unwrap(),
+            "Process completed with exit code 1."
         );
     }
 }
