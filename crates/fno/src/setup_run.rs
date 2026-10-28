@@ -2101,6 +2101,7 @@ pub(crate) fn apply_wizard_pending(
             "auto-heal" => step_auto_heal(exe, &mut rep),
             "groom-agent" => step_groom_agent(exe, &mut rep, &mut loaded),
             "projects" => step_projects(exe, root, &mut rep),
+            "messaging" => step_messaging(exe, true, Some(&[p.value.as_str()]), &mut rep),
             _ => rep.skipped.push(format!("{}: no runner", p.id)),
         }
         let outcome = step_outcome(p.id, &rep.done[done_len..], &rep.skipped[skipped_len..]);
