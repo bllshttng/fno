@@ -109,7 +109,7 @@ def test_a_keeper_recipient_routes_to_the_keeper_command_and_reads_delivered(
     assert text.splitlines()[0].startswith("`@web · fmail-"), (
         "the keeper lane carries the delivered header"
     )
-    assert "delivered (hosted)" in out.out
+    assert "injected" in out.out
     assert "queued (durable)" not in out.out
     assert "typed (pane" not in out.out
 
@@ -179,7 +179,7 @@ def test_a_pane_hosted_keeper_lane_harness_keeps_the_pane_rung(
     cli._name_lane_send("ping", from_name="web", resolved=session)
     out = capsys.readouterr()
     assert pane_entries, "the roster pane rung never ran for a pane-hosted row"
-    assert "delivered (hosted)" in out.out
+    assert "injected" in out.out
     assert "queued (durable)" not in out.out
 
 

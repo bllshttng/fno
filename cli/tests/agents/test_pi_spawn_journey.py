@@ -221,7 +221,7 @@ def _send_mail(text: str, session_id: str, monkeypatch, capsys) -> None:
     )
     mail_cli._name_lane_send(text, from_name="web", resolved=resolved)
     out = capsys.readouterr().out
-    if "delivered (hosted)" not in out:
+    if "injected" not in out:
         print(f"mail receipt without confirm: {out.strip()}")
 
 
