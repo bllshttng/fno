@@ -1858,10 +1858,55 @@ fn run_run_admit(args: &[String]) -> i32 {
         eprintln!("{TESTS_REFUSED_LINE}");
         return SLOT_BUSY;
     }
+    let pins = if is_test_program(&program) {
+        match test_run_pins_for_this_process() {
+            Ok(pins) => pins,
+            Err(line) => {
+                eprintln!("{line}");
+                return SLOT_BUSY;
+            }
+        }
+    } else {
+        Vec::new()
+    };
     match admit_run_slot(cargo_pid, &worktree, false) {
-        Ok(()) => 0,
+        Ok(()) => {
+            // The wrapper exports each `FNO_*=` stdout line before it execs.
+            for (key, value) in pins {
+                println!("{key}={}", value.display());
+            }
+            0
+        }
         Err(code) => code,
     }
+}
+
+/// The run door's state-root pins for a test binary, read from this
+/// process's env (the wrapper's, which the binary inherits). `Err` is a
+/// refusal line.
+fn test_run_pins_for_this_process() -> Result<Vec<(&'static str, PathBuf)>, String> {
+    use crate::test_run_pins::{decide, make_sandbox, Pins};
+    let hermetic = std::env::var("FNO_TEST_HERMETIC").ok();
+    let home = std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from);
+    let pins = match decide(hermetic.as_deref(), home.as_deref(), |k| {
+        std::env::var_os(k)
+    }) {
+        Pins::Refused(line) => return Err(line),
+        Pins::Set(pins) if pins.is_empty() => return Ok(Vec::new()),
+        Pins::Set(pins) => pins,
+    };
+    let sandbox = make_sandbox().map_err(|e| {
+        format!("[cargo test] could not make a temp state tree for the test binary: {e}")
+    })?;
+    Ok(pins
+        .into_iter()
+        .map(|(key, rel)| match rel {
+            "" => (key, sandbox.clone()),
+            rel => (key, sandbox.join(rel)),
+        })
+        .collect())
 }
 
 /// The shared wait state of a cargo admission waiter: which cargo it stands

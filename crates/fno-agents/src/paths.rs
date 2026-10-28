@@ -1084,6 +1084,22 @@ pub fn worktree_space_dir_opt(cwd: &Path) -> Option<PathBuf> {
 /// `<checkout>/.fno/events.jsonl` once on first resolve so appenders never
 /// split the file across the two locations; one contract for every reader
 /// and `fno-agents state path events`.
+/// The project journal as Python `paths.project_events_json` reads it: the
+/// `FNO_EVENTS_PATH` pin a harness sets, else the space journal of
+/// `$FNO_REPO_ROOT`, else of the cwd's repository. A caller that already
+/// holds its own root uses [`events_path`] instead.
+pub fn project_events_path() -> PathBuf {
+    if let Some(pin) = std::env::var_os("FNO_EVENTS_PATH").filter(|v| !v.is_empty()) {
+        return PathBuf::from(pin);
+    }
+    let anchor = std::env::var_os("FNO_REPO_ROOT")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    events_path(&anchor)
+}
+
 pub fn events_path(cwd: &Path) -> PathBuf {
     let path = space_dir(cwd).join("events.jsonl");
     migrate_from_checkout(

@@ -1,0 +1,84 @@
+{
+ "label": "the pass stops under its floor and names what it evaluated",
+ "now": "2026-08-29T12:00:00Z",
+ "runs": [
+  {
+   "asks": [],
+   "dispatches": [
+    [
+     "epic-2",
+     "mail",
+     "aaaa0002",
+     null
+    ],
+    [
+     "epic-3",
+     "mail",
+     "aaaa0003",
+     null
+    ]
+   ],
+   "events": [
+    [
+     "lead_woken",
+     {
+      "address": "aaaa0002",
+      "ceiling": 32,
+      "reason": "mail",
+      "scope": "epic-2",
+      "successor": false,
+      "window_count": 1
+     }
+    ],
+    [
+     "lead_woken",
+     {
+      "address": "aaaa0003",
+      "ceiling": 32,
+      "reason": "mail",
+      "scope": "epic-3",
+      "successor": false,
+      "window_count": 1
+     }
+    ]
+   ],
+   "sidecar": {
+    "answered_cursor": "2026-08-29T10:00:00Z"
+   },
+   "successor_flags": [
+    false,
+    false
+   ],
+   "summary": {
+    "armed": true,
+    "budget_spent": true,
+    "evaluated": 2,
+    "note": "budget spent after 2 of 5 roles, before truth:epic-4",
+    "refused": [],
+    "roles": 5,
+    "team_incomplete": false,
+    "truth_reads": 2,
+    "woke": [
+     {
+      "address": "aaaa0002",
+      "reason": "mail",
+      "scope": "epic-2",
+      "successor": false
+     },
+     {
+      "address": "aaaa0003",
+      "reason": "mail",
+      "scope": "epic-3",
+      "successor": false
+     }
+    ]
+   },
+   "unread_calls": [
+    "aaaa0002",
+    "aaaa0003",
+    "aaaa0004"
+   ],
+   "wake_times": null
+  }
+ ]
+}

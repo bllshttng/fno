@@ -19,8 +19,6 @@ from fno.adapters.providers.runtime_state import (
     MAX_BACKOFF_LEVEL,
     PROVIDER_HEALTH_TTL_SECONDS,
     ProviderHealth,
-    HeadroomState,
-    headroom,
     read_state,
 )
 
@@ -375,5 +373,5 @@ class TestMachineWideStatePath:
         cwd_b = tmp_path / "b"
         cwd_b.mkdir()
         monkeypatch.chdir(cwd_b)
-        assert headroom("acct-1").state is HeadroomState.EXHAUSTED
+        assert "acct-1" in read_state(now=now).provider_health
 

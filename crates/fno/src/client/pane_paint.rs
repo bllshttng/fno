@@ -407,7 +407,7 @@ impl View {
         let agent = self.layout.agents.iter().find(|a| a.pane_id == Some(pid));
         let status = agent.map(|a| {
             let st = agent_lattice_state(a);
-            let ls = lattice_style(st, self.theme.needs_you);
+            let ls = lattice_style(st, self.theme.needs_you, self.theme.ok);
             (status_glyph(st), ls.flags, ls.fg, status_word(st))
         });
         let fields = crate::pane_border::EdgeFields {

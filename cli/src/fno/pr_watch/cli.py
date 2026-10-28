@@ -130,11 +130,11 @@ def _emit_tick_row(arm: str, *, interval_s: int, acted: int = 0,
 def _notify_parked(message: str) -> None:
     """Send an OS notification for a parked PR.
 
-    Calls send_notification with (title, message) -- two positional args.
+    Calls notify_operator with (title, message) -- two positional args.
     On failure, logs a warning instead of silently passing.
     """
     try:
-        send_notification("pr-watch", message)
+        notify_operator("pr-watch", message)
     except Exception as exc:
         log.warning("pr-watch: notify failed: %s", exc)
 
@@ -372,7 +372,7 @@ class ClaimAdapter:
 
 from fno.claims.core import claim_status  # noqa: E402
 from fno.config import load_settings, load_settings_for_repo  # noqa: E402
-from fno.notify._impl import send_notification  # noqa: E402
+from fno.rust_binary import notify_operator  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -431,12 +431,6 @@ _RECOVERY_ROOT_FLOOR_S = 3.0
 _EVERY_TICK_CAP_S: dict[str, float] = {
     "settings": 10,
     "sweep": 150,
-    # The wake pays three fixed reads before its first role (team, the
-    # answered journal, the graph), each bounded at 10s, and guards every
-    # truth read behind a 15s step floor. The 45s cap measured "budget
-    # spent after 0 of 5 roles" with truth_reads=0 (2026-09-28 fleet
-    # specimen). 75s fits the fixed reads plus two truth reads.
-    "lead_wake": 75,
     # The notify phase pays the arm subprocess over every catch-up root
     # (armed pass: 23.1s measured over 12 roots 2026-09-27). 15s still cut
     # it mid-arm; 30s fits at the 0.85x deadline.
@@ -578,7 +572,7 @@ def tick() -> None:
     # boundary (SCAN_PROGRESS); this dict holds the rest.
     progress: dict[str, str] = {}
     ceiling_box: dict[str, Optional[int]] = {"v": None}
-    arm_interval: dict[str, int] = {"lead_wake": 900, "notify_watch": 300, "watchdog": 600}
+    arm_interval: dict[str, int] = {"notify_watch": 300, "watchdog": 600}
     roots_box: dict[str, Optional[list]] = {"v": None}
     phase_caps = dict(_PHASE_CAP_S)
     grant_queue_timeout_s = _GRANT_QUEUE_READ_TIMEOUT_S
@@ -1226,7 +1220,7 @@ def tick() -> None:
             assert cfg is not None
             set_tick_phase("merge")
             interval = int(getattr(cfg, "interval_seconds", 600))
-            head = f"merge kw={'cut' if 'lead_wake' in cut else 'ok'}"
+            head = "merge ok"
             if not tick_enabled:
                 _emit_tick_row("pr_watch_merge", interval_s=interval, skip_reason="disabled",
                                detail=f"{head} pr_watch disabled")
@@ -1283,73 +1277,6 @@ def tick() -> None:
         # anything here acts. Report, never reap: only STRANDED rows get
         # pushed and filed; only UNKNOWN rows get recorded; every other
         # class, LIVE included, is quiet and untouched.
-        #
-        # The lead wake phase runs BEFORE it: it is cheaper than either leg
-        # (one registry read, one transcript probe per role, a bus scan) and
-        # the wake it fires is the thing the stranded sweep would otherwise
-        # have to notice too late.
-        def _phase_lead_wake(_slice_s: float) -> None:
-            set_tick_phase("lead_wake")
-            # The guard is the first statement, before the import: this module is
-            # on the launchd hot path and the wake phase pulls the bus and the
-            # harness layer, which an unarmed tick must not pay for. The double
-            # getattr matches the phase's own read: a settings stub with no lead
-            # block at all (the tick's test harnesses) must read as unarmed.
-            # Double getattr throughout: a settings stub with no lead block at all
-            # must read as unarmed (debounce default), never crash the tick.
-            kw_i = int(getattr(getattr(settings, "lead", None), "wake_debounce_seconds", 900))
-            arm_interval["lead_wake"] = kw_i
-            if getattr(getattr(settings, "lead", None), "wake_enabled", False):
-                try:
-                    from fno.pr_watch._lead_wake import run_lead_wake
-
-                    wake_summary = run_lead_wake(
-                        settings,
-                        emit=_emit_event,
-                        seconds_left_fn=phase_seconds_left,
-                        on_step=lambda s: set_tick_phase(f"lead_wake:{s}"),
-                    )
-                    woke = ", ".join(
-                        f"{w['scope']}:{w['reason']}" for w in wake_summary.get("woke", [])
-                    )
-                    typer.echo(
-                        f"lead wake: roles={wake_summary.get('roles', 0)}"
-                        + (f" woke={woke}" if woke else "")
-                    )
-                    roles = int(wake_summary.get("roles", 0) or 0)
-                    woke_n = len(wake_summary.get("woke", []) or [])
-                    evaluated = int(wake_summary.get("evaluated", 0) or 0)
-                    truth_reads = int(wake_summary.get("truth_reads", 0) or 0)
-                    if roles == 0 and wake_summary.get("team_incomplete"):
-                        skip = "team_read_incomplete"
-                    elif roles == 0:
-                        skip = "no_promoted_target"
-                    elif woke_n:
-                        skip = None
-                    elif wake_summary.get("budget_spent"):
-                        skip = "budget_spent"
-                    else:
-                        skip = "no_trigger"
-                    note = wake_summary.get("note")
-                    from collections import Counter
-                    rc = Counter(str(i.get("refusal") or "?") for i in wake_summary.get("refused") or [])
-                    refused_s = ",".join(f"{k}:{rc[k]}" for k in sorted(rc))
-                    detail = (
-                        f"roles={roles} evaluated={evaluated}/{roles}"
-                        f" truth_reads={truth_reads}"
-                        + (f" woke={woke}" if woke else "")
-                        + (f" refused={refused_s}" if refused_s else "")
-                        + (f" note={note}" if note else "")
-                    )
-                    _emit_tick_row("lead_wake", interval_s=kw_i, acted=woke_n,
-                                   skip_reason=skip, detail=detail)
-                except Exception as exc:  # noqa: BLE001 - never let a wake break the tick
-                    log.warning("pr-watch: lead wake phase failed: %s", exc)
-                    _emit_tick_row("lead_wake", interval_s=kw_i, skip_reason="wake_failed",
-                                   detail=str(exc)[:200])
-            else:
-                _emit_tick_row("lead_wake", interval_s=kw_i, skip_reason="wake_disabled")
-
         # The operator-notice sampler: one phase, always run; the
         # Rust arm answers notify_off itself when the [notify] signals list
         # is empty, so the readout shows the arm whether or not it is armed.
@@ -1483,7 +1410,6 @@ def tick() -> None:
         # state, never the sweep's result, so they run first; the sweep
         # follows as the one arm that resumes per-PR across ticks.
         sweep_started = True
-        _run_phase("lead_wake", _phase_lead_wake, arm="lead_wake")
         _run_phase("merge", _phase_merge, arm="pr_watch_merge")
         _run_phase("sweep", _phase_sweep, arm="pr_watch_sweep")
         _run_phase("notify_watch", _phase_notify, arm="notify_watch")

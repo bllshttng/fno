@@ -6,11 +6,12 @@ use crate::tree::TabId;
 /// One open portal under the TV model: the channel it is tuned to, the
 /// screen pane playing it, and the tab that holds the screen's leaf. A
 /// portal is never a pane and never a tab; the pane is only what plays
-/// now. `row_key` is the channel: the attach id (claude) or the registry
-/// name (every other harness - the command's `id` field); it holds a key a
-/// row answered, or - when a claude seat's screen names no claimable row -
-/// the screen's title marked unclaimed (`vellum?`), which no row answers,
-/// so [`row_for_pane`] resolves no row there.
+/// now. `row_key` is the channel: the row's id
+/// ([`RegistryAgent::stored_key`]), never its name, so a restart that
+/// renames or retitles the row still finds it. When a claude seat's screen
+/// names no claimable row it holds the screen's title marked unclaimed
+/// (`vellum?`), which no row answers, so [`row_for_pane`] resolves no row
+/// there.
 #[derive(Clone)]
 pub(crate) struct Portal {
     pub(crate) row_key: String,
@@ -28,11 +29,9 @@ pub(crate) fn row_for_pane<'a>(
         .find(|portal| portal.seat == pane)?
         .row_key
         .as_str();
-    let mut matches = agents.iter().filter(|row| {
-        row.mux.is_none()
-            && !row.exited
-            && (row.name == key || row.answers_to(key) || row.attach_id.as_deref() == Some(key))
-    });
+    let mut matches = agents
+        .iter()
+        .filter(|row| row.mux.is_none() && !row.exited && row.keyed_by(key));
     let row = matches.next()?;
     matches.next().is_none().then_some(row)
 }

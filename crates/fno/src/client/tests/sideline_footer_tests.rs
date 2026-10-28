@@ -49,3 +49,58 @@ fn footer_buttons_open_what_their_keys_open() {
         ));
     }
 }
+
+#[tokio::test]
+async fn agents_tab_space_reaches_the_reply() {
+    // Space on an agent row docks the peek under the list with the reply
+    // input focused; Esc in the reply closes the dock whole.
+    let mut done = agent_row("w1", 4, Some(AgentBadge::Done), false);
+    done.harness = Some("codex".into());
+    let mut v = wide_view(vec![done]);
+    v.sideline_width = 60;
+    let at = v
+        .display_rows()
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Agent(_)))
+        .unwrap();
+    v.selector = Some(at);
+    let mut buf: Vec<u8> = Vec::new();
+    selector_keys(&mut v, b" ", &mut buf).await.unwrap();
+    assert_eq!(v.peek_input.as_ref().map(|(n, _)| n.as_str()), Some("w1"));
+    assert!(v.peek_is_docked(), "the peek docks under the list");
+    let lines = vec![" w1".to_string()];
+    let chrome = chrome::Chrome::new("w1", Anchor::Center);
+    let layout = v.peek_layout(&chrome, &lines);
+    assert_eq!(layout.origin.1, 0, "flush with the sideline's left edge");
+    assert!(layout.framed.width < v.panel_w() as usize);
+    let press = left_click(layout.origin.0 as u16 + 1, 1);
+    assert!(modal_mouse(&mut v, press), "the dock owns the press");
+    // On an odd column height a full dock never covers the answered row.
+    let long: Vec<String> = (0..99).map(|i| format!(" line {i}")).collect();
+    v.term.0 = 29;
+    for cursor in 0..29 {
+        v.peek.as_mut().unwrap().cursor = cursor;
+        let l = v.peek_layout(&chrome, &long);
+        let row = cursor.saturating_sub(v.sideline_offset()) + TAB_BAR_ROWS as usize;
+        let seat = l.origin.0..l.origin.0 + l.framed.lines.len();
+        assert!(!seat.contains(&row), "cursor {cursor}");
+    }
+
+    // The Done word wears the theme's ok color, not the lane color.
+    let st = agent_lattice_state(&v.layout.agents[0]);
+    assert_eq!(st, LatticeState::DoneUnseen);
+    let ok = lattice_style(st, v.theme.needs_you, v.theme.ok).fg;
+    assert_eq!(agent_lane_fg(&v.layout.agents[0], st, ok), v.theme.ok);
+
+    peek_keys(&mut v, b"\x1b", &mut buf).await.unwrap();
+    // A lone Esc is held for a split sequence; an empty read flushes it.
+    peek_keys(&mut v, b"", &mut buf).await.unwrap();
+    assert!(v.peek.is_none() && !v.peek_docked, "esc closes the dock");
+
+    // A wide panel's session button reads the task prompt.
+    let text = v.footer_buttons(100).text;
+    assert!(
+        text.starts_with("+ describe a task for a new session"),
+        "{text:?}"
+    );
+}

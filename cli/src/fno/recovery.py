@@ -1183,10 +1183,10 @@ def _notify_manual_resume(candidate: "Candidate", snap, session_uuid: str) -> No
     """US5: one OS notification carrying the exact resume command for a session
     footnote could not auto-revive (unshared transcript / interactive). Best-effort."""
     try:
-        from fno.notify._impl import send_notification
+        from fno.rust_binary import notify_operator
 
         cmd = _resume_command(snap.id, getattr(candidate, "cwd", None), session_uuid)
-        send_notification(
+        notify_operator(
             f"footnote: switched to {snap.id}",
             f"Session {candidate.short_id} needs a manual resume:\n{cmd}",
         )
@@ -1304,9 +1304,9 @@ def _notify_close(candidate: "Candidate") -> bool:
     that never reached the operator.
     """
     try:
-        from fno.notify._impl import send_notification
+        from fno.rust_binary import notify_operator
 
-        code, _msg = send_notification(
+        code, _msg = notify_operator(
             f"footnote: {candidate.short_id} finished but still open",
             CLOSE_MESSAGE,
         )

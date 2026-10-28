@@ -114,8 +114,9 @@ pub fn cargo_build_dir_value() -> String {
     let override_base = super::raw_get(&raw, "paths.cargo_targets_base")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    let home = home_dir().to_string_lossy().into_owned();
     let base = match override_base {
-        Some(configured) => resolve_path(&PathBuf::from(expanduser(&configured))),
+        Some(configured) => resolve_path(&PathBuf::from(expanduser(&configured, &home))),
         None => state_dir_value().join("cargo-build"),
     };
     format!("{}/{{workspace-path-hash}}", base.to_string_lossy())
@@ -130,18 +131,20 @@ pub fn state_dir_value() -> PathBuf {
         }
     }
     let raw = super::merged_config(&repo_root());
+    let home = home_dir().to_string_lossy().into_owned();
     match super::raw_get(&raw, "state_dir").and_then(|v| v.as_str()) {
-        Some(configured) => resolve_path(&PathBuf::from(expanduser(configured))),
+        Some(configured) => resolve_path(&PathBuf::from(expanduser(configured, &home))),
         None => home_dir().join(".fno"),
     }
 }
 
-/// For the `~/` shapes this reader meets.
-fn expanduser(path: &str) -> String {
+/// Python `os.path.expanduser` for the `~/` shapes this reader meets. The
+/// home is injected so tests never touch the process env.
+fn expanduser(path: &str, home: &str) -> String {
     match path.strip_prefix("~/") {
-        Some(rest) => format!("{}/{rest}", home_dir().to_string_lossy()),
+        Some(rest) => format!("{home}/{rest}"),
         None => match path.strip_prefix('~') {
-            Some(rest) => format!("{}{rest}", home_dir().to_string_lossy()),
+            Some(rest) => format!("{home}{rest}"),
             None => path.to_string(),
         },
     }
@@ -394,6 +397,7 @@ fn shape_ok(raw: &Value) -> bool {
 fn workspace_map() -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     let root = repo_root();
+    let home = home_dir().to_string_lossy().into_owned();
     // The work map reads the project's own config first, then the global file,
     // each location config.toml-first.
     let mut files: Vec<PathBuf> = Vec::new();
@@ -435,7 +439,7 @@ fn workspace_map() -> Vec<(String, String)> {
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    out.push((name, normalize_path(&raw_path)));
+                    out.push((name, normalize_path(&raw_path, &home)));
                 }
             }
         }
@@ -450,7 +454,7 @@ fn workspace_map() -> Vec<(String, String)> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                out.push((name.clone(), normalize_path(&raw_path)));
+                out.push((name.clone(), normalize_path(&raw_path, &home)));
             }
         }
     }
@@ -466,8 +470,8 @@ fn global_settings_path() -> PathBuf {
 
 /// `os.path.normpath` over an absolute path: `.` and `..` folded, duplicate
 /// and trailing slashes dropped.
-fn normalize_path(raw: &str) -> String {
-    let expanded = expanduser(raw);
+fn normalize_path(raw: &str, home: &str) -> String {
+    let expanded = expanduser(raw, home);
     let path = PathBuf::from(&expanded);
     let absolute = path.is_absolute();
     let mut parts: Vec<&str> = Vec::new();
@@ -685,14 +689,16 @@ mod tests {
 
     #[test]
     fn expanduser_matches_the_python_shapes() {
-        std::env::set_var("HOME", "/tmp/fake-home");
-        assert_eq!(expanduser("~/code/x"), "/tmp/fake-home/code/x");
-        assert_eq!(expanduser("/abs/path"), "/abs/path");
+        assert_eq!(
+            expanduser("~/code/x", "/tmp/fake-home"),
+            "/tmp/fake-home/code/x"
+        );
+        assert_eq!(expanduser("/abs/path", "/tmp/fake-home"), "/abs/path");
     }
 
     #[test]
     fn normalize_path_folds_dots_and_slashes() {
-        assert_eq!(normalize_path("/a/b/../c//d/"), "/a/c/d");
-        assert_eq!(normalize_path("~/x"), "/tmp/fake-home/x");
+        assert_eq!(normalize_path("/a/b/../c//d/", "/tmp/fake-home"), "/a/c/d");
+        assert_eq!(normalize_path("~/x", "/tmp/fake-home"), "/tmp/fake-home/x");
     }
 }

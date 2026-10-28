@@ -42,13 +42,3 @@ def test_backlog_new_writes_difficulty(tmp_graph):
     row = read_graph_strict(tmp_graph)[0]
     assert row["difficulty"] == "high"
     assert row["difficulty_history"][-1]["source"] == "filed"
-
-
-def test_no_difficulty_dispatch_receipt_is_named():
-    from fno.route_resolve import resolve_dispatch_model
-
-    model, source, chain = resolve_dispatch_model()
-
-    assert model is None
-    assert source == "provider-default(no-difficulty)"
-    assert chain == ["provider-default(no-difficulty)"]

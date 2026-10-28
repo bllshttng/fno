@@ -444,8 +444,8 @@ pub(super) fn wake_and_deliver(
     if session_uuid.is_empty() {
         return (false, "no-session-uuid".to_string());
     }
+    // argv[0] is the front-door binary itself, so the command starts at `agents`.
     let mut argv = vec![
-        "fno".to_string(),
         "agents".to_string(),
         "resume".to_string(),
         session_uuid.to_string(),
@@ -995,6 +995,11 @@ pub(super) fn queue_durable_fallback(
     match write {
         Ok(_) => Ok((msg_id.to_string(), durable_recipient)),
         Err(exc) => {
+            // The minted msg id joins this row to its agent_send_started row.
+            emit_event(
+                "agent_send_failed",
+                json!({"stage": "envelope-write", "name": str_field(row, "name"), "msg_id": msg_id}),
+            );
             let tail = if exc.contains(NO_ENVELOPE_CLAUSE) {
                 String::new()
             } else {
@@ -1385,7 +1390,9 @@ pub(super) fn dispatch_send_locked(
     let mut live_attempted = false;
     let mut delivery = "durable".to_string();
     let mut demotion_notice: Option<String> = None;
-    let mut live_miss_reason: Option<String> = None;
+    // A vetoed live lane names the reading; bus-only outranks it below.
+    let mut live_miss_reason: Option<String> =
+        (!family1_attemptable).then(|| format!("transcript-{family1_state}"));
     let mut live_reasons: Vec<String> = Vec::new();
     let _bus_only = delivery_policy_refusal(opt_str_field(&existing, "name").as_deref(), None)
         == Some(BUS_ONLY_POLICY.to_string());
@@ -1875,5 +1882,24 @@ pub(super) fn project_id_from_settings_text(text: &str) -> Option<String> {
             .filter(|s| !s.is_empty())
             .map(str::to_string),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod wake_rung_tests {
+    // contract: "1h-non-claude-never-woken-as-claude"
+    #[test]
+    fn a_non_claude_session_is_never_woken_as_claude() {
+        let codex = super::ReachableSession {
+            session_id: "04b5621d-1111-2222-3333-444455556666".to_string(),
+            source: "registry",
+            agent: "codex".to_string(),
+            cwd: None,
+        };
+        let lane = Some("wake=unsupported-harness(codex)".to_string());
+        assert_eq!(
+            super::wake_rung(&codex, "<fno_mail>hi</fno_mail>"),
+            (false, None, lane)
+        );
     }
 }

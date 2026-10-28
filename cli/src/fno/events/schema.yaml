@@ -4894,8 +4894,8 @@ event_types:
     consumers: [notifications, evals]
 
   - name: operator_notice
-    description: "One operator-attention notice left the notify chokepoint (fno.notify._impl.send_notification). The local OS toast is one leg; this row is the other: a status sink with events=[operator_notice] carries it off the host, so a remote operator sees it. A notice is a POINTER to the durable queue, never a copy: pointer names the verb that shows the content, and body carries counts, never rows."
-    sources: [python, daemon, test]
+    description: "One operator-attention notice left the notify dispatch (the native `fno inbox notify` command). The local OS toast is one leg; this row is the other: a status sink with events=[operator_notice] carries it off the host, so a remote operator sees it. A notice is a POINTER to the durable queue, never a copy: pointer names the command that shows the content, and body carries counts, never rows."
+    sources: [python, daemon, rust, test]
     data:
       required: [title, body]
       properties:
@@ -6051,7 +6051,7 @@ event_types:
           description: "The resolved provider record id the launch proceeded on."
         reason:
           type: string
-          description: "QuotaSignal.reason: why headroom could not be resolved."
+          description: "The route signal's reason: why headroom could not be resolved."
         snapshot_age_s:
           type: number
           description: "Age in seconds of the usage snapshot at decision time; absent when none exists."
@@ -6550,7 +6550,7 @@ event_types:
           description: "Wall-clock seconds from tick entry to this record."
         phase:
           type: string
-          description: "Last stage marker reached: one of entry, settings, lock, discover, sweep, dispatch, recovery, watchdog, lead_wake, heal, stranded, catchup."
+          description: "Last stage marker reached: one of entry, settings, lock, discover, sweep, dispatch, recovery, watchdog, heal, stranded, catchup."
         why:
           type: string
           enum: [deadline_exceeded, slice_starved, self_killed, killed]
@@ -8599,6 +8599,10 @@ event_types:
     description: "The main_revert arm read a red main head. outcome names what it did: seen, ambiguous, flaky, opened, failed or unreadable."
     sources: [daemon]
     data: {required: [slug, head, outcome]}
+  - name: ci_tier_pass
+    description: "One ci_tier arm pass that acted on a repo's open PRs: the active tier, the spared PRs, and the runs it cancelled or reran."
+    sources: [daemon]
+    data: {required: [slug, slots, active]}
   - name: mcp_channel_demoted_to_socket
     description: "Legacy agents-family telemetry kind, envelope-mapped by the shared emitter."
     sources: [daemon, agents]

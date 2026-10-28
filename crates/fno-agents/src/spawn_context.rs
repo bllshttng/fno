@@ -56,6 +56,39 @@ pub fn parse_canonical_stamp(
     canonical_identity_from(get)
 }
 
+/// The vendor fold (Python `_vendor_identity`): first family wins; two ids
+/// of one family that disagree conflict; multiple families resolve to
+/// nothing. Shared by the canonical resolution and route-slot's dispatch
+/// infer, so the absent-stamp answer spells once.
+pub fn vendor_identity(markers: &[(String, String, String)]) -> (Option<String>, Option<String>) {
+    let mut family: Option<String> = None;
+    let mut vendor_session: Option<String> = None;
+    let mut conflicted = false;
+    for (_marker, mharness, value) in markers {
+        match &family {
+            None => {
+                family = Some(mharness.clone());
+                vendor_session = Some(value.clone());
+            }
+            Some(prev) if prev != mharness => {
+                family = None;
+                vendor_session = None;
+                conflicted = true;
+            }
+            Some(_) => {
+                if !same_session_id(vendor_session.as_deref().unwrap_or_default(), value) {
+                    conflicted = true;
+                }
+            }
+        }
+    }
+    if conflicted {
+        family = None;
+        vendor_session = None;
+    }
+    (family, vendor_session)
+}
+
 /// Canonical-vs-vendor resolution with its disposition class. Mirror of
 /// Python `_resolve_canonical_identity`, which names invalid/contradiction
 /// where the claims-side resolver only returns empty pairs.
@@ -81,34 +114,7 @@ pub enum CanonicalClass {
 pub fn resolve_canonical_resolution(get: &impl Fn(&str) -> Option<String>) -> CanonicalResolution {
     let (session, harness, disposition) = parse_canonical_stamp(get);
     let markers = present_markers(get);
-    // The vendor fold, inlined: first family
-    // wins; two ids of one family that disagree conflict; multiple families
-    // resolve to nothing.
-    let mut family: Option<String> = None;
-    let mut vendor_session: Option<String> = None;
-    let mut conflicted = false;
-    for (_marker, mharness, value) in &markers {
-        match &family {
-            None => {
-                family = Some(mharness.clone());
-                vendor_session = Some(value.clone());
-            }
-            Some(prev) if prev != mharness => {
-                family = None;
-                vendor_session = None;
-                conflicted = true;
-            }
-            Some(_) => {
-                if !same_session_id(vendor_session.as_deref().unwrap_or_default(), value) {
-                    conflicted = true;
-                }
-            }
-        }
-    }
-    if conflicted {
-        family = None;
-        vendor_session = None;
-    }
+    let (family, vendor_session) = vendor_identity(&markers);
     let class = match disposition {
         CanonicalDisposition::Absent => CanonicalClass::Absent,
         CanonicalDisposition::Invalid => CanonicalClass::Invalid,

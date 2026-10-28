@@ -1,0 +1,2 @@
+questions.route=direct (default): the question stays on the board and no relay mail went out. For a decision only the user can make, file it with fno inbox outstanding ask. Set questions.route=triage in .fno/config.toml to route questions through a triage lead.
+lead: recorded <ID>

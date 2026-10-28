@@ -93,9 +93,9 @@ def test_retask_node_resolution_canonicalizes_slug_and_bare_hex(monkeypatch):
 def _patch_rename_call(monkeypatch, sink, receipt):
     """Intercept only the transaction hand-off; the spawn-defaults resolver
     makes its own command_call rounds that must reach the real binary."""
-    from fno.rust_binary import command_call as real_command_call
+    from fno.rust_binary import CommandUnavailable, command_call as real_command_call
 
-    def fake(command, payload, unavailable, *, timeout=30):
+    def fake(command, payload, unavailable=CommandUnavailable, *, timeout=30):
         if command == "rename":
             sink.append(payload)
             return receipt
@@ -181,7 +181,7 @@ def test_run_retask_converts_a_transport_failure_into_a_refused_receipt(monkeypa
         retask, "resolve_agent", lambda *_args, **_kwargs: SimpleNamespace(entry=row)
     )
 
-    def fail(command, payload, unavailable, *, timeout=30):
+    def fail(command, payload, unavailable=None, *, timeout=30):
         raise RetaskTransportError("pane_send_timeout", detail="pane 12 went away")
 
     monkeypatch.setattr("fno.rust_binary.command_call", fail)

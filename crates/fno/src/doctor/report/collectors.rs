@@ -320,8 +320,8 @@ fn unknown_components() -> Vec<Value> {
 /// (this is the one diagnostic crossing that keeps the schema fingerprint
 /// honest; recorded in rust-python-seam.md).
 fn deployed_config_keys() -> Option<Vec<String>> {
-    let fno_py = which("fno-py")?;
-    let output = Command::new(&fno_py)
+    let python = super::wheel_python()?;
+    let output = Command::new(&python)
         .args([
             "-c",
             "import json; from fno.config.registry import FIELD_META; print(json.dumps(sorted(FIELD_META)))",
@@ -435,8 +435,8 @@ fn parse_field_meta_keys(text: &str) -> Option<Vec<String>> {
 fn installed_pkg_dir() -> Option<PathBuf> {
     // The installed package dir, through the deployed interpreter (the one
     // diagnostic crossing; see rust-python-seam.md).
-    let fno_py = which("fno-py")?;
-    let output = Command::new(&fno_py)
+    let python = super::wheel_python()?;
+    let output = Command::new(&python)
         .args([
             "-c",
             "import fno, pathlib; print(pathlib.Path(fno.__file__).parent)",

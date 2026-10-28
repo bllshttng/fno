@@ -327,7 +327,7 @@ pub fn lead_state(
 
 /// `repo_cwd` is the CHECKOUT the alias map resolves from; `root` is the
 /// space dir the manifests live under. One path each, on purpose.
-fn lead_state_in_repo(
+pub(crate) fn lead_state_in_repo(
     root: &Path,
     repo_cwd: &Path,
     scope: Option<&str>,
@@ -1270,6 +1270,15 @@ pub fn run_lead_state(args: &[String]) -> i32 {
         Some("--init") => return crate::lead_lifecycle::run_init(&args[1..]),
         Some("--cancel") => return crate::lead_lifecycle::run_cancel(&args[1..]),
         Some("--term") => return crate::lead_lifecycle::run_term(&args[1..]),
+        Some("--drain") => return crate::lead_ops::run_drain(&args[1..]),
+        Some("--done") => return crate::lead_ops::run_done(&args[1..]),
+        Some("--escalate") => {
+            if let Err(message) = crate::role_cwd::rebind("escalate") {
+                eprintln!("{message}");
+                return 2;
+            }
+            return crate::lead_ops::run_escalate(&args[1..]);
+        }
         _ => {}
     }
     let mut scope: Option<String> = None;

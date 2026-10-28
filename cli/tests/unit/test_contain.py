@@ -222,16 +222,10 @@ def test_container_ids_ignores_an_all_contained_brood():
 # The named-dispatch redirect
 # ---------------------------------------------------------------------------
 
-
-def test_redirect_if_contained_exits_2_naming_the_owner(tmp_graph, capsys):
-    from fno.target_cli import _redirect_if_contained
-
-    owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    assert _native_contain(tmp_graph, owner, *kids)[0] == 0
-    with pytest.raises(typer.Exit) as exc:
-        _redirect_if_contained(_by_id(tmp_graph)[kids[0]])
-    assert exc.value.exit_code == 2
-    assert f"ships inside {owner}'s PR" in capsys.readouterr().err
+# The redirect refusal (a contained child exits 2 naming the owner PR) is
+# characterized against its golden by the Rust parity suite
+# (crates/fno-agents/tests/target_family_parity.rs); the Python helper it
+# exercised died with the target-family port.
 
 
 # ---------------------------------------------------------------------------

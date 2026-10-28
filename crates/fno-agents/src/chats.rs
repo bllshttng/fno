@@ -2279,7 +2279,7 @@ fn run_bus_read(args: &[String]) -> i32 {
 
 /// The envelope contract the serializer froze: id, from, to and kind are
 /// required; everything else reads with a fallback.
-fn required_fields_present(m: &Value) -> bool {
+pub(crate) fn required_fields_present(m: &Value) -> bool {
     ["id", "from", "to", "kind"]
         .iter()
         .all(|k| m.get(k).and_then(Value::as_str).is_some())

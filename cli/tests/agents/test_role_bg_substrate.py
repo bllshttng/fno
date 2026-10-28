@@ -109,7 +109,7 @@ def _row(name: str) -> AgentEntry:
 
 @pytest.mark.dev_build
 def test_bg_spawn_stamps_the_role(bg_home, monkeypatch) -> None:
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "parent-sess-abc")
@@ -230,7 +230,7 @@ def test_thread_spawn_stamps_the_promotion(bg_home, monkeypatch, harness) -> Non
     import subprocess as _subprocess
     import uuid as _uuid
 
-    import fno.lead.state as lead_state
+    import fno.agents.role as lead_state
 
     monkeypatch.setattr(lead_state, "lead_loop_enabled", lambda: True)
     monkeypatch.setattr(
@@ -316,7 +316,7 @@ def test_thread_spawn_stamps_the_promotion(bg_home, monkeypatch, harness) -> Non
     assert row.role_grantor == "human"
     # Resolve the manifest path through the same state-root resolver the arm
     # uses: a dev-build env can pin the state root away from <cwd>/.fno.
-    from fno.lead.state import lead_state_root
+    from fno.paths import space_dir as lead_state_root
 
     manifest = lead_state_root(Path(row.cwd)) / "leads" / "epic-x.md"
     if harness == "opencode":

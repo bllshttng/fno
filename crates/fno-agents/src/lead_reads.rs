@@ -209,7 +209,11 @@ fn flag<'a>(pairs: &'a [(String, String)], name: &str) -> Option<&'a str> {
 }
 
 fn faq_list(args: &[String]) -> i32 {
-    let pairs = match flag_pairs(args, &["--scope", "--max-entries"], "list") {
+    // `--paths` prints each entry's file, one per line: the post-compact hook
+    // points the lead at the files instead of pasting their text.
+    let paths_only = args.iter().any(|a| a == "--paths");
+    let args: Vec<String> = args.iter().filter(|a| *a != "--paths").cloned().collect();
+    let pairs = match flag_pairs(&args, &["--scope", "--max-entries"], "list") {
         Ok(p) => p,
         Err(code) => return code,
     };
@@ -226,7 +230,7 @@ fn faq_list(args: &[String]) -> i32 {
         }
     };
     let entries = faqs_dir()
-        .map(|dir| crate::lead_checkin::faq_entries_for_scope(&dir, scope))
+        .map(|dir| crate::lead_checkin::faq_files_for_scope(&dir, scope))
         .unwrap_or_default();
     // Python's `matched[-max:]`, where 0 keeps every entry.
     let skip = if max == 0 {
@@ -234,9 +238,13 @@ fn faq_list(args: &[String]) -> i32 {
     } else {
         entries.len().saturating_sub(max)
     };
-    for entry in &entries[skip..] {
-        println!("{entry}");
-        println!("---");
+    for (path, entry) in &entries[skip..] {
+        if paths_only {
+            println!("{}", path.display());
+        } else {
+            println!("{entry}");
+            println!("---");
+        }
     }
     0
 }

@@ -75,6 +75,7 @@ pub mod needs_overlay;
 pub mod notify;
 #[path = "mux_cli/notify_command.rs"]
 pub mod notify_command;
+pub mod notify_dispatch;
 pub mod observe;
 pub mod open_router;
 pub mod org_model;
@@ -114,6 +115,7 @@ pub mod setup_autowire;
 mod setup_autowire_tests;
 pub mod setup_cmds;
 pub mod setup_detect;
+pub mod setup_messaging;
 pub mod setup_profile;
 pub mod setup_run;
 pub mod setup_services;

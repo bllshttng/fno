@@ -1794,7 +1794,7 @@ def _claude_create_path(
                 )
                 role_declined = True
         if entry.role_level is not None and entry.role_scope:
-            from fno.lead.state import arm_lead_manifest
+            from fno.agents.role import arm_lead_manifest
 
             try:
                 lead_loop_armed = arm_lead_manifest(
@@ -2476,7 +2476,7 @@ def dispatch_spawn(
             message, role_level, role_scope, succession, take_over, harness, parent_edge,
             name=name, revive=bool(resume_session_id))
         message = promotion["message"]
-        name = adopt_drawn_name(succession, promotion.get("plan"), name)
+        name = adopt_drawn_name(promotion.get("plan"), name)
 
     # 3b. Codex thread spawns are held by the Rust app-server lane. The Python
     # runtime delegates there instead of silently downgrading to a one-shot.
@@ -2606,7 +2606,7 @@ def dispatch_spawn(
                 )
                 if role_refusal is not None:
                     raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
-                name = adopt_drawn_name(succession, role_plan, name)
+                name = adopt_drawn_name(role_plan, name)
 
             # a revive must come back on the route the row was born with
             # unless this invocation resolved one of its own; raises exit 2 when

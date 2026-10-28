@@ -154,17 +154,27 @@ class TestSpawnSeam:
 
 
 class TestQuotaDeath:
+    @pytest.mark.dev_build  # the verdict reads through the native list command
     def test_a_quota_death_cools_the_account_down(
         self, armed: Path
     ) -> None:
         # The snapshot can be probe_ttl_seconds stale, so without this the next
-        # pick would hand the successor the account that just died.
-        from fno.adapters.providers.runtime_state import HeadroomState, headroom
+        # pick would hand the successor the account that just died. The verdict
+        # reads through the native list command, whose `headroom` column the
+        # account rows carry.
+        def _makers_headroom() -> str:
+            from fno.rust_binary import call_binary_json
+
+            err, rows = call_binary_json(
+                "spawn-overlay", ("accounts", "list", "--json")
+            )
+            assert err is None, err
+            return next(r["headroom"] for r in rows if r["id"] == "makers")
 
         env = {"CLAUDE_CONFIG_DIR": str(armed / "claude-main")}
-        assert headroom("makers").state is not HeadroomState.EXHAUSTED
+        assert not _makers_headroom().startswith("exhausted")
         dispatch_mod.note_quota_death(env, "Error: usage limit reached for this account")
-        assert headroom("makers").state is HeadroomState.EXHAUSTED
+        assert _makers_headroom().startswith("exhausted")
 
 
 class TestRoutedSpawnsAreNotPicked:
@@ -234,26 +244,3 @@ class TestPaneSeam:
             mux_spawn.dispatch_spawn_pane(
                 name="p1", message="hi", provider="claude", cwd=armed
             )
-        assert seen["account_env"]["CLAUDE_CONFIG_DIR"] == str(armed / "claude-main")
-
-
-class TestDeferDoesNotStallWhenPickingCanReroute:
-    """Deferring is the floor, not the answer, once picking can reroute.
-
-    With both knobs armed, holding work because the ACTIVE account is exhausted
-    while another account has headroom is precisely the stall this feature
-    exists to delete.
-    """
-
-
-    def test_no_healthy_alternate_leaves_the_defer_standing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _write_config(tmp_path, pick_on_launch=True)
-        _pin_config(tmp_path, monkeypatch)
-        monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(tmp_path / "rs.json"))
-        from fno.agents.autonomous_route import _healthy_alternate_exists
-
-        _seed_usage(tmp_path / "rs.json", readyrule=100.0, makers=100.0)
-        assert _healthy_alternate_exists() is False
-

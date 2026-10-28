@@ -58,6 +58,9 @@ pub struct Question {
     pub blocks: Vec<String>,
     pub subject: Option<String>,
     pub live: Option<bool>,
+    /// The asking machine on a copy pulled from another machine of the
+    /// store; `None` (JSON null) for a question asked here.
+    pub host: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -307,23 +310,28 @@ fn read_carveouts(root: &Path) -> Result<(u64, Vec<(String, u64)>, Option<String
     Ok((total, by_kind, oldest))
 }
 
+/// Neither the event store nor the journal file exists for `index`.
+fn index_missing(index: &Path) -> bool {
+    let store_present = crate::event_store::try_store_path(index)
+        .map(|s| s.is_file())
+        .unwrap_or(false);
+    !store_present
+        && matches!(std::fs::symlink_metadata(index), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
 /// Fold `operator_question` minus `operator_question_closed` from the
-/// machine-wide index. A missing index reads as no questions with a recovery
-/// hint on stderr; an unreadable one is an error naming it.
+/// machine-wide index. A missing index reads as no questions (the command,
+/// not this reader, prints the recovery hint: the board reads it in-process);
+/// an unreadable one is an error naming it.
 pub fn read_open_questions(index: &Path) -> Result<Vec<Question>, String> {
+    if index_missing(index) {
+        return Ok(Vec::new());
+    }
     let store_present = crate::event_store::try_store_path(index)
         .map(|s| s.is_file())
         .unwrap_or(false);
     if !store_present {
         match std::fs::symlink_metadata(index) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!(
-                    "outstanding: question index {} is missing; run \
-`fno inbox outstanding reindex` to recover project questions.",
-                    index.display()
-                );
-                return Ok(Vec::new());
-            }
             Err(e) => {
                 return Err(format!(
                     "cannot read question index {}: {e}",
@@ -383,6 +391,11 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                         blocks: str_list(data, "blocks"),
                         subject: opt_str(data, "subject"),
                         live: None,
+                        host: opt_str(data, "origin_machine")
+                            .filter(|m| *m != crate::claims::machine_id())
+                            .map(|_| {
+                                opt_str(data, "host").unwrap_or_else(|| "another machine".into())
+                            }),
                     },
                 );
             }
@@ -409,7 +422,9 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
 /// lane. No asker is stale; an asker missing from `answers` is unknown.
 pub fn apply_liveness(questions: &mut [Question], answers: &HashMap<String, bool>) {
     for q in questions.iter_mut() {
+        // A copy's asker runs on its own machine, where no probe here reaches.
         q.live = match &q.asker {
+            _ if q.host.is_some() => None,
             None => Some(false),
             Some(a) => answers.get(a).copied(),
         };
@@ -934,6 +949,9 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
                 })
             });
             let mut details: Vec<String> = where_.into_iter().collect();
+            if let Some(host) = &q.host {
+                details.push(format!("on {host}"));
+            }
             if stale_row {
                 details.push(match age_days(&q.ts, ctx.now) {
                     Some(age) => format!("{} old", plural(age, "day")),
@@ -1104,6 +1122,15 @@ pub(crate) fn sources(cwd: &Path) -> Sources {
     }
 }
 
+/// The listing for `cwd`, liveness resolved within `liveness`. The board
+/// calls this in-process, so its read cannot drift from the command's.
+pub(crate) fn read(cwd: &Path, liveness: Duration) -> Result<Outstanding, String> {
+    let mut o = collect(&sources(cwd), prove_it_rows())?;
+    let answers = resolve_liveness(&o.questions, liveness);
+    apply_liveness(&mut o.questions, &answers);
+    Ok(o)
+}
+
 /// `fno-agents compaction outstanding [--json|-J]`, the native `fno inbox outstanding`.
 pub fn run_outstanding(args: &[String]) -> i32 {
     if let Some((word, rest)) = args.split_first() {
@@ -1126,16 +1153,20 @@ pub fn run_outstanding(args: &[String]) -> i32 {
         }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let src = sources(&cwd);
-    let mut o = match collect(&src, prove_it_rows()) {
+    let o = match read(&cwd, LIVENESS_BUDGET) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("outstanding: failed to read: {e}");
             return 1;
         }
     };
-    let answers = resolve_liveness(&o.questions, LIVENESS_BUDGET);
-    apply_liveness(&mut o.questions, &answers);
+    if index_missing(Path::new(&o.questions_store)) {
+        eprintln!(
+            "outstanding: question index {} is missing; run \
+`fno inbox outstanding reindex` to recover project questions.",
+            o.questions_store
+        );
+    }
     let mut out = std::io::stdout().lock();
     if as_json {
         let _ = writeln!(out, "{}", o.as_json());

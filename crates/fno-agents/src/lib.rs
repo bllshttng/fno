@@ -72,6 +72,7 @@ pub mod attach;
 pub(crate) mod attended;
 pub mod attention;
 pub mod attention_arm;
+pub mod attention_chat;
 pub mod attention_file;
 pub mod attention_http;
 pub mod attention_reply;
@@ -105,6 +106,7 @@ pub mod chats;
 pub mod check_supersession;
 pub mod ci_cadence;
 pub mod ci_front;
+pub mod ci_tier;
 pub mod claim_cli;
 pub mod claim_commands;
 pub mod claim_lanes_cli;
@@ -154,6 +156,7 @@ pub mod codex_watch;
 pub mod compaction;
 mod completion_output;
 pub mod component_update;
+pub mod config_route;
 pub mod context_run;
 pub mod context_window;
 pub mod convert;
@@ -170,6 +173,7 @@ pub mod delivery_completion;
 pub mod delivery_eval;
 pub mod digest;
 pub mod dispatch_credit;
+pub mod dispatch_harness;
 pub mod disposition_gate;
 pub mod distress;
 pub mod drift;
@@ -195,6 +199,7 @@ pub mod events_limits;
 pub mod evidence;
 pub mod executor_route;
 pub mod fallback_chain;
+pub mod family_doors;
 pub mod feed;
 pub mod finalize;
 pub mod finalize_run_summary;
@@ -289,6 +294,7 @@ pub mod lead_history;
 pub mod lead_hygiene;
 pub mod lead_lifecycle;
 pub mod lead_mail;
+pub mod lead_ops;
 pub mod lead_pushback;
 pub mod lead_reads;
 pub mod lead_settle;
@@ -297,11 +303,13 @@ pub mod lead_term;
 pub mod lead_termination;
 pub mod lead_verdict_inputs;
 pub mod lead_wake;
+pub mod lead_wake_triggers;
 pub mod lease_heartbeat;
 pub mod ledger_axes;
 pub(crate) mod ledger_register;
 pub(crate) mod ledger_workers;
 mod lifecycle_child;
+pub mod list_render;
 pub mod list_row;
 pub mod live_store_fence;
 pub mod liveness_cmd;
@@ -456,6 +464,7 @@ pub mod provider_key;
 pub mod provider_route;
 pub mod publish_review;
 pub mod quarantine;
+pub mod question_bus;
 pub mod question_clear;
 pub mod question_intake;
 pub mod question_sweep;
@@ -471,6 +480,7 @@ pub mod reclaim;
 pub mod reentry;
 pub mod refusal_rate;
 pub mod refusal_trend;
+pub mod register;
 pub mod registry_commit;
 pub mod registry_guard;
 pub mod registry_json;
@@ -505,6 +515,7 @@ pub mod revival_check;
 pub mod revive_proof;
 pub mod rm_receipt;
 pub mod rm_tombstone;
+pub mod role_cwd;
 pub mod role_migration;
 pub mod roles;
 pub mod roster_progress;
@@ -550,6 +561,7 @@ pub mod spawn;
 pub mod spawn_admission;
 pub mod spawn_axes;
 pub mod spawn_backends;
+pub mod spawn_bare;
 pub mod spawn_compose;
 pub mod spawn_context;
 pub mod spawn_contract;
@@ -582,12 +594,15 @@ pub mod state_layout;
 pub mod state_layout_sqlite;
 pub mod state_path;
 pub mod state_root_drift;
+pub mod status_fanout;
+pub mod status_render;
 pub mod status_sinks;
 pub mod store_conn;
 pub mod store_exec;
 pub mod store_export;
 pub mod store_remote;
 pub mod stream_worker;
+pub mod stub_manifest;
 pub mod stuck_work;
 pub mod subagent_hold;
 pub mod subprocess_ask;
@@ -600,6 +615,7 @@ pub mod sync_canonical;
 pub mod system_sender;
 pub mod target_blast;
 pub mod target_denominator;
+pub mod target_gates;
 pub mod target_init;
 pub mod target_orient;
 pub mod target_start;
@@ -622,6 +638,8 @@ pub mod test_delta;
 pub mod test_hold;
 pub mod test_run;
 mod test_run_journal;
+mod test_run_pins;
+pub mod text_or_file;
 pub mod think_daily;
 pub mod think_dispatch;
 pub mod think_inspect;
@@ -640,6 +658,7 @@ pub mod version;
 pub mod wait;
 pub mod wake_meter;
 pub mod wake_name;
+pub mod wake_read;
 pub mod watch_expiry;
 pub mod wave;
 pub mod whoami;
@@ -649,6 +668,7 @@ pub mod worktree;
 pub mod worktree_reapable;
 pub mod write_queue;
 pub mod yard;
+pub mod you_threads;
 pub mod zcode;
 pub mod zcode_ask;
 
@@ -1838,12 +1858,19 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The lead-wake arm's receipt: one row per daemon wake episode, the
     // dedupe memory the arm folds before it wakes again (lead_wake.rs).
     "lead_wake",
+    // The trigger leg's receipts (lead_wake_triggers.rs): the refill-respawn
+    // side of the arm, ported from the pr-watch tick's Python wake phase.
+    "lead_woken",
+    "lead_wake_refused",
+    "lead_spawned_successor",
     "worker_wake",
     // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
     "pr_push_landed",
     "ci_cadence_check",
     // The main_revert arm's read of a red main (main_revert.rs).
     "main_revert_check",
+    // A ci_tier arm pass that cancelled or reran runs (ci_tier.rs).
+    "ci_tier_pass",
     // The beat's cron act receipt: the wake resumed a parked codex lead's
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
@@ -1859,6 +1886,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // arm and `fno agents reap`). Python's attended `lead done` emits the
     // same kind through the shared emitter.
     "agent_team_vacated",
+    // The schema's canonical spelling of the same vacate (the alias pair in
+    // event_store::EVENT_TYPE_ALIASES): the native `org done` and the team
+    // spawn's succession write it.
+    "agent_role_vacated",
     // A succession reverted: the reap sweep restored the predecessor's
     // session after a successor died unbound past the window (team_reap.rs;
     // the daemon retire arm and `fno agents reap`).
@@ -2040,6 +2071,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // (observer/mod.rs: sweep and replay).
     "skill_eval_finding",
     "skill_eval_run_complete",
+    // The register command's join row (register.rs): one event per minted
+    // or refreshed roster row.
+    "session_registered",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

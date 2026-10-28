@@ -2631,10 +2631,18 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
             1
         };
         let mut fields: Vec<(&str, String)> = vec![("rc", rc.to_string())];
+        if let Some(r) = &rev {
+            fields.push(("new_rev", r.clone()));
+        }
         if let Some(line) = &held {
             fields.push(("reason", line.clone()));
         }
-        journal_call("failed", &fields, None);
+        // A hold leaves the install skewed: the door pages it once per rev.
+        let front_door = std::env::current_exe()
+            .ok()
+            .filter(|_| held.is_some())
+            .map(|p| p.to_string_lossy().into_owned());
+        journal_call("failed", &fields, front_door.as_deref());
         rc
     };
     // An update finishes in 60 seconds (user order 2026-10-09). One that runs
