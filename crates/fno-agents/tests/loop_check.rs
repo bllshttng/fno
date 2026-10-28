@@ -788,6 +788,31 @@ fn out_of_band_merged_pr_done() {
     );
 }
 
+/// Shared rig for the merged-stamp tests: a manifest bound to `node_id`, a
+/// promise transcript, and the node row seeded under a temp FNO_HOME. The
+/// caller owns the FNO_HOME restore after its fire.
+fn stamped_rig(
+    node_id: &str,
+    session: &str,
+    row: serde_json::Value,
+) -> (TempDir, PathBuf, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path();
+    fs::create_dir_all(cwd.join(".fno")).unwrap();
+    isolate_settings(cwd);
+    let manifest = format!(
+        "{}graph_node_id: {node_id}\n",
+        new_manifest(session, "2026-06-05T00:00:00Z", true)
+    );
+    let manifest_path = cwd.join("target-state.md");
+    fs::write(&manifest_path, &manifest).unwrap();
+    fs::write(cwd.join("transcript.jsonl"), transcript_with_promise()).unwrap();
+    std::env::set_var("FNO_HOME", tmp.path());
+    fno_agents::graph_store::seed_rows(&tmp.path().join("graph.json"), std::slice::from_ref(&row))
+        .unwrap();
+    (tmp, manifest_path, cwd.join("transcript.jsonl"))
+}
+
 /// A done node whose recorded PR reads merged retires the fire on
 /// the graph store's own stamp, before the REST read. Under a loaded
 /// machine the read is the one thing that can still time out, and each
@@ -796,33 +821,18 @@ fn out_of_band_merged_pr_done() {
 /// if the gate reaches gh at all, the test fails loudly.
 #[test]
 fn x0d87_done_node_merged_stamp_allows_without_rest_read() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest = format!(
-        "{}graph_node_id: x-stamp\n",
-        new_manifest("sess-stamp", "2026-06-05T00:00:00Z", true)
-    );
-    let manifest_path = cwd.join("target-state.md");
-    fs::write(&manifest_path, &manifest).unwrap();
-    fs::write(cwd.join("transcript.jsonl"), transcript_with_promise()).unwrap();
-
-    // Seed through the store the gate reads; the tail restores FNO_HOME (CI is single-threaded).
     let restore_home = std::env::var_os("FNO_HOME").unwrap_or_default();
-    let home = TempDir::new().unwrap();
-    std::env::set_var("FNO_HOME", home.path());
-    fno_agents::graph_store::seed_rows(
-        &home.path().join("graph.json"),
-        &[serde_json::json!({
+    let (tmp, manifest_path, transcript_path) = stamped_rig(
+        "x-stamp",
+        "sess-stamp",
+        serde_json::json!({
             "id": "x-stamp", "slug": "x-stamp", "title": "n", "type": "feature",
             "status": "done", "priority": "p1",
             "pr_number": 42, "pr_url": "https://github.com/bllshttng/footnote/pull/42",
             "merge_status": "merged"
-        })],
-    )
-    .unwrap();
+        }),
+    );
+    let cwd = tmp.path();
 
     let gh = make_script(
         tmp.path(),
@@ -875,32 +885,18 @@ exit 1"#,
 /// outage behavior.
 #[test]
 fn x0d87_live_replacement_pr_holds_the_early_allow() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest = format!(
-        "{}graph_node_id: x-stamp2\n",
-        new_manifest("sess-stamp2", "2026-06-05T00:00:00Z", true)
-    );
-    let manifest_path = cwd.join("target-state.md");
-    fs::write(&manifest_path, &manifest).unwrap();
-    fs::write(cwd.join("transcript.jsonl"), transcript_with_promise()).unwrap();
-
     let restore_home = std::env::var_os("FNO_HOME").unwrap_or_default();
-    let home = TempDir::new().unwrap();
-    std::env::set_var("FNO_HOME", home.path());
-    fno_agents::graph_store::seed_rows(
-        &home.path().join("graph.json"),
-        &[serde_json::json!({
+    let (tmp, manifest_path, transcript_path) = stamped_rig(
+        "x-stamp2",
+        "sess-stamp2",
+        serde_json::json!({
             "id": "x-stamp2", "slug": "x-stamp2", "title": "n", "type": "feature",
             "status": "done", "priority": "p1",
             "pr_number": 42, "merge_status": "merged",
             "additional_prs": [{"number": 43, "url": "https://github.com/bllshttng/footnote/pull/43"}]
-        })],
-    )
-    .unwrap();
+        }),
+    );
+    let cwd = tmp.path();
 
     let mock = MockBins::failing_gh();
     let (code, d) = fire(&[
@@ -938,31 +934,17 @@ fn x0d87_live_replacement_pr_holds_the_early_allow() {
 /// does not take the early allow.
 #[test]
 fn x0d87_open_node_keeps_rest_read() {
-    let tmp = TempDir::new().unwrap();
-    let cwd = tmp.path();
-    fs::create_dir_all(cwd.join(".fno")).unwrap();
-    isolate_settings(cwd);
-
-    let manifest = format!(
-        "{}graph_node_id: x-stamp3\n",
-        new_manifest("sess-stamp3", "2026-06-05T00:00:00Z", true)
-    );
-    let manifest_path = cwd.join("target-state.md");
-    fs::write(&manifest_path, &manifest).unwrap();
-    fs::write(cwd.join("transcript.jsonl"), transcript_with_promise()).unwrap();
-
     let restore_home = std::env::var_os("FNO_HOME").unwrap_or_default();
-    let home = TempDir::new().unwrap();
-    std::env::set_var("FNO_HOME", home.path());
-    fno_agents::graph_store::seed_rows(
-        &home.path().join("graph.json"),
-        &[serde_json::json!({
+    let (tmp, manifest_path, transcript_path) = stamped_rig(
+        "x-stamp3",
+        "sess-stamp3",
+        serde_json::json!({
             "id": "x-stamp3", "slug": "x-stamp3", "title": "n", "type": "feature",
             "status": "ready", "priority": "p1",
             "pr_number": 42, "merge_status": "merged"
-        })],
-    )
-    .unwrap();
+        }),
+    );
+    let cwd = tmp.path();
 
     let mock = MockBins::failing_gh();
     let (code, d) = fire(&[
