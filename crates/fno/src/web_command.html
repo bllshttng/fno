@@ -42,7 +42,7 @@ tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--b
 .drawer{position:fixed;top:calc(var(--fno-nav-h,0px) + 8px);right:8px;bottom:8px;width:min(440px,calc(100vw - 16px));z-index:20;background:var(--mantle);border:1px solid var(--surface1);transform:translateX(calc(100% + 16px));visibility:hidden;transition:transform .2s ease-out,visibility .2s;display:flex;flex-direction:column;overflow:hidden}.drawer.on{transform:none;visibility:visible}
 .dhead{padding:12px 14px 10px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--surface0)}.dtop{display:flex;align-items:center;gap:8px}.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;font-size:11.5px;font-weight:700;border:1px solid var(--surface1)}.x{margin-left:auto;width:26px;height:26px;border:1px solid var(--surface1);background:var(--base);color:var(--subtext0);cursor:pointer;font:inherit;font-size:14px;line-height:1}.x:hover{color:var(--text);border-color:var(--text)}
 .dhead h2{margin:0;font-size:14px;line-height:1.35;font-weight:700}.dnode{font-size:11.5px;color:var(--overlay1)}.dbody{padding:10px 14px 18px;overflow:auto;display:flex;flex-direction:column;gap:14px}.sec h3{margin:0 0 6px;font-size:11px;color:var(--overlay1);font-weight:700}.sec h3::before{content:"## "}
-.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;font-size:12px;margin:0}.kv dt{color:var(--overlay1)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.mono{font-size:11.5px}.dbox{margin:0;border:1px solid var(--surface0);background:var(--base);padding:8px 10px;font:inherit;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto}.dbox.none{color:var(--overlay1)}.sec:first-child .dbox{max-height:170px}.links{display:flex;flex-direction:column;gap:6px}a.lk{color:var(--text);text-decoration:none}a.lk:hover{border-color:var(--text)}.lk button{border:1px solid var(--surface1);background:var(--mantle);color:var(--subtext0);font:inherit;font-size:11px;padding:2px 8px;cursor:pointer;min-height:24px}.lk button:hover{color:var(--text);border-color:var(--text)}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;font-size:12px;margin:0}.kv dt{color:var(--overlay1)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.mono{font-size:11.5px}.dbox{margin:0;border:1px solid var(--surface0);background:var(--base);padding:8px 10px;font:inherit;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto}.dbox.none{color:var(--overlay1)}.dbox b{font-weight:700}.dbox code{font:inherit;color:var(--yellow)}.sec:first-child .dbox{max-height:170px}.links{display:flex;flex-direction:column;gap:6px}a.lk{color:var(--text);text-decoration:none}a.lk:hover{border-color:var(--text)}.lk button{border:1px solid var(--surface1);background:var(--mantle);color:var(--subtext0);font:inherit;font-size:11px;padding:2px 8px;cursor:pointer;min-height:24px}.lk button:hover{color:var(--text);border-color:var(--text)}
 @media (max-width:640px){.drawer{top:auto;left:8px;right:8px;bottom:8px;width:auto;height:78vh;transform:translateY(calc(100% + 16px))}.kv{grid-template-columns:96px minmax(0,1fr)}}
 </style>
 </head>
@@ -180,6 +180,7 @@ function machines(model) {
     info.append(name, meter("Sessions", mix, seats.length),
       meter("Memory", track(mem, mem > .85 ? "parked" : "ok"), mem == null ? "not sampled" : Math.round(mem * 100) + "%"),
       meter("Spawn cap", track(m.cap ? seats.length / m.cap : null, seats.length >= m.cap ? "parked" : "quiet"), m.cap == null ? "not published" : seats.length + " / " + m.cap + (seats.length >= m.cap ? " · at cap" : "")),
+      ...((m.lanes || []).length ? [] : [meter("Lanes", track(null), "not published")]),
       ...(m.lanes || []).map((l) => meter(l.provider, track(l.cap ? (l.count || 0) / l.cap : null, l.full ? "parked" : "quiet"),
         l.count == null ? "not read" : l.cap == null ? l.count + " · no cap" : l.count + " / " + l.cap + (l.full ? " · full" : ""))),
       meter("CPU", track(cpu, "quiet"), cpu == null ? "not sampled" : Math.round(m.cpu) + "%"));
@@ -272,7 +273,22 @@ function openSeat(r) {
   document.getElementById("dhost").textContent = r.machine + " · " + (r.lead === "no lead" ? "no lead" : "lead " + r.lead);
   document.getElementById("dtitle").textContent = w.title || s.name;
   document.getElementById("dnode").textContent = w.id ? [w.id, w.status, w.priority, w.difficulty, s.project].filter(Boolean).join(" · ") : ["no node", s.project].filter(Boolean).join(" · ");
-  const box = (text) => el("pre", text ? "dbox" : "dbox none", text || none);
+  const box = (text) => {
+    const d = el("div", text ? "dbox" : "dbox none");
+    if (!text) { d.textContent = none; return d; }
+    // A light markdown read, built from text nodes only: heading and list
+    // marks drop, **bold** and `code` render.
+    text.split("\n").forEach((line, i) => {
+      if (i) d.append("\n");
+      line = line.replace(/^(\s*)(#{1,6}\s+|[-*+]\s+)/, (m0, sp, mark) => sp + (/^#/.test(mark) ? "" : "• "));
+      for (const part of line.split(/(\*\*[^*]+\*\*|`[^`]+`)/)) {
+        if (/^\*\*[^*]+\*\*$/.test(part)) d.append(el("b", null, part.slice(2, -2)));
+        else if (/^`[^`]+`$/.test(part)) d.append(el("code", null, part.slice(1, -1)));
+        else if (part) d.append(part);
+      }
+    });
+    return d;
+  };
   const kv = el("dl", "kv");
   for (const [k, v, mono] of [
     ["Session id", s.session_id, 1], ["Handle", s.short || s.name], ["Harness", s.harness], ["Model", model_(r), 1],
@@ -516,19 +532,20 @@ function drawGraph(now) {
     const p = toScreen(n), r = radius(n) * Math.max(.7, cam.k) * (.4 + .6 * appear); ctx.globalAlpha = (focus && !rel.has(n) ? .28 : 1) * appear;
     if (n.kind === "host") drawHost(ctx, n.h, p.x, p.y, r, now, true);
     else if (n.kind === "territory" && layout === "transit") { const c = tcolor[n.label]; ctx.font = "600 13px " + UI; const tw = ctx.measureText(n.label).width + 26; ctx.fillStyle = T.base; ctx.strokeStyle = c; ctx.lineWidth = 2.5;
-      pills.push({x: p.x - tw / 2, y: p.y - 14, w: tw});
+      pills.push({x: p.x - tw / 2, y: p.y - 14, w: tw, h: 28});
       ctx.beginPath(); ctx.roundRect(p.x - tw / 2, p.y - 14, tw, 28, 14); ctx.fill(); ctx.stroke(); ctx.fillStyle = c; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y + 4.5); }
     else if (n.kind === "territory") { const tc = tcolor[n.label], g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3.2); g.addColorStop(0, A(T.text, .95)); g.addColorStop(.25, tc + "66"); g.addColorStop(1, tc + "00"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 3.2, 0, 7); ctx.fill();
-      ctx.fillStyle = T.text; ctx.font = "600 13px " + UI; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y + r + 20); }
+      ctx.fillStyle = T.text; ctx.font = "600 13px " + UI; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y + r + 20);
+      const hw = ctx.measureText(n.label).width; pills.push({x: p.x - hw / 2, y: p.y + r + 7, w: hw, h: 16}); }
     else if (n.kind === "epic") { if (layout !== "transit") { ctx.fillStyle = A(T.subtext0, .9); ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill(); ctx.strokeStyle = A(T.text, .2); ctx.lineWidth = 4; ctx.stroke();
       if (cam.k > .8 || focus && rel.has(n)) { ctx.fillStyle = T.subtext0; ctx.font = "500 11px " + DATA; ctx.textAlign = "center"; ctx.fillText(n.label, p.x, p.y - r - 8); } } }
     else { const st = n.r.s.status, c = COL[st], lead = leadName(n.r), breathe = st === "writing" && !still ? 1 + .18 * Math.sin(now / 380 + i) : 1;
       if (st !== "unknown") { const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.4 * breathe); g.addColorStop(0, A(T.text, .22)); g.addColorStop(1, A(T.text, 0)); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.4 * breathe, 0, 7); ctx.fill(); ctx.fillStyle = T.subtext0; star(p.x, p.y, r, n.r.host); ctx.fill(); ctx.strokeStyle = c; ctx.lineWidth = 2; star(p.x, p.y, r + 1.5, n.r.host); ctx.stroke(); }
       else { ctx.strokeStyle = c; ctx.lineWidth = 1.6; star(p.x, p.y, r, n.r.host); ctx.stroke(); }
       if (lead) { ctx.strokeStyle = T.text; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, r + 5, 0, 7); ctx.stroke(); ctx.fillStyle = T.text; ctx.font = "600 12px " + UI; ctx.textAlign = "center";
-        // A name that would touch a station pill goes below its star.
-        const lw = ctx.measureText(lead).width / 2 + 4, above = p.y - r - 11, hit = pills.some((b) => p.x + lw > b.x && p.x - lw < b.x + b.w && above > b.y - 2 && above - 12 < b.y + 30);
-        ctx.fillText(lead, p.x, hit ? p.y + r + 20 : above); }
+        // A name that would land on a pill, a hub name or another lead's name goes below its star.
+        const lw = ctx.measureText(lead).width / 2 + 4, hit = (y) => pills.some((b) => p.x + lw > b.x && p.x - lw < b.x + b.w && y > b.y - 2 && y - 12 < b.y + b.h + 2);
+        const ly = hit(p.y - r - 11) ? p.y + r + 20 : p.y - r - 11; ctx.fillText(lead, p.x, ly); pills.push({x: p.x - lw, y: ly - 12, w: lw * 2, h: 14}); }
       else if (focus === n || cam.k > 1.3) { ctx.fillStyle = T.subtext0; ctx.font = "500 11px " + DATA; ctx.textAlign = "center"; ctx.fillText(work(n.r, "id") || n.r.s.short || n.r.s.name, p.x, p.y - r - 9); }
       if (sel === n.r) { ctx.strokeStyle = T.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, r + 9 + 2 * Math.sin(now / 250), 0, 7); ctx.stroke(); } }
     ctx.globalAlpha = 1; });
