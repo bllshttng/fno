@@ -299,11 +299,24 @@ pub fn local_machine(home: &AgentsHome, now: i64) -> Machine {
     }
 }
 
-/// This machine with its lanes, and its sessions, from one `top` read.
+/// This machine with its lanes, and its sessions with their turn facts, from
+/// one `top` read and each session's transcript.
 fn with_top(mut machine: Machine) -> (Machine, Vec<Session>) {
     let top = crate::agents_top::payload(false, false);
     machine.lanes = lanes_from_top(&top);
-    let sessions = sessions_from_top(&machine.machine_id, &top);
+    let mut sessions = sessions_from_top(&machine.machine_id, &top);
+    for s in &mut sessions {
+        let (Some(harness), Some(id)) = (s.harness.as_deref(), s.session_id.as_deref()) else {
+            continue;
+        };
+        if let Some(turns) = crate::transcript_turns::user_turns(harness, id) {
+            s.user_turns = Some(turns.count as i64);
+            s.last_prompt = turns.last;
+            // The top row's message is cut short and flattened; the transcript
+            // keeps its paragraphs.
+            s.last_message = turns.reply.or(s.last_message.take());
+        }
+    }
     (machine, sessions)
 }
 

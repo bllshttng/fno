@@ -547,6 +547,7 @@ pub mod select_read;
 pub(crate) mod served_liveness;
 pub mod session_activity;
 pub mod session_backfill;
+pub mod transcript_turns;
 pub mod session_cost;
 pub mod session_join;
 pub mod session_names_fold;
