@@ -1557,8 +1557,10 @@ mod tests {
         draw_detail(&v, &mut cells, (rows, cols), (0, 0), (rows, cols));
         let title: String = cells[..cols].iter().map(|c| c.c).collect();
         assert!(title.contains("screen 1/2"), "{title}");
+        // A solid image draws no `▀` (both halves match), so read its color.
+        let red = crate::proto::Color::Rgb(200, 30, 30);
         assert!(
-            cells[cols..].iter().any(|c| c.c == '\u{2580}'),
+            cells[cols..].iter().any(|c| c.fg == red || c.bg == red),
             "the image paints"
         );
         detail_keys(&mut v, b"q", &mut Vec::new()).await.unwrap();
