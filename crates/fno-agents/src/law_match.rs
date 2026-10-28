@@ -2462,59 +2462,121 @@ fn near_miss_subject_lines(token: &str, rows: &[Value], law_only: bool) -> Vec<S
     near
 }
 
-/// The port of `retract_decision`'s write: durability first (project
-/// journal), then the recall index, then the graph store. Prints the
-/// retracted id alone on stdout, the narrative on stderr.
-fn write_retraction(target: &Value, reason: &str, caller: &Caller, label: &str) -> i32 {
-    let decision_id = row_id(target).to_string();
-    let subject = row_subject(target).trim().to_string();
+/// The facts one retraction write carries. Both doors build it: the
+/// operator retract doors resolve a `Caller`, the board answer door
+/// (question_clear) stamps the operator shape itself.
+pub(crate) struct RetractWrite {
+    pub target_decision_id: String,
+    pub subject: String,
+    pub reason: String,
+    pub retracted_by: String,
+    pub authority_source: String,
+    pub attested_by: Option<String>,
+    pub relayed_by: Option<String>,
+}
+
+/// How far one write got. The journal is the durable floor: once it lands,
+/// the retraction exists even when a later store refuses, and each later
+/// stage names its own remedy.
+pub(crate) enum RetractOutcome {
+    /// Nothing landed.
+    JournalFailed(String),
+    /// The journal has it; the recall index needs `fno backlog decide-reindex`.
+    IndexFailed(String),
+    /// Journal and index have it; the graph store refused.
+    GraphRefused(String),
+    Done,
+}
+
+/// The one retraction writer, shared by the operator retract doors and the
+/// board answer door, so the two can never disagree about where a
+/// retraction lands: the `decision_retracted` envelope goes to the project
+/// journal, the recall index and the graph store, in that order.
+pub(crate) fn write_retraction_event(w: &RetractWrite) -> RetractOutcome {
     let retraction_id = mint_retraction_id();
     let ts = now_iso();
     let mut data = json!({
         "retraction_id": retraction_id,
-        "target_decision_id": decision_id,
-        "subject": if subject.is_empty() { "(unscoped)".to_string() } else { subject },
-        "reason": text_cap(reason.trim(), 2000),
-        "retracted_by": caller.decided_by,
-        "authority_source": caller.authority,
+        "target_decision_id": w.target_decision_id,
+        "subject": if w.subject.is_empty() { "(unscoped)".to_string() } else { w.subject },
+        "reason": text_cap(w.reason.trim(), 2000),
+        "retracted_by": w.retracted_by,
+        "authority_source": w.authority_source,
     });
-    if let Some(a) = &caller.attested_by {
+    if let Some(a) = &w.attested_by {
         data["attested_by"] = json!(a);
     }
-    if let Some(r) = &caller.relayed_by {
+    if let Some(r) = &w.relayed_by {
         data["relayed_by"] = json!(r);
     }
     let envelope =
         json!({"ts": ts, "type": "decision_retracted", "source": "target", "data": data});
     let journal = project_events_journal();
     if let Err(e) = crate::event_store::append_envelope(&journal, &envelope.to_string(), None) {
-        return door_refuse(&format!("the project journal write failed ({e})"));
+        return RetractOutcome::JournalFailed(e.to_string());
     }
     let index_path = decision_index::default_state_path("decisions.jsonl");
     if let Err(e) = crate::event_store::append_envelope(&index_path, &envelope.to_string(), None) {
-        eprintln!(
-            "{label}: retracted {decision_id} to the project journal, \
-             but the recall index write failed ({e}). Run `fno backlog decide-reindex`; \
-             do not re-run the retract command."
-        );
-        return 1;
+        return RetractOutcome::IndexFailed(e.to_string());
     }
     let graph_path = crate::graph_get::default_graph_path();
     if let Err(e) = crate::backlog::api::decision_retract(
         &crate::backlog::api::Store::new(&graph_path),
-        envelope.clone(),
+        envelope,
     ) {
-        eprintln!(
-            "{label}: retracted {decision_id}, but the graph store refused \
-             the retraction ({e:?}). The retraction is durable in the journal and the index."
-        );
+        return RetractOutcome::GraphRefused(format!("{e:?}"));
     }
-    println!("{decision_id}");
-    eprintln!(
-        "{label}: retracted {decision_id}. The original decision remains \
-         in the append-only history."
-    );
-    0
+    RetractOutcome::Done
+}
+
+/// The port of `retract_decision`'s write: durability first (project
+/// journal), then the recall index, then the graph store. Prints the
+/// retracted id alone on stdout, the narrative on stderr.
+fn write_retraction(target: &Value, reason: &str, caller: &Caller, label: &str) -> i32 {
+    let decision_id = row_id(target).to_string();
+    let subject = row_subject(target).trim().to_string();
+    let outcome = write_retraction_event(&RetractWrite {
+        target_decision_id: decision_id.clone(),
+        subject,
+        reason: reason.to_string(),
+        retracted_by: caller.decided_by.clone(),
+        authority_source: caller.authority.clone(),
+        attested_by: caller.attested_by.clone(),
+        relayed_by: caller.relayed_by.clone(),
+    });
+    match outcome {
+        RetractOutcome::JournalFailed(e) => {
+            door_refuse(&format!("the project journal write failed ({e})"))
+        }
+        RetractOutcome::IndexFailed(e) => {
+            eprintln!(
+                "{label}: retracted {decision_id} to the project journal, \
+                 but the recall index write failed ({e}). Run `fno backlog decide-reindex`; \
+                 do not re-run the retract command."
+            );
+            1
+        }
+        RetractOutcome::GraphRefused(e) => {
+            eprintln!(
+                "{label}: retracted {decision_id}, but the graph store refused \
+                 the retraction ({e}). The retraction is durable in the journal and the index."
+            );
+            println!("{decision_id}");
+            eprintln!(
+                "{label}: retracted {decision_id}. The original decision remains \
+                 in the append-only history."
+            );
+            0
+        }
+        RetractOutcome::Done => {
+            println!("{decision_id}");
+            eprintln!(
+                "{label}: retracted {decision_id}. The original decision remains \
+                 in the append-only history."
+            );
+            0
+        }
+    }
 }
 
 /// The `history` read: one JSON answer over the whole chain behind a subject
