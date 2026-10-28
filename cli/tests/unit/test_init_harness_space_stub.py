@@ -32,8 +32,6 @@ SCRIPT_NAME = "init-target-state.sh"
 ALLOWED = {
     "cli/tests/unit/test_backlog_capture.py":
         "uses the script name as a capture --where payload; never runs init",
-    "cli/tests/unit/test_target_cli.py":
-        "writes its own stub init script into a fake plugin root; never reads state",
     "cli/tests/unit/test_target_init_review_gate.py":
         "absence is asserted through fno.paths.target_state_path, which the "
         "conftest-pinned FNO_SPACES_DIR resolves to the space path",

@@ -811,6 +811,35 @@ impl RegistryAgent {
         self.session_id.as_deref() == Some(id) || self.harness_session_id.as_deref() == Some(id)
     }
 
+    /// Whether a STORED key names this row: any id the row carries, or a
+    /// session its resume lineage retired. The name only for a row with no
+    /// id at all ([`Self::stored_key`]): a name, and an unnamed thread's
+    /// title most of all, is not stable across a restart.
+    pub fn keyed_by(&self, key: &str) -> bool {
+        match self.own_id() {
+            Some(_) => {
+                self.answers_to(key)
+                    || self.claude_session_uuid.as_deref() == Some(key)
+                    || self.attach_id.as_deref() == Some(key)
+                    || self.predecessor_session_ids.iter().any(|p| p == key)
+            }
+            None => self.name == key,
+        }
+    }
+
+    /// The key a saved reference to this row stores: the durable fno id,
+    /// else a harness session id, else the attach id. The name only for a
+    /// row that carries no id at all.
+    pub fn stored_key(&self) -> String {
+        self.own_id().unwrap_or(&self.name).to_string()
+    }
+
+    fn own_id(&self) -> Option<&str> {
+        self.effective_identity()
+            .or(self.claude_session_uuid.as_deref())
+            .or(self.attach_id.as_deref())
+    }
+
     /// The row's harness session id, falling back to the stable slot for a
     /// legacy row that holds only one. The value a harness launch or a resume
     /// argv needs.

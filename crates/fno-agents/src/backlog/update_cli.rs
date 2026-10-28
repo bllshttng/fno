@@ -1067,26 +1067,13 @@ fn model_token_ok(model: &str) -> bool {
 /// unreadable file. A file's content is data - the `null` clear-sentinel is
 /// CLI-only, tracked by the second return value.
 fn read_details(args: &UpdateArgs) -> Result<(Option<String>, bool), Refusal> {
-    match (&args.details, &args.details_file) {
-        (Some(_), Some(_)) => Err(refused(
-            "error: provide the details once - inline or as a file, not both",
-            1,
-        )),
-        (inline, None) => Ok((inline.clone(), false)),
-        (None, Some(path)) => {
-            if path == "-" {
-                let mut buf = String::new();
-                std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
-                    .map_err(|e| refused(format!("error: cannot read -: {e}"), 1))?;
-                Ok((Some(buf), true))
-            } else {
-                match std::fs::read_to_string(path) {
-                    Ok(body) => Ok((Some(body), true)),
-                    Err(e) => Err(refused(format!("error: cannot read {path}: {e}"), 1)),
-                }
-            }
-        }
-    }
+    let text = crate::text_or_file::read_text_arg(
+        args.details.as_deref(),
+        args.details_file.as_deref(),
+        "the details",
+    )
+    .map_err(|e| refused(e, 1))?;
+    Ok((text, args.details_file.is_some()))
 }
 
 /// The write cycle: read, recompute, mutate, publish with retry. Returns the

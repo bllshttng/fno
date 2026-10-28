@@ -346,6 +346,40 @@ fn is_user_placeholder(text: &str) -> bool {
     !text.is_empty() && strip(text) == strip(PLACEHOLDER)
 }
 
+/// The read check. Every canon refresh ends the doc with a fresh `Recall
+/// word:` line, so a word this lead has not acknowledged means a compaction
+/// or refresh since its last read. Only `--recall <that word>` passes and
+/// records it. No doc, or a doc with no word, passes.
+fn recall_gate(handoffs_dir: &Path, scope: &str, given: Option<&str>) -> Result<(), String> {
+    let Ok(doc) = team_handoff_doc(handoffs_dir, scope) else {
+        return Ok(());
+    };
+    let Ok(text) = std::fs::read_to_string(&doc) else {
+        return Ok(());
+    };
+    let Some(word) = text
+        .lines()
+        .rev()
+        .find_map(|l| l.strip_prefix("Recall word: ").map(str::trim))
+    else {
+        return Ok(());
+    };
+    let name = doc.file_name().and_then(|n| n.to_str()).unwrap_or("canon");
+    let ack = doc.with_file_name(format!(".{name}.recalled"));
+    let acked = std::fs::read_to_string(&ack).unwrap_or_default();
+    if acked.trim() == word {
+        return Ok(());
+    }
+    if given == Some(word) {
+        std::fs::write(&ack, word).map_err(|e| format!("{}: {e}", ack.display()))?;
+        return Ok(());
+    }
+    Err(format!(
+        "your canon doc changed since your last read. Feeling amnesia? Your memory is here. Read all of it: {}. Then rerun with --recall <the word on its last line>.",
+        doc.display()
+    ))
+}
+
 fn r_user_notes(handoffs_dir: &Path, scope: &str) -> Result<Value, String> {
     let doc = team_handoff_doc(handoffs_dir, scope)?;
     let text =
@@ -2646,7 +2680,15 @@ fn render_lines_with(
 // faq prompt + emit
 
 pub(crate) fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String> {
-    let mut entries: Vec<(SystemTime, String)> = Vec::new();
+    faq_files_for_scope(faqs_dir, scope)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect()
+}
+
+/// [`faq_entries_for_scope`] with each entry's file, oldest first.
+pub(crate) fn faq_files_for_scope(faqs_dir: &Path, scope: &str) -> Vec<(PathBuf, String)> {
+    let mut entries: Vec<(SystemTime, PathBuf, String)> = Vec::new();
     let Ok(it) = std::fs::read_dir(faqs_dir) else {
         return Vec::new();
     };
@@ -2666,11 +2708,11 @@ pub(crate) fn faq_entries_for_scope(faqs_dir: &Path, scope: &str) -> Vec<String>
                 .metadata()
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
-            entries.push((mtime, text.trim().to_string()));
+            entries.push((mtime, path.clone(), text.trim().to_string()));
         }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
-    entries.into_iter().map(|(_, t)| t).collect()
+    entries.into_iter().map(|(_, p, t)| (p, t)).collect()
 }
 
 /// The `scope:` line of a simple `---` frontmatter block, or None.
@@ -2855,6 +2897,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     let mut theme: Option<String> = None;
     let mut keep_name_from: Option<String> = None;
     let mut queue_arg: Option<String> = None;
+    let mut recall: Option<String> = None;
     let mut user_command = false;
     let mut i = 0;
     while i < args.len() {
@@ -2879,6 +2922,9 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
             i += 2;
         } else if flag("--queue") {
             queue_arg = Some(args[i + 1].clone());
+            i += 2;
+        } else if flag("--recall") {
+            recall = Some(args[i + 1].clone());
             i += 2;
         } else if flag("--events-path") {
             ctx.events_paths.push(PathBuf::from(&args[i + 1]));
@@ -2917,12 +2963,13 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
                  [--events-path ...] --graph PATH --handoffs-dir PATH \
                  [--faqs-dir PATH] [--board-state PATH] [--emit-path PATH] \
                  [--change TEXT] [--name NAME] [--theme THEME] \
-                 [--keep-name-from OLD-SCOPE] [--queue IDS] \
+                 [--keep-name-from OLD-SCOPE] [--queue IDS] [--recall WORD] \
                  [--no-emit] [--json] [--user-command]"
             );
             return 2;
         }
     }
+    let handoffs_defaulted = ctx.handoffs_dir.as_os_str().is_empty();
     if user_command {
         // `fno agents org checkin`: the paths the retired Python shell passed,
         // resolved here for any the caller left out.
@@ -2965,6 +3012,23 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     ) {
         eprintln!("lead: {msg}");
         return 2;
+    }
+    // The canon doc lives in the scope's project, not the lead's cwd: a lead
+    // whose shell sat elsewhere read an empty dir while `config paths handoff
+    // --scope` found the doc. The cwd default stays only for an unknown scope.
+    if user_command && handoffs_defaulted {
+        // The same ambient home `config paths handoff` passes: with None the
+        // resolver falls back under <project>/.fno and misses the doc.
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        if let Some(dir) = crate::paths_cli::scope_handoffs_dir(&ctx.scope, home.as_deref()) {
+            ctx.handoffs_dir = dir;
+        }
+    }
+    if user_command {
+        if let Err(msg) = recall_gate(&ctx.handoffs_dir, &ctx.scope, recall.as_deref()) {
+            eprintln!("lead: {msg}");
+            return 2;
+        }
     }
 
     // The graph read rides the beat once, before anything else needs it: the
@@ -4865,6 +4929,22 @@ mod tests {
     // AC4-HP: the specimen line names the dead call and offers resume.
 
     // AC4-ERR: an unreadable reading appends the reason, never a clean read.
+
+    /// The read check: a fresh word refuses (naming the doc) until --recall
+    /// names it; a wrong word refuses; the right word passes and is recorded.
+    #[test]
+    fn recall_gate_refuses_until_the_doc_word_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("20261027-role-fnh-fno.md");
+        std::fs::write(&doc, "# Canon doc\n\nRecall word: 1a2b3c4d\n").unwrap();
+        let err = recall_gate(dir.path(), "fnh,fno", None).unwrap_err();
+        assert!(err.contains(&doc.display().to_string()), "{err}");
+        assert!(recall_gate(dir.path(), "fnh,fno", Some("wrong")).is_err());
+        assert!(recall_gate(dir.path(), "fnh,fno", Some("1a2b3c4d")).is_ok());
+        assert!(recall_gate(dir.path(), "fnh,fno", None).is_ok());
+        std::fs::write(&doc, "# Canon doc\n\nRecall word: 99887766\n").unwrap();
+        assert!(recall_gate(dir.path(), "fnh,fno", None).is_err());
+    }
 }
 
 #[cfg(test)]

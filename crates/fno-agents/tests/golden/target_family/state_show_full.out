@@ -1,0 +1,9 @@
+fno_id: fno-NODE-HEX
+graph_node_id: NODE-HEX
+harness: claude
+harness_session_id: HEX8-1111-2222-3333-444455556666
+input: fixture target
+owner_cwd: <ROOT>
+plan_path: ''
+target_claim_holder: review-session:HEX8-1111-2222-3333-444455556666
+target_claim_key: node:NODE-HEX

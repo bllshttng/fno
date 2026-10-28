@@ -61,12 +61,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Delivery work: plans, targets, reviews, PRs, state, and supporting operations.",
         {"hidden": True},
     ),
-    "state": ("fno.state.cli:cli", "manage fno do state files", {"hidden": True}),
-    "target": (
-        "fno.target_cli:target_app",
-        "Target sessions: status, resolve-model, and check gates",
-        {"hidden": True},
-    ),
     "backlog": ("fno.graph.cli:cli", "Feature graph management"),
     "event": ("fno.events.cli:cli", "emit and audit events", {"hidden": True}),
     "inbox": (
@@ -99,11 +93,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     # their move rows stay in command_moves.py.
     "agents": ("fno.agents.cli:agents_app", "Cross-CLI agent dispatch (claude / codex / gemini)."),
     "plan": ("fno.plan:plan_app", "Plan frontmatter stamping (in-package)", {"hidden": True}),
-    "stub-manifest": (
-        "fno.stub_manifest:stub_manifest_app",
-        "Stub-manifest for contract-tier dependents (emit/validate/check-pr).",
-        {"hidden": True},
-    ),
     "status-fanout": (
         "fno.status_fanout:status_fanout_app",
         "Sweep events.jsonl and route status events to configured sinks (tick).",
@@ -129,11 +118,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "annotate": (
         "fno.annotate:annotate_app",
         "Record an operator review finding against a node (add/list/resolve); gates loop-check.",
-        {"hidden": True},
-    ),
-    "phase": (
-        "fno.phase:phase_app",
-        "Phase utilities (kill-check via the fno-agents binary)",
         {"hidden": True},
     ),
     "config": ("fno.config_writer_cli:app", "Configuration management"),
@@ -230,9 +214,6 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "plan": set(),
     "pr-watch": set(),
     "resume": set(),
-    "state": set(),
-    "stub-manifest": set(),
-    "target": set(),
 }
 
 for _group_name, _keep in COLLAPSE_KEEP.items():
