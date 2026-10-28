@@ -72,7 +72,7 @@ pub struct Escalation {
     pub meanwhile: String,
     /// The user-only reason a reversible, recommended question still
     /// reaches the user (irreversible, money or credential, outside the
-    /// machine, product or taste). Empty reads as absent.
+    /// machine, law-change, product or taste). Empty reads as absent.
     pub why_user: String,
     /// The ask span this question routes (`answers_ask:` frontmatter), the
     /// pointer that links the escalate route span to the ask it answers.
@@ -257,6 +257,7 @@ pub fn why_user_is_user_only(why: &str) -> bool {
         "outside",
         "product",
         "taste",
+        "law-change",
     ]
     .iter()
     .any(|k| why.contains(k))
@@ -539,6 +540,13 @@ The lead waits. A force push cannot be undone.
             found.iter().any(|p| p.contains("irreversible call waits")),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn a_law_change_reaches_the_user_like_the_other_user_classes() {
+        assert!(why_user_is_user_only("law-change: it retires two laws"));
+        assert!(why_user_is_user_only("a taste call"));
+        assert!(!why_user_is_user_only("the user asked to see it"));
     }
 
     #[test]

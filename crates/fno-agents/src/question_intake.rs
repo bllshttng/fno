@@ -633,8 +633,8 @@ choice starts>'.",
 to rule. Decide door first: {decide} (--authority agent) - record the \
 ruling, then continue. \
 The user answers only what only a user can: irreversible, spends money or a \
-credential, reaches outside the machine, or a product or taste call - name it \
-with why_user: in the question file."
+credential, reaches outside the machine, changes a law, or is a product or taste \
+call - name it with why_user: in the question file (law-change for a law)."
                 ));
                 answer.refusal = Some("decide_yourself".to_string());
                 answer.exit_code = 2;
