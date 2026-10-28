@@ -728,6 +728,12 @@ pub fn classify(params: &Value) -> Result<Value, String> {
         .get("followup_days")
         .and_then(Value::as_i64)
         .unwrap_or(14);
+    // The Python project view handed survival NO now, so its frozen answer
+    // is this same ladder ending at the n/a on an unusable now, never a
+    // clock-driven rate. The project door serves this field; the main view
+    // keeps the clock-driven one below. Computed before the `survival`
+    // binding shadows the function name.
+    let project_survival = survival(&by_node, &by_id, None, followup_days, w4_available);
     let survival = survival(
         &by_node,
         &by_id,
@@ -735,11 +741,6 @@ pub fn classify(params: &Value) -> Result<Value, String> {
         followup_days,
         w4_available,
     );
-    // The Python project view handed survival NO now, so its frozen answer
-    // is this same ladder ending at the n/a on an unusable now, never a
-    // clock-driven rate. The project door serves this field; the main view
-    // keeps the clock-driven one above.
-    let project_survival = survival(&by_node, &by_id, None, followup_days, w4_available);
     let vocab_terms: Vec<&str> = doc
         .iter()
         .chain(delivery.iter())
