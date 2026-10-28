@@ -52,6 +52,28 @@ def _capture_parent_edge() -> tuple[Optional[str], Optional[str], Optional[str]]
         except Exception:  # noqa: BLE001 - the walk never fails a spawn
             harness = None
 
+    if identity.session_id:
+        return identity.session_id, harness, parent_cwd
+
+    # Hosted-session tier. A daemon-hosted session's shells have no harness
+    # ancestor for the prover to walk (zsh under a keeper under the daemon),
+    # so the strict proof returns nothing in the session's OWN lead shell:
+    # measured 2026-10-28, a lead portal shell's spawn fell to the dispatcher
+    # path with CLAUDE_CODE_SESSION_ID set. A marker naming a LIVE registry
+    # row of the same harness is the daemon's own adoption record - it minted
+    # that row from the hosted stream - so the match is a second witness, not
+    # raw-env trust. Best-effort: an unreadable registry keeps the refusal.
+    for _marker, family, value in identity.markers_present:
+        try:
+            from fno.agents.registry import load_registry
+            from fno.agents.whoami import _find_by_session
+
+            row = _find_by_session(load_registry(), value, family)
+        except Exception:  # noqa: BLE001 - the voucher never fails a spawn
+            continue
+        if row is not None and row.status == "live":
+            return value, family, parent_cwd
+
     return identity.session_id, harness, parent_cwd
 
 
