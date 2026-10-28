@@ -643,6 +643,7 @@ pub mod test_env;
 pub mod test_hold;
 pub mod test_run;
 mod test_run_journal;
+mod test_run_pins;
 pub mod test_smoke;
 pub mod test_smoke_discovery;
 pub mod test_smoke_registry;
