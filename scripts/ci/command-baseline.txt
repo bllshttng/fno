@@ -95,9 +95,6 @@ pr-watch
 resume
 scoreboard
 status-fanout tick
-stub-manifest
-target
-test
 uninstall
 update
 version
