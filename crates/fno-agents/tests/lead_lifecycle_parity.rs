@@ -118,26 +118,33 @@ fn space(root: &Path) -> PathBuf {
         .join(slug(&fs::canonicalize(root.join("repo")).unwrap()))
 }
 
-/// Arm the scope manifest a promoted lead over epic-y holds.
+/// Arm the scope manifest a promoted lead over epic-y holds. The fixture's
+/// baked `created_at` ages against the `span:96h` default term: four days
+/// after the capture date the undeclared default reads Reached and the
+/// declare case refuses, so the copy is stamped to now. Nothing the goldens
+/// see carries the stamp: this suite's outputs print no manifest timestamps.
 fn arm_manifest(root: &Path) {
     let leads = space(root).join("leads");
     fs::create_dir_all(&leads).unwrap();
-    fs::copy(fixture("manifest-epic-y.md"), leads.join("epic-y.md")).unwrap();
-    // The fixture's static created_at ages out of the 96h default term, and
-    // an expired reading makes the declare case's own gate refuse it. Arm
-    // with a fresh stamp (the runtime-rewrite idiom rows_live_in_the_repo
-    // uses for cwd), so the gate's window never lapses on the wall clock.
-    let path = leads.join("epic-y.md");
-    let text = fs::read_to_string(&path).unwrap();
-    let fresh = (chrono::Utc::now() - chrono::Duration::hours(1))
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let stamped = format!("created_at: {fresh}");
-    let text = text.replacen("created_at: 2026-10-24T08:55:00Z", &stamped, 1);
-    assert!(
-        text.contains(&stamped),
-        "the fixture's created_at stamp drifted"
-    );
-    fs::write(path, text).unwrap();
+    let source = fs::read_to_string(fixture("manifest-epic-y.md")).unwrap();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let stamped = source
+        .lines()
+        .map(|line| {
+            if line.starts_with("created_at: ") {
+                format!("created_at: {now}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let stamped = if source.ends_with('\n') {
+        format!("{stamped}\n")
+    } else {
+        stamped
+    };
+    fs::write(leads.join("epic-y.md"), stamped).unwrap();
 }
 
 /// Move every registry row's cwd into this world's repo, so the role's

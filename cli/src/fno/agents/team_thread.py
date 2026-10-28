@@ -25,7 +25,8 @@ def plan_thread_promotion(message: str, level: int, scope: Optional[str], succes
     from fno.agents.dispatch import DispatchAskError, _capture_parent_edge
 
     caller = calling_agent_row()
-    refusal, plan = plan_spawn_role(scope or "", caller, succession, proposed_name=name, take_over=take_over)
+    refusal, plan = plan_spawn_role(scope or "", caller, succession, exclude_name=name if revive else None,
+                                    proposed_name=name, take_over=take_over)
     if refusal is not None:
         raise DispatchAskError(f"--promote: {refusal}", exit_code=2)
     message, typed = lead_typed_message(message, level, scope, revive, harness)

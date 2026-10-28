@@ -590,9 +590,9 @@ def settle_spawn_role(
     return [updates.get(i, row) for i, row in enumerate(rows)], outcome, vacated
 
 
-def adopt_drawn_name(succession: bool, plan: Optional[dict], name: str) -> str:
-    """Adopt a succession settle's draw: the machine names the successor."""
-    return (plan or {}).get("draw", {}).get("name") or name if succession else name
+def adopt_drawn_name(plan: Optional[dict], name: str) -> str:
+    """Adopt the settle's draw: a succession, or a fresh grant's --name redraw."""
+    return (plan or {}).get("draw", {}).get("name") or name
 
 
 def plan_spawn_role(

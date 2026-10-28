@@ -43,7 +43,7 @@
 "backlog exec-graph" = "nothing - the derived execution graph had no reader outside its own compile step, which still runs"
 "backlog release" = "`fno backlog unclaim` - `release` was an alias for it"
 "backlog schedule" = "nothing - the shadow-first frontier report never left shadow mode and no gate ever read its exit code. `fno backlog next` picks work"
-"backlog tree" = "`fno backlog view` - the board view nothing had switched off"
+"backlog tree" = "`fno backlog list 'in:\"<id>\"' -J` - it walks the whole subtree; add `-s:done` to drop finished nodes. Quote the id: a bare value is a prefix match"
 "backlog validate" = "nothing - the unknown-blocker and cycle checks had no caller, in CI or out. `fno backlog maintain` is the live hygiene pass but does NOT check blocker integrity, and `backlog triage validate` validates a proposal file rather than the graph"
 "backlog batch abandon" = "`fno backlog batch ship` - it is the documented failure path and already requeues members as individual PRs; `abandon` was wired to nothing despite its docstring naming the daemon"
 "backlog batch close" = "`fno backlog batch ship` - the only close path the daemon takes"
