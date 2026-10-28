@@ -191,35 +191,36 @@ fn incident_line(subject: &str, record: &IncidentRecord, lines: &mut Vec<String>
 #[cfg(test)]
 mod tests {
     use super::{active_laws_for, append_fleet_laws_with, Delivered, END_MARKER, MARKER};
-    use crate::fleet_incident::{self, IncidentRecord};
+    use crate::fleet_incident::{self, RecordMetadata};
     use crate::paths::AgentsHome;
 
-    fn stopped(scopes: &[&str], reason: &str, target: Option<&str>) -> IncidentRecord {
-        IncidentRecord {
-            version: fleet_incident::STATE_VERSION,
-            state: "stopped".to_string(),
-            generation: 1,
-            changed_at: "2026-10-28T00:00:00Z".to_string(),
-            changed_by: "gavin".to_string(),
-            reason: reason.to_string(),
-            holds: scopes.iter().map(|s| s.to_string()).collect(),
-            source: Some("file".to_string()),
-            target: target.map(str::to_string),
-            expires_at: None,
-            origin: None,
-            mail: None,
-            mail_session_id: None,
-        }
+    // The production writer, the one the machine arm uses: a test that
+    // hand-rolls the file is a second writer the reader never agreed to.
+    fn write_machine(home: &AgentsHome, scopes: &[&str], reason: &str) {
+        fleet_incident::write_transition_with_metadata(
+            &fleet_incident::fleet_stop_path(home),
+            "stopped",
+            Some(reason),
+            Some("gavin"),
+            scopes.iter().map(|s| s.to_string()).collect(),
+            RecordMetadata::default(),
+        )
+        .expect("the machine record writes");
     }
 
-    fn write_record(home: &AgentsHome, name: &str, record: &IncidentRecord) {
-        let path = if name == "machine" {
-            fleet_incident::fleet_stop_path(home)
-        } else {
-            fleet_incident::targets_dir(home).join(format!("{name}.json"))
-        };
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, serde_json::to_string(record).unwrap()).unwrap();
+    fn write_target(home: &AgentsHome, name: &str, target: &str, scopes: &[&str], reason: &str) {
+        fleet_incident::write_transition_with_metadata(
+            &fleet_incident::targets_dir(home).join(format!("{name}.json")),
+            "stopped",
+            Some(reason),
+            Some("gavin"),
+            scopes.iter().map(|s| s.to_string()).collect(),
+            RecordMetadata {
+                target: Some(target.to_string()),
+                ..RecordMetadata::default()
+            },
+        )
+        .expect("the target record writes");
     }
 
     fn laws(home: &AgentsHome) -> Option<Delivered> {
@@ -236,14 +237,10 @@ mod tests {
     fn armed_machine_wide_hold_renders_the_line() {
         let dir = tempfile::TempDir::new_in(std::env::temp_dir()).unwrap();
         let home = AgentsHome::at(dir.path());
-        write_record(
+        write_machine(
             &home,
-            "machine",
-            &stopped(
-                &["tests"],
-                "machine-wide all-stop armed by the operator.",
-                None,
-            ),
+            &["tests"],
+            "machine-wide all-stop armed by the operator.",
         );
         let delivered = laws(&home).expect("an armed hold renders a block");
         assert!(delivered.block.contains(MARKER) && delivered.block.contains(END_MARKER));
@@ -252,7 +249,10 @@ mod tests {
             .lines()
             .find(|l| l.starts_with("- fleet-stop"))
             .expect("the hold line");
-        assert!(line.contains("machine-wide, scope: tests"));
+        assert!(
+            line.contains("machine-wide, scope: tests"),
+            "the rendered line was: {line}"
+        );
         assert!(line.contains("machine-wide all-stop armed by the operator."));
         assert_eq!(
             delivered.subjects,
@@ -274,10 +274,12 @@ mod tests {
     fn targeted_hold_binds_only_its_named_subject() {
         let dir = tempfile::TempDir::new_in(std::env::temp_dir()).unwrap();
         let home = AgentsHome::at(dir.path());
-        write_record(
+        write_target(
             &home,
             "territory-fnh",
-            &stopped(&["builds"], "territory build stop.", Some("territory:fnh")),
+            "territory:fnh",
+            &["builds"],
+            "territory build stop.",
         );
         let subject_in = crate::fleet_incident::Subject {
             session_ids: Vec::new(),
@@ -298,7 +300,10 @@ mod tests {
             .lines()
             .find(|l| l.starts_with("- fleet-stop:territory:fnh"))
             .expect("the targeted line");
-        assert!(line.contains("hold, scope: builds"));
+        assert!(
+            line.contains("hold, scope: builds"),
+            "the rendered line was: {line}"
+        );
         assert!(line.contains("territory build stop."));
         assert!(active_laws_for(&home, &subject_out, Some("o/r")).is_none());
     }
@@ -307,7 +312,7 @@ mod tests {
     fn append_is_idempotent_and_keeps_empty_messages_empty() {
         let dir = tempfile::TempDir::new_in(std::env::temp_dir()).unwrap();
         let home = AgentsHome::at(dir.path());
-        write_record(&home, "machine", &stopped(&["tests"], "stop.", None));
+        write_machine(&home, &["tests"], "stop.");
         let delivered = laws(&home).expect("the armed home renders");
         let (payload, subjects) = append_fleet_laws_with("do the work", Some(&delivered));
         assert!(payload.contains(MARKER));
