@@ -678,6 +678,13 @@ jobs:
           bash scripts/ci/check-hook-classes.sh --self-test
           bash scripts/ci/check-hook-classes.sh
 
+      - name: Every registered hook picks a pack or mux profile
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-pack-profiles.sh --self-test
+          bash scripts/ci/check-pack-profiles.sh
+
       # From the installed-tree import crash: parents[N]/scripts joins in
       # cli/src/fno escape the package root and the wheel never ships them.
       - name: Package-root path escapes + self-test
