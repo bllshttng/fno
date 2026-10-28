@@ -26,7 +26,7 @@
     ]
    ],
    "sidecar": {
-    "answered_cursor": "2026-08-28T12:00:00+00:00"
+    "answered_cursor": "2026-08-28T12:00:00Z"
    },
    "successor_flags": [
     false
