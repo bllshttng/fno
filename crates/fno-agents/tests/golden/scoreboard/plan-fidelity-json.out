@@ -110,7 +110,7 @@
         "malformed_lines": 0
       },
       {
-        "path": "<CASE>/state/spaces/-Users-bb16-.fno-worktrees-footnote-x-08d8-crates-fno-agents-tests-golden-scoreboard-cases-plan_fidelity_json-repo/events.jsonl",
+        "path": "<CASE>/state/spaces/<SPACEREPO>/events.jsonl",
         "status": "missing",
         "malformed_lines": 0
       }

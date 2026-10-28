@@ -169,13 +169,21 @@ pub(crate) fn event_matches(delivery: &Value, event: &Value, commit: Option<&str
         }
         matched |= short_matches;
     }
-    if let Some(event_node) = event.get("node_id") {
-        if node_id.map(|n| !n.is_empty()).unwrap_or(false) && event_node.as_str() != node_id {
+    // normalize_event always materializes these keys (null when absent);
+    // Python truthiness reads a null or empty value the same as an absent
+    // key, so the guards below must filter both or every node-less event
+    // would fail the delivery's node guard.
+    if let Some(event_node) = event
+        .get("node_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        if node_id.map(|n| !n.is_empty()).unwrap_or(false) && Some(event_node) != node_id {
             return false;
         }
         matched |= node_id
-            .map(|n| !n.is_empty() && event_node.as_str() == Some(n))
-            .unwrap_or(false);
+            .filter(|n| !n.is_empty())
+            .is_some_and(|n| n == event_node);
     }
     if !event.get("pr_number").map(Value::is_null).unwrap_or(true) {
         let pr_matches = match (pr_number, event.get("pr_number").and_then(Value::as_i64)) {
@@ -187,10 +195,12 @@ pub(crate) fn event_matches(delivery: &Value, event: &Value, commit: Option<&str
         }
         matched |= pr_matches;
     }
-    if let Some(head) = event.get("head_sha") {
-        let head_matches = commit
-            .map(|c| !c.is_empty() && head.as_str() == Some(c))
-            .unwrap_or(false);
+    if let Some(head) = event
+        .get("head_sha")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        let head_matches = commit.map(|c| !c.is_empty() && head == c).unwrap_or(false);
         if commit.map(|c| !c.is_empty()).unwrap_or(false) && !head_matches {
             return false;
         }

@@ -252,7 +252,10 @@ pub fn run_scoreboard(args: &[String]) -> i32 {
         let mut trace_paths = inputs.events_paths.clone();
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let root = crate::paths::worktree_repo_root(&cwd);
-        trace_paths.push(crate::outstanding::project_log(&root, "events.jsonl"));
+        // Python `_paths.project_log("events.jsonl")`: the per-repo SPACE
+        // journal (`<spaces>/<slug-of-canonical-root>/events.jsonl`), not
+        // the checkout's `.fno` file.
+        trace_paths.push(crate::paths::space_dir(&root).join("events.jsonl"));
         let mut canonical_roots: Vec<std::path::PathBuf> = Vec::new();
         if let Some(c) = crate::paths::canonical_repo_root(&root) {
             canonical_roots.push(c);

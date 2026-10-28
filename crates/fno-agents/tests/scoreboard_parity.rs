@@ -12,10 +12,15 @@
 //! `fno whoami scoreboard` stdout/stderr/exit under pinned env
 //! (HOME/FNO_STATE_DIR/FNO_AGENTS_HOME/FNO_REPO_ROOT + stub `fno`/`gh` on
 //! PATH). This test replays each case against the native door from a temp
-//! copy and asserts byte parity, with two documented normalizers:
+//! copy and asserts byte parity, with three documented normalizers:
 //!
 //! - both sides normalize their own case-root absolute path to `<CASE>` (the
-//!   plan_path echo and the refusal stderr name the state root);
+//!   plan_path echo and the refusal stderr name the state root); the replay
+//!   rewrites the capture host's frozen paths inside the text fixtures to
+//!   the sandbox root first, so the same normalizer answers on both sides;
+//! - the event-coverage slug names the repo root flattened (`/` to `-`);
+//!   the goldens froze the capture host's slug, so the replay maps its own
+//!   flattened token to `<SPACEREPO>` and the goldens hold that placeholder;
 //! - `delivery_classes` is an insertion-ordered Python dict keyed by a
 //!   class-name set, so capture order was set-hash-order: both sides sort
 //!   that one object before comparing. Every other object keeps the leg's
@@ -123,6 +128,26 @@ fn sort_delivery_classes(text: &str) -> String {
     format!("{}\n", serde_json::to_string_pretty(&doc).unwrap())
 }
 
+/// The capture driver froze the capture host's absolute case-root paths
+/// inside the text fixtures (the ledger's plan/summary paths); a replay
+/// sandbox lives elsewhere, so mirror the capture's scrub inside the tree:
+/// point every UTF-8 fixture at the sandbox root before the door runs.
+/// Binary fixtures (the graph store) fail the UTF-8 check and keep their
+/// capture bytes.
+fn rewrite_fixture_paths(dir: &Path, from: &str, to: &str) {
+    for entry in std::fs::read_dir(dir).expect("read fixture dir") {
+        let entry = entry.expect("fixture entry");
+        let path = entry.path();
+        if path.is_dir() {
+            rewrite_fixture_paths(&path, from, to);
+        } else if let Ok(text) = std::fs::read_to_string(&path) {
+            if text.contains(from) {
+                std::fs::write(&path, text.replace(from, to)).expect("rewrite fixture");
+            }
+        }
+    }
+}
+
 /// Replay one fixture case against the native door from a temp copy.
 fn run_case(label: &str, argv: &[String]) -> (i32, String, String) {
     let golden = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -137,9 +162,19 @@ fn run_case(label: &str, argv: &[String]) -> (i32, String, String) {
     let _ = std::fs::remove_dir_all(&tmp);
     copy_dir(&golden, &tmp);
     rebuild_git(&tmp.join("repo"));
+    rewrite_fixture_paths(
+        &tmp,
+        golden.to_str().expect("utf8 golden"),
+        tmp.to_str().expect("utf8 tmp"),
+    );
     let bin = env!("CARGO_BIN_EXE_fno-agents");
     let mut cmd = Command::new(bin);
-    cmd.arg("scoreboard").args(argv).current_dir(&tmp);
+    // The capture driver ran the leg with cwd at the case REPO (the same
+    // place `project_log` resolves the space journal from), so the replay
+    // pins the same cwd.
+    cmd.arg("scoreboard")
+        .args(argv)
+        .current_dir(&tmp.join("repo"));
     // Scrub the ambient FNO_/provider-prefixed env BEFORE the pins ride, so
     // the scrub cannot strip them.
     for key in std::env::vars_os() {
@@ -153,6 +188,18 @@ fn run_case(label: &str, argv: &[String]) -> (i32, String, String) {
         .env("FNO_AGENTS_HOME", tmp.join("state/agents"))
         .env("FNO_REPO_ROOT", tmp.join("repo"))
         .env("LC_ALL", "C")
+        // The capture driver put the case's stub `fno`/`gh` first on PATH
+        // (`gh pr diff --name-only` answers the scope-drift diff read); the
+        // store exec lane resolves the real binary by path, so the stubs
+        // never intercept it.
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                tmp.join("bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
         .envs(fno_agents::test_run::self_owner_env())
         // The emission counter the capture's stub `fno` answered, frozen
         // here at the handoff point the door reads.
@@ -161,10 +208,23 @@ fn run_case(label: &str, argv: &[String]) -> (i32, String, String) {
             r#"{"touch_emit_failures": 2, "started_at": "2026-10-20T10:00:00Z", "measured_at": "2026-10-25T10:00:00Z"}"#,
         );
     let out = cmd.output().expect("run fno-agents scoreboard");
-    let stdout =
-        String::from_utf8_lossy(&out.stdout).replace(tmp.to_str().expect("utf8 tmp"), "<CASE>");
-    let stderr =
-        String::from_utf8_lossy(&out.stderr).replace(tmp.to_str().expect("utf8 tmp"), "<CASE>");
+    // The coverage lister prints the fs::canonicalize'd key, which on macOS
+    // resolves /var/folders to /private/var/folders; map both spellings, and
+    // map the replay's flattened repo token to the goldens' <SPACEREPO>.
+    // Longest-token-first: the short spelling is a substring of the
+    // canonical one, so the canonical replaces run first.
+    let tmp_canon = std::fs::canonicalize(&tmp).unwrap_or_else(|_| tmp.clone());
+    let repo_canon = std::fs::canonicalize(tmp.join("repo")).unwrap_or_else(|_| tmp.join("repo"));
+    let flatten = |p: &Path| p.to_string_lossy().replace('/', "-");
+    let slug_tokens = [flatten(&repo_canon), flatten(&tmp.join("repo"))];
+    let map_case = |text: String| {
+        text.replace(&slug_tokens[0], "<SPACEREPO>")
+            .replace(&slug_tokens[1], "<SPACEREPO>")
+            .replace(tmp_canon.to_str().expect("utf8 tmp canon"), "<CASE>")
+            .replace(tmp.to_str().expect("utf8 tmp"), "<CASE>")
+    };
+    let stdout = map_case(String::from_utf8_lossy(&out.stdout).into_owned());
+    let stderr = map_case(String::from_utf8_lossy(&out.stderr).into_owned());
     let code = out.status.code().unwrap_or(-1);
     let _ = std::fs::remove_dir_all(&tmp);
     (code, stdout, stderr)
