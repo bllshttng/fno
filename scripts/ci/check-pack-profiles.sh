@@ -58,8 +58,11 @@ for rel in hook_files:
             errors.append(f"{rel}: a hook entry names no hook script: {command[:60]}")
             continue
         entries += 1
-        if found[0] not in classified:
-            unclassified.add((rel, found[0]))
+        # A chained command (a.sh && b.sh) names several scripts; each one
+        # must pick a profile, not only the first.
+        for script in found:
+            if script not in classified:
+                unclassified.add((rel, script))
 for rel, script in sorted(unclassified):
     errors.append(f"{rel}: {script} is unclassified; add it to mux or pack_hooks in {manifest_path}")
 
@@ -96,6 +99,11 @@ if [[ "${1:-}" == "--self-test" ]]; then
   printf '{"mux":["hooks/m.sh","skills/gone"],"pack_hooks":["hooks/a.sh"]}' > "$tmp/gone.json"
   if check "$tmp" gone.json >/dev/null 2>&1; then
     echo "check-pack-profiles: self-test: a manifest path that does not exist must refuse" >&2; exit 1
+  fi
+  printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"${R}/hooks/a.sh && ${R}/hooks/m.sh"}]}]}}' > "$tmp/hooks/hooks.json"
+  printf '{"mux":[],"pack_hooks":["hooks/a.sh"]}' > "$tmp/chained.json"
+  if check "$tmp" chained.json >/dev/null 2>&1; then
+    echo "check-pack-profiles: self-test: an unclassified second script in a chained command must refuse" >&2; exit 1
   fi
   printf '{"mux":["hooks/m.sh"],"pack_hooks":["hooks/a.sh","hooks/m.sh"]}' > "$tmp/both.json"
   if check "$tmp" both.json >/dev/null 2>&1; then
