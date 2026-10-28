@@ -72,12 +72,31 @@ pub struct Escalation {
     pub meanwhile: String,
     /// The user-only reason a reversible, recommended question still
     /// reaches the user (irreversible, money or credential, outside the
-    /// machine, product or taste). Empty reads as absent.
+    /// machine, law-change, product or taste). Empty reads as absent.
     pub why_user: String,
     /// The ask span this question routes (`answers_ask:` frontmatter), the
     /// pointer that links the escalate route span to the ask it answers.
     pub answers_ask: Option<String>,
+    /// `## ` headings a question page does not carry, so their text never
+    /// reaches the user.
+    pub unknown_sections: Vec<String>,
 }
+
+/// Every section heading a question page carries. The escalation-only
+/// sections parse too, but the question row never stores them.
+pub const QUESTION_SECTIONS: [&str; 11] = [
+    SECTION_OPTIONS,
+    SECTION_RECOMMENDATION,
+    SECTION_BLOCKED_BECAUSE,
+    SECTION_WHY_THESE,
+    SECTION_DOWNSIDE,
+    SECTION_UNKNOWNS,
+    SECTION_REVERSIBLE,
+    SECTION_COST_IF_WRONG,
+    SECTION_MEANWHILE,
+    SECTION_WHY_USER,
+    "Answer",
+];
 
 /// The project's escalations directory: `<vault>/internal/<project>/escalations`
 /// when obsidian is enabled with a vault, else the space's `escalations/`.
@@ -250,6 +269,11 @@ pub fn parse(text: &str) -> Escalation {
     if !why_user.is_empty() {
         esc.why_user = why_user;
     }
+    esc.unknown_sections = sections
+        .iter()
+        .map(|(n, _)| n.clone())
+        .filter(|n| !QUESTION_SECTIONS.contains(&n.as_str()))
+        .collect();
     esc
 }
 
@@ -272,6 +296,7 @@ pub fn why_user_is_user_only(why: &str) -> bool {
         "outside",
         "product",
         "taste",
+        "law-change",
     ]
     .iter()
     .any(|k| why.contains(k))
@@ -554,6 +579,20 @@ The lead waits. A force push cannot be undone.
             found.iter().any(|p| p.contains("irreversible call waits")),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn a_section_no_field_reads_is_named() {
+        let esc = parse(
+            "Pick one?\n\n## Options\n1. A.\n## The table\n| a |\n## Why it matters now\nsoon\n",
+        );
+        assert_eq!(esc.unknown_sections, ["The table", "Why it matters now"]);
+    }
+
+    #[test]
+    fn a_law_change_reaches_the_user_like_the_other_user_classes() {
+        assert!(why_user_is_user_only("law-change: it retires two laws"));
+        assert!(!why_user_is_user_only("the user asked to see it"));
     }
 
     #[test]

@@ -580,6 +580,11 @@ pub(crate) fn clear_supersession_facts(rows: &mut [Value], idx: usize, changes: 
     let obj = rows[idx].as_object_mut().unwrap();
     put_key(obj, changes, &id, "superseded_by", Value::Null);
     put_key(obj, changes, &id, "supersession", Value::Null);
+    // The archive sweep takes a superseded node at any age, so a revived
+    // one leaves archive residency too, or no default read would show it.
+    if replacer.is_some() {
+        put_key(obj, changes, &id, "archived_at", Value::Null);
+    }
     if let Some(replacer) = replacer {
         if let Some(row) = rows.iter_mut().find(|r| field_eq(r, "id", &replacer)) {
             let rid = entry_id(row).unwrap_or_default().to_string();
@@ -1550,6 +1555,7 @@ mod tests {
                 "supersession": {"cause": "c"},
                 "deferred_at": "2026-01-01T00:00:00+00:00",
                 "deferred_reason": "waiting",
+                "archived_at": "2026-01-02T00:00:00Z",
             }),
         );
         let replacer = node("x-r", json!({ "supersedes": ["x-5"] }));
@@ -1557,6 +1563,11 @@ mod tests {
         let receipt = apply(&graph, &leave_req("x-5", "superseded")).expect("applied");
         // The unsupersede contract: the pre-supersession park survives.
         assert_eq!(receipt.status.to, "deferred");
+        // The sweep took it the moment it was superseded; reviving it must
+        // bring it back to the board.
+        let rows = graph_store::read_rows(&graph).unwrap();
+        let revived = rows.iter().find(|r| r["id"] == "x-5").unwrap();
+        assert!(revived.get("archived_at").is_none_or(Value::is_null));
     }
 
     fn leave_req(node: &str, direction: &str) -> PatchRequest {
