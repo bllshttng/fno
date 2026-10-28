@@ -345,7 +345,9 @@ mod tests {
         let td = tempfile::TempDir::new().unwrap();
         let prev = std::env::var_os("FNO_HOME");
         std::env::set_var("FNO_HOME", td.path().join("fno-home"));
-        let err = rule_set(Path::new("/")).expect_err("no store at all");
+        let Err(err) = rule_set(Path::new("/")) else {
+            panic!("no store at all must be Err");
+        };
         assert!(err.contains("no decision store"), "{err}");
         match prev {
             Some(v) => std::env::set_var("FNO_HOME", v),
