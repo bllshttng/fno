@@ -712,11 +712,14 @@ mod tests {
     #[test]
     fn sweep_skips_malformed_body_intact() {
         let dir = tmp_dir("malformed");
-        // An indented continuation line is the codec's parse error.
+        // An indented continuation line is the codec's parse error. No node
+        // evidence: the repair arm stands down, and the file stays
+        // byte-identical.
         let bad = "---\nnode: x-1\nstatus: idea\n  wrapped\n---\nbody\n";
         let p = write_doc(&dir, "bad.md", bad);
         let res = sweep(&dir, true, &map(&[]));
-        assert_eq!(res.skipped, 1);
+        assert_eq!(res.stood_down, 1);
+        assert_eq!(res.skipped, 0);
         assert_eq!(res.normalized, 0);
         assert_eq!(read_doc(&p), bad);
     }
