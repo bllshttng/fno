@@ -137,12 +137,20 @@ pub fn ladder_on(cwd: &Path) -> bool {
     crate::lead_escalation::route_for(cwd).as_deref() == Some("ladder")
 }
 
-/// The first rung for a question asked from `session` on `node`: the node's
-/// lead, its higher-up, or the least-loaded lead, never the asker itself.
-/// `None` is the user rung (no lead holds a session to wake).
+/// The first rung for a question a worker asks from `session` on `node`: the
+/// node's lead, its higher-up, or the least-loaded lead. `None` is the user
+/// rung: the asker is a lead, or no lead holds a session to wake.
 pub fn place(cwd: &Path, node: Option<&str>, session: Option<&str>) -> Option<Value> {
     use crate::owner_ladder::{resolve, world, Ask, Rung};
     let w = world(&crate::paths::AgentsHome::from_env(), cwd).ok()?;
+    // A lead files to the user board itself, after it tries the answer.
+    if session.is_some_and(|s| {
+        w.teams
+            .iter()
+            .any(|t| t.holder_session.as_deref() == Some(s))
+    }) {
+        return None;
+    }
     let owner = resolve(
         &Ask {
             node,
