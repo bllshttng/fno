@@ -7,6 +7,7 @@
 //! the Python leg printed, carried verbatim.
 
 use serde_json::{json, Map, Value};
+use std::io::Read;
 
 /// The monotonic axis plus the off-axis terminals (`plan/_status.py`).
 const STATUS_VOCABULARY: [&str; 7] = [
@@ -603,7 +604,7 @@ pub(crate) fn validate_frontmatter(fm: &Map<String, Value>) -> Vec<Value> {
     }
     if let Some(block) = fm.get("consolidation") {
         if !block.is_null() {
-            for mut e in validate_block("consolidation", block) {
+            for e in validate_block("consolidation", block) {
                 errors.push(e);
             }
         }
