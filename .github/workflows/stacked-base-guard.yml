@@ -19,12 +19,11 @@ name: stacked-base-guard
 #     context required while a merge queue is on would hang every entry: the
 #     required context never reports on the group's head SHA.
 #
-# Marking this a REQUIRED status check is a repository-settings action nobody
-# can take from code. Until an operator marks the `stacked-base-guard` context
-# required, this workflow reports but does not block: the web merge button and a
-# hand-run `gh pr merge` still ignore it.
+# The `stacked-base-guard` context is REQUIRED on the default branch
+# (scripts/ci/merge-ruleset.json). Three writers post it: the jobs below and,
+# for a default-based PR, `fno do pr push` / `fno do pr create` at push time.
 #
-# READ THIS BEFORE MARKING IT REQUIRED. On a `pull_request` event from a FORK,
+# On a `pull_request` event from a FORK,
 # GITHUB_TOKEN is read-only no matter what the `permissions:` block below says,
 # so the status POST fails and the context is never created for that PR. Mark
 # this required while fork PRs are accepted and every one of them blocks
