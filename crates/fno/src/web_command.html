@@ -268,11 +268,11 @@ function paint() {
 
 const drawer = document.getElementById("drawer"), toastEl = document.getElementById("toast");
 let toastTimer = 0;
-function toast(text) {
+function toast(text, ms) {
   toastEl.textContent = text;
   toastEl.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove("show"), 1600);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show"), ms || 1600);
 }
 function openSeat(r) {
   const s = r.s, w = s.work || {}, none = "not published";
@@ -322,19 +322,26 @@ function openSeat(r) {
       if (u.protocol.startsWith("http")) u.searchParams.delete("t");
       const shared = u.href;
       if (/^https?:/.test(url)) { open.target = "_blank"; open.rel = "noopener"; }
+      const select = () => {
+        const code = t.querySelector("code"), range = document.createRange();
+        code.textContent = shared;
+        range.selectNodeContents(code);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+      };
+      // A browser drops a click on a file:// link from a served page with no
+      // sign, so Open says so and shows the link, selected.
+      if (u.protocol === "file:" && location.protocol !== "file:") open.onclick = (e) => {
+        e.preventDefault();
+        select();
+        toast("The browser does not open file links from this page. Copy the link and open it yourself.", 4000);
+      };
       // The label never changes; a toast reports the result. Plain http
       // off loopback has no clipboard API, so the failure toast names it and
       // the row shows the link, selected, for a manual copy.
       copy.onclick = () => {
         const write = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(shared) : Promise.reject(new Error("no clipboard"));
-        write.then(() => toast("Link copied"), () => {
-          const code = t.querySelector("code"), range = document.createRange();
-          code.textContent = shared;
-          range.selectNodeContents(code);
-          getSelection().removeAllRanges();
-          getSelection().addRange(range);
-          toast("Copy failed");
-        });
+        write.then(() => toast("Link copied"), () => { select(); toast("Copy failed"); });
       };
       d.append(open, copy);
     }
