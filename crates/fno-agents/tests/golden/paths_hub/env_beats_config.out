@@ -1,0 +1,10 @@
+state_dir=<FIXTURE>/envstate
+graph_json=<FIXTURE>/envstate/db/graph.json
+ledger_json=<FIXTURE>/envstate/ledger.json
+briefs_dir=<FIXTURE>/envstate/briefs
+fleet_dir=<FIXTURE>/envstate/fleet
+postmortems_dir=<FIXTURE>/envstate/postmortems
+worktrees_base=<FIXTURE>/envstate/worktrees
+memory_dir=<FIXTURE>/envstate/memory
+hook_logs_dir=<FIXTURE>/envstate/hook-logs
+space_dir=<FIXTURE>/envstate/spaces/<FIXTURE_SLUG>-proj

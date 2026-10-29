@@ -1,12 +1,12 @@
-"""Pure config file-reader leaf, shared by ``fno.config`` and ``fno.graph``.
+"""Pure config file-reader leaf for the ``fno.config`` package's internals.
 
 This module exists to break the ``fno.config`` <-> ``fno.graph`` import cycle.
-``graph/_intake.py`` (and its siblings) needs the low-level config *readers* but
-not the ``fno.config`` god module; importing ``fno.config`` at top level closed a
+The config package needs the low-level config *readers* one hop away from its
+own god module; importing ``fno.config`` from a graph module at top level closed a
 load-time loop (config's ``id_prefix`` validator imports ``graph._constants``),
-so graph pushed the import into function bodies. Giving graph a dependency-free
-*leaf* to import instead removes the back-edge and lets both sides import at top
-level.
+so graph pushed the import into function bodies. The graph leftovers retired
+their config reads onto the binary door (2026-10), and the leaf now serves the
+config package and the agents/codemap/setup readers.
 
 It MUST live outside the ``config/`` package: a module at ``config/_io.py`` would
 re-run ``config/__init__.py`` on import and reintroduce the half-init cycle. This
