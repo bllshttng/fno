@@ -735,18 +735,20 @@ fn approval_carries<P: Probes>(
     ) else {
         return false;
     };
-    let roles = node
-        .map(|n| role_approval_texts(probes, cwd, pr, n))
-        .unwrap_or_default();
+    let mut texts: Vec<String> = approving_pages(root, pr)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect();
+    texts.extend(
+        node.map(|n| role_approval_texts(probes, cwd, pr, n))
+            .unwrap_or_default(),
+    );
     let Some(approved) = commits
         .iter()
         .rev()
         .filter(|sha| sha.as_str() != head)
         .take(CARRY_WALK)
-        .find(|sha| {
-            answered_question_names_pr(root, pr, sha)
-                || roles.iter().any(|text| text.contains(sha.as_str()))
-        })
+        .find(|sha| texts.iter().any(|text| text.contains(sha.as_str())))
     else {
         return false;
     };
