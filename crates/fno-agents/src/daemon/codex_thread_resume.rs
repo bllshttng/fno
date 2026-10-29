@@ -8,9 +8,40 @@ use super::*;
 /// A Codex thread row startup recovery may auto-resume: it needs a full
 /// durable identity AND a status that was non-terminal when the daemon died.
 /// `handle_stop` marks a stopped thread `Exited`; resurrecting that row on the
-/// next daemon start would silently undo `fno agents stop`.
-pub(super) fn codex_thread_recovery_candidate(entry: &RegistryEntry) -> bool {
-    codex_thread_resume_identity(entry).ok().flatten().is_some() && is_non_terminal(entry.status)
+/// next daemon start would silently undo `fno agents stop`. It also needs a
+/// RECENT real turn (x-a8ef): re-opening a month-idle row stamps it Live and
+/// makes the app-server touch its rollout, which manufactures the very
+/// liveness the ladder then trusts. Freshness reads the row's own turn
+/// stamps - `last_message_at`, the inside-leg report, `created_at` - never
+/// the rollout mtime.
+pub(super) fn codex_thread_recovery_candidate(entry: &RegistryEntry, now_secs: u64) -> bool {
+    codex_thread_resume_identity(entry).ok().flatten().is_some()
+        && is_non_terminal(entry.status)
+        && codex_thread_row_activity_is_fresh(entry, now_secs)
+}
+
+/// Startup-recovery freshness window: the same recency the liveness ladder's
+/// rollout rung treats as "still advancing". A quiet row older than this is
+/// still resumable on demand (every ask goes through
+/// `ensure_codex_thread_handle`); starting it here would read it alive.
+const RECOVERY_FRESH_SECS: u64 = crate::client_commands::CODEX_ROLLOUT_FRESH_SECS;
+
+/// True when at least one row-recorded turn stamp parses and falls within
+/// [`RECOVERY_FRESH_SECS`] of `now_secs`. Every stamp fails closed: absent,
+/// unparseable, or future is stale, never fresh.
+fn codex_thread_row_activity_is_fresh(entry: &RegistryEntry, now_secs: u64) -> bool {
+    stamp_within(entry.last_message_at.as_deref(), now_secs)
+        || entry
+            .inside_leg
+            .as_ref()
+            .is_some_and(|report| report.received_within(now_secs, RECOVERY_FRESH_SECS))
+        || stamp_within(Some(entry.created_at.as_str()), now_secs)
+}
+
+fn stamp_within(stamp: Option<&str>, now_secs: u64) -> bool {
+    stamp
+        .and_then(crate::state::rfc3339_like_to_secs)
+        .is_some_and(|secs| secs <= now_secs && now_secs - secs <= RECOVERY_FRESH_SECS)
 }
 
 pub(super) async fn ensure_codex_thread_handle(
@@ -185,7 +216,7 @@ pub(super) async fn recover_codex_threads(ctx: &Ctx) {
             }
         };
         for entry in registry.entries {
-            if !codex_thread_recovery_candidate(&entry) {
+            if !codex_thread_recovery_candidate(&entry, crate::claude_ask::now_epoch_secs()) {
                 continue;
             }
             match ensure_codex_thread_handle(&ctx, &entry).await {
