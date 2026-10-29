@@ -55,7 +55,7 @@ impl GetArgs<'_> {
                 "--grouped" => render.grouped = true,
                 "--strict" => render.strict = true,
                 "--trace" => render.trace = true,
-                "--json" => render.json = true,
+                flag if crate::json_output::is_flag(flag) => render.json = true,
                 other => {
                     if other.starts_with('-') {
                         return None;
