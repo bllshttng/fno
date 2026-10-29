@@ -440,12 +440,25 @@ mod tests {
         .unwrap();
         let prior = std::env::var_os("FNO_CONFIG");
         std::env::set_var("FNO_CONFIG", &cfg);
+        // The exact-count assertion needs the walk to see ONLY the fixture:
+        // an unset FNO_GLOBAL_SETTINGS_PATH sends candidates() at the real
+        // HOME settings, whose work map joins the count on any configured
+        // machine (measured on a fleet runner: left 2, right 1). An empty
+        // existing file keeps that branch pointed at the tempdir.
+        let empty_global = dir.path().join("empty-global-settings.yaml");
+        std::fs::write(&empty_global, "").unwrap();
+        let prior_global = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH");
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &empty_global);
 
         let pairs = work_map_pairs();
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].0, "one");
         assert_eq!(pairs[0].1, "/repo/one");
 
+        match prior_global {
+            Some(v) => std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", v),
+            None => std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH"),
+        }
         match prior {
             Some(v) => std::env::set_var("FNO_CONFIG", v),
             None => std::env::remove_var("FNO_CONFIG"),
