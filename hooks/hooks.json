@@ -357,7 +357,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/save-session.py\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT}/scripts/save-session.py\""
           },
           {
             "type": "command",
@@ -413,7 +413,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/save-session.py\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/lib/run-python.sh\" \"${CLAUDE_PLUGIN_ROOT}/scripts/save-session.py\""
           }
         ]
       }

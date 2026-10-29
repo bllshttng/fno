@@ -2,7 +2,9 @@
 
 `fno agents mail send <name> "<message>"` is the async sibling of `ask`.
 It attempts a live inject first and falls back to a durable envelope only when that misses, returning without waiting for a reply.
-A live delivery writes nothing to the bus; a durable one is the recovery copy, not delivery, so read the receipt (`delivered (hosted)` vs `queued (durable)`) rather than the exit code.
+
+A live delivery writes nothing to the bus. A durable one is the recovery copy, not delivery. So read the receipt, not the exit code: a live state such as `accepted-new-turn`, or `queued (durable)`.
+
 `queued (durable)` means the live inject was not CONFIRMED, which is not proof it failed: a busy recipient can record the turn past the confirm budget and receive it anyway, so `peek` before re-sending.
 Unlike `ask`, it does not require a registry row - it resolves a live session across the registry, the daemon roster, and disk - but a name that resolves to nothing exits 16 with a "spawn it first" hint (Locked Decision 1 from the cross-agent bus epic: ask and send never create peers).
 
@@ -26,7 +28,7 @@ fno agents mail send frontend-worker "run the failing tests and open a PR"
 On success, stdout is exactly one line and the command exits 0:
 
 ```
-msg-3a7f1c2e delivered (hosted)
+msg-3a7f1c2e accepted-new-turn
 ```
 
 or
@@ -37,7 +39,7 @@ msg-3a7f1c2e queued (durable) [not-confirmed]
 
 The bracketed reason on a durable line is the live lane's own cause. A claude row with no pane ref is always tried live, and the daemon roster decides. A refusal from that roster reads `not-injectable`. When the transcript veto skips a pane row or another harness, the reason reads `transcript-stalled` or `transcript-done`. One token is the exception. `agent-lock-timeout` means another command on the same agent held the per-agent lock past the wait. `send`, `ask`, `spawn`, `stop` and `rm` all take that flock. So the holder can be a peer sender, or the `stop` that just killed the recipient. No live attempt was made. The token says nothing about the recipient in either direction. Run `fno agents session peek <name>` before you act on it. Withdraw the queued copy before you re-send, or the recipient gets it twice.
 
-`delivered (hosted)` means live PTY injection (codex/gemini) or the `control.sock` inject succeeded (claude, via the `fno-agents mail-inject` command, which pastes and submits a wire-level CR).
+A live receipt names the state the send reached (`injected`, `parked`, `accepted-new-turn`, `accepted-steer` or `failed`). The `fno-agents mail-inject` command types the envelope, submits a wire-level CR, and reads the recipient's own turn record for the envelope id. Only that record makes a state `accepted-*`. The full table is in [pane transport](../architecture/pane-transport.md#receipt-vocabulary).
 `queued (durable)` means the message is in the recipient's inbox store, waiting for their next drain.
 Both are exit 0.
 The `msg-<8hex>` id is stable and appears in the live `<fno_mail>` envelope, but it exists in the bus log only for a `queued (durable)` send.
@@ -97,9 +99,9 @@ Send resolves delivery in order:
 | Bus lock timeout before durable append | 12 | `bus lock timeout after 5s at <path>; no durable envelope was written` |
 | Durable envelope write failed | 12 | `durable envelope write failed: ...` |
 | Live delivery demoted | 0 | demotion notice on stderr; stdout says `queued (durable)` |
-| Post-delivery registry stamp timed out | 0 | delivery-success warning says not to retry; stdout preserves `delivered (hosted)` |
+| Post-delivery registry stamp timed out | 0 | delivery-success warning says not to retry; stdout keeps the live state word |
 | Discovery alias lock timed out | unchanged | resolution falls back to canonical handles within its fixed budget |
-| Autonomous relay could not fork or detach all standard streams after hop one | 0 | the optional continuation stops; stdout still says `delivered (hosted)` |
+| Autonomous relay could not fork or detach all standard streams after hop one | 0 | the optional continuation stops; stdout still prints the live state word |
 
 The body cap (1 MiB) is enforced BEFORE any inbox store write, so a rejected oversized message leaves no partial record.
 

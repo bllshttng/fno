@@ -349,7 +349,7 @@ fn step_of(state: &ReplyState, items: &[AttentionItem], now: u64, cwd: &Path) ->
             })
         });
     let facts = Facts {
-        mail_landed: state.receipt.contains("delivered (hosted)"),
+        mail_landed: crate::mail_delivery_state::receipt_reached(&state.receipt),
         is_note: state.item_id.starts_with("note-"),
         session: session.as_ref().map(|(s, h)| (s.as_str(), h.as_str())),
         confirmed,
@@ -459,7 +459,7 @@ fn mail_note(
     ];
     let (code, stdout, _stderr) = runner(&argv);
     state.note_mail_sent = true;
-    if code == 0 && crate::mail_inject::mail_send_receipt(&stdout).contains("delivered (hosted)") {
+    if crate::mail_inject::mail_send_accepted(code, &stdout) {
         state.rung = "mail".into();
         state.outcome = "landed".into();
         state.evidence = crate::mail_inject::mail_send_receipt(&stdout).to_string();
@@ -819,7 +819,7 @@ mod tests {
         let items = vec![ready_item("q-done", None, Some("s1"))];
         record_answer("q-history");
         let mut io = FakeIo {
-            posture: "outstanding: q-done answered; mail to w1: delivered (hosted)".into(),
+            posture: "outstanding: q-done answered; mail to w1: accepted-new-turn".into(),
             clears: 0,
         };
         let state_dir = tempfile::tempdir().unwrap();

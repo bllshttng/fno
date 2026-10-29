@@ -148,7 +148,8 @@ Answer a message with `fno agents mail reply --to <msg-id>`. It threads the repl
 
 | Receipt reads | What it means |
 |---|---|
-| `delivered (hosted)` | Inject accepted. It does not prove it was read. Check `landed` in `fno agents mail admin sent`. |
+| `accepted-new-turn` / `accepted-steer` | The recipient's turn record holds the envelope id. It does not prove it was acted on. |
+| `parked` / `injected` | The bytes reached the recipient; no turn took them yet. `fno agents mail admin sent` shows when that changes. |
 | `queued (durable)` | Can sit undrained. No receipt is no coordination. |
 | `[bus-only]` | Drains by design at the recipient's turn boundary. The receipt IS coordination. |
 

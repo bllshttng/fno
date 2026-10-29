@@ -411,6 +411,22 @@ fn agy_wire(agents: &Path, paths: [String; 3], home: &Path, run: Run) -> Outcome
     }
 }
 
+// --- footnote ---------------------------------------------------------------
+
+/// footnote loads `~/.footnote/plugins/fno` in place. The install links the
+/// full stage there, and its receipt line names the link.
+pub fn footnote_wire(agents: &Path, run: Run) -> Outcome {
+    match run(&[agents_str(agents), "plugin-install", "footnote"]) {
+        Ok(out) => Outcome::Installed(
+            out.lines()
+                .find_map(|l| l.strip_prefix("plugin install footnote: "))
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        Err(e) => Outcome::Failed(e),
+    }
+}
+
 // --- main -------------------------------------------------------------------
 
 pub(crate) struct Harness {
@@ -418,7 +434,7 @@ pub(crate) struct Harness {
     pub(crate) label: &'static str,
 }
 
-pub(crate) const HARNESS_LIST: [Harness; 6] = [
+pub(crate) const HARNESS_LIST: [Harness; 7] = [
     Harness {
         name: "claude",
         label: "Claude Code",
@@ -442,6 +458,10 @@ pub(crate) const HARNESS_LIST: [Harness; 6] = [
     Harness {
         name: "agy",
         label: "Antigravity CLI",
+    },
+    Harness {
+        name: "footnote",
+        label: "footnote",
     },
 ];
 
@@ -493,6 +513,11 @@ pub fn run() -> i32 {
                     pi_wire(&agents, src.as_deref(), &real_run)
                 }
             }
+            "footnote" if home_missing => no_home(),
+            "footnote" if !agents_ok => {
+                Outcome::Failed("the fno-agents binary is missing; run `fno doctor update`".into())
+            }
+            "footnote" => footnote_wire(&agents, &real_run),
             _ => {
                 if home_missing {
                     no_home()

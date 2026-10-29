@@ -4,7 +4,7 @@ Reference for target's environment audit step. Run from `skills/target/SKILL.md`
 
 **3-second environment check before target spends 20 minutes hitting an avoidable blocker.**
 
-Catches the most common environmental reasons target gets blocked: dirty working tree, expired auth, missing deps, stale codemap. Read-only. Fast.
+Catches the most common environmental reasons target gets blocked: dirty working tree, expired auth, missing deps, low disk. Read-only. Fast.
 
 ## Invocation
 
@@ -23,7 +23,7 @@ Each check emits one line on stdout:
 ```
   ✓ working-tree-clean: clean working tree
   ✗ branch-state: on protected branch 'main' - create a feature branch before making changes
-  ⚠ codemap-fresh: codemap is 26h old (>24h) - consider refreshing with `fno doctor codemap`
+  ⚠ disk-space: only 3.2GB free in $HOME (recommend >=5GB)
   ? test-suite-green: opt-in not set (set PREFLIGHT_RUN_TESTS=1 or test_suite_check: true in config.toml)
 ```
 
@@ -61,7 +61,6 @@ See [preflight-checks.md](preflight-checks.md) for the full catalog with pass cr
 | `branch-state` | always | Fails on main/master/prod/release/production; warns on hotfix |
 | `deps-installed` | always | Warns on missing tools (not fail) |
 | `test-suite-green` | unknown | Opt-in: `PREFLIGHT_RUN_TESTS=1` or `test_suite_check: true` |
-| `codemap-fresh` | always | Warns when `.fno/codemap.md` >24h old |
 | `auth-valid` | always | Skips if no GitHub remote detected |
 | `disk-space` | always | Fails <1GB, warns <5GB |
 

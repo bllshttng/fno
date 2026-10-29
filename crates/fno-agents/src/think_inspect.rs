@@ -2,8 +2,8 @@
 //!
 //! The model still judges relevance and chooses a design. This module only
 //! gathers facts whose truth should not depend on prompt compliance:
-//! repository state, graph overlap, PR search availability, schema
-//! grounding, and the project lesson corpus. Every external command is
+//! repository state, graph overlap, PR search availability, database
+//! signals, and the project lesson corpus. Every external command is
 //! argv-only and every missing source is typed. The receipt's key order and
 //! byte shape are the deleted Python command's (`json.dumps(indent=2)`).
 
@@ -76,8 +76,6 @@ pub struct Inputs<'a> {
     pub archive: Option<Vec<Value>>,
     pub plans_path: Option<PathBuf>,
     pub home: Option<PathBuf>,
-    /// The worktree space dir that holds `codemap.md`.
-    pub space_dir: Option<PathBuf>,
     pub run: &'a dyn Fn(&[&str], &Path) -> Outcome,
     pub decisions: &'a dyn Fn(&str) -> Result<Vec<Value>, String>,
 }
@@ -306,53 +304,13 @@ pub fn pull_requests_section(outcome: &Outcome) -> Value {
 // database
 // ---------------------------------------------------------------------------
 
-fn collect_mtimes(dir: &Path, out: &mut Vec<std::time::SystemTime>) -> std::io::Result<()> {
-    // An unreadable directory contributes nothing (rglob's own degrade); a
-    // file whose stat fails reads as stale.
-    let Ok(read) = std::fs::read_dir(dir) else {
-        return Ok(());
-    };
-    for entry in read.flatten() {
-        let path = entry.path();
-        let is_link = std::fs::symlink_metadata(&path)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false);
-        if path.is_dir() {
-            if !is_link {
-                collect_mtimes(&path, out)?;
-            }
-        } else if path.is_file() {
-            out.push(std::fs::metadata(&path)?.modified()?);
-        }
-    }
-    Ok(())
-}
-
-fn schema_is_stale(artifact: &Path, signal_paths: &[PathBuf]) -> std::io::Result<bool> {
-    let artifact_mtime = std::fs::metadata(artifact)?.modified()?;
-    let mut mtimes = Vec::new();
-    for path in signal_paths {
-        if path.is_dir() {
-            collect_mtimes(path, &mut mtimes)?;
-        } else if path.is_file() {
-            mtimes.push(std::fs::metadata(path)?.modified()?);
-        }
-    }
-    Ok(mtimes
-        .iter()
-        .max()
-        .is_some_and(|newest| *newest > artifact_mtime))
-}
-
-/// Database detection and schema grounding against the space's codemap.
-pub fn database_section(repo: &Path, artifact: Option<&Path>) -> Value {
+/// Database detection: the schema files and env keys that name a database.
+pub fn database_section(repo: &Path) -> Value {
     let mut signals: BTreeSet<String> = BTreeSet::new();
-    let mut signal_paths: Vec<PathBuf> = Vec::new();
     for relative in FIXED_DB_SIGNALS {
         let path = repo.join(relative);
         if path.exists() {
             signals.insert(relative.to_string());
-            signal_paths.push(path);
         }
     }
     if let Some(re) = regex(r"(?m)^\s*(DATABASE_URL|SUPABASE_DB_URL|POSTGRES_URL|DIRECT_URL)\s*=") {
@@ -361,40 +319,16 @@ pub fn database_section(repo: &Path, artifact: Option<&Path>) -> Value {
             let Some(body) = read_text(&path) else {
                 continue;
             };
-            let mut hit = false;
             for caps in re.captures_iter(&body) {
-                hit = true;
                 if let Some(key) = caps.get(1) {
                     signals.insert(format!("{name}:{}", key.as_str()));
                 }
             }
-            if hit {
-                signal_paths.push(path);
-            }
         }
     }
-    let grounded = artifact
-        .and_then(read_text)
-        .is_some_and(|body| body.contains("## Database Schema"));
-    let stale = match artifact {
-        Some(path) if grounded => schema_is_stale(path, &signal_paths).unwrap_or(true),
-        _ => false,
-    };
-    let status = if stale {
-        "stale"
-    } else if grounded {
-        "grounded"
-    } else if !signals.is_empty() {
-        "missing"
-    } else {
-        "not-applicable"
-    };
-    let artifact_exists = artifact.is_some_and(Path::exists);
     json!({
-        "detected": !signals.is_empty() || grounded,
+        "detected": !signals.is_empty(),
         "signals": signals.into_iter().collect::<Vec<String>>(),
-        "schema_artifact": if artifact_exists { json!("codemap.md") } else { Value::Null },
-        "schema_status": status,
     })
 }
 
@@ -1161,12 +1095,7 @@ pub fn build_receipt(seed: &str, repo: &Path, inputs: &Inputs<'_>) -> Value {
         "--json",
         "number,title,state,url",
     ]));
-    let artifact = inputs
-        .space_dir
-        .clone()
-        .or_else(|| crate::paths::worktree_space_dir_opt(&repo))
-        .map(|dir| dir.join("codemap.md"));
-    let database = database_section(&repo, artifact.as_deref());
+    let database = database_section(&repo);
     let pitfalls_plans = inputs
         .plans_path
         .clone()
@@ -1183,11 +1112,6 @@ pub fn build_receipt(seed: &str, repo: &Path, inputs: &Inputs<'_>) -> Value {
     }
     if text(&pull_requests, "status") != "ok" {
         warnings.push("pull request evidence is unavailable".to_string());
-    }
-    match text(&database, "schema_status") {
-        "missing" => warnings.push("database schema evidence is missing".to_string()),
-        "stale" => warnings.push("database schema evidence is stale".to_string()),
-        _ => {}
     }
     let recall = graph.get("recall").cloned().unwrap_or(Value::Null);
     let no_duplicates = !graph
@@ -1288,11 +1212,7 @@ pub fn render_receipt(receipt: &Value) -> String {
             shown(prs, "status", ""),
             len_of(prs, "matches")
         ),
-        format!(
-            "database: detected={} schema={}",
-            detected,
-            shown(database, "schema_status", "")
-        ),
+        format!("database: detected={detected}"),
         format!(
             "pitfalls: source={} entries={} syntheses={} candidates={}",
             shown(pitfalls, "source", ""),
@@ -1418,7 +1338,6 @@ pub fn run(args: &[String]) -> i32 {
         archive: None,
         plans_path: None,
         home: None,
-        space_dir: None,
         run: &real_command,
         decisions: &live_decisions,
     };

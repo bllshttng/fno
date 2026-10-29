@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Project context for AI agents (Claude Code, Gemini CLI, Codex CLI). Canonical source; `CLAUDE.md` / `GEMINI.md` are stubs that import it. Quick reference + index: deep subsystem mechanics live in `docs/` (see [Deep-dive docs](#deep-dive-docs)).
+Project context for AI agents (Claude Code, Gemini CLI, Codex CLI). Canonical source; `CLAUDE.md` / `GEMINI.md` are stubs that import it. Deep subsystem mechanics live in `docs/` (see [Deep-dive docs](#deep-dive-docs)).
 
 **fno** is a Claude Code plugin: idea -> shipped PR. Setup: `fno config setup run` or `/fno:setup`.
 
@@ -12,7 +12,7 @@ Lead responses with the next action, number multi-step work, give concrete time 
 
 ## Working principles
 
-0. **Worktree-first.** Whenever possible, enter a dedicated feature worktree before editing, generating, or committing (`worktree.policy = "never"` projects work in place by design). Keep the canonical checkout unclogged. Prune after merge.
+0. **Worktree-first.** Enter a dedicated feature worktree before editing, generating, or committing (`worktree.policy = "never"` projects work in place by design). Keep the canonical checkout unclogged. Prune after merge.
 1. **Think before coding.** State assumptions; if uncertain, ask. Surface alternative interpretations and simpler options instead of silently picking.
 2. **Simplicity first.** Minimum code that solves the problem. No speculative features, single-use abstractions, unrequested config. If 200 lines could be 50, rewrite.
 3. **OSS-first: fix in the project, never memory-only.** Anything load-bearing (workaround, invariant, gotcha, "next time do X") goes in code, docs, `--help` text, a gate, a test, or a filed node - never private agent memory, which ships to nobody. Full rule: [.claude/rules/oss-fix-not-memory.md](.claude/rules/oss-fix-not-memory.md).
@@ -33,7 +33,7 @@ Traps a fresh agent re-hits because no lint, guard or refusal catches them yet. 
 
 AC9 delivery sentinel (echoed verbatim by a fresh worker, asserted by unit test): `kdc-delivery-sentinel-1932`.
 
-No entries today. The last one aged out to [Sending a raw command to a worker](docs/harness-command-matrix.md#sending-a-raw-command-to-a-worker).
+No entries today. The last one aged out to [the raw-command entry](docs/harness-command-matrix.md#sending-a-raw-command-to-a-worker).
 
 ## Repository
 
@@ -159,7 +159,7 @@ Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> im
 - **Pane keeper** - every pane's pty master lives in a keeper, not the server. A fresh server re-adopts the same pid; kill-server refuses an unkept pane. `fno mux pane keeper list` reads survivors. The page answers why, not the daemon. [pane-keeper](docs/architecture/pane-keeper.md).
 - **watchdog** - transcript-truth wake/reroute/reap; dry run, `--apply`/`--apply-all`. [fleet-watchdog](docs/architecture/fleet-watchdog.md)
 - **`fno doctor`** - compares deployed `fno` with local source. Reports lag. `--fix` runs `fno doctor update`. [installed-fno-staleness](docs/architecture/installed-fno-staleness.md).
-- **`fno doctor footprint`** - measures sustained fleet CPU and process count without load average; see [machine footprint](docs/architecture/machine-footprint.md).
+- **`fno doctor footprint`** - measures sustained fleet CPU and process count. The load average prints demoted and decides nothing. See [machine footprint](docs/architecture/machine-footprint.md).
 - **Accounts + rotation** - `fno config accounts`: records, failover, lockout, routing, combos. Five axes, never confuse them: harness (`-H`), provider (vendor, `-P`), model (`-m`), effort (`--effort`), account (`--account`). `opencode` is legally both harness and provider. Never infer the axis from a value. Defined in [axis-vocabulary](docs/architecture/axis-vocabulary.md).
 - **[Stage table](docs/architecture/role-based-model-routing.md)** (per-stage axis) - `config.agents.profiles.<command>` overlays `agents.defaults`, reaches autonomous dispatch. `dispatch.harness` is deprecated. `route`=vendor/model (`--route`) beside `provider`=harness (`provider` is the config key name, not the axis. It holds a harness value.)
 - **Curated CLI menu** - `fno doctor lint menu-caps` caps the first three levels of `fno` and `fno-agents` at 12 commands each; hidden commands count. Over-cap groups sit in shrink-only `scripts/ci/menu-caps-debt.tsv`. Group actions are arguments not leaves.
@@ -176,7 +176,7 @@ Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> im
 
 ## Deep-dive docs
 
-The docs nothing above already points at:
+Docs nothing above points at:
 
 Backlog: [usage](docs/backlog-usage.md), [board ordering](docs/architecture/backlog-board-ordering.md), [triage](docs/backlog-triage.md)
 

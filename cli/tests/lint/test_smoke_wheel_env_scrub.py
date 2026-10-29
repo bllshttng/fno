@@ -188,7 +188,6 @@ WHEEL_CHANNEL_SMOKES = {
 #: so adding a smoke script is a decision instead of a silent exemption.
 NON_INSTALL_SMOKES = {
     "run-all.sh",
-    "test-db-schema.sh",
     "test_done.sh",
     "test_find_new.sh",
     "test_help.sh",

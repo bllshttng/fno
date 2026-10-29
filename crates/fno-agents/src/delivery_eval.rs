@@ -44,7 +44,6 @@ const EFFECT_STATES: &[&str] = &[
     "blocked",
     "unknown",
 ];
-const DIFFICULTY_REQUIRED_AFTER: (i32, u32, u32) = (2026, 8, 26);
 
 fn utc_now() -> DateTime<FixedOffset> {
     chrono::Utc::now().with_timezone(&chrono::FixedOffset::east_opt(0).expect("zero offset"))
@@ -619,30 +618,12 @@ fn validate_frontmatter(mapping: &Map<String, Value>) -> Result<(), String> {
             )
         }
     };
-    let created_date = created_date(&created)?.ok_or_else(|| {
-        "plan is unreadable or invalid: created must be a date (YYYY-MM-DD)".to_string()
-    })?;
-    let gate = chrono::NaiveDate::from_ymd_opt(
-        DIFFICULTY_REQUIRED_AFTER.0,
-        DIFFICULTY_REQUIRED_AFTER.1,
-        DIFFICULTY_REQUIRED_AFTER.2,
-    )
-    .expect("constant date");
-    if created_date > gate {
-        let band_ok = match mapping.get("difficulty") {
-            Some(Value::String(band)) => {
-                matches!(
-                    band.trim().to_lowercase().as_str(),
-                    "low" | "medium" | "high"
-                )
-            }
-            _ => false,
-        };
-        if !band_ok {
-            return Err(
-                "difficulty is required for plans created after 2026-08-26: set it to one of low, medium, high (an intrinsic property of the work - the expected time, edge cases, unknowns, and what a senior tech lead makes of the problem; not a model or capacity hint)".to_string(),
-            );
-        }
+    // Validate the date under this function's own error contract; the gate
+    // itself lives once in plan_schema, and its undatable branch is
+    // unreachable here because the parse above already refused one.
+    created_date(&created)?;
+    if let Some(err) = crate::plan_schema::difficulty_gate_error(mapping, true) {
+        return Err(err);
     }
     Ok(())
 }

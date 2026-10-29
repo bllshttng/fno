@@ -26,7 +26,6 @@ footnote/                              # Flat root - plugin.json at .claude-plug
 │   ├── check-pr/                       # Poll for external review feedback
 │   ├── distill/                        # Conversation analysis/distillation
 │   ├── setup/                          # Interactive settings wizard
-│   ├── codemap/                        # AST structural analysis (PageRank)
 │   ├── ship-docs/                      # Architecture documentation generation
 │   └── git-worktrees/                  # Isolated git worktree management
 │

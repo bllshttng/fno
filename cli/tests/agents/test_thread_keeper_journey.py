@@ -240,7 +240,7 @@ def _send_mail(text: str, session_id: str, monkeypatch, capsys) -> None:
     # land after it. The receipt is not the proof - the transcript is. The
     # step-7 answer assertions below are the gate, so a queued (durable)
     # receipt here is recorded, never fatal.
-    if "delivered (hosted)" not in out:
+    if "injected" not in out:
         print(f"mail receipt without confirm: {out.strip()}")
 
 
