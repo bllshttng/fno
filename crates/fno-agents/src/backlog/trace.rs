@@ -206,7 +206,12 @@ pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
     if inp.cost_usd.is_none() {
         header["cost_reason"] = json!("no cost recorded");
     }
-    let (tasks, tasks_reason) = task_rows(inp);
+    let execute: Vec<&str> = sessions
+        .iter()
+        .filter(|s| str_of(s, "phase") == Some("execute"))
+        .filter_map(|s| str_of(s, "session_id"))
+        .collect();
+    let (tasks, tasks_reason) = task_rows(inp, &execute);
     json!({
         "node": id,
         "title": str_of(node, "title"),
@@ -284,24 +289,88 @@ fn task_span(events: &[Value], task: &str) -> Span {
     )
 }
 
-/// The plan's tasks in plan order with their recorded spans, plus the
-/// reason the list is empty.
-fn task_rows(inp: &Inputs) -> (Vec<Value>, Value) {
+/// Per-task timed counts from the execute sessions. Each mark goes to the
+/// one task window that holds it; a mark two windows hold goes to neither,
+/// and those tasks read null. The phase total keeps every mark.
+fn task_counts(inp: &Inputs, execute: &[&str], spans: &[Span]) -> Vec<Value> {
+    let mut per_task: Vec<BTreeMap<&str, u64>> = vec![BTreeMap::new(); spans.len()];
+    let mut shared = vec![false; spans.len()];
+    let mut unread: Option<String> = None;
+    for sid in execute {
+        let Some(scan) = inp.scans.get(*sid) else {
+            unread = Some("not on this host".into());
+            continue;
+        };
+        if scan.counts.get("tool_errors").copied().flatten().is_none() {
+            unread = Some(scan.reason.clone().unwrap_or_else(|| "not read".into()));
+        }
+        for (at, kind) in &scan.marks {
+            let holders: Vec<usize> = spans
+                .iter()
+                .enumerate()
+                .filter(|(_, (s, e, _))| matches!((s, e), (Some(s), Some(e)) if s <= at && at <= e))
+                .map(|(i, _)| i)
+                .collect();
+            match holders.as_slice() {
+                [one] => *per_task[*one].entry(*kind).or_insert(0) += 1,
+                [] => {}
+                many => many.iter().for_each(|i| shared[*i] = true),
+            }
+        }
+    }
+    spans
+        .iter()
+        .enumerate()
+        .map(|(i, (start, done, _))| {
+            let reason = if start.is_none() || done.is_none() {
+                Some("not recorded".to_string())
+            } else if shared[i] {
+                Some("parallel tasks share this window".to_string())
+            } else {
+                unread.clone()
+            };
+            let (mut counts, mut reasons) = (Map::new(), Map::new());
+            for kind in TIMED_KINDS {
+                let n = per_task[i].get(kind).copied().unwrap_or(0);
+                counts.insert(
+                    kind.into(),
+                    if reason.is_some() {
+                        Value::Null
+                    } else {
+                        json!(n)
+                    },
+                );
+                if let Some(r) = &reason {
+                    reasons.insert(kind.into(), json!(r));
+                }
+            }
+            errors_value(counts, reasons)
+        })
+        .collect()
+}
+
+/// The plan's tasks in plan order with their recorded spans and counts,
+/// plus the reason the list is empty.
+fn task_rows(inp: &Inputs, execute: &[&str]) -> (Vec<Value>, Value) {
     let plan = match &inp.tasks {
         Ok(t) => t,
         Err(reason) => return (Vec::new(), json!(reason)),
     };
     let events: &[Value] = inp.events.as_deref().unwrap_or(&[]);
+    let spans: Vec<Span> = plan.iter().map(|t| task_span(events, &t.id)).collect();
+    let errors = task_counts(inp, execute, &spans);
     let rows = plan
         .iter()
-        .map(|task| {
-            let (start, done, outcome) = task_span(events, &task.id);
+        .zip(spans)
+        .zip(errors)
+        .map(|((task, (start, done, outcome)), errors)| {
             let mut row = json!({
                 "id": task.id,
                 "title": task.title,
                 "started_at": start.map(stamp),
                 "ended_at": done.map(stamp),
                 "outcome": outcome,
+                "errors": errors,
             });
             if start.is_none() && done.is_none() {
                 row["reason"] = json!(match &inp.events {
@@ -694,6 +763,32 @@ mod tests {
         assert!(t["errors"]["tool_errors"].is_null());
         assert_eq!(t["errors"]["ci_red"], 1);
         assert_eq!(t["errors"]["reopens"], 0);
+
+        // A task window holds both marks; an overlapping pair holds neither.
+        let ev = |t: &str, task: &str, ts: &str| json!({"type": t, "task": task, "ts": ts});
+        let task = |id: &str| PlanTask {
+            id: id.into(),
+            title: String::new(),
+        };
+        let mut inp = Inputs {
+            events: Ok(vec![
+                ev("task_started", "1", "2026-10-03T00:00:00Z"),
+                ev("task_done", "1", "2026-10-03T01:00:00Z"),
+            ]),
+            tasks: Ok(vec![task("1")]),
+            scans: inp.scans,
+            ..Default::default()
+        };
+        assert_eq!(fold(&node, &inp)["tasks"][0]["errors"]["tool_errors"], 2);
+        let events = inp.events.as_mut().unwrap();
+        events.push(ev("task_started", "2", "2026-10-03T00:10:00Z"));
+        events.push(ev("task_done", "2", "2026-10-03T00:40:00Z"));
+        inp.tasks = Ok(vec![task("1"), task("2")]);
+        let t = fold(&node, &inp);
+        assert_eq!(
+            t["tasks"][1]["errors"]["unread"]["tool_errors"],
+            "parallel tasks share this window"
+        );
     }
 
     #[test]
