@@ -526,13 +526,19 @@ fn fold_stray_chats(chats_dir: &Path, stray_root: &Path) {
         let Some(name) = stray.file_name().map(|n| n.to_os_string()) else {
             continue;
         };
+        // A concurrent record may fold and park this dir first; a vanished
+        // stray is that fold's success, not an error.
         if let Err(e) = fold_one_stray(&stray.join("messages.jsonl"), &chats_dir.join(&name)) {
-            eprintln!("chats fold {}: {e}", stray.display());
+            if stray.exists() {
+                eprintln!("chats fold {}: {e}", stray.display());
+            }
             continue;
         }
         let _ = std::fs::create_dir_all(&parked);
         if let Err(e) = std::fs::rename(&stray, parked.join(&name)) {
-            eprintln!("chats fold park {}: {e}", stray.display());
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("chats fold park {}: {e}", stray.display());
+            }
         }
     }
 }

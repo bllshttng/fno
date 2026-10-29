@@ -846,8 +846,8 @@ impl MessagesBoard {
     }
 
     /// Column 3's lines, with the conversation row each line belongs to
-    /// (`None` for separators) so the click map mirrors the paint. A bubble
-    /// thread: the other side on the left, the selected agent on the right,
+    /// (`None` for separators) so the click map mirrors the paint. A
+    /// thread: every body left-aligned under its sender's label,
     /// one centered HH:MM before a gap of five minutes or more, one name
     /// label per run of consecutive same-sender rows, and the body only -
     /// no envelopes, no delivered-header lines (item 9 runs, item 12
@@ -933,8 +933,8 @@ impl MessagesBoard {
         (lines, owners)
     }
 
-    /// Column 3 for a selected You thread: the operator's typed turn on the
-    /// right, the assistant's reply on the left, one item at a time, with
+    /// Column 3 for a selected You thread: the operator's typed turn, then
+    /// the assistant's reply, both left-aligned, one item at a time, with
     /// the same gap-clock and wrap idioms `thread_lines` uses. Owners index
     /// ITEMS (two bubbles per item), so the cursor indexes `item = cur/2`.
     fn you_thread_lines(&self, w: usize, sid: &str) -> (Vec<BLine>, Vec<Option<usize>>) {
@@ -968,7 +968,7 @@ impl MessagesBoard {
                 }
             }
             last_ts = ts.to_string();
-            // The operator's typed turn: right-aligned like their mail side.
+            // The operator's typed turn, under its own You label.
             let typed = item.get("typed_text").and_then(Value::as_str).unwrap_or("");
             if !typed.is_empty() {
                 push_blank(&mut lines, &mut owners);
@@ -982,7 +982,7 @@ impl MessagesBoard {
                     owners.push(Some(item_index));
                 }
             }
-            // The assistant's reply: left-aligned like the other side.
+            // The assistant's reply, under the session's name.
             let reply = item.get("reply_text").and_then(Value::as_str).unwrap_or("");
             if !reply.is_empty() {
                 push_blank(&mut lines, &mut owners);
