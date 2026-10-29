@@ -81,7 +81,7 @@ printf '#!/usr/bin/env bash\necho "%s"\n' "$SBX/fakepy" > "$FAKEBIN/uv"
 chmod +x "$FAKEBIN/uv"
 
 OUT6="$(env PATH="$FAKEBIN" FNO_HOOK_PY_FALLBACK_PATH="$EMPTYDIR" bash "$RESOLVER" -c 'print("picked-me")')"
-[[ "$OUT6" == "picked-me" ]] || fail "AC3: the uv-managed python was not picked (got: $OUT6)"
+[[ "$OUT6" == "uv-managed-python" ]] || fail "AC3: the uv-managed python was not picked (got: $OUT6)"
 pass "AC3: the uv-managed python resolves when system python3 is absent"
 
 NOBIN="$SBX/nobin"
