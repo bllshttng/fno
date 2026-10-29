@@ -915,25 +915,15 @@ pub(crate) fn dirs_home() -> PathBuf {
 /// The spaces ROOT (the directory holding `<slug>` space dirs): `FNO_SPACES_DIR`
 /// verbatim -- it names the root itself, like Python `spaces_root` -- else
 /// `<FNO_AGENTS_HOME parent>/spaces`, else `$HOME/.fno/spaces`.
-/// `config.paths.spaces_dir` is Python-only for now: relocation through the
-/// env pins covers tests and isolation, and the default answers
-/// byte-identically to `fno.paths` (the slug contract below is a
-/// cross-language wire format).
+/// The spaces ROOT: `FNO_SPACES_DIR`, then the `config.paths.spaces_dir`
+/// override, then the state chain's `spaces` dir -- Python
+/// `paths.spaces_root`'s chain (the slug contract below is a cross-language
+/// wire format).
 fn spaces_root_dir() -> PathBuf {
     if let Some(v) = std::env::var_os("FNO_SPACES_DIR").filter(|v| !v.is_empty()) {
         let root = PathBuf::from(v);
         fence_declared_root(test_sandbox_claimed(), &root);
         return root;
-    }
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    // Python spaces_root(): the `config.paths.spaces_dir` override, resolved
-    // like every paths override and anchored at the cwd when relative.
-    if let Some(raw) = crate::paths_cli::cfg_str(&cwd, &["paths", "spaces_dir"]) {
-        if let Ok(p) = crate::paths_cli::resolve_override_path(&raw) {
-            let root = crate::paths_cli::anchor_at(&cwd, p);
-            fence_declared_root(test_sandbox_claimed(), &root);
-            return root;
-        }
     }
     durable_spaces_root()
 }
@@ -943,11 +933,22 @@ fn spaces_root_dir() -> PathBuf {
 /// state root outlives it. A one-time migration moves the ONLY copy, so its
 /// destination must be a root the repo's own processes still resolve.
 fn durable_spaces_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // Python spaces_root(): the `config.paths.spaces_dir` override, resolved
+    // like every paths override and anchored at the cwd when relative. It is
+    // DURABLE: it outlives the per-process pin, so the migration guard
+    // validates destinations built under it.
+    if let Some(raw) = crate::paths_cli::cfg_str(&cwd, &["paths", "spaces_dir"]) {
+        if let Ok(p) = crate::paths_cli::resolve_override_path(&raw) {
+            let root = crate::paths_cli::anchor_at(&cwd, p);
+            fence_declared_root(test_sandbox_claimed(), &root);
+            return root;
+        }
+    }
     let state_root = if let Some(v) = std::env::var_os(HOME_ENV).filter(|v| !v.is_empty()) {
         let home = PathBuf::from(&v);
         home.parent().map(|p| p.to_path_buf()).unwrap_or(home)
     } else {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         crate::paths_cli::declared_state_dir(&cwd).unwrap_or_else(|| {
             refuse_undeclared_home_fallback(test_root_declared(), "FNO_SPACES_DIR");
             std::env::var_os("HOME")
@@ -1031,30 +1032,50 @@ pub fn space_dir(cwd: &Path) -> PathBuf {
 /// the resolution mid-read. The stop/rm claims release skips on `None`
 /// instead of failing the stop.
 pub fn space_dir_opt(cwd: &Path) -> Option<PathBuf> {
-    let spaces = std::env::var_os("FNO_SPACES_DIR")
+    if let Some(dir) = std::env::var_os("FNO_SPACES_DIR")
         .filter(|v| !v.is_empty())
-        .map(PathBuf::from);
+        .map(PathBuf::from)
+    {
+        return space_dir_from_root(dir, cwd);
+    }
+    let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // The configured spaces override answers before the state chain, so the
+    // best-effort callers read the same space the strict resolver answers.
+    if let Some(raw) = crate::paths_cli::cfg_str(&base, &["paths", "spaces_dir"]) {
+        if let Ok(p) = crate::paths_cli::resolve_override_path(&raw) {
+            return space_dir_from_root(crate::paths_cli::anchor_at(&base, p), cwd);
+        }
+    }
     let agents_home = std::env::var_os(HOME_ENV)
         .filter(|v| !v.is_empty())
         .map(PathBuf::from);
-    let root = match (spaces, agents_home) {
-        (Some(dir), _) => dir,
-        (None, Some(home)) => home
+    if let Some(home) = agents_home {
+        let root = home
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| home.clone())
-            .join("spaces"),
-        // No pin at all: under test that is an undeclared process (skip);
-        // in production the durable default is the real answer.
-        (None, None) => {
-            if cfg!(test) && !test_root_declared() {
-                return None;
-            }
-            std::env::var_os("HOME")
-                .filter(|h| !h.is_empty())
-                .map(|h| PathBuf::from(h).join(".fno").join("spaces"))?
-        }
-    };
+            .join("spaces");
+        return space_dir_from_root(root, cwd);
+    }
+    // The configured state chain (carrier, then config state_dir), then the
+    // guarded default: the strict resolver's answer, one-read.
+    if let Some(root) = crate::paths_cli::declared_state_dir(&base) {
+        return space_dir_from_root(root.join("spaces"), cwd);
+    }
+    // No pin at all: under test that is an undeclared process (skip);
+    // in production the durable default is the real answer.
+    if cfg!(test) && !test_root_declared() {
+        return None;
+    }
+    let home = std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(|h| PathBuf::from(h).join(".fno").join("spaces"))?;
+    space_dir_from_root(home, cwd)
+}
+
+/// The slug join every [`space_dir_opt`] arm shares: the space for `cwd`'s
+/// repo under one resolved root.
+fn space_dir_from_root(root: PathBuf, cwd: &Path) -> Option<PathBuf> {
     let repo_root = canonical_repo_root(cwd).unwrap_or_else(|| worktree_repo_root(cwd));
     Some(root.join(space_slug(&repo_root)))
 }
