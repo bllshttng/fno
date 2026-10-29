@@ -182,7 +182,14 @@ fn question_page(
                 .as_deref()
                 .filter(|n| !n.is_empty())
                 .unwrap_or(&o.handle);
-            format!("asked by {name} ({})", o.handle)
+            // The parenthetical names the handle beside the registry name;
+            // with no registry name the handle already printed, so the parens
+            // would read one word twice.
+            if name == o.handle.as_str() {
+                format!("asked by {name}")
+            } else {
+                format!("asked by {name} ({})", o.handle)
+            }
         }
         None => asker.map(|a| a.handle.as_str()).unwrap_or("?").to_string(),
     };
@@ -1464,6 +1471,21 @@ mod tests {
         let page = question_page(&bare, &d, 0, 60);
         assert!(page.contains("NOT RECORDED"));
         assert!(!page.contains("via "), "no lead named: {page}");
+
+        // A name equal to the handle prints once: the parenthetical would
+        // read the same word twice.
+        let mut same = item("q-same", true);
+        same.origin = Some(crate::needs_overlay::QuestionOrigin {
+            handle: "w1".into(),
+            session_id: Some("aaaa1111-bbbb".into()),
+            name: Some("w1".into()),
+            harness: Some("claude".into()),
+            host: Some("bb16".into()),
+        });
+        let d = Detail::open(&fold_with(vec![same.clone()]), "q-same").unwrap();
+        let page = question_page(&same, &d, 0, 60);
+        assert!(page.contains("asked by w1"), "no duplicated handle: {page}");
+        assert!(!page.contains("(w1"), "parens dropped: {page}");
     }
 
     #[tokio::test]

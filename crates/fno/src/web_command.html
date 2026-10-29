@@ -158,8 +158,13 @@ function openQuestion(q) {
   const facts = [];
   if (o.handle || o.name) {
     // The header names the worker, its mail tag, harness and full session id.
-    const inner = [o.handle, o.harness, o.session_id].filter(Boolean).join(", ");
-    facts.push("asked by " + (o.name || o.handle) + " (" + inner + ")");
+    // The handle joins the parenthetical only when it is not the word the
+    // registry name already printed.
+    const name = o.name || o.handle;
+    const parts = [o.harness, o.session_id];
+    if (name !== o.handle) parts.unshift(o.handle);
+    const inner = parts.filter(Boolean).join(", ");
+    facts.push("asked by " + name + " (" + inner + ")");
   }
   if (o.host) facts.push("on " + o.host);
   if (via) facts.push("via " + via);
