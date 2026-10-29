@@ -426,6 +426,7 @@ pub mod pane_spawn;
 pub mod pane_stop;
 pub mod paths;
 pub mod paths_cli;
+pub mod peek;
 pub mod pending_session_row;
 pub mod phase_close;
 pub mod pi;
