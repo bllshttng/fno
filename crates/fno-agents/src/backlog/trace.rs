@@ -10,19 +10,11 @@ use serde_json::{json, Value};
 const PHASES: [&str; 5] = ["think", "blueprint", "execute", "review", "ship"];
 
 /// Everything the fold reads, gathered first so the fold itself is pure.
+#[derive(Default)]
 pub(crate) struct Inputs {
     /// The review rows whose branch names the node.
     pub(crate) reviews: Vec<Value>,
     pub(crate) cost_usd: Option<f64>,
-}
-
-impl Default for Inputs {
-    fn default() -> Self {
-        Inputs {
-            reviews: Vec::new(),
-            cost_usd: None,
-        }
-    }
 }
 
 fn ms_of(ts: &str) -> Option<i64> {
@@ -162,6 +154,15 @@ fn phase_row(phase: &str, sessions: &[&Value], inp: &Inputs) -> Value {
     row
 }
 
+/// The node's own project store, from its `project` root in the work map,
+/// else this checkout's store.
+fn store_of(node: &Value) -> std::path::PathBuf {
+    str_of(node, "project")
+        .and_then(super::settings::project_root)
+        .map(|root| crate::paths::events_path(std::path::Path::new(&root)))
+        .unwrap_or_else(crate::paths::project_events_path)
+}
+
 /// Shared reads for one trace call: the store and the ledger, read once.
 pub(crate) struct Shared {
     reviews: Vec<Value>,
@@ -169,8 +170,8 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    pub(crate) fn load() -> Shared {
-        let events_path = crate::paths::project_events_path();
+    pub(crate) fn load(root: &Value) -> Shared {
+        let events_path = store_of(root);
         // An unreadable store leaves no review rows; the review phase then
         // reads its sessions alone.
         let _ = crate::event_store::import_all(&events_path);
