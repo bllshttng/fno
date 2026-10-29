@@ -648,6 +648,15 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         || node_id
             .as_deref()
             .is_some_and(|node| role_chat_clears_pr(probes, cwd, pr, head, node))
+        || approval_carries(
+            probes,
+            cwd,
+            &root,
+            pr,
+            head,
+            node_id.as_deref(),
+            &paint_paths,
+        )
     {
         return None;
     }
@@ -693,6 +702,132 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         }
     }
     Some(Blocker::held("visual_approval", detail))
+}
+
+/// How many earlier commits of the PR the carry walks, newest first.
+const CARRY_WALK: usize = 30;
+
+/// The user's look carries to a head whose own paint patch is unchanged: a
+/// main merge or a test-only commit moves the head but not what the user
+/// saw. The newest earlier commit of this PR that the user approved is the
+/// reference. The PR's paint patch against its base, at that commit and at
+/// the head, must match file for file. Any paint change holds, and so does
+/// every unreadable read.
+fn approval_carries<P: Probes>(
+    probes: &P,
+    cwd: &Path,
+    root: &Path,
+    pr: u64,
+    head: &str,
+    node: Option<&str>,
+    paint_paths: &[String],
+) -> bool {
+    let Some(commits) = gh_lines(
+        probes,
+        cwd,
+        &[
+            "api",
+            &format!("repos/{{owner}}/{{repo}}/pulls/{pr}/commits"),
+            "--paginate",
+            "--jq",
+            ".[].sha",
+        ],
+    ) else {
+        return false;
+    };
+    let mut texts: Vec<String> = approving_pages(root, pr)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect();
+    texts.extend(
+        node.map(|n| role_approval_texts(probes, cwd, pr, n))
+            .unwrap_or_default(),
+    );
+    let Some(approved) = commits
+        .iter()
+        .rev()
+        .filter(|sha| sha.as_str() != head)
+        .take(CARRY_WALK)
+        .find(|sha| texts.iter().any(|text| text.contains(sha.as_str())))
+    else {
+        return false;
+    };
+    let Some(base) = gh_lines(
+        probes,
+        cwd,
+        &[
+            "api",
+            &format!("repos/{{owner}}/{{repo}}/pulls/{pr}"),
+            "--jq",
+            ".base.ref",
+        ],
+    )
+    .and_then(|l| l.into_iter().next()) else {
+        return false;
+    };
+    match (
+        paint_patch(probes, cwd, &base, approved, paint_paths),
+        paint_patch(probes, cwd, &base, head, paint_paths),
+    ) {
+        (Some(was), Some(now)) => !now.is_empty() && was == now,
+        _ => false,
+    }
+}
+
+/// The PR's paint patch at one commit: each paint file the three-dot
+/// compare against the base changes, with its status and its patch body.
+/// Hunk headers drop out, so a main merge that only shifts line numbers
+/// still matches. A file with no patch (binary or too large) keys on its
+/// blob sha instead.
+fn paint_patch<P: Probes>(
+    probes: &P,
+    cwd: &Path,
+    base: &str,
+    sha: &str,
+    paint_paths: &[String],
+) -> Option<std::collections::BTreeMap<String, String>> {
+    let lines = gh_lines(
+        probes,
+        cwd,
+        &[
+            "api",
+            &format!("repos/{{owner}}/{{repo}}/compare/{base}...{sha}"),
+            "--jq",
+            ".files[] | [.filename, .status, (.patch // \"\"), .sha]",
+        ],
+    )?;
+    let mut out = std::collections::BTreeMap::new();
+    for line in lines {
+        let row: Vec<String> = serde_json::from_str(&line).ok()?;
+        let [name, status, patch, blob] = row.as_slice() else {
+            return None;
+        };
+        if !path_matches_paint(name, paint_paths) {
+            continue;
+        }
+        let body = if patch.is_empty() {
+            format!("{status} blob {blob}")
+        } else {
+            let hunks: Vec<&str> = patch.lines().filter(|l| !l.starts_with("@@")).collect();
+            format!("{status}\n{}", hunks.join("\n"))
+        };
+        out.insert(name.clone(), body);
+    }
+    Some(out)
+}
+
+/// One `gh` read as its non-empty trimmed lines; `None` on a failed read.
+fn gh_lines<P: Probes>(probes: &P, cwd: &Path, args: &[&str]) -> Option<Vec<String>> {
+    let args: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+    let (ok, stdout) = probes.run_gh(cwd, &args).ok()?;
+    ok.then(|| {
+        stdout
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned)
+            .collect()
+    })
 }
 
 /// The repo root whose `.fno/config.toml` carries the project id: the vault
@@ -998,9 +1133,15 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
     head: &str,
     node: &str,
 ) -> bool {
-    if head.is_empty() {
-        return false;
-    }
+    !head.is_empty()
+        && role_approval_texts(probes, cwd, pr, node)
+            .iter()
+            .any(|text| text.contains(head))
+}
+
+/// The text of every live role row on this node that approves this PR, at
+/// any head: one decisions read, so a caller can test many heads with it.
+fn role_approval_texts<P: Probes>(probes: &P, cwd: &Path, pr: u64, node: &str) -> Vec<String> {
     // Subject-scoped and uncapped: a capped newest-first read of the whole
     // lane loses an approval once enough other rows land after it.
     let args: Vec<String> = [
@@ -1019,10 +1160,10 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
     .map(|s| (*s).to_string())
     .collect();
     let Some((Some(0), out, _)) = probes.fno_shell(cwd, &args).ok() else {
-        return false;
+        return Vec::new();
     };
     let Ok(payload) = serde_json::from_slice::<Value>(&out) else {
-        return false;
+        return Vec::new();
     };
     let approved: Vec<String> = approving_pages(&vault_root(cwd), pr)
         .into_iter()
@@ -1032,21 +1173,20 @@ pub(crate) fn role_chat_clears_pr<P: Probes>(
     payload
         .get("decisions")
         .and_then(Value::as_array)
-        .is_some_and(|rows| {
-            rows.iter().any(|row| {
-                row.get("authority_source").and_then(Value::as_str) == Some("role")
-                    && row.get("subject").and_then(Value::as_str) == Some(node)
-                    && matches!(
-                        row.get("lifecycle").and_then(Value::as_str),
-                        Some("live") | Some("unscoped")
-                    )
-                    && (row_is_chat_attested(row) || row_cites_any(row, &approved))
-                    && {
-                        let text = row_text(row);
-                        text.contains(head) && page_names_pr(&text, pr)
-                    }
-            })
+        .into_iter()
+        .flatten()
+        .filter(|row| {
+            row.get("authority_source").and_then(Value::as_str) == Some("role")
+                && row.get("subject").and_then(Value::as_str) == Some(node)
+                && matches!(
+                    row.get("lifecycle").and_then(Value::as_str),
+                    Some("live") | Some("unscoped")
+                )
+                && (row_is_chat_attested(row) || row_cites_any(row, &approved))
         })
+        .map(row_text)
+        .filter(|text| page_names_pr(text, pr))
+        .collect()
 }
 
 /// The `owner/name` pair a remote url names, normalized across the ssh
