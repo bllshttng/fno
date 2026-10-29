@@ -600,6 +600,28 @@ mod tests {
         }
     }
 
+    /// The Telegram `getUpdates` answer for any token, and a success for
+    /// every other endpoint the walks reach.
+    struct TwoChannel;
+
+    impl Http for TwoChannel {
+        fn call(
+            &mut self,
+            _m: &str,
+            url: &str,
+            _h: &[(&str, String)],
+            _b: Option<&str>,
+        ) -> Option<(u16, String)> {
+            if url.contains("getUpdates") {
+                return Some((
+                    200,
+                    r#"{"result":[{"message":{"chat":{"id":100},"from":{"id":42}}}]}"#.into(),
+                ));
+            }
+            Some((200, "{}".into()))
+        }
+    }
+
     /// AC13: the Telegram walk reads the chat and the sender from the
     /// user's first message, stamps this machine, and allows only that
     /// sender.
@@ -641,7 +663,7 @@ mod tests {
             Some(&["telegram"]),
             &mut Answers(vec!["new-tok", ""]),
             &set,
-            &mut Updates,
+            &mut TwoChannel,
             &home,
         );
         assert_eq!(
@@ -660,7 +682,7 @@ mod tests {
             Some(&["telegram"]),
             &mut Answers(vec!["new-tok", ""]),
             &set,
-            &mut Updates,
+            &mut TwoChannel,
             &home,
         );
         assert_eq!(
@@ -674,24 +696,6 @@ mod tests {
 
         // A failed write also rolls the shared rows back: a later pick's
         // successful write must not land the failed channel's row.
-        struct TwoChannel;
-        impl Http for TwoChannel {
-            fn call(
-                &mut self,
-                _m: &str,
-                url: &str,
-                _h: &[(&str, String)],
-                _b: Option<&str>,
-            ) -> Option<(u16, String)> {
-                if url.contains("getUpdates") {
-                    return Some((
-                        200,
-                        r#"{"result":[{"message":{"chat":{"id":100},"from":{"id":42}}}]}"#.into(),
-                    ));
-                }
-                Some((200, "{}".into()))
-            }
-        }
         std::fs::write(&env_file, "export FNO_CHAT_TELEGRAM_TOKEN=old-tok\n").unwrap();
         let calls = std::cell::RefCell::new(Vec::<String>::new());
         let set = |value: &str| -> Result<PathBuf, String> {
