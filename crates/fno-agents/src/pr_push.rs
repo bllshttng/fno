@@ -747,16 +747,6 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
         return PushOutcome::PushFailed(err);
     }
     stamp_push(ctx);
-    if let Ok((true, full, _)) = run_labeled(
-        "pr-push",
-        &ctx.git_bin,
-        &["rev-parse", "HEAD"],
-        &ctx.cwd,
-        READ_TIMEOUT,
-    ) {
-        let run = crate::stacked_base_stamp::runner(&ctx.git_bin, &ctx.gh_bin);
-        crate::stacked_base_stamp::stamp_pushed(&ctx.cwd, &target, full.trim(), &run);
-    }
     PushOutcome::Pushed {
         sha: run_labeled(
             "pr-push",
@@ -769,6 +759,18 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
         .unwrap_or_default(),
         ci,
         remote_branch: target,
+    }
+}
+
+/// Post `stacked-base-guard` on the pushed head of a default-based PR.
+/// Callers run it after the push receipt, so a slow GitHub read never holds
+/// the landed event. Best-effort: the CI job still covers a miss.
+pub(crate) fn stamp_guard(ctx: &PushCtx, remote_branch: &str) {
+    let head = ["rev-parse", "HEAD"];
+    if let Ok((true, full, _)) = run_labeled("pr-push", &ctx.git_bin, &head, &ctx.cwd, READ_TIMEOUT)
+    {
+        let run = crate::stacked_base_stamp::runner(&ctx.git_bin, &ctx.gh_bin);
+        crate::stacked_base_stamp::stamp_pushed(&ctx.cwd, remote_branch, full.trim(), &run);
     }
 }
 
@@ -1708,6 +1710,7 @@ pub fn run_push(argv: &[String]) -> i32 {
                  preflight={} ci={ci} sha={sha} ref=refs/heads/{remote_branch} pushed=1",
                 mode.label()
             );
+            stamp_guard(&ctx, &remote_branch);
             0
         }
         PushOutcome::InFlight { check, job } => {

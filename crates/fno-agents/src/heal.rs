@@ -2990,8 +2990,9 @@ fn run_one(a: &Args, pr: &str) -> (i32, Vec<String>) {
         remote_branch: None,
     };
     match crate::pr_push::guarded_push(&ctx, &head) {
-        crate::pr_push::PushOutcome::Pushed { .. } => {
+        crate::pr_push::PushOutcome::Pushed { remote_branch, .. } => {
             println!("pushed once");
+            crate::pr_push::stamp_guard(&ctx, &remote_branch);
             (code, reran_keys)
         }
         crate::pr_push::PushOutcome::InFlight { .. } => {
