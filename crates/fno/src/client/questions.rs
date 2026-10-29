@@ -122,7 +122,10 @@ impl Detail {
     /// composes once, so it waits for the pixels the live loop redraws for.
     pub(super) fn wait_decoded(&self, bound: std::time::Duration) {
         let end = std::time::Instant::now() + bound;
-        while !self.shots.is_empty() && self.pixels.get().is_none() && std::time::Instant::now() < end {
+        while !self.shots.is_empty()
+            && self.pixels.get().is_none()
+            && std::time::Instant::now() < end
+        {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
@@ -324,6 +327,9 @@ pub(super) fn draw_detail(
     }
     let strip_h = strip_rows(d, rows);
     let panes_h = rows.saturating_sub(hint_h + strip_h);
+    // The frame sizes to the page, so blank the view first: a short
+    // question never shows the panes under it.
+    backlog_style::paint_panel(cells, rows, cols, 0, cols, panes_h, &[], None, &view.theme);
     if strip_h > 0 {
         draw_strip(d, cells, (panes_h, strip_h), cols, &view.theme);
     }
@@ -465,15 +471,17 @@ fn draw_strip(
 }
 
 /// Thumbnails side by side on one transparent canvas of `px` pixels, each
-/// fit and centered in an equal slot.
+/// fit and centered in an equal slot. Fit scales up too, so one shot on a
+/// canvas the size of the view fills it.
 fn sheet(imgs: &[&image::DynamicImage], px: (u32, u32)) -> image::DynamicImage {
     let mut canvas = image::RgbaImage::new(px.0.max(1), px.1.max(1));
     let slot = px.0 / imgs.len().max(1) as u32;
     let pad = 8;
     for (i, img) in imgs.iter().enumerate() {
-        let thumb = img.thumbnail(
+        let thumb = img.resize(
             slot.saturating_sub(pad).max(1),
             px.1.saturating_sub(pad).max(1),
+            image::imageops::FilterType::Triangle,
         );
         let x = i as u32 * slot + (slot.saturating_sub(thumb.width())) / 2;
         let y = px.1.saturating_sub(thumb.height()) / 2;
@@ -505,7 +513,16 @@ fn draw_expanded(d: &Detail, cells: &mut [Cell], rows: usize, cols: usize, theme
         w: cols as u16,
         h: rows.saturating_sub(1) as u16,
     };
-    paint_cached(d, rect, Some(i), cells, cols, || img.clone());
+    // The encoder only shrinks to fit, so a small shot is first scaled up and
+    // centered on a canvas the size of the view.
+    paint_cached(d, rect, Some(i), cells, cols, || {
+        let (fw, fh) = image_layer::font_px();
+        let px = (
+            u32::from(rect.w) * u32::from(fw),
+            u32::from(rect.h) * u32::from(fh),
+        );
+        sheet(&[img], px)
+    });
 }
 
 /// Encode once per rect and screen, then paint the cached encoding. A stable
@@ -1599,7 +1616,10 @@ mod tests {
         let strip = v.question_detail.as_ref().unwrap().strip_at.get().unwrap();
         let red = crate::proto::Color::Rgb(200, 30, 30);
         let band = &cells[usize::from(strip.row) * cols..(usize::from(strip.row + strip.h)) * cols];
-        assert!(band.iter().any(|c| c.fg == red || c.bg == red), "half-block thumbnails paint");
+        assert!(
+            band.iter().any(|c| c.fg == red || c.bg == red),
+            "half-block thumbnails paint"
+        );
         mouse(
             &mut v,
             crate::mouse::MouseReport {
