@@ -538,6 +538,7 @@ pub fn run() -> i32 {
                     pi_wire(&agents, src.as_deref(), &real_run)
                 }
             }
+            "footnote" if home_missing => no_home(),
             "footnote" if !agents_ok => {
                 Outcome::Failed("the fno-agents binary is missing; run `fno doctor update`".into())
             }
