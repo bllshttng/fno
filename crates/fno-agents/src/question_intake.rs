@@ -503,36 +503,68 @@ fn run_append(req: &IntakeRequest) -> IntakeAnswer {
         .index_path
         .clone()
         .unwrap_or_else(|| questions_path(&AgentsHome::from_env()));
-    let line = match serde_json::to_string(event) {
-        Ok(l) => l,
-        Err(e) => {
-            answer.lines.push(format!(
-                "outstanding: failed to record question: could not serialize the envelope: {e}"
-            ));
+    if let Err((journaled, e)) = append_question_event(event, &journal_path, &index) {
+        answer.lines.push(e);
+        answer.exit_code = 1;
+        if journaled {
+            answer.qid = Some(qid);
+        } else {
             answer.refusal = Some("write".to_string());
-            answer.exit_code = 1;
-            return answer;
         }
-    };
-    if let Err(e) = crate::event_store::append_envelope(&journal_path, &line, None) {
-        answer.lines.push(format!(
-            "outstanding: failed to append question to project journal: {e}"
-        ));
-        answer.refusal = Some("write".to_string());
-        answer.exit_code = 1;
-        return answer;
-    }
-    if let Err(e) = crate::provider_cap::append_questions_row(&index, event) {
-        answer.lines.push(format!(
-            "outstanding: recorded {qid} in the project journal, but the recall index \
-write failed: {e}. Run `fno inbox outstanding reindex`."
-        ));
-        answer.qid = Some(qid);
-        answer.exit_code = 1;
         return answer;
     }
     answer.qid = Some(qid);
     answer
+}
+
+/// Who asked, for the card: the handle and session the row already carries,
+/// plus the registry name and harness and this machine's host name.
+fn origin_of(req: &IntakeRequest, home: &AgentsHome) -> Option<Value> {
+    let session = req.session_id.as_deref().filter(|s| !s.is_empty())?;
+    let rows = crate::state::load_registry(&home.registry_json())
+        .map(|r| r.entries)
+        .unwrap_or_default();
+    let row = crate::lead_state::find_by_session(&rows, session, None);
+    Some(json!({
+        "handle": req.asker,
+        "session_id": session,
+        "name": row.map(|r| r.name.clone()),
+        "harness": row.and_then(|r| r.harness.clone()),
+        "host": crate::claims::hostname(),
+    }))
+}
+
+/// The dual write of one `operator_question` envelope: the project journal
+/// (durable, fatal) then the recall index. `Err` carries whether the journal
+/// half landed, and the line naming the failure.
+pub(crate) fn append_question_event(
+    event: &Value,
+    journal_path: &Path,
+    index: &Path,
+) -> Result<(), (bool, String)> {
+    let line = serde_json::to_string(event).map_err(|e| {
+        (
+            false,
+            format!(
+                "outstanding: failed to record question: could not serialize the envelope: {e}"
+            ),
+        )
+    })?;
+    crate::event_store::append_envelope(journal_path, &line, None).map_err(|e| {
+        (
+            false,
+            format!("outstanding: failed to append question to project journal: {e}"),
+        )
+    })?;
+    crate::provider_cap::append_questions_row(index, event).map_err(|e| {
+        (
+            true,
+            format!(
+                "outstanding: recorded the question in the project journal, but the recall \
+index write failed: {e}. Run `fno inbox outstanding reindex`."
+            ),
+        )
+    })
 }
 
 pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
@@ -932,6 +964,12 @@ already waits ({}). Answer it or clear it; do not ask twice.",
     if let Some(rung) = &req.rung {
         data.insert("rung".into(), rung.clone());
     }
+    if !parsed.class.trim().is_empty() {
+        data.insert("class".into(), json!(parsed.class.trim()));
+    }
+    if let Some(origin) = origin_of(req, home) {
+        data.insert("origin".into(), origin);
+    }
     if !req.blocks.is_empty() {
         data.insert("blocks".into(), json!(req.blocks));
     }
@@ -990,6 +1028,10 @@ already waits ({}). Answer it or clear it; do not ask twice.",
         ("reversible", &parsed.reversible),
         ("cost_if_wrong", &parsed.cost_if_wrong),
         ("meanwhile", &parsed.meanwhile),
+        ("tried", &parsed.tried),
+        ("evidence", &parsed.evidence),
+        ("deadline", &parsed.deadline),
+        ("on_silence", &parsed.on_silence),
     ] {
         if !value.trim().is_empty() {
             context.insert(key.into(), json!(value.trim()));
