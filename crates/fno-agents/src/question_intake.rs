@@ -1512,7 +1512,14 @@ stops
         second.decision_id = "d-junk0002".to_string();
         let home = tmp_home("retract-stamp-2");
         let root = tmp_root("retract-stamp-2");
-        let mut r = req(&question, &root);
+        // The text cites both ids: two cited laws name no single target.
+        let two_question = QUESTION_FILE
+            .replace("## Reversible\ncostly", "## Reversible\nyes")
+            .replace(
+                "Is a net-zero Python repair legal with no grant?",
+                "Retract d-junk0001 and d-junk0002: the junk laws ruling on junk-law?",
+            );
+        let mut r = req(&two_question, &root);
         r.subject = Some("junk-law".to_string());
         r.node = Some("x-aaaa".to_string());
         r.laws = vec![junk_law(), second];
