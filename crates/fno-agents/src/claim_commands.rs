@@ -1172,6 +1172,16 @@ fn row_verdict_live(registry: &SessionRegistryIndex, session: &str) -> bool {
     })
 }
 
+/// Whether both witnesses positively report `session` gone. Unresolved
+/// reads as not gone.
+pub(crate) fn session_is_absent(session: &str) -> bool {
+    let index = std::cell::RefCell::new(None);
+    matches!(
+        session_liveness_answer_uncached(session, &index, None),
+        crate::claims::SessionLiveness::Absent
+    )
+}
+
 /// The uncached resolution: registry row first, then transcript.
 fn session_liveness_answer_uncached(
     session: &str,
