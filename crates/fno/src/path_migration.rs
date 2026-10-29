@@ -34,11 +34,12 @@ fn state_root() -> Option<PathBuf> {
 
 /// Whether any config source exists that could re-point `state_dir` away
 /// from the default root: the `FNO_CONFIG` pin, the `FNO_REPO_ROOT` pin, a
-/// repo-level settings file in `cwd`, a global one under `home`, or a
-/// worktree cwd (whose canonical checkout's own `.fno/` rides the chain
-/// even when the worktree carries none). The fast path may only shortcut
-/// when this is false - a sentinel at the default root proves nothing about
-/// a root a config file names.
+/// repo-level settings file in `cwd` or any ancestor, a global one under
+/// `home`, or a checkout above `cwd` (a `.git` marker of either shape - the
+/// repo root's own `.fno/` rides the chain even when the nested directory
+/// carries none, and a worktree spells `.git` as a file). The fast path may
+/// only shortcut when this is false - a sentinel at the default root proves
+/// nothing about a root a config file names.
 fn config_may_repoint(
     fno_config: bool,
     fno_repo_root: bool,
@@ -47,10 +48,12 @@ fn config_may_repoint(
 ) -> bool {
     fno_config
         || fno_repo_root
-        || [".fno/config.toml", ".fno/settings.yaml"]
-            .iter()
-            .any(|rel| cwd.join(rel).is_file())
-        || cwd.join(".git").is_file()
+        || cwd.ancestors().any(|dir| {
+            [".fno/config.toml", ".fno/settings.yaml"]
+                .iter()
+                .any(|rel| dir.join(rel).is_file())
+                || dir.join(".git").exists()
+        })
         || home.is_some_and(|home| {
             ["config.toml", "settings.yaml"]
                 .iter()

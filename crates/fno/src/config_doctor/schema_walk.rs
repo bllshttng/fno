@@ -357,6 +357,66 @@ fn enum_set(schema: &Value, field: &Value) -> Option<Vec<String>> {
     strings(field)
 }
 
+/// A leaf field's single declared non-null type, when there is exactly one:
+/// the `type` spelling, or the one non-null `anyOf` arm. A union of two or
+/// more non-null types gets `None` - the walk draws no verdict on it.
+fn declared_leaf_type(field: &Value) -> Option<String> {
+    if let Some(t) = field.get("type").and_then(Value::as_str) {
+        return match t {
+            "null" => None,
+            other => Some(other.to_string()),
+        };
+    }
+    if let Some(types) = field.get("type").and_then(Value::as_array) {
+        let named: Vec<&str> = types.iter().filter_map(Value::as_str).collect();
+        let non_null: Vec<&str> = named.iter().copied().filter(|t| *t != "null").collect();
+        return match non_null[..] {
+            [one] => Some(one.to_string()),
+            _ => None,
+        };
+    }
+    let arms = field.get("anyOf").and_then(Value::as_array)?;
+    let typed: Vec<&str> = arms
+        .iter()
+        .filter_map(|arm| arm.get("type").and_then(Value::as_str))
+        .filter(|t| *t != "null")
+        .collect();
+    match typed[..] {
+        [one] => Some(one.to_string()),
+        _ => None,
+    }
+}
+
+/// Whether the field admits a `null`: a `null` type member or a `null`-typed
+/// `anyOf` arm.
+fn nullable(field: &Value) -> bool {
+    if let Some(types) = field.get("type").and_then(Value::as_array) {
+        return types.iter().filter_map(Value::as_str).any(|t| t == "null");
+    }
+    field
+        .get("anyOf")
+        .and_then(Value::as_array)
+        .is_some_and(|arms| {
+            arms.iter()
+                .any(|arm| arm.get("type").and_then(Value::as_str) == Some("null"))
+        })
+}
+
+/// Whether a value of the declared type admits `value`. Minimal coercion:
+/// an `integer` takes any whole number, and that is the whole list - the
+/// schema's declared shape is the contract, not pydantic's lax one.
+fn leaf_type_admits(expected: &str, value: &Value) -> bool {
+    match expected {
+        "string" => value.is_string(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.is_i64() || value.is_u64(),
+        "number" => value.is_number(),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        _ => true,
+    }
+}
+
 /// pydantic's `expected` text: `'a', 'b' or 'c'`.
 fn expected_text(legal: &[String]) -> String {
     let quoted: Vec<String> = legal.iter().map(|v| super::py_repr_str(v)).collect();
@@ -431,7 +491,27 @@ fn refusals_in(
                     refusals_in(schema, map, nested, &here, out);
                 }
             }
-            Shape::Leaf => {}
+            Shape::Leaf => {
+                // A modeled leaf's declared type, when the schema carries
+                // exactly one non-null one: the deleted Python leg's
+                // model_validate refused a wrong scalar shape (state_dir = 123
+                // cannot be a state dir), so the walk refuses it too. A union
+                // of two or more non-null types gets no verdict; null passes
+                // only a nullable field.
+                if let Some(expected) = declared_leaf_type(field) {
+                    let admitted = match value {
+                        Value::Null => nullable(field),
+                        v => leaf_type_admits(&expected, v),
+                    };
+                    if !admitted {
+                        out.push(Refusal {
+                            loc: here,
+                            input: value.clone(),
+                            expected: format!("of type {expected}"),
+                        });
+                    }
+                }
+            }
         }
     }
 }

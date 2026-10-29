@@ -110,12 +110,37 @@ pub fn bare(out: &mut String) -> i32 {
 
 /// The setup verify's in-process read: Ok with the report when clean, else
 /// the same `` `fno config doctor` exited N: <report> `` detail the child
-/// spawn produced.
+/// spawn produced. Bounded by the same 10s cap the deleted subprocess wrapper
+/// enforced: each `fno-agents` child gets the deadline's remainder, so a
+/// wedged sibling binary still yields a `needs_human` verify row, never a
+/// multi-minute stall.
 pub fn verify() -> Result<String, String> {
+    VERIFY_DEADLINE.store(
+        now_millis() + std::time::Duration::from_secs(10).as_millis() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let mut out = String::new();
-    match bare(&mut out) {
+    let rc = bare(&mut out);
+    VERIFY_DEADLINE.store(0, std::sync::atomic::Ordering::Relaxed);
+    match rc {
         0 => Ok(out),
         rc => Err(format!("`fno config doctor` exited {rc}: {}", out.trim())),
+    }
+}
+
+static VERIFY_DEADLINE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn verify_deadline_remaining() -> std::time::Duration {
+    match VERIFY_DEADLINE.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => AGENTS_CALL_CAP,
+        deadline => std::time::Duration::from_millis(deadline.saturating_sub(now_millis())),
     }
 }
 
@@ -151,9 +176,13 @@ pub(crate) fn bounded_output(
 ) -> Result<std::process::Output, String> {
     use std::io::Read as _;
     use std::process::Stdio;
-    cmd.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    cmd.stdin(if stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
     let mut child = crate::process_admission::std_spawn(cmd).map_err(|e| e.to_string())?;
     if let (Some(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
         std::thread::spawn(move || {
@@ -169,8 +198,18 @@ pub(crate) fn bounded_output(
             buf
         })
     };
-    let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>));
-    let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>));
+    let out = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+    );
+    let err = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+    );
     let deadline = std::time::Instant::now() + cap;
     let status = loop {
         match child.try_wait().map_err(|e| e.to_string())? {
@@ -202,7 +241,14 @@ pub(crate) fn agents_call(command: &[&str], payload: Option<&Value>) -> Result<V
     let mut cmd = crate::process_admission::std_command(&binary);
     cmd.args(command);
     let stdin = payload.map(|p| p.to_string().into_bytes());
-    let output = bounded_output(&mut cmd, stdin, AGENTS_CALL_CAP)
+    // A caller's deadline wins: setup's verify runs the whole diagnostic in
+    // process, and its cap must stay killable, so each child gets whatever
+    // remains of the deadline instead of the full 60s.
+    let remaining = verify_deadline_remaining();
+    if remaining <= std::time::Duration::ZERO {
+        return Err("the config doctor verify cap elapsed".into());
+    }
+    let output = bounded_output(&mut cmd, stdin, remaining.min(AGENTS_CALL_CAP))
         .map_err(|e| format!("fno-agents {display} failed: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
