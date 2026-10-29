@@ -112,7 +112,7 @@ fn repo_root(dir: &Path) -> Result<PathBuf, String> {
 /// Sessions started before the restage hold the old hook config for their
 /// whole life; the hook-tombstones lint protects one merge range, but a stage
 /// stale across many merges can still reference a script the new tree deleted.
-fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path) -> usize {
+fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path, mux: Option<&MuxPaths>) -> usize {
     let re = match Regex::new(HOOK_REF_PATTERN) {
         Ok(r) => r,
         Err(_) => return 0,
@@ -129,7 +129,8 @@ fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path) -> usize {
         };
         for rel in re.captures_iter(&text).map(|c| c[1].to_string()) {
             let target = new_stage.join(&rel);
-            if target.exists() {
+            // A script reclassified as mux stays out of a pack, old stage or not.
+            if target.exists() || mux.is_some_and(|m| m.covers(&rel)) {
                 continue;
             }
             let src = old_stage.join(&rel);
@@ -379,7 +380,7 @@ fn build_stage_as(
     }
 
     if dest.exists() {
-        carry_referenced_scripts(&dest, &new_dir);
+        carry_referenced_scripts(&dest, &new_dir, mux.as_ref());
         // ponytail: two concurrent manual installs can race these renames;
         // the update:fno claim serializes the automated path.
         std::fs::rename(&dest, &old_dir)
@@ -595,17 +596,23 @@ fn check_stage_report(stage: &Path, source_dir: &Path) -> StageCheck {
         if !stage_manifest.is_file() {
             missing.push(marketplace.to_string());
         } else {
-            let verdict = std::fs::read_to_string(root.join(marketplace))
-                .map_err(|e| format!("{marketplace}: {e}"))
-                .and_then(|t| match &mux {
-                    Some(m) if HOOK_FILES.contains(&marketplace) => m.filter_hooks(&t),
-                    _ => staged_marketplace_bytes(&t, marketplace),
-                })
-                .and_then(|expected| {
-                    std::fs::read_to_string(&stage_manifest)
-                        .map(|actual| actual == expected)
-                        .map_err(|e| format!("{marketplace}: {e}"))
-                });
+            // A pack hook file is filtered from its HEAD blob, so a dirty
+            // working-tree hook file reads stale here as it does on a full stage.
+            let verdict = match &mux {
+                Some(m) if HOOK_FILES.contains(&marketplace) => run_checked(
+                    &["git".into(), "show".into(), format!("HEAD:{marketplace}")],
+                    Some(&root),
+                )
+                .and_then(|t| m.filter_hooks(&t)),
+                _ => std::fs::read_to_string(root.join(marketplace))
+                    .map_err(|e| format!("{marketplace}: {e}"))
+                    .and_then(|t| staged_marketplace_bytes(&t, marketplace)),
+            }
+            .and_then(|expected| {
+                std::fs::read_to_string(&stage_manifest)
+                    .map(|actual| actual == expected)
+                    .map_err(|e| format!("{marketplace}: {e}"))
+            });
             match verdict {
                 Err(e) => return unknown_check(stage, source_dir, e),
                 Ok(false) => differing.push(marketplace.to_string()),
