@@ -1,0 +1,25 @@
+fno whoami scoreboard (last 20000d)
+
+Coverage
+  rows in window:      7
+  termination_reason:  86%    node linkage:  71%
+  ! rates below reflect 86% termination / 71% node-linkage: a partial window is not a trend.
+  ! touch emission failures: 2 since 2026-10-20T10:00:00Z (measured 2026-10-25T10:00:00Z; server instance lifetime).
+
+Shipped       2 nodes (confirmed merge, doc or delivery evidence); by session terminal alone: 2
+              by evidence: 1 delivered_doc 1 merged
+
+Stop-cause distribution
+  DonePRGreen    2
+  DoneAdvisory   1
+  DonePlanned    1
+  NoProgress     1
+  delegated      1
+
+Spend split
+  ship-terminal:   $9.50
+  wedge-terminal:  $2.00
+  other:           $1.75
+
+Autonomy      1.0 human touches / shipped node (2 touches, 2 nodes)
+Survival      50% (1/2 shipped nodes)

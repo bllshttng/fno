@@ -306,6 +306,13 @@ fn main() {
     if args.first().map(String::as_str) == Some("evals-attempt") {
         std::process::exit(fno_agents::eval_attempt::run_evals_attempt(&args[1..]));
     }
+    // `scoreboard`: the telemetry family's transport door, dispatched here
+    // like evals-trend because the shrink law bars a new `run` arm. The
+    // front door (`fno whoami scoreboard`) execs here; the parity goldens
+    // replay the same spelling.
+    if args.first().map(String::as_str) == Some("scoreboard") {
+        std::process::exit(fno_agents::scoreboard::run_scoreboard(&args[1..]));
+    }
     // `pr-park` and `pr-watch`: the two command families behind `fno do pr
     // watch`; both dispatch here like evals-arm because the shrink law bars
     // a new `run` arm. Their module docs carry the per-command contract.
@@ -1228,10 +1235,25 @@ async fn run(args: Vec<String>) -> i32 {
         // `fno-agents status --capabilities <h> ...`. With neither flag the
         // behavior is exactly the plain status read. The /fno-me join rides
         // the same way: `fno agents register ...` arrives as
-        // `status --register ...`, daemon-free like registry-json.
+        // `status --register ...`, daemon-free like registry-json, and so do
+        // the name, whoami, registry-repair and heal-token leaves.
         let rest = &args[1..];
-        if rest.first().map(String::as_str) == Some("--register") {
-            return fno_agents::register::run_register(&rest[1..], &AgentsHome::from_env());
+        match rest.first().map(String::as_str) {
+            Some("--register") => {
+                return fno_agents::register::run_register(&rest[1..], &AgentsHome::from_env())
+            }
+            Some("--name") => return fno_agents::naming::run_agents_name(&rest[1..]),
+            Some("--whoami") => {
+                return fno_agents::registry_commands::run_whoami(
+                    &rest[1..],
+                    &AgentsHome::from_env(),
+                )
+            }
+            Some("--registry-repair") => {
+                return fno_agents::registry_commands::run_registry_repair(&rest[1..])
+            }
+            Some("--heal-token") => return fno_agents::store_heal::run_heal_token(&rest[1..]),
+            _ => {}
         }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");
         let has_family = rest.iter().any(|a| a.as_str() == "--target-family");

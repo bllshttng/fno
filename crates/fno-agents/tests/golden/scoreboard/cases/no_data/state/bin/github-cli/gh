@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /Users/bb16/.cargo/bin/fno-agents gh "$@"

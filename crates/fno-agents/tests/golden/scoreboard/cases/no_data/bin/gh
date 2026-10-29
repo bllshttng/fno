@@ -1,0 +1,10 @@
+#!/bin/sh
+# Answers `gh pr diff <n> --name-only [--repo slug]` with a fixed file list.
+for arg in "$@"; do
+  if [ "$arg" = "--name-only" ]; then
+    printf '%s\n' 'cli/src/fno/scoreboard/fold.py' 'cli/src/fno/new_surface.py' 'migrations/0002_nodes.sql'
+    exit 0
+  fi
+done
+echo "stub gh: unexpected argv: $*" >&2
+exit 99

@@ -1,0 +1,48 @@
+{
+  "state": "ok",
+  "n": 11,
+  "excluded": {
+    "error": 1
+  },
+  "unattributed": 0,
+  "untimed_outcomes": 9,
+  "table": {
+    "pass": {
+      "merged_clean": 7,
+      "bounced": 1,
+      "reverted": 0
+    },
+    "concerns": {
+      "merged_clean": 2,
+      "bounced": 0,
+      "reverted": 0
+    },
+    "fail": {
+      "merged_clean": 1,
+      "bounced": 0,
+      "reverted": 0
+    }
+  },
+  "false_positive": {
+    "count": 1,
+    "of_pass": 8,
+    "rate_pct": 12
+  },
+  "event_coverage": {
+    "complete": true,
+    "malformed_lines": 0,
+    "unreadable_paths": 0,
+    "paths": [
+      {
+        "path": "<CASE>/state/events.jsonl",
+        "status": "ok",
+        "malformed_lines": 0
+      },
+      {
+        "path": "<CASE>/state/events.jsonl.ephemeral",
+        "status": "missing",
+        "malformed_lines": 0
+      }
+    ]
+  }
+}

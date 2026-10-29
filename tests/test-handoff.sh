@@ -394,8 +394,12 @@ fi
 
 if [ "$subcmd1 $subcmd2" = "agents name" ]; then
   # Name minting is the contract under test, not a scenario input: delegate
-  # to the real implementation exactly like `do plan rung` above.
-  exec env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -m fno.cli agents name "${@:3}"
+  # to the real implementation exactly like `do plan rung` above. The name
+  # door is native, and the default router never execs a dev build, so the
+  # stub calls this checkout's binary itself.
+  bin="$(env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c 'from fno import rust_binary; b = rust_binary.find_dev_binary() or rust_binary.resolve_binary(); print(b or "")')"
+  [ -n "$bin" ] || { echo "no fno-agents binary for agents name" >&2; exit 127; }
+  exec "$bin" status --name "${@:3}"
 fi
 
 case "$subcmd1 $subcmd2" in

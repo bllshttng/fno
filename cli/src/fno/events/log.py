@@ -8,6 +8,7 @@ Writes commit through the native event store; no file lock is needed.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
@@ -301,3 +302,169 @@ def audit_session(
         return {"ok": False, "events": events, "gaps": gaps}
 
     return {"ok": True, "events": events}
+
+
+# -- Journal read side (moved from the deleted scoreboard fold; the one
+#    journal reader: store answers first, raw file is the fallback) --
+
+
+def _parse_ts(raw) -> Optional[datetime]:
+    """Parse an ISO timestamp to a naive LOCAL datetime - the one timeline the
+    whole fold uses.
+
+    The dominant source, the ledger's `completed`, is written naive-local
+    (`datetime.now().isoformat()`), and `now` is `datetime.now()` (also naive
+    local), so those are compared apples-to-apples. Aware timestamps (events
+    carry a `...Z` / offset) are converted to local *before* their tzinfo is
+    stripped, so an offset like `+02:00` is not silently mis-read - it lands on
+    the same local timeline instead of being off by the offset."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)  # -> naive local
+    return dt
+
+
+def _event_sort_key(event: dict) -> tuple:
+    """Sort canonical observations by their timestamp, not journal path order."""
+    parsed = _parse_ts(event.get("ts") or event.get("timestamp"))
+    signature_source = event.get("raw") if isinstance(event.get("raw"), dict) else event
+    signature = json.dumps(signature_source, sort_keys=True, separators=(",", ":"))
+    raw_data = event.get("data")
+    data: dict = raw_data if isinstance(raw_data, dict) else {}
+    complete_context = (
+        (event.get("type") or event.get("kind")) == "context_snapshot"
+        and data.get("measurement_complete") is True
+    )
+    return parsed is not None, parsed or datetime.min, complete_context, signature
+
+
+def read_jsonl_events_with_coverage(paths: List[Path], kinds: set) -> dict:
+    """Read and deduplicate journals while retaining input-integrity coverage."""
+    out: list = []
+    seen_events: set = set()
+    seen_paths: set = set()
+    path_coverage: list = []
+    malformed_lines = 0
+    unreadable_paths = 0
+    for p in paths:
+        p = Path(p).expanduser()
+        try:
+            path_key = str(p.resolve())
+        except OSError:
+            path_key = os.path.abspath(p)
+        if path_key in seen_paths:
+            continue
+        seen_paths.add(path_key)
+        # SQL authority: a store beside the journal answers first. Only a
+        # store-less path falls back to the raw file (a fixture or a
+        # pre-cutover journal nothing has imported yet).
+        from fno.events.store_client import EventStoreUnavailable, store_db_path
+
+        db = store_db_path(p)
+        if db.exists():
+            try:
+                from fno.events.store_client import query_rows
+
+                rows = query_rows(p)
+            except EventStoreUnavailable as exc:
+                unreadable_paths += 1
+                path_coverage.append(
+                    {
+                        "path": path_key,
+                        "status": "unreadable",
+                        "error": str(exc),
+                        "malformed_lines": 0,
+                    }
+                )
+                continue
+            path_malformed = 0
+            for e in rows:
+                if not isinstance(e, dict):
+                    path_malformed += 1
+                    malformed_lines += 1
+                    continue
+                if (e.get("kind") or e.get("type")) in kinds:
+                    signature = json.dumps(e, sort_keys=True, separators=(",", ":"))
+                    if signature not in seen_events:
+                        seen_events.add(signature)
+                        out.append(e)
+            path_coverage.append(
+                {
+                    "path": path_key,
+                    "status": "ok" if path_malformed == 0 else "malformed",
+                    "malformed_lines": path_malformed,
+                }
+            )
+            continue
+        if not p.exists():
+            path_coverage.append({"path": path_key, "status": "missing", "malformed_lines": 0})
+            continue
+        path_malformed = 0
+        try:
+            with p.open(encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        e = json.loads(line)
+                    except json.JSONDecodeError:
+                        path_malformed += 1
+                        malformed_lines += 1
+                        continue
+                    if not isinstance(e, dict):
+                        path_malformed += 1
+                        malformed_lines += 1
+                        continue
+                    if (e.get("kind") or e.get("type")) == "context_snapshot":
+                        from fno.events import ValidationError, validate
+
+                        try:
+                            validate(e)
+                        except ValidationError:
+                            path_malformed += 1
+                            malformed_lines += 1
+                            continue
+                    if (e.get("kind") or e.get("type")) in kinds:
+                        signature = json.dumps(e, sort_keys=True, separators=(",", ":"))
+                        if signature not in seen_events:
+                            seen_events.add(signature)
+                            out.append(e)
+            path_coverage.append(
+                {
+                    "path": path_key,
+                    "status": "ok" if path_malformed == 0 else "malformed",
+                    "malformed_lines": path_malformed,
+                }
+            )
+        except (OSError, UnicodeError) as exc:
+            unreadable_paths += 1
+            path_coverage.append(
+                {
+                    "path": path_key,
+                    "status": "unreadable",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "malformed_lines": 0,
+                }
+            )
+            continue
+    out.sort(key=_event_sort_key)
+    return {
+        "events": out,
+        "coverage": {
+            "complete": malformed_lines == 0 and unreadable_paths == 0,
+            "malformed_lines": malformed_lines,
+            "unreadable_paths": unreadable_paths,
+            "paths": path_coverage,
+        },
+    }
+
+
+def read_jsonl_events(paths: List[Path], kinds: set) -> list:
+    """Compatibility reader for views that do not consume integrity coverage."""
+    return read_jsonl_events_with_coverage(paths, kinds)["events"]
