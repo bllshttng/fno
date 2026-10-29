@@ -229,14 +229,14 @@ mod tests {
     #[test]
     fn watch_loop_keeps_cursor_and_stops_on_interrupt() {
         let mut seen = Vec::new();
-        let mut polls = 0;
+        let polls = std::cell::Cell::new(0);
         let rc = watch_loop(
             |c| {
                 seen.push(c);
                 Some(json!({"frames": [], "next": 4}))
             },
-            || polls += 1,
-            || polls >= 2,
+            || polls.set(polls.get() + 1),
+            || polls.get() >= 2,
         );
         assert_eq!(rc, 0);
         assert_eq!(seen, vec![0, 4]);
