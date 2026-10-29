@@ -1269,6 +1269,7 @@ async fn run(args: Vec<String>) -> i32 {
             Some("--pane-identity") => {
                 return fno_agents::pane_identity::run_pane_identity(&rest[1..])
             }
+            Some("--watch") => return fno_agents::watch::run_watch(&rest[1..]),
             _ => {}
         }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");
