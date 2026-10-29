@@ -1,0 +1,40 @@
+# The project rule file for the footnote repo. Every harness reads it
+# through decide (docs/architecture/event-rules.md): no preamble required.
+# The two rules migrated from .claude/rules/ are informs: they say what you
+# are about to touch and where the contract lives, and never refuse.
+
+[[rule]]
+id = "worktree-first"
+action = "inform"
+what = "you are creating a worktree by hand"
+why = "footnote work goes in config-placed worktrees; a hand-placed one clogs the checkout or lands where the reaper never looks"
+instead = "fno do target start <node>, or follow docs/architecture/worktree-mechanics.md (Placement)"
+default = true
+[rule.when]
+events = ["pre-tool"]
+tools = ["Bash"]
+commands = ["git worktree add*"]
+
+[[rule]]
+id = "worktree-enter"
+action = "inform"
+what = "you are writing a worktree path into a script or doc"
+why = "paths under .claude/worktrees are harness-native placements; a hardcoded base breaks every install that sets paths.worktrees_base"
+instead = "docs/architecture/worktree-mechanics.md (Placement) names the config-driven root"
+default = true
+[rule.when]
+events = ["pre-tool"]
+tools = ["Write", "Edit"]
+paths = [".claude/worktrees/**"]
+
+[[rule]]
+id = "oss-fix-not-memory"
+action = "inform"
+what = "you are writing to agent memory"
+why = "load-bearing project knowledge in private memory ships to nobody"
+instead = "docs/oss-fix-not-memory.md names the project artifact that carries it"
+default = true
+[rule.when]
+events = ["pre-tool"]
+tools = ["Write"]
+paths = ["**/memory/*.md"]

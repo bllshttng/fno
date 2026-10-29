@@ -1,8 +1,53 @@
 # Worktree mechanics
 
-The always-loaded half lives in [.claude/rules/worktrees.md](../../.claude/rules/worktrees.md), the authority on placement: where worktrees go, the policy values and their precedence, and the forbidden locations. This file is the authority on the machinery.
+The placement contract lives in this file now: the [Placement](#placement) section below is the authority on where worktrees go, the policy values and their precedence, and the forbidden locations. It moved out of the preamble (`.claude/rules/worktrees.md`, deleted) so the same contract reaches codex and every other harness through the rule engine at the `git worktree add` decision point (`.fno-rules/rules.toml`). This file is also the authority on the machinery.
 
 When you edit the hook, remove or prune a worktree, or trace why a location gate fired, read this first.
+
+## Placement
+
+The single place saying where git worktrees go and what to do after creating one. Skill defaults that place them elsewhere lose to this rule.
+
+The placement rule fires as context: the project rule `worktree-first` (`.fno-rules/rules.toml`) informs at every `git worktree add` and pre-tool Write under `.claude/worktrees/`, so the contract reaches a harness that never loaded any preamble. It is an inform, never a block: an explicit in-conversation user request for a different path outranks the rule. Project state resolves through the repo's space regardless of worktree. Do not solicit overrides.
+
+**The worktree root is config-driven via `config.paths.worktrees_base`. Set nothing and the defaults work.**
+
+- **Unset (OSS-neutral default):** harness-native `<repo>/.claude/worktrees/<name>` (gitignored, search-clean). No config needed.
+- **`config.paths.worktrees_base: <dir>`:** worktrees land at `<dir>/<repo>/<name>` (`<repo>` = the checkout's base name).
+- **`worktree.use_conductor_canonical: true` is DEPRECATED:** acts as `worktrees_base = ~/conductor/workspaces`. Prefer `worktrees_base`.
+- Cargo output lives in TWO places per checkout. Final binaries sit in `crates/*/target`. Intermediates land in the fno build base (`paths.cargo_targets_base`, default `~/.fno/cargo-build`). With the env unset: `~/.cargo/build`. Lane `cargo_build_dirs` sweeps both hourly for every repo on the base, by `CACHEDIR.TAG`, base and member fingerprint, never by name. Never name-match target dirs: `cli/src/fno/target`, `skills/target`, and `tests/target` are source dirs. A 2026-09-02 name-based sweep deleted 66 across 26 worktrees.
+
+Add first, enter by path, then run the setup script from inside:
+
+```bash
+git worktree add <location>/<name> -b <name> origin/main
+# then EnterWorktree with that path, then from inside it:
+bash scripts/setup/setup-worktree.sh
+```
+
+**`EnterWorktree` by NAME fails here**: name-only defers and the caller hard-fails with no worktree. So add first, enter by path. Any path in `git worktree list` is enterable, and a `/target` cold-start reads it from the `fno target start` receipt. A shell `cd` will not do. It does not persist across tool calls.
+
+Setup links shared state from canonical: vault symlink, gitignored `.claude/` subdirs, harness config roots. It warns and skips real files. Tracked files come from git checkout.
+
+Per-project policy precedence: per-project `work.workspaces.<slug>.projects[].worktree` > global `config.worktree.policy` > built-in `harness-native`.
+
+- **`never`** - launch in place on the canonical checkout (for projects whose tree IS the product, e.g. an Obsidian vault). ensure prints the repo root, exit 0; callers skip `setup-worktree.sh`; the location gate treats the protected branch as `ok`.
+- **`harness-native`** (both keys unset) - the harness's own location: claude lands at `<repo>/.claude/worktrees/<name>`. Codex Desktop uses `/worktree` or **Hand off -> Worktree**. A harness with no native transition degrades to `~/.fno/worktrees`. Ensure needs `--harness` and never guesses. An explicit `paths.worktrees_base` degrades `harness-native` to `external`: the key alone relocates.
+- **`external`** - fno-managed at `<worktrees_base>/<repo>/<name>`.
+
+The per-project policy outranks the global `worktree.policy` key ("conductor" is a base value, not a policy value). A parse error or out-of-enum value REFUSES creation (fail closed): ensure exits non-zero with empty stdout, so the caller holds.
+
+Both creation paths honor `never`, the hook resolving it through `fno agents workspace worktree policy` (one resolver, no second precedence impl).
+
+Forbidden locations (regardless of config):
+
+- `~/.warp/worktrees/...` (setup script never runs there).
+- `~/.cursor/worktrees/...` (cursor-agent's native worktree). fno allocates the worktree and never passes cursor-agent a native worktree flag.
+- `<repo>/worktrees/` or any non-`.claude` path inside the checkout. Enforced since 2026-09-03: `setup-worktree.sh` refuses a `WORKTREE` that does not exist.
+- `../<name>` or any sibling-of-canonical path.
+- Anything beneath `$CODEX_HOME/worktrees`; Footnote never allocates there.
+
+Exception: `/speculate` keeps its own `.claude/worktrees/<name>` placement even when `worktrees_base` is set (do not generalize).
 
 ## Branch names
 

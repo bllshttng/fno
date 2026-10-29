@@ -3,7 +3,7 @@
 footnote runs each feature in its own git worktree, off the main branch.
 This keeps the main checkout clean and lets more than one feature ship in parallel.
 This guide is the short, hands-on version.
-The full policy contract is [.claude/rules/worktrees.md](../../.claude/rules/worktrees.md), and it stays canonical.
+The full policy contract is [worktree-mechanics.md](../architecture/worktree-mechanics.md) (Placement), and it stays canonical.
 When this guide and that rule disagree, the rule wins.
 
 ## Why worktrees
@@ -84,5 +84,5 @@ Starting work through `target` reclaims a stale claim for you.
 ## Where the full rules live
 
 Every detail (policy values, refusal shapes, forbidden locations) lives in the rule file:
-[.claude/rules/worktrees.md](../../.claude/rules/worktrees.md).
+[worktree-mechanics.md](../architecture/worktree-mechanics.md) (Placement).
 This guide intentionally does not repeat it.

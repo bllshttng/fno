@@ -210,7 +210,7 @@ set -euo pipefail
 # 2026-10: +128 for the native-launch pointer in using-fno. The pointer is
 # operator-mandated and the file survived prior compression passes, so no
 # tradeable restatement existed to fund it.
-CEILING_BYTES=41256
+CEILING_BYTES=33867
 # The working band under the ceiling. Spare above this fails the gate and names
 # the value to write, so a cut is banked in the same PR that makes it rather
 # than becoming headroom.
