@@ -3,9 +3,9 @@
 //! The fold writes nothing. Phases come from the graph `sessions` rows, the
 //! review span from review_invocation and review_attestation rows whose
 //! branch names the node, and tasks from the plan with the task_started and
-//! task_done events the commit hook lands. Tool errors and refusals read
-//! the session transcripts. A value no source answered reads null with a
-//! reason beside it, never 0.
+//! task_done events the commit hook lands. Error and mess-up counts read
+//! the session transcripts and the node's event rows. A value no source
+//! answered reads null with a reason beside it, never 0.
 
 use crate::wave::{plan_tasks, PlanTask};
 use serde_json::{json, Map, Value};
@@ -18,9 +18,17 @@ const PHASES: [&str; 5] = ["think", "blueprint", "execute", "review", "ship"];
 /// and one runaway session must not stall it.
 const TRANSCRIPT_CAP_BYTES: u64 = 64 * 1024 * 1024;
 
-/// The per-session counts. A transcript timestamps each, so a window can
-/// count them.
-const SESSION_KINDS: [&str; 2] = ["tool_errors", "refusals"];
+/// The per-session counts; reopens and retracted decisions are node-level
+/// and appear in the totals only.
+const SESSION_KINDS: [&str; 5] = [
+    "tool_errors",
+    "refusals",
+    "retractions",
+    "user_corrections",
+    "interruptions",
+];
+/// The kinds a transcript timestamps, so a window can count them.
+const TIMED_KINDS: [&str; 2] = ["tool_errors", "refusals"];
 
 /// One session transcript's reading. `marks` are the timestamped tool
 /// errors and refusals a window can count.
@@ -124,6 +132,18 @@ fn merge(totals: &mut Map<String, Value>, reasons: &mut Map<String, Value>, erro
     }
 }
 
+/// How many of the node's events have `event_type` (with `origin`, when
+/// named); null when the store was not read.
+fn event_count(inp: &Inputs, event_type: &str, origin: Option<&str>) -> Option<u64> {
+    let rows = inp.events.as_ref().ok()?;
+    let n = rows
+        .iter()
+        .filter(|r| str_of(r, "type") == Some(event_type))
+        .filter(|r| origin.is_none() || r.pointer("/data/origin").and_then(Value::as_str) == origin)
+        .count();
+    Some(n as u64)
+}
+
 /// The trace for one node from gathered inputs.
 pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
     let id = str_of(node, "id").unwrap_or_default();
@@ -132,14 +152,33 @@ pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
         .and_then(Value::as_array)
         .map(|a| a.iter().collect())
         .unwrap_or_default();
-    let phases: Vec<Value> = PHASES
+    let mut phases: Vec<Value> = PHASES
         .iter()
         .map(|phase| phase_row(phase, &sessions, inp))
         .collect();
+    // Red CI lands on ship.
+    let ci_red = event_count(inp, "friction", Some("ci_failure"));
+    let ship = phases[4]["errors"]
+        .as_object_mut()
+        .expect("errors is an object");
+    ship.insert("ci_red".into(), json!(ci_red));
     let mut totals = Map::new();
     let mut reasons = Map::new();
+    if ci_red.is_none() {
+        reasons.insert("ci_red".into(), json!("event store not read"));
+    }
     for p in &phases {
         merge(&mut totals, &mut reasons, &p["errors"]);
+    }
+    for (kind, event_type) in [
+        ("reopens", "backlog_reopened"),
+        ("decision_retractions", "decision_retracted"),
+    ] {
+        let n = event_count(inp, event_type, None);
+        add(&mut totals, kind, n);
+        if n.is_none() {
+            reasons.insert(kind.into(), json!("event store not read"));
+        }
     }
 
     let started: Vec<i64> = phases
@@ -189,7 +228,8 @@ fn sum_scans(sessions: &[&Value], inp: &Inputs, f: fn(&SessionScan) -> Option<u6
 
 /// One session's counts inside its phase window. A transcript that lies
 /// inside the window answers whole. One that spans other work (a lead
-/// session that ran a blueprint) counts only its marks in the window.
+/// session that ran a blueprint) counts only its timestamped marks in the
+/// window, and its untimed kinds read null.
 fn session_counts(
     scan: &SessionScan,
     window: (i64, i64),
@@ -208,12 +248,15 @@ fn session_counts(
             if inside {
                 return (*kind, whole, None);
             }
-            let n = scan
-                .marks
-                .iter()
-                .filter(|(at, k)| k == kind && *at >= window.0 && *at <= window.1)
-                .count() as u64;
-            (*kind, Some(n), None)
+            if TIMED_KINDS.contains(kind) {
+                let n = scan
+                    .marks
+                    .iter()
+                    .filter(|(at, k)| k == kind && *at >= window.0 && *at <= window.1)
+                    .count() as u64;
+                return (*kind, Some(n), None);
+            }
+            (*kind, None, Some("session spans other work".into()))
         })
         .collect()
 }
@@ -341,6 +384,20 @@ fn phase_row(phase: &str, sessions: &[&Value], inp: &Inputs) -> Value {
         if starts.is_empty() {
             starts.extend(attested.iter().min());
         }
+        let (mut findings, mut fails) = (0u64, 0u64);
+        for a in inp
+            .reviews
+            .iter()
+            .filter(|r| str_of(r, "type") == Some("review_attestation"))
+        {
+            findings += a
+                .pointer("/data/findings_blocking")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            fails += u64::from(a.pointer("/data/verdict").and_then(Value::as_str) == Some("fail"));
+        }
+        add(&mut counts, "review_findings", Some(findings));
+        add(&mut counts, "review_fails", Some(fails));
     }
     let mut row = json!({
         "phase": phase,
@@ -456,10 +513,14 @@ fn scan_claude(raw: &str) -> SessionScan {
             _ => {}
         }
     }
+    let corrections = crate::correction_meter::correction_totals(raw);
     scan.ai_turns = Some(turns);
     scan.tool_calls = Some(calls);
     scan.counts.insert("tool_errors", Some(errors));
     scan.counts.insert("refusals", Some(refusals));
+    for k in ["retractions", "user_corrections", "interruptions"] {
+        scan.counts.insert(k, corrections[k].as_u64());
+    }
     scan
 }
 
@@ -564,12 +625,13 @@ impl Shared {
 mod tests {
     use super::*;
 
-    fn scan(errors: u64, marks: Vec<(i64, &'static str)>) -> SessionScan {
+    fn scan(errors: u64, corrections: u64, marks: Vec<(i64, &'static str)>) -> SessionScan {
         let mut s = SessionScan::default();
         for k in SESSION_KINDS {
             s.counts.insert(k, Some(0));
         }
         s.counts.insert("tool_errors", Some(errors));
+        s.counts.insert("user_corrections", Some(corrections));
         s.span = marks.first().map(|(t, _)| (*t, *t));
         s.marks = marks;
         s
@@ -614,18 +676,24 @@ mod tests {
         let mut scans = HashMap::new();
         scans.insert(
             "c".to_string(),
-            scan(2, vec![(at, "tool_errors"), (at, "tool_errors")]),
+            scan(2, 1, vec![(at, "tool_errors"), (at, "tool_errors")]),
         );
+        let red = json!({"type": "friction", "data": {"origin": "ci_failure"}});
         let inp = Inputs {
+            events: Ok(vec![red]),
             scans,
             ..Default::default()
         };
         let t = fold(&node, &inp);
         assert_eq!(t["phases"][2]["errors"]["tool_errors"], 2);
+        assert_eq!(t["phases"][2]["errors"]["user_corrections"], 1);
+        assert_eq!(t["phases"][4]["errors"]["ci_red"], 1);
         // The ship session's transcript is absent: null with a reason.
         assert!(t["phases"][4]["errors"]["tool_errors"].is_null());
         assert_eq!(t["errors"]["unread"]["tool_errors"], "not on this host");
         assert!(t["errors"]["tool_errors"].is_null());
+        assert_eq!(t["errors"]["ci_red"], 1);
+        assert_eq!(t["errors"]["reopens"], 0);
     }
 
     #[test]
