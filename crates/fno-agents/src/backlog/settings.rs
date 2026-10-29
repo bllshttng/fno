@@ -59,10 +59,6 @@ pub(crate) fn candidates() -> Vec<PathBuf> {
             }
         }
     }
-    // An FNO_CONFIG naming `<dir>/settings.yaml` is also its own parent's
-    // sibling: keep the first, or every work-map pair reads twice.
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|p| seen.insert(p.clone()));
     out
 }
 
