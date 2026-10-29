@@ -123,4 +123,12 @@ for j in "${JSON_MANIFESTS[@]}"; do
     || { echo "sync-version: no \"version\" field set to ${ver} in $j (missing or unrecognized key?)" >&2; exit 1; }
 done
 
+# A release stamp is workspace-only, so crates/ reads dirty at build time and
+# the binaries would bake -dirty into the release. Mark the stamp so build.rs
+# reads the tree clean: the only working-tree diff is the release identity the
+# binary exists to report.
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+    echo "FNO_RELEASE_STAMP=1" >> "$GITHUB_ENV"
+fi
+
 echo "sync-version: all surfaces set to ${ver}"
