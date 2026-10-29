@@ -17,7 +17,9 @@ for py in python3 python; do
     command -v "$py" >/dev/null 2>&1 && exec "$py" "$@"
 done
 if command -v uv >/dev/null 2>&1; then
-    py="$(uv python find 2>/dev/null)" && [[ -n "$py" && -x "$py" ]] && exec "$py" "$@"
+    # --no-python-downloads keeps the rung offline: a hook never downloads
+    # an interpreter or blocks on the network.
+    py="$(uv python find --no-python-downloads 2>/dev/null)" && [[ -n "$py" && -x "$py" ]] && exec "$py" "$@"
 fi
 echo '{}'
 exit 0
