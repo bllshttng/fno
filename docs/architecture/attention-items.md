@@ -50,7 +50,7 @@ An unknown value reads as `ladder`, and the escalate nudge names it. The read li
 | `ask` | `public-surface`, `gate-override` | The rung holder can rule. |
 | `deny` | `irreversible`, `money-security`, `outside-reach`, `taste`, `law-change` | Only the user. The holder's clear refuses and names the climb. |
 
-A class in two lists, or an unknown class word, refuses the config read. A ladder row needs `class`, `deadline`, `on_silence` and a `## Tried` section to read ready, and a climb to the user's board refuses a row with no `## Tried`.
+A class in two lists, or an unknown class word, refuses the config read. A ladder row reads ready only with `class`, `deadline`, `on_silence` and a `## Tried` section. A climb to the user's board refuses a row with no `## Tried`.
 
 ## Asking with context
 
