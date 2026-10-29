@@ -11,7 +11,7 @@
 
 use serde_json::{json, Value};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The re-entry command every skip names.
 pub const REENTER: &str = "fno config setup run --only messaging";
@@ -103,12 +103,16 @@ pub trait Ask {
 /// The prompting step over the current `rows`; the no-prompt path prints
 /// `summary_line` instead. `picked` carries the wizard's channel picks;
 /// `None` shows the checklist. `set` writes `attention.sinks` (the
-/// validated `fno config set` path).
+/// validated `fno config set` path); `http` carries the channel probes;
+/// `home` is where the token env file lives (`$HOME` in production, a
+/// temp dir in tests).
 pub fn step(
     mut rows: Vec<Value>,
     picked: Option<&[&str]>,
     ask: &mut dyn Ask,
     set: &dyn Fn(&str) -> Result<PathBuf, String>,
+    http: &mut dyn Http,
+    home: &Path,
 ) -> Outcome {
     let mut out = Outcome::default();
     let me = machine();
@@ -140,9 +144,16 @@ pub fn step(
     }
     for i in picks {
         let kind = CHANNELS[i].0;
-        match setup_channel(kind, ask, &me, &mut Curl) {
+        match setup_channel(kind, ask, &me, http) {
             Ok((row, env, token)) => {
-                if let Err(e) = upsert_env(env, &token) {
+                let env_file = home.join(".fno/.env");
+                // `set` validates the row's token, so the env write lands
+                // first. Keep the old value: a failed `set` leaves the old
+                // rows behind, and they must keep resolving to the old
+                // token.
+                let old =
+                    crate::provider_key::read_var_from_env_file(&env_file.to_string_lossy(), env);
+                if let Err(e) = write_env(&env_file, env, Some(&token)) {
                     out.needs_human
                         .push(format!("messaging: {kind}: cannot write {ENV_FILE}: {e}"));
                     continue;
@@ -154,7 +165,7 @@ pub fn step(
                         out.done
                             .push(format!("messaging: {kind} added to attention.sinks"));
                         out.paths.push(path.display().to_string());
-                        match test_send(kind, &row, &token, &mut Curl).as_str() {
+                        match test_send(kind, &row, &token, http).as_str() {
                             "sent" => out
                                 .done
                                 .push(format!("messaging: {kind} test message sent")),
@@ -163,7 +174,14 @@ pub fn step(
                             )),
                         }
                     }
-                    Err(e) => out.needs_human.push(format!("messaging: {kind}: {e}")),
+                    Err(e) => {
+                        out.needs_human.push(format!("messaging: {kind}: {e}"));
+                        if let Err(re) = write_env(&env_file, env, old.as_deref()) {
+                            out.needs_human.push(format!(
+                                "messaging: {kind}: cannot restore {env} in {ENV_FILE}: {re}"
+                            ));
+                        }
+                    }
                 }
             }
             Err(why) => out
@@ -365,13 +383,11 @@ pub fn test_send(kind: &str, row: &Value, token: &str, http: &mut dyn Http) -> S
     }
 }
 
-/// Write `key=value` to `~/.fno/.env`, replacing an existing line, mode 0600.
-/// The new file lands beside it and renames over it, so a failed write
-/// never loses the other keys.
-fn upsert_env(key: &str, value: &str) -> std::io::Result<()> {
-    let home = std::env::var_os("HOME").ok_or_else(|| std::io::Error::other("HOME is unset"))?;
-    let path = PathBuf::from(home).join(".fno/.env");
-    let old = match std::fs::read_to_string(&path) {
+/// Write `key=value` to the env file, replacing an existing line, mode
+/// 0600; `None` removes the line instead. The new file lands beside it and
+/// renames over it, so a failed write never loses the other keys.
+fn write_env(path: &Path, key: &str, value: Option<&str>) -> std::io::Result<()> {
+    let old = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e),
@@ -384,7 +400,9 @@ fn upsert_env(key: &str, value: &str) -> std::io::Result<()> {
         })
         .map(str::to_string)
         .collect();
-    lines.push(format!("{key}={value}"));
+    if let Some(value) = value {
+        lines.push(format!("{key}={value}"));
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -587,5 +605,61 @@ mod tests {
         assert_eq!(row["chat_id"], "100");
         assert_eq!(row["allow"], json!(["42"]));
         assert_eq!(row["machine"], "this-mac");
+    }
+
+    /// A failed config write puts the old token back (Codex P2): `set`
+    /// validates the row's token, so the env write lands first, and the
+    /// kept sink rows must keep resolving to the old value.
+    #[test]
+    fn failed_config_write_restores_the_old_token() {
+        let set = |_: &str| -> Result<PathBuf, String> { Err("config write boom".into()) };
+        let home =
+            std::env::temp_dir().join(format!("fno-setup-msg-restore-{}", std::process::id()));
+        let env_file = home.join(".fno/.env");
+        std::fs::create_dir_all(env_file.parent().unwrap()).unwrap();
+
+        // A token the file already carried survives the failure untouched,
+        // and the other keys keep their lines.
+        std::fs::write(
+            &env_file,
+            "OTHER=keep\nexport FNO_CHAT_TELEGRAM_TOKEN=old-tok\n",
+        )
+        .unwrap();
+        let out = step(
+            Vec::new(),
+            Some(&["telegram"]),
+            &mut Answers(vec!["new-tok", ""]),
+            &set,
+            &mut Updates,
+            &home,
+        );
+        assert_eq!(
+            out.needs_human,
+            vec!["messaging: telegram: config write boom"]
+        );
+        let text = std::fs::read_to_string(&env_file).unwrap();
+        assert!(text.contains("FNO_CHAT_TELEGRAM_TOKEN=old-tok"), "{text}");
+        assert!(!text.contains("new-tok"), "{text}");
+        assert!(text.contains("OTHER=keep"), "{text}");
+
+        // A key the file did not carry is gone again after the failure.
+        std::fs::write(&env_file, "OTHER=keep\n").unwrap();
+        let out = step(
+            Vec::new(),
+            Some(&["telegram"]),
+            &mut Answers(vec!["new-tok", ""]),
+            &set,
+            &mut Updates,
+            &home,
+        );
+        assert_eq!(
+            out.needs_human,
+            vec!["messaging: telegram: config write boom"]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&env_file).unwrap().trim(),
+            "OTHER=keep"
+        );
+        std::fs::remove_dir_all(&home).ok();
     }
 }

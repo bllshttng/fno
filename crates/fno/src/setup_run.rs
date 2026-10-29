@@ -1972,7 +1972,24 @@ fn step_messaging(exe: &Path, prompting: bool, picked: Option<&[&str]>, rep: &mu
         return;
     }
     let set = |value: &str| config_set(exe, &[("attention.sinks", value)], false);
-    let out = m::step(rows, picked, &mut m::TermAsk::new(), &set);
+    let home = match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home),
+        None => {
+            let message = "messaging: cannot write ~/.fno/.env: HOME is unset".to_string();
+            rep.rows
+                .push(row("needs_human", "messaging_unfinished", message.clone()));
+            rep.needs_human.push(message);
+            return;
+        }
+    };
+    let out = m::step(
+        rows,
+        picked,
+        &mut m::TermAsk::new(),
+        &set,
+        &mut m::Curl,
+        &home,
+    );
     rep.done.extend(out.done);
     rep.skipped.extend(out.skipped);
     rep.paths.extend(out.paths);
