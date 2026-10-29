@@ -1251,9 +1251,9 @@ fn stamp_and_graduate(
     }
 
     // Post-stamp schema check (AC1-FR): validate the freshly-stamped frontmatter
-    // against fno.plan.schema. Non-fatal-but-loud - a schema-invalidating stamp
-    // is surfaced for the next session, never rolled back and never failing
-    // finalize (finalize is idempotent/non-fatal by design).
+    // through `fno do plan validate` (the plan-schema door). Non-fatal-but-loud -
+    // a schema-invalidating stamp is surfaced for the next session, never rolled
+    // back and never failing finalize (finalize is idempotent/non-fatal by design).
     validate_stamped_frontmatter(cwd, plan_path);
 
     // A code ship stamps `in_review` only; done flips at merge via the projection.

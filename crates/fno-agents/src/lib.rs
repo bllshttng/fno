@@ -436,6 +436,7 @@ pub mod pi_transcript;
 mod pi_transcript_tests;
 pub mod plan_carry;
 pub mod plan_doc;
+pub mod plan_schema;
 pub mod planning_lane;
 pub mod plans_dirs;
 pub mod plans_path;

@@ -777,53 +777,47 @@ sys.exit(0 if has_file_surface(Path(sys.argv[1])) else 7)
 
 _VALIDATE_SNIPPET = r"""
 import json, sys
-from pydantic import ValidationError
-from fno.plan.schema import PlanFrontmatter
+from fno.rust_binary import plan_schema
 fm = json.load(sys.stdin)
-try:
-    PlanFrontmatter.model_validate(fm)
-except ValidationError as e:
+answer = plan_schema({"op": "validate-frontmatter", "frontmatter": fm, "undatable_refuses": False})
+if answer is None:
+    sys.exit(0)  # door unavailable - degrade, the later checks still guard
+if not answer.get("valid"):
     # Only present-but-invalid fields block; a missing required field (e.g.
     # `node`, absent on many design docs until they bind) is tolerated here.
-    present = [x for x in e.errors() if x["type"] != "missing"]
+    present = [x for x in answer.get("errors") or [] if x.get("message") != "Field required"]
     for x in present:
-        loc = ".".join(str(p) for p in x["loc"]) or "<root>"
-        print(f"  {loc}: {x['msg']} (got {x.get('input')!r})")
+        loc = str(x.get("field") or "<root>")
+        print(f"  {loc}: {x.get('message')} (got {x.get('got')!r})")
     if present:
         sys.exit(7)
 """
 
 
-def _pydantic_python() -> str | None:
-    """A python that can import pydantic + fno.plan.schema, or None.
+def _door_python() -> str:
+    """A python that can run the plan-schema door snippets.
 
-    The ambient python3 that /blueprint uses lacks pydantic, so prefer the
-    repo's cli/.venv (same interpreter finalize.rs resolves). Fall back to the
-    current interpreter when it already has pydantic (tests under `uv run`).
+    The snippets only need fno on PYTHONPATH (the caller sets it) plus the
+    fno-agents binary that rust_binary resolves. Prefer the repo's cli/.venv
+    (same interpreter finalize.rs resolves); any python3 works otherwise.
     """
     venv = _REPO_ROOT / "cli" / ".venv" / "bin" / "python"
     if venv.exists():
         return str(venv)
-    try:
-        import pydantic  # noqa: F401
-
-        return sys.executable
-    except ImportError:
-        return None
+    return sys.executable
 
 
 def _validate_proposed_frontmatter(new_fm: dict[str, Any]) -> str | None:
     """Return a refusal message if the proposed frontmatter is invalid, else None.
 
-    Validates the PROPOSED frontmatter against fno.plan.schema.PlanFrontmatter,
-    refusing only on present-but-invalid fields (a bad `size`, a malformed
-    timestamp, an off-vocabulary status). Best-effort defense-in-depth: if no
-    pydantic-capable interpreter is found, skip rather than block the save (the
-    validate command and finalize's post-stamp check also guard the schema).
+    Validates the PROPOSED frontmatter through the plan-schema door (the one
+    Rust validator), refusing only on present-but-invalid fields (a bad
+    `size`, a malformed timestamp, an off-vocabulary status). Best-effort
+    defense-in-depth: if the door is unavailable, skip rather than block the
+    save (the validate command and finalize's post-stamp check also guard the
+    schema).
     """
-    py = _pydantic_python()
-    if py is None:
-        return None
+    py = _door_python()
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(_CLI_SRC), env.get("PYTHONPATH", "")]))
     try:
@@ -845,15 +839,22 @@ def _validate_proposed_frontmatter(new_fm: dict[str, Any]) -> str | None:
 # exactly what clears the gate's refusal for this frontmatter, SKIP otherwise.
 # Differential, so the gate stays the single oracle: no second date parser, no
 # refusal-message matching. Runs out-of-process because the ambient python3
-# running /blueprint has no pydantic (see _pydantic_python).
+# running /blueprint has no fno on its path (see _door_python).
 _DIFFICULTY_PROBE_SNIPPET = r"""
 import json, sys
-from fno.plan.schema import difficulty_gate_error
+from fno.rust_binary import plan_schema
 fm = json.load(sys.stdin)
 band = fm.get("difficulty")
 absent = band is None or (isinstance(band, str) and not band.strip())
-before = difficulty_gate_error(fm)
-after = difficulty_gate_error({**fm, "difficulty": "low"})
+
+
+def gate_error(doc):
+    gates = plan_schema({"op": "gates", "frontmatter": doc, "undatable_refuses": True}) or {}
+    return gates.get("difficulty_gate")
+
+
+before = gate_error(fm)
+after = gate_error({**fm, "difficulty": "low"})
 print("STAMP" if (absent and before is not None and after is None) else "SKIP")
 """
 
@@ -862,7 +863,7 @@ def _ensure_difficulty(new_fm: dict[str, Any]) -> None:
     """Stamp the floor difficulty band when, and only when, the gate refuses.
 
     A doc minted here carries ``created: <today>``, so the wall clock crossing
-    DIFFICULTY_REQUIRED_AFTER (2026-08-26, strictly-after) makes every mint
+    the gate date (2026-08-26, strictly after) makes every mint
     born failing its own validator with no code change at all. The
     probe above keeps the pre-gate contract intact: a plan created on or
     before the boundary passes bandless by design, and stamping a band onto
@@ -870,12 +871,10 @@ def _ensure_difficulty(new_fm: dict[str, Any]) -> None:
     touched, in or out of vocabulary: the probe fires only for an absent or
     blank one, so a typo'd band still reaches the schema check that names the
     bad value instead of being silently coerced to the floor.
-    Best-effort like _validate_proposed_frontmatter: no pydantic-capable
-    interpreter means no oracle, so skip rather than block the save.
+    Best-effort like _validate_proposed_frontmatter: no interpreter for the
+    door means no oracle, so skip rather than block the save.
     """
-    py = _pydantic_python()
-    if py is None:
-        return
+    py = _door_python()
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(_CLI_SRC), env.get("PYTHONPATH", "")]))
     try:
@@ -1070,14 +1069,15 @@ def mutate(
     # If current_status == "ready" and rewrite=True, keep "ready" (identity ok for rewrite)
 
     # --- Validate the proposed frontmatter against the canonical schema ---
-    # Refuse to write a plan whose PROPOSED frontmatter fails PlanFrontmatter,
-    # naming each bad field, so /execute's read weeks later never trips on it (US1).
+    # Refuse to write a plan whose PROPOSED frontmatter fails the plan-schema
+    # door, naming each bad field, so /execute's read weeks later never trips
+    # on it (US1).
     # Only present-but-invalid fields block (a bad `size`, a malformed
     # timestamp, an off-vocabulary status); MISSING required fields are NOT
     # enforced here - a design doc legitimately carries no `node` until it binds
     # to a backlog node (half of real design docs have none at this point).
     # Best-effort defense-in-depth (the command and finalize also validate): if the
-    # schema deps are unavailable in the ambient interpreter, skip rather than
+    # door is unavailable, skip rather than
     # block the save.
     schema_err = _validate_proposed_frontmatter(new_fm)
     if schema_err is not None:
@@ -1217,16 +1217,14 @@ def _warn_no_file_surface(plan_path: Path) -> None:
     heuristic would diverge from the thing it warns about, staying quiet on a
     table whose cells parse to nothing and firing on a heading it does not know.
 
-    Runs it out-of-process on the Pydantic-capable interpreter, same as
+    Runs it out-of-process on the door interpreter, same as
     ``_validate_proposed_frontmatter``. Importing the parser in-process looks
     simpler but never fires under the ambient python3 /blueprint actually uses:
     the module builds its thresholds from the config model at import time, so
     the import raises ModuleNotFoundError - an ImportError subclass - and a
     handler that degrades on ImportError swallows it silently.
     """
-    py = _pydantic_python()
-    if py is None:
-        return
+    py = _door_python()
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(_CLI_SRC), env.get("PYTHONPATH", "")]))
     try:

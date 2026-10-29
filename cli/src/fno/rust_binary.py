@@ -252,6 +252,40 @@ def settings_read(detect: Optional[str] = None) -> Optional[dict]:
     return receipt
 
 
+def plan_schema(payload: dict) -> Optional[dict]:
+    """One plan-frontmatter validation read through the door; None on failure.
+
+    ``payload`` carries the op (``validate-frontmatter`` or ``gates``) with
+    its arguments. YAML dates are flattened to ISO strings so the payload is
+    JSON-safe, and a door failure reads as None: the caller keeps its own
+    failure posture.
+    """
+    import datetime
+    import json
+
+    def _plain(value):
+        if isinstance(value, (datetime.datetime, datetime.date)):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {k: _plain(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_plain(v) for v in value]
+        return value
+
+    # The dev build outranks the installed copy: a validating surface must
+    # answer with its own checkout's schema, never a stale binary that lacks
+    # the op (the rule command_call states for the same reason).
+    err, receipt = call_binary_json(
+        "state",
+        ["plan-schema"],
+        binary=find_dev_binary() or resolve_binary(),
+        input_text=json.dumps(_plain(payload), default=str),
+    )
+    if err or not isinstance(receipt, dict):
+        return None
+    return receipt
+
+
 def style_word_count_checked(text: str) -> int:
     """Masked word count for an ENFORCING site: raises
     ``budget.BudgetCountUnavailable`` on a door failure instead of answering a
