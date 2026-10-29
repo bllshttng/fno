@@ -206,21 +206,36 @@ fn question_page(
         .as_deref()
         .map(|t| format!(" {t}"))
         .unwrap_or_default();
+    // The harness rides the origin when the asker row never carried one,
+    // and prints nothing over a bare question mark: a token with no fact
+    // behind it reads as noise.
+    let harness_word = origin
+        .and_then(|o| o.harness.as_deref())
+        .or_else(|| asker.and_then(|a| a.harness.as_deref()))
+        .map(|h| format!(" \u{b7} {h}"))
+        .unwrap_or_default();
+    // The missing list prints once, and the projection's per-field
+    // `missing ` prefix drops: `missing: asker, node`, never the word twice.
+    let missing = if item.ready {
+        String::new()
+    } else {
+        let names: Vec<&str> = item
+            .missing
+            .iter()
+            .map(|m| m.strip_prefix("missing ").unwrap_or(m))
+            .collect();
+        format!(" \u{b7} missing: {}", names.join(", "))
+    };
     s.push_str(&format!(
-        "{head} \u{b7} node {}{title_word}{stage} \u{b7} {} \u{b7} {} {}{}\n\n",
+        "{head} \u{b7} node {}{title_word}{stage}{harness_word} \u{b7} {} {}{}\n\n",
         item.node.as_deref().unwrap_or("none"),
-        asker.and_then(|a| a.harness.as_deref()).unwrap_or("?"),
         age_short(&item.created_at, now),
         if item.settled {
             "answered"
         } else {
             &item.state
         },
-        if item.ready {
-            String::new()
-        } else {
-            format!(" \u{b7} missing: {}", item.missing.join(", "))
-        }
+        missing
     ));
     if let Some(body) = item.body.as_deref() {
         if !body.is_empty() && body != item.title {
@@ -287,8 +302,12 @@ fn question_page(
             "0. none of these{}\n",
             if none_sel { "  [selected]" } else { "" }
         ));
+        s.push('\n');
+    } else {
+        // An empty options heading reads as a dropped section; the same
+        // not-recorded word every other section uses names it instead.
+        s.push_str(&format!("{not_recorded}\n\n"));
     }
-    s.push('\n');
     if let Some(r) = &item.recommendation {
         s.push_str(&format!(
             "## recommended\n\noption {} \u{b7} {}{}\n\n",
