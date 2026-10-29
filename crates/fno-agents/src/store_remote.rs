@@ -5,17 +5,20 @@
 //! nothing here runs and no process opens a socket. Set, the claim keys that
 //! decide dispatch (see `claim_store::SHARED_PREFIXES`) run their statements
 //! on the primary, so two machines never hold one node. Every other store
-//! stays local. The client speaks sqld's Hrana-over-HTTP pipeline over plain
-//! HTTP: the primary sits on a private network (the tailnet), which owns
-//! remote reach, as `fno web` leaves it.
+//! stays local. The client speaks sqld's Hrana-over-HTTP pipeline over HTTP
+//! or HTTPS. The primary sits on a private network (the tailnet), which owns
+//! remote reach, as `fno web` leaves it. An `https://` URL wraps the same
+//! hand-written request in TLS, trusting the system roots, so the token and
+//! every row stop crossing the wire in clear.
 //!
 //! A primary that cannot be reached fails closed: the call returns an error
 //! that names the URL and the key, and nothing is written anywhere.
 
 use base64::Engine;
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::Arc;
 use std::time::Duration;
 
 const CONNECT_WAIT: Duration = Duration::from_secs(3);
@@ -141,6 +144,22 @@ pub struct Reply {
     pub affected: u64,
 }
 
+/// The TLS client config an `https://` remote speaks with. `None` is the
+/// system roots; a test hands in its own CA. Two remotes compare equal on
+/// the same config object, which is all the derived `PartialEq` needs.
+#[derive(Debug, Clone)]
+struct Tls(Option<Arc<rustls::ClientConfig>>);
+
+impl PartialEq for Tls {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Remote {
     url: String,
@@ -149,17 +168,30 @@ pub struct Remote {
     path: String,
     token: Option<String>,
     fallbacks: Vec<SocketAddr>,
+    /// `Some` for an `https://` URL.
+    tls: Option<Tls>,
 }
 
+/// The words a TLS failure starts with. It is the primary's certificate,
+/// not the network, so callers must not hold it as an outage.
+const TLS_FAULT: &str = "TLS: ";
+
 impl Remote {
-    /// Parse `http://host[:port][/prefix]`. Any other scheme refuses: this
-    /// client carries no TLS, and the primary is meant to sit on a private
-    /// network.
+    /// Parse `http://host[:port][/prefix]` or `https://host[:port][/prefix]`.
+    /// Any other scheme refuses. https trusts the system roots, so the
+    /// primary serves a real certificate (`tailscale cert`).
     pub fn parse(url: &str, token: Option<String>) -> Result<Self, String> {
         let url = url.trim().trim_end_matches('/');
-        let rest = url.strip_prefix("http://").ok_or_else(|| {
-            format!("{KEY} = {url:?}: only http:// URLs on a private network are supported")
-        })?;
+        let (rest, tls, default_port) = match url.strip_prefix("https://") {
+            Some(rest) => (rest, Some(Tls(None)), 443),
+            None => (
+                url.strip_prefix("http://").ok_or_else(|| {
+                    format!("{KEY} = {url:?}: only http:// and https:// URLs are supported")
+                })?,
+                None,
+                80,
+            ),
+        };
         let (authority, path) = match rest.split_once('/') {
             Some((authority, path)) => (authority, format!("/{path}")),
             None => (rest, String::new()),
@@ -170,7 +202,7 @@ impl Remote {
                 port.parse()
                     .map_err(|_| format!("{KEY} = {url:?}: bad port {port:?}"))?,
             ),
-            None => (authority, 80),
+            None => (authority, default_port),
         };
         if host.is_empty() {
             return Err(format!("{KEY} = {url:?}: no host"));
@@ -182,7 +214,16 @@ impl Remote {
             path,
             token: token.filter(|t| !t.is_empty()),
             fallbacks: Vec::new(),
+            tls,
         })
+    }
+
+    /// Trust `config` instead of the system roots. Only tests need it: a
+    /// real primary serves a certificate the system already trusts.
+    #[cfg(test)]
+    pub(crate) fn with_tls_config(mut self, config: Arc<rustls::ClientConfig>) -> Self {
+        self.tls = Some(Tls(Some(config)));
+        self
     }
 
     /// Addresses to dial, in order, after the host name's own: a Tailscale
@@ -308,6 +349,15 @@ impl Remote {
             if error.starts_with("HTTP 4") {
                 format!(
                     "remote store {} ({KEY}) refused the request: {error}",
+                    self.url
+                )
+            } else if let Some(tls) = error.strip_prefix(TLS_FAULT) {
+                // A certificate the system roots reject is a fault on the
+                // primary, never an outage to queue through.
+                format!(
+                    "remote store {} ({KEY}) failed TLS: {tls}. Nothing was written. \
+                     The primary must serve a certificate the system trusts, such as \
+                     one from `tailscale cert`.",
                     self.url
                 )
             } else {
@@ -446,12 +496,71 @@ impl Remote {
             self.port,
             body.len()
         );
-        stream
-            .write_all(head.as_bytes())
-            .and_then(|()| stream.write_all(body.as_bytes()))
-            .map_err(|e| e.to_string())?;
-        read_response(BufReader::new(stream))
+        let Some(Tls(config)) = &self.tls else {
+            return exchange(stream, &head, body);
+        };
+        let config = match config {
+            Some(config) => Arc::clone(config),
+            None => system_tls()?,
+        };
+        // The certificate name is the URL's host even when the dial went to
+        // a fallback IP: the IP is only a route to the same primary.
+        let name = rustls::pki_types::ServerName::try_from(self.host.clone())
+            .map_err(|e| format!("{TLS_FAULT}bad server name {:?}: {e}", self.host))?;
+        let session =
+            rustls::ClientConnection::new(config, name).map_err(|e| format!("{TLS_FAULT}{e}"))?;
+        exchange(rustls::StreamOwned::new(session, stream), &head, body)
     }
+}
+
+/// Write one request and read its reply. A TLS failure (a rejected
+/// certificate, say) comes back as an io error that wraps a rustls error;
+/// it is named [`TLS_FAULT`] so the caller does not read it as an outage.
+fn exchange(mut stream: impl Read + Write, head: &str, body: &str) -> Result<String, String> {
+    let tls_fault = |e: std::io::Error| match e
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+    {
+        Some(tls) => format!("{TLS_FAULT}{tls}"),
+        None => e.to_string(),
+    };
+    stream
+        .write_all(head.as_bytes())
+        .and_then(|()| stream.write_all(body.as_bytes()))
+        .and_then(|()| stream.flush())
+        .map_err(tls_fault)?;
+    read_response(BufReader::new(stream))
+}
+
+/// The client config for `https://`: the system roots on the ring provider,
+/// built once per process. No root loads is a refusal, not an empty store
+/// that would reject every certificate with a misleading message.
+fn system_tls() -> Result<Arc<rustls::ClientConfig>, String> {
+    static CONFIG: std::sync::OnceLock<Result<Arc<rustls::ClientConfig>, String>> =
+        std::sync::OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let mut roots = rustls::RootCertStore::empty();
+            let found = rustls_native_certs::load_native_certs();
+            let (added, _) = roots.add_parsable_certificates(found.certs);
+            if added == 0 {
+                return Err(format!(
+                    "{TLS_FAULT}no system root certificate loaded ({} errors)",
+                    found.errors.len()
+                ));
+            }
+            tls_config(roots)
+        })
+        .clone()
+}
+
+pub(crate) fn tls_config(
+    roots: rustls::RootCertStore,
+) -> Result<Arc<rustls::ClientConfig>, String> {
+    rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .map(|builder| Arc::new(builder.with_root_certificates(roots).with_no_client_auth()))
+        .map_err(|e| format!("{TLS_FAULT}{e}"))
 }
 
 /// Is this error the fail-closed refusal of a primary that could not be
@@ -538,20 +647,27 @@ pub fn configured() -> Result<Option<Remote>, String> {
             std::sync::OnceLock::new();
         CONFIGURED
             .get_or_init(|| {
-                let lookup = |key| {
-                    crate::agents_config::config_lookup_global(&["store", key])
-                        .and_then(|v| v.as_str().map(str::to_string))
-                        .filter(|v| !v.trim().is_empty())
-                };
-                let Some(url) = lookup("remote_url") else {
+                let Some(url) = store_string("remote_url") else {
                     return Ok(None);
                 };
-                Remote::parse(&url, lookup("remote_token"))?
+                Remote::parse(&url, configured_token())?
                     .with_fallbacks(&configured_addrs()?)
                     .map(Some)
             })
             .clone()
     }
+}
+
+/// `store.remote_token`: this machine's own credential on the primary. The
+/// `--url` export path reads it too, so a token-guarded primary answers it.
+pub fn configured_token() -> Option<String> {
+    store_string("remote_token")
+}
+
+fn store_string(key: &str) -> Option<String> {
+    crate::agents_config::config_lookup_global(&["store", key])
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|v| !v.trim().is_empty())
 }
 
 /// `store.remote_addrs`: unset is no fallback, and anything but a list of
@@ -629,6 +745,55 @@ pub(crate) mod test_primary {
     }
 
     pub(crate) fn start() -> Primary {
+        let (primary, port) = start_on(None);
+        Primary {
+            remote: Remote::parse(&format!("http://127.0.0.1:{port}"), None).unwrap(),
+            ..primary
+        }
+    }
+
+    /// The same stand-in behind TLS, serving a `localhost` certificate from
+    /// a test CA. The remote it returns trusts that CA, and nothing else.
+    pub(crate) fn start_tls() -> Primary {
+        let pem = |name: &str| {
+            let dir =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/store_tls");
+            std::fs::read(dir.join(name)).unwrap()
+        };
+        use rustls::pki_types::pem::PemObject;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        let chain = vec![CertificateDer::from_pem_slice(&pem("leaf.pem")).unwrap()];
+        let key = PrivateKeyDer::from_pem_slice(&pem("leaf.pk8.pem")).unwrap();
+        let server = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(chain, key)
+        .unwrap();
+        let (primary, port) = start_on(Some(Arc::new(server)));
+        Primary {
+            remote: Remote::parse(&format!("https://localhost:{port}"), None)
+                .unwrap()
+                .with_tls_config(test_ca()),
+            ..primary
+        }
+    }
+
+    /// A client config that trusts only the test CA.
+    pub(crate) fn test_ca() -> Arc<rustls::ClientConfig> {
+        use rustls::pki_types::pem::PemObject;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/store_tls/ca.pem");
+        let mut roots = rustls::RootCertStore::empty();
+        roots
+            .add(rustls::pki_types::CertificateDer::from_pem_file(path).unwrap())
+            .unwrap();
+        tls_config(roots).unwrap()
+    }
+
+    fn start_on(tls: Option<Arc<rustls::ServerConfig>>) -> (Primary, u16) {
         let dir = tempfile::tempdir().unwrap();
         let connection = rusqlite::Connection::open(dir.path().join("primary.db")).unwrap();
         // The real primary enforces foreign keys.
@@ -643,15 +808,29 @@ pub(crate) mod test_primary {
         let limit = Arc::clone(&cap);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                serve(stream, &served, limit.load(Ordering::SeqCst));
+                let cap = limit.load(Ordering::SeqCst);
+                match &tls {
+                    None => serve(stream, &served, cap),
+                    // One thread per TLS connection: a client that rejects
+                    // the certificate aborts its handshake, and that panic
+                    // must not take the listener down with it.
+                    Some(config) => {
+                        let (config, served) = (Arc::clone(config), Arc::clone(&served));
+                        std::thread::spawn(move || {
+                            let session = rustls::ServerConnection::new(config).unwrap();
+                            serve(rustls::StreamOwned::new(session, stream), &served, cap);
+                        });
+                    }
+                }
             }
         });
-        Primary {
-            remote: Remote::parse(&format!("http://127.0.0.1:{port}"), None).unwrap(),
+        let primary = Primary {
+            remote: dead(),
             db,
             cap,
             _dir: dir,
-        }
+        };
+        (primary, port)
     }
 
     /// A URL with nothing listening behind it.
@@ -664,8 +843,8 @@ pub(crate) mod test_primary {
         Remote::parse(&format!("http://127.0.0.1:{port}"), None).unwrap()
     }
 
-    fn serve(stream: TcpStream, db: &Mutex<rusqlite::Connection>, cap: usize) {
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
+    fn serve(stream: impl Read + Write, db: &Mutex<rusqlite::Connection>, cap: usize) {
+        let mut reader = BufReader::new(stream);
         let mut length = 0;
         loop {
             let mut line = String::new();
@@ -688,12 +867,13 @@ pub(crate) mod test_primary {
             .map(|r| answer(&connection, r, cap))
             .collect();
         let reply = json!({"baton": null, "results": results}).to_string();
-        let mut stream = stream;
+        let stream = reader.get_mut();
         write!(
             stream,
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{reply}",
             reply.len()
         )
+        .and_then(|()| stream.flush())
         .unwrap();
     }
 
@@ -827,6 +1007,44 @@ mod tests {
         let found = lost.with_fallbacks(&[dead, "127.0.0.1".into()]).unwrap();
         let reply = found.execute("SELECT 1", &[]).unwrap();
         assert_eq!(reply.rows, vec![vec![SqlValue::Integer(1)]]);
+    }
+
+    #[test]
+    fn https_defaults_to_port_443_and_other_schemes_still_refuse() {
+        let remote = Remote::parse("https://r2d2.tailnet.ts.net/", None).unwrap();
+        assert_eq!((remote.host(), remote.port), ("r2d2.tailnet.ts.net", 443));
+        assert!(remote.tls.is_some());
+        let plain = Remote::parse("http://r2d2", None).unwrap();
+        assert_eq!((plain.port, plain.tls.is_none()), (80, true));
+        let error = Remote::parse("ftp://r2d2", None).unwrap_err();
+        assert!(error.contains(KEY) && error.contains("https://"), "{error}");
+    }
+
+    #[test]
+    fn a_tls_primary_answers_and_an_untrusted_certificate_fails_closed() {
+        let primary = test_primary::start_tls();
+        let reply = primary.remote.execute("SELECT 1", &[]).unwrap();
+        assert_eq!(reply.rows, vec![vec![SqlValue::Integer(1)]]);
+
+        // The same primary, trusted by an empty root store: the handshake
+        // fails, the error names the key, and it never reads as an outage
+        // (an outage queues mail; a bad certificate must not).
+        let untrusted = primary
+            .remote
+            .clone()
+            .with_tls_config(tls_config(rustls::RootCertStore::empty()).unwrap());
+        let error = untrusted
+            .execute("CREATE TABLE t (x INTEGER)", &[])
+            .unwrap_err();
+        assert!(
+            error.contains(KEY) && error.contains("failed TLS") && !is_unreachable(&error),
+            "{error}"
+        );
+        let tables = primary
+            .remote
+            .execute("SELECT count(*) FROM sqlite_master WHERE name = 't'", &[])
+            .unwrap();
+        assert_eq!(tables.rows, vec![vec![SqlValue::Integer(0)]]);
     }
 
     #[test]
