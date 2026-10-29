@@ -685,6 +685,7 @@ pub mod wait;
 pub mod wake_meter;
 pub mod wake_name;
 pub mod wake_read;
+pub mod watch;
 pub mod watch_expiry;
 pub mod wave;
 pub mod whoami;

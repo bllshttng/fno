@@ -1597,7 +1597,7 @@ def _forward_to_binary(command: str, args: list[str]) -> None:
     binary = resolve_binary()
     if binary is None:
         typer.echo(
-            f"fno pr watch {command.replace('pr-', '')}: the fno-agents binary was not found. "
+            f"fno do pr watch {command.replace('pr-', '')}: the fno-agents binary was not found. "
             "It ships in the `pip install fno` wheel and with the plugin; "
             "reinstall fno or run `fno doctor update --rust`, or set "
             "FNO_AGENTS_BIN to its path.",

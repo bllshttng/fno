@@ -725,7 +725,7 @@ log "Case D: generic delivery through production mux and Claude hook"
         cd "$TMP_DIR" || exit 1
         env HOME="$TMP_DIR/home" UV_TOOL_DIR="$TMP_DIR/uv-tools" \
             FNO_BOOTSTRAP_WHEEL="$REPO_ROOT/cli" PATH="$COMMON_PATH" \
-            "$MUX_BIN" delivery evaluate --json --plan-path plan.md --events "$D_EVENTS"
+            "$MUX_BIN" do delivery evaluate --json --plan-path plan.md --events "$D_EVENTS"
     )
     cd_ok=true
     assert_real_pending_path "$TMP_DIR" \

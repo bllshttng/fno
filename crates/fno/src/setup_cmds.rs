@@ -34,8 +34,6 @@ pub enum Cmd {
     ShimCheck(Vec<OsString>),
     /// A bare `config setup`, or its `--help`.
     Help,
-    /// A root `fno setup run|auto-wire`: those live under `config setup` only.
-    Moved(String),
     Unknown(String),
 }
 
@@ -66,15 +64,14 @@ const COMMANDS: &[(&str, &str)] = &[
 ];
 
 /// Claim every `config setup` command except `run` and `auto-wire`, which
-/// their own modules claim, and every root `fno setup` spelling.
+/// their own modules claim.
 pub fn classify(args: &[OsString]) -> Option<Cmd> {
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
     if words.len() != args.len() {
         return None;
     }
-    let (at, root) = match words.as_slice() {
-        ["config", "setup", ..] => (2, false),
-        ["setup", ..] => (1, true),
+    let at = match words.as_slice() {
+        ["config", "setup", ..] => 2,
         _ => return None,
     };
     // A bare `config setup` has no word at `at`, so slice only after a match.
@@ -86,7 +83,6 @@ pub fn classify(args: &[OsString]) -> Option<Cmd> {
         Some("cli-hooks") => Cmd::CliHooks(rest()),
         Some("cli-hooks-codex") => Cmd::CliHooksCodex(rest()),
         Some("shim-check") => Cmd::ShimCheck(rest()),
-        Some(w @ ("run" | "auto-wire")) if root => Cmd::Moved(w.to_string()),
         Some("run" | "auto-wire") => return None,
         Some(w) => Cmd::Unknown(w.to_string()),
     })
@@ -110,10 +106,6 @@ pub fn run(cmd: Cmd) -> i32 {
         Cmd::Help => {
             print!("{}", listing());
             0
-        }
-        Cmd::Moved(word) => {
-            eprintln!("`fno setup {word}` moved: run `fno config setup {word}`");
-            2
         }
         Cmd::Unknown(word) => {
             eprintln!("unknown setup command: '{word}'\n\n{}", listing());

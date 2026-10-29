@@ -46,7 +46,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENTS_FAIL_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/daemon.rs:2093 |
 | `FNO_AGENTS_FIXTURES` | rs | Overrides the scratch sweep fixtures directory. |
 | `FNO_AGENTS_FRONT` | py+rs | unclear: cli/src/fno/graph/store.py:213 |
-| `FNO_AGENTS_HOME` | py+rs | unclear: cli/src/fno/agents/cli.py:801 |
+| `FNO_AGENTS_HOME` | py+rs | The agents home: the registry and each worker's socket directory. Default `~/.fno/agents`. |
 | `FNO_AGENTS_IDLE_EXIT_SECS` | rs | unclear: crates/fno-agents/src/bin/daemon.rs:67 |
 | `FNO_AGENTS_NAME_MODEL` | rs | Raw model string; the agent-name mint appends its short code to the worker name. |
 | `FNO_AGENTS_NO_STARTUP_RECONCILE` | rs | unclear: crates/fno-agents/src/bin/daemon.rs:87 |

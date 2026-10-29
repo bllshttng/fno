@@ -50,8 +50,8 @@ const CACHEDIR_TAG: &str = "CACHEDIR.TAG";
 
 /// The fno build base: `FNO_CARGO_TARGETS_BASE`, else
 /// `paths.cargo_targets_base`, else the state root's `cargo-build`. Same
-/// precedence as Python `fno.paths.cargo_build_dir_value`; the
-/// `FNO_RECLAIM_STATE_ROOT` seam keeps the reclaim tests pointing at sandboxes.
+/// precedence as `fno config build-dir`; the `FNO_RECLAIM_STATE_ROOT` seam
+/// keeps the reclaim tests pointing at sandboxes.
 pub fn fno_build_base(root: &Path) -> PathBuf {
     if let Some(raw) = std::env::var_os("FNO_CARGO_TARGETS_BASE") {
         return expand_home(&PathBuf::from(raw));
