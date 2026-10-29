@@ -293,6 +293,11 @@ pub fn read_law_triggers(jsonl: &Path) -> Result<BTreeMap<String, Value>, String
         let Ok(env) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        // The store applies the type filter, but a journal with no store
+        // reads its whole family, so the row type is checked here too.
+        if env.get("type").and_then(Value::as_str) != Some("law_trigger") {
+            continue;
+        }
         let Some(data) = env.get("data").cloned() else {
             continue;
         };
