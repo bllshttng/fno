@@ -492,14 +492,6 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::backlog::style_check::run_cli(&args[1..]);
     }
 
-    // The settings fact set's hidden binary-direct door: the node-id knobs,
-    // the config candidates, and the work-map walk (with the cwd -> project
-    // detect) in one spawn. Same `matches!` treatment so the parity guard
-    // never sees it.
-    if matches!(command, "settings-read") {
-        return fno_agents::backlog::settings_read::run_settings_read(&args[1..]);
-    }
-
     // The mail receipt renderer's hidden binary-direct door: the send receipt
     // prose moved from Python (file budget) with Python keeping transports.
     // Same `matches!` treatment so the parity guard never sees it.

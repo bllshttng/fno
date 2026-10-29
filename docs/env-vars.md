@@ -93,7 +93,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CLAUDE_SESSIONS_DIR` | py | Overrides Claude Code's per-session registry directories on this host. |
 | `FNO_CLAUDE_SESSION_RECENCY_SECONDS` | py | Transcript-mtime liveness window in seconds (positive only; default 600). |
 | `FNO_CLAUDE_THEME` | py+rs | The Claude Code theme (`custom:fno:footnote-*`) the mux pins for a worker pane. A `claude --bg` spawn from that pane writes it into the thread's settings file. |
-| `FNO_FRONT_DOOR` | rs | Overrides the fno binary the footprint cause's rv-pane check runs, for tests; PATH order otherwise. |
 | `FNO_CODEX_ASK_WAIT_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:56 |
 | `FNO_CODEX_BIN` | rs | Overrides the codex CLI the readiness and upgrade paths resolve, for private roots and tests; PATH order otherwise. |
 | `FNO_CODEX_INTERRUPT_BOUND_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:80 |
@@ -116,6 +115,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_E2E_PTY_OUTPUT_DELAY_MS` | rs | unclear: crates/fno/src/pty.rs:1873 |
 | `FNO_EVENTS_PATH` | py+rs | Redirects the agents journal (events.jsonl) to one file; the hermetic guard honors it on both legs. |
 | `FNO_FOOTNOTE_BIN` | rs | The `footnote` harness binary `-H footnote` launches, built from bllshttng/fnh; unset, fno-agents looks beside its own executable, then on PATH. |
+| `FNO_FRONT_DOOR` | rs | Overrides the fno binary the footprint cause's rv-pane check runs, for tests; PATH order otherwise. |
 | `FNO_GH_BUDGET_POINTS_PER_MIN` | rs | Overrides the fleet GitHub request budget cap in points per 60s window (default 450). |
 | `FNO_GH_BUDGET_TEST_ARMED` | rs | Re-arms the in-process budget consult inside a unit-test build, which disarms it by default so the suite's gh-named stubs never stamp the machine-wide ledger; production builds ignore it. |
 | `FNO_GH_CALLER` | rs | Pins the spend journal's caller label outright, checked per admission and ahead of the ancestry walk; a test or a wrapper that knows the caller better than the ancestor argv sets it. |
@@ -298,6 +298,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `GEMINI_SESSION_ID` | rs | Gemini's provider session id, used by exact-session loop readiness. |
 | `GITHUB_ACTIONS` | rs | Folds the smoke step headers into ::group:: in CI: crates/fno-agents/src/test_smoke.rs |
 | `GITHUB_EVENT_BEFORE` | py | unclear: cli/src/fno/lint_cli.py:622 |
+| `GIT_CONFIG_GLOBAL` | rs | the VCS tool's own ambient global-config channel; the birth display_name test guard redirects it beside HOME. |
+| `GIT_CONFIG_SYSTEM` | rs | the VCS tool's own ambient system-config channel; the birth display_name test guard redirects it beside HOME. |
 | `GLOBAL_EVENTS_PATH` | rs | unclear: crates/fno-agents/src/hook/stop.rs:462 |
 | `GROK_HOME` | rs | grok's base directory, sessions live under its `sessions` child: crates/fno-agents/src/grok_store.rs:18 |
 | `GROK_SESSION_ID` | rs | fallback session id when a grok Stop payload omits sessionId: crates/fno-agents/src/hook/stop.rs:150 |

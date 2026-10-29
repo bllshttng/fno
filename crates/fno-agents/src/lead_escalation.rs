@@ -18,33 +18,36 @@ const MAX_LISTED_IDS: usize = 20;
 const MARKER: &str = "lead-escalation";
 
 /// The `questions.route` decision: who else learns of an escalated
-/// question beyond the board row. `direct`, the unset default, keeps the
-/// question on the board alone - the relay hop the user retired is the
-/// mail copy. `triage` is a team's opt-in to a triage lead. Anything
-/// else degrades to direct and says so.
+/// question beyond the board row. `ladder`, the unset default, sends a
+/// worker's ask to its lead first and sends no relay mail. `direct` keeps
+/// the board alone. `triage` is a team's opt-in to a triage lead's mail
+/// copy. Anything else degrades to ladder and says so.
 /// Returns `(mail_relay, nudge)`.
 fn relay_mail(route: Option<&str>) -> (bool, Option<String>) {
+    const TAIL: &str = "no relay mail went out. A lead files a decision only the \
+                        user can make with fno inbox outstanding ask. Set \
+                        questions.route=direct or triage in .fno/config.toml to opt out.";
     match route {
         Some("triage") => (true, None),
-        Some(other) => (
+        Some("direct") => (
             false,
             Some(format!(
-                "questions.route reads '{other}' (direct or triage), so direct \
-                 applies: the question stays on the board and no relay mail went \
-                 out. For a decision only the user can make, file it with \
-                 fno inbox outstanding ask. Set questions.route=triage in \
-                 .fno/config.toml to route questions through a triage lead."
+                "questions.route=direct: the question stays on the board and {TAIL}"
             )),
         ),
-        None => (
+        Some(other) if other != "ladder" => (
             false,
-            Some(
-                "questions.route=direct (default): the question stays on the board \
-                 and no relay mail went out. For a decision only the user can make, \
-                 file it with fno inbox outstanding ask. Set questions.route=triage \
-                 in .fno/config.toml to route questions through a triage lead."
-                    .to_string(),
-            ),
+            Some(format!(
+                "questions.route reads '{other}' (ladder, direct or triage), so ladder \
+                 applies: a worker's question goes to its lead first, and {TAIL}"
+            )),
+        ),
+        _ => (
+            false,
+            Some(format!(
+                "questions.route=ladder (default): a worker's question goes to its \
+                 lead first, and {TAIL}"
+            )),
         ),
     }
 }
@@ -513,12 +516,15 @@ mod tests {
     // --- the questions.route decision ---
 
     #[test]
-    fn direct_route_skips_the_relay_mail_and_teaches_the_board() {
+    fn the_default_route_is_the_ladder_and_skips_the_relay_mail() {
         let (mail_relay, nudge) = relay_mail(None);
         assert!(!mail_relay);
-        let nudge = nudge.expect("direct carries the teaching line");
+        let nudge = nudge.expect("the ladder carries the teaching line");
+        assert!(nudge.contains("questions.route=ladder (default)"));
         assert!(nudge.contains("fno inbox outstanding ask"));
-        assert!(nudge.contains("questions.route=triage"));
+        let (mail_relay, nudge) = relay_mail(Some("direct"));
+        assert!(!mail_relay);
+        assert!(nudge.unwrap().starts_with("questions.route=direct:"));
 
         let ans = render(&req(IDS.to_vec(), Some(true)));
         assert!(ans.ok);
@@ -540,11 +546,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_route_degrades_to_direct_and_names_the_value() {
-        let (mail_relay, nudge) = relay_mail(Some("ladder"));
+    fn an_unknown_route_degrades_to_the_ladder_and_names_the_value() {
+        let (mail_relay, nudge) = relay_mail(Some("relay"));
         assert!(!mail_relay);
         let nudge = nudge.expect("unknown carries the teaching line");
-        assert!(nudge.contains("reads 'ladder'"));
+        assert!(nudge.contains("reads 'relay'"));
+        assert!(nudge.contains("so ladder applies"));
         assert!(nudge.contains("fno inbox outstanding ask"));
     }
 

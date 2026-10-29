@@ -246,7 +246,7 @@ def settings_read(detect: Optional[str] = None) -> Optional[dict]:
     import json
 
     request = json.dumps({"detect": detect}) if detect is not None else "{}"
-    err, receipt = call_binary_json("settings-read", [], input_text=request)
+    err, receipt = call_binary_json("state", ["settings-read"], input_text=request)
     if err or not isinstance(receipt, dict):
         return None
     return receipt

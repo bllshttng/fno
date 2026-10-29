@@ -199,12 +199,21 @@ fn collect_retractions(raw: &str, kind: &str, out: &mut Vec<Value>) {
         }
         let Some(ts) = stamp(&row) else { continue };
         let Some(fields) = data(&row) else { continue };
-        out.push(json!({
+        let mut item = json!({
             "kind": kind,
-            "target": string(fields, "target").or_else(|| string(fields, "decision_id")).unwrap_or_default(),
+            "target": string(fields, "target_decision_id")
+                .or_else(|| string(fields, "target"))
+                .or_else(|| string(fields, "decision_id"))
+                .unwrap_or_default(),
             "reason": string(fields, "reason").unwrap_or_default(),
             "ts": ts,
-        }));
+        });
+        for key in ["authority_source", "retracted_by", "quote"] {
+            if let Some(value) = string(fields, key) {
+                item[key] = json!(value);
+            }
+        }
+        out.push(item);
     }
 }
 
@@ -904,10 +913,15 @@ mod tests {
             json!({"id":"x-in","title":"inside","completed_at":"2026-09-10T09:00:00Z"}),
             json!({"id":"x-out","title":"outside","completed_at":"2026-09-10T07:00:00Z"}),
         ];
+        input.decisions_raw = r#"{"ts":"2026-09-10T10:00:00Z","type":"decision_retracted","data":{"target_decision_id":"d-x","reason":"r","authority_source":"chat_attested","retracted_by":"testf4c6","quote":"drop it"}}"#.to_string();
         let payload = fold_day(&input).unwrap();
         assert_eq!(payload["completed"]["count"], json!(1));
         assert_eq!(payload["window"]["from"], json!("2026-09-10T08:00:00Z"));
         assert_eq!(payload["prior_boundary_id"], json!("day-end-old"));
+        let retraction = &payload["retractions"][0];
+        assert_eq!(retraction["target"], json!("d-x"));
+        assert_eq!(retraction["quote"], json!("drop it"));
+        assert_eq!(retraction["authority_source"], json!("chat_attested"));
     }
 
     #[test]
