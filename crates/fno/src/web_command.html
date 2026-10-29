@@ -359,6 +359,7 @@ function graph(model) {
     else { n.x = hx(n.r.host) * (240 + Math.random() * 120); n.y = (Math.random() - .5) * 380; }
   }
   setTargets();
+  if (still && !first) settle();
   if (first) {
     try { const l = localStorage.getItem("fnoCommandLayout"); if (LNOTE[l]) layout = l; } catch (e) {}
     resize(); setLayout(layout);
@@ -368,7 +369,7 @@ function graph(model) {
   }
 }
 function capBottom() { const c = document.getElementById("lnote"), lg = stage.querySelector(".legend"); TOP = c.offsetTop + c.offsetHeight + 12; BOT = stage.clientHeight - lg.offsetTop + 8; }
-function resize() { const b = cv.getBoundingClientRect(); if (!b.width) return; capBottom(); DPR = Math.min(2, devicePixelRatio || 1); W = b.width; H = b.height; cv.width = W * DPR; cv.height = H * DPR; if (nodes.length) setTargets(); }
+function resize() { const b = cv.getBoundingClientRect(); if (!b.width) return; capBottom(); DPR = Math.min(2, devicePixelRatio || 1); W = b.width; H = b.height; cv.width = W * DPR; cv.height = H * DPR; if (nodes.length) { setTargets(); if (still) settle(); } }
 addEventListener("resize", resize);
 document.getElementById("tab-synapse").addEventListener("click", () => requestAnimationFrame(resize));
 if (matchMedia("(max-width:640px)").matches) document.getElementById("tab-table").click();
@@ -392,9 +393,11 @@ function setTargets() {
     nodes.filter((n) => n.kind === "epic").forEach((n) => { const t = byId["P:" + n.project]; n.tx = 0; n.ty = (t ? t.band : 0) + 44; });
   }
 }
+// Reduced motion draws no easing frames, so the stars move to a new layout here, at once.
+function settle() { for (let i = 0; i < (layout === "constellation" ? 320 : 120); i++) tick(1); }
 function setLayout(l) {
   layout = l; stage.dataset.layout = l; document.getElementById("lnote").textContent = LNOTE[l](); capBottom();
-  setTargets(); born = performance.now() - 900; cam.tx = cam.ty = 0; cam.auto = true;
+  setTargets(); if (still) settle(); born = performance.now() - 900; cam.tx = cam.ty = 0; cam.auto = true;
   stage.querySelectorAll("[data-layout]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.layout === l)));
   try { localStorage.setItem("fnoCommandLayout", l); } catch (e) {}
 }
@@ -427,7 +430,7 @@ function fitK() { let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; nodes.forEach((n
   const kx = (W - 2 * Math.min(110, W * .08)) / Math.max(2, x1 - x0), ky = (H - TOP - BOT - 140) / Math.max(2, y1 - y0), k = Math.min(1.6, Math.max(.02, Math.min(kx, ky)));
   cam.tsx = layout === "constellation" ? Math.min(2.2, Math.max(1, kx / k)) : 1; return k; }
 function tipLines(n) {
-  if (n.kind === "host") { const h = n.h; return [h.host, rows.filter((r) => r.host === h.host).length + " sessions · spawn cap " + (h.cap ?? "?") + " · memory " + Math.round((h.mem_used || 0) * 100) + "%", (h.fresh ? "online" : "stale") + " · beat " + ago(h.age_s) + " ago · " + (h.takes_work ? "takes work" : "no new work")]; }
+  if (n.kind === "host") { const h = n.h; return [h.host, rows.filter((r) => r.host === h.host).length + " sessions · spawn cap " + (h.cap ?? "?") + " · memory " + (h.mem_used == null ? "not sampled" : Math.round(h.mem_used * 100) + "%"), (h.fresh ? "online" : "stale") + " · beat " + ago(h.age_s) + " ago · " + (h.takes_work ? "takes work" : "no new work")]; }
   if (n.kind === "territory") { const c = rows.filter((r) => proj(r) === n.label); return ["Project · " + n.label, c.length + " sessions · " + c.filter((r) => r.s.status === "writing").length + " writing"]; }
   if (n.kind === "epic") return [n.title || n.label, "epic " + n.label + " · " + rows.filter((r) => { const e = epic(r); return e && e[0] === n.label; }).length + " sessions"];
   const r = n.r; return [(leadName(r) ? leadName(r) + " · " : "") + (work(r, "title") || r.s.name), (work(r, "id") || "no node") + " · " + r.s.status + " · " + r.host, (model_(r) || r.s.harness || "") + " · alive " + ago(since(r.s.started_at)) + " · last msg " + ago(since(r.s.last_message_at)) + " ago"];
@@ -447,11 +450,11 @@ cv.addEventListener("dblclick", () => { cam.tx = cam.ty = 0; cam.auto = true; })
 function arc(x, cx, cy, r, a0, a1, color, w) { x.strokeStyle = color; x.lineWidth = w; x.lineCap = "round"; x.beginPath(); x.arc(cx, cy, r, a0, a1); x.stroke(); }
 // The machine orb: a memory ring, a ring split by seat state, and, on the card, one dot per seat in orbit.
 function drawHost(x, h, cx, cy, r, now, inGraph) {
-  const t = still ? 0 : now / 1000, seats = rows.filter((q) => q.host === h.host), n = Math.max(1, seats.length), mem = h.mem_used || 0, w = Math.max(2, r * .14), s = -Math.PI / 2;
+  const t = still ? 0 : now / 1000, seats = rows.filter((q) => q.host === h.host), n = Math.max(1, seats.length), mem = h.mem_used, w = Math.max(2, r * .14), s = -Math.PI / 2;
   const g = x.createRadialGradient(cx, cy, 0, cx, cy, r * 2.6); g.addColorStop(0, A(T.text, .1)); g.addColorStop(1, A(T.text, 0)); x.fillStyle = g; x.beginPath(); x.arc(cx, cy, r * 2.6, 0, 7); x.fill();
   const core = x.createRadialGradient(cx - r * .3, cy - r * .3, 1, cx, cy, r); core.addColorStop(0, T.surface0); core.addColorStop(1, T.mantle); x.fillStyle = core; x.beginPath(); x.arc(cx, cy, r, 0, 7); x.fill();
   x.strokeStyle = A(T.overlay1, .6); x.lineWidth = 1; x.stroke();
-  arc(x, cx, cy, r + w * 1.2, 0, 7, T.surface0, w); arc(x, cx, cy, r + w * 1.2, s, s + mem * Math.PI * 2, mem > .85 ? COL.parked : css("--ok"), w);
+  arc(x, cx, cy, r + w * 1.2, 0, 7, T.surface0, w); if (mem != null) arc(x, cx, cy, r + w * 1.2, s, s + mem * Math.PI * 2, mem > .85 ? COL.parked : css("--ok"), w);
   const R2 = r + w * 2.9; let a = s; arc(x, cx, cy, R2, 0, 7, T.surface0, w);
   for (const st of ORDER) { const k = seats.filter((q) => q.s.status === st).length; if (k) { const sw = k / n * Math.PI * 2; arc(x, cx, cy, R2, a + .04, a + sw - .04, COL[st], w); a += sw; } }
   if (!inGraph) seats.forEach((q, i) => { const st = q.s.status, ang = t * ({writing: .9, parked: .35}[st] || .2) + i / n * Math.PI * 2, R3 = st === "writing" ? R2 + w * 2.2 : R2 + w * 3.4;
@@ -459,7 +462,7 @@ function drawHost(x, h, cx, cy, r, now, inGraph) {
   x.fillStyle = T.text; x.textAlign = "center"; x.font = "600 " + Math.max(10, r * .42) + "px " + UI; x.fillText(seats.length, cx, cy + r * .16);
   x.fillStyle = T.overlay1; x.font = "500 " + Math.max(8, r * .22) + "px " + DATA; x.fillText("sessions", cx, cy + r * .5);
   // On the Subway ring a machine above the middle puts its label above the orb, clear of the lines that leave it downward.
-  if (inGraph) { const up = layout === "transit" && h._n && h._n.y < -1, ly = up ? cy - R2 - 30 : cy + R2 + 26; x.fillStyle = T.text; x.font = "600 14px " + UI; x.fillText(h.host, cx, ly); x.fillStyle = T.overlay1; x.font = "500 11px " + DATA; x.fillText("cap " + (h.cap ?? "?") + " · mem " + Math.round(mem * 100) + "%", cx, ly + 16); }
+  if (inGraph) { const up = layout === "transit" && h._n && h._n.y < -1, ly = up ? cy - R2 - 30 : cy + R2 + 26; x.fillStyle = T.text; x.font = "600 14px " + UI; x.fillText(h.host, cx, ly); x.fillStyle = T.overlay1; x.font = "500 11px " + DATA; x.fillText("cap " + (h.cap ?? "?") + " · mem " + (mem == null ? "?" : Math.round(mem * 100) + "%"), cx, ly + 16); }
 }
 function lightning(x1, y1, x2, y2, disp, out) { if (disp < 4) { out.push([x2, y2]); return; } const mx = (x1 + x2) / 2 + (Math.random() - .5) * disp, my = (y1 + y2) / 2 + (Math.random() - .5) * disp; lightning(x1, y1, mx, my, disp / 2, out); lightning(mx, my, x2, y2, disp / 2, out); }
 function curve(a, b) { const p = toScreen(a), q = toScreen(b); return [p, {x: (p.x + q.x) / 2 - (q.y - p.y) * .12, y: (p.y + q.y) / 2 + (q.x - p.x) * .12}, q]; }
@@ -517,7 +520,7 @@ function drawGraph(now) {
         const lw = ctx.measureText(lead).width / 2 + 4, above = p.y - r - 11, hit = pills.some((b) => p.x + lw > b.x && p.x - lw < b.x + b.w && above > b.y - 2 && above - 12 < b.y + 30);
         ctx.fillText(lead, p.x, hit ? p.y + r + 20 : above); }
       else if (focus === n || cam.k > 1.3) { ctx.fillStyle = T.subtext0; ctx.font = "500 11px " + DATA; ctx.textAlign = "center"; ctx.fillText(work(n.r, "id") || n.r.s.short || n.r.s.name, p.x, p.y - r - 9); }
-      if (sel === n.r) { ctx.strokeStyle = T.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, r + 9 + 2 * Math.sin(now / 250), 0, 7); ctx.stroke(); } }
+      if (sel === n.r) { ctx.strokeStyle = T.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, r + 9 + (still ? 0 : 2 * Math.sin(now / 250)), 0, 7); ctx.stroke(); } }
     ctx.globalAlpha = 1; });
 }
 function frame(now) {
