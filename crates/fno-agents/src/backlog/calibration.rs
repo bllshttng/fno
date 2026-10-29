@@ -45,8 +45,8 @@ pub struct NodeCalibration {
     /// Friction origin -> row count (`help`, `result_blocked`, `gate_refusal`,
     /// `review_round`, `ci_failure`). Absent entirely when the node hit none.
     pub friction: BTreeMap<String, u32>,
-    /// `Some(false)` when re-estimated; otherwise `friction.is_empty()` when
-    /// a recorder covered the node, and `None` when none did.
+    /// `Some(false)` when re-estimated or any friction row exists; otherwise
+    /// `Some(true)` when a recorder covered the node, and `None` when none did.
     pub smooth: Option<bool>,
 }
 
@@ -158,7 +158,9 @@ pub fn compute(
             _ => false,
         };
         let friction = friction_by_node.get(id).cloned().unwrap_or_default();
-        let smooth = if re_estimated {
+        // Any friction row proves rough even when the node predates the
+        // recorder; only a clean read needs the recorder's coverage.
+        let smooth = if re_estimated || !friction.is_empty() {
             Some(false)
         } else if measured {
             Some(friction.is_empty())
@@ -386,6 +388,14 @@ mod tests {
         assert_eq!(rows[0].smooth, None);
         let agg = aggregate(&rows);
         assert_eq!((agg[0].measured_count, agg[0].smooth_count), (0, 0));
+
+        // A friction row is proof of rough even before the recorder's start.
+        let friction = BTreeMap::from([(
+            "x-dddd".to_string(),
+            BTreeMap::from([("ci_failure".to_string(), 1)]),
+        )]);
+        let rows = compute(&[node.clone()], &friction, later);
+        assert_eq!(rows[0].smooth, Some(false));
 
         let earlier = recorder_from("2025-12-01T00:00:00Z");
         let rows = compute(&[node], &BTreeMap::new(), earlier);
