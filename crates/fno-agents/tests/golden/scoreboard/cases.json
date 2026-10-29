@@ -1,0 +1,150 @@
+{
+ "main_json": {
+  "argv": [
+   "--since",
+   "20000",
+   "--json"
+  ],
+  "key": "main-json"
+ },
+ "main_text": {
+  "argv": [
+   "--since",
+   "20000"
+  ],
+  "key": "main-text"
+ },
+ "partial_coverage": {
+  "argv": [
+   "--since",
+   "20000",
+   "--json"
+  ],
+  "key": "partial-coverage"
+ },
+ "events_malformed": {
+  "argv": [
+   "--since",
+   "20000",
+   "--json"
+  ],
+  "key": "events-malformed"
+ },
+ "no_data": {
+  "argv": [
+   "--since",
+   "20000",
+   "--json"
+  ],
+  "key": "no-data"
+ },
+ "broken_ledger": {
+  "argv": [
+   "--since",
+   "20000",
+   "--json"
+  ],
+  "key": "broken-ledger"
+ },
+ "since_zero": {
+  "argv": [
+   "--since",
+   "0"
+  ],
+  "key": "since-zero"
+ },
+ "mutually_exclusive": {
+  "argv": [
+   "--calibration",
+   "--by-skill"
+  ],
+  "key": "mutually-exclusive"
+ },
+ "calibration_ok": {
+  "argv": [
+   "--calibration",
+   "--json"
+  ],
+  "key": "calibration-ok"
+ },
+ "calibration_insufficient": {
+  "argv": [
+   "--calibration",
+   "--json"
+  ],
+  "key": "calibration-insufficient"
+ },
+ "by_skill_json": {
+  "argv": [
+   "--since",
+   "20000",
+   "--by-skill",
+   "--json"
+  ],
+  "key": "by-skill-json"
+ },
+ "efficiency_json": {
+  "argv": [
+   "--since",
+   "20000",
+   "--efficiency",
+   "--json"
+  ],
+  "key": "efficiency-json"
+ },
+ "efficiency_ci_unparsed": {
+  "argv": [
+   "--since",
+   "20000",
+   "--efficiency",
+   "--json"
+  ],
+  "key": "efficiency-ci-unparsed"
+ },
+ "lanes_json": {
+  "argv": [
+   "--since",
+   "20000",
+   "--lanes",
+   "--json"
+  ],
+  "key": "lanes-json"
+ },
+ "plan_fidelity_json": {
+  "argv": [
+   "--since",
+   "20000",
+   "--plan-fidelity",
+   "--json"
+  ],
+  "key": "plan-fidelity-json"
+ },
+ "plan_fidelity_unjoined": {
+  "argv": [
+   "--since",
+   "20000",
+   "--plan-fidelity",
+   "--json"
+  ],
+  "key": "plan-fidelity-unjoined"
+ },
+ "project_scope": {
+  "argv": [
+   "--since",
+   "20000",
+   "--project",
+   "ex/repo",
+   "--json"
+  ],
+  "key": "project-scope"
+ },
+ "by_provider_json": {
+  "argv": [
+   "--since",
+   "20000",
+   "--by-provider",
+   "--json"
+  ],
+  "key": "by-provider-json"
+ }
+}

@@ -1,76 +1,17 @@
-"""fno.agents.whoami — "what is MY registered mesh name?" (read-only).
+"""fno.agents.whoami: the session-to-row matchers ``fno agents whoami`` shared.
 
-A mesh-spawned worker has no clean way to learn its OWN registered name —
-the derived-name peers use to address it via ``fno agents mail send <name>``. The
-spawn path injects ``FNO_AGENT_SESSION`` / ``FNO_AGENT_HARNESS`` into every
-spawned agent's env (see :mod:`fno.agents.context`), but nothing surfaces
-that identity back. Identity is the session id; the name renders from the row.
-
-This module is the pure-logic half of ``fno agents whoami`` (the plural
-mesh namespace, NOT the retired singular ``fno agent``). The CLI wrapper
-in :mod:`fno.agents.cli` wires real env + registry + best-effort enrichers
-into :func:`resolve_self`; everything here takes plain inputs so it is
-unit-testable without a live mesh.
-
-Read-only by construction: no registry write, no event emit, no state-file
-mutation (the CLI tests assert paired-state md5 invariance, mirroring the
-``fno whoami`` / ``fno whoami status`` proof).
+The command itself is native (crates/fno-agents/src/registry_commands.rs). What
+stays here is read by Python callers: the harness-scoped session matcher the
+role authorization and succession checks use, and the held-node reader the
+carveout stamp uses. Read-only by construction.
 """
 from __future__ import annotations
 
-import json
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Mapping
-from typing import Callable, Optional
+from typing import Optional
 
 from fno.agents.registry import AgentEntry
-from fno.harness_identity import harness_from_env
-
-# Exit code for "ran fine, but you are not a registered mesh agent". Distinct
-# from Typer's 2 (usage/arg error) and the conventional 1 so a caller can
-# branch: `fno agents whoami && echo "I am $(...)"`.
-EXIT_NOT_REGISTERED = 3
-
-
-@dataclass
-class WhoamiResult:
-    """Resolved mesh self-identity + best-effort enrichment.
-
-    ``registered`` is the single authority for exit code: ``exit_code`` is 0
-    iff a name was resolved, else :data:`EXIT_NOT_REGISTERED`. Every
-    enrichment field degrades to ``None`` rather than turning a resolved
-    identity into a failure.
-    """
-
-    registered: bool
-    name: Optional[str]
-    provider: Optional[str] = None
-    session: Optional[str] = None
-    short_id: Optional[str] = None
-    status: Optional[str] = None
-    live_status: Optional[str] = None
-    node: Optional[str] = None
-    # Role (US9): a rendered "level N, scope=X (by <grantor>)" when this
-    # session's row carries an orchestrator role, so a compacted lead recovers
-    # its own authority. None for an unpromoted worker.
-    role: Optional[str] = None
-    resolved_via: Optional[str] = None  # "env" | "session-fallback" | None
-    warnings: list[str] = field(default_factory=list)
-    exit_code: int = 0
-
-
-def _nonempty(value: Optional[str]) -> Optional[str]:
-    """Trim and coerce empty-string env values to None.
-
-    A spawn path that exports ``FNO_AGENT_SESSION=""`` (or a stray
-    whitespace value) must read as "unset", not as a zero-length id.
-    """
-    if value is None:
-        return None
-    trimmed = value.strip()
-    return trimmed or None
 
 
 def _row_harness(entry: AgentEntry) -> str:
@@ -179,104 +120,6 @@ def is_caller_row(
     return _find_by_session([row], session_uuid, harness) is not None
 
 
-def resolve_self(
-    env: Mapping[str, str],
-    registry: list[AgentEntry],
-    registry_error: Optional[str] = None,
-    session_uuid: Optional[str] = None,
-    live_status_fn: Optional[Callable[[str], Optional[str]]] = None,
-    node_fn: Optional[Callable[[], Optional[str]]] = None,
-    harness: Optional[str] = None,
-) -> WhoamiResult:
-    """Resolve this process's mesh identity from env + registry.
-
-    Tiers (deterministic):
-
-    1. ``env`` — ``FNO_AGENT_SESSION`` set -> the row matching that session
-       id. The fleet name is display only; it renders from the row.
-    2. ``session-fallback`` — no ``FNO_AGENT_SESSION`` (or it matches no row)
-       but a registry row matches ``session_uuid``
-       (``CLAUDE_CODE_SESSION_ID``).
-    3. none — neither -> not a registered mesh agent (exit 3).
-
-    ``registry_error`` (a stringified ``RegistryVersionError``) means the
-    registry could not be read: enrichment is skipped and a WARN is recorded,
-    but tier 1 still answers from env. ``live_status_fn`` / ``node_fn`` are
-    best-effort enrichers; any exception they raise is swallowed into a WARN
-    (live_status) or silently dropped (node), never propagated.
-    """
-    warnings: list[str] = []
-    if registry_error:
-        warnings.append(f"registry unreadable, enrichment skipped: {registry_error}")
-        registry = []
-
-    env_provider = _nonempty(harness_from_env(env))
-    env_session = _nonempty(env.get("FNO_AGENT_SESSION"))
-
-    row: Optional[AgentEntry] = None
-    name: Optional[str] = None
-    resolved_via: Optional[str] = None
-
-    # Identity tiers on session ids only: a stale FNO_AGENT_SESSION that
-    # matches no row never blocks the CLAUDE uuid tier.
-    for via, token in (("env", env_session), ("session-fallback", session_uuid)):
-        if not token:
-            continue
-        row = _find_by_session(registry, token, harness)
-        if row is not None:
-            name = row.name
-            resolved_via = via
-            break
-
-    if name is None:
-        return WhoamiResult(
-            registered=False,
-            name=None,
-            resolved_via=None,
-            warnings=warnings,
-            exit_code=EXIT_NOT_REGISTERED,
-        )
-
-    provider = env_provider or (row.harness if row else None)
-    session = env_session or (row.session_id if row else None)
-    short_id = (row.short_id or None) if row else None
-    status = row.status if row else None
-
-    live_status: Optional[str] = None
-    if live_status_fn is not None and provider == "claude" and short_id:
-        try:
-            live_status = live_status_fn(short_id)
-        except Exception as exc:  # noqa: BLE001 — best-effort enrichment
-            warnings.append(f"live_status enrichment skipped: {exc}")
-
-    node: Optional[str] = None
-    if node_fn is not None:
-        try:
-            node = node_fn()
-        except Exception:  # noqa: BLE001 — best-effort, silent
-            node = None
-
-    from fno.agents.role import role_reading
-
-    reading = role_reading(row)
-    role: Optional[str] = reading["text"] if reading is not None else None
-
-    return WhoamiResult(
-        registered=True,
-        name=name,
-        provider=provider,
-        session=session,
-        short_id=short_id,
-        status=status,
-        live_status=live_status,
-        node=node,
-        role=role,
-        resolved_via=resolved_via,
-        warnings=warnings,
-        exit_code=0,
-    )
-
-
 def _scan_field(text: str, key: str) -> Optional[str]:
     """Return the value of the first ``<key>: <value>`` line in ``text``.
 
@@ -333,54 +176,3 @@ def find_held_node(cwd: str = ".", session_uuid: Optional[str] = None) -> Option
     if value and value.lower() != "null":
         return f"node:{value}"
     return None
-
-
-def render_human(result: WhoamiResult) -> str:
-    """Render the resolved identity as aligned ``key: value`` lines.
-
-    Returns the empty string for an unregistered result (the CLI writes the
-    "not a registered mesh agent" line to stderr instead). Enrichment fields
-    that are ``None`` are omitted so a sparse identity stays terse.
-    """
-    if not result.registered:
-        return ""
-    lines = [f"name:        {result.name}"]
-    if result.provider:
-        lines.append(f"provider:    {result.provider}")
-    if result.session:
-        lines.append(f"session:     {result.session}")
-    if result.short_id:
-        lines.append(f"short_id:    {result.short_id}")
-    if result.status:
-        lines.append(f"status:      {result.status}")
-    if result.live_status:
-        lines.append(f"live_status: {result.live_status}")
-    if result.node:
-        lines.append(f"node:        {result.node}")
-    if result.role:
-        lines.append(f"role:       {result.role}")
-    return "\n".join(lines)
-
-
-def render_json(result: WhoamiResult) -> str:
-    """Render the canonical JSON shape (every key always present).
-
-    Absent enrichments serialize as ``null`` (not a missing key) so a
-    consumer can distinguish "not resolvable" from "older shape".
-    """
-    return json.dumps(
-        {
-            "registered": result.registered,
-            "name": result.name,
-            "provider": result.provider,
-            "session": result.session,
-            "short_id": result.short_id,
-            "status": result.status,
-            "live_status": result.live_status,
-            "node": result.node,
-            "role": result.role,
-            "resolved_via": result.resolved_via,
-        },
-        indent=2,
-        sort_keys=True,
-    )
