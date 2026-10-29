@@ -9,7 +9,7 @@ use super::*;
 /// durable identity AND a status that was non-terminal when the daemon died.
 /// `handle_stop` marks a stopped thread `Exited`; resurrecting that row on the
 /// next daemon start would silently undo `fno agents stop`. It also needs a
-/// RECENT real turn (x-a8ef): re-opening a month-idle row stamps it Live and
+/// RECENT real turn: re-opening a month-idle row stamps it Live and
 /// makes the app-server touch its rollout, which manufactures the very
 /// liveness the ladder then trusts. Freshness reads the row's own turn
 /// stamps - `last_message_at`, the inside-leg report, `created_at` - never
