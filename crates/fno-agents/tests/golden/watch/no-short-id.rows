@@ -1,10 +1,1 @@
-[
-  {
-    "name": "alpha",
-    "cwd": "/work",
-    "log_path": "",
-    "harness": "claude",
-    "status": "idle",
-    "harness_session_id": "3f2b8c1a-9d4e-4f6a-b7c8-2e5d1a0b9c8d"
-  }
-]
+[{"name": "alpha", "cwd": "/work", "log_path": "", "harness": "claude", "status": "idle", "harness_session_id": "3f2b8c1a-9d4e-4f6a-b7c8-2e5d1a0b9c8d"}]

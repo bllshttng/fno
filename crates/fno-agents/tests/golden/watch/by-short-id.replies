@@ -1,15 +1,1 @@
-[
-  {
-    "id": 1,
-    "result": {
-      "frames": [
-        {
-          "kind": "result",
-          "is_error": true
-        }
-      ],
-      "next": 10,
-      "child_alive": false
-    }
-  }
-]
+[{"id": 1, "result": {"frames": [{"kind": "result", "is_error": true}], "next": 10, "child_alive": false}}]

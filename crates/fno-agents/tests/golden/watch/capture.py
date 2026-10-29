@@ -91,9 +91,9 @@ def run(root: Path, case: str, rows, replies, argv: list):
     (OUT / f"{case}.exit").write_text(f"{proc.returncode}\n")
     (OUT / f"{case}.out").write_text(proc.stdout)
     (OUT / f"{case}.err").write_text(proc.stderr)
-    (OUT / f"{case}.rows").write_text(json.dumps(rows, indent=2) + "\n")
+    (OUT / f"{case}.rows").write_text(json.dumps(rows) + "\n")
     if replies is not None:
-        (OUT / f"{case}.replies").write_text(json.dumps(replies, indent=2) + "\n")
+        (OUT / f"{case}.replies").write_text(json.dumps(replies) + "\n")
     return proc
 
 
