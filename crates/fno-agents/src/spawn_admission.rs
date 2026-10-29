@@ -1288,7 +1288,7 @@ mod tests {
         )
         .unwrap();
         let entries = vec![serde_json::json!({
-            "id": "x-91c4", "slug": "x-91c4", "title": "the drag", "type": "feature",
+            "id": "x-bbbb", "slug": "x-bbbb", "title": "the drag", "type": "feature",
             "status": "ready", "priority": "p2", "project": "proj", "domain": "code",
             "created_at": "2026-09-07T00:00:00Z",
             "plan_path": plan.display().to_string(),
@@ -1299,9 +1299,9 @@ mod tests {
         let argv: Vec<String> = [
             "spawn",
             "--node",
-            "x-91c4",
+            "x-bbbb",
             "--message",
-            "/fno:target x-91c4 fix the drag",
+            "/fno:target x-bbbb fix the drag",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -1327,7 +1327,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let entries = vec![serde_json::json!({
-            "id": "x-7e20", "slug": "x-7e20", "title": "the drag", "type": "feature",
+            "id": "x-cccc", "slug": "x-cccc", "title": "the drag", "type": "feature",
             "status": "idea", "priority": "p2", "project": "proj", "domain": "code",
             "created_at": "2026-09-07T00:00:00Z", "difficulty": "low",
         })];
@@ -1337,9 +1337,9 @@ mod tests {
         let argv: Vec<String> = [
             "spawn",
             "--node",
-            "x-7e20",
+            "x-cccc",
             "--message",
-            "/fno:target x-7e20 fix the drag",
+            "/fno:target x-cccc fix the drag",
         ]
         .iter()
         .map(|s| s.to_string())

@@ -210,7 +210,7 @@ set -euo pipefail
 # 2026-10: +128 for the native-launch pointer in using-fno. The pointer is
 # operator-mandated and the file survived prior compression passes, so no
 # tradeable restatement existed to fund it.
-# 2026-10-29: +44 for the footprint demotion fact in AGENTS.md (x-2d9e): the
+# 2026-10-29: +44 for the footprint demotion fact in AGENTS.md: the
 # load average now prints demoted and decides nothing, the old "without load
 # average" wording became false, and the compressed fact plus a working band
 # would not fit. The corpus is at its floor and barred from trading.
