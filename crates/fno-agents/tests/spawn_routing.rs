@@ -1527,7 +1527,7 @@ fn client_spawn_devcontainer_boxes_the_headless_lane() {
     let fake_path = tmpdir("box-bin");
     std::fs::write(
         fake_path.join("devcontainer"),
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DEVCONTAINER_LOG\"\n\
+        "#!/bin/sh\nprintf '%s\\036' \"$*\" >> \"$DEVCONTAINER_LOG\"\n\
          case \"$*\" in *'fno-agents status'*) exit \"${PROBE_EXIT:-0}\" ;; esac\n\
          echo boxed\n",
     )
@@ -1606,7 +1606,8 @@ fn client_spawn_devcontainer_boxes_the_headless_lane() {
         1,
         "{methods:?} stderr: {stderr}"
     );
-    let lines: Vec<&str> = calls.lines().collect();
+    // One record per call: the lane prompt itself carries newlines.
+    let lines: Vec<&str> = calls.split('\u{1e}').filter(|c| !c.is_empty()).collect();
     assert_eq!(lines.len(), 3, "up, probe, lane: {calls} stderr: {stderr}");
     assert!(
         lines[0].starts_with("up --workspace-folder "),
