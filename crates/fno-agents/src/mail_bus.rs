@@ -42,9 +42,9 @@ sig TEXT)";
 /// The signature columns, added to a table created before they existed.
 /// SQLite has no `ADD COLUMN IF NOT EXISTS`, so each runs alone and a
 /// duplicate-column error from a host that won the race reads as success.
-const ADDED_COLUMNS: [&str; 2] = [
-    "ALTER TABLE fno_mail_bus ADD COLUMN pubkey TEXT",
-    "ALTER TABLE fno_mail_bus ADD COLUMN sig TEXT",
+const ADDED_COLUMNS: [(&str, &str); 2] = [
+    ("pubkey", "ALTER TABLE fno_mail_bus ADD COLUMN pubkey TEXT"),
+    ("sig", "ALTER TABLE fno_mail_bus ADD COLUMN sig TEXT"),
 ];
 
 /// Hosts compare equal across machines that spell themselves differently
@@ -86,11 +86,25 @@ pub fn mint_msg_id() -> String {
     format!("fmail-{:012x}", hash & 0xffff_ffff_ffff)
 }
 
-/// Create the bus table. `IF NOT EXISTS`, so every host can run it at first
-/// use; concurrent creates are idempotent on sqld like on SQLite.
+/// Create the bus table, or add the signature columns it lacks. The column
+/// read comes first and writes nothing, so a send that finds the table
+/// current pays one round trip and never waits on the primary's write lock.
+/// `IF NOT EXISTS`, so every host can run it at first use; concurrent
+/// creates are idempotent on sqld like on SQLite.
 pub fn ensure_schema(remote: &Remote) -> Result<(), String> {
-    remote.script(DDL)?;
-    for alter in ADDED_COLUMNS {
+    let columns: Vec<String> = remote
+        .execute("SELECT name FROM pragma_table_info('fno_mail_bus')", &[])?
+        .rows
+        .iter()
+        .filter_map(|row| row.first().and_then(|v| v.text()).map(str::to_string))
+        .collect();
+    if columns.is_empty() {
+        return remote.script(DDL);
+    }
+    for (column, alter) in ADDED_COLUMNS {
+        if columns.iter().any(|c| c == column) {
+            continue;
+        }
         match remote.execute(alter, &[]) {
             Err(e) if !e.contains("duplicate column name") => return Err(e),
             _ => {}

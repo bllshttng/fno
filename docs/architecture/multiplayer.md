@@ -131,7 +131,7 @@ The table holds one row per machine id and question id. Only the machine that as
 
 A copy closes only through its asking machine. `fno inbox outstanding clear` on a copy refuses and names that machine, because a close here leaves the original open there. Answer it on the machine that asked, or on its synced vault page, and the close reaches every machine on the next pull.
 
-The beat rides the mail cadence key, `agents.remote.pull_interval_secs`. A closed row leaves the primary 7 days after the close (`RETAIN_SECS`). The vault page stays the asking machine's: a copy gets no page, so the synced folder has one writer. `state/question_bus/status.json` names the last beat, its peer hosts and its last error. With no `store.remote_url`, questions stay on the machine that asked. The trust model is the mail bus's: any writer on the primary can write a row, and the tailnet is the boundary.
+The beat rides the mail cadence key, `agents.remote.pull_interval_secs`. A closed row leaves the primary 7 days after the close (`RETAIN_SECS`). The vault page stays the asking machine's: a copy gets no page, so the synced folder has one writer. `state/question_bus/status.json` names the last beat, its peer hosts and its last error. With no `store.remote_url`, questions stay on the machine that asked. Question rows carry no machine signature, unlike mail rows. Any writer on the primary can write one, and the tailnet is the boundary.
 
 ## The lease heartbeat
 

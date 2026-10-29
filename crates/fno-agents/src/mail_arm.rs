@@ -580,6 +580,9 @@ pub(crate) fn flush(remote: &Remote) -> Result<usize, String> {
     let Ok(existing) = std::fs::read_to_string(&path) else {
         return Ok(0);
     };
+    // Every insert signs. A key that cannot load fails each line the same
+    // way, so the queue waits for the next beat instead of parking all of it.
+    crate::machine_key::own().map_err(|e| format!("machine key: {e}"))?;
     let mut kept: Vec<String> = Vec::new();
     let mut drained = 0;
     let mut parked = 0;
