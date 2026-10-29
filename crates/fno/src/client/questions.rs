@@ -158,7 +158,12 @@ impl Detail {
 /// The question page as markdown, the shape the backlog board's renderer
 /// turns into the detail pane's lines: title and meta, the context sections,
 /// the numbered options (the recommended one marked), and the answer line.
-fn question_page(item: &crate::needs_overlay::QuestionItem, d: &Detail, now: u64) -> String {
+fn question_page(
+    item: &crate::needs_overlay::QuestionItem,
+    d: &Detail,
+    now: u64,
+    w: usize,
+) -> String {
     let mut s = String::new();
     let title = if item.title.is_empty() {
         "(no title)"
@@ -167,11 +172,44 @@ fn question_page(item: &crate::needs_overlay::QuestionItem, d: &Detail, now: u64
     };
     s.push_str(&format!("# {title}\n\n"));
     let asker = item.asker.as_ref();
+    let origin = item.origin.as_ref();
+    // The card's header line: who asked (registry name, mail tag), the lead
+    // the row climbed through, the class, and the node with its graph stage.
+    let who = match origin {
+        Some(o) => {
+            let name = o
+                .name
+                .as_deref()
+                .filter(|n| !n.is_empty())
+                .unwrap_or(&o.handle);
+            format!("asked by {name} ({})", o.handle)
+        }
+        None => asker.map(|a| a.handle.as_str()).unwrap_or("?").to_string(),
+    };
+    let mut head = match item.via.last().and_then(|h| h.holder_name.as_deref()) {
+        Some(lead) => format!("{who} via {lead}"),
+        None => who,
+    };
+    if let Some(host) = origin.and_then(|o| o.host.as_deref()) {
+        head.push_str(&format!(" on {host}"));
+    }
+    if let Some(class) = item.class.as_deref() {
+        head.push_str(&format!(" \u{b7} class {class}"));
+    }
+    let stage = item
+        .node_stage
+        .as_deref()
+        .map(|s| format!(" ({s})"))
+        .unwrap_or_default();
+    let title_word = item
+        .node_title
+        .as_deref()
+        .map(|t| format!(" {t}"))
+        .unwrap_or_default();
     s.push_str(&format!(
-        "{} \u{b7} {} \u{b7} node {} \u{b7} {} {}{}\n\n",
-        asker.map(|a| a.handle.as_str()).unwrap_or("?"),
-        asker.and_then(|a| a.harness.as_deref()).unwrap_or("?"),
+        "{head} \u{b7} node {}{title_word}{stage} \u{b7} {} \u{b7} {} {}{}\n\n",
         item.node.as_deref().unwrap_or("none"),
+        asker.and_then(|a| a.harness.as_deref()).unwrap_or("?"),
         age_short(&item.created_at, now),
         if item.settled {
             "answered"
@@ -190,6 +228,22 @@ fn question_page(item: &crate::needs_overlay::QuestionItem, d: &Detail, now: u64
         }
     }
     let not_recorded = "NOT RECORDED";
+    // The notes input lives in the page: directly under
+    // the question body, above `## why asked`, pre-wrapped so every line
+    // keeps the blockquote bar, with the cursor block riding the text.
+    if let Some(text) = d.free.as_deref() {
+        s.push_str("## notes\n\n");
+        let mut wrapped = Vec::new();
+        node_detail::wrap_line(
+            &format!("\u{276f} {text}\u{258f}"),
+            w.saturating_sub(2).max(8),
+            &mut wrapped,
+        );
+        for line in &wrapped {
+            s.push_str(&format!("> {line}\n"));
+        }
+        s.push('\n');
+    }
     s.push_str(&format!(
         "## why asked\n\n{}\n\n",
         item.blocked_because
@@ -280,6 +334,34 @@ fn question_page(item: &crate::needs_overlay::QuestionItem, d: &Detail, now: u64
             .filter(|v| !v.is_empty())
             .unwrap_or(not_recorded)
     ));
+    s.push_str(&format!(
+        "## tried\n\n{}\n\n",
+        item.tried
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or(not_recorded)
+    ));
+    s.push_str(&format!(
+        "## evidence\n\n{}\n\n",
+        item.evidence
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or(not_recorded)
+    ));
+    // The default on silence with its deadline: what the row does when no
+    // answer lands before the deadline passes.
+    let silence = match (
+        item.on_silence.as_deref().map(str::trim),
+        item.deadline.as_deref().map(str::trim),
+    ) {
+        (Some(what), Some(at)) => format!("{what} at {at}"),
+        (Some(what), None) => what.to_string(),
+        (None, Some(at)) => format!("at {at}"),
+        (None, None) => not_recorded.to_string(),
+    };
+    s.push_str(&format!("## on silence\n\n{silence}\n\n"));
     if d.delegate {
         s.push_str(
             "## answer\n\nagents decide: the team over the node decides a reversible call\n\n",
@@ -293,7 +375,7 @@ fn question_page(item: &crate::needs_overlay::QuestionItem, d: &Detail, now: u64
 
 /// The question page's rendered lines at the detail pane's width.
 fn page_lines(d: &Detail, w: usize, now: u64) -> Vec<backlog_style::BLine> {
-    super::node_detail::backlog_md::md_lines(&question_page(d.item(), d, now), w)
+    super::node_detail::backlog_md::md_lines(&question_page(d.item(), d, now, w), w)
 }
 
 /// The page's wrapped width: the framed pane's text width at any terminal.
@@ -334,7 +416,14 @@ pub(super) fn draw_detail(
         draw_strip(d, cells, (panes_h, strip_h), cols, &view.theme);
     }
     let page = page_lines(d, page_width(cols), now);
-    let page_follow = Some(d.scroll.min(page.len().saturating_sub(1)));
+    // While the notes box is open the window follows the cursor line, so a
+    // box taller than the pane keeps every typed line in view.
+    let page_follow = if d.free.is_some() {
+        let cursor = page.iter().rposition(|l| l.text.contains('\u{258f}'));
+        Some(cursor.unwrap_or(page.len().saturating_sub(1)))
+    } else {
+        Some(d.scroll.min(page.len().saturating_sub(1)))
+    };
     let chrome = chrome::Chrome::new(
         format!("question \u{b7} {}", d.item().id),
         crate::popup::Anchor::Center,
@@ -368,9 +457,9 @@ pub(super) fn draw_detail(
             "notes \u{b7} Enter saves \u{b7} Esc cancels"
         }
     } else if d.item().options.is_empty() {
-        "Enter answer \u{b7} j/k scroll \u{b7} n notes \u{b7} Esc close"
+        "Enter answer \u{b7} j/k scroll \u{b7} n notes \u{b7} w watch \u{b7} Esc close"
     } else {
-        "1-9 option \u{b7} 0 none \u{b7} a agents decide \u{b7} j/k select \u{b7} Enter sends \u{b7} n notes \u{b7} ^d/^u scroll \u{b7} x archive \u{b7} X archive all \u{b7} Esc close"
+        "1-9 option \u{b7} 0 none \u{b7} a agents decide \u{b7} j/k select \u{b7} Enter sends \u{b7} n notes \u{b7} w watch \u{b7} ^d/^u scroll \u{b7} x archive \u{b7} X archive all \u{b7} Esc close"
     };
     if hint_h > 0 {
         let wrapped = super::backlog_board::backlog_panes::hint_rows(hint, cols);
@@ -391,11 +480,7 @@ pub(super) fn draw_detail(
             &view.theme,
         );
     }
-    // The notes input (g): the composer's look in miniature, the same frame,
-    // prompt marker and colors, one to three wrapped lines growing as typed.
-    if let Some(text) = &d.free {
-        draw_notes_box(cells, rows, cols, text, &view.theme, d);
-    }
+    // The notes box draws in the page (see question_page); nothing floats.
     true
 }
 
@@ -585,95 +670,6 @@ fn opaque_crop(
     };
     let crop = img.crop_imm(c0 * fw, r0 * fh, (c1 - c0) * fw, (r1 - r0) * fh);
     (crop, at)
-}
-
-/// The notes input: a small framed box over the popup's bottom center, the
-/// `❯ ` prompt gutter, the text wrapped to one to three lines, the cursor
-/// block at the end.
-fn draw_notes_box(
-    cells: &mut [Cell],
-    rows: usize,
-    cols: usize,
-    text: &str,
-    theme: &Theme,
-    d: &Detail,
-) {
-    // Never wider than the terminal can hold: a tiny column keeps the box
-    // inside its four-column margin instead of a forced minimum floor.
-    let w = 64.min(cols.saturating_sub(4).max(1));
-    let inner_w = w.saturating_sub(2);
-    let text_w = inner_w.saturating_sub(2);
-    let mut wrapped: Vec<String> = Vec::new();
-    node_detail::wrap_line(&format!("{text}\u{258f}"), text_w, &mut wrapped);
-    if wrapped.is_empty() {
-        wrapped.push("\u{258f}".to_string());
-    }
-    let body_lines = wrapped.len().clamp(1, 3);
-    let box_h = body_lines + 2;
-    let top = rows.saturating_sub(2).saturating_sub(box_h).max(1);
-    let left = cols.saturating_sub(w) / 2;
-    let chrome = chrome::Chrome::new("notes", crate::popup::Anchor::Center);
-    let body: Vec<chrome::BodyLine> = (0..body_lines)
-        .map(|_| chrome::BodyLine::plain(""))
-        .collect();
-    let framed = chrome::frame(&body, &chrome, inner_w, None);
-    chrome::blit(cells, rows, cols, (top, left), &framed, theme);
-    let hint = if d.item().options.is_empty() && d.item().kind != "pin" {
-        "Enter sends \u{b7} Esc cancels"
-    } else {
-        "Enter saves \u{b7} Esc cancels"
-    };
-    let hint_col = left + w.saturating_sub(hint.chars().count() + 1);
-    for (i, ch) in hint.chars().enumerate() {
-        let c = hint_col + i;
-        if c < cols && top > 0 {
-            let r = top - 1;
-            cells[r * cols + c] = Cell {
-                c: ch,
-                fg: Color::Default,
-                bg: Color::Default,
-                flags: cell_flags::DIM,
-            };
-        }
-    }
-    for (k, line) in wrapped.iter().take(body_lines).enumerate() {
-        let y = top + 1 + k;
-        if y >= rows {
-            break;
-        }
-        let mut col = left + 1;
-        let paint = if k == 0 {
-            format!("\u{276f} {line}")
-        } else {
-            format!("  {line}")
-        };
-        for ch in paint.chars() {
-            let gw = glyph_cols(ch);
-            if col + gw > left + 1 + inner_w || col + gw > cols {
-                break;
-            }
-            let flags = if ch == '\u{276f}' || ch == '\u{258f}' {
-                0
-            } else {
-                0
-            };
-            cells[y * cols + col] = Cell {
-                c: ch,
-                fg: Color::Default,
-                bg: Color::Default,
-                flags,
-            };
-            if gw == 2 {
-                cells[y * cols + col + 1] = Cell {
-                    c: ' ',
-                    fg: Color::Default,
-                    bg: Color::Default,
-                    flags: cell_flags::WIDE_SPACER,
-                };
-            }
-            col += gw;
-        }
-    }
 }
 
 pub(super) type FoldMsg = Result<crate::needs_overlay::QuestionsFold, String>;
@@ -907,7 +903,7 @@ pub(super) fn kick_action(
 pub(super) async fn detail_keys(
     view: &mut View,
     bytes: &[u8],
-    _sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<StdinFlow, String> {
     let open_ids: Vec<String> = view
         .questions_merged()
@@ -1068,6 +1064,37 @@ pub(super) async fn detail_keys(
             b'n' => {
                 let saved = d.notes.take().unwrap_or_default();
                 d.free = Some(saved);
+            }
+            // `w` watches the asker: focus its live pane through the same
+            // agent_hit path the feed modal uses (feed_detail.rs), else the
+            // notice names the miss. A send failure aborts the key batch.
+            b'w' => {
+                let row = d
+                    .item()
+                    .origin
+                    .as_ref()
+                    .and_then(|o| o.session_id.clone())
+                    .and_then(|sid| {
+                        view.layout
+                            .agents
+                            .iter()
+                            .find(|a| a.harness_session_id.as_deref() == Some(sid.as_str()))
+                            .cloned()
+                    });
+                match row {
+                    Some(a) => match agent_hit(&a, view.layout.active_squad) {
+                        ChromeHit::Cmds(cmds) => {
+                            for cmd in cmds {
+                                write_msg(sock_w, &ClientMsg::Command(cmd))
+                                    .await
+                                    .map_err(|e| format!("command send failed: {e}"))?;
+                            }
+                        }
+                        ChromeHit::Notice(msg) => d.notice = Some(msg),
+                        _ => d.notice = Some("session not on this bridge".into()),
+                    },
+                    None => d.notice = Some("session not on this bridge".into()),
+                }
             }
             b'\r' | b'\n' => match submit(d) {
                 Submit::Queued((id, pick)) => {
@@ -1329,7 +1356,7 @@ mod tests {
         q.cost_if_wrong = Some("the allowance drops".into());
         q.meanwhile = Some("stops".into());
         let d = Detail::open(&fold_with(vec![q.clone()]), "q-1").unwrap();
-        let page = question_page(&q, &d, 0);
+        let page = question_page(&q, &d, 0, 60);
         for want in [
             "title for q-1",
             "why asked",
@@ -1357,17 +1384,106 @@ mod tests {
         q.blocked_because = None;
         q.unknowns = None;
         let d = Detail::open(&fold_with(vec![q.clone()]), "q-2").unwrap();
-        let page = question_page(&q, &d, 0);
+        let page = question_page(&q, &d, 0, 60);
         assert!(page.contains("NOT RECORDED"));
 
         let q = item("q-1", true);
         let mut d = Detail::open(&fold_with(vec![q.clone()]), "q-1").unwrap();
         d.sel = Some(2);
-        let page = question_page(&q, &d, 0);
+        let page = question_page(&q, &d, 0, 60);
         assert!(page.contains("2. wide  [selected]"));
         d.sel = Some(0);
-        let page = question_page(&q, &d, 0);
+        let page = question_page(&q, &d, 0, 60);
         assert!(page.contains("0. none of these  [selected]"));
+    }
+
+    #[test]
+    fn header_names_origin_lead_class_and_stage_rows() {
+        // AC33-HP: the card's header names the origin worker, the via lead,
+        // the class and the node stage; the tried and evidence sections and
+        // the on-silence line show their fields.
+        let mut q = item("q-o", true);
+        q.origin = Some(crate::needs_overlay::QuestionOrigin {
+            handle: "w1".into(),
+            session_id: Some("aaaa1111-bbbb".into()),
+            name: Some("t-one".into()),
+            harness: Some("claude".into()),
+            host: Some("bb16".into()),
+        });
+        q.via = vec![crate::needs_overlay::QuestionHop {
+            level: Some("lead".into()),
+            holder_name: Some("tomas".into()),
+            evidence: Some("read PR 12".into()),
+        }];
+        q.class = Some("irreversible".into());
+        q.node = Some("x-1".into());
+        q.node_title = Some("seat table drawer".into());
+        q.node_stage = Some("in_review".into());
+        q.tried = Some("two leads declined".into());
+        q.evidence = Some("no owner named".into());
+        q.on_silence = Some("proceed".into());
+        q.deadline = Some("2026-10-30T09:00:00Z".into());
+        let d = Detail::open(&fold_with(vec![q.clone()]), "q-o").unwrap();
+        let page = question_page(&q, &d, 0, 60);
+        for want in [
+            "asked by t-one (w1)",
+            "via tomas",
+            "on bb16",
+            "class irreversible",
+            "node x-1 seat table drawer (in_review)",
+            "## tried\n\ntwo leads declined",
+            "## evidence\n\nno owner named",
+            "## on silence\n\nproceed at 2026-10-30T09:00:00Z",
+        ] {
+            assert!(page.contains(want), "{want} missing from:\n{page}");
+        }
+
+        // A row with none of the new fields still renders, NOT RECORDED in
+        // their place.
+        let bare = item("q-bare", true);
+        let d = Detail::open(&fold_with(vec![bare.clone()]), "q-bare").unwrap();
+        let page = question_page(&bare, &d, 0, 60);
+        assert!(page.contains("NOT RECORDED"));
+        assert!(!page.contains("via "), "no lead named: {page}");
+    }
+
+    #[tokio::test]
+    async fn notes_box_draws_inline_under_the_body_and_grows() {
+        // AC34-HP: typed notes wrap past the old 3-line cap, every wrapped
+        // line keeps the blockquote bar, the cursor block shows, and the box
+        // sits directly under the body and above why asked.
+        let mut q = item("q-n", true);
+        q.body = Some("the question body prose".into());
+        q.options = vec![];
+        let mut v = view_with_agents(vec![]);
+        v.questions_fold = Some(fold_with(vec![q]));
+        v.open_detail_on("q-n");
+        detail_keys(&mut v, b"n", &mut Vec::new()).await.unwrap();
+        detail_keys(&mut v, &b"word ".repeat(140), &mut Vec::new())
+            .await
+            .unwrap();
+        let text = crate::vt::frame_text(&v.compose());
+        let lines: Vec<&str> = text.lines().collect();
+        let bars = lines
+            .iter()
+            .filter(|l| l.starts_with('\u{2502}') && l.contains("word"))
+            .count();
+        assert!(bars >= 6, "expected 6+ wrapped note lines, got {bars}");
+        let body_at = lines
+            .iter()
+            .position(|l| l.contains("the question body prose"))
+            .expect("body renders");
+        let notes_at = lines
+            .iter()
+            .position(|l| l.contains('\u{276f}'))
+            .expect("notes prompt renders");
+        let why_at = lines
+            .iter()
+            .position(|l| l.contains("why asked"))
+            .expect("why asked renders");
+        assert!(body_at < notes_at, "notes sit under the body: {text}");
+        assert!(notes_at < why_at, "notes sit above why asked: {text}");
+        assert!(text.contains('\u{258f}'), "the cursor block shows: {text}");
     }
 
     #[tokio::test]
