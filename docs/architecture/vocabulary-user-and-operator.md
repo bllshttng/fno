@@ -10,7 +10,7 @@ Not for: how the config wizard runs or how the inbox queue is acked. Those live 
 
 The words carry different meanings, and the difference is load-bearing. This page is the one place that says what each word means, so nobody fixes a wording gripe with a repo-wide substitution.
 
-**User** is who we are talking to: the human on the other side. `config.user.name` is what the machine calls them, and `display_name()` in `cli/src/fno/user.py` is the one reader: configured name, else `git config user.name`, else "you". Set the name with `fno config set user.name <name>`. The first-run wizard asks for it. The human's own queue command is `fno inbox user`. The pre-rename spelling `fno inbox operator` still works as a hidden alias.
+**User** is who we are talking to: the human on the other side. `config.user.name` is what the machine calls them, and `display_name()` in `crates/fno-agents/src/backlog/birth.rs` is the one reader: configured name, else `git config user.name`, else "you". Set the name with `fno config set user.name <name>`. The first-run wizard asks for it. The human's own queue command is `fno inbox user`. The pre-rename spelling `fno inbox operator` still works as a hidden alias.
 
 **Superuser** is the authority an agent can never synthesize for itself. Every live string, gate, doc and skill spells it superuser. `--authority operator` stays the wire value that opens the superuser lane.
 
@@ -65,7 +65,7 @@ The user said it on 2026-09-27: "i think of workspaces as an object that houses 
 
 The address sense in skill prose is `user`. `scripts/ci/check-operator-address.sh` prevents drift.
 
-Read the tables first. Every row except the authority sense, which is done, is out of scope by decision, not by oversight. A rename of the address sense goes through `cli/src/fno/user.py` (`UserBlock`, `display_name()`), the three address strings that import it, and the `fno inbox user` command. It does not touch the reserved senses, the wire values, the graph rows, the shipped config keys, or the shell homonym.
+Read the tables first. Every row except the authority sense, which is done, is out of scope by decision, not by oversight. A rename of the address sense goes through `UserBlock` in `cli/src/fno/config/__init__.py`, the native reader `display_name()` in `crates/fno-agents/src/backlog/birth.rs`, the three address strings that use it, and the `fno inbox user` command. It does not touch the reserved senses, the wire values, the graph rows, the shipped config keys, or the shell homonym.
 
 ## Role vocabulary
 
