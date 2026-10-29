@@ -548,17 +548,13 @@
       "input": {
         "files": {
           "prisma/schema.prisma": "model User {}\n"
-        },
-        "artifact": "# Map\n\n## Database Schema\n",
-        "mtimes": {}
+        }
       },
       "output": {
         "detected": true,
         "signals": [
           "prisma/schema.prisma"
-        ],
-        "schema_artifact": "codemap.md",
-        "schema_status": "grounded"
+        ]
       }
     },
     {
@@ -566,59 +562,23 @@
       "input": {
         "files": {
           "drizzle.config.ts": "export default {}\n"
-        },
-        "artifact": null,
-        "mtimes": {}
+        }
       },
       "output": {
         "detected": true,
         "signals": [
           "drizzle.config.ts"
-        ],
-        "schema_artifact": null,
-        "schema_status": "missing"
+        ]
       }
     },
     {
       "fn": "database",
       "input": {
-        "files": {},
-        "artifact": null,
-        "mtimes": {}
+        "files": {}
       },
       "output": {
         "detected": false,
-        "signals": [],
-        "schema_artifact": null,
-        "schema_status": "not-applicable"
-      }
-    },
-    {
-      "fn": "database",
-      "input": {
-        "files": {},
-        "artifact": "# Map only\n",
-        "mtimes": {}
-      },
-      "output": {
-        "detected": false,
-        "signals": [],
-        "schema_artifact": "codemap.md",
-        "schema_status": "not-applicable"
-      }
-    },
-    {
-      "fn": "database",
-      "input": {
-        "files": {},
-        "artifact": "## Database Schema\n",
-        "mtimes": {}
-      },
-      "output": {
-        "detected": true,
-        "signals": [],
-        "schema_artifact": "codemap.md",
-        "schema_status": "grounded"
+        "signals": []
       }
     },
     {
@@ -628,9 +588,7 @@
           ".env": "DATABASE_URL=postgres://x\n  DIRECT_URL = y\nOTHER=1\n",
           ".env.local": "# POSTGRES_URL=commented\nSUPABASE_DB_URL=z\nDATABASE_URL=again\n",
           ".env.test": "NOTHING=here\n"
-        },
-        "artifact": null,
-        "mtimes": {}
+        }
       },
       "output": {
         "detected": true,
@@ -639,9 +597,7 @@
           ".env.local:SUPABASE_DB_URL",
           ".env:DATABASE_URL",
           ".env:DIRECT_URL"
-        ],
-        "schema_artifact": null,
-        "schema_status": "missing"
+        ]
       }
     },
     {
@@ -650,12 +606,6 @@
         "files": {
           "supabase/migrations/001.sql": "create table t();\n",
           "drizzle/meta/_journal.json": "{}"
-        },
-        "artifact": "## Database Schema\n",
-        "mtimes": {
-          "supabase/migrations/001.sql": 2000000000,
-          "drizzle/meta/_journal.json": 1000,
-          "@artifact": 1500000000
         }
       },
       "output": {
@@ -663,9 +613,7 @@
         "signals": [
           "drizzle",
           "supabase/migrations"
-        ],
-        "schema_artifact": "codemap.md",
-        "schema_status": "stale"
+        ]
       }
     },
     {
@@ -673,20 +621,13 @@
       "input": {
         "files": {
           "prisma/schema.prisma": "model A {}\n"
-        },
-        "artifact": "## Database Schema\n",
-        "mtimes": {
-          "prisma/schema.prisma": 1000,
-          "@artifact": 2000
         }
       },
       "output": {
         "detected": true,
         "signals": [
           "prisma/schema.prisma"
-        ],
-        "schema_artifact": "codemap.md",
-        "schema_status": "grounded"
+        ]
       }
     },
     {
@@ -694,20 +635,13 @@
       "input": {
         "files": {
           ".env.development": "DATABASE_URL=a\n"
-        },
-        "artifact": "x\n## Database Schema\n",
-        "mtimes": {
-          ".env.development": 3000,
-          "@artifact": 2000
         }
       },
       "output": {
         "detected": true,
         "signals": [
           ".env.development:DATABASE_URL"
-        ],
-        "schema_artifact": "codemap.md",
-        "schema_status": "stale"
+        ]
       }
     },
     {
@@ -717,9 +651,7 @@
           "drizzle.config.mjs": "",
           "drizzle.config.cjs": "",
           "drizzle.config.js": ""
-        },
-        "artifact": null,
-        "mtimes": {}
+        }
       },
       "output": {
         "detected": true,
@@ -727,9 +659,7 @@
           "drizzle.config.cjs",
           "drizzle.config.js",
           "drizzle.config.mjs"
-        ],
-        "schema_artifact": null,
-        "schema_status": "missing"
+        ]
       }
     },
     {
@@ -4706,7 +4636,6 @@
           "prisma/schema.prisma": "model User {}\n",
           "AGENTS.md": "# Agents\n\n## Pitfalls corpus (capped)\n\n### Guards can lie\n\nTrap.\n\n## Repository\n\n### Not a pitfall\n"
         },
-        "artifact": "# Map\n\n## Database Schema\n\n### public.users\n",
         "plans": {
           "20260725-retro-synthesis-x-abcd.md": "# Retro\n"
         },
@@ -4837,9 +4766,7 @@
             "detected": true,
             "signals": [
               "prisma/schema.prisma"
-            ],
-            "schema_artifact": "codemap.md",
-            "schema_status": "grounded"
+            ]
           },
           "pitfalls": {
             "source": "AGENTS.md",
@@ -4856,7 +4783,7 @@
           ]
         },
         "gh_search": "Lean think discovery receipt",
-        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=node tokens=5 resolved=x-4007 candidates=1 (ranked, judge before trusting) epics=1\npull requests: ok matches=1\ndatabase: detected=true schema=grounded\npitfalls: source=AGENTS.md entries=1 syntheses=1 candidates=2\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=node tokens=5 resolved=x-4007 candidates=1 (ranked, judge before trusting) epics=1\npull requests: ok matches=1\ndatabase: detected=true\npitfalls: source=AGENTS.md entries=1 syntheses=1 candidates=2\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
       }
     },
     {
@@ -4871,7 +4798,6 @@
         "repo_files": {
           "drizzle.config.ts": "export default {}\n"
         },
-        "artifact": null,
         "plans": null,
         "lessons": null,
         "commands": {
@@ -4938,9 +4864,7 @@
             "detected": true,
             "signals": [
               "drizzle.config.ts"
-            ],
-            "schema_artifact": null,
-            "schema_status": "missing"
+            ]
           },
           "pitfalls": {
             "source": "missing",
@@ -4951,12 +4875,11 @@
           "warnings": [
             "repository evidence is incomplete",
             "backlog graph evidence is unavailable",
-            "pull request evidence is unavailable",
-            "database schema evidence is missing"
+            "pull request evidence is unavailable"
           ]
         },
         "gh_search": "new database feature",
-        "render": "think inspection: incomplete\nrepository: error branch=- head=- dirty=0\ngraph: error lane=- tokens=- resolved=- candidates=0 (ranked, judge before trusting) epics=0\npull requests: unavailable matches=0\ndatabase: detected=true schema=missing\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: repository evidence is incomplete\nwarning: backlog graph evidence is unavailable\nwarning: pull request evidence is unavailable\nwarning: database schema evidence is missing"
+        "render": "think inspection: incomplete\nrepository: error branch=- head=- dirty=0\ngraph: error lane=- tokens=- resolved=- candidates=0 (ranked, judge before trusting) epics=0\npull requests: unavailable matches=0\ndatabase: detected=true\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: repository evidence is incomplete\nwarning: backlog graph evidence is unavailable\nwarning: pull request evidence is unavailable"
       }
     },
     {
@@ -4978,7 +4901,6 @@
         },
         "archive": [],
         "repo_files": {},
-        "artifact": null,
         "plans": {
           "plan-x-aaaa.md": "---\nclaims: x-aaaa\ntitle: T\nconsolidation:\n  outcome: proceed_alone\n  rejected:\n    - id: x-bbbb\n      reason: R\n---\n\n# T\n",
           "other.md": "---\ntitle: x-bbbb only\n---\n",
@@ -5100,9 +5022,7 @@
           },
           "database": {
             "detected": false,
-            "signals": [],
-            "schema_artifact": null,
-            "schema_status": "not-applicable"
+            "signals": []
           },
           "pitfalls": {
             "source": "missing",
@@ -5115,7 +5035,7 @@
           ]
         },
         "gh_search": "Ruled out node",
-        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=node tokens=6 resolved=x-bbbb candidates=0 (ranked, judge before trusting) epics=0\npull requests: ok matches=0\ndatabase: detected=false schema=not-applicable\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=node tokens=6 resolved=x-bbbb candidates=0 (ranked, judge before trusting) epics=0\npull requests: ok matches=0\ndatabase: detected=false\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
       }
     },
     {
@@ -5143,7 +5063,6 @@
         },
         "archive": [],
         "repo_files": {},
-        "artifact": null,
         "plans": null,
         "lessons": null,
         "commands": {
@@ -5228,9 +5147,7 @@
           },
           "database": {
             "detected": false,
-            "signals": [],
-            "schema_artifact": null,
-            "schema_status": "not-applicable"
+            "signals": []
           },
           "pitfalls": {
             "source": "missing",
@@ -5245,7 +5162,7 @@
           ]
         },
         "gh_search": "SPIKE",
-        "render": "think inspection: incomplete\nrepository: error branch=- head=- dirty=0\ngraph: ok lane=node tokens=4 resolved=x-38d3 candidates=0 (ranked, judge before trusting) epics=0\npull requests: unavailable matches=0\ndatabase: detected=false schema=not-applicable\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: repository evidence is incomplete\nwarning: pull request evidence is unavailable\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+        "render": "think inspection: incomplete\nrepository: error branch=- head=- dirty=0\ngraph: ok lane=node tokens=4 resolved=x-38d3 candidates=0 (ranked, judge before trusting) epics=0\npull requests: unavailable matches=0\ndatabase: detected=false\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: repository evidence is incomplete\nwarning: pull request evidence is unavailable\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
       }
     },
     {
@@ -5302,11 +5219,6 @@
         "archive": [],
         "repo_files": {
           "supabase/migrations/1.sql": "x"
-        },
-        "artifact": "## Database Schema\n",
-        "mtimes": {
-          "supabase/migrations/1.sql": 2000000000,
-          "@artifact": 1000
         },
         "plans": {},
         "lessons": "",
@@ -5449,9 +5361,7 @@
             "detected": true,
             "signals": [
               "supabase/migrations"
-            ],
-            "schema_artifact": "codemap.md",
-            "schema_status": "stale"
+            ]
           },
           "pitfalls": {
             "source": "missing",
@@ -5461,12 +5371,11 @@
           },
           "warnings": [
             "pull request evidence is unavailable",
-            "database schema evidence is stale",
             "duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
           ]
         },
         "gh_search": "wombat burrow falcon heron ibex jaguar kraken lynx",
-        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=seed tokens=8 resolved=- candidates=5 (ranked, judge before trusting) epics=0\npull requests: error matches=0\ndatabase: detected=true schema=stale\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: pull request evidence is unavailable\nwarning: database schema evidence is stale\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=seed tokens=8 resolved=- candidates=5 (ranked, judge before trusting) epics=0\npull requests: error matches=0\ndatabase: detected=true\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: pull request evidence is unavailable\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
       }
     },
     {
@@ -5506,7 +5415,6 @@
         },
         "archive": [],
         "repo_files": {},
-        "artifact": null,
         "plans": {},
         "lessons": null,
         "commands": {
@@ -5585,9 +5493,7 @@
           },
           "database": {
             "detected": false,
-            "signals": [],
-            "schema_artifact": null,
-            "schema_status": "not-applicable"
+            "signals": []
           },
           "pitfalls": {
             "source": "missing",
@@ -5601,7 +5507,7 @@
           ]
         },
         "gh_search": "zzz nothing matches",
-        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=seed tokens=3 resolved=- candidates=0 (ranked, judge before trusting) epics=0\npull requests: ok matches=0\ndatabase: detected=false schema=not-applicable\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: seed lane returned no candidates; this is not a measured absence. Widen the seed to the design body, or run: fno backlog find '<2-3 salient terms>'\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
+        "render": "think inspection: incomplete\nrepository: ok branch=feature/x-4007 head=abc123def456 dirty=1\ngraph: ok lane=seed tokens=3 resolved=- candidates=0 (ranked, judge before trusting) epics=0\npull requests: ok matches=0\ndatabase: detected=false\npitfalls: source=missing entries=0 syntheses=0 candidates=0\nwarning: seed lane returned no candidates; this is not a measured absence. Widen the seed to the design body, or run: fno backlog find '<2-3 salient terms>'\nwarning: duplicate recall ran without the fts lane: graph entries were injected without the graph file; the fts lane is unavailable"
       }
     },
     {
@@ -5647,9 +5553,7 @@
         },
         "database": {
           "detected": false,
-          "signals": [],
-          "schema_artifact": null,
-          "schema_status": "not-applicable"
+          "signals": []
         },
         "pitfalls": {
           "source": "AGENTS.md",
@@ -5661,7 +5565,7 @@
         },
         "warnings": []
       },
-      "output": "think inspection: complete\nrepository: ok branch=main head=abc dirty=2\ngraph: ok lane=node tokens=4 resolved=x-1 candidates=1 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=false schema=not-applicable\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3"
+      "output": "think inspection: complete\nrepository: ok branch=main head=abc dirty=2\ngraph: ok lane=node tokens=4 resolved=x-1 candidates=1 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=false\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3"
     },
     {
       "fn": "render_receipt",
@@ -5697,10 +5601,8 @@
           "detail": null
         },
         "database": {
-          "detected": true,
-          "signals": [],
-          "schema_artifact": null,
-          "schema_status": "missing"
+          "detected": false,
+          "signals": []
         },
         "pitfalls": {
           "source": "AGENTS.md",
@@ -5715,7 +5617,7 @@
           "two"
         ]
       },
-      "output": "think inspection: incomplete\nrepository: error branch=- head=- dirty=2\ngraph: error lane=- tokens=- resolved=- candidates=0 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=true schema=missing\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3\nwarning: one\nwarning: two"
+      "output": "think inspection: incomplete\nrepository: error branch=- head=- dirty=2\ngraph: error lane=- tokens=- resolved=- candidates=0 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=true\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3\nwarning: one\nwarning: two"
     },
     {
       "fn": "render_receipt",
@@ -5758,9 +5660,7 @@
         },
         "database": {
           "detected": false,
-          "signals": [],
-          "schema_artifact": null,
-          "schema_status": "not-applicable"
+          "signals": []
         },
         "pitfalls": {
           "source": "AGENTS.md",
@@ -5772,7 +5672,7 @@
         },
         "warnings": []
       },
-      "output": "think inspection: complete\nrepository: ok branch=main head=abc dirty=2\ngraph: ok lane=seed tokens=0 resolved=- candidates=1 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=false schema=not-applicable\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3"
+      "output": "think inspection: complete\nrepository: ok branch=main head=abc dirty=2\ngraph: ok lane=seed tokens=0 resolved=- candidates=1 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=false\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3"
     },
     {
       "fn": "render_receipt",
@@ -5817,9 +5717,7 @@
         },
         "database": {
           "detected": false,
-          "signals": [],
-          "schema_artifact": null,
-          "schema_status": "not-applicable"
+          "signals": []
         },
         "pitfalls": {
           "source": "AGENTS.md",
@@ -5831,7 +5729,7 @@
         },
         "warnings": []
       },
-      "output": "think inspection: complete\nrepository: ok branch=main head=abc dirty=2\ngraph: ok lane=node tokens=4 resolved=- candidates=1 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=false schema=not-applicable\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3"
+      "output": "think inspection: complete\nrepository: ok branch=main head=abc dirty=2\ngraph: ok lane=node tokens=4 resolved=- candidates=1 (ranked, judge before trusting) epics=0\npull requests: ok matches=3\ndatabase: detected=false\npitfalls: source=AGENTS.md entries=1 syntheses=0 candidates=3"
     },
     {
       "fn": "cli_missing_repo",

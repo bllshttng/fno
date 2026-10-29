@@ -15,7 +15,7 @@ Not for: how completion is decided (PR + CI + review). That is [control-plane-lo
 A meaningful share of target BLOCKED states are not code bugs. They are:
 
 - **Environmental:** dirty working tree, expired auth, missing dependencies,
-  stale codemap.
+  low disk.
 - **Cross-phase context drift:** each phase reconstructs context from the
   full session, drifts, and sometimes loses critical info from the prior
   phase (a deferred story, an edge case noted, a file intentionally left
@@ -59,7 +59,6 @@ The full check catalog is at
 | `branch-state` | detached HEAD, dangerous branches (main, master, prod) |
 | `deps-installed` | missing `node_modules` or `.venv` relative to lockfile mtime |
 | `test-suite-green` | broken state at HEAD before changes (opt-in) |
-| `codemap-fresh` | stale `.fno/codemap.md` (older than 24h) |
 | `auth-valid` | unauthenticated `gh` CLI |
 | `disk-space` | low free space in `$HOME` |
 

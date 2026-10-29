@@ -120,7 +120,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 2.17x | 13 | 6 | `cli/src/fno/agents/registry.py:505` | `resolve_agent` |
 | 2.17x | 13 | 6 | `cli/src/fno/backlog/advance.py:379` | `_live_lane_domains` |
 | 2.17x | 13 | 6 | `cli/src/fno/backlog/advance.py:453` | `_high_collision` |
-| 2.17x | 13 | 6 | `cli/src/fno/codemap_cli/cli.py:25` | `_system_python_env` |
 | 2.14x | 15 | 7 | `cli/src/fno/_subprocess_util.py:22` | `fno_py_cmd` |
 | 2.06x | 35 | 17 | `cli/src/fno/adapters/providers/usage.py:654` | `probe_usage_detail` |
 | 2.06x | 35 | 17 | `cli/src/fno/update.py:902` | `_await_binary` |

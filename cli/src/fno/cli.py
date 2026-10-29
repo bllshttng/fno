@@ -117,7 +117,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     ),
     "config": ("fno.config_writer_cli:app", "Configuration management"),
     "paths": ("fno.paths_cli:app", "Path resolution helpers", {"hidden": True}),
-    "codemap": ("fno.codemap_cli:app", "Codebase map management", {"hidden": True}),
     # `fno route` (the hidden root spelling of the provider route lanes)
     # answers natively: the front classifies it onto route-slot's
     # config-route mode, so no Python mount remains. The worktree family's
@@ -433,7 +432,7 @@ command is about" and differs by family:
   fno backlog carveout add              -k kind       (-p priority)
 
 Unix-entrenched lowercase stays put: -h help, -n tail / -f follow
-(agents logs), -m note (done), -o output (codemap), -b blocked
+(agents logs), -m note (done), -b blocked
 (backlog pick), -I ideas (backlog next/ready).
 
 Canonical spellings: --session-id and --pr-number. The old --session /

@@ -39,7 +39,6 @@ def _signpost(spelling: str) -> None:
 
 # Sub-apps (foreign families) ----------------------------------------------
 
-from fno.codemap_cli import app as codemap_app  # noqa: E402
 from fno.evals_cli import evals_app  # noqa: E402
 from fno.events.cli import cli as event_app  # noqa: E402
 from fno.scratch_cli import scratch_app  # noqa: E402
@@ -49,7 +48,6 @@ from fno.doctor_lanes import lanes_command  # noqa: E402
 from fno.doctor_reclaim import reclaim_command  # noqa: E402
 from fno.lint_cli import lint  # noqa: E402
 
-doctor_app.add_typer(codemap_app, name="codemap")
 doctor_app.add_typer(evals_app, name="evals")
 doctor_event_app = typer.Typer(name="event", no_args_is_help=True, add_completion=False)
 doctor_event_app.registered_callback = event_app.registered_callback

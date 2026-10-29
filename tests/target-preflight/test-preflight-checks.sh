@@ -34,7 +34,7 @@ run_check() {
 # --- AC1-HP: Each check runs in under 2 seconds ---
 echo ""
 echo "--- AC1-HP: All checks run quickly ---"
-for check in working-tree-clean branch-state deps-installed test-suite-green codemap-fresh auth-valid disk-space; do
+for check in working-tree-clean branch-state deps-installed test-suite-green auth-valid disk-space; do
     if [[ ! -f "$CHECKS_DIR/${check}.sh" ]]; then
         fail "AC1-HP: ${check}.sh missing"
         continue
@@ -53,7 +53,7 @@ done
 # --- Contract: each check always exits 0 ---
 echo ""
 echo "--- Contract: each check exits 0 regardless of result ---"
-for check in working-tree-clean branch-state deps-installed test-suite-green codemap-fresh auth-valid disk-space; do
+for check in working-tree-clean branch-state deps-installed test-suite-green auth-valid disk-space; do
     if [[ ! -f "$CHECKS_DIR/${check}.sh" ]]; then
         fail "Contract: ${check}.sh missing"
         continue
@@ -70,7 +70,7 @@ done
 # --- Contract: each check outputs exactly one line in format: name status message ---
 echo ""
 echo "--- Contract: each check outputs one valid line ---"
-for check in working-tree-clean branch-state deps-installed test-suite-green codemap-fresh auth-valid disk-space; do
+for check in working-tree-clean branch-state deps-installed test-suite-green auth-valid disk-space; do
     if [[ ! -f "$CHECKS_DIR/${check}.sh" ]]; then
         fail "Contract: ${check}.sh missing"
         continue

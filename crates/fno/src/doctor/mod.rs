@@ -5,7 +5,7 @@
 //! `plugin-file`, and the hidden op arms; `cost`, `update`, `event`,
 //! `lint style|menu-caps`, `skill-diff` and `builds` are claimed by their
 //! own classifiers earlier in `decide_role`; every other leaf
-//! (`codemap`, `evals`, `test`, ...) returns None so the argv falls
+//! (`evals`, `test`, ...) returns None so the argv falls
 //! through to the Python wheel byte-verbatim until its family ports.
 //! `--context-audit` is claimed here and runs `fno.context_audit` through
 //! the wheel's interpreter: the census module is still Python, and the
@@ -37,7 +37,6 @@ pub enum Claim {
 /// The leaves this classifier never claims: their families port in their
 /// own children and the wheel keeps answering them.
 const FOREIGN_LEAVES: &[&str] = &[
-    "codemap",
     "evals",
     "test",
     "scratch",

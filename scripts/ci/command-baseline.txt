@@ -58,7 +58,6 @@ bundle
 carveout
 claim
 claim release
-codemap
 config
 config accounts
 config get
