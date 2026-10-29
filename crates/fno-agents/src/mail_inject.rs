@@ -2737,6 +2737,12 @@ mod tests {
     fn mail_send_accepted_false_paths() {
         assert!(!mail_send_accepted(1, "msg-1 accepted-new-turn\n"));
         assert!(!mail_send_accepted(0, "\n"));
+        // A durable copy never reached the recipient's harness.
+        assert!(!mail_send_accepted(0, "msg-1 delivered (durable)\n"));
+        // A clear's posture line carries the receipt after its last colon.
+        assert!(crate::mail_delivery_state::receipt_reached(
+            "outstanding: q-1 answered; mail to w1: accepted-new-turn"
+        ));
         assert_eq!(mail_send_receipt("  \n"), "");
     }
 

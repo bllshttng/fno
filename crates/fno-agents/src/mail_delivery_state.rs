@@ -324,19 +324,26 @@ const REACHED_WORDS: [&str; 4] = ["injected", "parked", "accepted-new-turn", "ac
 
 /// Did a `fno agents mail send` receipt line say the bytes reached the
 /// recipient (so a durable copy or a resend would duplicate them)? The line
-/// is the JSON receipt or a plain `<id> <status>` line. An older front
-/// binary prints the pre-state `delivered (...)` receipt words (hosted, woken),
-/// which still read as reached.
+/// is the JSON receipt, a plain `<id> <status>` line, or a posture line that
+/// ends `...: <status>`. An older front binary prints the pre-state
+/// `delivered (hosted)` and `delivered (woken)` receipts, which still read as
+/// reached; `delivered (durable)` never did.
 pub fn receipt_reached(line: &str) -> bool {
     let status = serde_json::from_str::<Value>(line)
         .ok()
         .and_then(|v| v.get("status").and_then(Value::as_str).map(str::to_string))
         .unwrap_or_else(|| line.to_string());
-    status
-        .split_whitespace()
-        .take(2)
-        .any(|t| REACHED_WORDS.contains(&t))
-        || status.contains("delivered (")
+    let head_reached = |s: &str| {
+        s.split_whitespace()
+            .take(2)
+            .any(|t| REACHED_WORDS.contains(&t))
+    };
+    head_reached(status.as_str())
+        || status
+            .rsplit_once(": ")
+            .is_some_and(|(_, tail)| head_reached(tail))
+        || status.contains("delivered (hosted)")
+        || status.contains("delivered (woken)")
 }
 
 #[cfg(test)]
