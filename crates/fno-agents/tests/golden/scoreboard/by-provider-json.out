@@ -1,0 +1,28 @@
+{
+  "state": "ok",
+  "since_days": 20000,
+  "coverage": {
+    "rows": 1,
+    "harness_pct": 0,
+    "provider_pct": 100,
+    "model_pct": 100,
+    "attributed_pct": 0
+  },
+  "rows": [
+    {
+      "harness": "unattributed",
+      "provider": "zai",
+      "model": "glm-5",
+      "runs": 1,
+      "shipped": 1,
+      "delivered_nodes": 1,
+      "shared_nodes": 0,
+      "spend_usd": 3.0,
+      "cost_per_shipped_usd": 3.0,
+      "bounce_rate_pct": 100,
+      "shipped_linked": 1,
+      "median_iterations": null,
+      "retry_rows": 0
+    }
+  ]
+}

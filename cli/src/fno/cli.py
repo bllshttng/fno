@@ -121,7 +121,9 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     # `fno route` (the hidden root spelling of the provider route lanes)
     # answers natively: the front classifies it onto route-slot's
     # config-route mode, so no Python mount remains. The worktree family's
-    # root spellings joined the same way with its port.
+    # root spellings joined the same way with its port. `fno scoreboard`
+    # joined too: the front prints the command_moves notice and re-spells to
+    # `fno whoami scoreboard`.
     "evals": (
         "fno.evals_cli:evals_app",
         "Golden-task efficacy evals (run / report / diff)",
@@ -165,11 +167,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "fno.doctor_forward:doctor_app",
         "Foreign doctor leaves (test, event, evals, lint, harness); the family's own surfaces are native.",
         {},
-    ),
-    "scoreboard": (
-        "fno.scoreboard.cli:scoreboard_command",
-        "Read-only telemetry: stop-cause, spend, autonomy, survival, coverage.",
-        {"hidden": True},
     ),
     "update": (
         "fno.rust_binary:_update_signpost",

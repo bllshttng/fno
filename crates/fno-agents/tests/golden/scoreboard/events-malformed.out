@@ -1,0 +1,64 @@
+{
+  "state": "partial",
+  "since_days": 20000,
+  "coverage": {
+    "rows": 7,
+    "termination_reason_pct": 86,
+    "node_linkage_pct": 71
+  },
+  "shipped_nodes": 2,
+  "shipped_by_terminal": 2,
+  "merged_nodes_without_ledger_row": 0,
+  "delivery_classes": {
+    "delivered_doc": 1,
+    "merged": 1
+  },
+  "stop_cause": {
+    "DonePRGreen": 2,
+    "DoneAdvisory": 1,
+    "NoProgress": 1,
+    "DonePlanned": 1,
+    "delegated": 1
+  },
+  "spend": {
+    "ship_terminal_usd": 9.5,
+    "wedge_terminal_usd": 2.0,
+    "other_usd": 1.75
+  },
+  "autonomy": {
+    "available": true,
+    "touches": 2,
+    "shipped_nodes": 2,
+    "touches_per_shipped_node": 1.0
+  },
+  "survival": {
+    "available": true,
+    "survived": 1,
+    "shipped_nodes": 2,
+    "rate_pct": 50,
+    "pending": 0
+  },
+  "event_coverage": {
+    "complete": false,
+    "malformed_lines": 1,
+    "unreadable_paths": 0,
+    "paths": [
+      {
+        "path": "<CASE>/state/events.jsonl",
+        "status": "malformed",
+        "malformed_lines": 1
+      },
+      {
+        "path": "<CASE>/state/events.jsonl.ephemeral",
+        "status": "missing",
+        "malformed_lines": 0
+      }
+    ]
+  },
+  "emission_failures": {
+    "available": true,
+    "count": 2,
+    "measured_since": "2026-10-20T10:00:00Z",
+    "measured_at": "2026-10-25T10:00:00Z"
+  }
+}
