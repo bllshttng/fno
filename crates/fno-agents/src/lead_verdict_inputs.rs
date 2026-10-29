@@ -163,10 +163,27 @@ pub(crate) fn resolve_scope(
             answer.get("scope")?.as_str()?.to_string(),
         ))
     };
+    // A grant recorded for another project on this machine never stamps here.
+    let laws = || {
+        let mut index = crate::decision_index::default_store_live().map_err(|e| e.to_string())?;
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let project =
+            crate::law_match::resolve_project(Some(&cwd), &crate::law_match::settings_sources())
+                .ok();
+        crate::decision_index::retain_in_scope(&mut index, project.as_deref());
+        Ok(index)
+    };
+    let vacated_at = |session: &str| {
+        newest_vacate(
+            &crate::paths::AgentsHome::from_env().events_jsonl(),
+            session,
+        )
+    };
     let grants = Grants {
         spaces_root: &crate::paths::spaces_root(),
-        laws: &|| crate::decision_index::default_store_live().map_err(|e| e.to_string()),
+        laws: &laws,
         role_of: &role_of,
+        vacated_at: &vacated_at,
     };
     resolve_scope_in(explicit_scope, registry_path, &grants)
 }
@@ -178,6 +195,28 @@ struct Grants<'a> {
     spaces_root: &'a Path,
     laws: &'a dyn Fn() -> Result<crate::decision_index::Index, String>,
     role_of: &'a dyn Fn(&str) -> Option<(u32, String)>,
+    /// When this session last gave up a role (`agent_role_vacated`). A chat
+    /// grant older than that is spent: `org done` must not be undone by it.
+    vacated_at: &'a dyn Fn(&str) -> Option<chrono::DateTime<chrono::Utc>>,
+}
+
+fn parse_ts(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc))
+}
+
+/// The newest `agent_role_vacated` time for `session` in the agents journal.
+fn newest_vacate(events: &Path, session: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    std::fs::read_to_string(events)
+        .ok()?
+        .lines()
+        .filter(|line| line.contains("agent_role_vacated"))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|e| e.get("type").and_then(Value::as_str) == Some("agent_role_vacated"))
+        .filter(|e| e.pointer("/data/holder_session").and_then(Value::as_str) == Some(session))
+        .filter_map(|e| parse_ts(e.get("ts")?.as_str()?))
+        .max()
 }
 
 /// The line that tells an agent how to record a grant the user says in chat.
@@ -280,6 +319,7 @@ fn chat_grant(
 ) -> Option<(String, u32)> {
     let index = (grants.laws)().ok()?;
     let names = [row.name.as_str(), row.short_id.as_str(), session];
+    let spent_before = (grants.vacated_at)(session);
     let mut rows: Vec<&Value> = index
         .rows
         .iter()
@@ -294,6 +334,14 @@ fn chat_grant(
             r.get("subject")
                 .and_then(Value::as_str)
                 .is_some_and(|s| s.starts_with("role-grant:"))
+        })
+        .filter(|r| match spent_before {
+            Some(vacated) => r
+                .get("ts")
+                .and_then(Value::as_str)
+                .and_then(parse_ts)
+                .is_some_and(|ts| ts > vacated),
+            None => true,
         })
         .collect();
     rows.sort_by_key(|r| {
@@ -1099,6 +1147,7 @@ mod tests {
             spaces_root: root,
             laws,
             role_of: &|scope: &str| Some((2, scope.to_string())),
+            vacated_at: &|_: &str| None,
         }
     }
 
@@ -1141,6 +1190,14 @@ mod tests {
         });
         let healed = crate::state::load_registry(&path).unwrap();
         assert_eq!(healed.entries[0].role_level, Some(2));
+        // After `org done` vacates the role, the same grant is spent.
+        let spent = write_registry(&dir, serde_json::json!([row]));
+        let later = |_: &str| parse_ts("2026-10-28T13:00:00Z");
+        let mut after_done = grants(&dir, vec![law("lead-a792", "user in chat: promote")]);
+        after_done.vacated_at = &later;
+        with_teamed_identity(|| {
+            resolve_scope_in(None, &spent, &after_done).expect_err("a vacated role stays vacated");
+        });
         fs::remove_dir_all(&dir).ok();
     }
 
