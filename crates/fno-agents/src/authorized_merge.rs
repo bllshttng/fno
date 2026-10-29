@@ -463,6 +463,12 @@ pub trait Probes {
     fn merge_freeze(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         ProbeOutcome::Clear
     }
+    /// The rule engine's read of this merge: a block verdict holds with
+    /// blocker `rule`. Default `Clear` keeps an impl that does not read
+    /// rule sources inert.
+    fn rules(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
     /// Has the round attested at `reviewed_head` (the newest branch
     /// attestation's own head, not necessarily `facts.head_sha` - a carried
     /// round never gets a fresh attestation at the new head) landed as a
@@ -605,6 +611,12 @@ fn decide_observed<P: Probes>(
     // The merge freeze answers beside the per-PR hold, for every caller of
     // `run`: finalize's auto-merge arm reads it here and nowhere else.
     if let Some(blocked) = probes.merge_freeze(cwd, &facts).fail_closed() {
+        return Err(Outcome::Held { reason: blocked });
+    }
+
+    // The rule engine's read, beside the hold probes: a rule block holds,
+    // and flipping or expiring the rule clears it.
+    if let Some(blocked) = probes.rules(cwd, &facts).fail_closed() {
         return Err(Outcome::Held { reason: blocked });
     }
 
@@ -1028,6 +1040,9 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     }
     if let Some(reason) = probes.merge_freeze(cwd, facts).fail_closed() {
         blockers.push(Blocker::held("merge_freeze", reason));
+    }
+    if let Some(reason) = probes.rules(cwd, facts).fail_closed() {
+        blockers.push(Blocker::held("rule", reason));
     }
 
     // (4b) the user's look: a PR touching the configured paint surface holds
@@ -1708,6 +1723,37 @@ fn classify_failure(effect: Effect, strategy: &str, output: &str) -> Outcome {
 // The real probes.
 // ---------------------------------------------------------------------------
 
+/// The rules read for one merge ask: one `door:merge` event, the PR named
+/// as `<slug>#<n>` (the same subject shape the pr-hold rows use) plus the
+/// node the body binds. A block holds; a warn or unread source prints and
+/// the merge proceeds (AC14).
+fn merge_rules_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+    let ev = crate::rules::Event {
+        kind: "door:merge".to_string(),
+        node: facts
+            .body
+            .as_deref()
+            .and_then(crate::rules_source::node_in_text),
+        project: crate::law_match::resolve_project(
+            Some(cwd),
+            &crate::law_match::settings_sources(),
+        )
+        .ok(),
+        subjects: crate::merge_grant::repo_slug_from_pr_url(&facts.url)
+            .map(|slug| vec![format!("{slug}#{}", facts.number)])
+            .unwrap_or_default(),
+        ..crate::rules::Event::default()
+    };
+    let ruling = crate::rules_source::rule(cwd, &ev);
+    if let Some(sentence) = crate::rules_source::block_sentence(&ruling) {
+        return ProbeOutcome::Refused(sentence);
+    }
+    for line in crate::rules_source::advisory_lines(&ruling) {
+        eprintln!("{line}");
+    }
+    ProbeOutcome::Clear
+}
+
 /// The production [`Probes`]: one guarded `fno do pr info` fetch, the shipped
 /// hold and lineage commands, and the repo's own config readers.
 pub struct RealProbes;
@@ -1770,6 +1816,11 @@ impl Probes for RealProbes {
     fn merge_freeze(&self, _cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
         let _step = step_timer::step("merge_freeze");
         crate::merge_freeze::probe(facts)
+    }
+
+    fn rules(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("rules");
+        merge_rules_probe(cwd, facts)
     }
 
     fn review_posted(&self, cwd: &Path, facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {

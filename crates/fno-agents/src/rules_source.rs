@@ -185,6 +185,39 @@ pub fn rule(cwd: &Path, ev: &crate::rules::Event) -> Ruling {
     Ruling { decision, unread }
 }
 
+/// The block verdict's refusal sentence for a door caller, or `None` when
+/// the door proceeds. A fire never fails a door on its own error: an unread
+/// source answers `None` and rides `advisory_lines`.
+pub fn block_sentence(ruling: &Ruling) -> Option<String> {
+    (ruling.decision.verdict == "block")
+        .then(|| format!("Refused by rule: {}", ruling.decision.reasons.join("; ")))
+}
+
+/// The lines a door prints so a fire is never silent: every warn and
+/// inject fire, plus the sources that could not be read. A block never
+/// reaches here; the door refused on `block_sentence` first.
+pub fn advisory_lines(ruling: &Ruling) -> Vec<String> {
+    let mut out: Vec<String> = ruling
+        .decision
+        .fires
+        .iter()
+        .map(|f| format!("rule {}: {}: {}", f.action, f.rule, f.text))
+        .collect();
+    out.extend(ruling.unread.iter().map(|r| format!("Unread: {r}")));
+    out
+}
+
+/// The first node-id-shaped token in free text (a `Fixes <node>`), the
+/// node a door event names when its caller carries one only as prose.
+pub fn node_in_text(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .map(|t| {
+            t.trim_matches(|c: char| !c.is_ascii_alphanumeric())
+                .to_lowercase()
+        })
+        .find(|t| crate::law_match::matches_node_id_shape(t))
+}
+
 /// One `decision_span` per fire, `span_kind = "rule"`: the rows the
 /// rules report reads. Best-effort; a lost row never changes the answer.
 fn log_fires(ev: &crate::rules::Event, decision: &crate::rules::Decision) {
@@ -358,6 +391,49 @@ mod tests {
     fn envelope(ts: &str, data: Value) -> String {
         json!({"ts": ts, "type": "operator_decision", "source": "backlog", "data": data})
             .to_string()
+    }
+
+    #[test]
+    fn door_helpers_map_a_ruling_to_a_refusal_and_printed_lines() {
+        let fire = |action: &str| crate::rules::Fire {
+            rule: "r-hold".into(),
+            law: None,
+            action: action.into(),
+            class: String::new(),
+            deliver: "context".into(),
+            tier: 0,
+            text: "the freeze is on".into(),
+            why: String::new(),
+            instead: "lift the freeze".into(),
+        };
+        let decision = |verdict: &'static str, fires: Vec<crate::rules::Fire>| crate::rules::Decision {
+            verdict,
+            fires,
+            reasons: vec!["r-hold: the freeze is on".to_string()],
+            unevaluated: Vec::new(),
+        };
+        let block = Ruling {
+            decision: decision("block", vec![fire("block")]),
+            unread: Vec::new(),
+        };
+        assert_eq!(
+            block_sentence(&block).as_deref(),
+            Some("Refused by rule: r-hold: the freeze is on")
+        );
+        let warn = Ruling {
+            decision: decision("warn", vec![fire("warn")]),
+            unread: vec!["the rule set (x)".to_string()],
+        };
+        assert_eq!(block_sentence(&warn), None);
+        let lines = advisory_lines(&warn);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "rule warn: r-hold: the freeze is on");
+        assert_eq!(lines[1], "Unread: the rule set (x)");
+        assert_eq!(
+            node_in_text("Backlog-Closure: x-aaaa ships the doors"),
+            Some("x-aaaa".to_string())
+        );
+        assert_eq!(node_in_text("no node here"), None);
     }
 
     #[test]

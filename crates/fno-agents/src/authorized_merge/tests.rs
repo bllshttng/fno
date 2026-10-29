@@ -12,6 +12,9 @@ struct Fake {
     outside_pr: Option<ProbeOutcome>,
     pr_hold: Option<ProbeOutcome>,
     merge_freeze: Option<ProbeOutcome>,
+    rules: Option<ProbeOutcome>,
+    /// Per-PR rules answer, so a test can hold one PR and clear the next.
+    other_rules: RefCell<HashMap<u64, ProbeOutcome>>,
     review_posted: Option<ProbeOutcome>,
     /// The `reviewed_head` argument review_posted_gate last passed in, so a
     /// test can prove it threaded the attestation's own head, not a guess.
@@ -284,6 +287,12 @@ impl Probes for Fake {
     }
     fn merge_freeze(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
         self.merge_freeze.clone().unwrap_or(ProbeOutcome::Clear)
+    }
+    fn rules(&self, _cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        if let Some(ruling) = self.other_rules.borrow().get(&facts.number) {
+            return ruling.clone();
+        }
+        self.rules.clone().unwrap_or(ProbeOutcome::Clear)
     }
     fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
         *self.review_posted_head_seen.borrow_mut() = Some(reviewed_head.to_string());
@@ -1588,6 +1597,28 @@ fn preview_blockers(fake: &Fake, req: &Request) -> Vec<Blocker> {
     }
 }
 
+/// AC13: a fixture `door:merge` rule holds PR 7 with blocker `rule`
+/// naming the rule id, and PR 8 clears - merge and preview answer alike.
+#[test]
+fn a_door_merge_rule_holds_one_pr_and_clears_the_next() {
+    let sentence = "Refused by rule: r-release-freeze: the release freeze is on";
+    let fake = clean();
+    fake.other_rules.borrow_mut().insert(7, ProbeOutcome::Refused(sentence.to_string()));
+
+    let held = run(&fake, &Request { require_checks: true, ..request(Effect::Merge) });
+    assert_eq!(held.word(), "held");
+    assert!(held.detail().contains("r-release-freeze"), "{:?}", held.detail());
+
+    let blockers = preview_blockers(&fake, &preview_request(7));
+    assert_eq!(blockers[0].code, "rule");
+    assert!(blockers[0].detail.contains("r-release-freeze"), "{}", blockers[0].detail);
+
+    // PR 8 carries no rule fire: the decision clears.
+    fake.other_facts.borrow_mut().insert(8, PrFacts { number: 8, ..open_facts() });
+    let cleared = run(&fake, &Request { require_checks: true, pr: Some(8), decide_only: true, ..request(Effect::Merge) });
+    assert!(matches!(cleared, Outcome::Authorized { .. }), "{cleared:?}");
+}
+
 #[test]
 fn merge_and_preview_name_the_same_first_blocker_for_every_gate() {
     // AC2: for each gate made to refuse in turn, the Merge outcome's
@@ -1656,6 +1687,15 @@ fn merge_and_preview_name_the_same_first_blocker_for_every_gate() {
             Fake {
                 merge_freeze: Some(ProbeOutcome::Refused(
                     "merge_freeze: PR #7 is off the pin merge-freeze:o/r@prs:6".to_string(),
+                )),
+                ..base()
+            },
+        ),
+        (
+            "rule",
+            Fake {
+                rules: Some(ProbeOutcome::Refused(
+                    "Refused by rule: r-release-freeze: the release freeze is on".to_string(),
                 )),
                 ..base()
             },
