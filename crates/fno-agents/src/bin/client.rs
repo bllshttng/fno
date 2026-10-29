@@ -1235,10 +1235,25 @@ async fn run(args: Vec<String>) -> i32 {
         // `fno-agents status --capabilities <h> ...`. With neither flag the
         // behavior is exactly the plain status read. The /fno-me join rides
         // the same way: `fno agents register ...` arrives as
-        // `status --register ...`, daemon-free like registry-json.
+        // `status --register ...`, daemon-free like registry-json, and so do
+        // the name, whoami, registry-repair and heal-token leaves.
         let rest = &args[1..];
-        if rest.first().map(String::as_str) == Some("--register") {
-            return fno_agents::register::run_register(&rest[1..], &AgentsHome::from_env());
+        match rest.first().map(String::as_str) {
+            Some("--register") => {
+                return fno_agents::register::run_register(&rest[1..], &AgentsHome::from_env())
+            }
+            Some("--name") => return fno_agents::naming::run_agents_name(&rest[1..]),
+            Some("--whoami") => {
+                return fno_agents::registry_commands::run_whoami(
+                    &rest[1..],
+                    &AgentsHome::from_env(),
+                )
+            }
+            Some("--registry-repair") => {
+                return fno_agents::registry_commands::run_registry_repair(&rest[1..])
+            }
+            Some("--heal-token") => return fno_agents::store_heal::run_heal_token(&rest[1..]),
+            _ => {}
         }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");
         let has_family = rest.iter().any(|a| a.as_str() == "--target-family");

@@ -754,7 +754,7 @@ fn trace_logic(args: &TraceArgs, events_path: &Path, registry_path: &Path) -> Tr
                             stderr: format!("fno agents trace: {detail}\n"),
                         };
                     }
-                    _ => match resolve_entry_with_heal_scoped(&rows, token, registry_path, None) {
+                    _ => match resolve_entry_with_heal(&rows, token, registry_path) {
                         Ok(e) => {
                             resolved_name = Some(
                                 e.get("name")
@@ -1139,29 +1139,27 @@ pub(crate) fn find_agent_entry<'a>(
 // ---------------------------------------------------------------------------
 // All-source short-token resolution. The registry is a cache of reality,
 // not a gate in front of it: store-only sessions participate in the same
-// ambiguity namespace as registry rows. Rust lifecycle commands reach the Python
-// resolver through a shellout rather than growing a second store prober.
+// ambiguity namespace as registry rows (crate::store_heal owns the probes).
 // ---------------------------------------------------------------------------
 
 /// [`find_agent_entry`], plus all-source resolution for session-shaped tokens.
 ///
 /// The one choke point the session-connecting commands resolve through. Returns an
-/// OWNED row because the shared Python resolver may synthesize a healed row;
+/// OWNED row because the healer may synthesize an adopted row;
 /// full ids and non-session-shaped registry hits clone their small local row.
 /// Registry-gated trace calls this only after a local hit, so it gains the same
 /// store-collision refusal without adopting a store-only row that has no events.
-pub(crate) fn resolve_entry_with_heal_scoped(
+pub(crate) fn resolve_entry_with_heal(
     rows: &[Value],
     token: &str,
     registry_path: &Path,
-    scope_cwd: Option<&Path>,
 ) -> Result<Value, ResolveError> {
     match find_agent_entry(rows, token) {
         Ok(e) => {
             if entry_session_tier(e, token) == Some(0) || !is_session_shaped(token) {
                 return Ok(e.clone());
             }
-            match heal_token(token, registry_path, scope_cwd) {
+            match heal_token(token, registry_path) {
                 Ok(Some(row)) => Ok(row),
                 Ok(None) => Err(ResolveError::Ambiguous(format!(
                     "cannot safely resolve token {} because the harness stores could not be checked. Use the full session id.",
@@ -1177,7 +1175,7 @@ pub(crate) fn resolve_entry_with_heal_scoped(
             if !is_session_shaped(token) {
                 return Err(err);
             }
-            match heal_token(token, registry_path, scope_cwd) {
+            match heal_token(token, registry_path) {
                 Ok(Some(row)) => Ok(row),
                 Ok(None) => Err(err),
                 Err(candidates) => Err(ResolveError::Ambiguous(candidates)),
@@ -1325,7 +1323,7 @@ pub(crate) fn upsert_synthesized_row(
             Some(i) => {
                 // Adopt knows IDENTITY, never runtime state. A row can already
                 // exist under the canonical id while the operator adopts by a
-                // legacy alias (`resolve_entry_with_heal_scoped` misses the
+                // legacy alias (`resolve_entry_with_heal` misses the
                 // alias), so
                 // a wholesale replace would downgrade a live row to Idle and
                 // drop its pid / log_path / mux. Liveness stays with reconcile.
@@ -1691,7 +1689,6 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         Ok(v) => v,
         Err(code) => return code,
     };
-    let scope_cwd = cwd_override.as_deref().map(Path::new);
 
     let entries = match read_registry_entries(&home.registry_json()) {
         Ok(e) => e,
@@ -1700,12 +1697,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
             return 13;
         }
     };
-    let entry = match resolve_entry_with_heal_scoped(
-        &entries,
-        &name,
-        &home.registry_json(),
-        scope_cwd,
-    ) {
+    let entry = match resolve_entry_with_heal(&entries, &name, &home.registry_json()) {
         Ok(e) => e,
         Err(err) => {
             // Session-shaped miss: try adopting from a target manifest (the durable
@@ -2651,14 +2643,13 @@ pub async fn run_logs(rest: &[String], home: &AgentsHome) -> i32 {
             return 1;
         }
     };
-    let entry =
-        match resolve_entry_with_heal_scoped(&entries, &args.name, &home.registry_json(), None) {
-            Ok(e) => e,
-            Err(err) => {
-                eprintln!("{}", err.message());
-                return 13;
-            }
-        };
+    let entry = match resolve_entry_with_heal(&entries, &args.name, &home.registry_json()) {
+        Ok(e) => e,
+        Err(err) => {
+            eprintln!("{}", err.message());
+            return 13;
+        }
+    };
     let entry = &entry;
     let harness = entry
         .get("harness")

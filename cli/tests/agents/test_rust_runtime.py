@@ -413,6 +413,11 @@ def test_python_agent_commands_match_registered_commands() -> None:
         # goldens and a parity test in the fno-agents crate; the Python
         # registration stays as the no-binary refusal.
         "register",
+        # The registry and store commands port the same way.
+        "name",
+        "whoami",
+        "registry-repair",
+        "heal-token",
         # Task 1.2: spawn gains a Python implementation (--once / claude plain
         # spawn) but stays in RUST_CLIENT_COMMANDS + AUTO_ROUTE_COMMANDS so the
         # daemon PTY worker path (codex/gemini without --once) still auto-routes
