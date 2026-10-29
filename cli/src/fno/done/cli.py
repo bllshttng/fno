@@ -30,7 +30,7 @@ Never hand-rolls graph writes - goes through locked_mutate_graph for safety.
 Registered under `fno backlog done` : the plain node-id close is
 graph.cli's cmd_done; this command owns the rich completion surface
 (--backfill rollups, PR/link/note metadata, fuzzy and branch queries) and is
-reached through cmd_done's delegation and the `fno done` COMMAND_MOVES shim.
+reached through cmd_done's delegation.
 """
 
 from __future__ import annotations
