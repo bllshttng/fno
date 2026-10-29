@@ -430,7 +430,7 @@ _semantic_validate() {
         # in PyYAML, so a narrower probe passes and the real call still crashes.
         if [[ -n "$python_bin" ]]; then
             probe_error=$(PYTHONPATH="$source_pythonpath" \
-                "$python_bin" -c 'import fno.cli, fno.plan.cli, fno.plan.schema, fno.plan.execution_validation' 2>&1) && {
+                "$python_bin" -c 'import fno.cli, fno.plan.cli, fno.plan.execution_validation' 2>&1) && {
                 PYTHONPATH="$source_pythonpath" \
                     "$python_bin" -m fno.cli do plan validate "$PLAN_DIR" --execution
                 return
@@ -438,7 +438,7 @@ _semantic_validate() {
         fi
         if command -v uv >/dev/null 2>&1; then
             probe_error=$(uv run --project "$source_root/cli" \
-                python -c 'import fno.cli, fno.plan.cli, fno.plan.schema, fno.plan.execution_validation' 2>&1) && {
+                python -c 'import fno.cli, fno.plan.cli, fno.plan.execution_validation' 2>&1) && {
                 uv run --project "$source_root/cli" \
                     python -m fno.cli do plan validate "$PLAN_DIR" --execution
                 return
@@ -475,24 +475,30 @@ _dispatch_hold_validate() {
     fi
     [[ -z "$source_root" ]] && return 2
     local source_pythonpath="$source_root/cli/src${PYTHONPATH:+:$PYTHONPATH}"
-    local code='from datetime import date
+    local code='from datetime import date, datetime
 from pathlib import Path
 import sys
-from pydantic import ValidationError
 from fno.plan._doc import load_plan
-from fno.plan.schema import DispatchHoldBlock
+from fno.rust_binary import plan_schema
 raw = load_plan(Path(sys.argv[1])).frontmatter.get("dispatch_hold")
-try:
-    hold = DispatchHoldBlock.model_validate(raw)
-except ValidationError as exc:
-    for error in exc.errors():
-        field = ".".join(str(part) for part in error["loc"]) or "dispatch_hold"
-        print("dispatch_hold.%s: %s" % (field, error["msg"]))
+if raw is None:
+    raise SystemExit(0)
+answer = plan_schema({"op": "validate-block", "kind": "dispatch_hold", "block": raw})
+if answer is None:
+    print("dispatch_hold.door: the plan-schema door could not run")
     raise SystemExit(1)
-if hold.review_on < date.today():
-    print(f"PAST:{hold.review_on.isoformat()}")'
+for error in answer.get("errors") or []:
+    field = str(error.get("field", "dispatch_hold")).replace("dispatch_hold.", "")
+    print("dispatch_hold.%s: %s" % (field or "dispatch_hold", error.get("message", "")))
+if not answer.get("valid"):
+    raise SystemExit(1)
+review_on = raw.get("review_on")
+if isinstance(review_on, datetime):
+    review_on = review_on.date()
+if isinstance(review_on, date) and review_on < date.today():
+    print(f"PAST:{review_on.isoformat()}")'
     if [[ -n "$python_bin" ]] && PYTHONPATH="$source_pythonpath" \
-        "$python_bin" -c 'import pydantic, yaml' 2>/dev/null; then
+        "$python_bin" -c 'import yaml' 2>/dev/null; then
         PYTHONPATH="$source_pythonpath" "$python_bin" -c "$code" "$PLAN_DIR"
         return
     fi
@@ -1092,12 +1098,12 @@ check_consolidation_file() {
         return 0
     fi
 
-    # Shape check: hand the block to the model that already defines it.
+    # Shape check: hand the block to the plan-schema door, the one validator.
     # This used to be an awk walk over the YAML, and five review rounds each
     # found a shape it misread - block scalars, flow lists, key order,
     # hyphenated sibling keys, duplicate keys, integer ids. Several of those
-    # hard-FAILED valid plans. A second implementation of a shape the
-    # `ConsolidationBlock` model already pins can only ever diverge from it,
+    # hard-FAILED valid plans. A second implementation of a shape the door
+    # already pins can only ever diverge from it,
     # so there is now one implementation and bash keeps only what is policy.
     local _src="" python_bin="" source_root="" delegate_out="" delegate_rc=0
     # The plan names no node id, so the decisions rows below have no subject
@@ -1126,10 +1132,9 @@ import sys
 
 try:
     import yaml
-    from pydantic import ValidationError
 
-    from fno.plan.schema import ConsolidationBlock
-except Exception as exc:  # missing PyYAML / pydantic / fno on this interpreter
+    from fno.rust_binary import plan_schema
+except Exception as exc:  # missing PyYAML / fno on this interpreter
     sys.stdout.write("U\t" + " ".join(str(exc).split())[:160] + "\n")
     raise SystemExit(0)
 
@@ -1177,36 +1182,43 @@ def dup_keys(node, out):
 
 
 def render(err, block):
-    loc, kind = err["loc"], err["type"]
-    if loc == ("outcome",):
-        if kind == "missing":
+    """Translate one plan-schema door error into the channel's own words."""
+    field = str(err.get("field") or "")
+    message = str(err.get("message") or "")
+    if field == "consolidation.outcome":
+        if message == "Field required":
             return "consolidation block present but has no outcome: line (expected %s)" % ENUM
         raw = block.get("outcome")
         return "consolidation outcome `%s` is not in the enum %s" % (raw, ENUM)
-    if len(loc) >= 2 and isinstance(loc[1], int):
-        section, index = loc[0], loc[1]
+    parts = field.split(".")
+    if len(parts) == 3 and parts[0] == "consolidation" and parts[2].isdigit():
+        return "consolidation section `%s` entry %d is not an id/reason mapping" % (
+            parts[1],
+            int(parts[2]) + 1,
+        )
+    if len(parts) == 4 and parts[0] == "consolidation" and parts[2].isdigit():
+        section, index, leaf = parts[1], int(parts[2]), parts[3]
         entry = None
         listed = block.get(section)
         if isinstance(listed, list) and index < len(listed):
             entry = listed[index]
-        field = loc[2] if len(loc) > 2 else None
-        if field == "id":
-            if kind == "missing":
+        if leaf == "id":
+            if message == "Field required":
                 return "consolidation section `%s` has an entry with no id" % section
             raw = entry.get("id") if isinstance(entry, dict) else entry
             return (
                 "consolidation entry id `%s` (%s) is not a node id "
                 "(expected <prefix>-<hex>, e.g. x-aaaa)" % (raw, section)
             )
-        if field == "decision_id":
-            if kind == "missing":
+        if leaf == "decision_id":
+            if message == "Field required":
                 return "consolidation section `%s` has an entry with no decision_id" % section
             raw = entry.get("decision_id") if isinstance(entry, dict) else entry
             return (
                 "consolidation entry decision_id `%s` (%s) is not a decision id "
                 "(expected d-<hex>)" % (raw, section)
             )
-        if field == "reason":
+        if leaf == "reason":
             named = entry.get("id") if isinstance(entry, dict) else None
             if named is None and isinstance(entry, dict):
                 named = entry.get("decision_id")
@@ -1220,11 +1232,12 @@ def render(err, block):
             "consolidation section `%s` entry %d is not an id/reason mapping"
             % (section, index + 1)
         )
-    message = err["msg"].replace("Value error, ", "")
+    if message.startswith("Value error, "):
+        message = message[len("Value error, "):]
     for outcome, key in (("absorb", "absorbed"), ("append", "appended_to")):
         if message == "outcome %s requires at least one %s entry" % (outcome, key):
             return "consolidation outcome is %s but the %s: list is empty" % (outcome, key)
-    where = ".".join(str(part) for part in loc)
+    where = field[len("consolidation."):] if field.startswith("consolidation.") else field
     return "consolidation block%s: %s" % (" " + where if where else "", message)
 
 
@@ -1257,18 +1270,20 @@ for key, value in (composed.value if composed else []):
                 "silently discards the earlier value\n" % name
             )
 
-try:
-    validated = ConsolidationBlock.model_validate(block)
-except ValidationError as exc:
-    for err in exc.errors():
+answer = plan_schema({"op": "validate-block", "kind": "consolidation", "block": block})
+if answer is None:
+    sys.stdout.write("U\tplan-schema door unavailable\n")
+    raise SystemExit(0)
+if not answer.get("valid"):
+    for err in answer.get("errors") or []:
         sys.stdout.write("E\t" + " ".join(render(err, block).split()) + "\n")
     raise SystemExit(0)
-sys.stdout.write("O\t%s\n" % validated.outcome)
+sys.stdout.write("O\t%s\n" % block.get("outcome"))
 
 # Which of the node's LIVE decisions has no decisions_acknowledged entry.
-# This is the one part of the check the shape model above cannot do (it has
-# no access to the decision index), so it runs here rather than in
-# ConsolidationBlock: the model stays a pure shape authority, this stays the
+# This is the one part of the check the shape door cannot do (it has
+# no access to the decision index), so it runs here rather than in the
+# plan-schema door: the door stays a pure shape authority, this stays the
 # one place that reads live data.
 #
 # node -> claims -> graph_node_id, same order and same one-element-list
@@ -1364,8 +1379,8 @@ if isinstance(node_id, str) and node_id.strip():
                 )
         # Drop rows the derived superseded_by map marks withdrawn - a
         # withdrawn ruling must not demand acknowledgment. Never scan the
-        # ruling's own prose for this (see DecisionAcknowledgment's
-        # sibling note in ConsolidationBlock's docstring).
+        # ruling's own prose for this: a superseded ruling keeps its old
+        # text, and prose search cannot tell live from withdrawn.
         live = [r for r in rows if r.get("lifecycle") == "live"]
         # casefold both sides: DecisionAcknowledgment accepts
         # d-ABCD1234 (the id regex is case-insensitive, matching

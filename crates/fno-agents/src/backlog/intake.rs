@@ -434,13 +434,9 @@ fn find_node_exact<'a>(entries: &'a [Value], node_id: &str) -> Option<&'a Value>
 // The difficulty gate (plan/schema.py: _parse_created + difficulty_gate_error)
 // ---------------------------------------------------------------------------
 
-/// Date the difficulty band became required. A literal, never computed: a
-/// runtime date crosses the gate on a commit nobody touched and leaves no
-/// literal to grep (the smoke-rest outage of 2026-08-27).
-const DIFFICULTY_REQUIRED_AFTER: &str = "2026-08-26";
 
 /// `^\d{4}-\d{2}-\d{2}(?:[T ].*)?$` - extended-calendar forms only.
-fn iso_created(s: &str) -> bool {
+pub(crate) fn iso_created(s: &str) -> bool {
     if s.len() < 10 {
         return false;
     }
@@ -461,7 +457,7 @@ fn iso_created(s: &str) -> bool {
 /// Days in month, leap-aware: `date.fromisoformat` refuses an impossible
 /// day ("2026-02-31") and the port must refuse it too, or a plan Python
 /// dates as undatable mints in Rust.
-fn valid_ymd(year: i32, month: u32, day: u32) -> bool {
+pub(crate) fn valid_ymd(year: i32, month: u32, day: u32) -> bool {
     let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
     let dim = match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
@@ -482,7 +478,7 @@ fn valid_ymd(year: i32, month: u32, day: u32) -> bool {
 /// extended-calendar strings only; an unquoted YAML int (20260827) and every
 /// other scalar shape refuse rather than date the plan in one scope and
 /// break it in another.
-fn parse_created(value: Option<&Value>) -> Option<(i32, u32, u32)> {
+pub(crate) fn parse_created(value: Option<&Value>) -> Option<(i32, u32, u32)> {
     let s = value?.as_str()?.trim().to_string();
     if !iso_created(&s) {
         return None;
@@ -498,57 +494,15 @@ fn parse_created(value: Option<&Value>) -> Option<(i32, u32, u32)> {
 }
 
 /// The date-keyed difficulty refusal for raw frontmatter, or None. The
-/// minting lanes have no fallback dater, so undatable frontmatter refuses
-/// (undatable_refuses is the default and the only scope this port serves).
+/// minting scope: undatable frontmatter refuses. The parametrized owner
+/// lives in plan_schema; this is the minting lane's thin alias.
 fn difficulty_gate_error(fm: &Map<String, Value>) -> Option<String> {
-    if fm.is_empty() {
-        return None;
-    }
-    let created_raw = fm.get("created");
-    let created = parse_created(created_raw);
-    if created.is_none() {
-        if created_raw.is_none() {
-            return Some(
-                "cannot read created: absent from frontmatter; the difficulty \
-                 gate needs a date. Set created: <YYYY-MM-DD> and, for \
-                 post-gate plans, difficulty: low, medium, high."
-                    .to_string(),
-            );
-        }
-        return Some(format!(
-            "cannot read created: {}; the difficulty gate needs a date. Set \
-             created: <YYYY-MM-DD> and, for post-gate plans, difficulty: \
-             low, medium, high.",
-            yaml_display(created_raw.unwrap_or(&Value::Null))
-        ));
-    }
-    let (y, m, d) = created.unwrap();
-    if !valid_ymd(y, m, d) {
-        return Some(format!(
-            "cannot read created: {}; the difficulty gate needs a date. Set \
-             created: <YYYY-MM-DD> and, for post-gate plans, difficulty: \
-             low, medium, high.",
-            yaml_display(created_raw.unwrap_or(&Value::Null))
-        ));
-    }
-    if (y, m, d) <= (2026, 8, 26) {
-        return None;
-    }
-    let band = fm.get("difficulty").and_then(Value::as_str);
-    match band {
-        Some(b) if ["low", "medium", "high"].contains(&b.trim().to_lowercase().as_str()) => None,
-        _ => Some(format!(
-            "difficulty is required for plans created after \
-             {DIFFICULTY_REQUIRED_AFTER}: set it to one of low, medium, high \
-             (an intrinsic property of the work - the expected time, edge \
-             cases, unknowns, and what a senior tech lead makes of the \
-             problem; not a model or capacity hint)"
-        )),
-    }
+    crate::plan_schema::difficulty_gate_error(fm, true)
 }
 
+
 /// The stderr rendering Python's `{value!r}` gives a frontmatter scalar.
-fn yaml_display(v: &Value) -> String {
+pub(crate) fn yaml_display(v: &Value) -> String {
     match v {
         Value::String(s) => format!("'{s}'"),
         other => other.to_string(),
