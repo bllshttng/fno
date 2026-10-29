@@ -1258,6 +1258,9 @@ async fn run(args: Vec<String>) -> i32 {
                 return fno_agents::registry_commands::run_registry_repair(&rest[1..])
             }
             Some("--heal-token") => return fno_agents::store_heal::run_heal_token(&rest[1..]),
+            Some("--pane-identity") => {
+                return fno_agents::pane_identity::run_pane_identity(&rest[1..])
+            }
             _ => {}
         }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");

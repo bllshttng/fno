@@ -408,6 +408,7 @@ pub mod outstanding;
 pub mod outstanding_cmds;
 pub(crate) mod owner_ladder;
 pub mod pane_claim;
+pub mod pane_identity;
 pub mod pane_keeper;
 pub mod pane_loop;
 pub mod pane_rebind;

@@ -144,6 +144,8 @@ RUST_CLIENT_COMMANDS = frozenset(
         "whoami",
         "registry-repair",
         "heal-token",
+        # The pane/registry identity cross-check: a read, never a repair.
+        "pane-identity",
         # The daemon-free revival decision the spawn path calls. Client-side
         # dispatch starts nothing.
         "revival-check",
@@ -424,11 +426,6 @@ PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
     # body routes in every runtime mode, and `orphans` is no client action, so
     # it must never auto-route.
     "orphans",
-    #: the pane/registry identity cross-check. Pure Python (one pane ls
-    # subprocess + load_registry + a ps probe); a mismatch is a READING, never
-    # a repair, and the daemon holds no such command, so it must never auto-route
-    # to the daemon.
-    "pane-identity",
     #: the codex late-bind helper `late_bind_codex_sessions` (Rust,
     # fno-agents daemon) shells out to for one pane's rollout session id.
     # Pure Python (fno.agents.mux_spawn._codex_session_id_for_pid, reads the
@@ -876,6 +873,7 @@ _STATUS_ARG_LEAVES = {
     "whoami": "--whoami",
     "registry-repair": "--registry-repair",
     "heal-token": "--heal-token",
+    "pane-identity": "--pane-identity",
     "liveness": "--liveness",
 }
 

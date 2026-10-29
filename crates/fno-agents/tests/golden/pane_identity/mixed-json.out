@@ -1,0 +1,24 @@
+{
+  "session": "main",
+  "panes_compared": 4,
+  "rows_with_mux_compared": 4,
+  "rows_other_session": 1,
+  "row_mismatches": [
+    {
+      "row": "beta",
+      "pane": 2,
+      "reason": "pane id is 'unresolved:spawned-name', row expects 5a6b7c8d-1e2f-4a3b-8c4d-9e0f1a2b3c4d"
+    },
+    {
+      "row": "gamma",
+      "pane": 3,
+      "reason": "row carries a mux ref but no session id"
+    },
+    {
+      "row": "delta",
+      "pane": 9,
+      "reason": "pane missing from session listing"
+    }
+  ],
+  "pane_mismatches": []
+}
