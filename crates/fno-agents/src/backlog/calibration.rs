@@ -357,31 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn ci_failure_friction_or_a_re_estimate_makes_it_rough() {
-        let friction = BTreeMap::from([(
-            "x-bbbb".to_string(),
-            BTreeMap::from([("ci_failure".to_string(), 1)]),
-        )]);
-        let covered = recorder_from("2025-12-01T00:00:00Z");
-        let rows = compute(
-            &[done_node("x-bbbb", "code", "medium", 5.0)],
-            &friction,
-            covered,
-        );
-        assert_eq!(rows[0].smooth, Some(false));
-
-        let mut revised = done_node("x-cccc", "code", "medium", 5.0);
-        revised["difficulty_history"] = json!([
-            {"value": "medium", "source": "filed", "ts": "2026-01-01T00:00:00Z"},
-            {"value": "high", "source": "revised", "ts": "2026-01-02T00:00:00Z"}
-        ]);
-        let rows = compute(&[revised], &BTreeMap::new(), None);
-        assert!(rows[0].re_estimated);
-        assert_eq!(rows[0].smooth, Some(false));
-    }
-
-    #[test]
-    fn smooth_is_null_before_the_friction_recorder() {
+    fn smooth_needs_a_recorder_only_for_a_clean_read() {
         let node = done_node("x-dddd", "code", "medium", 5.0);
         let later = recorder_from("2026-02-01T00:00:00Z");
         let rows = compute(&[node.clone()], &BTreeMap::new(), later);
@@ -398,8 +374,18 @@ mod tests {
         assert_eq!(rows[0].smooth, Some(false));
 
         let earlier = recorder_from("2025-12-01T00:00:00Z");
-        let rows = compute(&[node], &BTreeMap::new(), earlier);
+        let rows = compute(&[node.clone()], &BTreeMap::new(), earlier);
         assert_eq!(rows[0].smooth, Some(true));
+
+        // A revision reads rough with no recorder at all.
+        let mut revised = node;
+        revised["difficulty_history"] = json!([
+            {"value": "medium", "source": "filed", "ts": "2026-01-01T00:00:00Z"},
+            {"value": "high", "source": "revised", "ts": "2026-01-02T00:00:00Z"}
+        ]);
+        let rows = compute(&[revised], &BTreeMap::new(), None);
+        assert!(rows[0].re_estimated);
+        assert_eq!(rows[0].smooth, Some(false));
     }
 
     #[test]
