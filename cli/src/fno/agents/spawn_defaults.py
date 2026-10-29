@@ -122,27 +122,6 @@ _SPAWN_VALUE_FLAGS = _VALUE_FLAGS | frozenset(
 )
 
 
-def extract_existing_pane(args: Sequence[str]) -> tuple[List[str], Optional[int]]:
-    """Remove fno's control-plane pane target before Typer parses."""
-    index = 0
-    while index < len(args):
-        token = args[index]
-        if token in ("--argv", "--"):
-            return list(args), None
-        key, equals, raw = token.partition("=")
-        if key == "--pane":
-            if not equals:
-                raw = args[index + 1] if index + 1 < len(args) else ""
-            try:
-                pane = int(raw)
-            except ValueError as exc:
-                raise ValueError(f"--pane needs an integer pane id, got {raw!r}") from exc
-            out = list(args)
-            del out[index:index + (1 if equals else 2)]
-            return out, pane
-        index += 1 + (not equals and token in _SPAWN_VALUE_FLAGS)
-    return list(args), None
-
 # Tokens that pin the substrate explicitly (a positional substrate word conflicts
 # with any of these -> exit 2). `-o/--once` means headless; `--substrate
 # headless` is the long form. `-H` selects the harness and `-P` the vendor, so
@@ -150,42 +129,7 @@ def extract_existing_pane(args: Sequence[str]) -> tuple[List[str], Optional[int]
 # took the flag budget; `--substrate headless` is the spelling).
 _EXPLICIT_SUBSTRATE_BOOLS = ("-o", "--once")
 
-#: A claude thread spawned with no message starts with no prompt: claude's job
-#: state reads `needs: send a prompt to start` and the row holds a worker slot
-#: for nothing. Printed by the seam (explicit substrate, both runtimes) and by
-#: cmd_spawn (resolved substrate).
-SEEDLESS_THREAD_REFUSAL = (
-    "refusing a claude thread spawn with no message. Claude starts that session "
-    "with no prompt, it waits for one forever, and its row holds a worker slot. "
-    "Put the work in the message: fno agents spawn '/fno:target {node}' "
-    "--name {name} --node {node}. A revival needs no message. No worker launched."
-)
-
-
-def seedless_thread_refusal(
-    harness: Optional[str],
-    substrate: Optional[str],
-    message: Optional[str],
-    *,
-    resume: Optional[str] = None,
-    role: bool = False,
-    name: Optional[str] = None,
-    node: Optional[str] = None,
-) -> Optional[str]:
-    """The refusal text for a fresh claude thread spawn with no message, else None.
-
-    A resume continues a transcript and a role spawn gets the term command typed
-    later in dispatch, so neither needs a message here.
-    """
-    if harness != "claude" or substrate not in ("thread", "bg"):
-        return None
-    if (message or "").strip() or resume or role:
-        return None
-    return SEEDLESS_THREAD_REFUSAL.format(name=name or "<name>", node=node or "<node>")
-
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-_SHORT_ID_RE = re.compile(r"^[0-9a-f]{8}$")
-
 # Two-word slug lists for a nameless spawn (docker/heroku pattern). Curated
 # lowercase-ascii, unambiguous read aloud; no external dependency, no config.
 _SLUG_ADJ = (
@@ -202,58 +146,6 @@ _SLUG_NOUN = (
     "heron", "ibis", "jaguar", "koala", "lemur", "marten", "newt", "osprey",
     "puffin", "raven", "shrew", "tapir", "urchin", "viper", "wombat", "finch",
 )
-
-
-def placement_refusal(
-    *,
-    substrate: str,
-    once: bool,
-    squad: Optional[str],
-    split: Optional[str],
-    at: Optional[str],
-    tab: Optional[str],
-    bounded_placement: bool,
-) -> Optional[str]:
-    """The pane placement contract as one named refusal, or None when
-    the combination is legal. Portal placement is Rust-owned (the runtime that
-    runs the spawn validates its own flags); this seam no longer reads a
-    --portal value."""
-    placement_requested = (
-        bounded_placement
-        or squad is not None
-        or split is not None
-        or at is not None
-        or tab is not None
-    )
-    if squad is not None and not squad.strip():
-        return "--workspace/-s needs a nonblank workspace name"
-    if bounded_placement and substrate == "bg":
-        return "--bounded-placement selects its own tab for a pane; a thread cannot be bounded"
-    if at is not None and substrate == "bg":
-        return "--at needs --as pane (a thread has no calling pane)"
-    if placement_requested and (substrate != "pane" or once):
-        return (
-            "--workspace/-s, --split/-x, --at, and --tab need --as pane "
-            "(a thread or --once one-shot has no pane geometry)"
-        )
-    if split is not None and split not in ("left", "right", "up", "down"):
-        return f"--split/-x must be left, right, up, or down (got {split!r})"
-    if tab is not None and not tab.strip():
-        return "--tab needs a nonblank selector or pane-group name"
-    if bounded_placement and any(value is not None for value in (split, at, tab)):
-        return (
-            "--bounded-placement selects its own stable tab and cannot be combined "
-            "with --split, --at, or --tab"
-        )
-    if at is not None:
-        # `--at current` is the exact-anchor spelling (the mux CLI resolves it
-        # from FNO_PANE, strict Refuse fallback). A numeric anchor is a
-        # low-level `mux pane run` concern, never exposed here.
-        if at != "current":
-            return "--at must be `current` (the exact-anchor spelling)"
-        if split is None:
-            return "--at requires --split (the side to place on)"
-    return None
 
 
 def _has_explicit_substrate(toks: Sequence[str]) -> Optional[str]:
@@ -515,11 +407,6 @@ def normalize_spawn_args(
 # token selects `config.agents.profiles.<command>`, layered over `agents.defaults`.
 # No content-based inference of any kind - only an explicit leading slash-command.
 # --------------------------------------------------------------------------- #
-
-# Keep the old spelling on the canonical profile key for one release.
-_COMMAND_ALIASES = {"do": "execute"}
-# Lead work walks the role slot whichever command opens its seed.
-_ROLE_COMMANDS = frozenset({"lead", "term", "fno-me"})
 
 # The one built-in answer to "what permission mode does an unattended worker
 # get". Formerly config.agents.spawn_permission_mode's default; a constant now,
@@ -905,42 +792,4 @@ def routing_enforcement_state(settings: object = None) -> str:
 # --------------------------------------------------------------------------- #
 # The CLI's substrate posture gates, moved here from cmd_spawn (file budget):
 # the value gate + bg alias, and the monitor gate.
-
-
-def resolve_spawn_gates(substrate, monitor, *, once, harness):
-    """Validate the substrate/monitor posture; canonicalize ``thread``->``bg``.
-
-    Exit 2 on a value outside the closed set or a monitor combination without
-    support (exactly claude+zai on a pane). The deprecated ``bg`` spelling
-    warns and still works. Portal gates live on the Rust lane only: the
-    Python parser must not advertise a flag whose placement it cannot run.
-    """
-    if substrate not in ("pane", "thread", "bg", "headless", "cloud"):
-        print(
-            f"--substrate must be one of: pane, thread, headless, cloud (got {substrate})",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    if substrate == "bg":
-        print("substrate 'bg' was retired; a bare spawn seats a thread", file=sys.stderr)
-        raise SystemExit(2)
-    if substrate == "thread":
-        substrate = "bg"
-    if monitor is not None and monitor != "happy":
-        print(f"--monitor must be 'happy' (got {monitor!r})", file=sys.stderr)
-        raise SystemExit(2)
-    if monitor == "happy" and (substrate != "pane" or once):
-        print(
-            "--monitor happy needs --as pane; thread and headless workers do not pass "
-            "the happy launcher seam",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    if monitor == "happy" and harness != "claude":
-        print(
-            f"--monitor happy requires the claude harness; got harness {harness!r}",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    return substrate
 

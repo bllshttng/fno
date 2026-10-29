@@ -7,9 +7,8 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
-import click
 import typer
 
 
@@ -34,7 +33,6 @@ CHECKS: dict[str, str] = {
     "flock-pattern": "flock_pattern",
     "provider-stderr-merge": "provider_stderr_merge",
     "shellout-drift": "shellout_drift",
-    "spawn-flag-owners": "spawn_flag_owners",
     "command-ratchet": "command_ratchet",
     "stale-skill-refs": "stale_skill_refs",
     "retired-commands": "retired_commands",
@@ -752,115 +750,6 @@ def shellout_drift(no_degrade: bool = False) -> None:
     for line in report.lines:
         typer.echo(line, err=stream_err)
     raise typer.Exit(report.exit_code)
-
-
-def spawn_flag_owners() -> None:
-    """Every ``fno agents spawn`` flag names an owner, and the count is capped.
-
-    ``menu-caps`` ratchets COMMANDS; nothing ratcheted FLAGS. Introspecting the
-    live Typer command is what makes this a gate and not a stale list: a flag
-    added to ``cmd_spawn`` and not to ``FLAG_OWNERS`` fails here, in the PR
-    that adds it.
-    """
-    from fno.agents.spawn_flag_owners import (
-        CALLER,
-        CONFIG,
-        DEFAULT,
-        ENV,
-        FLAG_OWNERS,
-        RETIRED_SPAWN_FLAGS,
-        SPAWN_FLAG_CAP,
-        TRANSLATED,
-    )
-
-    try:
-        import typer.main
-
-        from fno.agents.cli import agents_app
-
-        group = cast("click.Group", typer.main.get_command(agents_app))
-        spawn_cmd = group.commands.get("spawn")
-    except Exception as exc:  # noqa: BLE001 - a lint must degrade, not crash
-        typer.echo(f"spawn-flag-owners: skipped (parser unavailable: {exc})", err=True)
-        return
-    if spawn_cmd is None:
-        typer.echo("spawn-flag-owners: FAIL\nspawn command not found on the agents app", err=True)
-        raise typer.Exit(1)
-
-    # The primary long spelling of every Option on the live command. Hidden
-    # flags are in: they occupy the parser and the reader's attention the
-    # same as visible ones.
-    live = {
-        opts[0]
-        for param in spawn_cmd.params
-        if (opts := [o for o in getattr(param, "opts", []) if o.startswith("--")])
-    }
-
-    failures: list[str] = []
-    # The retired axes are refusal stubs: declared, hidden, refusing. Each
-    # must still exist (a silent re-add or a deleted stub both fail here).
-    stubs = set(RETIRED_SPAWN_FLAGS)
-    if missing_stubs := sorted(stubs - live):
-        failures.append(
-            f"{len(missing_stubs)} retired spawn flag stub(s) missing from the "
-            f"parser: {', '.join(missing_stubs)}.\n"
-            "  Remedy: keep the refusal stub (the callback names the native "
-            "form and exits 2); deleting it reopens the untaught door."
-        )
-    live -= stubs
-    if unclassified := sorted(live - set(FLAG_OWNERS)):
-        failures.append(
-            f"{len(unclassified)} live spawn flag(s) have no owner row: "
-            f"{', '.join(unclassified)}.\n"
-            "  Remedy: add a FLAG_OWNERS row (cli/src/fno/agents/"
-            "spawn_flag_owners.py): owner fno if fno branches on the value, "
-            "translated (with its site) if fno only maps the harness's "
-            "spelling - or forward the flag after `--` when the pane "
-            "passthrough carries it."
-        )
-    if stale := sorted(set(FLAG_OWNERS) - live):
-        failures.append(
-            f"{len(stale)} FLAG_OWNERS row(s) name flags the parser no longer "
-            f"has: {', '.join(stale)}.\n"
-            "  Remedy: delete each stale row in the same PR that removed "
-            "the flag."
-        )
-    if len(live) > SPAWN_FLAG_CAP:
-        failures.append(
-            f"spawn carries {len(live)} flags (cap {SPAWN_FLAG_CAP}).\n"
-            "  Remedy: move harness-owned flags across the `--` passthrough "
-            "instead of declaring them; FLAG_OWNERS marks which are safe to "
-            "move - or raise SPAWN_FLAG_CAP in a deliberate one-line diff."
-        )
-    if siteless := sorted(
-        f for f, row in FLAG_OWNERS.items() if row.owner == TRANSLATED and not row.site
-    ):
-        failures.append(
-            f"{len(siteless)} translated row(s) name no site: {', '.join(siteless)}.\n"
-            "  Remedy: set `site` to the file:function holding the "
-            "per-harness spelling map; it is the code a migration deletes."
-        )
-    known = {CALLER, CONFIG, DEFAULT, ENV}
-    if unknown_sources := sorted(
-        f
-        for f, row in FLAG_OWNERS.items()
-        if not row.sources or not set(row.sources) <= known
-    ):
-        failures.append(
-            f"{len(unknown_sources)} row(s) carry an unknown or empty "
-            f"provenance: {', '.join(unknown_sources)}.\n"
-            "  Remedy: use the shared vocabulary - caller, config, env, "
-            "default - and record only what the code verifiably does."
-        )
-
-    if failures:
-        for f in failures:
-            typer.echo(f"spawn-flag-owners: FAIL\n{f}", err=True)
-        raise typer.Exit(1)
-    typer.echo(
-        f"spawn-flag-owners: ok ({len(live)}/{len(FLAG_OWNERS)} flags owned; "
-        f"cap {SPAWN_FLAG_CAP})"
-    )
 
 
 def command_ratchet(update: bool = False) -> None:
