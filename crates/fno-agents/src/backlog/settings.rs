@@ -31,13 +31,20 @@ pub(crate) fn candidates() -> Vec<PathBuf> {
         }
     }
     // The project config the FNO_CONFIG redirect names (python's
-    // `config_file()` candidate), then the global file.
+    // `config_file()` candidate), then the global file. A pinned file
+    // spelled config.toml/settings.yaml is already covered by the parent
+    // push; pushing it again would read its work map twice.
     if let Some(cfg) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
         let cfg = PathBuf::from(cfg);
         if let Some(parent) = cfg.parent() {
             push_dir(parent.to_path_buf());
         }
-        out.push(cfg);
+        let covered = cfg.file_name().is_some_and(|n| {
+            n == std::ffi::OsStr::new("config.toml") || n == std::ffi::OsStr::new("settings.yaml")
+        });
+        if !covered {
+            out.push(cfg);
+        }
     }
     match std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
         Some(v) if !v.is_empty() => out.push(PathBuf::from(v)),
@@ -440,6 +447,10 @@ mod tests {
         .unwrap();
         let prior = std::env::var_os("FNO_CONFIG");
         std::env::set_var("FNO_CONFIG", &cfg);
+        // Bound discovery to the sandbox: without a ceiling the walk counts
+        // every machine config's work map alongside this test's own row.
+        let prior_root = std::env::var_os("FNO_CONFIG_SEARCH_ROOT");
+        std::env::set_var("FNO_CONFIG_SEARCH_ROOT", dir.path());
 
         let pairs = work_map_pairs();
         assert_eq!(pairs.len(), 1);
@@ -449,6 +460,10 @@ mod tests {
         match prior {
             Some(v) => std::env::set_var("FNO_CONFIG", v),
             None => std::env::remove_var("FNO_CONFIG"),
+        }
+        match prior_root {
+            Some(v) => std::env::set_var("FNO_CONFIG_SEARCH_ROOT", v),
+            None => std::env::remove_var("FNO_CONFIG_SEARCH_ROOT"),
         }
     }
 }
