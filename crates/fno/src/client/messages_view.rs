@@ -65,6 +65,62 @@ fn column_band(focused: bool, theme: &crate::theme::Theme) -> (Color, Color, u8)
     }
 }
 
+/// A message body as left-aligned lines inside one box: each stored line
+/// wraps on its own, indented under the sender label. A raw `\n` in a
+/// painted cell moved the terminal cursor and overwrote the next row, so
+/// no output line ever carries one.
+fn body_lines(text: &str, w: usize, role: BRole) -> Vec<BLine> {
+    let inner = w.saturating_sub(BODY_INDENT.len()).max(1);
+    let mut out = Vec::new();
+    for para in text
+        .replace("\r\n", "\n")
+        .replace('\t', "    ")
+        .split(['\n', '\r'])
+    {
+        for mut line in BLine::of(&[seg(para, role)]).wrap(inner) {
+            line.text.insert_str(0, BODY_INDENT);
+            line.roles.splice(0..0, [role; BODY_INDENT.len()]);
+            out.push(line);
+        }
+    }
+    out
+}
+
+const BODY_INDENT: &str = "  ";
+
+/// True for a participant name that is only a session id: a UUID or its
+/// 8-hex handle, never a registry name.
+fn is_raw_id(name: &str) -> bool {
+    let head: String = name.chars().take(8).collect();
+    head.len() == 8
+        && head.chars().all(|c| c.is_ascii_hexdigit())
+        && name.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// The column-1 label for a participant: the registry name, else the
+/// harness plus the 8-char handle for an unnamed session. `None` hides the
+/// row: the `unknown` placeholder and the operator's own `user` voice,
+/// which the You row already holds.
+fn agent_label(p: &Value) -> Option<String> {
+    let name = text_of(p, "name");
+    let name = if name.is_empty() {
+        text_of(p, "key")
+    } else {
+        name
+    };
+    if name.is_empty() || matches!(name, "unknown" | "user") {
+        return None;
+    }
+    if !is_raw_id(name) {
+        return Some(name.to_string());
+    }
+    let handle: String = name.chars().take(8).collect();
+    match text_of(p, "harness") {
+        "" => Some(handle),
+        harness => Some(format!("{harness} {handle}")),
+    }
+}
+
 fn push_blank(lines: &mut Vec<BLine>, owners: &mut Vec<Option<usize>>) {
     if lines.last().is_some_and(|l| l.text.is_empty()) {
         return;
@@ -236,6 +292,9 @@ impl MessagesBoard {
 /// chat list, no tree.
 #[derive(Debug)]
 pub(crate) enum TreeRow {
+    /// The operator's own entry, first in the agent list: picking it lists
+    /// every session the user typed into.
+    You,
     /// A broadcast group row (Broadcasts filter), by its scope.
     Channel(String),
     /// One mail participant, live or ended, by name (never a raw session
@@ -349,14 +408,25 @@ impl MessagesBoard {
             }
             return rows;
         }
+        let has_you = self
+            .projection()
+            .and_then(|p| p.get("you"))
+            .and_then(Value::as_array)
+            .is_some_and(|rows| !rows.is_empty());
+        if has_you && self.list_tab == ListTab::Agents {
+            rows.push(TreeRow::You);
+        }
         let mut seen: HashSet<&str> = HashSet::new();
         for p in self.agent_rows() {
             if !seen.insert(text_of(p, "key")) {
                 continue;
             }
+            let Some(name) = agent_label(p) else {
+                continue;
+            };
             rows.push(TreeRow::Agent {
                 key: text_of(p, "key").to_string(),
-                name: text_of(p, "name").to_string(),
+                name,
                 live: bool_of(p, "live"),
             });
         }
@@ -499,7 +569,7 @@ impl MessagesBoard {
         proj.and_then(|p| p.get("participants"))
             .and_then(Value::as_array)
             .and_then(|ps| ps.iter().find(|p| text_of(p, "key") == key))
-            .map(|p| text_of(p, "name").to_string())
+            .and_then(agent_label)
             .unwrap_or_else(|| key.to_string())
     }
 
@@ -621,6 +691,7 @@ impl MessagesBoard {
         lines.push(BLine::meta(""));
         for (i, row) in rows.iter().enumerate() {
             let mut line = match row {
+                TreeRow::You => BLine::of(&[seg("  ", BRole::Meta), seg("You", BRole::Label)]),
                 TreeRow::Channel(scope) => {
                     BLine::of(&[seg(format!("fleet:{}", channel_label(scope)), BRole::Label)])
                 }
@@ -641,12 +712,15 @@ impl MessagesBoard {
     fn chats_column(&self, w: usize) -> Vec<BLine> {
         let wrap_w = w.saturating_sub(2).max(1);
         let focused = self.col == Col::Chats;
-        let strip = BLine::of(&[
-            tab_seg("Chats", self.col2 == ChatTab::Chats, focused),
-            tab_seg("You", self.col2 == ChatTab::You, focused),
-            tab_seg("System", self.col2 == ChatTab::System, focused),
-            tab_seg("Archive", self.col2 == ChatTab::Archive, focused),
-        ]);
+        let strip = if self.col2 == ChatTab::You {
+            BLine::of(&[tab_seg("You", true, focused)])
+        } else {
+            BLine::of(&[
+                tab_seg("Chats", self.col2 == ChatTab::Chats, focused),
+                tab_seg("System", self.col2 == ChatTab::System, focused),
+                tab_seg("Archive", self.col2 == ChatTab::Archive, focused),
+            ])
+        };
         let mut lines = vec![strip, BLine::meta("")];
         // The You tab is session-wide: no column-1 selection gates it.
         if self.col2 != ChatTab::You && self.sel_agent.is_none() {
@@ -803,8 +877,7 @@ impl MessagesBoard {
             lines.extend(wrapped);
             return (lines, owners);
         }
-        let mine = self.sel_agent.as_deref().unwrap_or("");
-        let wrap_w = w.saturating_sub(2).min(((w * 7) / 10).max(12)).max(1);
+        let wrap_w = w.saturating_sub(2).max(1);
         let mut last_ts = String::new();
         let mut run_key: Option<String> = None;
         for (index, r) in rows.iter().enumerate() {
@@ -824,7 +897,6 @@ impl MessagesBoard {
             }
             last_ts = ts.to_string();
             let key = text_of(r, "from_key");
-            let mine_row = key == mine;
             let sys = bool_of(r, "system");
             let sender = if sys {
                 display_label(&text_of(r, "from"))
@@ -836,12 +908,7 @@ impl MessagesBoard {
                 // The name line is the envelope's formal structure, so it
                 // paints in the label color, distinct from the dim meta and
                 // the bold subject under it.
-                let mut label = if mine_row {
-                    let pad = w.saturating_sub(1).saturating_sub(sender.chars().count());
-                    BLine::of(&[seg(format!("{}{sender}", " ".repeat(pad)), BRole::Label)])
-                } else {
-                    BLine::of(&[seg(sender.clone(), BRole::Label)])
-                };
+                let mut label = BLine::of(&[seg(sender.clone(), BRole::Label)]);
                 label.band = selected;
                 lines.push(label);
                 owners.push(Some(index));
@@ -851,26 +918,13 @@ impl MessagesBoard {
             // the sender, only when one was given.
             let subject = text_of(r, "subject");
             if !subject.is_empty() {
-                for mut line in BLine::of(&[seg(subject, BRole::Head)]).wrap(wrap_w) {
-                    if mine_row {
-                        let pad = w
-                            .saturating_sub(1)
-                            .saturating_sub(line.text.chars().count());
-                        line.text = format!("{}{}", " ".repeat(pad), line.text);
-                    }
+                for mut line in body_lines(subject, wrap_w, BRole::Head) {
                     line.band = selected;
                     lines.push(line);
                     owners.push(Some(index));
                 }
             }
-            let wrapped = BLine::plain(text_of(r, "body")).wrap(wrap_w);
-            for mut line in wrapped {
-                if mine_row {
-                    let pad = w
-                        .saturating_sub(1)
-                        .saturating_sub(line.text.chars().count());
-                    line.text = format!("{}{}", " ".repeat(pad), line.text);
-                }
+            for mut line in body_lines(text_of(r, "body"), wrap_w, BRole::Body) {
                 line.band = selected;
                 lines.push(line);
                 owners.push(Some(index));
@@ -887,7 +941,7 @@ impl MessagesBoard {
         let title = self.thread_title();
         let mut lines = vec![title];
         let mut owners: Vec<Option<usize>> = vec![None];
-        let wrap_w = w.saturating_sub(2).min(((w * 7) / 10).max(12)).max(1);
+        let wrap_w = w.saturating_sub(2).max(1);
         let items = self.you_items(sid);
         if items.is_empty() {
             let wrapped = BLine::meta("(no You items)").wrap(wrap_w);
@@ -917,17 +971,12 @@ impl MessagesBoard {
             // The operator's typed turn: right-aligned like their mail side.
             let typed = item.get("typed_text").and_then(Value::as_str).unwrap_or("");
             if !typed.is_empty() {
+                push_blank(&mut lines, &mut owners);
                 let mut label = BLine::of(&[seg("You", BRole::Label)]);
                 label.band = selected;
-                let pad = w.saturating_sub(1).saturating_sub(3);
-                label.text = format!("{}{}", " ".repeat(pad), label.text);
                 lines.push(label);
                 owners.push(Some(item_index));
-                for mut line in BLine::plain(typed).wrap(wrap_w) {
-                    let pad = w
-                        .saturating_sub(1)
-                        .saturating_sub(line.text.chars().count());
-                    line.text = format!("{}{}", " ".repeat(pad), line.text);
+                for mut line in body_lines(typed, wrap_w, BRole::Body) {
                     line.band = selected;
                     lines.push(line);
                     owners.push(Some(item_index));
@@ -941,7 +990,7 @@ impl MessagesBoard {
                 label.band = selected;
                 lines.push(label);
                 owners.push(Some(item_index));
-                for mut line in BLine::plain(reply).wrap(wrap_w) {
+                for mut line in body_lines(reply, wrap_w, BRole::Body) {
                     line.band = selected;
                     lines.push(line);
                     owners.push(Some(item_index));
@@ -1022,14 +1071,7 @@ pub(crate) fn paint(
         cols,
         (tree_w, 1, part_w, body_h),
         &partners,
-        Some(
-            partners.len().saturating_sub(
-                b.sel_agent
-                    .as_deref()
-                    .map(|a| b.chat_rows(a).len())
-                    .unwrap_or(0),
-            ) + b.cursors[1],
-        ),
+        Some(partners.len().saturating_sub(b.active_chat_rows().len()) + b.cursors[1]),
         column_band(b.col == Col::Chats, &view.theme),
         &view.theme,
     );
@@ -1409,10 +1451,10 @@ pub(crate) async fn keys(
                 // steps the column.
                 if b.col == Col::Chats {
                     b.col2 = match b.col2 {
-                        ChatTab::Chats => ChatTab::You,
-                        ChatTab::You => ChatTab::System,
+                        ChatTab::Chats => ChatTab::System,
                         ChatTab::System => ChatTab::Archive,
                         ChatTab::Archive => ChatTab::Chats,
+                        ChatTab::You => ChatTab::You,
                     };
                     b.cursors[1] = 0;
                 } else {
@@ -1461,6 +1503,13 @@ async fn act(
                 return Ok(());
             };
             match row {
+                TreeRow::You => {
+                    b.sel_agent = None;
+                    b.sel_thread = None;
+                    b.col2 = ChatTab::You;
+                    b.cursors[1] = 0;
+                    b.col = Col::Chats;
+                }
                 TreeRow::Channel(scope) => {
                     b.sel_thread = Some(format!("channel:{scope}"));
                     b.cursors[2] = b.conversation_rows().len().saturating_sub(1);
@@ -1469,6 +1518,10 @@ async fn act(
                 TreeRow::Agent { key, .. } => {
                     b.sel_agent = Some(key.clone());
                     b.sel_thread = None;
+                    if b.col2 == ChatTab::You {
+                        b.col2 = ChatTab::Chats;
+                        b.cursors[1] = 0;
+                    }
                     b.col = Col::Chats;
                 }
             }
@@ -1635,7 +1688,7 @@ fn copy_bubble(view: &mut View, whole_body: bool) {
 fn tree_row_agent_key(row: &TreeRow) -> Option<String> {
     match row {
         TreeRow::Agent { key, .. } => Some(key.clone()),
-        TreeRow::Channel(_) => None,
+        TreeRow::You | TreeRow::Channel(_) => None,
     }
 }
 
@@ -1725,14 +1778,18 @@ pub(crate) async fn mouse(
             }
             Col::Chats => {
                 let rel = (rep.col as usize).saturating_sub(tree_w);
-                let spans = tab_spans(0, &["Chats", "You", "System", "Archive"], 0);
-                let tab = if hit(spans[0].clone(), rel) {
+                let you = view
+                    .messages_board
+                    .as_ref()
+                    .is_some_and(|b| b.col2 == ChatTab::You);
+                let spans = tab_spans(0, &["Chats", "System", "Archive"], 0);
+                let tab = if you {
+                    None
+                } else if hit(spans[0].clone(), rel) {
                     Some(ChatTab::Chats)
                 } else if hit(spans[1].clone(), rel) {
-                    Some(ChatTab::You)
-                } else if hit(spans[2].clone(), rel) {
                     Some(ChatTab::System)
-                } else if hit(spans[3].clone(), rel) {
+                } else if hit(spans[2].clone(), rel) {
                     Some(ChatTab::Archive)
                 } else {
                     None

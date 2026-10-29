@@ -66,6 +66,9 @@ async fn messages_reply_board_contracts() {
             {"key":"s-ivy","name":"ivy","system":false,"live":true},
             {"key":"s-maple","name":"maple","system":false,"live":true},
             {"key":"s-oak","name":"oak","system":false,"live":true},
+            {"key":"unknown","name":"unknown","system":false,"live":false},
+            {"key":"user","name":"user","system":false,"live":false},
+            {"key":"01a18820-1111-4111-8111-111111111111","name":"01a18820-1111-4111-8111-111111111111","harness":"claude","system":false,"live":true},
             {"key":"fno/pr-nudge","name":"fno/pr-nudge","system":true,"live":false},
         ],
         "threads": [
@@ -74,7 +77,7 @@ async fn messages_reply_board_contracts() {
                {"id":"m1","ts":"2026-10-01T09:00:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Ship it.","body":"Ship it.","system":false},
                {"id":"m2","ts":"2026-10-01T09:01:00Z","from":"first","from_key":"s1","to_key":"s-c","summary":"On it.","body":"On it.","system":false},
                {"id":"m3","ts":"2026-10-01T09:02:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Merged.","body":"Merged.","system":false},
-               {"id":"m4","ts":"2026-10-01T09:20:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Landed.","body":"Landed.","system":false}],
+               {"id":"m4","ts":"2026-10-01T09:20:00Z","from":"candor","from_key":"s-c","to_key":"s1","summary":"Landed.","body":"Landed.\nSee the log.","system":false}],
              "last_ts":"2026-10-01T09:20:00Z"},
             {"chat_id":"chat-a2","participants":["s-c","s-q"],
              "rows":[
@@ -103,7 +106,15 @@ async fn messages_reply_board_contracts() {
             })
             .collect()
     };
-    assert_eq!(agent_names(&b.tree_rows()).len(), 6, "{:?}", b.tree_rows());
+    // A raw session id shows as its harness and handle; the `unknown`
+    // placeholder and the operator's `user` voice never list.
+    let names = agent_names(&b.tree_rows());
+    assert_eq!(names.len(), 7, "{names:?}");
+    assert!(names.contains(&"claude 01a18820".to_string()), "{names:?}");
+    assert!(
+        !names.iter().any(|n| n == "unknown" || n == "user"),
+        "{names:?}"
+    );
     b.sort_mode = SortMode::Last;
     let last_order = agent_names(&b.tree_rows());
     assert_eq!(&last_order[..2], ["candor", "first"], "{last_order:?}");
@@ -261,15 +272,21 @@ async fn messages_reply_board_contracts() {
     let two_i = texts4.iter().position(|t| t.ends_with("two")).unwrap();
     assert_eq!(two_i, one_i + 1, "one run, no blank between: {texts4:?}");
     b.sel_thread = Some("chat-a1".into());
+    // Both sides read left-aligned, indented under the sender label; a
+    // stored newline starts a new line and never paints as a cell.
     let ship_i = texts
         .iter()
-        .position(|t| t.ends_with("Ship it."))
-        .expect("my bubble right-aligned");
-    assert_eq!(texts[ship_i].chars().count(), 49, "right edge: {texts:?}");
+        .position(|t| t.as_str() == "  Ship it.")
+        .expect("my bubble left-aligned");
+    assert!(texts.iter().any(|t| t.as_str() == "  On it."), "{texts:?}");
+    assert!(texts.iter().all(|t| !t.contains('\n')), "{texts:?}");
+    let see_i = texts.iter().position(|t| t.as_str() == "  See the log.");
     assert_eq!(
-        texts.iter().find(|t| t.as_str() == "On it."),
-        Some(&"On it.".to_string()),
-        "theirs starts at column 0: {texts:?}"
+        see_i,
+        texts
+            .iter()
+            .position(|t| t.as_str() == "  Landed.")
+            .map(|i| i + 1)
     );
     assert!(!texts
         .iter()
@@ -289,7 +306,7 @@ async fn messages_reply_board_contracts() {
     assert_eq!(texts[landed_i - 1].trim(), "candor", "{texts:?}");
     assert!(texts[ship_i + 1].trim().is_empty(), "{texts:?}");
     assert_eq!(owners3[ship_i], Some(0), "{owners3:?}");
-    let onit_i = texts.iter().position(|t| t.as_str() == "On it.").unwrap();
+    let onit_i = texts.iter().position(|t| t.as_str() == "  On it.").unwrap();
     assert_eq!(owners3[onit_i], Some(1), "{owners3:?}");
     assert_eq!(owners3[landed_i], Some(3), "{owners3:?}");
     // The shared row builder: a field no source holds prints nothing.
@@ -603,7 +620,7 @@ fn fixture_projection() -> serde_json::Value {
 
 /// The You tab: rows read the projection's `you` array
 /// (newest first, one per session, unread off the chat-id read marks) and
-/// the detail paints the typed turn right, the reply left, per item.
+/// the detail paints both turns left-aligned, per item.
 #[tokio::test]
 async fn messages_you_tab_contract() {
     use super::super::LayoutView;
@@ -637,7 +654,23 @@ async fn messages_you_tab_contract() {
             {"session_id":"fresh","name":"gavin","last_ts":"2026-10-01T10:00:00Z","items":[{"ts":"2026-10-01T09:30:00Z","typed_text":"mid-turn follow-up","reply_text":"Working on it."},{"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."}]},
         ],
     }));
-    b.col2 = ChatTab::You;
+    // You is column 1's first row; Enter on it opens the user's chats.
+    assert!(
+        matches!(b.tree_rows().first(), Some(TreeRow::You)),
+        "{:?}",
+        b.tree_rows()
+    );
+    b.cursors[0] = 0;
+    b.col = Col::Tree;
+    super::keys(&mut view, b"\r", &mut tokio::io::sink())
+        .await
+        .unwrap();
+    let b = view.messages_board.as_mut().unwrap();
+    assert_eq!(b.col2, ChatTab::You);
+    assert!(
+        b.chats_column(50)[0].text.trim() == "You",
+        "no tab strip under You"
+    );
     let rows = b.chat_rows("");
     assert_eq!(rows.len(), 2, "{rows:?}");
     assert!(
@@ -657,21 +690,20 @@ async fn messages_you_tab_contract() {
         marks.get("you:fresh"),
         Some(&"2026-10-01T10:00:00Z".to_string())
     );
-    // The detail: typed right-aligned, reply left-aligned, title names it.
+    // The detail: both turns left-aligned under their labels.
     let (lines3, _) = b.thread_lines(50);
     let texts: Vec<String> = lines3.iter().map(|l| l.text.clone()).collect();
     assert!(texts[0].starts_with("gavin"), "{texts:?}");
     let typed_i = texts
         .iter()
-        .position(|t| t.ends_with("why did the gate refuse?"))
+        .position(|t| t.as_str() == "  why did the gate refuse?")
         .expect("typed bubble");
-    assert_eq!(texts[typed_i].chars().count(), 49, "right edge: {texts:?}");
-    assert_eq!(
+    assert_eq!(texts[typed_i - 1], "You", "{texts:?}");
+    assert!(
         texts
             .iter()
-            .find(|t| t.as_str() == "Because the base was stale."),
-        Some(&"Because the base was stale.".to_string()),
-        "reply starts at column 0: {texts:?}"
+            .any(|t| t.as_str() == "  Because the base was stale."),
+        "{texts:?}"
     );
     // Navigation needs no column-1 selection: the You tab is session-wide,
     // and the detail's j/k walks the item bubbles, not conversation rows.
