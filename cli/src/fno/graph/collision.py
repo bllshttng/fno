@@ -1,42 +1,30 @@
-"""Plan collision detection: file-overlap as a proxy for plan overlap.
+"""Plan file-surface parsing and task partitioning.
 
-Pure-Python primitive consumed by:
-  * ``fno backlog collisions check`` (cli.py)
-  * ``fno backlog triage health`` (triage.py)
-  * ``/spec`` skill at intake time (steps 3a / 11a)
+Pure-Python primitives consumed by the plugin skills:
+  * skills/execute/orchestrator.py  - partition over (task id, files) pairs
+  * skills/blueprint/scripts/mutate_doc.py - has_file_surface
 
 Public API:
-    Collision (dataclass)            - one collision record between two plans
+    HIDDEN_SHARED_OUTPUT_ROOTS      - the generated-output rule's root tuple
     parse_files_to_modify(plan_path) - normalize files from a plan's table
-    partition(items)                 - group items by shared path (node AND task grain)
-    find_collisions(...)             - compare a candidate against all pending
-    find_acknowledged_collisions(...) - reconcile acknowledged + shipped pairs
-    _load_thresholds()               - resolve severity thresholds from settings
+    has_file_surface(plan_path)      - true when a plan states a file surface
+    match_shared_root(path, roots)   - the shared-output root a path falls under
+    partition(items, shared_roots)   - group items by shared path (task grain)
 
-Severity model (configurable; see ``_load_thresholds``):
-    high   -> shared count >= high_count OR shared/min(set_sizes) >= high_ratio
-    medium -> shared count == medium_count OR shared/max(set_sizes) >= medium_ratio
-    low    -> shared count == 1 (no further overlap signals)
-
-Action inference (deterministic):
-    shared < 50% of the wider surface -> coordinate
-    shared >= 50% of the wider surface AND candidate subset other_files -> absorb (older plan covers everything)
-    shared >= 50% of the wider surface AND other_files subset candidate -> supersede (new plan covers more)
-    shared >= 50% of the wider surface AND other is older -> absorb
-    everything else -> coordinate (both ship; rebase second to land)
+The file-collision decision itself (thresholds, severity scoring, action
+inference, acknowledged reconciliation) is native: the collision engine in
+crates/fno-agents/src/backlog/collision.rs, fed by cutover.rs
+collision_thresholds. The Python engine that mirrored it died with its
+last callers when the graph CLI's collisions sub-app and triage health
+went native; this module keeps only what the skills still import.
 """
 from __future__ import annotations
 
 import posixpath
 import re
 import sys
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Collection, Iterable, Literal, TypedDict, cast
-
-# Distinguishes "node carries no plan_path" from "node is not on the graph";
-# both are self, but for different reasons and a bare None conflates them.
-_UNSET_PLAN = object()
+from typing import Collection
 
 # Hidden shared-output roots (the generated-output rule): two tasks writing
 # under one of these directories collide even when no literal path overlaps.
@@ -50,68 +38,6 @@ HIDDEN_SHARED_OUTPUT_ROOTS = (
     "docs/",
     "internal/",
 )
-
-Severity = Literal["low", "medium", "high"]
-Action = Literal["coordinate", "absorb", "supersede"]
-ResolvedStatus = Literal["done", "merged"]
-
-
-class CollisionThresholds(TypedDict):
-    """Severity scoring thresholds. Keys are stringly-typed elsewhere; this
-    TypedDict catches typos at the call site instead of producing a KeyError
-    or silent miss inside ``_classify``."""
-
-    high_count: float
-    high_ratio: float
-    medium_count: float
-    medium_ratio: float
-
-
-# Default thresholds (v1 heuristics; tunable via settings.yaml). Derived from
-# the Pydantic CollisionThresholdsBlock so the model is the single source of
-# truth: this is the model's defaults, not an independent copy.
-def _default_thresholds() -> CollisionThresholds:
-    from fno.config import CollisionThresholdsBlock
-
-    return CollisionThresholdsBlock().model_dump()  # type: ignore[return-value]
-
-
-# Lazy on purpose: partition() must import under a dep-less python (the
-# orchestrator's --ready path runs there), so the fno.config import rides the
-# first thresholds read, never the module import. The public
-# DEFAULT_THRESHOLDS attribute resolves through module __getattr__ below, so
-# `from fno.graph.collision import DEFAULT_THRESHOLDS` still yields the dict.
-_DEFAULT_THRESHOLDS: CollisionThresholds | None = None
-
-
-def _default_thresholds_loaded() -> CollisionThresholds:
-    global _DEFAULT_THRESHOLDS
-    if _DEFAULT_THRESHOLDS is None:
-        _DEFAULT_THRESHOLDS = _default_thresholds()
-    return _DEFAULT_THRESHOLDS
-
-
-def __getattr__(name: str):
-    if name == "DEFAULT_THRESHOLDS":
-        return _default_thresholds_loaded()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-@dataclass(frozen=True)
-class Collision:
-    with_node_id: str
-    with_node_title: str
-    with_plan_path: str
-    shared_files: list[str]
-    candidate_only_files: list[str]
-    other_only_files: list[str]
-    severity: Severity
-    recommended_action: Action
-    rationale: str
-    # Hidden tie-breaker for sorting; populated when find_collisions builds
-    # the record. Not part of the user-visible payload.
-    _other_created_at: str = field(default="", repr=False, compare=False)
-
 
 # ---------------------------------------------------------------------------
 # File-table parser
@@ -233,11 +159,11 @@ def parse_files_to_modify(plan_path: Path) -> set[str]:
 
 
 def has_file_surface(plan_path: Path) -> bool:
-    """True when a plan states a file surface the collision check can compare.
+    """True when a plan states a file surface a collision check can compare.
 
-    False means the check is UNEVALUATED, not clean: ``find_collisions`` returns
-    an empty list either way, so a caller that needs to tell "compared, no
-    overlap" from "had nothing to compare" must ask here first.
+    False means the check is UNEVALUATED, not clean: an empty surface and a
+    clean comparison both yield no findings, so a caller that needs to tell
+    "compared, no overlap" from "had nothing to compare" must ask here first.
     """
     return bool(parse_files_to_modify(plan_path))
 
@@ -290,7 +216,8 @@ def partition(
         return node
 
     def union(left: str, right: str) -> None:
-        left_root, right_root = find(left), find(right)
+        left_root = find(left)
+        right_root = find(right)
         if left_root != right_root:
             parent[right_root] = left_root
 
@@ -320,11 +247,6 @@ def partition(
     return ordered, unevaluated
 
 
-def resolve_plan_path(plan_path: str) -> Path:
-    """Resolve a graph-stored ``plan_path`` (absolute, ``~``, or repo-relative)."""
-    return _resolve_plan_path(plan_path, _find_repo_root())
-
-
 def _scan_one(path: Path) -> set[str]:
     """Read a single markdown file and pull out its files-to-modify set."""
     try:
@@ -346,427 +268,3 @@ def _scan_one(path: Path) -> set[str]:
         if any(heading_text.startswith(h) for h in _FILE_HEADINGS):
             found |= _extract_files_from_section(text, idx)
     return found
-
-
-# ---------------------------------------------------------------------------
-# Threshold loading
-# ---------------------------------------------------------------------------
-
-
-def _load_thresholds(
-    project_settings: Path | None = None,
-    user_settings: Path | None = None,
-) -> dict[str, float]:
-    """Resolve severity thresholds from the model.
-
-    Single source of truth is the Pydantic ``CollisionThresholdsBlock`` read via
-    ``load_settings().collision.severity_thresholds``; a malformed or
-    negative per-key value degrades to the model default (with a WARNING) inside
-    the model's own sanitizer, so this can never break the load. Returns a fresh
-    dict each call so callers can mutate freely.
-
-    ``project_settings`` / ``user_settings`` are honored for callers (tests)
-    pointing at explicit temp files: they are merged through the SAME model via
-    ``config.settings_from_files`` (project beats user). No private hand-parser
-    or per-module default set remains.
-    """
-    from fno.config import load_settings, settings_from_files
-
-    try:
-        if project_settings is None and user_settings is None:
-            block = load_settings().collision.severity_thresholds
-        else:
-            explicit = [p for p in (project_settings, user_settings) if p is not None]
-            block = settings_from_files(explicit).collision.severity_thresholds
-        return dict(block.model_dump())
-    except Exception as exc:
-        # Fail-open: a malformed UNRELATED setting must not abort collision
-        # detection; fall back to default thresholds. The old loader only read
-        # config.collision.severity_thresholds.
-        print(
-            f"Warning: collision thresholds: settings validation failed ({exc}); "
-            "using defaults",
-            file=sys.stderr,
-        )
-        return cast("dict[str, float]", dict(_default_thresholds_loaded()))
-
-
-# ---------------------------------------------------------------------------
-# Collision detection
-# ---------------------------------------------------------------------------
-
-
-_SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
-
-
-_repo_root_cache: tuple[bool, Path] | None = None
-
-
-def _find_repo_root() -> Path:
-    """Best-effort repo root: ``git rev-parse --show-toplevel`` then CWD.
-
-    Used to resolve relative ``plan_path`` entries that were stored as
-    repo-relative strings (the canonical shape on intake). Falls back to
-    the current working directory when not in a git checkout - tests
-    inject a tmp_path-rooted shape so the fallback is fine there.
-
-    Memoized for the lifetime of the process. ``cmd_health`` calls
-    ``find_collisions`` once per pending node; without the cache that is N
-    subprocess invocations of ``git rev-parse``. The fallback path emits a
-    one-shot stderr warning so a misconfigured environment is visible.
-    """
-    global _repo_root_cache
-    if _repo_root_cache is not None:
-        _, cached = _repo_root_cache
-        return cached
-
-    import subprocess
-
-    try:
-        out = subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"],
-            stderr=subprocess.DEVNULL, text=True,
-        ).strip()
-        if out:
-            root = Path(out)
-            _repo_root_cache = (True, root)
-            return root
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-
-    fallback = Path.cwd()
-    _repo_root_cache = (False, fallback)  # the bool IS the degrade signal; see below
-    print(
-        "Warning: git rev-parse failed; resolving plan paths against cwd "
-        f"({fallback}). Cross-collision detection may produce false negatives.",
-        file=sys.stderr,
-    )
-    return fallback
-
-
-def repo_root_resolution_degraded() -> bool:
-    """True once repo-root resolution has fallen back to the cwd.
-
-    That fallback resolves plan paths against the wrong root, so collision
-    comparisons can come back false-negative, and a frontier built on them
-    OVERSTATES what is safe to dispatch. The warning above says so on stderr
-    and dies there; a caller assembling gating evidence needs it as a value it
-    can put in a report. Reads the memo rather than re-probing, so it reflects
-    the resolution the comparisons in this process actually used.
-    """
-    return _repo_root_cache is not None and not _repo_root_cache[0]
-
-
-def _resolve_plan_path(plan_path: str, repo_root: Path) -> Path:
-    """Resolve a stored ``plan_path`` to an absolute Path.
-
-    Handles three shapes seen on the live graph:
-      1. Absolute (`/abs/path/to/plan.md`) - returned as-is.
-      2. ``~`` expanded (`~/vault/plans/...`) - tilde-expanded.
-      3. Repo-relative (`internal/fno/plans/...`) - joined to repo_root.
-    """
-    if not plan_path:
-        return Path("")
-    if plan_path.startswith("~"):
-        return Path(plan_path).expanduser()
-    p = Path(plan_path)
-    if p.is_absolute():
-        return p
-    return repo_root / plan_path
-
-
-def _is_pending_for_collision(entry: dict) -> bool:
-    """A node is collision-eligible if it has a plan and is not done/deferred/superseded."""
-    if entry.get("type") == "roadmap":
-        return False
-    if entry.get("completed_at"):
-        return False
-    status = entry.get("status", "ready")
-    if status in ("done", "deferred", "superseded"):
-        return False
-    if not entry.get("plan_path"):
-        return False
-    return True
-
-
-def _classify(
-    candidate: set[str],
-    other: set[str],
-    thresholds: dict[str, float],
-) -> tuple[Severity, list[str]]:
-    """Return (severity, sorted-shared-files) for two file sets."""
-    shared = sorted(candidate & other)
-    if not shared:
-        return ("low", [])  # caller filters empty
-    n_shared = len(shared)
-    min_set = min(len(candidate), len(other)) or 1
-    max_set = max(len(candidate), len(other)) or 1
-    high_count = thresholds["high_count"]
-    high_ratio = thresholds["high_ratio"]
-    medium_count = thresholds["medium_count"]
-    medium_ratio = thresholds["medium_ratio"]
-
-    if n_shared >= high_count or (n_shared / min_set) >= high_ratio:
-        return ("high", shared)
-    if n_shared >= medium_count or (n_shared / max_set) >= medium_ratio:
-        return ("medium", shared)
-    return ("low", shared)
-
-
-def _infer_action(
-    candidate: set[str],
-    other: set[str],
-    other_created_at: str,
-    candidate_created_at: str,
-    severity: Severity,
-) -> Action:
-    """Infer the recommended action from set relationships and ages."""
-    shared = candidate & other
-    if not shared:
-        return "coordinate"
-    # Half of the WIDER surface, which is what "50% of both sides" means. The
-    # narrower side is always satisfied by a small plan inside a large one, so
-    # dividing by it recommends folding a two-file bug into a thirteen-file
-    # feature that happens to open the same files.
-    widest = max(len(candidate), len(other)) or 1
-    if (len(shared) / widest) < 0.5:
-        return "coordinate"
-    if candidate < other:
-        return "absorb"
-    if other < candidate:
-        return "supersede"
-    if other_created_at and candidate_created_at and other_created_at < candidate_created_at:
-        return "absorb"
-    return "coordinate"
-
-
-def _build_rationale(
-    candidate: set[str],
-    other: set[str],
-    shared: list[str],
-    other_id: str,
-    severity: Severity,
-    action: Action,
-) -> str:
-    """Produce a human-readable rationale string."""
-    files_preview = ", ".join(shared[:3])
-    if len(shared) > 3:
-        files_preview += f", ... ({len(shared)} total)"
-    base = (
-        f"{len(shared)} shared files ({files_preview}) "
-        f"of {len(candidate)} in this plan and {len(other)} in {other_id}"
-    )
-    if action == "absorb":
-        return base + f"; {other_id} has wider scope, so absorbing your changes into {other_id} is the cleanest path."
-    if action == "supersede":
-        return base + f"; this plan covers everything {other_id} touches plus more, so superseding {other_id} is the cleanest path."
-    if severity == "low":
-        return base + "; consider splitting the overlap into a shared dependency rather than two parallel touches."
-    return base + "; both plans can ship if the second one rebases on the first."
-
-
-def _claims_default(plan_path: Path) -> str | None:
-    """Default the self-exclusion from the plan's own claimed ids.
-
-    A plan intaked against a node collides with that node's plan at HIGH, the
-    exact severity meant to stop an operator, so a caller that forgets
-    ``self_id`` manufactures a reflexive finding. The plan file is already in
-    hand here, so the default lives in this one place rather than in each
-    caller. In practice only a ``collisions check`` run with no ``--self-id``
-    reaches it: ``backlog/advance.py`` and ``graph/triage.py`` both pass one
-    explicitly, and this default is what covers the path they do not. Claims are
-    read by the shared ``_intake.plan_claims`` parser (both ``claims:`` and
-    ``node:`` - 41% of plans carry only the latter). One declared id is used;
-    zero or several leave the behavior unchanged, and an explicit ``self_id``
-    still wins because this only runs when it is None.
-    """
-    from fno.graph._intake import plan_claims
-
-    target = plan_path / "00-INDEX.md" if plan_path.is_dir() else plan_path
-    ids = plan_claims(str(target))
-    return next(iter(ids)) if len(ids) == 1 else None
-
-
-def find_collisions(
-    candidate_plan_path: Path,
-    graph: Iterable[dict],
-    *,
-    self_id: str | None = None,
-    thresholds: dict[str, float] | None = None,
-) -> list[Collision]:
-    """Compare candidate plan against all pending plans on the graph.
-
-    self_id: optional node ID of the candidate plan itself, to exclude
-    self-collisions when the candidate has already been intaked.
-
-    thresholds: optional override; when None, ``_load_thresholds()`` resolves
-    from project + user + default layers. Tests inject a fixed dict to avoid
-    touching the real settings.
-
-    Returns collisions sorted by severity descending (high first), then by
-    node id ASC for stable output.
-    """
-    if thresholds is None:
-        thresholds = _load_thresholds()
-
-    graph = list(graph)
-    if self_id is None:
-        # The claimed node is SELF only when this file is the plan it already
-        # registered, or when it has registered none yet. A DIFFERENT plan
-        # drafted against the same node genuinely overlaps that node's own
-        # plan, and excluding it would hide the one collision worth seeing.
-        claimed = _claims_default(candidate_plan_path)
-        if claimed:
-            registered = next(
-                (e.get("plan_path") for e in graph if e.get("id") == claimed), _UNSET_PLAN
-            )
-            if registered is _UNSET_PLAN or not registered:
-                self_id = claimed
-            elif (
-                _resolve_plan_path(str(registered), _find_repo_root()).resolve()
-                == candidate_plan_path.resolve()
-            ):
-                self_id = claimed
-
-    out: list[Collision] = []
-    candidate_files = parse_files_to_modify(candidate_plan_path)
-    if not candidate_files:
-        return out
-
-    # Resolve candidate created_at if it's already on the graph (for action
-    # inference's age tie-breaker). Default to empty string when absent.
-    candidate_created = ""
-    if self_id:
-        for entry in graph:
-            if entry.get("id") == self_id:
-                candidate_created = entry.get("created_at") or ""
-                break
-
-    repo_root = _find_repo_root()
-    comparators: list[tuple[dict, str, set[str]]] = []
-    for entry in graph:
-        if not _is_pending_for_collision(entry):
-            continue
-        if self_id and entry.get("id") == self_id:
-            continue
-        other_plan = entry.get("plan_path")
-        if not other_plan:
-            continue
-        other_path = _resolve_plan_path(other_plan, repo_root)
-        other_files = parse_files_to_modify(other_path)
-        if not other_files:
-            continue
-        comparators.append((entry, other_plan, other_files))
-
-    # One partition decides who is compared: the candidate's group-mates are
-    # exactly the plans sharing a file. Severity still comes from the pair's
-    # shared count and thresholds, so the verdict per pair is unchanged.
-    candidate_key = "<candidate>"
-    groups, _unevaluated = partition(
-        [(candidate_key, candidate_files)]
-        + [(f"other:{i}", files) for i, (_, _, files) in enumerate(comparators)]
-    )
-    by_key = {f"other:{i}": pair for i, pair in enumerate(comparators)}
-    for group in groups:
-        if candidate_key not in group:
-            continue
-        for key in group - {candidate_key}:
-            entry, other_plan, other_files = by_key[key]
-            severity, shared_sorted = _classify(candidate_files, other_files, thresholds)
-            if not shared_sorted:
-                # The partition normalizes paths this comparison does not; a
-                # group mate with no literal shared path is no collision.
-                continue
-            action = _infer_action(
-                candidate_files,
-                other_files,
-                entry.get("created_at") or "",
-                candidate_created,
-                severity,
-            )
-            rationale = _build_rationale(
-                candidate_files,
-                other_files,
-                shared_sorted,
-                entry.get("id", "<unknown>"),
-                severity,
-                action,
-            )
-            out.append(
-                Collision(
-                    with_node_id=entry.get("id", "<unknown>"),
-                    with_node_title=entry.get("title", ""),
-                    with_plan_path=str(other_plan),
-                    shared_files=shared_sorted,
-                    candidate_only_files=sorted(candidate_files - other_files),
-                    other_only_files=sorted(other_files - candidate_files),
-                    severity=severity,
-                    recommended_action=action,
-                    rationale=rationale,
-                    _other_created_at=entry.get("created_at") or "",
-                )
-            )
-
-    out.sort(key=lambda c: (_SEVERITY_ORDER[c.severity], c.with_node_id))
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Acknowledged-collision reconciliation
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class AcknowledgedReconciliation:
-    """A node that acknowledged a collision which has now resolved.
-
-    The user accepted the collision at spec time; the colliding plan has
-    since shipped. Triage health surfaces this so the user can verify the
-    conflict actually resolved cleanly, or notice that it didn't.
-    """
-
-    node_id: str
-    node_title: str
-    resolved_via: str  # the colliding node's id
-    resolved_via_title: str
-    resolved_via_status: ResolvedStatus
-
-
-def find_acknowledged_collisions(graph: Iterable[dict]) -> list[AcknowledgedReconciliation]:
-    """Find nodes whose acknowledged collisions have since shipped.
-
-    A node carries ``collisions_acknowledged: list[str]`` of ab-IDs the user
-    accepted at spec time. When any of those referenced nodes have
-    ``status == "done"`` (or a ``merge_status == "merged"``), surface a
-    reconciliation entry so the user can verify the conflict resolved.
-
-    The ``__skipped_check__`` sentinel (written by ``--no-collision-check``)
-    is ignored because there is no specific other node to reconcile against.
-    """
-    entries = list(graph)
-    by_id = {e["id"]: e for e in entries if isinstance(e.get("id"), str)}
-    out: list[AcknowledgedReconciliation] = []
-    for e in entries:
-        ack = e.get("collisions_acknowledged") or []
-        if not isinstance(ack, list):
-            continue
-        for ref_id in ack:
-            if not isinstance(ref_id, str) or ref_id == "__skipped_check__":
-                continue
-            other = by_id.get(ref_id)
-            if other is None:
-                continue
-            status = other.get("status", "")
-            merge_status = other.get("merge_status", "")
-            if status == "done" or merge_status == "merged":
-                out.append(
-                    AcknowledgedReconciliation(
-                        node_id=e["id"],
-                        node_title=e.get("title", ""),
-                        resolved_via=ref_id,
-                        resolved_via_title=other.get("title", ""),
-                        resolved_via_status="merged" if merge_status == "merged" else status,
-                    )
-                )
-    out.sort(key=lambda r: (r.node_id, r.resolved_via))
-    return out
