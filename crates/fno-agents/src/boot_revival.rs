@@ -154,12 +154,16 @@ where
     for name in leads {
         rows.push(revive_fn(home, name));
     }
-    for chunk in workers.chunks(REVIVE_CONCURRENCY) {
+    // Chunks iterate the RESOLVED workers only: a worker whose resolution
+    // failed already owns its failed row from resolve_failed, and a second
+    // attempt through the batch would record the name twice and retry it
+    // twice.
+    for chunk in planned.chunks(REVIVE_CONCURRENCY) {
         let revive = &revive_fn;
         std::thread::scope(|s| {
             let handles: Vec<_> = chunk
                 .iter()
-                .map(|name| {
+                .map(|(name, _)| {
                     let home = home.clone();
                     let value = name.clone();
                     let handle = s.spawn(move || revive(&home, &value));
@@ -671,6 +675,23 @@ pub(crate) fn rerun_failed(home: &AgentsHome) -> i32 {
         }
     };
     let boot = body.boot;
+    // A receipt from an earlier boot selects rows against that boot's world:
+    // a worker stopped during the current boot would read eligible against
+    // the old stamp. Refuse rather than rerun the wrong boot.
+    match boot_time() {
+        Some(now) if ran_this_boot(Some(boot), now) => {}
+        Some(now) => {
+            eprintln!(
+                "fno agents session recover: receipt {} is from an earlier boot (stamp {boot}, now {now}); this boot has not produced its own receipt yet",
+                receipt.display()
+            );
+            return 1;
+        }
+        None => {
+            eprintln!("fno agents session recover: boot time unreadable; refusing to rerun against an unverifiable receipt");
+            return 1;
+        }
+    }
     let old_rows = body.rows;
     let rerun: HashSet<String> = old_rows
         .iter()
@@ -1099,5 +1120,64 @@ mod tests {
             &home,
         );
         assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn a_resolution_failure_is_attempted_once_not_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(dir.path());
+        let workers = vec!["bad".to_string(), "good".to_string()];
+        let calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let c1 = calls.clone();
+        let rows = revive_batch(
+            &home,
+            &[],
+            &workers,
+            |_plan| {},
+            move |_home, name| {
+                c1.lock().unwrap().push(name.to_string());
+                ReceiptRow::new(name, "revived", "")
+            },
+            |_home, name| {
+                if name == "bad" {
+                    Err("no route on the row".to_string())
+                } else {
+                    Ok(plan_fixture(name, None))
+                }
+            },
+        );
+        let bad: Vec<&ReceiptRow> = rows.iter().filter(|r| r.name == "bad").collect();
+        assert_eq!(
+            bad.len(),
+            1,
+            "one row for a resolve-failed worker: {rows:?}"
+        );
+        assert_eq!(bad[0].outcome, "revived", "{rows:?}");
+        let log = calls.lock().unwrap();
+        assert_eq!(
+            log.iter().filter(|n| n.as_str() == "bad").count(),
+            1,
+            "the resolve-failed worker rides the retry loop only, never the batch: {log:?}"
+        );
+    }
+
+    #[test]
+    fn rerun_refuses_a_receipt_from_an_earlier_boot() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(dir.path());
+        std::fs::create_dir_all(home.root()).unwrap();
+        let receipt = dir.path().join(RECEIPT_FILE);
+        let old_boot = boot_time().unwrap() - 86_400;
+        write_receipt(
+            &receipt,
+            old_boot,
+            &[ReceiptRow::new(
+                "folio",
+                "failed",
+                "claude respawn 33334444 exited 16",
+            )],
+        );
+        let code = rerun_failed(&home);
+        assert_eq!(code, 1, "a previous boot's receipt is not this boot's news");
     }
 }
