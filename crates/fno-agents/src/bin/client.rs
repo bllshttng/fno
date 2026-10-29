@@ -2303,6 +2303,15 @@ fn maybe_run_spawn(
             Ok(None) => fno_agents::spawn_cwd::resolve_dispatch_cwd(params),
         }
     };
+    // `[sandbox] provider`: refuse a spawn the box cannot carry before the
+    // guard and the gate; the box itself comes up after the gate admits.
+    let boxed = match fno_agents::sandbox_launch::check(&cwd, provider, public_substrate) {
+        Ok(boxed) => boxed,
+        Err((code, reason)) => {
+            eprintln!("fno-agents spawn: {reason}");
+            return Some(code);
+        }
+    };
 
     // The fleet-law block composes for the WORKER's cwd (a --cwd foreign-repo
     // spawn must not inherit the spawner's repo freezes), after the dispatch
@@ -2455,6 +2464,16 @@ fn maybe_run_spawn(
             }
             Some(outcome.exit_code)
         }};
+    }
+
+    if boxed {
+        if let Err((code, reason)) = fno_agents::sandbox_launch::arm(home, &cwd) {
+            eprintln!("fno-agents spawn: [sandbox] devcontainer refused: {reason}");
+            if let Some(g) = gate_guard.as_mut() {
+                g.release();
+            }
+            return Some(code);
+        }
     }
 
     match (provider, substrate) {

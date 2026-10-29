@@ -1508,3 +1508,156 @@ fn install_fake_claude_cloud(bin_dir: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
+
+/// `[sandbox] provider = "devcontainer"`: a headless spawn asks the daemon for
+/// the plan once, brings the box up with the socket-dir mount, probes the
+/// daemon from inside, and runs the lane under `devcontainer exec` with the
+/// lane env in a file, never the argv (AC3). A failing probe refuses 84
+/// naming the recreate (AC6); a thread spawn refuses 2 naming `--as
+/// headless` (AC4); `none` never calls devcontainer (AC5).
+#[test]
+fn client_spawn_devcontainer_boxes_the_headless_lane() {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::PermissionsExt;
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!("skipping client_spawn_devcontainer_boxes_the_headless_lane: binary not found");
+        return;
+    }
+    let fake_path = tmpdir("box-bin");
+    std::fs::write(
+        fake_path.join("devcontainer"),
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DEVCONTAINER_LOG\"\n\
+         case \"$*\" in *'fno-agents status'*) exit \"${PROBE_EXIT:-0}\" ;; esac\n\
+         echo boxed\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        fake_path.join("devcontainer"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let run = |provider: &str, extra: &[&str], probe_exit: &str| {
+        let root = tmpdir("box-home");
+        let home = AgentsHome::at(root.clone());
+        std::fs::create_dir_all(home.sandbox_sock_dir()).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(home.supervisor_sock()).unwrap();
+        let plan = fno_agents::sandbox_launch::launch_for(
+            fno_agents::sandbox_launch::SandboxProvider::Devcontainer,
+            &home.sandbox_sock_dir(),
+        );
+        let methods = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = methods.clone();
+        std::thread::spawn(move || {
+            for mut conn in listener.incoming().flatten() {
+                let mut len = [0u8; 4];
+                if conn.read_exact(&mut len).is_err() {
+                    continue;
+                }
+                let mut body = vec![0u8; u32::from_le_bytes(len) as usize];
+                let _ = conn.read_exact(&mut body);
+                let req: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+                let method = req["method"].as_str().unwrap_or_default().to_string();
+                let reply = if method == "agent.sandbox-plan" {
+                    serde_json::json!({ "id": req["id"], "result": plan })
+                } else {
+                    serde_json::json!({
+                        "id": req["id"],
+                        "error": { "code": -32601, "message": "fake" },
+                    })
+                };
+                seen.lock().unwrap().push(method);
+                let out = serde_json::to_vec(&reply).unwrap();
+                let _ = conn.write_all(&(out.len() as u32).to_le_bytes());
+                let _ = conn.write_all(&out);
+            }
+        });
+        let config = tmpdir("box-config").join("config.toml");
+        std::fs::write(&config, format!("[sandbox]\nprovider = \"{provider}\"\n")).unwrap();
+        let log = tmpdir("box-log").join("devcontainer.log");
+        let out = std::process::Command::new(&bin)
+            .envs(fno_agents::test_run::self_owner_env())
+            .args(["spawn", "--name", "boxed", "hello", "--harness", "claude"])
+            .args(extra)
+            .arg("--cwd")
+            .arg(tmpdir("box-cwd"))
+            .env("FNO_SPAWN_GATE", "0")
+            .env("FNO_E2E", "1")
+            .env("FNO_AGENTS_HOME", &root)
+            .env("FNO_CONFIG", &config)
+            .env("DEVCONTAINER_LOG", &log)
+            .env("PROBE_EXIT", probe_exit)
+            .env_remove("FNO_SUPERVISOR_SOCKET")
+            .env("PATH", path_with(&fake_path))
+            .output()
+            .expect("failed to run fno-agents");
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
+        let methods = methods.lock().unwrap().clone();
+        (out, calls, methods, home)
+    };
+
+    let (out, calls, methods, home) = run("devcontainer", &["--once"], "0");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        methods
+            .iter()
+            .filter(|m| *m == "agent.sandbox-plan")
+            .count(),
+        1,
+        "{methods:?} stderr: {stderr}"
+    );
+    let lines: Vec<&str> = calls.lines().collect();
+    assert_eq!(lines.len(), 3, "up, probe, lane: {calls} stderr: {stderr}");
+    assert!(
+        lines[0].starts_with("up --workspace-folder "),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[0].ends_with(&format!(
+            "--mount type=bind,source={},target=/fno-state/sock",
+            home.sandbox_sock_dir().display()
+        )),
+        "{}",
+        lines[0]
+    );
+    for line in &lines[1..] {
+        assert!(
+            line.starts_with("exec --workspace-folder ")
+                && line
+                    .contains("--remote-env FNO_SUPERVISOR_SOCKET=/fno-state/sock/supervisor.sock"),
+            "{line}"
+        );
+    }
+    assert!(lines[1].ends_with("fno-agents status"), "{}", lines[1]);
+    assert!(
+        lines[2].contains(" -- /bin/sh -c ") && lines[2].contains(" claude "),
+        "{}",
+        lines[2]
+    );
+    assert!(
+        !calls.contains("FNO_AGENT_FROM"),
+        "lane env rides a file: {calls}"
+    );
+
+    let (out, _, _, _) = run("devcontainer", &["--once"], "13");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(84), "stderr: {stderr}");
+    assert!(stderr.contains("--remove-existing-container"), "{stderr}");
+
+    let (out, calls, methods, _) = run("devcontainer", &["--as", "thread"], "0");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "stderr: {stderr}");
+    assert!(stderr.contains("--as headless"), "{stderr}");
+    assert!(
+        calls.is_empty() && methods.is_empty(),
+        "{calls} {methods:?}"
+    );
+
+    let (_, calls, methods, _) = run("none", &["--once"], "0");
+    assert!(calls.is_empty(), "none never boxes: {calls}");
+    assert!(
+        !methods.iter().any(|m| m == "agent.sandbox-plan"),
+        "{methods:?}"
+    );
+}
