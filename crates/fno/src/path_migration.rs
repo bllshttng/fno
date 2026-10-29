@@ -33,15 +33,24 @@ fn state_root() -> Option<PathBuf> {
 }
 
 /// Whether any config source exists that could re-point `state_dir` away
-/// from the default root: the `FNO_CONFIG` pin, a repo-level settings file
-/// in `cwd`, or a global one under `home`. The fast path may only shortcut
+/// from the default root: the `FNO_CONFIG` pin, the `FNO_REPO_ROOT` pin, a
+/// repo-level settings file in `cwd`, a global one under `home`, or a
+/// worktree cwd (whose canonical checkout's own `.fno/` rides the chain
+/// even when the worktree carries none). The fast path may only shortcut
 /// when this is false - a sentinel at the default root proves nothing about
 /// a root a config file names.
-fn config_may_repoint(fno_config: bool, cwd: &Path, home: Option<&std::ffi::OsStr>) -> bool {
+fn config_may_repoint(
+    fno_config: bool,
+    fno_repo_root: bool,
+    cwd: &Path,
+    home: Option<&std::ffi::OsStr>,
+) -> bool {
     fno_config
+        || fno_repo_root
         || [".fno/config.toml", ".fno/settings.yaml"]
             .iter()
             .any(|rel| cwd.join(rel).is_file())
+        || cwd.join(".git").is_file()
         || home.is_some_and(|home| {
             ["config.toml", "settings.yaml"]
                 .iter()
@@ -61,6 +70,7 @@ pub fn run_if_needed() {
     // re-point state_dir away from this default root.
     let config_may_repoint = config_may_repoint(
         std::env::var_os("FNO_CONFIG").is_some(),
+        std::env::var_os("FNO_REPO_ROOT").is_some(),
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         std::env::var_os("HOME").as_deref(),
     );
