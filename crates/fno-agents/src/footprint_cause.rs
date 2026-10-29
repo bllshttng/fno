@@ -166,23 +166,29 @@ fn attributed_command(command: &str) -> bool {
 }
 
 /// The `worktrees/<name>` tail a cluster of commands shares - the one line
-/// that explains a spike ("that tree's test suite is running").
+/// that explains a spike ("that tree's test suite is running"). The walk
+/// mirrors main's `_WORKTREE_RE` (`[\w~./-]*worktrees/[\w.-]+`): the prefix
+/// class carries `/`, the tree name does not.
 fn worktree_of(command: &str) -> Option<String> {
     let abs = command.find("worktrees/")?;
     let bytes = command.as_bytes();
     let mut start = abs;
-    while start > 0 && is_name_byte(bytes[start - 1]) {
+    while start > 0 && is_prefix_byte(bytes[start - 1]) {
         start -= 1;
     }
     let mut end = abs + "worktrees/".len();
-    while end < bytes.len() && is_name_byte(bytes[end]) {
+    while end < bytes.len() && is_tree_name_byte(bytes[end]) {
         end += 1;
     }
     Some(command[start..end].to_string())
 }
 
-fn is_name_byte(b: u8) -> bool {
+fn is_prefix_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'_' | b'~' | b'.' | b'/' | b'-')
+}
+
+fn is_tree_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-')
 }
 
 pub(crate) fn top_consumers(sustained: &[(f64, String)], n: usize) -> Vec<Value> {
