@@ -497,7 +497,7 @@ fn round_missing_journals() {
 fn round_raise_at_head_raised() {
     let fx = fixture("repo");
     let head = repo_head(&fx.repo);
-    seed_chain(&fx, [head, head], 1);
+    seed_chain(&fx, [head.as_str(), head.as_str()], 1);
     assert_case(
         &fx,
         "round raise at head raised",
@@ -518,7 +518,7 @@ fn round_raise_at_head_clear_when_the_newest_row_moved_off() {
     let fx = fixture("repo");
     let head = repo_head(&fx.repo);
     let other = "1111111111111111111111111111111111111111";
-    seed_chain(&fx, [head, other], 2);
+    seed_chain(&fx, [head.as_str(), other], 2);
     assert_case(
         &fx,
         "round raise at head clear when the newest row moved off",
@@ -538,7 +538,7 @@ fn round_raise_at_head_clear_when_the_newest_row_moved_off() {
 fn round_raise_at_head_clear_when_nothing_blocks() {
     let fx = fixture("repo");
     let head = repo_head(&fx.repo);
-    seed_chain(&fx, [head, head], 0);
+    seed_chain(&fx, [head.as_str(), head.as_str()], 0);
     assert_case(
         &fx,
         "round raise at head clear when nothing blocks",
