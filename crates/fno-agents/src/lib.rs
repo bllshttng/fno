@@ -535,6 +535,7 @@ pub mod revive_proof;
 pub mod rm_receipt;
 pub mod rm_tombstone;
 pub mod role_cwd;
+pub mod role_grant;
 pub mod role_migration;
 pub mod roles;
 pub mod roster_progress;

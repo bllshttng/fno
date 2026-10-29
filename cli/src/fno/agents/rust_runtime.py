@@ -158,6 +158,9 @@ RUST_CLIENT_COMMANDS = frozenset(
         # The whole-team read: every live role and whether the registry and
         # the graph agree, over native readers in one process. A read.
         "team",
+        # The in-place role grant and reclaim: one locked registry write plus
+        # its lead-manifest and team-thread effects, no daemon. A write.
+        "role",
         # The daemon-free revival decision the spawn path calls. Client-side
         # dispatch starts nothing.
         "revival-check",
@@ -377,9 +380,6 @@ RUST_CLIENT_COMMANDS = frozenset(
 #: ``_resolve_ask_provider``) is gone; the ``AUTO_ROUTE_COMMANDS`` identity below is
 #: now the whole routing contract except for ``send``.
 PYTHON_AGENT_COMMANDS: frozenset[str] = frozenset({
-    # Human-attended in-place role grant. Pure shared-registry transaction;
-    # spawn-time grant and succession remain on the Rust-backed spawn path.
-    "role",
     # Messaging commands are not direct agents actions. They live below the
     # Python-owned `fno agents mail` subgroup and therefore never auto-route as
     # direct send, inbox, or ack Rust commands. `incident` relays argv.
@@ -874,6 +874,7 @@ _STATUS_ARG_LEAVES = {
     "truth": "--truth",
     "peek": "--peek",
     "team": "--team",
+    "role": "--role",
     "liveness": "--liveness",
 }
 

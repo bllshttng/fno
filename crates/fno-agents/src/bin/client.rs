@@ -1265,6 +1265,7 @@ async fn run(args: Vec<String>) -> i32 {
             Some("--truth") => return fno_agents::truth_cli::run_truth(&rest[1..]),
             Some("--peek") => return fno_agents::peek::run_peek(&rest[1..]),
             Some("--team") => return fno_agents::team_read::run_team(&rest[1..]),
+            Some("--role") => return fno_agents::role_grant::run_role(&rest[1..]),
             _ => {}
         }
         let has_cap = rest.iter().any(|a| a.as_str() == "--capabilities");

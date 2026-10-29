@@ -209,48 +209,10 @@ def cmd_role(
     grantor, and the receipt reports what was vacated. `--reclaim` returns a
     transferred role to its recorded grantor and never creates a session.
     """
-    from fno.agents import events
-    from fno.agents.role import RolePromotionError, promote_existing_session
+    from fno.agents.rust_runtime import refuse_without_binary
 
-    if reclaim:
-        from fno.agents.role import reclaim_role
-
-        try:
-            receipt = reclaim_role(handle or None)
-        except RolePromotionError as exc:
-            print(f"role reclaim: {exc}", file=sys.stderr)
-            raise typer.Exit(code=2) from exc
-        events.emit(
-            "agent_role_reclaimed",
-            reclaimed=receipt["reclaimed"],
-            from_holder=receipt["from_holder"],
-            scope=receipt["scope"],
-            grantor=receipt["grantor"],
-        )
-        print(json.dumps(receipt))
-        return
-
-    if not handle or not scopes:
-        print("role: HANDLE and at least one --scope are required", file=sys.stderr)
-        raise typer.Exit(code=2)
-
-    try:
-        receipt = promote_existing_session(handle, scopes)
-    except RolePromotionError as exc:
-        print(f"role: {exc}", file=sys.stderr)
-        raise typer.Exit(code=2) from exc
-
-    events.emit(
-        "agent_promoted",
-        name=receipt["promoted"],
-        level=receipt["level"],
-        scope=receipt["scope"],
-        grantor=receipt["grantor"],
-        vacated_scope=receipt["vacated_scope"],
-        vacated_level=receipt["vacated_level"],
-        stranded_subordinates=receipt["stranded_subordinates"],
-    )
-    print(json.dumps(receipt))
+    _ = (handle, scopes, reclaim)
+    refuse_without_binary("role")
 
 
 # The team command moved to fno.agents.team (file budget); the
