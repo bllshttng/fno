@@ -309,7 +309,7 @@ fn serve_loaded(
 /// child when the node has children. A child that fails to load is named,
 /// never dropped.
 fn trace_out(connection: &rusqlite::Connection, row: &Value) -> String {
-    let shared = super::trace::Shared::load();
+    let shared = super::trace::Shared::load(row);
     let mut inputs = shared.gather(row);
     for child in row
         .get("children")
