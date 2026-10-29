@@ -106,6 +106,21 @@ def test_accessors_fall_back_when_the_door_fails(monkeypatch):
     assert c.node_id_hex_width() == 8
 
 
+def test_mint_reads_the_door_once(monkeypatch):
+    # The efficiency contract of the door port: one spawn carries both knobs
+    # per mint, not one per knob.
+    calls: list = []
+
+    def counting_read(detect=None):
+        calls.append(detect)
+        return {"prefix": "xy-", "hex_width": 4}
+
+    monkeypatch.setattr("fno.rust_binary.settings_read", counting_read)
+    mid = c.mint_node_id(set())
+    assert mid.startswith("xy-") and len(c.node_id_suffix(mid)) == 4
+    assert len(calls) == 1
+
+
 # --- mint_node_id ----------------------------------------------------------
 
 

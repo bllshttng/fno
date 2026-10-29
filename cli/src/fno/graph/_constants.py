@@ -307,8 +307,17 @@ def mint_node_id(existing_ids) -> str:
     consistent snapshot and two concurrent mints cannot collide (AC2-FR).
     """
     import uuid
-    prefix = node_id_prefix()
-    width = node_id_hex_width()
+
+    from fno import rust_binary
+
+    # One door spawn serves both knobs: mint fires on nearly every node
+    # creation, and one receipt is half the subprocess cost of two calls.
+    receipt = rust_binary.settings_read() or {}
+    prefix = receipt.get("prefix")
+    if not (isinstance(prefix, str) and prefix):
+        prefix = LEGACY_PREFIX
+    width = receipt.get("hex_width")
+    width = int(width) if isinstance(width, int) else LEGACY_HEX
     archive_ids = _archived_id_pool()
     for _ in range(_MINT_MAX_ATTEMPTS):
         candidate = f"{prefix}{uuid.uuid4().hex[:width]}"
