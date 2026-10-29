@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const PAYLOAD_CODE: &str = "payload-code";
 pub(crate) const RUN_ANNOTATIONS: &str = "run-annotations";
-pub(crate) const KINDS: [&str; 2] = [PAYLOAD_CODE, RUN_ANNOTATIONS];
+pub(crate) const GREEN_VERDICT: &str = "green-verdict";
+pub(crate) const KINDS: [&str; 3] = [PAYLOAD_CODE, RUN_ANNOTATIONS, GREEN_VERDICT];
 
 fn memo_path(cwd: &Path, kind: &str, name: &str) -> Option<PathBuf> {
     let dir = crate::agents_config::pr_status_cache_dir(cwd)?.join(kind);
