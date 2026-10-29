@@ -3,14 +3,38 @@
 //! The fold writes nothing. Phases come from the graph `sessions` rows, the
 //! review span from review_invocation and review_attestation rows whose
 //! branch names the node, and tasks from the plan with the task_started and
-//! task_done events the commit hook lands. A value no source answered reads
-//! null with a reason beside it, never 0.
+//! task_done events the commit hook lands. Tool errors and refusals read
+//! the session transcripts. A value no source answered reads null with a
+//! reason beside it, never 0.
 
 use crate::wave::{plan_tasks, PlanTask};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 const PHASES: [&str; 5] = ["think", "blueprint", "execute", "review", "ship"];
+
+/// A transcript over this size is not read: the trace is an on-demand read
+/// and one runaway session must not stall it.
+const TRANSCRIPT_CAP_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The per-session counts. A transcript timestamps each, so a window can
+/// count them.
+const SESSION_KINDS: [&str; 2] = ["tool_errors", "refusals"];
+
+/// One session transcript's reading. `marks` are the timestamped tool
+/// errors and refusals a window can count.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SessionScan {
+    pub(crate) ai_turns: Option<u64>,
+    pub(crate) tool_calls: Option<u64>,
+    pub(crate) counts: BTreeMap<&'static str, Option<u64>>,
+    pub(crate) marks: Vec<(i64, &'static str)>,
+    /// Why a null count is null.
+    pub(crate) reason: Option<String>,
+    /// First and last row timestamps of the transcript.
+    pub(crate) span: Option<(i64, i64)>,
+}
 
 /// Everything the fold reads, gathered first so the fold itself is pure.
 pub(crate) struct Inputs {
@@ -20,6 +44,7 @@ pub(crate) struct Inputs {
     pub(crate) reviews: Vec<Value>,
     pub(crate) cost_usd: Option<f64>,
     pub(crate) tasks: Result<Vec<PlanTask>, String>,
+    pub(crate) scans: HashMap<String, SessionScan>,
 }
 
 impl Default for Inputs {
@@ -29,6 +54,7 @@ impl Default for Inputs {
             reviews: Vec::new(),
             cost_usd: None,
             tasks: Ok(Vec::new()),
+            scans: HashMap::new(),
         }
     }
 }
@@ -64,6 +90,40 @@ pub(crate) fn branch_names(branch: &str, node: &str) -> bool {
     })
 }
 
+/// Add `n` to `counts[kind]`, keeping a null null.
+fn add(counts: &mut Map<String, Value>, kind: &str, n: Option<u64>) {
+    let next = match (counts.get(kind), n) {
+        (Some(Value::Null), _) | (_, None) => Value::Null,
+        (Some(v), Some(n)) => json!(v.as_u64().unwrap_or(0) + n),
+        (None, Some(n)) => json!(n),
+    };
+    counts.insert(kind.into(), next);
+}
+
+fn errors_value(counts: Map<String, Value>, reasons: Map<String, Value>) -> Value {
+    let mut out = counts;
+    if !reasons.is_empty() {
+        out.insert("unread".into(), Value::Object(reasons));
+    }
+    Value::Object(out)
+}
+
+/// Merge one errors object into running totals, carrying null and reasons.
+fn merge(totals: &mut Map<String, Value>, reasons: &mut Map<String, Value>, errors: &Value) {
+    let Some(obj) = errors.as_object() else {
+        return;
+    };
+    for (k, v) in obj {
+        if k == "unread" {
+            for (rk, rv) in v.as_object().into_iter().flatten() {
+                reasons.entry(rk.clone()).or_insert_with(|| rv.clone());
+            }
+            continue;
+        }
+        add(totals, k, v.as_u64());
+    }
+}
+
 /// The trace for one node from gathered inputs.
 pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
     let id = str_of(node, "id").unwrap_or_default();
@@ -76,6 +136,11 @@ pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
         .iter()
         .map(|phase| phase_row(phase, &sessions, inp))
         .collect();
+    let mut totals = Map::new();
+    let mut reasons = Map::new();
+    for p in &phases {
+        merge(&mut totals, &mut reasons, &p["errors"]);
+    }
 
     let started: Vec<i64> = phases
         .iter()
@@ -96,6 +161,8 @@ pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
         "duration_s": started.iter().min().zip(ended.iter().max()).map(|(s, e)| (e - s).max(0) / 1000),
         "cost_usd": inp.cost_usd,
         "sessions": sessions.len(),
+        "ai_turns": sum_scans(&sessions, inp, |s| s.ai_turns),
+        "tool_calls": sum_scans(&sessions, inp, |s| s.tool_calls),
     });
     if inp.cost_usd.is_none() {
         header["cost_reason"] = json!("no cost recorded");
@@ -109,7 +176,46 @@ pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
         "phases": phases,
         "tasks": tasks,
         "tasks_reason": tasks_reason,
+        "errors": errors_value(totals, reasons),
     })
+}
+
+fn sum_scans(sessions: &[&Value], inp: &Inputs, f: fn(&SessionScan) -> Option<u64>) -> Option<u64> {
+    sessions.iter().try_fold(0u64, |acc, s| {
+        let scan = inp.scans.get(str_of(s, "session_id").unwrap_or_default())?;
+        Some(acc + f(scan)?)
+    })
+}
+
+/// One session's counts inside its phase window. A transcript that lies
+/// inside the window answers whole. One that spans other work (a lead
+/// session that ran a blueprint) counts only its marks in the window.
+fn session_counts(
+    scan: &SessionScan,
+    window: (i64, i64),
+) -> Vec<(&'static str, Option<u64>, Option<String>)> {
+    let inside = scan
+        .span
+        .is_some_and(|(first, last)| first >= window.0 && last <= window.1);
+    SESSION_KINDS
+        .iter()
+        .map(|kind| {
+            let whole = scan.counts.get(kind).copied().flatten();
+            if whole.is_none() {
+                let reason = scan.reason.clone().unwrap_or_else(|| "not read".into());
+                return (*kind, None, Some(reason));
+            }
+            if inside {
+                return (*kind, whole, None);
+            }
+            let n = scan
+                .marks
+                .iter()
+                .filter(|(at, k)| k == kind && *at >= window.0 && *at <= window.1)
+                .count() as u64;
+            (*kind, Some(n), None)
+        })
+        .collect()
 }
 
 /// One task's recorded span and outcome from its events.
@@ -182,6 +288,32 @@ fn phase_row(phase: &str, sessions: &[&Value], inp: &Inputs) -> Value {
         .filter_map(|s| str_of(s, "ended_at").and_then(ms_of))
         .collect();
     let open = rows.iter().any(|s| str_of(s, "ended_at").is_none());
+    let mut counts = Map::new();
+    let mut reasons = Map::new();
+    for s in &rows {
+        let window = (
+            str_of(s, "started_at").and_then(ms_of).unwrap_or(i64::MIN),
+            str_of(s, "ended_at").and_then(ms_of).unwrap_or(i64::MAX),
+        );
+        let missing;
+        let found = inp.scans.get(str_of(s, "session_id").unwrap_or_default());
+        let scan = match found {
+            Some(scan) => scan,
+            None => {
+                missing = SessionScan {
+                    reason: Some("not on this host".into()),
+                    ..Default::default()
+                };
+                &missing
+            }
+        };
+        for (kind, n, reason) in session_counts(scan, window) {
+            add(&mut counts, kind, n);
+            if let Some(reason) = reason {
+                reasons.insert(kind.into(), json!(reason));
+            }
+        }
+    }
     let listed: Vec<Value> = rows
         .iter()
         .map(|s| {
@@ -215,6 +347,7 @@ fn phase_row(phase: &str, sessions: &[&Value], inp: &Inputs) -> Value {
         "started_at": starts.iter().min().map(|m| stamp(*m)),
         "ended_at": if open && !derived { None } else { ends.iter().max().map(|m| stamp(*m)) },
         "sessions": listed,
+        "errors": errors_value(counts, reasons),
     });
     if row["started_at"].is_null() {
         row["start_reason"] = json!(if rows.is_empty() && !derived {
@@ -232,12 +365,114 @@ fn phase_row(phase: &str, sessions: &[&Value], inp: &Inputs) -> Value {
     row
 }
 
-/// Shared reads for one trace call: the store and the ledger, read once.
+/// Read one claude or codex transcript into counts and timestamped marks.
+pub(crate) fn scan_transcript(harness: &str, path: Option<PathBuf>) -> SessionScan {
+    let unread = |reason: String| SessionScan {
+        counts: SESSION_KINDS.iter().map(|k| (*k, None)).collect(),
+        reason: Some(reason),
+        ..Default::default()
+    };
+    let Some(path) = path else {
+        return unread(match harness {
+            "claude" | "codex" => "not on this host".to_string(),
+            other => format!("no transcript reader for {other}"),
+        });
+    };
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > TRANSCRIPT_CAP_BYTES) {
+        return unread("transcript over 64 MB".into());
+    }
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(e) => return unread(format!("transcript unreadable: {e}")),
+    };
+    if harness == "codex" {
+        // A codex rollout carries no is_error flag and no compaction windows:
+        // only its refusals are measured.
+        let rate = crate::refusal_rate::rate_from_text("codex", &raw, usize::MAX, false).ok();
+        let mut scan = unread("codex rollout carries no such count".into());
+        scan.counts.insert(
+            "refusals",
+            rate.as_ref().and_then(|r| r["refused"].as_u64()),
+        );
+        scan.tool_calls = rate.as_ref().and_then(|r| r["total"].as_u64());
+        return scan;
+    }
+    scan_claude(&raw)
+}
+
+fn scan_claude(raw: &str) -> SessionScan {
+    let mut scan = SessionScan::default();
+    let (mut turns, mut calls, mut errors, mut refusals) = (0u64, 0u64, 0u64, 0u64);
+    let mut seen = std::collections::HashSet::new();
+    for line in raw.lines() {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let at = str_of(&row, "timestamp").and_then(ms_of);
+        if let Some(t) = at {
+            scan.span = Some(scan.span.map_or((t, t), |(a, b)| (a.min(t), b.max(t))));
+        }
+        let blocks = row
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let of = |kind: &'static str| {
+            blocks
+                .iter()
+                .filter(move |b| str_of(b, "type") == Some(kind))
+        };
+        match str_of(&row, "type") {
+            Some("assistant") => {
+                let key = row
+                    .pointer("/message/id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(line);
+                turns += u64::from(seen.insert(key.to_string()));
+                calls += of("tool_use").count() as u64;
+            }
+            Some("user") => {
+                for b in of("tool_result") {
+                    let is_error = b.get("is_error").and_then(Value::as_bool);
+                    let text = match b.get("content") {
+                        Some(Value::String(s)) => s.clone(),
+                        Some(Value::Array(parts)) => {
+                            let texts: Vec<&str> =
+                                parts.iter().filter_map(|p| str_of(p, "text")).collect();
+                            texts.join("\n")
+                        }
+                        _ => String::new(),
+                    };
+                    if is_error == Some(true) {
+                        errors += 1;
+                        scan.marks.extend(at.map(|t| (t, "tool_errors")));
+                    }
+                    if crate::refusal_rate::is_refused(&text, is_error) {
+                        refusals += 1;
+                        scan.marks.extend(at.map(|t| (t, "refusals")));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    scan.ai_turns = Some(turns);
+    scan.tool_calls = Some(calls);
+    scan.counts.insert("tool_errors", Some(errors));
+    scan.counts.insert("refusals", Some(refusals));
+    scan
+}
+
+/// Shared reads for one trace call: the store, the ledger and each session
+/// transcript, read once even when an epic folds many children.
 pub(crate) struct Shared {
     events_path: PathBuf,
     store_ok: Result<(), String>,
     reviews: Vec<Value>,
     ledger: super::scorecard::LedgerIndex,
+    transcripts: crate::context_run::SessionTranscripts,
+    /// One scan per session: an epic's children often share a lead session.
+    scanned: std::cell::RefCell<HashMap<String, SessionScan>>,
 }
 
 impl Shared {
@@ -259,6 +494,8 @@ impl Shared {
             store_ok,
             reviews,
             ledger: super::scorecard::LedgerIndex::load(),
+            transcripts: crate::context_run::SessionTranscripts::default(),
+            scanned: Default::default(),
         }
     }
 
@@ -293,11 +530,32 @@ impl Shared {
             Some(p) => plan_tasks(Path::new(p)),
             None => Err("no plan".to_string()),
         };
+        let mut scans = HashMap::new();
+        for s in node
+            .get("sessions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let (Some(sid), harness) =
+                (str_of(s, "session_id"), str_of(s, "harness").unwrap_or(""))
+            else {
+                continue;
+            };
+            let scan = self
+                .scanned
+                .borrow_mut()
+                .entry(sid.to_string())
+                .or_insert_with(|| scan_transcript(harness, self.transcripts.find(sid, harness)))
+                .clone();
+            scans.insert(sid.to_string(), scan);
+        }
         Inputs {
             events,
             reviews,
             cost_usd: super::scorecard::node_cost_usd(node, id, &self.ledger),
             tasks,
+            scans,
         }
     }
 }
@@ -305,6 +563,17 @@ impl Shared {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scan(errors: u64, marks: Vec<(i64, &'static str)>) -> SessionScan {
+        let mut s = SessionScan::default();
+        for k in SESSION_KINDS {
+            s.counts.insert(k, Some(0));
+        }
+        s.counts.insert("tool_errors", Some(errors));
+        s.span = marks.first().map(|(t, _)| (*t, *t));
+        s.marks = marks;
+        s
+    }
 
     fn session(phase: &str, sid: &str, start: Option<&str>, end: Option<&str>) -> Value {
         json!({"phase": phase, "harness": "claude", "session_id": sid,
@@ -333,6 +602,30 @@ mod tests {
         assert_eq!(t["header"]["cost_reason"], "no cost recorded");
         assert!(branch_names("feature/x-aaaa-trace", "x-aaaa"));
         assert!(!branch_names("feature/x-aaaa0", "x-aaaa"));
+    }
+
+    #[test]
+    fn counts_fold_per_phase_and_an_unread_transcript_reads_null() {
+        let node = json!({"id": "x-1", "sessions": [
+            session("execute", "c", Some("2026-10-03T00:00:00Z"), Some("2026-10-03T05:00:00Z")),
+            session("ship", "gone", Some("2026-10-03T05:00:00Z"), Some("2026-10-03T06:00:00Z")),
+        ]});
+        let at = ms_of("2026-10-03T00:30:00Z").unwrap();
+        let mut scans = HashMap::new();
+        scans.insert(
+            "c".to_string(),
+            scan(2, vec![(at, "tool_errors"), (at, "tool_errors")]),
+        );
+        let inp = Inputs {
+            scans,
+            ..Default::default()
+        };
+        let t = fold(&node, &inp);
+        assert_eq!(t["phases"][2]["errors"]["tool_errors"], 2);
+        // The ship session's transcript is absent: null with a reason.
+        assert!(t["phases"][4]["errors"]["tool_errors"].is_null());
+        assert_eq!(t["errors"]["unread"]["tool_errors"], "not on this host");
+        assert!(t["errors"]["tool_errors"].is_null());
     }
 
     #[test]
