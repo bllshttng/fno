@@ -747,6 +747,16 @@ pub(crate) fn guarded_push(ctx: &PushCtx, head: &str) -> PushOutcome {
         return PushOutcome::PushFailed(err);
     }
     stamp_push(ctx);
+    if let Ok((true, full, _)) = run_labeled(
+        "pr-push",
+        &ctx.git_bin,
+        &["rev-parse", "HEAD"],
+        &ctx.cwd,
+        READ_TIMEOUT,
+    ) {
+        let run = crate::stacked_base_stamp::runner(&ctx.git_bin, &ctx.gh_bin);
+        crate::stacked_base_stamp::stamp_pushed(&ctx.cwd, &target, full.trim(), &run);
+    }
     PushOutcome::Pushed {
         sha: run_labeled(
             "pr-push",

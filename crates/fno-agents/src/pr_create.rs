@@ -703,6 +703,11 @@ fn run(a: &Args, gh: Gh) -> i32 {
             match crate::org_board::budget::run_with_timeout(&cmd, &a.cwd, CREATE_TIMEOUT) {
                 Ok(out) => {
                     print!("{}", String::from_utf8_lossy(&out));
+                    if let Ok(sha) = git(&a.cwd, &["rev-parse", "HEAD"]) {
+                        let run = crate::stacked_base_stamp::runner("git", "gh");
+                        let base = a.base.trim_start_matches("origin/");
+                        crate::stacked_base_stamp::stamp(&a.cwd, base, &sha, &run);
+                    }
                     0
                 }
                 Err(e) if e.over_budget() => {

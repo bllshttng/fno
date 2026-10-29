@@ -62,9 +62,14 @@ jobs:
     # A skip matches what the header already states: the context is simply never
     # created for a fork PR. Covering forks needs the privileged second workflow
     # described above, which this PR deliberately does not add.
+    #
+    # A PR based on the default branch skips this job for `default-base`
+    # below: its verdict needs no checkout and no cargo build, so it should
+    # hold a runner for seconds, not minutes.
     if: >-
       github.event_name == 'pull_request'
       && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.base.ref != github.event.repository.default_branch
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -93,6 +98,39 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash scripts/ci/check-stacked-base.sh "$PR_NUMBER" "$HEAD_SHA"
+
+  # The default-base answer, stamped the way the sweep stamps it. `fno do pr
+  # push` and `fno do pr create` post the same status at push time with no
+  # runner at all; this job covers a hand push. It still waits for a runner
+  # in a deep queue, which is why the CLI posts first.
+  default-base:
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.base.ref == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Stamp the default-based head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DEFAULT: ${{ github.event.repository.default_branch }}
+        run: |
+          for attempt in 1 2 3; do
+            if gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+              -f state=success \
+              -f context=stacked-base-guard \
+              -f description="base is the default branch (${DEFAULT})" \
+              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              >/dev/null; then
+              exit 0
+            fi
+            echo "status post attempt $attempt failed; retrying after a backoff" >&2
+            sleep 5
+          done
+          echo "FAIL: could not post the stacked-base-guard status for the default-based head" >&2
+          exit 1
 
   queue-guard:
     if: github.event_name == 'merge_group'
