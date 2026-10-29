@@ -861,6 +861,8 @@ fn live_law_rows() -> Vec<crate::law_match::LawRow> {
         "law".to_string(),
         "--state".to_string(),
         "live".to_string(),
+        "--limit".to_string(),
+        "0".to_string(),
         "--json".to_string(),
     ];
     let (_, stdout) = match captured_stdout(&argv, 30.0) {

@@ -187,16 +187,26 @@ pub struct LawRow {
     /// "not law", the historical behavior of every consumer below.
     #[serde(default)]
     pub lane: Option<String>,
+    #[serde(default)]
+    pub authority_source: Option<String>,
 }
 
 impl LawRow {
-    /// The retract gate's authority rule, as the ask gate reads it:
-    /// `fno backlog decide-retract` refuses every non-operator authority on a
-    /// law-lane row, so a question whose closing action is that retraction
-    /// has no agent-side remedy and may reach the user.
+    /// The retract gate's authority rule, as the ask gate reads it: a
+    /// session retracts a chat_attested law itself (`chat_may_retire`), so
+    /// only a superuser law's retraction has no agent-side remedy and may
+    /// reach the user.
     pub(crate) fn retraction_needs_operator(&self) -> bool {
         self.lane.as_deref() == Some("law")
+            && self.authority_source.as_deref() != Some("chat_attested")
     }
+}
+
+/// The one lane rule for retiring a row from a session: a chat_attested
+/// caller retires its own kind, never the superuser's. Supersede and retract
+/// both read it.
+pub(crate) fn chat_may_retire(row: &Value) -> bool {
+    row.get("authority_source").and_then(Value::as_str) != Some("operator")
 }
 
 #[derive(Deserialize)]
@@ -1449,7 +1459,7 @@ pub(crate) struct RecordDoor {
 }
 
 const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global] [--paths glob,glob]";
-const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why>";
+const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
 const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
 
 fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
@@ -2006,9 +2016,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
                 "agent {decided_by} cannot record under superuser authority"
             ));
         }
-        if authority == "chat_attested"
-            && row.get("authority_source").and_then(Value::as_str) == Some("operator")
-        {
+        if authority == "chat_attested" && !chat_may_retire(&row) {
             return door_refuse(&format!(
                 "agent {decided_by} cannot record under superuser authority"
             ));
@@ -2108,6 +2116,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         decision: Some(decision),
         ts: Some(ts),
         lane: None,
+        authority_source: None,
     };
     let near = near_law_lines(&law_row);
     let answer = law_answer_with(
@@ -2144,6 +2153,7 @@ struct RetractDoor {
     token: String,
     reason: String,
     stated_authority: Option<String>,
+    quote: String,
 }
 
 fn parse_retract_door(
@@ -2172,6 +2182,13 @@ fn parse_retract_door(
                     .ok_or_else(|| format!("--authority needs a value\n{usage}"))?
                     .clone();
                 door.stated_authority = Some(value);
+            }
+            ("--quote", true) => {
+                i += 1;
+                door.quote = args
+                    .get(i)
+                    .ok_or_else(|| format!("--quote needs a value\n{usage}"))?
+                    .clone();
             }
             (f, _) if f.starts_with('-') && f != "-" => {
                 return Err(format!("no such option: {f}\n{usage}"));
@@ -2257,35 +2274,33 @@ pub fn run_backlog_retract(argv: &[String]) -> i32 {
 /// target. The backlog entry drops all three, so `fno inbox law retract`
 /// keeps answering exactly what it answered before this door widened.
 fn run_retract_labeled(label: &str, usage: &str, argv: &[String], law_only: bool) -> i32 {
-    let door = match parse_retract_door(argv, usage, law_only, !law_only) {
+    let door = match parse_retract_door(argv, usage, law_only, true) {
         Ok(d) => d,
         Err(u) => {
             eprintln!("{label}: {u}");
             return 2;
         }
     };
+    let lanes: &[&str] = if law_only {
+        &["operator", "chat_attested"]
+    } else {
+        &["operator", "team", "agent", "beastmode"]
+    };
     if let Some(a) = &door.stated_authority {
-        if !matches!(a.as_str(), "operator" | "team" | "agent" | "beastmode") {
-            eprintln!("{label}: --authority '{a}' is not one of operator, team, agent, beastmode");
+        if !lanes.contains(&a.as_str()) {
+            eprintln!(
+                "{label}: --authority '{a}' is not one of {}",
+                lanes.join(", ")
+            );
             return 2;
         }
     }
-    // The law entry's authority gate before any read: a law-lane retraction
-    // refuses every non-operator caller, the rule `retract_decision`
-    // enforced and the ask gate relies on (`retraction_needs_operator`). The
-    // backlog entry gates after the target resolves, because a non-law row
-    // takes the caller's own lane.
+    // The gate runs after the target resolves, so a missing id gets its own
+    // answer and a chat_attested law can be retired by its own kind.
     let caller = match resolve_caller() {
         Ok(c) => c,
         Err(message) => return door_refuse(&message),
     };
-    if law_only && caller.authority != "operator" {
-        return door_refuse(&format!(
-            "retracting a law needs operator authority (got {}); \
-             run it from an attended terminal",
-            caller.authority
-        ));
-    }
     let (rows, damaged) = match all_decision_rows() {
         Ok(pair) => pair,
         Err(reason) => {
@@ -2318,7 +2333,10 @@ fn run_retract_labeled(label: &str, usage: &str, argv: &[String], law_only: bool
         Ok(t) => t,
         Err(message) => return door_refuse(&message),
     };
-    write_retraction(&target, &door.reason, &caller, label)
+    if let Err(message) = chat_quote_gate(&target, &caller.authority, &door.quote) {
+        return door_refuse(&message);
+    }
+    write_retraction(&target, &door.reason, &door.quote, &caller, label)
 }
 
 /// The target a retraction addresses plus its lane gate, pure over the rows
@@ -2358,7 +2376,7 @@ fn retract_target(
             }
             _ => {}
         }
-        let _ = gate(caller_authority, stated_authority, law_only, row)?;
+        gate(caller_authority, stated_authority, law_only, row)?;
         return Ok(row.clone());
     }
     let subject_cf = token.to_lowercase();
@@ -2394,12 +2412,13 @@ fn retract_target(
             ));
         }
     };
-    let _ = gate(caller_authority, stated_authority, law_only, &row)?;
+    gate(caller_authority, stated_authority, law_only, &row)?;
     Ok(row)
 }
 
-/// The lane gate: every lane retracts through the backlog entry, laws still
-/// demand the operator, and a stated --authority that disagrees with the
+/// The lane gate: every lane retracts through the backlog entry, a session
+/// retires a chat_attested law with the user's words, a superuser law still
+/// demands the superuser, and a stated --authority that disagrees with the
 /// caller's resolved lane is refused rather than stamped.
 fn gate(
     caller_authority: &str,
@@ -2408,28 +2427,48 @@ fn gate(
     target: &Value,
 ) -> Result<(), String> {
     if decision_index::is_law(target) && caller_authority != "operator" {
-        return Err(format!(
-            "retracting a law needs operator authority (got {}); \
-             run it from an attended terminal",
-            caller_authority
-        ));
-    }
-    if !law_only {
-        if let Some(a) = stated_authority {
-            if a != caller_authority {
-                return Err(format!(
-                    "--authority {a} does not match this caller's resolved authority \
-                     ({}); state nothing and let the session speak",
-                    caller_authority
-                ));
-            }
+        if caller_authority != "chat_attested" || !chat_may_retire(target) {
+            return Err(format!(
+                "retracting {} needs superuser authority (got {caller_authority}; it was \
+                 recorded as {}); only the user retracts it, so ask them with \
+                 `fno inbox outstanding ask`",
+                row_id(target),
+                target
+                    .get("authority_source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("operator"),
+            ));
         }
-    } else if !decision_index::is_law(target) {
+    }
+    if let Some(a) = stated_authority {
+        if a != caller_authority {
+            return Err(format!(
+                "--authority {a} does not match this caller's resolved authority \
+                 ({}); state nothing and let the session speak",
+                caller_authority
+            ));
+        }
+    }
+    if law_only && !decision_index::is_law(target) {
         return Err(format!(
             "{} is not a law-lane decision; retract it with `fno backlog decide-retract {}`",
             row_id(target),
             row_id(target)
         ));
+    }
+    Ok(())
+}
+
+/// A session retracting a law records the user's words: the quote is the
+/// only evidence the user asked for it.
+fn chat_quote_gate(target: &Value, caller_authority: &str, quote: &str) -> Result<(), String> {
+    if decision_index::is_law(target)
+        && caller_authority == "chat_attested"
+        && quote.trim().is_empty()
+    {
+        return Err(
+            "a chat-attested retraction of a law needs --quote \"<the user's words>\"".to_string(),
+        );
     }
     Ok(())
 }
@@ -2466,7 +2505,13 @@ fn near_miss_subject_lines(token: &str, rows: &[Value], law_only: bool) -> Vec<S
 /// The port of `retract_decision`'s write: durability first (project
 /// journal), then the recall index, then the graph store. Prints the
 /// retracted id alone on stdout, the narrative on stderr.
-fn write_retraction(target: &Value, reason: &str, caller: &Caller, label: &str) -> i32 {
+fn write_retraction(
+    target: &Value,
+    reason: &str,
+    quote: &str,
+    caller: &Caller,
+    label: &str,
+) -> i32 {
     let decision_id = row_id(target).to_string();
     let subject = row_subject(target).trim().to_string();
     let retraction_id = mint_retraction_id();
@@ -2484,6 +2529,9 @@ fn write_retraction(target: &Value, reason: &str, caller: &Caller, label: &str) 
     }
     if let Some(r) = &caller.relayed_by {
         data["relayed_by"] = json!(r);
+    }
+    if !quote.trim().is_empty() {
+        data["quote"] = json!(text_cap(quote.trim(), 2000));
     }
     let envelope =
         json!({"ts": ts, "type": "decision_retracted", "source": "target", "data": data});
@@ -2910,6 +2958,7 @@ pub(crate) mod tests {
             decision: Some(decision.to_owned()),
             ts: Some(ts.to_owned()),
             lane: None,
+            authority_source: None,
         }
     }
 
@@ -3412,6 +3461,7 @@ pub(crate) mod tests {
             decision: Some("A fourth round is spent".to_owned()),
             ts: None,
             lane: None,
+            authority_source: None,
         };
         let lines = near_law_lines_from(&index, &new_law);
         assert_eq!(lines.len(), 1, "{lines:?}");
@@ -4079,7 +4129,7 @@ pub(crate) mod scope_tests {
     }
 
     #[test]
-    fn the_retract_door_resolves_a_subject_and_writes_the_retraction() {
+    fn chat_retract_writes_the_retraction_with_the_users_quote() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
         let index = env.0.path().join("decisions.jsonl");
@@ -4097,11 +4147,12 @@ pub(crate) mod scope_tests {
                 "decision_id": "d-0ad0ad0a",
                 "subject": "portal-test",
                 "decision": "One pane is never a portal",
-                "authority_source": "operator",
+                "authority_source": "chat_attested",
                 "ts": "2026-09-01T00:00:00Z"
             }),
             "verify cleanup",
-            &Caller::as_authority("operator"),
+            "drop the portal law",
+            &Caller::as_authority("chat_attested"),
             "fno inbox law retract",
         );
         assert_eq!(code, 0);
@@ -4113,6 +4164,12 @@ pub(crate) mod scope_tests {
             text.contains("\"target_decision_id\":\"d-0ad0ad0a\""),
             "{text}"
         );
+        assert!(text.contains("\"quote\":\"drop the portal law\""), "{text}");
+        assert!(
+            text.contains("\"authority_source\":\"chat_attested\""),
+            "{text}"
+        );
+        assert!(text.contains("\"retracted_by\":\"testf4c6\""), "{text}");
         // The retracted row no longer reads as live: the live derivation
         // (the same pass `fno inbox law set` consults for auto-supersede)
         // drops it.
@@ -4121,41 +4178,56 @@ pub(crate) mod scope_tests {
     }
 
     #[test]
-    fn laws_still_demand_operator_through_the_backlog_entry() {
-        let rows = vec![serde_json::json!({
-            "decision_id": "d-bbbb0002", "subject": "portal-test",
-            "decision": "One pane is never a portal", "authority_source": "operator",
-            "ts": "2026-09-01T00:00:00Z"
-        })];
+    fn chat_retract_retires_its_own_kind_and_never_a_superuser_law() {
+        let law = |id: &str, authority: &str| {
+            serde_json::json!({
+                "decision_id": id, "subject": format!("subject-{id}"),
+                "decision": "One pane is never a portal", "authority_source": authority,
+                "ts": "2026-09-01T00:00:00Z"
+            })
+        };
+        let rows = vec![
+            law("d-bbbb0002", "operator"),
+            law("d-cccc0003", "chat_attested"),
+        ];
         let retired = decision_index::retirement_map(&rows);
-        for lane in ["chat_attested", "team", "agent", "beastmode"] {
-            let err = retract_target(
-                "portal-test",
+        let retract = |token: &str, lane: &str, quote: &str, law_only: bool| {
+            let target = retract_target(
+                token,
                 &rows,
                 &retired,
-                false,
+                law_only,
                 lane,
                 None,
                 |t, r, only| near_miss_subject_lines(t, r, only),
-            )
-            .expect_err("a law row refuses every non-operator lane");
-            assert!(
-                err.contains(&format!("needs operator authority (got {lane})")),
-                "{err}"
-            );
+            )?;
+            chat_quote_gate(&target, lane, quote).map(|()| target)
+        };
+        // A superuser law refuses every session lane, by subject and by id,
+        // on both entries.
+        for lane in ["chat_attested", "team", "agent", "beastmode"] {
+            for (token, law_only) in [("subject-d-bbbb0002", false), ("d-bbbb0002", true)] {
+                let err = retract(token, lane, "the user said so", law_only)
+                    .expect_err("a superuser law refuses every session lane");
+                assert!(
+                    err.contains(&format!("needs superuser authority (got {lane};")),
+                    "{err}"
+                );
+            }
         }
-        // The id path is gated identically.
-        let err = retract_target(
-            "d-bbbb0002",
-            &rows,
-            &retired,
-            false,
-            "chat_attested",
-            None,
-            |t, r, only| near_miss_subject_lines(t, r, only),
-        )
-        .expect_err("a law row refuses by id too");
-        assert!(err.contains("needs operator authority"), "{err}");
+        // A chat_attested law retires from the chat lane with the user's
+        // words, and refuses without them.
+        assert!(retract("d-cccc0003", "chat_attested", "drop it", true).is_ok());
+        let err = retract("d-cccc0003", "chat_attested", " ", true).expect_err("no quote");
+        assert!(err.contains("--quote"), "{err}");
+        let err = retract("d-cccc0003", "team", "drop it", false).expect_err("team lane");
+        assert!(err.contains("needs superuser authority"), "{err}");
+        // A missing id gets its own answer, not the lane refusal.
+        let err = retract("d-dddd0004", "chat_attested", "drop it", true).expect_err("absent");
+        assert!(
+            err.contains("decision d-dddd0004 is not recoverable from the decision index"),
+            "{err}"
+        );
     }
 
     #[test]

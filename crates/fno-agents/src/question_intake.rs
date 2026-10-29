@@ -536,10 +536,10 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
 
     // The law refusal first: a live law on this subject means the question
     // is never recorded (fail-closed, d-0fa92eb9) - unless the question's
-    // closing action is the retraction of that law. A law-lane row refuses
-    // every non-operator retraction (`retract_decision`), so "act on the
-    // law; do not ask" has no agent-side remedy there and the user is the
-    // only door. The closing action may ride the pin line (`--ask`), so it
+    // closing action is the retraction of a superuser law. A session
+    // retracts a chat_attested law itself, but a superuser law refuses every
+    // session retraction, so "act on the law; do not ask" has no agent-side
+    // remedy there and the user is the only door. The closing action may ride the pin line (`--ask`), so it
     // scans with the question, not after it.
     let closing_text = match req.ask.as_deref() {
         Some(ask) if !ask.trim().is_empty() => format!("{}\n{}", req.question, ask),
@@ -564,8 +564,9 @@ fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}
             if req.subject.is_none() {
                 line += " If the question is about another subject, name it with --subject.";
             }
-            line += " If the question asks to retract this law, name its id in the \
-question and ask again: only the user may record that retraction.";
+            line += " If the question asks to retract this law: a chat-attested law \
+retracts from your session with `fno inbox law retract <id> --reason <why> --quote \"<the user's words>\"`; \
+for a superuser law, name its id in the question and ask again.";
             answer.lines.push(line);
         }
         if let Some(refusal) = law_verdict.nearby_refusal {
@@ -1447,14 +1448,16 @@ stops
             decision: Some("a placeholder ruling".to_string()),
             ts: Some("2026-08-29T19:20:10Z".to_string()),
             lane: Some("law".to_string()),
+            authority_source: Some("operator".to_string()),
         }
     }
 
     #[test]
     fn a_question_to_retract_a_law_is_accepted() {
         // The closing action is a retraction, and the retract gate refuses
-        // every non-operator authority on a law-lane row: the ask is the
-        // only door, so neither the law refusal nor decide_yourself fires.
+        // every session on a superuser law: the ask is the only door, so
+        // neither the law refusal nor decide_yourself fires. A chat_attested
+        // law retracts from the session, so the same ask is refused.
         let home = tmp_home("retract-accept");
         let root = tmp_root("retract-accept");
         let question = QUESTION_FILE
@@ -1470,6 +1473,23 @@ stops
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
         assert!(journal_text(&root).lines().count() == 1);
+
+        let chat_root = tmp_root("retract-chat");
+        let mut chat = req(&question, &chat_root);
+        chat.subject = Some("junk-law".to_string());
+        chat.node = Some("x-aaaa".to_string());
+        chat.laws = vec![crate::law_match::LawRow {
+            authority_source: Some("chat_attested".to_string()),
+            ..junk_law()
+        }];
+        let answer = run_intake(&chat, &home);
+        assert_eq!(answer.exit_code, 2, "lines: {:?}", answer.lines);
+        assert!(
+            answer.lines.iter().any(|l| l.contains("d-junk0001")),
+            "{:?}",
+            answer.lines
+        );
+        assert_eq!(journal_text(&chat_root).lines().count(), 0);
     }
 
     #[test]
@@ -1570,6 +1590,7 @@ stops
             decision: Some("stay strict".to_string()),
             ts: Some("2026-09-01T00:00:00Z".to_string()),
             lane: Some("law".to_string()),
+            authority_source: None,
         }];
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 2);
