@@ -31,13 +31,19 @@ pub(crate) fn candidates() -> Vec<PathBuf> {
         }
     }
     // The project config the FNO_CONFIG redirect names (python's
-    // `config_file()` candidate), then the global file.
+    // `config_file()` candidate), then the global file. The explicit file is
+    // usually its parent's settings.yaml sibling, so the sibling push already
+    // covered it: skip the repeat so one file is read once (a doubled work
+    // map was the symptom; Python's FNO_CONFIG branch reads the file exactly
+    // once).
     if let Some(cfg) = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty()) {
         let cfg = PathBuf::from(cfg);
         if let Some(parent) = cfg.parent() {
             push_dir(parent.to_path_buf());
         }
-        out.push(cfg);
+        if !out.contains(&cfg) {
+            out.push(cfg);
+        }
     }
     match std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
         Some(v) if !v.is_empty() => out.push(PathBuf::from(v)),
