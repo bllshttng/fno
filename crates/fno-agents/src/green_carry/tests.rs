@@ -163,24 +163,29 @@ fn carry_refuses_a_conflict_resolution() {
     let dir = repo_init("conflict");
     let guard = cache_guard(&dir);
     git(&dir, &["checkout", "-q", "-b", "feature"]);
-    std::fs::write(dir.join("shared.txt"), "branch\n").unwrap();
+    std::fs::write(dir.join("seed.txt"), "branch\n").unwrap();
     let green = commit_all(&dir, "c1");
     pin_origin_main(&dir);
     record_green(&dir, &green);
     git(&dir, &["checkout", "-q", "main"]);
-    std::fs::write(dir.join("shared.txt"), "main\n").unwrap();
+    std::fs::write(dir.join("seed.txt"), "main\n").unwrap();
     commit_all(&dir, "m1");
     git(&dir, &["checkout", "-q", "feature"]);
+    // Both sides edit seed.txt off the shared seed commit, so the 3-way merge
+    // conflicts on every git and the resolution below always runs.
     let merged = Command::new("git")
         .args(["merge", "main"])
         .current_dir(&dir)
         .output()
         .unwrap();
-    if !merged.status.success() {
-        std::fs::write(dir.join("shared.txt"), "resolved\n").unwrap();
-        git(&dir, &["add", "shared.txt"]);
-        git(&dir, &["commit", "-q", "--no-edit"]);
-    }
+    assert!(
+        !merged.status.success(),
+        "the both-sides edit must conflict: {}",
+        String::from_utf8_lossy(&merged.stdout)
+    );
+    std::fs::write(dir.join("seed.txt"), "resolved\n").unwrap();
+    git(&dir, &["add", "seed.txt"]);
+    git(&dir, &["commit", "-q", "--no-edit"]);
     pin_origin_main(&dir);
     let head = rev_parse(&dir, "HEAD");
     let checks = carried_checks(&dir, 7, Some(&head), pending(&head));
