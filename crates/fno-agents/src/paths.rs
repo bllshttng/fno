@@ -925,6 +925,16 @@ fn spaces_root_dir() -> PathBuf {
         fence_declared_root(test_sandbox_claimed(), &root);
         return root;
     }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // Python spaces_root(): the `config.paths.spaces_dir` override, resolved
+    // like every paths override and anchored at the cwd when relative.
+    if let Some(raw) = crate::paths_cli::cfg_str(&cwd, &["paths", "spaces_dir"]) {
+        if let Ok(p) = crate::paths_cli::resolve_override_path(&raw) {
+            let root = crate::paths_cli::anchor_at(&cwd, p);
+            fence_declared_root(test_sandbox_claimed(), &root);
+            return root;
+        }
+    }
     durable_spaces_root()
 }
 
@@ -937,11 +947,14 @@ fn durable_spaces_root() -> PathBuf {
         let home = PathBuf::from(&v);
         home.parent().map(|p| p.to_path_buf()).unwrap_or(home)
     } else {
-        refuse_undeclared_home_fallback(test_root_declared(), "FNO_SPACES_DIR");
-        std::env::var_os("HOME")
-            .filter(|h| !h.is_empty())
-            .map(|h| PathBuf::from(h).join(".fno"))
-            .unwrap_or_else(|| PathBuf::from(".fno"))
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        crate::paths_cli::declared_state_dir(&cwd).unwrap_or_else(|| {
+            refuse_undeclared_home_fallback(test_root_declared(), "FNO_SPACES_DIR");
+            std::env::var_os("HOME")
+                .filter(|h| !h.is_empty())
+                .map(|h| PathBuf::from(h).join(".fno"))
+                .unwrap_or_else(|| PathBuf::from(".fno"))
+        })
     };
     let root = state_root.join("spaces");
     fence_declared_root(test_sandbox_claimed(), &root);
