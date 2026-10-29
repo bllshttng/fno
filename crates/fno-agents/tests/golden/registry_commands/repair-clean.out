@@ -1,0 +1,3 @@
+would repair <ROOT>/home-repair-clean/registry.json: schema_version 99 -> 43
+  no rows carry keys this fno does not know
+  dry run; pass --apply to perform it

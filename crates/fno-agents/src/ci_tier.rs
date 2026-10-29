@@ -48,7 +48,7 @@ pub(crate) struct Plan {
     pub rerun: Vec<(u64, Vec<u64>)>,
 }
 
-fn word<'a>(v: &'a Value, pointer: &str) -> &'a str {
+pub(crate) fn word<'a>(v: &'a Value, pointer: &str) -> &'a str {
     v.pointer(pointer).and_then(Value::as_str).unwrap_or("")
 }
 
@@ -110,7 +110,7 @@ fn pages(root: &Path, path: &str) -> Result<Vec<Value>, String> {
     crate::pr_push::gh_api_pages_conditional("gh", root, path)
 }
 
-fn runs_of(root: &Path, query: &str) -> Result<Vec<Value>, String> {
+pub(crate) fn runs_of(root: &Path, query: &str) -> Result<Vec<Value>, String> {
     let path = format!("repos/{{owner}}/{{repo}}/actions/runs?{query}&per_page=100");
     Ok(pages(root, &path)?
         .iter()
@@ -184,7 +184,7 @@ fn read_repo(root: &Path) -> Result<Repo, String> {
 }
 
 /// POST `action` on each run; the journal records what gh refused.
-fn act(root: &Path, list: &[(u64, Vec<u64>)], action: &str) -> Vec<Value> {
+pub(crate) fn act(root: &Path, list: &[(u64, Vec<u64>)], action: &str) -> Vec<Value> {
     let post = |run: &u64| {
         let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/{action}");
         match crate::pr_push::gh_api("gh", root, &path, &["-X", "POST"]) {

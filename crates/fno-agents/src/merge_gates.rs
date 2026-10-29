@@ -642,8 +642,9 @@ pub(crate) fn visual_approval_blocker<P: Probes>(
         .map(|n| mux_shots(&root, home.as_deref(), n))
         .unwrap_or_default();
     let mut detail = format!(
-        "PR {pr} touches the paint surface the config lists ({}); the user's look is \
-         the only clear: an answered question page naming the PR and its head sha, or a role-recorded \
+        "PR {pr} touches the paint surface the config lists ({}); full CI is held at \
+         this head, and the daemon cancels every run but rust-ci (the shots) until the \
+         look clears, then reruns them. The user's look is the only clear: an answered question page naming the PR and its head sha, or a role-recorded \
          decision whose rationale attests the chat and whose text names the PR and \
          its head sha (`fno backlog decide <node> 'Approved: PR {pr} at {head}' \
          --authority role --rationale 'user in chat: <the user's words>'`). Ask via \
@@ -835,7 +836,7 @@ fn file_visual_question(
 /// Does one changed file match the paint-path list? Two pattern shapes: a
 /// `dir/**` subtree and a bare file name (any directory). `ponytail:` no glob
 /// engine; a mid-pattern `**` or `*` wildcard is added when a config needs it.
-fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
+pub(crate) fn path_matches_paint(path: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| {
         let p = p.trim();
         if let Some(prefix) = p.strip_suffix("/**") {

@@ -764,6 +764,74 @@ pub fn run_name_mint(args: &[String]) -> i32 {
     }
 }
 
+/// The shell dispatchers' bridge model: `$FNO_AGENTS_NAME_MODEL`, never a
+/// flag, so a dispatcher carries it as cheaply as any env var.
+pub fn name_model_from_env() -> Option<String> {
+    std::env::var("FNO_AGENTS_NAME_MODEL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// `fno agents name [prefix] <node>`: the routed bridge, the same mint as
+/// `name-mint` with the model read from the env. Exit 3 (never 2) is the
+/// naming refusal; 2 is a usage error, which a stale install also returns.
+pub fn run_agents_name(args: &[String]) -> i32 {
+    const USAGE: &str = "usage: fno agents name [prefix] <node-id> [--slug S] [--qualifier Q] \
+                         [--discriminator D] [--source S] [--command C]";
+    const VALUE_FLAGS: [&str; 6] = [
+        "--slug",
+        "--qualifier",
+        "--discriminator",
+        "--source",
+        "--command",
+        "--verb", // verb-wording: allow (old flag, one release)
+    ];
+    // The shared mint parser is lenient by design; this public door keeps
+    // the strict grammar the retired Click front enforced.
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "--help" || a == "-h" {
+            println!("{USAGE}");
+            return 0;
+        }
+        if let Some(flag) = a.strip_prefix("--") {
+            let (name, inline) = match flag.split_once('=') {
+                Some((n, _)) => (format!("--{n}"), true),
+                None => (a.to_string(), false),
+            };
+            if !VALUE_FLAGS.contains(&name.as_str()) {
+                eprintln!("error: no such option: {name}\n{USAGE}");
+                return 2;
+            }
+            if !inline && args.get(i + 1).is_none_or(|v| v.starts_with("--")) {
+                eprintln!("error: option {name} requires a value\n{USAGE}");
+                return 2;
+            }
+            i += if inline { 1 } else { 2 };
+            continue;
+        }
+        i += 1;
+    }
+    let pos = positionals(args);
+    if pos.is_empty() {
+        eprintln!("error: a node id is required: fno agents name [prefix] <node-id>");
+        return 2;
+    }
+    if pos.len() > 2 {
+        eprintln!("error: got unexpected extra argument ({})\n{USAGE}", pos[2]);
+        return 2;
+    }
+    let mut argv = args.to_vec();
+    if value_of(args, "--model").is_none() {
+        if let Some(model) = name_model_from_env() {
+            argv.extend(["--model".to_string(), model]);
+        }
+    }
+    run_name_mint(&argv)
+}
+
 /// `fno-agents name-parse` reads one name per line on stdin and prints one
 /// JSON object per line: {name, source, verb, node, tail} or {name, null} (verb-wording: allow, wire key).
 pub fn run_name_parse() -> i32 {
