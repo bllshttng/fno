@@ -68,7 +68,8 @@ fn column_band(focused: bool, theme: &crate::theme::Theme) -> (Color, Color, u8)
 /// A message body as left-aligned lines inside one box: each stored line
 /// wraps on its own, indented under the sender label. A raw `\n` in a
 /// painted cell moved the terminal cursor and overwrote the next row, so
-/// no output line ever carries one.
+/// no output line ever carries one. The harness's `<pasted_content>` wrapper
+/// lines are transport, not words the user typed, so they never paint.
 fn body_lines(text: &str, w: usize, role: BRole) -> Vec<BLine> {
     let inner = w.saturating_sub(BODY_INDENT.len()).max(1);
     let mut out = Vec::new();
@@ -77,6 +78,12 @@ fn body_lines(text: &str, w: usize, role: BRole) -> Vec<BLine> {
         .replace('\t', "    ")
         .split(['\n', '\r'])
     {
+        let tag = para.trim();
+        if (tag.starts_with("<pasted_content") || tag.starts_with("</pasted_content"))
+            && tag.ends_with('>')
+        {
+            continue;
+        }
         for mut line in BLine::of(&[seg(para, role)]).wrap(inner) {
             line.text.insert_str(0, BODY_INDENT);
             line.roles.splice(0..0, [role; BODY_INDENT.len()]);

@@ -683,7 +683,7 @@ async fn messages_you_tab_contract() {
         "unreadable": 0,
         "you": [
             {"session_id":"older","name":"older-worker","last_ts":"2026-10-01T09:00:00Z","items":[{"ts":"2026-10-01T09:00:00Z","typed_text":"earlier question","reply_text":""}]},
-            {"session_id":"fresh","name":"gavin","last_ts":"2026-10-01T10:00:00Z","items":[{"ts":"2026-10-01T09:30:00Z","typed_text":"mid-turn follow-up","reply_text":"Working on it."},{"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."}]},
+            {"session_id":"fresh","name":"gavin","last_ts":"2026-10-01T10:00:00Z","items":[{"ts":"2026-10-01T09:30:00Z","typed_text":"<pasted_content id=\"7\">\nmid-turn follow-up\n</pasted_content id=\"7\">","reply_text":"Working on it."},{"ts":"2026-10-01T10:00:00Z","typed_text":"why did the gate refuse?","reply_text":"Because the base was stale."}]},
         ],
     }));
     // The drill is Agent, then Me, then the chat: column 1 lists agents
@@ -733,6 +733,15 @@ async fn messages_you_tab_contract() {
         .position(|t| t.as_str() == "  why did the gate refuse?")
         .expect("typed bubble");
     assert_eq!(texts[typed_i - 1], "Me", "{texts:?}");
+    // The harness's paste wrapper lines never paint; the pasted words do.
+    assert!(
+        texts.iter().any(|t| t.as_str() == "  mid-turn follow-up"),
+        "{texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t.contains("pasted_content")),
+        "{texts:?}"
+    );
     assert!(
         texts
             .iter()
