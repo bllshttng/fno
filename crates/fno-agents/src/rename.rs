@@ -399,14 +399,27 @@ pub fn stamp_title_push(home: &crate::paths::AgentsHome, result: &mut Value) {
     let Some(command) = title_push(row, new_name) else {
         return;
     };
+    let session = row.harness_session_id.as_deref().unwrap_or_default();
+    let harness = row.harness.as_deref().unwrap_or_default();
+    // One quiet read, no wait: the delivery's own gate would hold up to its
+    // full budget on a held composer (a draft, a question picker, Stop
+    // hooks), a wait the mux rename gesture bounds at 20s. Not quiet now
+    // means skip; the title is cosmetic and the rename is already durable.
+    if crate::mail_inject::quiet_blocker(
+        &home.events_jsonl(),
+        &home.registry_json(),
+        &crate::claude_drive::claude_projects_dir(),
+        session,
+        crate::mail_inject::now_ms(),
+    )
+    .is_some()
+    {
+        result["title_push"] = Value::String("title push skipped: session not quiet".to_string());
+        return;
+    }
     // title_push proved both fields present and non-empty, so the defaults
     // below are unreachable spellings of a proved fact, not guesses.
-    let outcome = deliver_command_to_session(
-        row.harness_session_id.as_deref().unwrap_or_default(),
-        row.harness.as_deref().unwrap_or_default(),
-        &command,
-        false,
-    );
+    let outcome = deliver_command_to_session(session, harness, &command, false);
     result["title_push"] = Value::String(match outcome {
         Ok(()) => "title pushed".to_string(),
         Err(error) => format!("title push failed: {error}"),
@@ -534,6 +547,65 @@ mod tests {
         let line = receipt("quill", &result).unwrap();
         assert!(line.contains("renamed quill -> wren"), "{line}");
         assert!(line.contains("title pushed"), "{line}");
+    }
+
+    #[test]
+    fn quiet_blocker_holds_on_a_fresh_draft_and_reads_none_when_clear() {
+        // The rename door's skip gate is the delivery's own single read:
+        // a fresh typing row (a draft) holds, and a journal with no fresh
+        // typing row reads clear. Row shape mirrors the daemon's
+        // operator_typing emit.
+        let dir = std::env::temp_dir().join(format!(
+            "fno-rename-quiet-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let journal = dir.join("events.jsonl");
+        let base = crate::mail_inject::now_ms();
+        let row = serde_json::json!({
+            "ts": "2026-09-27T18:00:00Z",
+            "type": "operator_typing",
+            "source": "daemon",
+            "data": {
+                "mux_session": "main", "pane": 7, "via": "pane",
+                "typed_ms": base - 1_000,
+                "resolution": "ok",
+                "harness_session": "sess-1",
+            }
+        });
+        std::fs::write(&journal, format!("{row}\n")).unwrap();
+        // A later submit row ages the typing row out of draft: the composer
+        // was submitted, so the same journal reads clear once the typing row
+        // leaves the recent window.
+        let submit = serde_json::json!({
+            "ts": "2026-09-27T18:00:00Z",
+            "type": "operator_submit",
+            "source": "daemon",
+            "data": {
+                "mux_session": "main", "pane": 7, "via": "pane",
+                "submit_ms": base,
+                "resolution": "ok",
+                "harness_session": "sess-1",
+            }
+        });
+        std::fs::write(&journal, format!("{row}\n{submit}\n")).unwrap();
+        let registry = std::env::temp_dir().join("fno-rename-quiet-no-registry");
+        let held =
+            crate::mail_inject::quiet_blocker(&journal, &registry, &registry, "sess-1", base);
+        assert_eq!(held.as_deref(), Some("user-typing"));
+        let clear = crate::mail_inject::quiet_blocker(
+            &journal,
+            &registry,
+            &registry,
+            "sess-1",
+            base + 120_000,
+        );
+        assert_eq!(clear, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
