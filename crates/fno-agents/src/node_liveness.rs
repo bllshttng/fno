@@ -131,6 +131,7 @@ pub fn verdict(f: &Facts) -> Verdict {
 fn state_word(state: ClaimState) -> &'static str {
     match state {
         ClaimState::Free => "free",
+        ClaimState::Corrupted => "corrupted",
         ClaimState::Live => "live",
         ClaimState::Suspect => "suspect",
         ClaimState::Stale => "stale",
@@ -287,7 +288,7 @@ pub fn run_pass(home: &AgentsHome) -> Result<Value, String> {
 
     let (witness, _) = crate::claim_commands::default_session_witness();
     let witness: crate::claims::SessionWitness<'_> = &witness;
-    let watches = crate::watch_expiry::current_watch_bounds(home, now_ms).unwrap_or_default();
+    let watches = crate::watch_expiry::current_watch_bounds(home, now_ms)?;
     let beacon = beacon_sessions(now_ms);
     let store = crate::provider_cap::questions_path(home);
     let open: HashMap<String, i64> = crate::fleet_task::open_tasks(&store)?
@@ -302,8 +303,11 @@ pub fn run_pass(home: &AgentsHome) -> Result<Value, String> {
             )
         })
         .collect();
-    for (id, _) in open.iter().filter(|(id, _)| terminal.contains(*id)) {
-        let _ = crate::fleet_task::close(&store, LANE, id, "", "node closed", LANE);
+    // A task whose node left the judged set (closed, or now in review with
+    // no claim) is moot.
+    let judged: std::collections::HashSet<&String> = ids.iter().collect();
+    for (id, _) in open.iter().filter(|(id, _)| !judged.contains(id)) {
+        let _ = crate::fleet_task::close(&store, LANE, id, "", "node left the judged set", LANE);
     }
     let path = served_path(home);
     let previous = previous_uncovered(&path);
@@ -339,11 +343,17 @@ pub fn run_pass(home: &AgentsHome) -> Result<Value, String> {
             claim,
             same_machine,
         };
-        let v = verdict(&facts);
-        let since = matches!(v, Verdict::Uncovered { .. })
+        let mut v = verdict(&facts);
+        let mut since = matches!(v, Verdict::Uncovered { .. })
             .then(|| previous.get(id).copied().unwrap_or(now_ms));
         match action(&v, since.unwrap_or(now_ms), now_ms, open.contains_key(id)) {
-            Action::File => file_recovery(home, &store, id, &v, &facts),
+            Action::File => {
+                // The task just filed is a young recovery: serve it as one.
+                if file_recovery(home, &store, id, &v, &facts) {
+                    v = Verdict::Recovering { since_ms: now_ms };
+                    since = None;
+                }
+            }
             Action::Close => {
                 let _ = crate::fleet_task::close(&store, LANE, id, "", "node covered", LANE);
             }
@@ -391,9 +401,10 @@ fn beacon_sessions(now_ms: i64) -> std::collections::HashSet<String> {
         .collect()
 }
 
-fn file_recovery(home: &AgentsHome, store: &Path, id: &str, v: &Verdict, f: &Facts) {
+/// File the node's recovery task; true when a task is open for it now.
+fn file_recovery(home: &AgentsHome, store: &Path, id: &str, v: &Verdict, f: &Facts) -> bool {
     let Verdict::Uncovered { reason } = v else {
-        return;
+        return false;
     };
     let clear = if f.reconcile.is_some_and(|(_, held)| !held) {
         "re-run `fno backlog advance` on its merged blocker".to_string()
@@ -406,8 +417,11 @@ fn file_recovery(home: &AgentsHome, store: &Path, id: &str, v: &Verdict, f: &Fac
         GRACE_MS / 60_000
     );
     let filed = crate::fleet_task::file_once(store, LANE, id, "", &text, Some(&clear), Some(id));
-    if !matches!(filed, Ok(crate::fleet_task::Filed::New(_))) || !f.same_machine {
-        return;
+    let Ok(filed) = filed else {
+        return false;
+    };
+    if !matches!(filed, crate::fleet_task::Filed::New(_)) || !f.same_machine {
+        return true;
     }
     // Balanced auto: resume the node's own worker once per filing, never on
     // another machine's claim.
@@ -418,6 +432,7 @@ fn file_recovery(home: &AgentsHome, store: &Path, id: &str, v: &Verdict, f: &Fac
             row.outcome, row.reason
         );
     }
+    true
 }
 
 /// The node's newest registry worker with a session to resume. A row that
