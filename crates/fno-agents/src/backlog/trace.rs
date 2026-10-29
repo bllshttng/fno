@@ -275,8 +275,9 @@ fn question_row(q: &crate::outstanding::Question) -> Value {
 }
 
 /// An epic's rows: one per child with its span and error totals. The epic
-/// header spans the earliest child start to the latest child end, and its
-/// totals add every child's.
+/// header spans the earliest child start to the latest child end, and stays
+/// open while a started child is open. Its totals add every child's, and a
+/// started child with no cost or a null count says so in a reason.
 fn rollup(out: &mut Value, children: &[Value]) {
     let mut totals = Map::new();
     let mut reasons = Map::new();
@@ -285,13 +286,24 @@ fn rollup(out: &mut Value, children: &[Value]) {
     let mut starts: Vec<i64> = at(&out["header"]["started_at"]).into_iter().collect();
     let mut ends: Vec<i64> = at(&out["header"]["ended_at"]).into_iter().collect();
     let mut cost: Option<f64> = out["header"]["cost_usd"].as_f64();
+    let mut open =
+        at(&out["header"]["started_at"]).is_some() && out["header"]["ended_at"].is_null();
+    let mut cost_partial = false;
+    const KEYS: [&str; 2] = ["ai_turns", "tool_calls"];
+    let mut counts = KEYS.map(|k| out["header"][k].as_u64());
     let mut rows = Vec::new();
     for child in children {
         let h = &child["header"];
+        let started = at(&h["started_at"]).is_some();
+        open |= started && h["ended_at"].is_null();
         starts.extend(at(&h["started_at"]));
         ends.extend(at(&h["ended_at"]));
-        if let Some(c) = h["cost_usd"].as_f64() {
-            cost = Some(cost.unwrap_or(0.0) + c);
+        match h["cost_usd"].as_f64() {
+            Some(c) => cost = Some(cost.unwrap_or(0.0) + c),
+            None => cost_partial |= started,
+        }
+        for (n, k) in counts.iter_mut().zip(KEYS) {
+            *n = n.zip(h[k].as_u64()).map(|(a, b)| a + b);
         }
         merge(&mut totals, &mut reasons, &child["errors"]);
         let mut row = json!({
@@ -308,7 +320,8 @@ fn rollup(out: &mut Value, children: &[Value]) {
         }
         rows.push(row);
     }
-    let (start, end) = (starts.iter().min(), ends.iter().max());
+    let start = starts.iter().min();
+    let end = if open { None } else { ends.iter().max() };
     let header = &mut out["header"];
     header["started_at"] = json!(start.map(|m| stamp(*m)));
     header["ended_at"] = json!(end.map(|m| stamp(*m)));
@@ -317,6 +330,15 @@ fn rollup(out: &mut Value, children: &[Value]) {
     if cost.is_some() {
         if let Some(h) = header.as_object_mut() {
             h.remove("cost_reason");
+        }
+    }
+    if cost_partial {
+        header["cost_reason"] = json!("a started child has no cost recorded");
+    }
+    for (n, k) in counts.into_iter().zip(KEYS) {
+        header[k] = json!(n);
+        if n.is_none() {
+            header[format!("{k}_reason")] = json!("a child count is null");
         }
     }
     out["errors"] = errors_value(totals, reasons);
@@ -972,6 +994,19 @@ mod tests {
         assert_eq!(e["header"]["started_at"], "2026-10-04T00:00:00Z");
         assert_eq!(e["header"]["ended_at"], "2026-10-05T00:00:00Z");
         assert_eq!(e["children"][1]["state"], "not started");
+        // A started child still open keeps the epic open.
+        let mut open = child("x-c", None);
+        open["header"]["started_at"] = json!("2026-10-06T00:00:00Z");
+        let epic = Inputs {
+            children: vec![child("x-a", Some("2026-10-04T00:00:00Z")), open],
+            ..Default::default()
+        };
+        let e = fold(&json!({"id": "x-e"}), &epic);
+        assert!(e["header"]["ended_at"].is_null());
+        assert_eq!(
+            e["header"]["cost_reason"],
+            "a started child has no cost recorded"
+        );
     }
 
     #[test]
