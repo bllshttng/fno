@@ -356,6 +356,15 @@ impl AgentsHome {
         self.root.join("events.jsonl")
     }
 
+    /// The transcripts journal: one `transcript_record` envelope per raw
+    /// transcript line a session's turn hook pushed over the daemon socket
+    /// (the sandboxed-session lane; the file fallback stays for sessions
+    /// whose transcript file is readable). High-volume, so it stays out of
+    /// `events.jsonl` (the operator audit log).
+    pub fn transcripts_journal(&self) -> PathBuf {
+        self.root.join("transcripts.jsonl")
+    }
+
     /// The last footprint probe answer (`footprint-cache.json`). Any real
     /// probe run writes it; readers that can serve a recent answer read it
     /// instead of re-spawning the probe child. See [`crate::spawn_gate`].
@@ -422,6 +431,13 @@ impl AgentsHome {
 
     pub fn supervisor_sock(&self) -> PathBuf {
         self.root.join("supervisor.sock")
+    }
+
+    /// The directory a devcontainer box mounts to reach the daemon: it holds
+    /// a hard link to `supervisor_sock()` that the daemon re-creates at
+    /// every bind, and nothing else from the home.
+    pub fn sandbox_sock_dir(&self) -> PathBuf {
+        self.root.join("sandbox-sock")
     }
 
     /// Sidecar advisory-lock file for the supervisor-socket singleton guard

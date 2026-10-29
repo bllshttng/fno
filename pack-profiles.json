@@ -12,6 +12,7 @@
     "hooks/send-message-guard.sh",
     "hooks/session-state.sh",
     "hooks/spawn-seed-provenance-session-start.sh",
+    "hooks/transcript-push.sh",
     "skills/agent",
     "skills/dnd",
     "skills/fno-me",
