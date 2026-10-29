@@ -3,7 +3,7 @@
 
 use crate::backlog_model::Inputs;
 use crate::proto::AgentRow;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// The status words on the wire, in the order a lead lists its seats.
@@ -24,7 +24,10 @@ pub(crate) struct Work {
     pub(crate) difficulty: Option<String>,
     pub(crate) plan: Option<String>,
     pub(crate) pr: Option<u64>,
+    pub(crate) pr_url: Option<String>,
     pub(crate) epic: Option<(String, Option<String>)>,
+    /// The node's description, when it is plain text.
+    pub(crate) details: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -43,6 +46,13 @@ pub(crate) struct Seat {
     /// The published project, else the node's graph project.
     pub(crate) project: Option<String>,
     pub(crate) context_pct: Option<i64>,
+    pub(crate) rss_mb: Option<f64>,
+    /// The turn facts. Null when the seat's machine publishes none or its
+    /// harness has no transcript reader.
+    pub(crate) last_message: Option<String>,
+    pub(crate) last_prompt: Option<String>,
+    pub(crate) user_turns: Option<i64>,
+    pub(crate) progress: Option<String>,
     pub(crate) status: &'static str,
     pub(crate) status_age_s: Option<i64>,
     pub(crate) work: Option<Work>,
@@ -105,7 +115,20 @@ pub(crate) struct Machine {
     pub(crate) mem_used: Option<f64>,
     pub(crate) cap: Option<i64>,
     pub(crate) takes_work: bool,
+    /// The machine's configured name. Null means the page shows the host.
+    pub(crate) display_name: Option<String>,
+    pub(crate) lanes: Vec<Lane>,
     pub(crate) leads: Vec<Lead>,
+}
+
+/// One provider lane as the spawn gate counts it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Lane {
+    pub(crate) provider: String,
+    pub(crate) cap: Option<i64>,
+    pub(crate) count: Option<i64>,
+    #[serde(default)]
+    pub(crate) full: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -183,7 +206,13 @@ fn work_of(backlog: &Inputs, id: &str) -> Work {
         difficulty: node.difficulty.clone(),
         plan: node.plan_path.clone(),
         pr: node.prs.first().map(|p| p.number),
+        pr_url: node.prs.first().and_then(|p| p.url.clone()),
         epic: node.parent.first().map(|l| (l.id.clone(), l.title.clone())),
+        details: node
+            .details
+            .as_ref()
+            .and_then(Value::as_str)
+            .map(str::to_string),
     }
 }
 
@@ -254,6 +283,11 @@ pub(crate) fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_
                     role: text(s, "role"),
                     project,
                     context_pct: s.get("context_pct").and_then(Value::as_i64),
+                    rss_mb: s.get("rss_mb").and_then(Value::as_f64),
+                    last_message: text(s, "last_message"),
+                    last_prompt: text(s, "last_prompt"),
+                    user_turns: s.get("user_turns").and_then(Value::as_i64),
+                    progress: text(s, "progress"),
                     status,
                     status_age_s: s.get("age_s").and_then(Value::as_i64),
                     work,
@@ -288,6 +322,8 @@ pub(crate) fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_
                 mem_used: m["mem_used"].as_f64(),
                 cap: m["cap"].as_i64(),
                 takes_work: m["takes_work"].as_bool().unwrap_or(false),
+                display_name: text(m, "display_name"),
+                lanes: serde_json::from_value(m["lanes"].clone()).unwrap_or_default(),
                 leads,
             }
         })
