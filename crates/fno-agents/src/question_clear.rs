@@ -623,7 +623,8 @@ mod tests {
             req.caller = Some(ClearCaller {
                 ancestry_handle: Some("1eadabcd".to_string()),
                 teamed: true,
-                scope_nodes: scope.iter().map(|s| s.to_string()).collect(),
+                teams: Vec::new(),
+                scope_nodes: Some(scope.iter().map(|s| s.to_string()).collect()),
                 asker_gone: Some(gone),
             });
             let mut question = ask("q-moot", "which lane?", None, Some("x-in"));
@@ -733,8 +734,10 @@ pub struct ClearCaller {
     pub ancestry_handle: Option<String>,
     /// Whether the caller's handle holds a live team.
     pub teamed: bool,
-    /// Node ids inside the scopes of the live teams the caller holds.
-    pub scope_nodes: BTreeSet<String>,
+    /// The live teams the caller holds.
+    pub teams: Vec<crate::territory::Team>,
+    /// Test seam for the scope read; `None` compiles `teams` on first need.
+    pub scope_nodes: Option<BTreeSet<String>>,
     /// Test seam for the asker-gone read; `None` reads session liveness.
     pub asker_gone: Option<fn(&str) -> bool>,
 }
@@ -852,26 +855,30 @@ fn resolve_clear_caller(req: &ClearRequest) -> ClearCaller {
                 })
         })
         .unwrap_or_default();
-    // A scope that does not compile adds no nodes (fail closed).
-    let scope_nodes = teams
-        .iter()
-        .filter_map(|team| {
-            crate::lead_answers::scope_node_ids(
-                &req.graph,
-                &req.repo_root,
-                &team.scope,
-                Some(i64::from(team.level)),
-            )
-            .ok()
-        })
-        .flatten()
-        .collect();
     ClearCaller {
         ancestry_handle,
         teamed: !teams.is_empty(),
-        scope_nodes,
+        teams,
+        scope_nodes: None,
         asker_gone: None,
     }
+}
+
+/// Whether `node` sits in a scope of a team the caller holds. A scope that
+/// does not compile holds nothing (fail closed).
+fn scope_holds(req: &ClearRequest, caller: &ClearCaller, node: &str) -> bool {
+    if let Some(seam) = &caller.scope_nodes {
+        return seam.contains(node);
+    }
+    caller.teams.iter().any(|team| {
+        crate::lead_answers::scope_node_ids(
+            &req.graph,
+            &req.repo_root,
+            &team.scope,
+            Some(i64::from(team.level)),
+        )
+        .is_ok_and(|ids| ids.contains(node))
+    })
 }
 
 /// The moot withdrawal a scope lead may make for a worker's question: the
@@ -887,7 +894,7 @@ fn lead_may_withdraw(
     let Some(node) = node.filter(|_| caller.teamed) else {
         return false;
     };
-    if !caller.scope_nodes.contains(node) {
+    if !scope_holds(req, caller, node) {
         return false;
     }
     let asker_gone = asker_session.is_some_and(|session| match caller.asker_gone {
