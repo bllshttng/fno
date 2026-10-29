@@ -86,6 +86,14 @@ Every 3 minutes the arm ranks the open PRs: a `main-repair` node first, drafts l
 
 `fno do pr push` reads the newest row before it pushes. Three facts hold a push: the row is under 20 minutes old, the tier is full, and the PR ranks below every PR in it. The held push exits 3. A push into a full tier only queues runs that the next pass cancels. The hold writes one `ci_tier_held` row. When a later pass clears the hold, the arm mails the session to run `fno do pr push` again and writes one `ci_tier_wake` row. A main-repair PR ranks first, so only other main-repair PRs can hold it.
 
+## The look hold
+
+A paint PR that waits for the user's look must not spend runners. If the user rejects the look, the PR changes again. On 2026-10-28 two such PRs queued 12 full-suite runs on a look the user then rejected, and a lead cancelled them by hand.
+
+The daemon's `look_hold` arm closes that gap. Every 2 minutes it reads each open PR's runs in a repo whose `merge.visual_paint_paths` is armed. A head with runs in flight asks the `visual_approval` gate. A held head gets every run cancelled except the shot workflows and the merge-queue gate. `merge.visual_shot_workflows` names the shot workflows by file name. Unset, it is `["rust-ci.yml"]`: footnote's cheap build (fmt, check) and the `bell-shots` job, so the user still gets the shots. Each cancel writes one `look_hold_cancel` row. The arm reads the gate on every pass, so a push, a rerun or a body edit on a held head is cancelled again.
+
+The user answers the head's page, or a role row records the chat approval, and the look clears at that head. The next pass then reruns the runs the arm cancelled at that head and writes one `look_hold_release` row. A run cancelled by hand or by other automation is never rerun. A gate that cannot answer neither cancels nor reruns. `fno do pr status` prints the hold in the `visual_approval` blocker, so no lead cancels runs by hand. A head's changed-file list is read once and cached, so a PR that touches no paint path costs one runs read per pass.
+
 ## The idle-PR alarm
 
 On 2026-10-16 the user found 37 open PRs. Several were green and mergeable for days, and nothing raised an alarm. The owning worker merges its own PR. The daemon's `pr_idle` arm is the backstop for a worker that left. Every 15 minutes it lists the open PRs of each registry repo. It reads each non-draft PR through the status door, so the read rides the shared status cache and the account poller. It reads the merge gate's `ready` verdict. A PR that is held, uncovered or waiting on the user's visual look never reads ready.

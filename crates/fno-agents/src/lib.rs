@@ -318,6 +318,7 @@ pub mod lock_queue;
 pub mod logs;
 pub mod logs_args;
 pub mod logs_client;
+pub mod look_hold;
 pub mod loop_dispatch;
 pub mod loop_lead;
 pub mod loop_readiness;
@@ -483,6 +484,7 @@ pub mod reentry;
 pub mod refusal_rate;
 pub mod refusal_trend;
 pub mod register;
+pub mod registry_commands;
 pub mod registry_commit;
 pub mod registry_guard;
 pub mod registry_json;
@@ -604,6 +606,7 @@ pub mod status_sinks;
 pub mod store_conn;
 pub mod store_exec;
 pub mod store_export;
+pub mod store_heal;
 pub mod store_remote;
 pub mod stream_worker;
 pub mod stub_manifest;
@@ -1892,6 +1895,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "ci_tier_pass",
     "ci_tier_held",
     "ci_tier_wake",
+    // The look_hold arm's cancel of a paint head's CI and its rerun when the
+    // user's look clears (look_hold.rs).
+    "look_hold_cancel",
+    "look_hold_release",
     // A PR queued in place of a merge, and the merge queue arm's acts
     // (merge_queue.rs).
     "merge_queue_entry",

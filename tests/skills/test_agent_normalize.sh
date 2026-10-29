@@ -634,6 +634,11 @@ if [[ ! -x "$VENV_PY" ]]; then
   CANON="$(cd "$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"
   [[ -n "$CANON" ]] && VENV_PY="$CANON/cli/.venv/bin/python"
 fi
+REAL_AGENTS_BIN="$("$VENV_PY" -c "
+import sys; sys.path.insert(0, '$REPO_ROOT/cli/src')
+from fno import rust_binary
+b = rust_binary.find_dev_binary() or rust_binary.resolve_binary()
+print(b or '')" 2>/dev/null || true)"
 # A REAL fno on PATH; the suite otherwise pins a failing one suite-wide. The
 # capabilities ask is answered from the fixture table first (x-3873): it is a
 # Rust-leaf read, and the installed binary may predate this branch.
@@ -656,6 +661,8 @@ REAL_FNO_DIR="$TMP/real-fno"; mkdir -p "$REAL_FNO_DIR"
   echo "    *) printf '{\"command_surface\":\"refused\"}\\n'; exit 0 ;;"
   echo '  esac'
   echo 'fi'
+  # The name door is native, and the default router never execs a dev build.
+  echo "[[ \"\$1 \$2\" == \"agents name\" ]] && exec \"$REAL_AGENTS_BIN\" status --name \"\${@:3}\""
   echo "exec \"$VENV_PY\" -c 'import sys; sys.path.insert(0, \"$REPO_ROOT/cli/src\"); from fno.cli import app; app()' \"\$@\""
 } > "$REAL_FNO_DIR/fno"
 chmod +x "$REAL_FNO_DIR/fno"
@@ -720,7 +727,7 @@ EOF
     && pass "x-3218 slugless node still degrades to <command>-<hex>" \
     || fail "x-3218 slugless: $OUT"
 else
-  fail "x-3218 bridge unreachable: no cli venv at $VENV_PY"
+  fail "x-3218 bridge unreachable: venv $VENV_PY, binary '${REAL_AGENTS_BIN}'"
 fi
 
 # --- x-0413: the handoff SEED carries the every-lane decisions check ---

@@ -6,14 +6,12 @@ the retired --cross-project flag. The heal is machine-wide now: a full session
 id, a short id, or a name resolves from any project, and the one guard left is
 uniqueness (more than one store hit refuses with the candidate list).
 
-These tests pin the machine-wide behavior on the in-process healer AND on the
-exec'd ``fno agents heal-token`` binary, so a future confinement cannot return
-without a test failing on both.
+This test pins the machine-wide behavior on the Python healer; the native
+healer's adoption runs in tests/test-agents-heal-token.sh.
 """
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
@@ -87,50 +85,3 @@ def _seed_claude_transcript(projects_dir: Path, session_id: str, cwd: Path) -> N
     (slot / f"{session_id}.jsonl").write_text(
         json.dumps({"cwd": str(cwd)}) + "\n"
     )
-
-
-def test_binary_heal_token_resolves_a_foreign_session(two_repos, tmp_path):
-    """From the footnote scope AND the foreign repo, the same foreign-repo
-    session resolves (exit 0). The retired binary refused the first shape with
-    exit 3 and a --cross-project remedy."""
-    main, _worktree, foreign = two_repos
-    sid = "ab12cdef-0000-0000-0000-000000000009"
-    projects = tmp_path / "projects"
-    _seed_claude_transcript(projects, sid, foreign)
-
-    env = {
-        **os.environ,
-        # Point the probe at the seeded transcript; isolate the registry.
-        "FNO_CLAUDE_PROJECTS_DIR": str(projects),
-        "FNO_STATE_DIR": str(tmp_path / "fno-state"),
-        # Keep the host's real sessions/codex/opencode stores out of the probe.
-        "FNO_CLAUDE_SESSIONS_DIR": str(tmp_path / "sessions-empty"),
-        "FNO_CODEX_SESSIONS_DIR": str(tmp_path / "codex-empty"),
-    }
-    for k in ("FNO_AGENTS_HOME",):
-        env.pop(k, None)
-    (tmp_path / "fno-state").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "sessions-empty").mkdir(exist_ok=True)
-    (tmp_path / "codex-empty").mkdir(exist_ok=True)
-
-    cli_dir = Path(__file__).resolve().parents[2]  # .../cli (the uv project)
-
-    def _run(cwd: Path):
-        # fno-py is the Python CLI entrypoint (imports the editable source); the
-        # Rust `fno` mux dispatches to a separately-deployed fno-py, so it would
-        # test the deployed copy, not this worktree's fix.
-        return subprocess.run(
-            ["uv", "run", "--project", str(cli_dir), "fno-py",
-             "agents", "heal-token", "ab12cdef"],
-            cwd=str(cwd), env=env, capture_output=True, text=True,
-        )
-
-    # From the footnote scope: the foreign-repo session resolves (exit 0).
-    out_main = _run(main)
-    assert out_main.returncode == 0, out_main.stderr + out_main.stdout
-    row = json.loads(out_main.stdout.strip().splitlines()[-1])
-    assert row["harness_session_id"] == sid
-
-    # From the foreign repo itself: the same session resolves too.
-    out_foreign = _run(foreign)
-    assert out_foreign.returncode == 0, out_foreign.stderr + out_foreign.stdout

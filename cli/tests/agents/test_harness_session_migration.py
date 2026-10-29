@@ -93,7 +93,4 @@ def test_whoami_does_not_cross_match_another_harness():
         harness="claude",
         harness_session_id="SHARED",
     )
-    res = whoami.resolve_self(
-        env={}, registry=[claude_row], session_uuid="SHARED", harness="codex"
-    )
-    assert not res.registered
+    assert whoami._find_by_session([claude_row], "SHARED", "codex") is None
