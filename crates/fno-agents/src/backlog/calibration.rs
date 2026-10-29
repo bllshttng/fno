@@ -7,7 +7,13 @@
 //! `smooth` is derived entirely from facts a node cannot assert about
 //! itself: zero `friction` rows against it, and a `difficulty_history` that
 //! was never revised past its filed entry. No agent writes this field, so
-//! no agent can flatter it.
+//! no agent can flatter it. A node created before the journal's first
+//! friction row had no recorder watching it, so its `smooth` reads null:
+//! no row there is missing data, not a clean run.
+//!
+//! `revisions` answers where a filed band ended up, over every done node
+//! with a history, cost or no cost - the read a planner consults before it
+//! picks a band.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -39,19 +45,42 @@ pub struct NodeCalibration {
     /// Friction origin -> row count (`help`, `result_blocked`, `gate_refusal`,
     /// `review_round`, `ci_failure`). Absent entirely when the node hit none.
     pub friction: BTreeMap<String, u32>,
-    /// `friction.is_empty() && !re_estimated` - no self-report possible.
-    pub smooth: bool,
+    /// `Some(false)` when re-estimated; otherwise `friction.is_empty()` when
+    /// a recorder covered the node, and `None` when none did.
+    pub smooth: Option<bool>,
 }
 
-/// One `(domain, planned_difficulty)` rollup: which plans/domains run clean.
+/// One `(domain, planned_difficulty, planned_size)` rollup: which plans run
+/// clean. `smooth_count` counts only measured nodes, out of `measured_count`.
 #[derive(Debug, Clone, Serialize)]
 pub struct AggregateRow {
     pub domain: Option<String>,
     pub planned_difficulty: Option<String>,
+    pub planned_size: Option<String>,
     pub node_count: usize,
+    pub measured_count: usize,
     pub smooth_count: usize,
     pub avg_cost_usd: f64,
     pub avg_duration_hours: Option<f64>,
+}
+
+/// One `(domain, filed band)` row: how many done nodes were filed at that
+/// band, and how many ended above or below it.
+#[derive(Debug, Clone, Serialize)]
+pub struct RevisionRow {
+    pub domain: Option<String>,
+    pub filed: Option<String>,
+    pub nodes: usize,
+    pub revised_up: usize,
+    pub revised_down: usize,
+}
+
+/// The batched friction read: counts per node, whether the store read at
+/// all, and the timestamp of its first friction row (the recorder's start).
+pub struct FrictionRead {
+    pub by_node: BTreeMap<String, BTreeMap<String, u32>>,
+    pub readable: bool,
+    pub first_ms: Option<i64>,
 }
 
 /// Reuses the event store's own RFC3339 parser rather than a second hand-
@@ -64,13 +93,18 @@ fn parse_rfc3339_hours(a: &str, b: &str) -> Option<f64> {
     (hours >= 0.0).then_some(hours)
 }
 
+fn history_value(entry: &Value) -> Option<&str> {
+    entry.get("value").and_then(Value::as_str)
+}
+
 /// Computes one [`NodeCalibration`] per done node that carries at least one
 /// `cost_sessions` row. `friction_by_node` is the caller's batched read (see
-/// [`friction_counts_by_node`]); a node absent from it reads as zero
-/// friction, never as "unknown" or "skipped".
+/// [`read_friction`]); a node absent from it reads as zero friction when
+/// `first_ms` says a recorder covered it, and as unmeasured otherwise.
 pub fn compute(
     nodes: &[Value],
     friction_by_node: &BTreeMap<String, BTreeMap<String, u32>>,
+    first_ms: Option<i64>,
 ) -> Vec<NodeCalibration> {
     let mut out = Vec::new();
     for node in nodes {
@@ -95,7 +129,7 @@ pub fn compute(
             .unwrap_or(&[]);
         let planned_difficulty = difficulty_history
             .first()
-            .and_then(|e| e.get("value").and_then(Value::as_str))
+            .and_then(history_value)
             .map(str::to_string);
         // A blueprint confirmation appends a history row too (same value,
         // source "blueprint"), so `len() > 1` alone would flag an
@@ -104,22 +138,33 @@ pub fn compute(
         let re_estimated = difficulty_history
             .iter()
             .skip(1)
-            .any(|e| e.get("value").and_then(Value::as_str) != planned_difficulty.as_deref());
+            .any(|e| history_value(e) != planned_difficulty.as_deref());
         let planned_size = node.get("size").and_then(Value::as_str).map(str::to_string);
         let actual_cost_usd: f64 = cost_sessions
             .iter()
             .filter_map(|s| s.get("cost_usd").and_then(Value::as_f64))
             .sum();
         let session_count = cost_sessions.len();
-        let duration_hours = match (
-            node.get("created_at").and_then(Value::as_str),
-            node.get("completed_at").and_then(Value::as_str),
-        ) {
+        let created_at = node.get("created_at").and_then(Value::as_str);
+        let duration_hours = match (created_at, node.get("completed_at").and_then(Value::as_str)) {
             (Some(a), Some(b)) => parse_rfc3339_hours(a, b),
             _ => None,
         };
+        let measured = match (
+            first_ms,
+            created_at.and_then(crate::event_store::parse_rfc3339_ms),
+        ) {
+            (Some(first), Some(created)) => created >= first,
+            _ => false,
+        };
         let friction = friction_by_node.get(id).cloned().unwrap_or_default();
-        let smooth = friction.is_empty() && !re_estimated;
+        let smooth = if re_estimated {
+            Some(false)
+        } else if measured {
+            Some(friction.is_empty())
+        } else {
+            None
+        };
         out.push(NodeCalibration {
             id: id.to_string(),
             title: node
@@ -144,23 +189,28 @@ pub fn compute(
     out
 }
 
-/// Groups [`NodeCalibration`] rows by `(domain, planned_difficulty)`,
-/// averaging cost and duration and counting how many came in smooth - the
-/// "which domains/sizes run clean vs rough" read.
+/// Groups [`NodeCalibration`] rows by `(domain, planned_difficulty,
+/// planned_size)`, averaging cost and duration and counting how many
+/// measured nodes came in smooth.
 pub fn aggregate(rows: &[NodeCalibration]) -> Vec<AggregateRow> {
-    let mut groups: BTreeMap<(Option<String>, Option<String>), Vec<&NodeCalibration>> =
-        BTreeMap::new();
+    type Key = (Option<String>, Option<String>, Option<String>);
+    let mut groups: BTreeMap<Key, Vec<&NodeCalibration>> = BTreeMap::new();
     for row in rows {
         groups
-            .entry((row.domain.clone(), row.planned_difficulty.clone()))
+            .entry((
+                row.domain.clone(),
+                row.planned_difficulty.clone(),
+                row.planned_size.clone(),
+            ))
             .or_default()
             .push(row);
     }
     groups
         .into_iter()
-        .map(|((domain, planned_difficulty), members)| {
+        .map(|((domain, planned_difficulty, planned_size), members)| {
             let node_count = members.len();
-            let smooth_count = members.iter().filter(|m| m.smooth).count();
+            let measured_count = members.iter().filter(|m| m.smooth.is_some()).count();
+            let smooth_count = members.iter().filter(|m| m.smooth == Some(true)).count();
             let avg_cost_usd =
                 members.iter().map(|m| m.actual_cost_usd).sum::<f64>() / node_count.max(1) as f64;
             let durations: Vec<f64> = members.iter().filter_map(|m| m.duration_hours).collect();
@@ -172,7 +222,9 @@ pub fn aggregate(rows: &[NodeCalibration]) -> Vec<AggregateRow> {
             AggregateRow {
                 domain,
                 planned_difficulty,
+                planned_size,
                 node_count,
+                measured_count,
                 smooth_count,
                 avg_cost_usd,
                 avg_duration_hours,
@@ -181,21 +233,65 @@ pub fn aggregate(rows: &[NodeCalibration]) -> Vec<AggregateRow> {
         .collect()
 }
 
-/// One batched read of every `friction` row in the journal, grouped
-/// client-side by `data.node_id` - never one query per node. A row with no
-/// `node_id` (friction with no node correlation) is skipped: it cannot
-/// contribute to any node's calibration.
-pub fn friction_counts_by_node(journal: &Path) -> BTreeMap<String, BTreeMap<String, u32>> {
-    friction_counts_by_node_checked(journal).0
+/// Where each filed band ended, per domain, over every done node with a
+/// `difficulty_history` - no `cost_sessions` needed. The last entry is the
+/// final band; a band outside the dispatch grid's order counts toward
+/// `nodes` and neither direction.
+pub fn revisions(nodes: &[Value]) -> Vec<RevisionRow> {
+    let mut groups: BTreeMap<(Option<String>, Option<String>), RevisionRow> = BTreeMap::new();
+    for node in nodes {
+        if node.get("status").and_then(Value::as_str) != Some("done") {
+            continue;
+        }
+        let Some(history) = node
+            .get("difficulty_history")
+            .and_then(Value::as_array)
+            .filter(|h| !h.is_empty())
+        else {
+            continue;
+        };
+        let domain = node
+            .get("domain")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let filed = history.first().and_then(history_value);
+        let filed_rank = filed.map_or(-1, crate::route_slot::band_rank);
+        let final_rank = history
+            .last()
+            .and_then(history_value)
+            .map_or(-1, crate::route_slot::band_rank);
+        let row = groups
+            .entry((domain.clone(), filed.map(str::to_string)))
+            .or_insert_with(|| RevisionRow {
+                domain,
+                filed: filed.map(str::to_string),
+                nodes: 0,
+                revised_up: 0,
+                revised_down: 0,
+            });
+        row.nodes += 1;
+        if filed_rank >= 0 && final_rank >= 0 {
+            if final_rank > filed_rank {
+                row.revised_up += 1;
+            } else if final_rank < filed_rank {
+                row.revised_down += 1;
+            }
+        }
+    }
+    groups.into_values().collect()
 }
 
-/// The same read, reporting store readability: an unreadable store must not
-/// read as zero friction downstream, so the by-lane scorecard carries the
-/// unreadable case as None and emits null instead of a measured zero.
-pub fn friction_counts_by_node_checked(
-    journal: &Path,
-) -> (BTreeMap<String, BTreeMap<String, u32>>, bool) {
-    let mut out: BTreeMap<String, BTreeMap<String, u32>> = BTreeMap::new();
+/// One batched read of every `friction` row in the journal, grouped
+/// client-side by `data.node_id` - never one query per node. A row with no
+/// `node_id` (friction with no node correlation) is skipped for the counts
+/// but still dates the recorder's first row. An unreadable store reports
+/// `readable: false`, so a caller never mistakes silence for a clean signal.
+pub fn read_friction(journal: &Path) -> FrictionRead {
+    let mut out = FrictionRead {
+        by_node: BTreeMap::new(),
+        readable: true,
+        first_ms: None,
+    };
     let query = crate::event_store::EventQuery {
         types: vec!["friction".to_string()],
         ..Default::default()
@@ -205,17 +301,18 @@ pub fn friction_counts_by_node_checked(
         Err(err) => {
             // Unlike a fresh node with no friction ever recorded, this is an
             // unreadable store (locked, corrupt, or a newer schema this
-            // build cannot parse) - every node would read falsely smooth
-            // with no sign anything was wrong. Warn so that silence is never
-            // mistaken for a clean signal.
+            // build cannot parse). Warn so that silence is never mistaken
+            // for a clean signal.
             eprintln!(
                 "fno backlog calibration: could not read the friction event store ({err}); \
-every node's friction count reads as zero rather than unknown."
+no node's friction reads as measured."
             );
-            return (out, false);
+            out.readable = false;
+            return out;
         }
     };
     for row in rows {
+        out.first_ms = Some(out.first_ms.map_or(row.ts_ms, |m| m.min(row.ts_ms)));
         // The canonical identity reader (resolves both the "node_id" and
         // "node" key aliases a friction row could carry), not a second
         // hand-rolled parse of the same envelope.
@@ -226,9 +323,13 @@ every node's friction count reads as zero rather than unknown."
             .ok()
             .and_then(|env| env.get("data")?.get("origin")?.as_str().map(str::to_string))
             .unwrap_or_else(|| "unknown".to_string());
-        *out.entry(node_id).or_default().entry(origin).or_insert(0) += 1;
+        *out.by_node
+            .entry(node_id)
+            .or_default()
+            .entry(origin)
+            .or_insert(0) += 1;
     }
-    (out, true)
+    out
 }
 
 #[cfg(test)]
@@ -249,41 +350,98 @@ mod tests {
         })
     }
 
+    fn recorder_from(ts: &str) -> Option<i64> {
+        crate::event_store::parse_rfc3339_ms(ts)
+    }
+
     #[test]
     fn ci_failure_friction_or_a_re_estimate_makes_it_rough() {
         let friction = BTreeMap::from([(
             "x-bbbb".to_string(),
             BTreeMap::from([("ci_failure".to_string(), 1)]),
         )]);
-        let rows = compute(&[done_node("x-bbbb", "code", "medium", 5.0)], &friction);
-        assert!(!rows[0].smooth);
+        let covered = recorder_from("2025-12-01T00:00:00Z");
+        let rows = compute(
+            &[done_node("x-bbbb", "code", "medium", 5.0)],
+            &friction,
+            covered,
+        );
+        assert_eq!(rows[0].smooth, Some(false));
 
         let mut revised = done_node("x-cccc", "code", "medium", 5.0);
         revised["difficulty_history"] = json!([
             {"value": "medium", "source": "filed", "ts": "2026-01-01T00:00:00Z"},
             {"value": "high", "source": "revised", "ts": "2026-01-02T00:00:00Z"}
         ]);
-        let rows = compute(&[revised], &BTreeMap::new());
-        assert!(rows[0].re_estimated && !rows[0].smooth);
+        let rows = compute(&[revised], &BTreeMap::new(), None);
+        assert!(rows[0].re_estimated);
+        assert_eq!(rows[0].smooth, Some(false));
     }
 
     #[test]
-    fn aggregate_groups_by_domain_and_planned_difficulty() {
+    fn smooth_is_null_before_the_friction_recorder() {
+        let node = done_node("x-dddd", "code", "medium", 5.0);
+        let later = recorder_from("2026-02-01T00:00:00Z");
+        let rows = compute(&[node.clone()], &BTreeMap::new(), later);
+        assert_eq!(rows[0].smooth, None);
+        let agg = aggregate(&rows);
+        assert_eq!((agg[0].measured_count, agg[0].smooth_count), (0, 0));
+
+        let earlier = recorder_from("2025-12-01T00:00:00Z");
+        let rows = compute(&[node], &BTreeMap::new(), earlier);
+        assert_eq!(rows[0].smooth, Some(true));
+    }
+
+    #[test]
+    fn aggregate_groups_by_domain_difficulty_and_size() {
+        let mut sized_s = done_node("x-0000", "code", "medium", 4.0);
+        sized_s["size"] = json!("S");
+        let mut sized_l = done_node("x-1111", "code", "medium", 6.0);
+        sized_l["size"] = json!("L");
         let nodes = [
-            done_node("x-0000", "code", "medium", 4.0),
-            done_node("x-1111", "code", "medium", 6.0),
-            done_node("x-2222", "docs", "low", 1.0),
+            sized_s,
+            sized_l,
+            done_node("x-2222", "code", "medium", 5.0),
+            done_node("x-3333", "code", "medium", 7.0),
         ];
-        let agg = aggregate(&compute(&nodes, &BTreeMap::new()));
-        let code_medium = agg
+        let covered = recorder_from("2025-12-01T00:00:00Z");
+        let agg = aggregate(&compute(&nodes, &BTreeMap::new(), covered));
+        assert_eq!(agg.len(), 3);
+        let no_size = agg
             .iter()
-            .find(|a| {
-                a.domain.as_deref() == Some("code")
-                    && a.planned_difficulty.as_deref() == Some("medium")
-            })
-            .expect("code/medium group present");
-        assert_eq!(code_medium.node_count, 2);
-        assert_eq!(code_medium.smooth_count, 2);
-        assert!((code_medium.avg_cost_usd - 5.0).abs() < 1e-9);
+            .find(|a| a.planned_size.is_none())
+            .expect("code/medium group with no size present");
+        assert_eq!(no_size.node_count, 2);
+        assert_eq!((no_size.measured_count, no_size.smooth_count), (2, 2));
+        assert!((no_size.avg_cost_usd - 6.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn revisions_count_direction_and_ignore_confirmation() {
+        let mut up = done_node("x-4444", "code", "medium", 1.0);
+        up["difficulty_history"] = json!([
+            {"value": "medium", "source": "filed"},
+            {"value": "high", "source": "blueprint"}
+        ]);
+        let mut down = done_node("x-5555", "code", "medium", 1.0);
+        down["difficulty_history"] = json!([
+            {"value": "medium", "source": "filed"},
+            {"value": "low", "source": "update"}
+        ]);
+        let mut confirmed = done_node("x-6666", "code", "medium", 1.0);
+        confirmed["difficulty_history"] = json!([
+            {"value": "medium", "source": "filed"},
+            {"value": "medium", "source": "blueprint"}
+        ]);
+        // No cost_sessions: revisions still counts it, compute skips it.
+        confirmed.as_object_mut().unwrap().remove("cost_sessions");
+        let nodes = [up, down, confirmed];
+        let rows = revisions(&nodes);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (rows[0].nodes, rows[0].revised_up, rows[0].revised_down),
+            (3, 1, 1)
+        );
+        assert_eq!(compute(&nodes, &BTreeMap::new(), None).len(), 2);
     }
 }

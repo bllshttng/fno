@@ -421,7 +421,7 @@ fn hour_in_utc_window(hour: u8, start: u8, end: u8) -> bool {
 
 /// A row's strength rank; a band outside the vocabulary (including unbanded)
 /// ranks -1, below every banded row.
-fn band_rank(band: &str) -> i64 {
+pub(crate) fn band_rank(band: &str) -> i64 {
     BAND_RANK_KEYS
         .iter()
         .position(|k| *k == band)
