@@ -27,7 +27,6 @@ These Python commands still refuse `-J`. The list was regenerated 2026-09-15 wit
 
 no-flag: cli/src/fno/agents/cli.py cmd_role
 no-flag: cli/src/fno/agents/cli.py cmd_discovered_json
-no-flag: cli/src/fno/agents/cli.py cmd_heal_token
 no-flag: cli/src/fno/agents/distress_reads.py cmd_distress_verdicts
 no-flag: cli/src/fno/agents/gate_reads.py cmd_gate_status
 no-flag: cli/src/fno/backlog/capture.py cmd_add

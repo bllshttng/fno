@@ -211,29 +211,6 @@ pub fn find_node_index(entries: &[Value], node_id: &str) -> Option<usize> {
     None
 }
 
-/// The archived read-through on a working-graph miss: the same tiers over the
-/// archived residents, else a `previous_id` hit; stamps `_archived` on the
-/// clone it returns.
-pub fn archive_hit(entries: &[Value], query: &str) -> Option<Value> {
-    if let Some(hit) = resolve_tiers(entries, query) {
-        let mut row = hit.clone();
-        if let Some(obj) = row.as_object_mut() {
-            obj.insert("_archived".to_string(), Value::Bool(true));
-        }
-        return Some(row);
-    }
-    for e in entries {
-        if e.get("previous_id").and_then(Value::as_str) == Some(query) {
-            let mut row = e.clone();
-            if let Some(obj) = row.as_object_mut() {
-                obj.insert("_archived".to_string(), Value::Bool(true));
-            }
-            return Some(row);
-        }
-    }
-    None
-}
-
 /// Whether setting `node.parent = proposed_parent_id` forms a cycle: the
 /// proposed parent's ancestor chain already reaches the node.
 pub fn would_create_cycle(entries: &[Value], node_id: &str, proposed_parent_id: &str) -> bool {

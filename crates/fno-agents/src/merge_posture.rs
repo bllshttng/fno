@@ -116,23 +116,6 @@ pub fn inject_no_merge(command: &str) -> String {
     parts.join(" ")
 }
 
-/// Remove the carrier from a /target-family command: the first standalone
-/// flag and the first standalone legacy token. A pathological id like
-/// `no-merger-x` is never touched (standalone tokens only), and non-family
-/// commands pass through so a prose brief's text is never mangled.
-pub fn strip_no_merge(command: &str) -> String {
-    if !is_target_family(command) {
-        return command.to_string();
-    }
-    let mut parts: Vec<&str> = command.split_whitespace().collect();
-    for token in [table().flag.as_str(), table().legacy_token.as_str()] {
-        if let Some(pos) = parts[1..].iter().position(|p| *p == token) {
-            parts.remove(pos + 1);
-        }
-    }
-    parts.join(" ")
-}
-
 /// The env posture a message dictates for the carrier env key. `Hold` covers
 /// both the ambiguous bare-token case and non-family prose (which clears
 /// nothing).

@@ -1321,7 +1321,6 @@ fn pin_clean_board(dir: &Path, scope: &str) {
         &format!(
             "#!/bin/sh\nif [ \"$1\" = \"agents\" ] && [ \"$2\" = \"org\" ] && [ \"$3\" = \"drain\" ]; \
              then echo '{{\"scope\":\"{scope}\",\"undelivered\":0}}'; exit 0; fi\n\
-             if [ \"$1\" = \"agents\" ] && [ \"$2\" = \"name\" ]; then echo 'k-9331-w0'; exit 0; fi\n\
              echo '{{}}'\n"
         ),
     )
@@ -1345,7 +1344,6 @@ fn write_stub_fno_board(dir: &Path, actionable: u64) {
         &format!(
             "if [ \"$1\" = \"agents\" ] && [ \"$2\" = \"org\" ] && [ \"$3\" = \"drain\" ]; then \
              echo '{{\"scope\":\"epic-x\",\"undelivered\": {actionable}}}'; exit 0; fi\n\
-             if [ \"$1\" = \"agents\" ] && [ \"$2\" = \"name\" ]; then echo 'k-9331-w0'; exit 0; fi\n\
              if [ \"$1\" = \"inbox\" ]; then echo '{{\"actionable\": {actionable}, \"unreadable\": 0, \"queues\": []}}'; exit 0; fi\nexit 1"
         ),
     );
@@ -1419,7 +1417,7 @@ fn lead_walk_proceeds_past_driver_validation_into_preflight() {
         "the header must name the lead driver: {stdout}"
     );
     assert!(
-        stdout.contains("session:    k-9331-w"),
+        stdout.contains("session:    kl-th-epic-x-w"),
         "the header must show the per-invocation walk key: {stdout}"
     );
 }
@@ -1547,7 +1545,7 @@ fn lead_walk_dispatches_past_a_prior_lead_terminal_and_bills_one_respawn() {
         "the continue prompt must name the lead: {env_dump}"
     );
     assert!(
-        env_dump.contains("FNO_LEAD_WALK_SESSION_KEY=k-9331-w"),
+        env_dump.contains("FNO_LEAD_WALK_SESSION_KEY=kl-th-epic-x-w"),
         "the walk key must reach the child so its terminal correlates: {env_dump}"
     );
     assert!(

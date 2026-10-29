@@ -15,6 +15,7 @@ guards.yml
 harness-launch-docs.yml
 install-script-portability.yml
 main-binaries.yml
+merge-queue-gate.yml
 multiplayer-attestation.yml
 release.yml
 pitfalls.yml
