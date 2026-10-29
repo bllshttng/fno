@@ -201,6 +201,16 @@ pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
         "cost_usd": inp.cost_usd,
         "sessions": sessions.len(),
     });
+    for (key, f) in [
+        ("ai_turns", (|s| s.ai_turns) as Count),
+        ("tool_calls", |s| s.tool_calls),
+    ] {
+        let (n, reason) = sum_scans(&sessions, inp, f);
+        header[key] = json!(n);
+        if let Some(reason) = reason {
+            header[format!("{key}_reason")] = json!(reason);
+        }
+    }
     if inp.cost_usd.is_none() {
         header["cost_reason"] = json!("no cost recorded");
     }
@@ -217,12 +227,41 @@ pub(crate) fn fold(node: &Value, inp: &Inputs) -> Value {
     })
 }
 
+type Count = fn(&SessionScan) -> Option<u64>;
+
 /// A session row's window; an open end or a missing start reads unbounded.
 fn window_of(s: &Value) -> (i64, i64) {
     (
         str_of(s, "started_at").and_then(ms_of).unwrap_or(i64::MIN),
         str_of(s, "ended_at").and_then(ms_of).unwrap_or(i64::MAX),
     )
+}
+
+/// One header count summed over the node's sessions. A session with no
+/// scan, no count, or a transcript that spans other work leaves the sum
+/// null with the reason.
+fn sum_scans(sessions: &[&Value], inp: &Inputs, f: Count) -> (Option<u64>, Option<String>) {
+    let mut total = 0u64;
+    for s in sessions {
+        let Some(scan) = inp.scans.get(str_of(s, "session_id").unwrap_or_default()) else {
+            return (None, Some("not on this host".into()));
+        };
+        let (start, end) = window_of(s);
+        if !scan
+            .span
+            .is_none_or(|(first, last)| first >= start && last <= end)
+        {
+            return (None, Some("a session spans other work".into()));
+        }
+        let Some(n) = f(scan) else {
+            return (
+                None,
+                Some(scan.reason.clone().unwrap_or_else(|| "not read".into())),
+            );
+        };
+        total += n;
+    }
+    (Some(total), None)
 }
 
 /// One session's counts inside its phase window. A transcript that lies
