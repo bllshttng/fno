@@ -192,13 +192,14 @@ _wt_refresh_cwd_snapshot() {
     _WT_CWD_SNAPSHOT=""
     _WT_CWD_SNAPSHOT_OK=0
     # A fresh machine-wide cache serves the snapshot without the read - but
-    # only ONCE per process: a later refresh in the same sweep (the apply
-    # pass re-reads to catch a process rooted after the inventory pass) must
-    # go live, or the recheck would serve the very read it exists to
-    # supersede. The presence guard keeps the sed-extracted partial contexts
-    # (which never sourced the cache lib) on the uncached path below.
+    # only ONCE per process, whatever path served it: a later refresh in the
+    # same sweep (the apply pass re-reads to catch a process rooted after
+    # the inventory pass) must go live, or the recheck would serve the very
+    # read it exists to supersede. The presence guard keeps the
+    # sed-extracted partial contexts (which never sourced the cache lib) on
+    # the uncached path below.
     if declare -F wt_cwd_cache_load >/dev/null 2>&1 && [[ "${_WT_CWD_CACHE_SERVED:-0}" -eq 0 ]]; then
-        raw="$(wt_cwd_cache_load 2>/dev/null)" && { _WT_CWD_SNAPSHOT_OK=1; _WT_CWD_CACHE_SERVED=1; }
+        raw="$(wt_cwd_cache_load 2>/dev/null)" && _WT_CWD_SNAPSHOT_OK=1
     fi
     if [[ "$_WT_CWD_SNAPSHOT_OK" -eq 0 ]]; then
         command -v lsof >/dev/null 2>&1 || return 1
@@ -213,6 +214,7 @@ _wt_refresh_cwd_snapshot() {
         fi
         _WT_CWD_SNAPSHOT_OK=1
     fi
+    _WT_CWD_CACHE_SERVED=1
     _WT_CWD_SNAPSHOT="$(printf '%s\n' "$raw" | awk '
         /^p[0-9]+$/ { pid = substr($0, 2); next }
         /^n/ && pid != "" { print pid "\t" substr($0, 2) }
