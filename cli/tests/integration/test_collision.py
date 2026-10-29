@@ -2,12 +2,14 @@
 
 Covers:
 - ``parse_files_to_modify`` for quick plans
-- ``find_collisions`` severity scoring + action inference
-- ``_load_thresholds`` layered config
 - ``fno backlog supersede`` CLI command
-- ``find_acknowledged_collisions`` resolved-collision reconciliation
 - ``fno backlog triage health`` aggregate report
 - ``superseded`` ``status`` derivation
+
+The severity-scoring, threshold-loading and acknowledged-reconciliation
+engine these sections once exercised is retired: its Rust owner is
+``crates/fno-agents/src/backlog/collision.rs``, and the graph CLI's
+collisions sub-app and triage health went native before the engine died.
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
@@ -122,40 +124,6 @@ Some context.
     return path
 
 
-# ---------------------------------------------------------------------------
-# parse_files_to_modify
-# ---------------------------------------------------------------------------
-
-
-def test_parse_strips_parentheticals_and_line_suffixes(tmp_path):
-    from fno.graph.collision import parse_files_to_modify
-
-    plan = tmp_path / "p.md"
-    plan.write_text(
-        """# t
-
-## Files to Modify
-
-| File | Action |
-|------|--------|
-| `path/to/file.py:42` | edit |
-| `~/.fno/settings.yaml` (template) | edit |
-| `cli/src/fno/setup/` | edit |
-"""
-    )
-    out = parse_files_to_modify(plan)
-    assert "path/to/file.py" in out
-    assert "~/.fno/settings.yaml" in out
-    assert "cli/src/fno/setup/" in out
-    # Line suffix should be stripped, not preserved
-    assert "path/to/file.py:42" not in out
-
-
-# ---------------------------------------------------------------------------
-# find_collisions
-# ---------------------------------------------------------------------------
-
-
 def _seed_node(graph: list[dict], *, id_: str, plan_path: str, created_at: str = "2026-04-27T00:00:00+00:00") -> dict:
     node = {
         "id": id_,
@@ -183,179 +151,33 @@ def _seed_node(graph: list[dict], *, id_: str, plan_path: str, created_at: str =
     return node
 
 
-def test_high_severity_when_subset(tmp_path):
-    from fno.graph.collision import find_collisions
-
-    # candidate is a strict subset of other -> absorb
-    cand = _write_quick_plan(tmp_path / "cand.md", ["src/a.py", "src/b.py"])
-    other = _write_quick_plan(tmp_path / "other.md", ["src/a.py", "src/b.py", "src/c.py", "src/d.py"])
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-other", plan_path=str(other))
-
-    cols = find_collisions(cand, graph)
-    assert len(cols) == 1
-    assert cols[0].severity == "high"
-    assert cols[0].recommended_action == "absorb"
-
-
-def test_high_severity_when_superset(tmp_path):
-    from fno.graph.collision import find_collisions
-
-    # candidate is a strict superset of other -> supersede
-    cand = _write_quick_plan(tmp_path / "cand.md", ["src/a.py", "src/b.py", "src/c.py", "src/d.py"])
-    other = _write_quick_plan(tmp_path / "other.md", ["src/a.py", "src/b.py"])
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-other", plan_path=str(other))
-
-    cols = find_collisions(cand, graph)
-    assert len(cols) == 1
-    assert cols[0].severity == "high"
-    assert cols[0].recommended_action == "supersede"
-
-
-def test_one_shared_file_of_six_and_two_never_absorbs(tmp_path):
-    from fno.graph.collision import find_collisions
-
-    # 1 shared of 6 and 2: over half of the NARROWER side, under half the
-    # wider one - coordinate, never absorb
-    cand = _write_quick_plan(
-        tmp_path / "cand.md",
-        ["src/a.py", "src/b.py", "src/c.py", "src/d.py", "src/e.py", "src/f.py"],
-    )
-    other = _write_quick_plan(tmp_path / "other.md", ["src/a.py", "src/z.py"])
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-other", plan_path=str(other), created_at="2026-04-27T00:00:00+00:00")
-    _seed_node(graph, id_="ab-cand", plan_path=str(cand), created_at="2026-04-28T00:00:00+00:00")
-
-    cols = find_collisions(cand, graph, self_id="ab-cand")
-    assert len(cols) == 1
-    assert cols[0].recommended_action == "coordinate"
-    assert cols[0].severity == "high"
-
-
-def test_low_severity_single_overlap(tmp_path):
-    from fno.graph.collision import find_collisions
-
-    cand = _write_quick_plan(tmp_path / "cand.md", ["src/a.py", "src/b.py", "src/c.py", "src/d.py", "src/e.py"])
-    other = _write_quick_plan(tmp_path / "other.md", ["src/a.py", "src/x.py", "src/y.py", "src/z.py", "src/w.py"])
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-other", plan_path=str(other))
-
-    cols = find_collisions(
-        cand, graph,
-        thresholds={"high_count": 3, "high_ratio": 0.5, "medium_count": 2, "medium_ratio": 0.25},
-    )
-    assert len(cols) == 1
-    assert cols[0].severity == "low"
-    # Low severity gets a coordinate recommendation with split rationale
-    assert cols[0].recommended_action == "coordinate"
-    assert "split" in cols[0].rationale.lower()
-
-
-def test_self_collision_excluded(tmp_path):
-    from fno.graph.collision import find_collisions
-
-    cand = _write_quick_plan(tmp_path / "cand.md", ["src/a.py", "src/b.py"])
-    other = _write_quick_plan(tmp_path / "other.md", ["src/a.py", "src/b.py"])
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-self", plan_path=str(cand))
-    _seed_node(graph, id_="ab-other", plan_path=str(other))
-
-    cols = find_collisions(cand, graph, self_id="ab-self")
-    assert len(cols) == 1
-    assert cols[0].with_node_id == "ab-other"
-
-
-def test_done_nodes_excluded(tmp_path):
-    """Done plans should not show as collisions; the work already shipped."""
-    from fno.graph.collision import find_collisions
-
-    cand = _write_quick_plan(tmp_path / "cand.md", ["src/a.py", "src/b.py"])
-    other = _write_quick_plan(tmp_path / "other.md", ["src/a.py", "src/b.py"])
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-done", plan_path=str(other))
-    graph[0]["completed_at"] = "2026-04-27T00:00:00+00:00"
-    graph[0]["status"] = "done"
-
-    cols = find_collisions(cand, graph)
-    assert cols == []
-
-
 # ---------------------------------------------------------------------------
-# _load_thresholds
+# parse_files_to_modify
 # ---------------------------------------------------------------------------
 
 
-def test_load_thresholds_project_beats_user(tmp_path):
-    from fno.graph.collision import _load_thresholds
+def test_parse_strips_parentheticals_and_line_suffixes(tmp_path):
+    from fno.graph.collision import parse_files_to_modify
 
-    user = tmp_path / "user.yaml"
-    user.write_text(
-        """config:
-  collision:
-    severity_thresholds:
-      high_count: 5
-      high_ratio: 0.9
-      medium_count: 4
-      medium_ratio: 0.4
+    plan = tmp_path / "p.md"
+    plan.write_text(
+        """# t
+
+## Files to Modify
+
+| File | Action |
+|------|--------|
+| `path/to/file.py:42` | edit |
+| `~/.fno/settings.yaml` (template) | edit |
+| `cli/src/fno/setup/` | edit |
 """
     )
-    project = tmp_path / "project.yaml"
-    project.write_text(
-        """config:
-  collision:
-    severity_thresholds:
-      high_count: 2
-"""
-    )
-    out = _load_thresholds(project_settings=project, user_settings=user)
-    # project wins where present
-    assert out["high_count"] == 2
-    # user fills in the rest
-    assert out["high_ratio"] == 0.9
-    assert out["medium_count"] == 4
-    assert out["medium_ratio"] == 0.4
-
-
-def test_load_thresholds_malformed_warns_and_falls_back(tmp_path, caplog):
-    import logging
-
-    from fno.graph.collision import _load_thresholds, _default_thresholds_loaded
-
-    proj = tmp_path / "project.yaml"
-    proj.write_text(
-        """config:
-  collision:
-    severity_thresholds:
-      high_count: not-a-number
-      high_ratio: -0.5
-"""
-    )
-    with caplog.at_level(logging.WARNING, logger="fno.config"):
-        out = _load_thresholds(project_settings=proj, user_settings=tmp_path / "missing.yaml")
-    # The model's per-key sanitizer warns via the logger and falls back to the
-    # modeled default for the bad key.
-    assert any(
-        "not numeric" in r.message or "negative" in r.message for r in caplog.records
-    )
-    expected = _default_thresholds_loaded()
-    assert out["high_count"] == expected["high_count"]
-    assert out["high_ratio"] == expected["high_ratio"]
-
-
-# ---------------------------------------------------------------------------
-# _resolve_plan_path
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_plan_path_tilde_expanded(tmp_path):
-    from fno.graph.collision import _resolve_plan_path
-
-    out = _resolve_plan_path("~/foo/bar.md", tmp_path)
-    # Tilde must be expanded; result is absolute and points outside repo_root
-    assert out.is_absolute()
-    assert "foo/bar.md" in str(out)
-    assert "~" not in str(out)
+    out = parse_files_to_modify(plan)
+    assert "path/to/file.py" in out
+    assert "~/.fno/settings.yaml" in out
+    assert "cli/src/fno/setup/" in out
+    # Line suffix should be stripped, not preserved
+    assert "path/to/file.py:42" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -527,29 +349,6 @@ def test_supersede_guard_not_bypassed_by_abbreviated_id(tmp_graph, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# find_acknowledged_collisions reconciliation
-# ---------------------------------------------------------------------------
-
-
-def test_acknowledged_resolved_when_other_ships(tmp_path):
-    from fno.graph.collision import find_acknowledged_collisions
-
-    graph: list[dict] = []
-    _seed_node(graph, id_="ab-old", plan_path=str(_write_quick_plan(tmp_path / "old.md", ["x.py"])))
-    _seed_node(graph, id_="ab-new", plan_path=str(_write_quick_plan(tmp_path / "new.md", ["x.py"])))
-    # ab-new acknowledged a collision with ab-old; ab-old then shipped.
-    graph[0]["completed_at"] = "2026-04-28T00:00:00+00:00"
-    graph[0]["status"] = "done"
-    graph[1]["collisions_acknowledged"] = ["ab-old"]
-
-    out = find_acknowledged_collisions(graph)
-    assert len(out) == 1
-    assert out[0].node_id == "ab-new"
-    assert out[0].resolved_via == "ab-old"
-    assert out[0].resolved_via_status == "done"
-
-
-# ---------------------------------------------------------------------------
 # CLI: triage health
 # ---------------------------------------------------------------------------
 
@@ -588,11 +387,10 @@ def test_triage_health_failure_prone(tmp_graph, tmp_path):
 
 
 def test_triage_health_resolves_relative_plan_paths(tmp_graph, tmp_path, monkeypatch):
-    """Per gemini PR #189 review: when graph entries store repo-relative
-    plan_paths and triage health is invoked from a non-repo-root cwd, the
-    candidate path must be resolved against the repo root before being
-    passed into find_collisions, otherwise the all-pairs loop silently
-    yields zero collisions (false negatives).
+    """When graph entries store repo-relative plan_paths and triage health is
+    invoked from a non-repo-root cwd, the health report must resolve candidate
+    paths against the repo root, otherwise the comparison silently yields
+    zero collisions (false negatives).
 
     Simulates the scenario by using relative plan_paths in the graph and
     running from a fake repo root (a `.git` marker), so the test does not

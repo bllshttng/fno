@@ -3159,8 +3159,8 @@ class ResourceMeterBlock(BaseModel):
 class CollisionThresholdsBlock(BaseModel):
     """Collision severity scoring thresholds (config.collision.severity_thresholds).
 
-    Defaults lifted verbatim from the former
-    ``collision.py:DEFAULT_THRESHOLDS`` (US2 converges that private loader here).
+    Defaults lifted verbatim from the collision module's original private
+    loader; the native thresholds reader holds the same contract.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -3175,8 +3175,9 @@ class CollisionThresholdsBlock(BaseModel):
     def _sanitize(cls, v: object) -> object:
         """Drop any non-numeric or negative value so the field default applies.
 
-        Matches the old collision._load_thresholds per-key fallback: a bad
-        threshold warns and falls back to default rather than breaking load.
+        A bad threshold warns and falls back to default rather than breaking
+        load; the native twin holds the same contract (cutover.rs
+        collision_thresholds).
         """
         if not isinstance(v, dict):
             return v
