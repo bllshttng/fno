@@ -39,6 +39,20 @@ fn commit_all(cwd: &Path, msg: &str) -> String {
     rev_parse(cwd, "HEAD")
 }
 
+/// A git run whose output the caller keeps: the merge is the one step whose
+/// refusal mode varies by runner, so its failure must carry both streams.
+fn git_out(cwd: &Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@fno")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@fno")
+        .output()
+        .expect("git spawns")
+}
+
 fn rev_parse(cwd: &Path, rev: &str) -> String {
     let out = Command::new("git")
         .args(["rev-parse", rev])
@@ -110,10 +124,17 @@ fn pending(_head: &str) -> ChecksRead {
 }
 
 /// The env-carried cache dir: carried_checks resolves the memo through
-/// pr_status_cache_dir, so each test points it at its own tempdir.
+/// pr_status_cache_dir, so each test points it at its own tempdir. The dir
+/// sits OUTSIDE the scratch repo: a memo inside the repo gets staged by the
+/// fixtures' `git add -A` and deleted by their checkouts, and a row's
+/// presence then depends on which commit happened to resurrect it.
 fn cache_guard(dir: &Path) -> std::sync::MutexGuard<'static, ()> {
     let guard = crate::pr_status::cache_env_lock();
-    std::env::set_var("FNO_PR_STATUS_CACHE_DIR", dir.join("cache"));
+    let cache = dir.parent().unwrap().join(format!(
+        "{}-pr-status-cache",
+        dir.file_name().unwrap().to_string_lossy()
+    ));
+    std::env::set_var("FNO_PR_STATUS_CACHE_DIR", cache);
     guard
 }
 
@@ -173,15 +194,22 @@ fn carry_refuses_a_conflict_resolution() {
     git(&dir, &["checkout", "-q", "feature"]);
     // Both sides edit seed.txt off the shared seed commit, so the 3-way merge
     // conflicts on every git and the resolution below always runs.
-    let merged = Command::new("git")
-        .args(["merge", "main"])
-        .current_dir(&dir)
-        .output()
-        .unwrap();
+    let merged = git_out(&dir, &["merge", "--no-edit", "main"]);
+    let streams = format!(
+        "{}{}",
+        String::from_utf8_lossy(&merged.stdout),
+        String::from_utf8_lossy(&merged.stderr)
+    );
     assert!(
         !merged.status.success(),
-        "the both-sides edit must conflict: {}",
-        String::from_utf8_lossy(&merged.stdout)
+        "the both-sides edit must conflict: {streams}"
+    );
+    // A conflicted merge leaves MERGE_HEAD and MERGE_MSG behind; commit only
+    // in that state, so a runner whose merge refused some other way reports
+    // its own refusal instead of an empty-message abort from a stray commit.
+    assert!(
+        dir.join(".git").join("MERGE_HEAD").exists(),
+        "the conflicted merge left no MERGE_HEAD: {streams}"
     );
     std::fs::write(dir.join("seed.txt"), "resolved\n").unwrap();
     git(&dir, &["add", "seed.txt"]);
