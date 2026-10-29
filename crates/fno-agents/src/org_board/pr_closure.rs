@@ -1,6 +1,6 @@
 //! The one parser and renderer for the PR-body closure line.
 //!
-//! The line format lives here and nowhere else: the Python `closure.py`
+//! The line format lives here and nowhere else:
 //! readers forward to this module through `fno-agents pr closure parse|render`,
 //! so Python and Rust can never disagree about what a body claims. Writers
 //! emit only the `Fixes` spelling; readers also accept the retired

@@ -929,7 +929,6 @@ pub fn resolve_attester_identity(
 }
 
 /// The row statuses under which a session still owns its identity. Mirror of
-/// Python `OWNERSHIP_LIVE_STATUSES`.
 const OWNERSHIP_LIVE_STATUSES: [&str; 6] =
     ["spawning", "ready", "idle", "busy", "live", "restarting"];
 

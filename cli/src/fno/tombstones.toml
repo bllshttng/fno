@@ -17,12 +17,13 @@
 # --dead`: no skill, doc, script, hook, or cli/src argv named any of them.
 # Confirmed by a second whole-repo walk sharing no code with that tool.
 # The implementation packages stay where live code imports them
-# (`fno.company.contracts` and `fno.wake.signal` have many importers); what
-# is gone is the invocable surface.
+# (`fno.company.contracts` still is); what is gone is the invocable
+# surface. The wake signal reader later left with its family's Rust port,
+# so the wake entry below names where its one live read went.
 "company" = "nothing - the company campaign commands had no caller anywhere. `fno.company.contracts` is still imported by the graph, plan, and delivery code; only the CLI surface was removed"
 "log" = "`fno doctor event emit` - the per-worktree progress log had no reader and no caller outside its own test"
 "reality-check" = "nothing - the external-reality probes had no caller. The `gh` probe's job is done by `fno do pr status <n>`"
-"wake" = "nothing - the wake-signal ADMIN commands had no caller. Wake signals themselves are still written and read by `fno.wake.signal`, which the inbox drain and mail paths use"
+"wake" = "nothing - the wake-signal ADMIN commands had no caller. The read survives as the fno-agents binary's hidden `wake-signals` op (scripts/lib/wake-signals.sh reads kind=question signals through it); nothing writes wake signals anymore, so the write path is gone with the port"
 "backlog inbox" = "`fno backlog capture` - the same command. `inbox` was a second registration of the identical Typer app, so every one of its nine subcommands was a duplicate of a `capture` subcommand"
 
 # --- Leaves with zero callers anywhere a contributor reads, confirmed by a
@@ -42,7 +43,7 @@
 "backlog exec-graph" = "nothing - the derived execution graph had no reader outside its own compile step, which still runs"
 "backlog release" = "`fno backlog unclaim` - `release` was an alias for it"
 "backlog schedule" = "nothing - the shadow-first frontier report never left shadow mode and no gate ever read its exit code. `fno backlog next` picks work"
-"backlog tree" = "`fno backlog view` - the board view nothing had switched off"
+"backlog tree" = "`fno backlog list 'in:\"<id>\"' -J` - it walks the whole subtree; add `-s:done` to drop finished nodes. Quote the id: a bare value is a prefix match"
 "backlog validate" = "nothing - the unknown-blocker and cycle checks had no caller, in CI or out. `fno backlog maintain` is the live hygiene pass but does NOT check blocker integrity, and `backlog triage validate` validates a proposal file rather than the graph"
 "backlog batch abandon" = "`fno backlog batch ship` - it is the documented failure path and already requeues members as individual PRs; `abandon` was wired to nothing despite its docstring naming the daemon"
 "backlog batch close" = "`fno backlog batch ship` - the only close path the daemon takes"

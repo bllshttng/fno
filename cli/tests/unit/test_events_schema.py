@@ -11,7 +11,6 @@ from fno.events import (
     EVENT_TYPES,
     ValidationError,
     decision_retracted,
-    operator_decision,
     validate,
 )
 
@@ -19,30 +18,6 @@ from fno.events import (
 def _require_schema_loaded() -> None:
     if EVENT_TYPES is None:
         pytest.skip("event schema unavailable in this environment")
-
-
-def test_builder_carries_the_full_record_shape() -> None:
-    """The recovery fields survive the builder, not just the required pair."""
-    event = operator_decision(
-        decision_id="d-ab12cd34",
-        decision="fold every project's inbox",
-        subject="x-7d94",
-        question_id="q-11112222",
-        question="fold or migrate?",
-        asked_by="cfc87e37",
-        asked_at="2026-08-14T21:00:00Z",
-        options=["fold", "migrate"],
-        decided_by="cfc87e37",
-        authority_source="operator",
-        rationale="a fold is a read; you do not migrate before you can see",
-        supersedes=None,
-    )
-    validate(event)
-    data = event["data"]
-    assert data["subject"] == "x-7d94"
-    assert data["options"] == ["fold", "migrate"]
-    assert data["authority_source"] == "operator"
-    assert "supersedes" not in data  # None means omit
 
 
 def test_validate_rejects_missing_required_field() -> None:

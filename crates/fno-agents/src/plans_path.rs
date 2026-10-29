@@ -306,7 +306,7 @@ fn collapse_dashes(s: &str) -> String {
     out
 }
 
-/// Python `_resolve`: expand `$VAR`, then `{vault}`/`{project}` templates
+/// Expand `$VAR`, then `{vault}`/`{project}` templates
 /// (unknown template errors), unescape `{{`/`}}`, expand `~`, anchor a
 /// relative remainder at the project root, resolve loose.
 pub(crate) fn resolve_template(raw: &str, project_root: Option<&Path>) -> Result<PathBuf, String> {

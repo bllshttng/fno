@@ -17,6 +17,8 @@ BREVITY_BLOCK = f"{BREVITY_MARKER}\n{BREVITY_INSTRUCTION}\n{BREVITY_END_MARKER}"
 
 TASK_CONTEXT_TAG = "<task-context "
 
+FLEET_LAW_MARKER = "<fno_fleet_laws>"
+
 
 def enrich_spawn_payload(message: str) -> str:
     """Append first-party brevity guidance once to a non-empty spawn payload."""
@@ -27,9 +29,11 @@ def enrich_spawn_payload(message: str) -> str:
 
 def prepare_spawn_payload(message: str) -> tuple[str, dict]:
     """ONE payload entry for both launch substrates: brevity guidance once,
-    then the natively rendered task-context pointer once. The render reads the
-    declared binding from the environment natively; a missing binary or an
-    undeclared/corrupt file means no block - absent, never fabricated."""
+    then the natively rendered task-context pointer once, then the natively
+    rendered fleet-law block once (a worker seated under an active freeze
+    reads the line in its seed). Each render reads its state natively;
+    a missing binary or an undeclared/corrupt state means no block - absent,
+    never fabricated."""
     payload = enrich_spawn_payload(message)
     measures: dict = {"task_context": False, "payload_bytes": len(payload.encode("utf-8"))}
     if TASK_CONTEXT_TAG not in payload:
@@ -42,4 +46,19 @@ def prepare_spawn_payload(message: str) -> tuple[str, dict]:
         if block:
             payload = f"{payload}\n\n{block}"
             measures = {"task_context": True, "payload_bytes": len(payload.encode("utf-8"))}
+    if FLEET_LAW_MARKER not in payload:
+        import os
+
+        from fno.rust_binary import CommandUnavailable, command_call
+
+        try:
+            block = command_call(
+                "task-context-payload", {"fleet_laws": True, "cwd": os.getcwd()}
+            ).get("block")
+        except CommandUnavailable:
+            block = None
+        if block:
+            payload = f"{payload}\n\n{block}"
+            measures["fleet_laws"] = True
+            measures["payload_bytes"] = len(payload.encode("utf-8"))
     return payload, measures

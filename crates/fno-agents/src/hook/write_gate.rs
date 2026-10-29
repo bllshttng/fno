@@ -34,9 +34,6 @@ const BASH_BLOCK_SUFFIX: &str =
     " (this Bash write to a protected state file is blocked; use `fno backlog` / `fno do state`).";
 const FAILCLOSED_MALFORMED: &str =
     "graph-write-protect: payload references a protected state file but could not be parsed; blocking fail-closed.";
-/// Only the sh shim emits this one: it is the no-binary fallback, the same
-/// posture the shell guard took when no parser existed.
-pub const FAILCLOSED_NO_PARSER: &str = "graph-write-protect: neither jq nor python3 available to parse a payload referencing a protected state file; blocking fail-closed. Install jq or python3.";
 
 /// Payload fields the three sections read, extracted once.
 struct Payload {

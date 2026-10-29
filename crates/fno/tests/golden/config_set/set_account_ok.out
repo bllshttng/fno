@@ -1,0 +1,1 @@
+set accounts.active = work (global: <FIXTURE>/fake_home/.fno/config.toml)

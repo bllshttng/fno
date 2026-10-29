@@ -250,8 +250,9 @@ while IFS= read -r hit; do
     if [ -n "$test_start" ] && [ "$window_end" -ge "$test_start" ]; then
         window_end=$((test_start - 1))
     fi
-    # The formatter moves a trailing marker comment to its own line below.
-    if sed -n "${lineno},$((lineno + 2))p" "$file" 2>/dev/null | grep -q 'events-discipline:allow'; then
+    # The formatter moves a trailing marker comment to its own line below;
+    # an author-placed marker above the line is just as explicit.
+    if sed -n "$((lineno > 2 ? lineno - 2 : 1)),$((lineno + 2))p" "$file" 2>/dev/null | grep -q 'events-discipline:allow'; then
         continue
     fi
     if sed -n "${lineno},${window_end}p" "$file" 2>/dev/null | grep -q 'OpenOptions::new()'; then
@@ -286,8 +287,9 @@ while IFS= read -r hit; do
     if [ -n "$test_start" ] && [ "$lineno" -ge "$test_start" ]; then
         continue
     fi
-    # The formatter moves a trailing marker comment to its own line below.
-    if sed -n "${lineno},$((lineno + 2))p" "$file" 2>/dev/null | grep -q 'events-discipline:allow'; then
+    # The formatter moves a trailing marker comment to its own line below;
+    # an author-placed marker above the line is just as explicit.
+    if sed -n "$((lineno > 2 ? lineno - 2 : 1)),$((lineno + 2))p" "$file" 2>/dev/null | grep -q 'events-discipline:allow'; then
         continue
     fi
     if sed -n "${lineno},${window_end}p" "$file" 2>/dev/null | grep -qE 'OpenOptions::new\(\)|File::create\(|fs::write\(' ; then

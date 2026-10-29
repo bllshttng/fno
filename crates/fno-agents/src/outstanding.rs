@@ -61,6 +61,10 @@ pub struct Question {
     /// The asking machine on a copy pulled from another machine of the
     /// store; `None` (JSON null) for a question asked here.
     pub host: Option<String>,
+    /// The person behind the asking machine; absent on a row written before
+    /// the stamp, so old rows render byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -310,23 +314,28 @@ fn read_carveouts(root: &Path) -> Result<(u64, Vec<(String, u64)>, Option<String
     Ok((total, by_kind, oldest))
 }
 
+/// Neither the event store nor the journal file exists for `index`.
+fn index_missing(index: &Path) -> bool {
+    let store_present = crate::event_store::try_store_path(index)
+        .map(|s| s.is_file())
+        .unwrap_or(false);
+    !store_present
+        && matches!(std::fs::symlink_metadata(index), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
 /// Fold `operator_question` minus `operator_question_closed` from the
-/// machine-wide index. A missing index reads as no questions with a recovery
-/// hint on stderr; an unreadable one is an error naming it.
+/// machine-wide index. A missing index reads as no questions (the command,
+/// not this reader, prints the recovery hint: the board reads it in-process);
+/// an unreadable one is an error naming it.
 pub fn read_open_questions(index: &Path) -> Result<Vec<Question>, String> {
+    if index_missing(index) {
+        return Ok(Vec::new());
+    }
     let store_present = crate::event_store::try_store_path(index)
         .map(|s| s.is_file())
         .unwrap_or(false);
     if !store_present {
         match std::fs::symlink_metadata(index) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!(
-                    "outstanding: question index {} is missing; run \
-`fno inbox outstanding reindex` to recover project questions.",
-                    index.display()
-                );
-                return Ok(Vec::new());
-            }
             Err(e) => {
                 return Err(format!(
                     "cannot read question index {}: {e}",
@@ -391,6 +400,7 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                             .map(|_| {
                                 opt_str(data, "host").unwrap_or_else(|| "another machine".into())
                             }),
+                        person: opt_str(data, "person"),
                     },
                 );
             }
@@ -1000,6 +1010,10 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
         ));
     }
     lines.push("  Answer with: fno inbox outstanding clear <id> --answer \"...\"".to_string());
+    lines.push(
+        "  An agent relaying the user's chat answer adds: --authority chat_attested --quote \"<their words>\""
+            .to_string(),
+    );
     if body_trimmed {
         lines.push(
             "  Rows are trimmed to one line; read a full question with: fno inbox outstanding -J"
@@ -1117,6 +1131,15 @@ pub(crate) fn sources(cwd: &Path) -> Sources {
     }
 }
 
+/// The listing for `cwd`, liveness resolved within `liveness`. The board
+/// calls this in-process, so its read cannot drift from the command's.
+pub(crate) fn read(cwd: &Path, liveness: Duration) -> Result<Outstanding, String> {
+    let mut o = collect(&sources(cwd), prove_it_rows())?;
+    let answers = resolve_liveness(&o.questions, liveness);
+    apply_liveness(&mut o.questions, &answers);
+    Ok(o)
+}
+
 /// `fno-agents compaction outstanding [--json|-J]`, the native `fno inbox outstanding`.
 pub fn run_outstanding(args: &[String]) -> i32 {
     if let Some((word, rest)) = args.split_first() {
@@ -1139,16 +1162,20 @@ pub fn run_outstanding(args: &[String]) -> i32 {
         }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let src = sources(&cwd);
-    let mut o = match collect(&src, prove_it_rows()) {
+    let o = match read(&cwd, LIVENESS_BUDGET) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("outstanding: failed to read: {e}");
             return 1;
         }
     };
-    let answers = resolve_liveness(&o.questions, LIVENESS_BUDGET);
-    apply_liveness(&mut o.questions, &answers);
+    if index_missing(Path::new(&o.questions_store)) {
+        eprintln!(
+            "outstanding: question index {} is missing; run \
+`fno inbox outstanding reindex` to recover project questions.",
+            o.questions_store
+        );
+    }
     let mut out = std::io::stdout().lock();
     if as_json {
         let _ = writeln!(out, "{}", o.as_json());

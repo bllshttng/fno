@@ -1,0 +1,88 @@
+{
+  "ALWAYS_LINTS": [
+    [
+      "placement rule",
+      "scripts/ci/check-placement-rule.sh"
+    ],
+    [
+      "No stale /spec refs (blueprint rename audit)",
+      "scripts/ci/check-no-stale-spec-refs.sh"
+    ],
+    [
+      "Skill bundles freshness check",
+      "scripts/lint/check-skill-bundles-fresh.sh"
+    ],
+    [
+      "Hook exec bits",
+      "scripts/ci/check-hook-exec-bit.sh"
+    ]
+  ],
+  "AMBIENT_MODES": [
+    "clean",
+    "dirty",
+    "both"
+  ],
+  "BUNDLE_TEST_TARGETS": [
+    "cli/tests/unit/test_skill_bundles.py",
+    "cli/tests/unit/test_bundle_cli.py"
+  ],
+  "CENSUS_KILL_BOUND_S_DEFAULT": 300,
+  "CENSUS_TRANCHE_BOUND_S": 60,
+  "CHANGED_RC_PREREQ": 22,
+  "CHANGED_RC_UNEVALUATED": 21,
+  "CHANGED_RC_UNSELECTED": 20,
+  "CHANGED_RECEIPT_DEFAULT": ".fno/changed-last-receipt.json",
+  "CLAIM_DOOR_NAME": "fno-agents-claim-door",
+  "HARNESS_GLOBS": [
+    "tests/*.sh",
+    "tests/hooks/*.sh",
+    "tests/lib/*.sh",
+    "tests/target/*.sh",
+    "tests/skills/*.sh",
+    "tests/events/*.sh",
+    "tests/lint/*.sh",
+    "scripts/tests/*.sh",
+    "skills/*/tests/*.sh"
+  ],
+  "INFRA_BASENAME": [
+    "conftest.py"
+  ],
+  "INFRA_EXACT": [
+    "cli/src/fno/test_cmd.py",
+    "scripts/ci/preflight.sh",
+    "cli/pyproject.toml"
+  ],
+  "INFRA_PREFIX": [
+    ".github/workflows/"
+  ],
+  "INFRA_SELECTS": [
+    "cli/tests/unit/test_test_cmd.py",
+    "tests/ci/test_smoke_modes.sh",
+    "tests/ci/test_preflight.sh",
+    "tests/ci/test_changed_smoke_workflow.sh"
+  ],
+  "ORCHESTRATED_SUBTREES": [
+    [
+      "cli/tests/smoke/",
+      "Smoke tests"
+    ]
+  ],
+  "RUST_BIN_MARKERS": [
+    "target/debug/fno-agents",
+    "target/release/fno-agents",
+    "FNO_AGENTS_BIN"
+  ],
+  "RUST_BUILD_STEP": "Build fno-agents debug binary (for journey tests)",
+  "SMOKE_FAILURE_RECORD_DEFAULT": ".fno/preflight-last-failures.txt",
+  "STATE_CONTROL_TEST": "test_state_canary_detects_populated_state",
+  "STATE_MODES": [
+    "clean",
+    "populated",
+    "both"
+  ],
+  "TAIL_LINES": 40,
+  "TARGET_BIN_RELS": [
+    "crates/fno-agents/target/debug/fno-agents",
+    "crates/fno-agents/target/release/fno-agents"
+  ]
+}

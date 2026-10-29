@@ -80,16 +80,45 @@ fn run(
     }
 }
 
-/// One row's identity, in column order: the dedup key and the insert args.
+/// One row's identity, in column order: the insert args.
 fn key(entry: &NameHistoryEntry, host: &str) -> [String; 6] {
+    let [name, scope, session, kind, ts] = row_id(entry);
+    [name, scope, session, kind, ts, host.to_string()]
+}
+
+/// A row's identity without its host. The push dedups on this: a macOS
+/// hostname moves with the network (bb16, bb16.local, Mac), and keying the
+/// push on it re-sent this machine's whole history under each new label.
+fn row_id(entry: &NameHistoryEntry) -> [String; 5] {
     [
         entry.name.to_ascii_lowercase(),
         entry.scope.clone(),
         entry.session.clone().unwrap_or_default(),
         entry.kind.clone(),
         entry.ts.clone(),
-        host.to_string(),
     ]
+}
+
+/// The machine label a row carries. macOS `LocalHostName` is the name the
+/// user set and holds still; `gethostname` drifts with DHCP and VPN.
+pub(crate) fn host_label() -> String {
+    static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            #[cfg(target_os = "macos")]
+            if let Ok(out) = std::process::Command::new("/usr/sbin/scutil")
+                .args(["--get", "LocalHostName"])
+                .output()
+            {
+                let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if out.status.success() && !name.is_empty() {
+                    return name;
+                }
+            }
+            let host = crate::claims::hostname();
+            host.strip_suffix(".local").unwrap_or(&host).to_string()
+        })
+        .clone()
 }
 
 /// Insert `entries` as this machine's rows. A row already there is skipped,
@@ -98,7 +127,7 @@ fn insert(remote: &Remote, entries: &[&NameHistoryEntry]) -> Result<(), String> 
     if entries.is_empty() {
         return Ok(());
     }
-    let host = crate::claims::hostname();
+    let host = host_label();
     let args: Vec<SqlValue> = entries
         .iter()
         .flat_map(|e| key(e, &host).map(SqlValue::Text))
@@ -167,15 +196,8 @@ fn push_missing(
     shared: &[NameHistoryEntry],
     local: &[NameHistoryEntry],
 ) -> Result<usize, String> {
-    let host = crate::claims::hostname();
-    let seen: BTreeSet<[String; 6]> = shared
-        .iter()
-        .map(|e| key(e, e.host.as_deref().unwrap_or("")))
-        .collect();
-    let missing: Vec<&NameHistoryEntry> = local
-        .iter()
-        .filter(|e| !seen.contains(&key(e, &host)))
-        .collect();
+    let mut seen: BTreeSet<[String; 5]> = shared.iter().map(row_id).collect();
+    let missing: Vec<&NameHistoryEntry> = local.iter().filter(|e| seen.insert(row_id(e))).collect();
     insert(remote, &missing)?;
     Ok(missing.len())
 }
@@ -234,6 +256,20 @@ mod tests {
         route_to_primary(Some(primary.remote.clone()));
         assert_eq!(team_names::history_sync(&imac_store).unwrap(), 1);
         assert_eq!(team_names::history_sync(&imac_store).unwrap(), 0);
+        // The same rows already landed under an older hostname: a moved
+        // label pushes nothing twice.
+        let rows = select_all(&primary.remote).unwrap();
+        let relabelled: Vec<NameHistoryEntry> = rows
+            .iter()
+            .map(|e| NameHistoryEntry {
+                host: Some("bb16.local".into()),
+                ..e.clone()
+            })
+            .collect();
+        assert_eq!(
+            push_missing(&primary.remote, &relabelled, &rows).unwrap(),
+            0
+        );
         assert!(team_names::history_names(&mac_store)
             .unwrap()
             .contains("rowan"));

@@ -1,0 +1,58 @@
+name: merge-queue-gate
+
+# The merge queue's one test of a batch: main plus every PR in the batch, on
+# the batch's own fno-merge-queue/main/<id> ref. The daemon arm
+# (crates/fno-agents/src/merge_queue.rs) dispatches it once per batch and
+# moves main to the batch commit only on success. It runs the guards jobs,
+# the fast subset that caught the 2026-10-26 main break, not the full suite.
+#
+# The last job stamps `stacked-base-guard` on the batch commit. The ruleset
+# requires that context on any commit main moves to, so only a batch this
+# run passed can land. Every other workflow's push trigger is main-only, so
+# the batch ref starts no second run.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: merge-queue-gate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/guards.yml
+
+  stamp:
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - name: Stamp the batch commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          # Same retry shape as stacked-base-guard.yml's queue-guard: a
+          # dropped POST that reads as reported is how a batch never lands.
+          for attempt in 1 2 3; do
+            if gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+              -f state=success \
+              -f context=stacked-base-guard \
+              -f description="merge queue batch passed the gate on main" \
+              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              >/dev/null; then
+              exit 0
+            fi
+            echo "status post attempt $attempt failed; retrying after a backoff" >&2
+            sleep 5
+          done
+          echo "FAIL: could not post the stacked-base-guard status for the batch" >&2
+          exit 1

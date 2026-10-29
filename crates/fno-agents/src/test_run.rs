@@ -578,15 +578,26 @@ fn emit(run_id: &str, kind: &str, fields: &[(&str, String)]) {
 struct Options {
     timeout: Duration,
     claims_root: Option<PathBuf>,
+    /// Per-child env pins and removals for the test command: `--env K=V` and
+    /// `--unset NAME`, repeatable, applied by `spawn_group` on top of the
+    /// inherited process env. The command builds the full hermetic env and hands
+    /// it over per command, so no process-global mutation is needed.
+    envs: Vec<(String, String)>,
+    unsets: Vec<String>,
+    stdout_file: Option<PathBuf>,
     argv: Vec<String>,
 }
 
-/// `[--timeout SECS] [--claims-root PATH] -- ARGV...`. The separator is
-/// mandatory: a flag-shaped argv token (e.g. a test binary's own `--nocapture`)
-/// must never be mistaken for one of ours.
+/// `[--timeout SECS] [--claims-root PATH] [--env K=V] [--unset NAME]
+/// [--stdout-file PATH] -- ARGV...`. The separator is mandatory: a
+/// flag-shaped argv token (e.g. a test binary's own `--nocapture`) must never
+/// be mistaken for one of ours.
 fn parse_args(args: &[String]) -> Result<Options, String> {
     let mut timeout_secs: u64 = 1800;
     let mut claims_root: Option<PathBuf> = None;
+    let mut envs: Vec<(String, String)> = Vec::new();
+    let mut unsets: Vec<String> = Vec::new();
+    let mut stdout_file: Option<PathBuf> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -602,10 +613,31 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
                 claims_root = Some(PathBuf::from(v));
                 i += 2;
             }
+            "--env" => {
+                let v = args.get(i + 1).ok_or("--env needs a value")?;
+                let (k, val) = v
+                    .split_once('=')
+                    .ok_or_else(|| format!("--env takes NAME=VALUE, got {v:?}"))?;
+                envs.push((k.to_string(), val.to_string()));
+                i += 2;
+            }
+            "--unset" => {
+                let v = args.get(i + 1).ok_or("--unset needs a value")?;
+                unsets.push(v.clone());
+                i += 2;
+            }
+            "--stdout-file" => {
+                let v = args.get(i + 1).ok_or("--stdout-file needs a value")?;
+                stdout_file = Some(PathBuf::from(v));
+                i += 2;
+            }
             "--" => {
                 return Ok(Options {
                     timeout: Duration::from_secs(timeout_secs),
                     claims_root,
+                    envs,
+                    unsets,
+                    stdout_file,
                     argv: args[i + 1..].to_vec(),
                 });
             }
@@ -1858,10 +1890,55 @@ fn run_run_admit(args: &[String]) -> i32 {
         eprintln!("{TESTS_REFUSED_LINE}");
         return SLOT_BUSY;
     }
+    let pins = if is_test_program(&program) {
+        match test_run_pins_for_this_process() {
+            Ok(pins) => pins,
+            Err(line) => {
+                eprintln!("{line}");
+                return SLOT_BUSY;
+            }
+        }
+    } else {
+        Vec::new()
+    };
     match admit_run_slot(cargo_pid, &worktree, false) {
-        Ok(()) => 0,
+        Ok(()) => {
+            // The wrapper exports each `FNO_*=` stdout line before it execs.
+            for (key, value) in pins {
+                println!("{key}={}", value.display());
+            }
+            0
+        }
         Err(code) => code,
     }
+}
+
+/// The run door's state-root pins for a test binary, read from this
+/// process's env (the wrapper's, which the binary inherits). `Err` is a
+/// refusal line.
+fn test_run_pins_for_this_process() -> Result<Vec<(&'static str, PathBuf)>, String> {
+    use crate::test_run_pins::{decide, make_sandbox, Pins};
+    let hermetic = std::env::var("FNO_TEST_HERMETIC").ok();
+    let home = std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from);
+    let pins = match decide(hermetic.as_deref(), home.as_deref(), |k| {
+        std::env::var_os(k)
+    }) {
+        Pins::Refused(line) => return Err(line),
+        Pins::Set(pins) if pins.is_empty() => return Ok(Vec::new()),
+        Pins::Set(pins) => pins,
+    };
+    let sandbox = make_sandbox().map_err(|e| {
+        format!("[cargo test] could not make a temp state tree for the test binary: {e}")
+    })?;
+    Ok(pins
+        .into_iter()
+        .map(|(key, rel)| match rel {
+            "" => (key, sandbox.clone()),
+            rel => (key, sandbox.join(rel)),
+        })
+        .collect())
 }
 
 /// The shared wait state of a cargo admission waiter: which cargo it stands
@@ -2374,6 +2451,7 @@ fn spawn_group(
     owner_pid: u32,
     owner_birth: u64,
     whole_lane: bool,
+    opts: &Options,
 ) -> std::io::Result<Child> {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
@@ -2386,9 +2464,41 @@ fn spawn_group(
     if whole_lane {
         cmd.env("FNO_TEST_FULL", "1");
     }
+    // The command's per-child hermetic env: the neutralised surface plus its
+    // pins, handed over per command so no process-global env mutation is
+    // needed anywhere.
+    for (k, v) in &opts.envs {
+        cmd.env(k, v);
+    }
+    for name in &opts.unsets {
+        cmd.env_remove(name);
+    }
     cmd.stdin(Stdio::inherit());
-    cmd.stdout(Stdio::inherit());
-    cmd.stderr(Stdio::inherit());
+    match &opts.stdout_file {
+        Some(path) => {
+            // Captured mode: the suite's output lands in the log (stdout and
+            // stderr merged), never in the transcript.
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| {
+                    std::io::Error::new(
+                        e.kind(),
+                        format!("fno doctor test: cannot open the log file: {e}"),
+                    )
+                })?;
+            let dup = file.try_clone().map_err(|e| {
+                std::io::Error::new(e.kind(), format!("fno doctor test: log dup failed: {e}"))
+            })?;
+            cmd.stdout(Stdio::from(file));
+            cmd.stderr(Stdio::from(dup));
+        }
+        None => {
+            cmd.stdout(Stdio::inherit());
+            cmd.stderr(Stdio::inherit());
+        }
+    }
     // SAFETY: setsid() is async-signal-safe and takes no arguments; called
     // here it runs in the child after fork, before exec, single-threaded.
     unsafe {
@@ -2440,7 +2550,7 @@ fn wait_bounded(child: &mut Child, deadline: Instant) -> Result<i32, Unfinished>
 /// answers that for every member by pgid, not only processes this owner
 /// itself `wait()`s for, which is exactly what a grandchild leaked by a
 /// leader's own clean exit needs.
-fn cleanup_group(pgid: i32) -> bool {
+pub(crate) fn cleanup_group(pgid: i32) -> bool {
     // SAFETY: pgid is this run's own child pid, and that child called
     // setsid() before exec, so pgid == its own pid: the signal never reaches
     // a process outside processes THIS run spawned.
@@ -2695,7 +2805,7 @@ pub fn run_test_run(args: &[String]) -> i32 {
         (pid, crate::daemon::process_start_time(pid).unwrap_or(0))
     });
 
-    let mut child = match spawn_group(&opts.argv, owner_pid, owner_birth, whole) {
+    let mut child = match spawn_group(&opts.argv, owner_pid, owner_birth, whole, &opts) {
         Ok(c) => c,
         Err(e) => {
             emit(

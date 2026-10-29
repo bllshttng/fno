@@ -310,7 +310,7 @@ fn grant_refusal<'a>(
             "" => "cannot verify the grantor's authority: the agent registry could not \
                    be read, so this session is treated as an agent whose authority is \
                    unknown, not as an attended human. A role may not be granted when \
-                   the grantor cannot be checked; retry, or spawn from an attended shell."
+                   the grantor cannot be checked; retry, or ask your lead to grant it."
                 .to_string(),
             stray => format!(
                 "cannot verify the grantor's authority: this shell carries \
@@ -326,7 +326,7 @@ fn grant_refusal<'a>(
              identity but has no registry row (it spawned before its row landed, \
              or has not run /fno-me), so it is an agent with no verified authority, \
              not an attended human. Run /fno-me to join or wait for the row, then \
-             retry; or spawn from an attended shell."
+             retry; or ask your lead to grant it."
                 .to_string(),
         ),
         "agent" => {
@@ -339,14 +339,14 @@ fn grant_refusal<'a>(
                 return Some(format!(
                     "cannot verify the grantor's authority: its STORED status is \
                      '{status}', which is terminal, so it cannot grant a role. \
-                     Re-register the grantor in its live session or use an attended shell."
+                     Re-register the grantor in its live session, or ask your lead to grant it."
                 ));
             }
             if held.is_empty() {
                 return Some(format!(
                     "a role is handed DOWN, and this session holds none: an unpromoted \
                      agent cannot grant one. Ask a lead whose scope contains \
-                     '{requested}', or spawn from an attended shell."
+                     '{requested}' to grant it."
                 ));
             }
             if same_territory(held, requested, projects) {

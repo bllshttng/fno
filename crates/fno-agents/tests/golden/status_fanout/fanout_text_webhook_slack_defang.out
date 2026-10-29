@@ -1,0 +1,1 @@
+{"calls": [{"body": {"text": "&lt;!channel "}, "content_type": "application/json", "url": "https://example.invalid/hook"}, {"body": {"text": "&lt;!channel "}, "content_type": "application/json", "url": "https://example.invalid/hook"}]}

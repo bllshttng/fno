@@ -1,0 +1,4 @@
+Usage: fno config unset [OPTIONS] KEY
+Try 'fno config unset --help' for help.
+
+Error: Missing argument 'KEY'.

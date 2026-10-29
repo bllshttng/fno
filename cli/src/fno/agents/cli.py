@@ -1768,11 +1768,13 @@ def cmd_spawn(
                 from fno.agents.spawn_lineage import _capture_parent_edge
 
                 launcher_session, launcher_harness, launcher_cwd = _capture_parent_edge()
+                from fno.agents.spawn_lineage import _lineage_reason
                 from fno.agents.spawn_defaults import SPAWN_PERMISSION_BUILTIN
                 from fno.config._dispatch_commands import is_command_seed
 
                 if not launcher_session:
                     print("spawn: the native lane needs this session's own identity (the launch record names the parent); a spawn from outside any session keeps the dispatcher path.", file=sys.stderr)
+                    print(f"parent edge NOT recorded ({_lineage_reason(launcher_session)}).", file=sys.stderr)
                 else:
                     from fno.rust_binary import resolve_binary
                     import subprocess as _subprocess
@@ -3640,8 +3642,10 @@ def cmd_rm(
     the orphan in the receipt. rm needs no prior stop: it ends the
     session's process itself as part of the removal. The one exception is
     a claude background thread, where rm runs `claude stop` first - and
-    runs it itself, so no caller composes one. When the process end
-    cannot be confirmed, rm keeps the row and says why. Do not tear a
+    runs it itself, so no caller composes one. When the ask does not end
+    the session, rm ends the proven process set itself (a glm worker's
+    `claude stop` returns without ending it); only an end rm cannot
+    confirm keeps the row, and then it says why. Do not tear a
     session down by hand: the harness session record IS the resume
     handle, and dropping it directly spends that handle for nothing this
     command has not already done. If one is already orphaned, use the

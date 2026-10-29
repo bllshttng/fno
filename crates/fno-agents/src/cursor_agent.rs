@@ -14,27 +14,11 @@ use crate::provider::{AgentEntry, Provider, ReachabilityProbeError, ResumeContex
 use crate::ParsedEvent;
 
 pub const CURSOR_AGENT_BINARY: &str = "cursor-agent";
-pub const CURSOR_AGENT_DEFAULT_PROVIDER: &str = "cursor";
-pub const CURSOR_AGENT_DEFAULT_MODEL: &str = "auto";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CursorWorkerServerHandle {
     pub pid: u32,
     pub start_time: u64,
-}
-
-pub fn cursor_agent_provider() -> String {
-    std::env::var("FNO_CURSOR_AGENT_PROVIDER")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| CURSOR_AGENT_DEFAULT_PROVIDER.to_string())
-}
-
-pub fn cursor_agent_model() -> String {
-    std::env::var("FNO_CURSOR_AGENT_MODEL")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| CURSOR_AGENT_DEFAULT_MODEL.to_string())
 }
 
 pub fn is_chat_id(value: &str) -> bool {

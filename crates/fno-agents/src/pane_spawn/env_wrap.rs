@@ -247,16 +247,6 @@ fn generate_msg_id() -> String {
     format!("fmail-{hex}")
 }
 
-/// `enrich_spawn_payload` (`spawn_payload.py:21`): the one payload entry -
-/// first-party brevity guidance appended once to a non-empty seed.
-pub fn enrich_spawn_payload(message: &str) -> String {
-    const BREVITY_BLOCK: &str = "<fno_relay_compression>\nKeep reports and handoffs at 80 words or fewer unless this payload requires a longer artifact or exact output schema. Think fully; write only the requested result, essential reason, and next action. Drop filler, pleasantries, hedges, repeated context, and articles where clear. Fragments work. Keep technical terms, commands, errors, numbers, units, negation, and code blocks exact. Put long detail in durable artifacts when available; return a path or link.\n</fno_relay_compression>";
-    if message.is_empty() || message.contains(BREVITY_BLOCK) {
-        return message.to_string();
-    }
-    format!("{message}\n\n{BREVITY_BLOCK}")
-}
-
 /// `is_command_seed` (`config/_dispatch_commands.py:60`): position 0 is
 /// load-bearing - only a leading command token may be rewritten.
 pub fn is_command_seed(seed: &str) -> bool {
