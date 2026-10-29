@@ -606,7 +606,7 @@ fn recovery_candidate_requires_a_recent_real_turn_stamp() {
     );
     assert!(
         candidate(&|e| {
-            e.last_message_at = Some("2026-09-01T00:00:00");
+            e.last_message_at = Some("2026-09-01T00:00:00".into());
         }),
         "an unparseable last_message_at fails closed even beside a parseable-looking value"
     );
