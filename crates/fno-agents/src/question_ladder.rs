@@ -132,9 +132,13 @@ fn rules_from_configs(candidates: &[PathBuf]) -> Result<Rules, String> {
 /// user's board whatever rung it sits at, so nothing a lead ignores is lost.
 pub const LEASE_SECS: i64 = 600;
 
-/// True when `questions.route` is `ladder` for a caller in `cwd`.
+/// True unless `questions.route` opts out (`direct` or `triage`) for a caller
+/// in `cwd`: the ladder is the default.
 pub fn ladder_on(cwd: &Path) -> bool {
-    crate::lead_escalation::route_for(cwd).as_deref() == Some("ladder")
+    !matches!(
+        crate::lead_escalation::route_for(cwd).as_deref(),
+        Some("direct" | "triage")
+    )
 }
 
 /// The first rung for a question a worker asks from `session` on `node`: the

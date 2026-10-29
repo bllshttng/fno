@@ -32,6 +32,9 @@ pub const QUESTION_CAP: usize = 2000;
 pub const QUESTION_TEMPLATE: &str = "\
 ---
 recommend: 1
+class: <public-surface, gate-override, irreversible, money-security, outside-reach, taste or law-change>
+deadline: <RFC 3339 time, such as 2026-11-01T09:00:00Z>
+on_silence: <take-recommended or wait>
 ---
 
 <the question, one line>
@@ -56,6 +59,12 @@ Option 1, <the reason in one line>.
 
 ## Not thought through
 <the part you did not check>
+
+## Tried
+<what you did to answer it yourself>
+
+## Evidence
+<what you read or ran, with the command or file>
 
 ## Reversible
 costly

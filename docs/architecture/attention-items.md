@@ -28,9 +28,29 @@ A machine chore whose row names the command that clears it is a `fleet_task`, no
 
 The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields. If the row has a `person`, the `asker` object carries it: the asking machine's `fleet.owner`, else its login name. It is a display name, never proof, and no gate reads it.
 
-## Who asks: direct, by default
+## Who asks: the ladder, by default
 
-Whoever holds a user-only decision files it on the board itself, lead or worker: `fno inbox outstanding ask` (law d-fdab1af2). Nobody mails a decision up a lead to relay, because a relay hop is where asks get lost. The knob is `questions.route` in `.fno/config.toml`: `direct` (the default) or `triage` for a team that wants a triage lead. The knob routes the `fno agents org escalate` relay-mail leg. Under `direct` the question the command records stays on the board alone and the command prints the teaching line. `triage` keeps the lead's mail copy. The read lives in the fno-agents renderer (`crates/fno-agents/src/lead_escalation.rs`), so the default needs no config entry.
+A worker's question goes to its lead first, and only a lead files to the user's board, after it tries the answer itself (ruling d-69c529b9). `fno inbox outstanding ask` places the row on a rung: the node's lead, its higher-up, or the least-loaded lead. The holder gets one wake. The holder answers with `fno inbox outstanding clear <qid> --authority role`, or climbs with `fno inbox outstanding climb <qid> --evidence "<what it checked>"`. Each climb adds one `via` hop. A row shows on the user's board at the user rung, or 10 minutes after it reached its holder with no answer, so nothing a lead ignores is lost. A lead's own ask, or an ask with no live lead, starts at the user rung.
+
+The knob is `questions.route` in `.fno/config.toml`:
+
+| Value | What happens |
+|---|---|
+| `ladder` (the default) | The row sits with the asker's lead first. `fno agents org escalate` sends no relay mail. |
+| `direct` | The row goes to the user's board at once, with no rung. |
+| `triage` | As `direct`, and `fno agents org escalate` keeps the triage lead's mail copy. |
+
+An unknown value reads as `ladder`, and the escalate nudge names it. The read lives in `crates/fno-agents/src/lead_escalation.rs`, so the default needs no config entry.
+
+`questions.rules` sorts each class into one list. The intake door refuses an ask whose class the asker can decide itself:
+
+| List | Default classes | Who rules |
+|---|---|---|
+| `allow` | none | The asker decides and logs. The ask is refused. |
+| `ask` | `public-surface`, `gate-override` | The rung holder can rule. |
+| `deny` | `irreversible`, `money-security`, `outside-reach`, `taste`, `law-change` | Only the user. The holder's clear refuses and names the climb. |
+
+A class in two lists, or an unknown class word, refuses the config read. A ladder row needs `class`, `deadline`, `on_silence` and a `## Tried` section to read ready, and a climb to the user's board refuses a row with no `## Tried`.
 
 ## Asking with context
 
@@ -41,6 +61,8 @@ The fields ride a question file handed to `--question-file`:
 recommend: 1
 answers_ask: s-1a2b3c4d
 class: irreversible
+deadline: 2026-11-01T09:00:00Z
+on_silence: wait
 ---
 Is a net-zero Python repair legal with no grant?
 
@@ -64,6 +86,12 @@ Option 1, the narrowest door: every later fix needs it.
 
 ## Not thought through
 whether a net-zero move between files counts
+
+## Tried
+read the file budget gate and the two grants it names
+
+## Evidence
+scripts/ci/check-file-budget.sh refuses any added Python line
 
 ## Reversible
 costly

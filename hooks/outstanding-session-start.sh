@@ -56,7 +56,7 @@ if [[ $have_jq -eq 1 && -s "$cache" ]]; then
         if [[ "${FNO_SESSION_ROLE:-}" != "worker" ]]; then
             printf '%s open across the fleet.\n' "${total:-0}"
         fi
-        printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask) and keep working, park with a lease, or mail your lead.\n'
+        printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask): it goes to your lead first, and the lead rules it or climbs it to the user. Keep working, or park with a lease.\n'
         exit 0
     fi
 fi
@@ -66,7 +66,7 @@ fi
 # the fold below is the fleet-wide list the worker's role omits.
 if [[ "${FNO_SESSION_ROLE:-}" == "worker" ]]; then
     printf '## Outstanding for you\n\nNo open questions from this session.\n'
-    printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask) and keep working, park with a lease, or mail your lead.\n'
+    printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask): it goes to your lead first, and the lead rules it or climbs it to the user. Keep working, or park with a lease.\n'
     exit 0
 fi
 
@@ -91,5 +91,5 @@ rc=${rc:-0}
 [[ $rc -eq 2 ]] && exit 0
 
 printf '## Outstanding for you\n\ncould not be read (fno inbox outstanding exit %s). Run it directly.\n' "$rc"
-printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask) and keep working, park with a lease, or mail your lead.\n'
+printf 'Never open an interactive question (AskUserQuestion) from a background or thread session: nobody can see it and the worker idles. File it (fno inbox outstanding ask): it goes to your lead first, and the lead rules it or climbs it to the user. Keep working, or park with a lease.\n'
 exit 0
