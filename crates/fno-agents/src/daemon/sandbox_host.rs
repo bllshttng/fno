@@ -166,13 +166,20 @@ mod tests {
         }
     }
 
-    /// The `socket` carrier is verified, never taken on faith: a dead path
-    /// refuses naming the socket, a live listener passes; a stance that is
-    /// not the carrier is never probed; no path to probe fails open, the same
-    /// leg the empty-roots case takes (AC8).
+    /// The socket door a box uses, end to end.
+    /// - The `socket` carrier is probed, never taken on faith: a dead path
+    ///   refuses naming the socket, a live listener passes, another stance
+    ///   is never probed, and no path fails open like empty roots (AC8).
+    /// - A daemon restart must not strand the box: the stale link refuses,
+    ///   and the publish at every bind points it at the new socket (AC1).
+    /// - A pinned client never forks a daemon; it fails as not running, and
+    ///   the home path serves again once the pin is gone (AC12).
     #[test]
-    fn socket_carrier_is_probed_not_declared() {
-        let sock = tempdir("carrier").join("supervisor.sock");
+    fn socket_door_probes_relinks_and_never_forks_under_a_pin() {
+        use std::os::unix::fs::MetadataExt as _;
+        let home = crate::paths::AgentsHome::at(tempdir("door"));
+        let sock = home.supervisor_sock();
+        let link = home.sandbox_sock_dir().join("supervisor.sock");
         let err = socket_carrier_ok(Some("socket"), Some(&sock))
             .err()
             .expect("dead socket refuses");
@@ -180,25 +187,12 @@ mod tests {
             err.starts_with(&sock.display().to_string()),
             "the refusal names the socket path: {err}"
         );
-        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-        assert!(socket_carrier_ok(Some("socket"), Some(&sock)).is_ok());
-        assert!(socket_carrier_ok(Some("unsandboxed"), Some(&sock)).is_ok());
-        assert!(socket_carrier_ok(None, Some(&sock)).is_ok());
         assert!(socket_carrier_ok(Some("socket"), None).is_ok());
-        drop(listener);
-    }
 
-    /// The box mounts the link directory, so a daemon restart must not strand
-    /// it: after the unlink and rebind the stale link refuses, and the
-    /// publish the daemon runs at every bind points it at the new socket
-    /// (AC1).
-    #[test]
-    fn sandbox_sock_link_follows_rebind() {
-        use std::os::unix::fs::MetadataExt as _;
-        let home = crate::paths::AgentsHome::at(tempdir("rebind"));
-        let sock = home.supervisor_sock();
-        let link = home.sandbox_sock_dir().join("supervisor.sock");
         let first = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert!(socket_carrier_ok(Some("socket"), Some(&sock)).is_ok());
+        assert!(socket_carrier_ok(Some("unsandboxed"), Some(&link)).is_ok());
+        assert!(socket_carrier_ok(None, Some(&link)).is_ok());
         publish_sandbox_sock(&home);
         assert!(supervisor_sock_reachable(&link).is_ok());
         drop(first);
@@ -214,34 +208,28 @@ mod tests {
             std::fs::metadata(&sock).unwrap().ino()
         );
         assert!(supervisor_sock_reachable(&link).is_ok());
-    }
 
-    #[tokio::test]
-    async fn pinned_lane_never_forks_a_daemon_and_fails_naming_the_pin() {
-        let home = crate::paths::AgentsHome::at(tempdir("pin"));
-        let req = Request::new(1, "agent.status", json!({}));
         // A stale socket file at the pin path answers nobody.
         let pin = tempdir("pin-sock").join("supervisor.sock");
         std::fs::write(&pin, b"").unwrap();
-        // SAFETY: test-process env; only the new pin path reads this var and
+        let req = Request::new(1, "agent.status", json!({}));
+        // SAFETY: test-process env; only the pin readers read this var and
         // the test restores the unpinned world before it ends.
         std::env::set_var("FNO_SUPERVISOR_SOCKET", &pin);
-        let err = crate::client::call(
-            &home,
-            Path::new("/nonexistent/fno-agents"), // a fork would fail here, not with DaemonNotRunning
-            &req,
-        )
-        .await
-        .unwrap_err();
+        let res = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(crate::client::call(
+                &home,
+                Path::new("/nonexistent/fno-agents"), // a fork would fail here, not with DaemonNotRunning
+                &req,
+            ));
         std::env::remove_var("FNO_SUPERVISOR_SOCKET");
         assert!(
-            matches!(err, crate::client::ClientError::DaemonNotRunning),
-            "got {err:?}"
+            matches!(res, Err(crate::client::ClientError::DaemonNotRunning)),
+            "got {res:?}"
         );
-        assert_eq!(
-            crate::client::client_sock(&home),
-            home.supervisor_sock(),
-            "the pin removed, the home path is served again"
-        );
+        assert_eq!(crate::client::client_sock(&home), home.supervisor_sock());
     }
 }
