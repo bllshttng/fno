@@ -2187,6 +2187,28 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
     assert_eq!(bound(7).as_deref(), Some("x-paint"));
     assert_eq!(bound(6).as_deref(), Some("x-paint"));
     assert_eq!(bound(8), None);
+    // PR numbers collide across repositories: a ref whose URL names another
+    // repository never binds, primary or additional; a ref with no URL does.
+    let rows = [
+        json!({"id": "x-foreign", "pr_number": 7,
+               "pr_url": "https://github.com/o/other/pull/7"}),
+        json!({"id": "x-also-foreign", "additional_prs": [
+               {"number": 7, "url": "https://github.com/o/other/pull/7"}]}),
+        json!({"id": "x-here", "additional_prs": [
+               {"number": 7, "url": "https://github.com/O/Here/pull/7"}]}),
+    ];
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(&rows, 7, Some("o/here")),
+        Some(2)
+    );
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(&rows[..2], 7, Some("o/here")),
+        None
+    );
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(&rows, 7, None),
+        Some(0)
+    );
     fake.decisions_stdout = Some(
         row(
             "Approved: PR 7 at <head> as built",

@@ -2370,15 +2370,28 @@ pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
     let store = GraphStore::new(&graph_path);
     let entries = backlog_api::rows(&store).ok()?;
-    let at = entries
-        .iter()
-        .position(|e| e.get("pr_number").and_then(Value::as_u64) == Some(pr))
-        .or_else(|| {
-            entries
-                .iter()
-                .position(|e| crate::merge_gates::pr_numbers_of(e).contains(&pr))
-        })?;
+    let here = crate::pr_list::origin_slug(cwd, None).ok();
+    let at = pr_bound_index(&entries, pr, here.as_deref())?;
     entries.into_iter().nth(at)
+}
+
+/// The pure half of [`pr_bound_entry`]. PR numbers collide across
+/// repositories, and `additional_prs` may name any of them, so a ref whose
+/// URL names a repository other than `here` belongs to that repository. A
+/// ref with no URL, or no known `here`, still binds by number.
+pub(crate) fn pr_bound_index(entries: &[Value], pr: u64, here: Option<&str>) -> Option<usize> {
+    let ours = |url: Option<&str>| match (here, crate::backlog::pr_link::repo_slug_from_url(url)) {
+        (Some(here), Some(theirs)) => theirs.eq_ignore_ascii_case(here),
+        _ => true,
+    };
+    let bound = |primary: bool| {
+        entries.iter().position(|e| {
+            crate::merge_gates::pr_refs_of(e)
+                .iter()
+                .any(|r| r.number == pr && r.primary == primary && ours(r.url.as_deref()))
+        })
+    };
+    bound(true).or_else(|| bound(false))
 }
 
 /// The main-repair exemption probe over the live graph: `None` when this
