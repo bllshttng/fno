@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -291,3 +292,17 @@ def test_postcompact_producer_uses_each_harness_wire_schema(
             "Keep the target oriented"
             in payload["hookSpecificOutput"]["additionalContext"]
         )
+
+
+def test_module_entry_answers_the_doctor_context_audit_door() -> None:
+    """`fno doctor --context-audit` (Rust) runs this entry; context_run reads its JSON."""
+    args = {"root": str(ROOT), "host": None, "harness": "claude", "entry": "startup",
+            "budget": 32768, "json_out": True}
+    result = subprocess.run([sys.executable, "-m", "fno.context_audit", json.dumps(args)],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    cells = json.loads(result.stdout)["cells"]
+    assert [(c["harness"], c["entry_state"]) for c in cells] == [("claude", "startup")]
+    bad = subprocess.run([sys.executable, "-m", "fno.context_audit", json.dumps({**args, "harness": "x"})],
+                         capture_output=True, text=True, check=False)
+    assert bad.returncode == 1 and "unsupported harness: x" in bad.stderr

@@ -210,6 +210,11 @@
 #      the port of the Python _projects_dir read) and roster_path()
 #      joins ~/.claude/daemon for the daemon roster.json. Read-only;
 #      footnote stores nothing there.
+#      crates/fno-agents/src/register.rs prints the ambiguity refusal's
+#      resolve hint, the same `find ~/.claude/projects` line the Python
+#      identity_ambiguity_message prints: it points the human at Claude
+#      Code's own transcript tree to identify their session. A string in a
+#      refusal; nothing is constructed or stored.
 #   2. The worktree-harness integration: `.claude/worktrees/<name>` is the
 #      documented, SANCTIONED harness-native worktree default (see
 #      .claude/rules/worktrees.md - "this is now allowed"), and
@@ -367,7 +372,9 @@ cli/src/fno/review/confidence_scorer.py
 cli/src/fno/review/runners/agents_spawn_runner.py
 cli/src/fno/review/runners/claude_runner.py
 cli/src/fno/review/scorers/__init__.py
-cli/src/fno/scoreboard/fold.py
+cli/src/fno/runtime/cli.py
+cli/src/fno/runtime/worktree.py
+crates/fno-agents/src/scoreboard/views.rs
 crates/fno/src/setup_autowire.rs
 crates/fno/src/setup_autowire_tests.rs
 cli/src/fno/target_cli.py
@@ -406,6 +413,7 @@ crates/fno-agents/src/provider.rs
 crates/fno-agents/src/gh_spend.rs
 crates/fno-agents/src/reclaim.rs
 crates/fno-agents/src/receipt.rs
+crates/fno-agents/src/register.rs
 crates/fno-agents/src/roster_reap.rs
 crates/fno-agents/src/scratch.rs
 crates/fno-agents/src/session_start_bytes.rs

@@ -2279,7 +2279,7 @@ fn run_bus_read(args: &[String]) -> i32 {
 
 /// The envelope contract the serializer froze: id, from, to and kind are
 /// required; everything else reads with a fallback.
-fn required_fields_present(m: &Value) -> bool {
+pub(crate) fn required_fields_present(m: &Value) -> bool {
     ["id", "from", "to", "kind"]
         .iter()
         .all(|k| m.get(k).and_then(Value::as_str).is_some())
@@ -2352,13 +2352,11 @@ pub(crate) fn record(chats_dir: &Path, line: &Value) -> Result<Recorded, String>
     record_at(chats_dir, &index_path(), &bus_live_path(), line)
 }
 
-#[allow(dead_code)]
 pub(crate) fn rebuild_index(chats_dir: &Path) -> Result<String, String> {
     rebuild_index_at(&index_path(), chats_dir)
 }
 
 /// The full id behind a prefix, at the env paths (the doors use this).
-#[allow(dead_code)]
 pub(crate) fn resolve_prefix(prefix: &str) -> Result<Resolved, String> {
     resolve_prefix_at(&index_path(), &chats_dir(), prefix)
 }

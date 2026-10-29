@@ -1227,6 +1227,32 @@ pub(crate) const AMBIENT_IDENTITY_NAMES: &[&str] = &[
     "CODEX_COMPANION_TRANSCRIPT_PATH",
 ];
 
+/// The same names with their harness family, in the Python
+/// `AMBIENT_IDENTITY_ENV` order: the one list the identity strip remedy
+/// walks, so a name without a classified family is never suggested for
+/// deletion (Python's fail-closed `.get(name)` rule).
+pub(crate) const AMBIENT_IDENTITY_FAMILIES: &[(&str, &str)] = &[
+    ("FNO_HARNESS_NAME", "fno"),
+    ("FNO_HARNESS_SESSION_ID", "fno"),
+    ("CODEX_THREAD_ID", "codex"),
+    ("CLAUDE_CODE_SESSION_ID", "claude"),
+    ("CODEX_SESSION_ID", "codex"),
+    ("GEMINI_SESSION_ID", "gemini"),
+    ("OPENCODE_SESSION_ID", "opencode"),
+    ("CLAUDE_SESSION_ID", "claude"),
+    ("CLAUDECODE", "claude"),
+    ("CLAUDECODE_SESSION_ID", "claude"),
+    ("HERMES_SESSION_ID", "hermes"),
+    ("TARGET_SESSION_ID", "fno"),
+    ("CODEX_CI", "codex"),
+    ("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "codex"),
+    ("CODEX_SHELL", "codex"),
+    ("CODEX_COMPANION_SESSION_ID", "codex"),
+    ("CODEX_COMPANION_TRANSCRIPT_PATH", "codex"),
+    ("FNO_AGENT_SUBSTRATE", "fno"),
+    ("FNO_NODE_REASON", "fno"),
+];
+
 /// Clear inherited session identity before stamping the values owned by this
 /// launcher. Routing and authentication variables remain untouched.
 pub(crate) fn stamp_command_env(
@@ -1516,6 +1542,53 @@ pub fn ambient_parent_edge_from(
         }
     };
     (session, harness, cwd)
+}
+
+/// Why [`ambient_parent_edge`] named no session, as one diagnostic clause.
+/// Mirrors the Python spawn notice's `_lineage_reason`: the identity
+/// disposition plus the NAMES of every present marker (never their values,
+/// so the refusal is safe to paste into a report). A downgrade that says
+/// nothing is undiagnosable - the 2026-10-28 lead-session spawns fell to the
+/// dispatcher path three times across two builds with no way to tell which
+/// of the strict vendor rules zeroed the session.
+pub fn ambient_edge_reason() -> String {
+    ambient_edge_reason_from(|k| std::env::var(k).ok())
+}
+
+fn ambient_edge_reason_from(get: impl Fn(&str) -> Option<String>) -> String {
+    let (_, _, disposition) = canonical_identity_from(&get);
+    let disposition_word = match disposition {
+        CanonicalDisposition::Absent => "absent",
+        CanonicalDisposition::Invalid => "invalid",
+        CanonicalDisposition::NameOnly => "name-only",
+        CanonicalDisposition::Complete => "complete",
+    };
+    let (_, vendor_ambiguous) = vendor_identity_from(&get);
+    let mut markers: Vec<&str> = Vec::new();
+    for (marker, _harness) in HARNESS_SESSION_MARKERS
+        .iter()
+        .chain(LEGACY_HARNESS_SESSION_MARKERS.iter())
+    {
+        if get(marker).map(|v| !v.trim().is_empty()).unwrap_or(false) {
+            markers.push(marker);
+        }
+    }
+    for pin in [FNO_HARNESS_NAME, FNO_HARNESS_SESSION_ID] {
+        if get(pin).map(|v| !v.trim().is_empty()).unwrap_or(false) {
+            markers.push(pin);
+        }
+    }
+    let ambiguous = if vendor_ambiguous {
+        "+vendor-ambiguous"
+    } else {
+        ""
+    };
+    let names = if markers.is_empty() {
+        "no markers".to_string()
+    } else {
+        markers.join(",")
+    };
+    format!("identity disposition={disposition_word}{ambiguous}, markers={names}")
 }
 
 /// The measured codex thread shape behind the daemon's "spawn request carried

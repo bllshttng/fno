@@ -18,7 +18,6 @@ import sys
 from pathlib import Path
 
 import yaml
-from fno.state.io import read_frontmatter, write_frontmatter
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _SCRIPT_PATH = _REPO_ROOT / "skills" / "blueprint" / "scripts" / "mutate_doc.py"
@@ -65,9 +64,10 @@ def test_serialize_frontmatter_prose_not_folded() -> None:
 def test_state_frontmatter_prose_not_folded(tmp_path: Path) -> None:
     """`fno do state` manifests carry free text (`input`); it must not fold either."""
     path = tmp_path / "target-state.md"
-    write_frontmatter(path, {"type": "target", "input": _LONG_PROSE}, "# State\n")
+    emitted = _mutate_doc._serialize_frontmatter({"type": "target", "input": _LONG_PROSE})
+    path.write_text(f"---\n{emitted}---\n# State\n", encoding="utf-8")
 
     text = path.read_text(encoding="utf-8")
     _assert_value_on_one_line(text, "input", _LONG_PROSE)
-    data, _ = read_frontmatter(path)
-    assert data["input"] == _LONG_PROSE
+    frontmatter = text.split("---\n")[1]
+    assert yaml.safe_load(frontmatter)["input"] == _LONG_PROSE

@@ -141,11 +141,9 @@ def _load_settings_at(key: _SettingsKey) -> "SettingsModel":
     # resolve_source replays the same layers, so the chain, its order, and the
     # alias pass (whose deprecation warnings fire once per process per chain,
     # not once per consumer) live in exactly one place.
+    # Retired dispatch keys leave disk through the native loader, the one
+    # dropper; a key left here only draws the unknown-key warning.
     candidates = _candidate_paths()
-    from fno.config.writer import drop_retired_dispatch_keys
-
-    for receipt in drop_retired_dispatch_keys(candidates):  # retired keys leave disk once
-        print(f"fno config: {receipt}", file=sys.stderr)
     layers = list(_aliased_layers(tuple(candidates)))
 
     # Deep-merge lowest priority first so the highest-priority file wins per

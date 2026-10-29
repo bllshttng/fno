@@ -3250,7 +3250,7 @@ def dispatch_spawn_pane(
         )
         if role_refusal is not None:
             raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
-        name = adopt_drawn_name(succession, role_plan, name)
+        name = adopt_drawn_name(role_plan, name)
 
     conflict = pane_placement_conflict(
         pane, workspace=squad, split=split, at=at, tab=tab, tab_id=tab_id,
@@ -4468,7 +4468,7 @@ def dispatch_spawn_pane(
                     account_record_id=account_record_id,
                 )
             if entry.role_level is not None and entry.role_scope:
-                from fno.lead.state import arm_lead_manifest
+                from fno.agents.role import arm_lead_manifest
 
                 try:
                     lead_loop_armed = arm_lead_manifest(

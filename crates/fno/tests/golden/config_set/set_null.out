@@ -1,0 +1,1 @@
+set test.max_net_new = None (global: <FIXTURE>/fake_home/.fno/config.toml)

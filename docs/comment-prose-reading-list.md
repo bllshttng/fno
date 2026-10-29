@@ -127,7 +127,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 2.0x | 8 | 4 | `cli/src/fno/adapters/providers/staging.py:29` | `_default_providers_root` |
 | 2.0x | 8 | 4 | `cli/src/fno/adapters/providers/usage.py:222` | `_load_records` |
 | 2.0x | 18 | 9 | `cli/src/fno/adapters/providers/usage.py:293` | `_bearer_verdict` |
-| 2.0x | 12 | 6 | `cli/src/fno/agents/autonomous_route.py:180` | `_healthy_alternate_exists` |
 | 2.0x | 10 | 5 | `cli/src/fno/agents/context.py:80` | `caller_kind_from_env` |
 | 2.0x | 20 | 10 | `cli/src/fno/agents/events.py:44` | `emit` |
 | 2.0x | 8 | 4 | `cli/src/fno/agents/harnesses/codex.py:212` | `git_writable_config_args` |
@@ -404,7 +403,6 @@ The actionable view. A high ratio on a 4-line function is usually a thorough doc
 | 1.17x | 7 | 6 | `cli/src/fno/graph/slug.py:83` | `assign_unique_slug` |
 | 1.17x | 7 | 6 | `cli/src/fno/inbox/store.py:317` | `_slug_for` |
 | 1.17x | 7 | 6 | `cli/src/fno/pr_watch/_discover.py:102` | `_resolve_repo_dir` |
-| 1.17x | 7 | 6 | `cli/src/fno/pr_watch/cli.py:410` | `ensure_watcher_activated` |
 | 1.17x | 7 | 6 | `cli/src/fno/relay/envelope.py:88` | `frame_envelope` |
 | 1.17x | 7 | 6 | `cli/src/fno/target_cli.py:2286` | `_read_node_claim` |
 | 1.16x | 44 | 38 | `cli/src/fno/graph/_reconcile.py:1141` | `emit_gate_escape_for_record` |

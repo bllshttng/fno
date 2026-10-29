@@ -1,0 +1,123 @@
+{
+  "state": "ok",
+  "since_days": 20000,
+  "results": [
+    {
+      "session_id": "s-plan",
+      "plan_path": "<CASE>/repo/plans/p1.md",
+      "status": "joined",
+      "pr_number": 11,
+      "outcome": "bounced",
+      "probes": {
+        "declared": 1,
+        "passed": 1
+      },
+      "context_outcome_trace": {
+        "objective": "One",
+        "plan_node": "x-1",
+        "plan_path": "<CASE>/repo/plans/p1.md",
+        "worker_session": "s-ship",
+        "claim": {
+          "observed": false,
+          "events": []
+        },
+        "commit": "abc1234",
+        "evidence_receipt": null,
+        "pr": {
+          "number": 11,
+          "url": "https://github.com/ex/repo/pull/11"
+        },
+        "context": {
+          "harness": "claude",
+          "entry_state": "startup",
+          "bytes": 10,
+          "estimated_tokens": 3,
+          "context_hash": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+          "source_hashes": [
+            "abc"
+          ],
+          "measurement_complete": true,
+          "measurement_errors": []
+        },
+        "outcomes": {
+          "ci": {
+            "state": "SUCCESS",
+            "observed_at": "2026-06-15T08:00:00Z"
+          },
+          "review": {
+            "reviewed": null,
+            "attestations": 0,
+            "findings": 0,
+            "observed": false
+          },
+          "merge": {
+            "observed": true,
+            "state": "merged",
+            "merged": true,
+            "at": "2026-06-15T10:30:00+00:00"
+          },
+          "revert": {
+            "observed": true,
+            "reverted": false,
+            "at": null
+          },
+          "recovery": [],
+          "latency_minutes": 30.0,
+          "spend_usd": 5.0
+        },
+        "completed_at": "2026-06-15T10:00:00",
+        "falsifiable": true,
+        "missing": [],
+        "provenance": [
+          "ledger",
+          "graph",
+          "events"
+        ]
+      },
+      "ac_coverage": {
+        "verified": 2,
+        "total": 2,
+        "pct": 100
+      },
+      "scope_drift": {
+        "unplanned": [
+          "cli/src/fno/new_surface.py",
+          "migrations/0002_nodes.sql"
+        ],
+        "untouched": []
+      },
+      "data_model_surprise": 1,
+      "deviation_load": 1
+    }
+  ],
+  "coverage": {
+    "planned_rows": 1,
+    "joined_pct": 100
+  },
+  "event_coverage": {
+    "complete": true,
+    "malformed_lines": 0,
+    "unreadable_paths": 0,
+    "paths": [
+      {
+        "path": "<CASE>/state/events.jsonl",
+        "status": "ok",
+        "malformed_lines": 0
+      },
+      {
+        "path": "<CASE>/state/events.jsonl.ephemeral",
+        "status": "missing",
+        "malformed_lines": 0
+      },
+      {
+        "path": "<CASE>/state/spaces/<SPACEREPO>/events.jsonl",
+        "status": "missing",
+        "malformed_lines": 0
+      }
+    ]
+  },
+  "context_comparison": {
+    "label": "rejected",
+    "reason": "comparison_not_predeclared"
+  }
+}

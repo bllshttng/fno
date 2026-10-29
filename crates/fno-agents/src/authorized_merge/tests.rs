@@ -21,6 +21,7 @@ struct Fake {
     merge_result: Option<ProbeOutcome>,
     ci_base: Option<ProbeOutcome>,
     fresh_ci: Option<bool>,
+    live_lanes: usize,
     ci_base_calls: RefCell<u32>,
     checks: Option<String>,
     /// GitHub's ruleset hold for the PR under decision; `None` (the
@@ -44,6 +45,8 @@ struct Fake {
     /// read asked for.
     fno_calls: RefCell<Vec<Vec<String>>>,
     covered_head: Option<String>,
+    /// The merge queue's answer; `None` (the default) reads no queue.
+    merge_queue: Option<Result<Option<String>, String>>,
     enabled: bool,
     floor: Option<String>,
     gh_ok: bool,
@@ -302,6 +305,9 @@ impl Probes for Fake {
     fn require_fresh_ci(&self, _cwd: &Path) -> bool {
         self.fresh_ci.unwrap_or(true)
     }
+    fn live_lanes(&self, _cwd: &Path) -> usize {
+        self.live_lanes
+    }
     fn slot_holder(&self, _cwd: &Path, _base_ref: &str) -> Result<Option<u64>, String> {
         if self.slot_holder_err {
             return Err("merge slot claim corrupted".to_string());
@@ -377,6 +383,14 @@ impl Probes for Fake {
     }
     fn main_repair_hold(&self, _cwd: &Path, _facts: &PrFacts) -> Option<String> {
         self.main_repair.clone().flatten()
+    }
+    fn merge_queue(
+        &self,
+        _cwd: &Path,
+        _facts: &PrFacts,
+        _head: &str,
+    ) -> Option<Result<Option<String>, String>> {
+        self.merge_queue.clone()
     }
     fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String), String> {
         self.gh_calls.borrow_mut().push(args.to_vec());
@@ -927,15 +941,31 @@ fn ci_base_freshness_gates_the_chain() {
     assert!(outcome.detail().contains("retry later"));
     assert!(fake.gh_calls.borrow().is_empty());
     assert!(fake.take_slot_calls.borrow().is_empty());
+    // Off by default, the base_overlap hold rides the same key: live lanes
+    // never read the base move, so a mergeable PR merges as it is.
+    let reads_refs = |fake: &Fake| {
+        fake.gh_calls
+            .borrow()
+            .iter()
+            .any(|call| call.iter().any(|arg| arg == "baseRefName,headRefName"))
+    };
     let fake = Fake {
         ci_base: Some(ProbeOutcome::Refused("ci_base_stale: old".to_string())),
         fresh_ci: Some(false),
+        live_lanes: 2,
         ..clean()
     };
     let mut req = request(Effect::Merge);
     req.require_checks = true;
     assert_eq!(run(&fake, &req).word(), "merged");
     assert_eq!(*fake.ci_base_calls.borrow(), 0);
+    assert!(!reads_refs(&fake));
+    let armed = Fake {
+        live_lanes: 2,
+        ..clean()
+    };
+    run(&armed, &req);
+    assert!(reads_refs(&armed));
 }
 
 #[test]
@@ -1120,6 +1150,7 @@ fn an_arm_receipt_names_the_head_and_is_never_merged() {
         Outcome::Armed {
             head: "abc123".to_string(),
             merge_grant: None,
+            queued: false,
         }
     );
     let calls = fake.gh_calls.borrow();
@@ -1198,6 +1229,32 @@ fn an_immediate_merge_never_passes_auto() {
     assert_eq!(spans[0]["data"]["pr"], 7);
     assert_eq!(spans[0]["data"]["repo"], "o/r");
     assert_eq!(spans[0]["data"]["head"], "abc123");
+}
+
+#[test]
+fn a_queued_merge_runs_no_gh_merge_and_an_ejected_head_holds() {
+    let mut fake = clean();
+    fake.merge_queue = Some(Ok(None));
+    let outcome = run(&fake, &request(Effect::Merge));
+    assert_eq!(
+        outcome,
+        Outcome::Armed {
+            head: "abc123".to_string(),
+            merge_grant: None,
+            queued: true,
+        }
+    );
+    assert!(outcome.detail().contains("fno merge queue"));
+    assert!(!fake
+        .gh_calls
+        .borrow()
+        .iter()
+        .any(|call| call.get(1).map(String::as_str) == Some("merge")));
+    fake.merge_queue = Some(Ok(Some("the merge queue ejected head abc123".to_string())));
+    assert!(matches!(
+        run(&fake, &request(Effect::Merge)),
+        Outcome::Held { .. }
+    ));
 }
 
 #[test]

@@ -6,7 +6,6 @@
 //! forwarding shim. The catalog is
 //! the single source both the compatibility help and any future dispatcher
 //! must read - no second handwritten mapping in help or completion.
-use serde_json::{json, Value};
 
 /// One canonical group: its purpose line and the action vocabulary, where
 /// each action names the legacy first-level command it dispatches to (the
@@ -19,18 +18,6 @@ pub struct Group {
     /// `(action, legacy_command)` pairs: `fno backlog <group> <action>`
     /// dispatches to the legacy command `<legacy_command>`.
     pub actions: &'static [(&'static str, &'static str)],
-}
-
-impl Group {
-    /// The action for a legacy command, if the table knows it.
-    pub fn action_for_legacy(command: &str) -> Option<(&'static str, &'static str)> {
-        GROUPS.iter().find_map(|g| {
-            g.actions
-                .iter()
-                .find(|(_, legacy)| *legacy == command)
-                .map(|(action, _)| (g.name, *action))
-        })
-    }
 }
 
 /// The canonical table, in plan order.
@@ -194,29 +181,6 @@ pub fn from_legacy(command: &str) -> Option<(&'static str, &'static str)> {
             .iter()
             .find(|(_, legacy)| *legacy == command)
             .map(|(action, _)| (g.name, *action))
-    })
-}
-
-/// The catalog as JSON: groups, actions, legacy names, counts.
-pub fn catalog_json() -> Value {
-    let groups: Vec<Value> = GROUPS
-        .iter()
-        .map(|g| {
-            json!({
-                "group": g.name,
-                "purpose": g.purpose,
-                "actions": g.actions.iter().map(|(a, l)| json!({
-                    "action": a,
-                    "legacy": l,
-                })).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
-    json!({
-        "groups": groups,
-        "group_count": GROUPS.len(),
-        "mapped_names": GROUPS.iter().map(|g| g.actions.len()).sum::<usize>(),
-        "exception": "annotate is retired: its spellings refuse, naming note --blocking as the replacement",
     })
 }
 

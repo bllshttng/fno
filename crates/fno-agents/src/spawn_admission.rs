@@ -620,7 +620,35 @@ pub fn normalize(
             flag_value(head, &["--slug"]).as_deref(),
             &names,
         );
-        let name = match minted {
+        // A promoted spawn makes a lead, and a lead carries a person name.
+        let promoted = head
+            .iter()
+            .any(|t| t == "--promote" || t.starts_with("--promote="));
+        let person = match promoted
+            .then(crate::paths::AgentsHome::from_env_opt)
+            .flatten()
+        {
+            None => None,
+            Some(home) => match crate::name_draw::pick_free_name(
+                &home.team_names_json(),
+                &home.registry_json(),
+            ) {
+                Ok(name) => Some(name),
+                // A slug in its place would launch a lead the name check
+                // never saw: refuse, the way a typed name refuses.
+                Err(e) => {
+                    notes.push(format!(
+                        "fno agents spawn --promote: a lead takes a drawn person name, and the draw failed ({e}); nothing launched"
+                    ));
+                    return Normalized {
+                        argv: args.to_vec(),
+                        stderr: notes,
+                        exit: Some(2),
+                    };
+                }
+            },
+        };
+        let name = match minted.filter(|_| !promoted).or(person) {
             Some(n) => n,
             None => match mint_slug(&names) {
                 Ok(n) => n,
@@ -1208,4 +1236,48 @@ fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
     out.push(account);
     out.extend_from_slice(&args[boundary..]);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A nameless `--promote` draws the lead's person name. When the shared
+    /// name ledger cannot be read, the spawn refuses; it never falls back to
+    /// a slug the name check never saw.
+    #[test]
+    fn a_nameless_promote_refuses_when_the_ledger_cannot_be_read() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("agents-home");
+        std::fs::create_dir_all(&home).unwrap();
+        crate::registry_store::seed_raw(
+            &home.join("registry.json"),
+            serde_json::json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
+                .to_string(),
+        );
+        let prior = std::env::var_os(crate::paths::HOME_ENV);
+        std::env::set_var(crate::paths::HOME_ENV, &home);
+        let argv: Vec<String> = ["spawn", "--promote", "x-aaaa", "lead it"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        crate::name_ledger::route_to_primary(Some(crate::store_remote::test_primary::dead()));
+        let refused = normalize(&argv, None, tmp.path());
+        crate::name_ledger::route_to_primary(None);
+        let drawn = normalize(&argv, None, tmp.path());
+        match prior {
+            Some(v) => std::env::set_var(crate::paths::HOME_ENV, v),
+            None => std::env::remove_var(crate::paths::HOME_ENV),
+        }
+
+        assert_eq!(refused.exit, Some(2), "{:?}", refused.stderr);
+        assert!(refused.stderr.iter().any(|l| l.contains("draw failed")));
+        let at = drawn.argv.iter().position(|t| t == "--name").unwrap();
+        let name = &drawn.argv[at + 1];
+        assert!(crate::team_names::valid_person_name(name), "{name}");
+    }
 }

@@ -34,15 +34,16 @@ fn scan_field(content: &str, field: &str) -> Option<String> {
 
 /// The flock handle for `<manifest>.lock`. Dropping it closes the file and
 /// releases the lock.
-struct ManifestLock {
+pub(crate) struct ManifestLock {
     _file: std::fs::File,
 }
 
 /// Take the same `<manifest>.lock` flock `fno do state set` holds while it
-/// rewrites the manifest (cli/src/fno/state/io.py uses the filelock package,
-/// which flocks this path on unix). Best-effort: `None` after ~5s of
-/// contention means the refresh skips rather than racing the other writer.
-fn lock_manifest(manifest: &Path) -> Option<ManifestLock> {
+/// rewrites the manifest (the Python `atomic_write` flocked this path with a
+/// 10s filelock timeout; the native commands mirror the ~5s budget). Best-effort:
+/// `None` after ~5s of contention means the caller skips rather than racing
+/// the other writer. `pub(crate)`: the `state-cli` door shares the lock.
+pub(crate) fn lock_manifest(manifest: &Path) -> Option<ManifestLock> {
     use std::os::fd::AsRawFd;
     let name = manifest
         .file_name()
@@ -243,7 +244,7 @@ fn consume_init_sentinel(path: &Path) {
 
 /// Write via a sibling tempfile and rename, so a reader never sees a half
 /// manifest.
-fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let tmp = dir.join(format!(
         ".{}.refresh-{}",

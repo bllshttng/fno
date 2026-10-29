@@ -55,6 +55,10 @@ READ_ALLOWLIST = (
     "crates/fno-agents/src/backlog/mod.rs",
     "crates/fno-agents/src/backlog/note_history.rs",
     "crates/fno-agents/src/backlog/note_migrate.rs",
+    # The state lane's fixture writer: populate_state_profile builds a
+    # synthetic graph.json inside the session sandbox for the state canary.
+    # It never opens the real store.
+    "crates/fno-agents/src/test_smoke.rs",
     # The pr-watch installer's plist template: its doc comment names the
     # store the launchd tick polls, and the rendered bytes are golden-frozen;
     # the installer itself never opens the store, never a read.

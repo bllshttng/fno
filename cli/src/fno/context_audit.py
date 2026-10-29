@@ -977,3 +977,22 @@ def build_context_report(
         "duplicates": _duplicate_groups(all_records),
         "conflicts": _conflict_groups(all_records),
     }
+
+
+def print_doctor_report(root: str, host: str | None, harness: str, entry: str, budget: int,
+                        json_out: bool) -> None:
+    """`fno doctor --context-audit`: the census for one cell or every cell."""
+    try:
+        report = build_context_report(
+            Path(host or root), plugin_root=Path(root), packet_budget_bytes=max(budget, 1), node_count=1,
+            harnesses=SUPPORTED_HARNESSES if harness == "all" else (harness,),
+            entry_states=SUPPORTED_ENTRY_STATES if entry == "all" else (entry,))
+    except ValueError as e:
+        raise SystemExit(f"fno doctor --context-audit: {e}") from e
+    print(json.dumps(report, indent=None if json_out else 2))
+
+
+if __name__ == "__main__":  # `fno doctor --context-audit` runs this with one JSON argument
+    import sys
+
+    print_doctor_report(**json.loads(sys.argv[1]))

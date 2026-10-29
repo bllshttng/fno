@@ -140,13 +140,12 @@ fn law_authority(subject: &str, cwd: Option<&Path>) -> (&'static str, String) {
     let rows: Vec<&Value> = index
         .rows
         .iter()
-        .filter(|row| crate::decision_index::is_law(row))
+        .filter(|row| crate::decision_index::is_user_ruling(row))
         .filter(|row| {
             row.get("subject")
                 .and_then(Value::as_str)
                 .is_some_and(|s| s.eq_ignore_ascii_case(subject))
         })
-        .filter(|row| row.get("authority_source").and_then(Value::as_str) == Some("operator"))
         .collect();
     if index.damaged > 0 {
         let noun = if index.damaged == 1 { "row" } else { "rows" };
@@ -240,9 +239,10 @@ fn current_branch(cwd: Option<&Path>) -> Option<String> {
 fn refusal_text(subject: &str) -> String {
     format!(
         "gh proxy: --draft refused (config.pr.open_ready): pull requests open \
-         ready for review, never draft. To grant this one, record the operator \
-         ruling from your own terminal: fno inbox law set {subject} \
-         \"draft permitted for this pull request\" --rationale \"<why>\". \
+         ready for review, never draft. To grant this one, ask the user in chat; \
+         when they agree, record their exact words: fno inbox law set {subject} \
+         \"draft permitted for this pull request\" --rationale \"user in chat: \
+         <their words>\". \
          To turn the rule off for this repo: config pr.open_ready = false."
     )
 }

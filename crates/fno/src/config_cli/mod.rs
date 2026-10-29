@@ -1,9 +1,8 @@
 //! The `fno config` read-side doors that answer natively on the front door.
 //!
-//! One classify, one dispatch line in `main.rs`, bodies beside this module:
-//! [`get`], [`history`], [`leaves`] and [`plugin_install`], plus
-//! `config doctor` in `crate::config_doctor`. The write side (`set`, `unset`,
-//! `rm`) stays Python for now: it belongs to the config-writer port.
+//! One classify, one dispatch ([`run`]), bodies beside this module:
+//! [`get`], [`history`], [`leaves`], [`plugin_install`], `config doctor` in
+//! `crate::config_doctor`, and the writer, [`write`] (`set`, `unset`, `rm`).
 //!
 //! The reader replays the Python loader's merge: candidate chain, per-layer
 //! legacy alias, deep merge, worktree-local allowlist, then the schema table
@@ -18,7 +17,9 @@
 pub mod get;
 pub mod history;
 pub mod leaves;
+pub mod model;
 pub mod plugin_install;
+pub mod write;
 
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
@@ -38,12 +39,31 @@ pub enum Door {
     PluginInstall(Vec<OsString>),
     PluginGroup(Vec<OsString>),
     Doctor(Vec<OsString>),
+    Set(Vec<OsString>),
+    /// `unset` and its `rm` alias; the command names the usage line.
+    Unset(&'static str, Vec<OsString>),
+}
+
+/// The one dispatch for every claimed door.
+pub fn run(door: Door) -> i32 {
+    match door {
+        Door::Get(rest) => get::run(&rest),
+        Door::History(rest) => history::run(&rest),
+        Door::BuildDir => leaves::run_build_dir(&[]),
+        Door::Budget(rest) => leaves::run_budget(&rest),
+        Door::StatusSinks(rest) => leaves::run_status_sinks(&rest),
+        Door::ActiveBacklog => leaves::run_active_backlog(&[]),
+        Door::PluginInstall(rest) => plugin_install::run(&rest),
+        Door::PluginGroup(rest) => plugin_install::run_group(&rest),
+        Door::Doctor(rest) => crate::config_doctor::run(&rest),
+        Door::Set(rest) => write::set::run(&rest),
+        Door::Unset(command, rest) => write::unset::run(command, &rest),
+    }
 }
 
 /// Claim the native `config` leaves lexically, before clap, the way
 /// `config_defaults::classify` does. `None` forwards to the Python shell
-/// untouched: the writer commands and the lazy mounts (accounts, paths,
-/// route, routing).
+/// untouched: the lazy mounts (accounts, paths, route, routing).
 pub fn classify(args: &[OsString]) -> Option<Door> {
     let words: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
     if words.len() != args.len() {
@@ -73,6 +93,9 @@ pub fn classify(args: &[OsString]) -> Option<Door> {
             rest.iter().map(|w| OsString::from(*w)).collect(),
         )),
         ["config", "doctor", ..] => Some(Door::Doctor(args[2..].to_vec())),
+        ["config", "set", ..] => Some(Door::Set(args[2..].to_vec())),
+        ["config", "unset", ..] => Some(Door::Unset("unset", args[2..].to_vec())),
+        ["config", "rm", ..] => Some(Door::Unset("rm", args[2..].to_vec())),
         _ => None,
     }
 }
@@ -723,26 +746,12 @@ pub fn raw_get<'a>(raw: &'a Value, dotted: &str) -> Option<&'a Value> {
     Some(node)
 }
 
-/// Dotted lookup with the loader's prefix tolerance: `config.` is optional.
-pub fn raw_get_variant(raw: &Value, key: &str) -> Option<Value> {
-    let variants: Vec<String> = match key.strip_prefix("config.") {
-        Some(stripped) => vec![key.to_string(), stripped.to_string()],
-        None => vec![key.to_string(), format!("config.{key}")],
-    };
-    for variant in &variants {
-        if let Some(got) = raw_get(raw, variant) {
-            return Some(got.clone());
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn classify_claims_native_doors_and_forwards_the_writer() {
+    fn classify_claims_the_doors_and_forwards_the_lazy_mounts() {
         let os = |words: &[&str]| -> Vec<OsString> { words.iter().map(OsString::from).collect() };
         assert!(matches!(
             classify(&os(&["config", "get", "review.max_rounds"])),
@@ -769,7 +778,7 @@ mod tests {
             Some(Door::PluginInstall(_))
         ));
         // Every harness word, codex included, and the harness-less form reach
-        // the one exec door.
+        // the one exec door; the Python shim that did the same exec is gone.
         assert!(matches!(
             classify(&os(&["config", "plugin", "install", "codex"])),
             Some(Door::PluginInstall(_))
@@ -782,9 +791,14 @@ mod tests {
             classify(&os(&["config", "doctor", "--post-merge"])),
             Some(Door::Doctor(_))
         ));
-        // The writer stays Python.
-        assert_eq!(classify(&os(&["config", "set", "a.b", "1"])), None);
-        assert_eq!(classify(&os(&["config", "unset", "a.b"])), None);
+        assert!(matches!(
+            classify(&os(&["config", "set", "a.b", "1"])),
+            Some(Door::Set(_))
+        ));
+        assert!(matches!(
+            classify(&os(&["config", "rm", "a.b"])),
+            Some(Door::Unset("rm", _))
+        ));
         // The bare group and unknown leaves forward.
         assert_eq!(classify(&os(&["config"])), None);
         assert_eq!(classify(&os(&["config", "no-such-leaf"])), None);

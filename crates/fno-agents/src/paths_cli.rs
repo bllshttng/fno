@@ -182,7 +182,7 @@ fn functions_lines() -> Vec<String> {
 /// The repo root, Python `resolve_repo_root` semantics: `FNO_REPO_ROOT` env
 /// first, then `git rev-parse --show-toplevel`. None when git fails (the
 /// caller refuses rather than write to a guessed root).
-fn repo_root() -> Option<PathBuf> {
+pub(crate) fn repo_root() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("FNO_REPO_ROOT") {
         return Some(PathBuf::from(p));
     }
@@ -299,7 +299,7 @@ fn local_date() -> String {
 }
 
 /// `handoff [--session-id S | --slug S | --scope S] [--name-only]`: print the
-/// save path for a canon handoff doc (Python `paths_cli.handoff` parity). The
+/// Save path for a canon handoff doc. The
 /// filename key is the session's canonical handle (first-8) unless --slug
 /// overrides. --scope keys the doc on the role instead -- a role outlives
 /// its sessions -- and returns the newest existing doc for that scope, so a
@@ -375,12 +375,11 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
         // else its cwd). Resolving from the caller's cwd minted
         // `internal/<basename>/` strays whenever a promoted session's shell
         // had cd'd once, so a scope with no row refuses instead.
-        let root = scope_project_root(&scope, home).ok_or_else(|| {
+        let directory = scope_handoffs_dir(&scope, home).ok_or_else(|| {
             format!(
                 "no registry row carries role_scope {scope:?}; refusing to key the handoff dir on the cwd basename"
             )
         })?;
-        let directory = resolve_handoffs_dir(None, None, Path::new(&root), home);
         let suffix = format!("-{key}.md");
         let mut best: Option<(std::time::SystemTime, String)> = None;
         if let Ok(rd) = std::fs::read_dir(&directory) {
@@ -394,7 +393,7 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
                 }
                 // A concurrent refresh can unlink between read_dir and stat;
                 // a vanished candidate sorts oldest and the writer recreates
-                // the file anyway (Python `_mtime` parity).
+                // the file anyway.
                 let mtime = entry
                     .metadata()
                     .and_then(|m| m.modified())
@@ -433,6 +432,14 @@ fn render_handoff(directory: &Path, filename: &str, name_only: bool) -> String {
     } else {
         directory.join(filename).display().to_string()
     }
+}
+
+/// The handoffs dir a role scope's canon doc lives in. Every canon-doc reader
+/// resolves through this, so a reader cannot miss a doc `config paths
+/// handoff --scope` finds.
+pub(crate) fn scope_handoffs_dir(scope: &str, home: Option<&Path>) -> Option<PathBuf> {
+    let root = scope_project_root(scope, home)?;
+    Some(resolve_handoffs_dir(None, None, Path::new(&root), home))
 }
 
 /// The scope's project root: the newest registry row carrying this exact
@@ -1226,6 +1233,12 @@ mod tests {
         assert!(
             full.contains(&format!("handoffs/{project}")) && !full.contains("mail-hold"),
             "the scope doc must key on the row's project, got {full}"
+        );
+        // The checkin reader resolves through scope_handoffs_dir: it must name
+        // the dir this command printed, whatever the caller's cwd.
+        assert_eq!(
+            scope_handoffs_dir(scope, Some(&home)).as_deref(),
+            Path::new(full.trim()).parent()
         );
         let _ = std::fs::remove_dir_all(project_cwd.parent().unwrap());
     }

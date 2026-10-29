@@ -50,6 +50,15 @@ ALLOW_FILES+='|^crates/fno-agents/tests/fixtures/lead/lead-2026-08-05\.json$'
 ALLOW_FILES+='|^crates/fno-agents/src/research/html5_entities\.tsv$'
 # The v3 graph schema a migration test replays: the column it names is history.
 ALLOW_FILES+='|^crates/fno-agents/tests/fixtures/graph_db_schema_v3\.sql$'
+# The config-route settings golden: the deleted python leg spelled the slot
+# key "verb", and the frozen bytes replay it until both legs rename together.
+ALLOW_FILES+='|^crates/fno-agents/tests/golden/config_route/cases\.json$'
+# The config-loader goldens: the retired-key drop freezes the two retired
+# dispatch keys by their old spelling, which is what the drop removes.
+ALLOW_FILES+='|^crates/fno/tests/golden/config_load/retired\.jsonl$'
+# The config-writer goldens: unset of a retired dispatch key prints and
+# receipts it by its old spelling.
+ALLOW_FILES+='|^crates/fno/tests/golden/config_set/unset_retired\.(out|state\.json)$'
 # The rule-9 glue wordlists: English dictionaries (a dwyl protection tier and
 # a google-10000 split tier) whose entries collide as substrings (feverblossom,
 # beaverkill, deverbative). The lists are data, not prose teaching the word.

@@ -23,10 +23,6 @@ pub enum Writer {
     GcSweep,
     /// The roster sweep for harness rows no fno row names.
     RosterReap,
-    /// The merge reaper's tree/row cleanup.
-    #[allow(dead_code)] // vocabulary sibling; the merge reaper emits
-    // events, not receipts, until a door routes its receipts here
-    MergeReaper,
     /// The registry choke point: the surface is whatever argv named.
     RegistryWrite,
 }
@@ -36,7 +32,6 @@ impl Writer {
         match self {
             Writer::GcSweep => "gc-sweep".to_string(),
             Writer::RosterReap => "roster-reap".to_string(),
-            Writer::MergeReaper => "merge-reaper".to_string(),
             // One command serves a human shell and a daemon loop, so the
             // surface is the whole bounded invocation, not the binary.
             Writer::RegistryWrite => crate::state::invocation_command(),

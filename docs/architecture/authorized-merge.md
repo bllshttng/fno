@@ -38,7 +38,7 @@ The receipt keeps them apart. `Armed` is a queue entry, a promise GitHub keeps l
 | `Unknown` | an instrument could not answer | retry; never read it as clear |
 | `Failed` | the effect ran and failed | report |
 
-The gate merges a PR only after its CI tested the current main. The test is ancestry, not a timestamp. The gate compares the PR against its base (`compare/{base}...{head}`). A `behind_by` above zero holds as `ci_base_stale` only on file overlap: the newer base commits touch a file the PR changes. A behind head with no shared file merges (user ruling, 2026-10-07). A behind head whose merge has no conflicts also merges (user ruling, 2026-10-18). An unreadable file set holds as retry-later and takes no slot. The run-timestamp heuristic this replaced answered the wrong question. A run can start after the base tip moves yet still run at a head cut before it. An unreadable freshness read holds with `retry later`, never a merge. The gate is off by default. Set `auto_merge.require_fresh_ci` to turn it on. The gate covers `Effect::Arm` too. Main has no branch protection, so GitHub merges an armed green PR at once.
+By default the gate merges a green, mergeable PR as it is. Only a GitHub conflict pulls main into the branch. `auto_merge.require_fresh_ci` (default false) turns on the freshness gate this section and the next describe. With it on, the gate merges a PR only after its CI tested the current main. The same key arms the `base_overlap` hold, which holds a behind PR while parallel lanes run and the base move touches its files. The test is ancestry, not a timestamp. The gate compares the PR against its base (`compare/{base}...{head}`). A `behind_by` above zero holds as `ci_base_stale` only on file overlap: the newer base commits touch a file the PR changes. A behind head with no shared file merges (user ruling, 2026-10-07). A behind head whose merge has no conflicts also merges (user ruling, 2026-10-18). An unreadable file set holds as retry-later and takes no slot. The run-timestamp heuristic this replaced answered the wrong question. A run can start after the base tip moves yet still run at a head cut before it. An unreadable freshness read holds with `retry later`, never a merge. The gate covers `Effect::Arm` too. Main has no branch protection, so GitHub merges an armed green PR at once.
 
 After a main merge, every open PR with older CI is stale. A stale PR can prove its merge result clean: the merge tree into the current base computes clean. The repo-wide static step also passes on it. That PR merges on the current settle, with no fold and no slot. Main CI and the main-red hold catch a combined break. Folding on every stale settle restarted a full CI run each time. On a base that moves faster than CI, the holder chased the fold forever, and green PRs starved behind the slot. A stale PR whose merge result cannot verify instead walks the fold. While the slot is free, `decide` holds it with `ci_base_stale` and gives it the slot. The holder then has GitHub merge main into its branch (`PUT pulls/<n>/update-branch`, pinned to the head it read). That is a merge commit, never a rebase, so CI reruns against the current main. The slot claim then records `retested` metadata, so the retest runs once per slot hold. The mark lands in whichever store the slot lives in: the rootless primary, or the legacy repo-root store a migration window can still hold. If the base moves again, that settle still merges on the real `gh pr merge` call. The review coverage carries over as `carried_base_sync`. A conflict or a failed call holds with the manual remedy: merge `origin/main` into the branch and push. The receipt says `merge_slot_held`. While a PR holds the slot, all others are `Held`, even with fresh CI. This keeps another merge from invalidating the holder's retest. When the holder merges or closes, turns red, takes a dispatch hold, or its 60-minute lease expires, the slot releases. A held holder can satisfy none of the other three, so a hold releases the slot. An admitted holder that arms keeps the slot until its merge lands. The read-only preview reads the same two exits. A proven merge, or a self-held slot with its retest spent, reads no stale blocker. pr status never holds a merge the gate will take. The 60-minute TTL covers one retest, the measured 31-minute rust-ci maximum, one 10-minute sweep tick, and margin. The lease uses `<canonical repo>/.fno/claims`, keyed `merge-slot:<base_ref>`.
 
@@ -134,11 +134,13 @@ Only a live `operator` ruling at the lift subject lifts the freeze:
 fno inbox decide 'merge-freeze:<owner/repo>@<pin key>' 'lift' --authority operator
 ```
 
-The user records that row at their own terminal. A `chat_attested` row does not lift it: any process a harness session started can mint one, so it cannot show the user ruled. This is the trust shape of the merge grant and the waiver. A team or agent row at the subject does not lift it either. A row at another pin's subject does not lift it. A retracted lift row freezes the window again. An unreadable record or decision store holds the merge.
+The user records that row at a terminal (an `operator` row), or says lift in chat and a session records their words. The chat row is a `chat_attested` law row whose rationale starts `user in chat:` or that stores a `quote` (`decision_index::is_user_ruling`). A bare `chat_attested` row does not lift it. Any process a harness session started can mint one, so only the user's words show the user ruled. The merge grant keeps the operator-only shape. A team or agent row at the subject does not lift it either. A row at another pin's subject does not lift it. A retracted lift row freezes the window again. An unreadable record or decision store holds the merge.
 
 The `freeze-clear` op only tidies the record. It removes the primary row and the local file. Its `evidence` must be the decision id of a live `operator` ruling at the current lift subject. Free text refuses, and the refusal names the user's terminal door.
 
 A new pin re-arms the freeze. While the current pin is unlifted, a set refuses. After the user lifts it, a set with the same pin refuses, and a set with a new pin writes the record. The new pin has its own lift subject and no ruling there, so it holds again.
+
+A `release-pin` on the release record moves the sha of a live freeze on the same repo to the new pin. Only the sha changes: the sha admits no PR, so the move never widens the freeze. The new sha gives a new lift subject, so a lifted freeze re-arms. The record is in [distribution](../distribution.md#the-release-record).
 
 The pr-nudge ladder pauses on a frozen PR, so its owner gets no merge retry while the freeze holds.
 
@@ -159,6 +161,32 @@ revert_after_minutes = 10   # default 10
 Each minute the arm reads main's verdict through the gate's own cached reading. If a red head stays red past the window, is a `Merge pull request #N` commit, and has a green first parent, it is the culprit. The hold stops further merges once main reads red, so the red head is usually that merge. The arm then files a node tagged `main-repair`. It opens a PR that reverts the merge (`git revert -m 1`) and names that node. It asks the author of PR N to re-land the change with the fix. The revert needs one CI run. A fix forward can wait behind a flaky test and a CI queue: on 2026-10-26 main stayed red about 3 hours that way.
 
 The arm refuses to guess. If the parent run is red, cancelled or missing, or the head is not a PR merge, it journals `ambiguous` and opens nothing. A red whose failing checks all sit on heal's flake ledger journals `flaky`. Every outcome is one `main_revert_check` row per red head, so a daemon restart never opens a second revert. The arm never merges the revert. The owner merges it through this gate.
+
+## The merge queue
+
+A PR green on its own can still break main. On 2026-10-26 PR 3958 was green at 14:23Z, merged at 16:17Z over 48 newer main commits, and turned the `guards` job red on main. The merge queue tests each PR on top of current main before it lands. It is off by default. Turn it on per repo:
+
+```toml
+[merge_queue]
+enabled = true
+max_batch = 6   # default 6, the CI tier width
+```
+
+GitHub's own merge queue serves only organization-owned repos, so fno runs its own. With the knob on, the effect (next section) does not merge a PR whose base is `main`. Every gate before it still decides: review coverage, holds, the freeze, red main and the head pin. The effect writes one `merge_queue_entry` row for the cleared head and answers `armed`. A head the queue already ejected answers `held`, with the reason.
+
+The `merge_queue` daemon arm reads the entries every 2 minutes. It takes up to `max_batch` of them in queue order: a `main-repair` entry first and alone, then node priority, then age. It creates the ref `fno-merge-queue/main/<batch>` at main's tip, adds one merge commit per PR through the REST merges API, and dispatches `merge-queue-gate.yml` on that ref. The gate runs the `guards` jobs once for the whole batch, then posts `stacked-base-guard` on the batch commit. The ruleset requires that context, so main can move only to a commit the gate passed. On green the arm moves `main` to the batch commit with a non-force ref update. GitHub marks each PR merged, because its head is now on main.
+
+The queue never writes to a PR branch and never merges main into a green PR. The one exception is a PR that conflicts with the batch. The arm ejects it and asks for a merge of main.
+
+On a red gate:
+
+- When every failing check is on heal's flake ledger, the arm reruns the gate once.
+- A red batch of several PRs splits. The next batch takes only the left half, and the right half follows on top of it.
+- A red batch of one PR ejects it. The arm comments on the PR with the failing checks. A new push queues it again.
+
+When main moves under a built batch, the arm drops the batch and builds again. After 3 rebuilds in a row it holds with `main_moving` until main stays still for one tick. A PR whose head moved, or that closed, drops out. The arm reads the heads again just before it moves main, so a push during the gate run rebuilds the batch. An entry has no expiry. It stays queued until it lands, is ejected, or its PR closes. While main is red, only a `main-repair` entry builds. Each act writes one `merge_queue_step` row, so a daemon restart resumes the batch.
+
+The queue lands merge commits and ignores `auto_merge.merge_strategy`. A PR reads merged on GitHub once main contains its head. A squash drops that head. It does not cover a break that only the full suite finds. The revert lane above catches that on main. A human merge from the web button bypasses the queue, and the batch then rebuilds. The CI tier never cancels a `merge-queue-gate` run.
 
 ## The effect
 

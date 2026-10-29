@@ -45,9 +45,23 @@ pub(super) const REVIEWER_INVOCATIONS: &[(&str, &str, bool, &str)] = &[
     ("declare", "/fno:review declare", true, ""),
 ];
 
+/// The `requires` capability each built-in local reviewer demands, beside
+/// REVIEWER_INVOCATIONS so the descriptor union the review gate builds
+/// reads both columns under the same parity guard. Source of truth: the
+/// `requires` fields of `_RESOLVABLE_REVIEWERS` in
+/// `cli/src/fno/config/__init__.py`; kept honest by
+/// `scripts/ci/check-reviewer-descriptor-parity.sh`, not by a comment asking
+/// a human to remember. `pub(crate)`: the review gate's descriptor builder
+/// iterates it as the built-in roster.
+pub(crate) const REVIEWER_BUILTIN_REQUIRES: &[(&str, &str)] = &[
+    ("sigma", "retired"),
+    ("code-review", "none"),
+    ("declare", "none"),
+];
+
 /// `(invocation, is_self_cert, per_harness)`. The flag mirrors the Python
 /// descriptor's `asserts` field: a surface that names `declare` without saying
-/// it asserts nothing invites an operator to clear the gate with no review
+/// it asserts nothing invites an operator to clear a review gate with no review
 /// behind it. `pub(crate)`: the review-capability renderer reads the same
 /// row for the `code-review` base spelling.
 pub(crate) fn reviewer_entry(name: &str) -> Option<(&'static str, bool, &'static str)> {

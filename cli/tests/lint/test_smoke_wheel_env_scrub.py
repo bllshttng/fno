@@ -199,7 +199,6 @@ NON_INSTALL_SMOKES = {
     "test_skeleton.sh",
     "test_stop_hook_wake_log.sh",
     "test_unknown.sh",
-    "test_wake_roundtrip.sh",
 }
 
 #: Where a wheel/formula/crate actually gets installed. Only used to locate the

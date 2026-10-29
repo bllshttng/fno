@@ -149,17 +149,35 @@ pub(super) fn prove_target(
 ) -> Result<Vec<(u32, u64)>, String> {
     let short = short.to_string();
     let session_id = session_id.map(str::to_string);
-    off_executor(move || {
-        let roster = ClaudeRoster::load_default().map_err(|e| format!("roster unreadable: {e}"))?;
-        let (table, _) = crate::census::process_table();
-        capture_target(
-            &roster,
-            &short,
-            session_id.as_deref(),
-            &table,
-            &process_start_time,
-        )
-    })
+    off_executor(move || prove_target_blocking(&short, session_id.as_deref()))
+}
+
+/// The same proof for a caller that already runs OFF the executor (rm's
+/// stop leg, whose seam executes under `off_executor`): the identical
+/// blocking reads, run directly so the leg never re-enters
+/// `off_executor` from blocking context.
+pub(super) fn prove_target_blocking(
+    short: &str,
+    session_id: Option<&str>,
+) -> Result<Vec<(u32, u64)>, String> {
+    let roster = ClaudeRoster::load_default().map_err(|e| format!("roster unreadable: {e}"))?;
+    let (table, _) = crate::census::process_table();
+    capture_target(&roster, short, session_id, &table, &process_start_time)
+}
+
+/// Does the default roster still host this session? The rm stop leg's
+/// re-probe after it ends the captured set: the supervisor's own word on
+/// whether a respawn or a late-named worker stands behind the session,
+/// matched by the same two-key lookup every roster presence reader runs.
+/// `Err` is an unreadable roster - unknown presence, never absence.
+pub(super) fn roster_still_hosts(short: &str, session_id: Option<&str>) -> Result<bool, ()> {
+    let roster = ClaudeRoster::load_default().map_err(|_| ())?;
+    let hosted = session_id
+        .filter(|sid| !sid.is_empty())
+        .and_then(|sid| roster.find(sid))
+        .or_else(|| roster.find(short))
+        .is_some();
+    Ok(hosted)
 }
 
 /// End whatever survived the ask. The grace phase runs against the whole
@@ -487,6 +505,45 @@ mod tests {
 
     fn start_of_every(pid: u32) -> Option<u64> {
         Some(u64::from(pid) + 7)
+    }
+
+    /// The rm leg's re-probe answers PRESENCE, not liveness: a listed worker
+    /// hosts even with no readable pid; a session the roster dropped reads
+    /// absent; a corrupt roster is Err, never absence.
+    #[test]
+    fn roster_still_hosts_answers_presence_not_liveness() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = dir.path().join("daemon");
+        std::fs::create_dir_all(&daemon).unwrap();
+        std::fs::write(
+            daemon.join("roster.json"),
+            br#"{"proto":1,"workers":{"27f5226c":{"sessionId":"27f5226c-1111-2222-3333-444444444444","cwd":""}}}"#,
+        )
+        .unwrap();
+        let previous = std::env::var_os(crate::claude_roster::DAEMON_DIR_ENV);
+        std::env::set_var(crate::claude_roster::DAEMON_DIR_ENV, &daemon);
+        let hosted = roster_still_hosts("27f5226c", Some("27f5226c-1111-2222-3333-444444444444"));
+        let dropped = roster_still_hosts("abcd1234", Some("abcd1234-1111-2222-3333-444444444444"));
+        std::fs::write(daemon.join("roster.json"), b"{not json").unwrap();
+        let unreadable =
+            roster_still_hosts("27f5226c", Some("27f5226c-1111-2222-3333-444444444444"));
+        match previous {
+            Some(value) => std::env::set_var(crate::claude_roster::DAEMON_DIR_ENV, value),
+            None => std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV),
+        }
+        assert_eq!(hosted, Ok(true), "a listed worker hosts, pid or no pid");
+        assert_eq!(
+            dropped,
+            Ok(false),
+            "a session the roster dropped reads absent"
+        );
+        assert!(
+            unreadable.is_err(),
+            "a corrupt roster is unknown presence, never absence"
+        );
     }
 
     /// AC2-HP: the worker, its direct children and every deeper descendant,

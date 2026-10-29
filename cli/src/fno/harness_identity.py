@@ -755,9 +755,9 @@ def resolve_harness_identity(
     from two harness families mean one is foreign and inherited - a claude
     child carrying its codex parent's ``CODEX_THREAD_ID`` - and the answer is
     ``(None, None)`` so no caller can launder the foreign marker into this
-    session's identity. This is the same disposition
-    :func:`fno.dispatch_flags.infer_invoking_harness` gives the same
-    environment; the two must not diverge.
+    session's identity. route-slot's resolve mode folds the same
+    markers through the Rust twin of this resolution; the two must not
+    diverge.
 
     Byte-identical to :func:`resolve_owned_identity`'s ``single`` disposition
     whenever exactly one family is present (the dominant case).

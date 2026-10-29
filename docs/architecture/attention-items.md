@@ -26,7 +26,7 @@ A machine chore whose row names the command that clears it is a `fleet_task`, no
 
 ## The ten context fields and the readiness gate
 
-The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields.
+The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields. If the row has a `person`, the `asker` object carries it: the asking machine's `fleet.owner`, else its login name. It is a display name, never proof, and no gate reads it.
 
 ## Who asks: direct, by default
 
@@ -91,7 +91,13 @@ outstanding: refused: a question needs <the missing sections>. Write a question 
 
 Flag options (`--options a --options b`) carry no per-option next, so the door refuses them for questions and points at the question file. The fno-agents binary can be missing on a broken install. The fallback then still records the question. It prints a NOT VISIBLE line: without the readiness gate the row can land not-ready, and the mux will not show it.
 
-A reversible question that carries a recommendation is one the asker must decide itself. The port refuses it too, with the decide door first: `fno backlog decide <node> "<ruling>"` as the asking session or its lead, then continue. It reaches the user only with a user-only reason in a `why_user:` frontmatter key. The four reasons are: irreversible, spends money or a credential, reaches outside the machine, or a product or taste call. The user sees a decide-it-yourself ruling only as a one-line FYI in the check-in, never as a question.
+The page renders only the sections above. If a question file carries another `## ` heading, the intake records the question and prints a warning that names the heading. Put a long table on its own vault page and link it from `## Why these options`.
+
+Pass a screenshot with `--image <path>`, once per file. The intake copies each file to `<questions dir>/screens/<qid>-<n>-<name>` before it records anything, and the page embeds each copy under a `## Screens` heading. The intake accepts a png, jpg, gif or webp file. It refuses any other path (`image`). A question that can clear a visual-approval hold must carry an image, or the intake refuses it (`screens`). That covers the gate's own subject, `visual approval PR <n> at <head>`, and a title that names a PR and the visual hold. The user cannot judge paint they cannot see.
+
+In the mux question view, the shots show as thumbnails under the page. Left and right pick one, Enter expands it to the whole view, left and right step through, and Esc goes back to the page. A terminal with no image protocol shows the names only, and Enter hands the picked file to the open router (`mux.open_with`). An `inmux` route goes to the platform opener there, because the question view covers the in-mux viewer.
+
+A reversible question that carries a recommendation is one the asker must decide itself. The port refuses it too, with the decide door first: `fno backlog decide <node> "<ruling>"` as the asking session or its lead, then continue. It reaches the user only with a user-only reason in a `why_user:` frontmatter key. The five reasons are: irreversible, spends money or a credential, reaches outside the machine, changes a law (write `law-change`), or a product or taste call. The user sees a decide-it-yourself ruling only as a one-line FYI in the check-in, never as a question.
 
 The two trace keys name the hop the question answers. `answers_ask:` is the ask span id. Any other id reads as the ask mail's message id. The intake reads that row off the bus and re-derives the ask span. An unresolvable id still routes, only parentless. `class:` is one of public-surface, irreversible, money-security, law-change, gate-override, none. The intake turns `answers_ask:` into the escalate route span and stamps the question row's trace (docs/architecture/decision-record.md, "Traced decisions"). The ask span id also prints on every Approval: send as `mail-record: ask span <id>`.
 
@@ -157,6 +163,8 @@ An accepted answer appends the same `attention_answer` row the arm writes. The a
 
 Sinks are `[[attention.sinks]]` rows in config.toml, read by the arm's beat beside the pages. An ntfy row carries `name`, `type = "ntfy"`, `url`, `topic`, `token_env`, and optionally `answer_base_url` and `body`. The `url` is the server root. The body mode is `"title-only"` by default, because anyone who knows a public topic reads it. `"full"` adds the recommendation and the downside. A webhook row carries the same shape with `type = "webhook"` and the adapter's URL.
 
+A sink's `token_env` resolves from the process env first, then from `~/.fno/.env`. A daemon that launchd starts never sees a var the user exported in a shell, so the file is the reliable place for a token.
+
 When a sink's `answer_base_url` is a loopback address, the load refuses it. The tick detail names the refusal every beat. A phone cannot answer this machine's loopback. The supported setups are a tailnet address through Tailscale Serve, or a public URL behind the sink token.
 
 The arm delivers each ready question or pin once per sink. The delivery id is `sha256(sink, item id, event)`. A transient failure retries next beat with the same id. The transient classes are connect errors, 5xx, 401, 403, 408 and 429, the status fanout's retry classes. A permanent 4xx drops the delivery for good. When a delivered item leaves the open set, the arm posts `item.closed`. A returned `external_id` rides that body. Outbound posts run one `curl` child per call. The URL, the bearer header and the body never appear in argv.
@@ -164,6 +172,22 @@ The arm delivers each ready question or pin once per sink. The delivery id is `s
 ntfy shows at most three actions per notification. A question therefore carries up to three `http` actions, with the recommended option first. Each action posts `{"option": N, "idempotency_key": "<delivery_id>:N"}` to the answer endpoint with the sink's bearer header. The one view link rides the `click` key. When the item has fewer options, a literal `view` button fills a free slot. A pin gets one `Done` action.
 
 A webhook sink receives the `Delivery` body. The body carries `delivery_id`, `event` (`item.opened` or `item.closed`), `sink`, and the item. A sink with an `answer_base_url` also carries the `answer_url`. The adapter's `external_id` returns on `item.closed`. fno ships no adapter. The contract and the endpoint are the deliverable.
+
+## Chat channels
+
+A chat channel sends each open question to one chat as one message. A reply in that message's thread answers it. The channels are Telegram, Discord, and iMessage through a BlueBubbles server. Each one is off until its row exists in config.toml. Keep the row's secret in `~/.fno/.env`, so the daemon reads it.
+
+A chat row is an `[[attention.sinks]]` row with `type` set to `telegram`, `discord` or `bluebubbles`. Every row carries `name`, `type`, `machine`, `token_env` and `allow`. Telegram adds `chat_id`. Discord adds `channel_id`. BlueBubbles adds `url` and `chat_guid`, and its `token_env` names the server password. A loopback `url` is legal for BlueBubbles, because the server runs on the same Mac.
+
+`machine` names the one machine that runs the row: the same platform id the claims carry in their `machine` field. A row with no `machine` is refused, and the refusal names this machine's id. Another machine's arm skips the row and names the skip in the tick detail. One owner is needed: Telegram allows one poller per bot, and two arms will each post every question. `allow` lists the sender ids that can answer. A row with an empty `allow` is refused. A reply from anyone else records nothing and gets one refusal line in the thread.
+
+Each beat runs the chat stage after the ntfy and webhook sinks. It posts a close line for each delivered question that left the open set. It posts each new ready question once per row. Then it reads replies from a stored cursor. The state lives in `~/.fno/state/attention/chat.json`. It keeps the delivery rows keyed by the same delivery id as the sinks, and one cursor per row. A transient failure retries next beat in the same classes as the sinks. A failed read holds the cursor. The first read of a fresh row skips the chat's history.
+
+A reply maps to its question by the thread or reply reference first. Otherwise a leading question id maps it, as in `q-9 2`. A message that maps to nothing gets one hint that lists the open ids. A single letter or digit picks an option, and any other text is words. `done` answers only a pin. An option not on the question is refused in the thread. The lane drops every message it sent itself. Telegram buttons carry `<id>:<n>`, and a tap answers like a reply.
+
+An accepted reply lands one `attention_answer` row through the shared writer, with `authority: sink` and `mapped_by: attention_chat`. The reply ladder then clears the question and resumes the asker, the same as every other lane. The lane replies with the receipt in the thread. A chat answer has the authority of a phone tap. It can close a question and reach the asker. It can never become law. A chat row's secret never authorizes the answer endpoint. The endpoint skips chat rows as it loads its bearer tokens.
+
+Discord needs Message Content Intent turned on for the bot. Without it Discord returns empty message text, and no reply can map. A BlueBubbles server without the Private API cannot thread its own sends, so the lane's replies post plain and name the question id. An inline reply the user makes still maps by its thread. Until questions move between machines, a channel carries the questions asked on its own machine.
 
 ## Checks the user's agent runs
 

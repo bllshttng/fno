@@ -151,7 +151,7 @@ fn relay_words_with_sender(
 ) -> Vec<String> {
     let name_part = match from_name {
         FromName::Given(v) | FromName::SelfName(v) => v.clone(),
-        FromName::OsUser(v) => v.clone(),
+        FromName::Person(v) => v.clone(),
     };
     let mut words = vec![
         "agents".to_string(),
@@ -201,8 +201,8 @@ pub enum FromName {
     /// The ambient session's own name, from `--from-self` or the ambient
     /// value, or the session's registry row: the replier's role name.
     SelfName(String),
-    /// No identity above the OS user resolved: the plain-shell form.
-    OsUser(String),
+    /// No identity above the person resolved: the plain-shell form.
+    Person(String),
 }
 
 /// Read the passthrough flags a send carries. The tail rides the relay (or
@@ -241,7 +241,7 @@ pub fn parse_send_tail(args: &[String]) -> Result<SendTail, String> {
 /// (`stamp_from`): `--from-self` is fail-loud and takes the canonical
 /// handle of the proven session. `--from-name` wins verbatim, except an
 /// 8-hex session handle that is not this session's own. Then the proven
-/// own handle, then the OS user.
+/// own handle, then the person (`identity::person`).
 pub fn resolve_from_name_with(
     own_session: Option<&str>,
     tail: &SendTail,
@@ -275,7 +275,7 @@ Omit --from-name to self-stamp."
     if let Some(handle) = own {
         return Ok(FromName::SelfName(handle));
     }
-    Ok(FromName::OsUser(os_user()))
+    Ok(FromName::Person(crate::identity::person_token()))
 }
 
 /// The CLI form: reads the proven own session id from the same resolver
@@ -283,12 +283,6 @@ Omit --from-name to self-stamp."
 pub fn resolve_from_name(tail: &SendTail) -> Result<FromName, String> {
     let own = crate::mail_cli::send::own_identity().map(|(sid, _harness)| sid);
     resolve_from_name_with(own.as_deref(), tail)
-}
-
-fn os_user() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "unknown".to_string())
 }
 
 /// `<user>:<host>/<name>`: the sender identity stamped into `from_id`
@@ -408,8 +402,13 @@ fn cmd_send(args: &[String]) -> i32 {
                     return 2;
                 }
             };
-            let relay_words =
-                relay_words_with_sender(&name, &tail.rest, &from_name, &os_user(), &local_host);
+            let relay_words = relay_words_with_sender(
+                &name,
+                &tail.rest,
+                &from_name,
+                &crate::identity::person_token(),
+                &local_host,
+            );
             // The original message arg: everything after the target that is
             // not a flag was kept in rest in order, so the message is there.
             relay(&host, &relay_words)
@@ -424,7 +423,7 @@ fn cmd_send(args: &[String]) -> i32 {
             };
             let name_part = match &from_name {
                 FromName::Given(v) | FromName::SelfName(v) => v.clone(),
-                FromName::OsUser(v) => v.clone(),
+                FromName::Person(v) => v.clone(),
             };
             let payload = match payload_of(&tail) {
                 Some(p) if !p.is_empty() => p,
@@ -448,7 +447,7 @@ the message directly after the target; none was found"
                 );
                 return 2;
             }
-            let from_id = sender_id(&os_user(), &local_host, &name_part);
+            let from_id = sender_id(&crate::identity::person_token(), &local_host, &name_part);
             // Sender-side style check: the receiver's door refuses an
             // unvetted body after transit, where only the sender's `mail
             // status` shows the loss. A refused body exits 1 having
@@ -639,10 +638,7 @@ pub(crate) fn reply_route(from: &str) -> ReplyRoute {
     }
     // A colon is common in other ids, so the user part must read as an OS
     // user name before `a:b/c` counts as the relay's label.
-    if !user
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-    {
+    if !crate::identity::is_sender_token(user) {
         return ReplyRoute::Forward;
     }
     let host = mail_bus::normalize_host(host);
@@ -694,9 +690,9 @@ pub(crate) fn reply_cross_host(
             }
             let label = resolve_from_name(&SendTail::default())
                 .map(|f| match f {
-                    FromName::Given(v) | FromName::SelfName(v) | FromName::OsUser(v) => v,
+                    FromName::Given(v) | FromName::SelfName(v) | FromName::Person(v) => v,
                 })
-                .unwrap_or_else(|_| os_user());
+                .unwrap_or_else(|_| crate::identity::person_token());
             if kind {
                 eprintln!("note: a cross-host reply carries no kind; --kind dropped");
             }
@@ -879,6 +875,11 @@ cross-host target answered over the ssh fallback leave no bus rows"
 /// Binary-direct entry from `fno-agents mail-remote <send|peek|status|reply> ...`.
 /// The dispatcher holds `Vec<String>`, so the tail rides as `&[String]`.
 pub fn run(args: &[String]) -> i32 {
+    let depth = hop_depth(std::env::var(HOP_ENV).ok().as_deref());
+    if depth >= HOP_LIMIT {
+        eprintln!("{}", hop_refusal(depth));
+        return 2;
+    }
     match args.first().map(|a| a.as_str()) {
         Some("send") => cmd_send(&args[1..]),
         Some("peek") => cmd_peek(&args[1..]),
@@ -898,14 +899,44 @@ pub fn run(args: &[String]) -> i32 {
 /// and every send recurses until the process table fills.
 pub const LOCAL_FORWARD_ENV: &str = "FNO_MAIL_LOCAL_FORWARD";
 
-/// Exec an argv, inherit stdio, return the exit code (same-host forwards).
+/// The relay depth a mail forward stamps on the process it starts. The
+/// front door clears it on every route but the relay's own, so only a
+/// forward that re-enters the relay counts up. The re-entry marker above is
+/// the first guard; this count is the backstop when a new route loses it.
+pub const HOP_ENV: &str = "FNO_MAIL_HOP";
+
+/// The depth the relay refuses at: one forward is the design, a second is
+/// already a bug, a third never runs.
+pub const HOP_LIMIT: u32 = 3;
+
+/// This entry's depth: the stamped count plus one. A missing or malformed
+/// count reads as a first entry.
+pub fn hop_depth(stamped: Option<&str>) -> u32 {
+    stamped
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+        .saturating_add(1)
+}
+
+pub fn hop_refusal(depth: u32) -> String {
+    format!(
+        "fno agents mail: relay hop limit: this send entered the mail relay at depth \
+{depth} ({HOP_ENV}={}); a forward looped back into the relay, so it stops here \
+instead of filling the process table",
+        depth - 1
+    )
+}
+
 /// The relay family's shared same-host forward: exec an argv, inherit stdio,
-/// return the exit code. `mail_env` stamps the mail-only re-entry marker.
+/// return the exit code. `mail_env` stamps the mail-only re-entry marker and
+/// this entry's hop depth.
 pub fn exec_forward(argv: &[OsString], label: &str, mail_env: bool) -> i32 {
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
     if mail_env {
         cmd.env(LOCAL_FORWARD_ENV, "1");
+        let depth = hop_depth(std::env::var(HOP_ENV).ok().as_deref());
+        cmd.env(HOP_ENV, depth.to_string());
     }
     match cmd.status() {
         Ok(status) => status.code().unwrap_or(1),
@@ -934,6 +965,14 @@ mod tests {
         assert!(split_target("@imac2d2").is_err());
         assert!(split_target("nemo@").is_err());
         assert!(split_target("nemo").is_err());
+        // Hop depth: an unstamped entry is depth 1, a garbled stamp reads
+        // as unstamped, and the refusal names the limit and the env.
+        assert_eq!(hop_depth(None), 1);
+        assert_eq!(hop_depth(Some("garbage")), 1);
+        assert_eq!(hop_depth(Some("2")), HOP_LIMIT);
+        let refusal = hop_refusal(HOP_LIMIT);
+        assert!(refusal.contains("relay hop limit"), "{refusal}");
+        assert!(refusal.contains("FNO_MAIL_HOP=2"), "{refusal}");
         // Remote-shell quoting: plain words wrap; the quote escapes; the
         // -lc script itself rides quoted so ssh's space-join cannot split
         // it (the round-1 regression).
@@ -992,8 +1031,8 @@ mod tests {
         let plain = SendTail::default();
         assert_eq!(
             resolve_from_name_with(None, &plain),
-            Ok(FromName::OsUser(os_user())),
-            "no proven session resolves to the OS user"
+            Ok(FromName::Person(crate::identity::person_token())),
+            "no proven session resolves to the person"
         );
         // The ssh fallback stamps the sender locally in the full
         // `<user>:<host>/<name>` form, the same shape the bus lane passes,
@@ -1023,11 +1062,11 @@ mod tests {
                 "hello".to_string(),
             ]
         );
-        // The OsUser floor keeps the same form.
+        // The Person floor keeps the same form.
         let floored = relay_words_with_sender(
             "nemo",
             &[],
-            &FromName::OsUser("operator".to_string()),
+            &FromName::Person("operator".to_string()),
             "bb16",
             "mbp3",
         );
@@ -1044,7 +1083,7 @@ mod tests {
         // A blank session falls through, never stamps a blank.
         assert_eq!(
             resolve_from_name_with(Some("  "), &plain),
-            Ok(FromName::OsUser(os_user()))
+            Ok(FromName::Person(crate::identity::person_token()))
         );
         // Sender identity normalizes the host part.
         assert_eq!(

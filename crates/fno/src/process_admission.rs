@@ -826,11 +826,6 @@ pub(crate) fn bootstrap_status(
 }
 
 #[cfg(unix)]
-pub fn std_exec(command: &mut std::process::Command) -> io::Error {
-    command.exec()
-}
-
-#[cfg(unix)]
 pub(crate) fn bootstrap_exec(command: &mut std::process::Command) -> io::Error {
     command.exec()
 }

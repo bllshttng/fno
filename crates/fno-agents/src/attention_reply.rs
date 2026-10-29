@@ -752,6 +752,7 @@ mod tests {
 
     fn ready_item(id: &str, harness: Option<&str>, sid: Option<&str>) -> AttentionItem {
         let item = AttentionItem {
+            host: None,
             recovery_batch: None,
             id: id.into(),
             kind: "question".into(),
@@ -772,6 +773,7 @@ mod tests {
                 rank: None,
                 live: None,
                 reach: None,
+                person: None,
             }),
             node: Some("x-1".into()),
             blocked_because: None,
@@ -786,6 +788,7 @@ mod tests {
             missing: vec![],
             state: "open".into(),
             settled: false,
+            images: vec![],
         };
         item
     }
@@ -797,6 +800,7 @@ mod tests {
             "mux",
             &crate::attention_file::FileAnswer::Option(1),
             "sink",
+            "needs_door",
             "mux",
         )
         .unwrap();

@@ -266,6 +266,7 @@ use posture::{
 };
 #[cfg(test)]
 use pr_read::manifest_node_pr_selector;
+use pr_read::node_done_pr_merged;
 pub(crate) use pr_read::CiConclusion;
 use pr_read::{read_pr_info, PrInfo, PrState};
 pub use review_coverage_command::{run_review_coverage, run_review_coverage_capture};
@@ -821,6 +822,96 @@ pub(crate) fn decide_with_payload(
             }
             holds::QuestionGateStop::Terminate { reason, message } => {
                 return (0, allow_output("allow", Some(reason), &message, 0, None));
+            }
+        }
+    }
+    // ── Done-node early allow ─────────────────────────────────────────────────
+    // A finished worker must not re-fight its own stop gate: once the graph
+    // store records the node done and its PR merged, the REST read can only
+    // re-learn a known fact, and under a loaded machine that read is the one
+    // thing that can still time out - each timeout re-blocked the finished
+    // session so it never went idle and never took its queued mail. Retire
+    // the fire on the store's own stamp, before the probe and done()
+    // can pay for a read. Batched units ship via the batch PR (their terminal
+    // is DoneBatched) and advisory/plan units have their own folds, so none of
+    // them take this verdict. A failed store read or an open node keeps the
+    // REST read, which is the pre-existing behavior (fail-open).
+    if !manifest.batched && !manifest.planned && !manifest.advisory && !manifest.no_ship {
+        if let Some(pr_number) = node_done_pr_merged(&cwd, node_id.as_deref()) {
+            // The shortcut must not outrank the terminal gates that ride the
+            // full done() read: an open operator finding holds every success
+            // terminal, unshipped local work is not delivered work, and a red
+            // done_probe is the final DonePRGreen conjunct. Each one falls
+            // through to the full gate, which blocks with its own reason.
+            // Plan fidelity rides the node itself: the done stamp is
+            // reconcile's own all-ships-landed verdict.
+            let held_by_findings = match node_id.as_deref() {
+                Some(n) => {
+                    let (open_findings, findings_read_error) =
+                        open_findings_from_store(&crate::graph_get::default_graph_path(), n);
+                    !open_findings.is_empty() || findings_read_error.is_some()
+                }
+                None => false,
+            };
+            let git_bin = &parsed.git_bin;
+            let local_output = |args: &[&str]| {
+                git_bounded(git_bin.as_ref(), args, &cwd)
+                    .filter(|out| out.status.success())
+                    .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            };
+            let unshipped_or_dirty = match (
+                local_output(&["rev-parse", "HEAD"]),
+                local_output(&["rev-parse", "@{push}"]),
+                local_output(&["status", "--porcelain"]),
+            ) {
+                (Some(head), Some(upstream), Some(status)) => {
+                    head != upstream || !status.is_empty()
+                }
+                // An unreadable checkout says nothing about what shipped, so
+                // it keeps the REST read.
+                _ => true,
+            };
+            let mut shortcut_holds = !held_by_findings && !unshipped_or_dirty;
+            if shortcut_holds {
+                shortcut_holds = !matches!(
+                    evaluate_done_probes(
+                        manifest.plan_path.as_deref(),
+                        settings.done_probes.as_ref(),
+                        &cwd,
+                        &project_events,
+                        &session_id,
+                        PROBE_TIMEOUT,
+                    ),
+                    ProbeGate::Fail { .. }
+                );
+            }
+            if shortcut_holds {
+                let reason = format!(
+                    "node {node} done and PR #{n} recorded merged in the graph store; retiring the fire without the REST read",
+                    node = node_id.as_deref().unwrap_or(""),
+                    n = pr_number
+                );
+                // The termination row is the only journal row: a custom event
+                // type would need the schema.yaml inventory plus its cargo
+                // regen, and an unregistered type is rejected by the judge.
+                emit(
+                    "termination",
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "reason": "DonePRGreen",
+                        "message": reason
+                    }),
+                );
+                return (
+                    0,
+                    allow_output(
+                        "allow",
+                        Some(TerminationReason::DonePRGreen),
+                        &reason,
+                        0,
+                        None,
+                    ),
+                );
             }
         }
     }

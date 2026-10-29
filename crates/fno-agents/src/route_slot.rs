@@ -2349,6 +2349,33 @@ pub fn run_route_slot_capture(args: &[String]) -> (i32, String, String) {
         let out = crate::route_gather::run_mode(&payload, &slot_cwd());
         return (0, format!("{out}\n"), String::new());
     }
+    // The folded door modes answer before the walk: the dispatch-flag trio
+    // delegates to the ported answers module, and `config-route` proxies the
+    // front shim's argv through the routing ops. Their standalone actions
+    // folded into this command, so a modeless payload still means the walk.
+    if matches!(mode, "resolve" | "configured" | "validate-model") {
+        let out = crate::dispatch_harness::answer(&payload);
+        return (
+            0,
+            format!(
+                "{}\n",
+                serde_json::to_string(&out).unwrap_or_else(|_| "{}".into())
+            ),
+            String::new(),
+        );
+    }
+    if mode == "config-route" {
+        let argv: Vec<String> = payload
+            .get("argv")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        return crate::config_route::run_capture(&argv);
+    }
     let filled = crate::route_gather::fill(&payload, &slot_cwd());
     let out = resolve_slot_payload(&filled);
     journal_routing_refusal(&payload, &out);

@@ -219,9 +219,6 @@ _NEEDS_STORE_KEEPER = (
     "tests/test_pr_watch_dispatch.py::TestDurableGrantExecution",
     "tests/unit/test_cli_wrappers.py::test_get_one_id_never_invokes_the_binary",
     "tests/unit/test_pr_closure_producer.py::test_supersede_keeps_the_human_reason",
-    "tests/unit/test_target_cli.py::test_check_dispatch_hold_is_wired_for_direct_shell_bootstrap",
-    "tests/unit/test_target_cli.py::test_shared_plan_path_resolves_to_the_delivery_unit",
-    "tests/unit/test_target_cli.py::test_check_contained_refuses_with_the_shell_gates_own_code",
 )
 
 
@@ -718,15 +715,13 @@ def _hermetic_authorized_merge(monkeypatch):
 # a frozen constant is to move the state location BEFORE the import, and
 # conftest.py is imported before the test modules that pull in fno.graph.
 #
-# WHAT gets neutralised lives in fno/hermetic.py, deny-by-default over the whole
-# ambient surface, so this file no longer carries a hand-maintained list that
-# loses to the next var somebody adds. `fno doctor test` applies the same function at
-# `_child_env`, which covers the shell and cargo trees; this call is what covers
-# a developer running a bare `pytest cli/tests/...`.
-#
-# The import is safe despite the import-time-constant hazard above: hermetic
-# pulls only os/pathlib/typing plus harness_identity, never fno.graph.
-from fno.hermetic import neutralise  # noqa: E402
+# WHAT gets neutralised lives in the shared vocabulary (crates/fno-agents/
+# src/ambient_vocab.toml, byte-copied to cli/src/fno/ by build.rs), deny-by-
+# default over the whole ambient surface, so no tree carries a hand-maintained
+# list that loses to the next var somebody adds. `fno doctor test` applies the
+# same env natively in-process, which covers the shell and cargo trees; this
+# door call is what covers a developer running a bare `pytest cli/tests/...`.
+from fno.test_env_door import native_env  # noqa: E402
 
 # The pytest process's own harness session id, caught BEFORE the swap below
 # scrubs it. Session markers are deliberately ambient - tests run as bare
@@ -767,7 +762,7 @@ if not os.environ.get("PYTEST_XDIST_WORKER"):
     )
     _TRIPWIRE = (_tripwire_roots, snapshot(_tripwire_roots))
 
-_hermetic_env = neutralise(os.environ, Path(_SANDBOX))
+_hermetic_env = native_env("neutralise", sandbox=Path(_SANDBOX))
 os.environ.clear()
 os.environ.update(_hermetic_env)
 
