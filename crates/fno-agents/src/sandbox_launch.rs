@@ -335,10 +335,29 @@ fn box_argv(
     if let Some(name) = Path::new(&argv[0]).file_name() {
         argv[0] = name.to_string_lossy().into_owned();
     }
-    if let Some(host) = argv[1..].iter().find(|a| {
-        let p = Path::new(a.as_str());
+    let outside = |a: &str| {
+        let p = Path::new(a);
         p.is_absolute() && p.exists() && !canonical(p).starts_with(&inside)
-    }) {
+    };
+    // The seam's host write grants (`--add-dir ~/.fno`) name roots the box
+    // does not mount; inside the box they grant nothing, so drop them.
+    let mut kept = vec![argv[0].clone()];
+    let mut rest = argv[1..].iter();
+    while let Some(a) = rest.next() {
+        if a == "--add-dir" {
+            match rest.next() {
+                Some(dir) if outside(dir) => continue,
+                Some(dir) => kept.extend([a.clone(), dir.clone()]),
+                None => kept.push(a.clone()),
+            }
+        } else if a.strip_prefix("--add-dir=").is_some_and(|dir| outside(dir)) {
+            continue;
+        } else {
+            kept.push(a.clone());
+        }
+    }
+    let argv = kept;
+    if let Some(host) = argv[1..].iter().find(|a| outside(a)) {
         return Err(format!(
             "the command names {host}, a host path outside the worktree the box cannot see"
         ));
@@ -404,9 +423,9 @@ fn write_env_file(path: &Path, env: &[(String, Option<String>)]) -> std::io::Res
 mod tests {
     use super::*;
 
-    /// The wrap's three shapes: a QoS prefix and an absolute harness path
-    /// drop; the lane env rides a 0600 file the box sources, never the argv;
-    /// a host path outside the worktree refuses by name.
+    /// The wrap's shapes: a QoS prefix, an absolute harness path and a host
+    /// `--add-dir` grant drop; the lane env rides a 0600 file the box sources,
+    /// never the argv; any other host path outside the worktree refuses by name.
     #[test]
     fn box_argv_wraps_env_through_a_file_and_refuses_host_paths() {
         let root = std::env::temp_dir().join(format!("sandbox-launch-{}", std::process::id()));
@@ -416,6 +435,7 @@ mod tests {
         std::fs::create_dir_all(&sock_dir).unwrap();
         std::fs::create_dir_all(&wt).unwrap();
         let launch = launch_for(SandboxProvider::Devcontainer, &sock_dir);
+        let (root_s, wt_s) = (root.display().to_string(), wt.display().to_string());
         let argv = strip_qos(
             [
                 "/usr/sbin/taskpolicy",
@@ -423,6 +443,10 @@ mod tests {
                 "utility",
                 "--",
                 "/opt/bin/claude",
+                "--add-dir",
+                root_s.as_str(),
+                "--add-dir",
+                wt_s.as_str(),
                 "-p",
                 "hi",
             ]
@@ -440,7 +464,10 @@ mod tests {
              --remote-env FNO_SUPERVISOR_SOCKET=/fno-state/sock/supervisor.sock -- /bin/sh -c",
             wt.display()
         )));
-        assert!(joined.ends_with("claude -p hi"), "{joined}");
+        assert!(
+            joined.ends_with(&format!("claude --add-dir {wt_s} -p hi")),
+            "a host write grant drops, a worktree one stays: {joined}"
+        );
         assert!(
             !joined.contains("s3"),
             "a secret never rides the argv: {joined}"
