@@ -3,21 +3,11 @@
 
 **Load when:** starting a fresh target run (Step 1 onwards). All steps run sequentially before pipeline execution.
 
-This reference covers config load, codemap, state initialization, input-type detection, cross-project detection, Linear auto-detection, plan validation, domain resolution, discovery gate, pre-execute checkpoint, and kill-criteria check.
+This reference covers config load, state initialization, input-type detection, cross-project detection, Linear auto-detection, plan validation, domain resolution, discovery gate, pre-execute checkpoint, and kill-criteria check.
 
 ## Step 1: Load Workspace Config (MANDATORY)
 
 Check for `config.toml` in `.fno/` (project override) or `$HOME/.fno/` (primary). Extracts: `worktree_base`, testing auth shortcuts, project gotchas. Store config path and current project in target-state.md. If not found, cross-project features are disabled.
-
-## Step 1a: Structural Context (AUTO)
-
-Generate fresh codemap for structural awareness:
-
-```bash
-fno doctor codemap --tokens 2048 2>/dev/null || true
-```
-
-If `fno` is unavailable or `fno doctor codemap` dependencies are missing, skip silently. If a codemap exists, read it from the repo's space with `fno-agents state path codemap`. The top files are high-importance codebase nodes. Changes to them have wide blast radius and can need extra verification. This context informs the user's execution and sigma-review's risk assessment.
 
 ## Step 1b: Load Project Config (AUTO)
 

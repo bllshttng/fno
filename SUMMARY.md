@@ -47,7 +47,7 @@ sibling-of-binary lookup finds no `fno-agents`, matching the capture machine.
   cover the installed shapes.
 - **yaml-only settings.** The native config readers read the toml and json
   layers; a yaml-only settings file reads as absent.
-- **Forwarding window.** Doctor-prefixed foreign leaves (`codemap`, `evals`,
+- **Forwarding window.** Doctor-prefixed foreign leaves (`evals`,
   `test`, the `lint` subcommands beyond style and menu-caps, and the rest)
   forward to the installed wheel until their families port; a wheel released
   after this PR answers `fno doctor <anything>` on Python-only installs with

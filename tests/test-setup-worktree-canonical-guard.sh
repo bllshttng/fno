@@ -56,9 +56,8 @@ check_contains() {
   fi
 }
 
-# A canonical checkout carrying the two artifact shapes the script links:
-# a regenerable one (codemap.md, which link_artifact rm -f's) and a user-data
-# one (config.toml, which link_file skips).
+# A canonical checkout carrying two real files: codemap.md, the file the
+# 2026-07-26 self-link destroyed, and config.toml, which link_file skips.
 make_canonical() {
   local root="$1"
   mkdir -p "$root/.fno" "$root/.claude"
