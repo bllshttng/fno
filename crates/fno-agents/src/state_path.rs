@@ -39,6 +39,12 @@ pub fn run(args: &[String]) -> i32 {
     if name == "migrate" {
         return crate::state_layout::run_migrate_cli(&args[1..]);
     }
+    // `settings-read` is the settings fact set's hidden door (settings_read.rs):
+    // the node-id knobs, the config candidates, and the work-map walk in one
+    // spawn. Same pre-table dispatch: it answers a fact-set receipt, not a path.
+    if name == "settings-read" {
+        return crate::backlog::settings_read::run_settings_read(&args[1..]);
+    }
     // `dir` is the state-root folder door (state_layout.rs's dir table): a
     // hook or a Python port asks for a folder by name instead of spelling
     // it, so the layout table stays the one path vocabulary and a fold
