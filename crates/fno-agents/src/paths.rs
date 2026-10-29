@@ -169,7 +169,7 @@ impl AgentsHome {
     /// Resolve from the environment: `FNO_AGENTS_HOME` if set, else
     /// `$HOME/.fno/agents`. Falls back to `./.fno/agents` if `$HOME`
     /// is somehow unset (CI containers), so the daemon never panics on a missing
-    /// home — it degrades to a relative tree.
+    /// home and degrades to a relative tree.
     pub fn from_env() -> Self {
         if let Some(home) = Self::from_value(std::env::var_os(HOME_ENV)) {
             return home;
@@ -229,11 +229,27 @@ impl AgentsHome {
     /// it: losing the pin must never widen what a fence permits. This resolves
     /// the same path [`AgentsHome::from_env`] would and skips the fences,
     /// because nothing is written through it.
+    ///
+    /// The one resolver every surface reads. Three used to disagree here: this
+    /// answered the ambient `$HOME/.fno` under a configured `state_dir`, the
+    /// claim leaf answered the configured root, and the worktree status read
+    /// answered a third ladder - so the mail gate and the claims read saw
+    /// different stores on the same machine. The ladder is the claim leaf's
+    /// (Python `paths.agents_registry_path`): a declared `FNO_AGENTS_HOME`
+    /// wins, else the configured state root (`FNO_STATE_DIR`, the config
+    /// `state_dir`, `$HOME/.fno`), else the ambient root when even `HOME` is
+    /// gone.
     pub fn shared_registry_json() -> PathBuf {
-        if let Some(v) = std::env::var_os(HOME_ENV) {
+        if let Some(v) = std::env::var_os(HOME_ENV).filter(|v| !v.is_empty()) {
             return PathBuf::from(v).join("registry.json");
         }
-        Self::ambient_shared_root().join("registry.json")
+        let root = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| crate::agents_config::state_dir(&cwd));
+        match root {
+            Some(root) => root.join("agents").join("registry.json"),
+            None => Self::ambient_shared_root().join("registry.json"),
+        }
     }
 
     /// The ambient `$HOME/.fno/agents` - the one root every real session
@@ -1353,6 +1369,75 @@ mod tests {
         let home = AgentsHome::from_env();
         assert_eq!(home.root(), root.as_path());
         std::env::remove_var(HOME_ENV);
+    }
+
+    #[test]
+    fn shared_registry_json_runs_one_ladder_for_every_reader() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Declared root wins, verbatim: FNO_AGENTS_HOME names the agents dir.
+        let home = tmp("shared-reg-home");
+        std::env::set_var(HOME_ENV, &home);
+        assert_eq!(
+            AgentsHome::shared_registry_json(),
+            home.join("registry.json")
+        );
+        std::env::remove_var(HOME_ENV);
+        // FNO_STATE_DIR names a state root; the registry lives in agents/.
+        let state = tmp("shared-reg-state");
+        std::env::set_var("FNO_STATE_DIR", &state);
+        // Empty spelling counts as unset: the empty value falls through the
+        // ladder instead of joining onto the empty path (which would have
+        // read `registry.json` out of the cwd).
+        std::env::set_var(HOME_ENV, "");
+        assert_eq!(
+            AgentsHome::shared_registry_json(),
+            state.join("agents").join("registry.json")
+        );
+        // And the variable gone entirely reads the same arm: one ladder,
+        // not two spellings of unset.
+        std::env::remove_var(HOME_ENV);
+        assert_eq!(
+            AgentsHome::shared_registry_json(),
+            state.join("agents").join("registry.json")
+        );
+        std::env::remove_var("FNO_STATE_DIR");
+        // A configured state_dir routes the same way, read through a pinned
+        // FNO_CONFIG so the developer's own config cannot leak in.
+        let cfg_dir = tmp("shared-reg-cfg");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        let state2 = tmp("shared-reg-state2");
+        std::fs::write(
+            cfg_dir.join("config.toml"),
+            format!("state_dir = \"{}\"\n", state2.display()),
+        )
+        .unwrap();
+        std::env::set_var("FNO_CONFIG", cfg_dir.join("config.toml"));
+        assert_eq!(
+            AgentsHome::shared_registry_json(),
+            state2.join("agents").join("registry.json")
+        );
+        std::env::remove_var("FNO_CONFIG");
+        // Nothing set: the ambient $HOME/.fno arm, with HOME pinned so the
+        // developer's machine cannot leak in either. The caller's HOME comes
+        // back afterwards: other tests read it unlocked.
+        let cfg_dir2 = tmp("shared-reg-empty-cfg");
+        std::fs::create_dir_all(&cfg_dir2).unwrap();
+        std::fs::write(cfg_dir2.join("config.toml"), "").unwrap();
+        std::env::set_var("FNO_CONFIG", cfg_dir2.join("config.toml"));
+        let prev_home = std::env::var_os("HOME");
+        let fake_home = tmp("shared-reg-ambient-home");
+        std::env::set_var("HOME", &fake_home);
+        assert_eq!(
+            AgentsHome::shared_registry_json(),
+            fake_home.join(".fno").join("agents").join("registry.json")
+        );
+        std::env::remove_var("FNO_CONFIG");
+        match prev_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
     }
 
     // ── is_sandbox ─────────────────────────────────────────────────

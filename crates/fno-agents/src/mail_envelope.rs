@@ -26,7 +26,7 @@ fn team_label(registry_path: &Path, row: &crate::state::RegistryEntry) -> Option
     let level = row.role_level?;
     let scope = row.role_scope.as_deref().unwrap_or("?");
     let theme =
-        crate::team_names::theme_for(&registry_path.with_file_name("team_names.json"), scope);
+        crate::team_names::theme_for(&crate::team_names::store_beside(registry_path), scope);
     Some(crate::team_names::title(
         level as u32,
         scope,

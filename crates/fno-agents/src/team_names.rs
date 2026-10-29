@@ -354,6 +354,14 @@ struct HistoryStore {
     names: Vec<NameHistoryEntry>,
 }
 
+/// The store beside the registry path a caller resolved: the one spelling of
+/// the sibling rule (`AgentsHome::team_names_json` is its accessor twin).
+/// The mail surfaces hold a registry path, not a home, so they route the
+/// derivation through here instead of spelling `with_file_name` twice.
+pub fn store_beside(registry_path: &Path) -> PathBuf {
+    registry_path.with_file_name("team_names.json")
+}
+
 /// The history file lives beside the store; every caller holds one path.
 pub fn history_path(store_path: &Path) -> PathBuf {
     store_path.with_file_name("name_history.json")
