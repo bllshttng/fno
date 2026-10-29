@@ -65,7 +65,9 @@ fn in_temp_judges_every_temp_root_in_both_spellings() {
     // driver's TMPDIR floors to /tmp, and the raw /private spelling holds.
     let fixture = std::env::temp_dir().join("fno-in-temp-fixture/gh");
     assert!(in_temp(&fixture));
-    assert!(in_temp(Path::new("/private/var/folders/ab/T/fno-501/github-cli")));
+    assert!(in_temp(Path::new(
+        "/private/var/folders/ab/T/fno-501/github-cli"
+    )));
     // A sibling sharing the prefix string is not under it, and the base
     // itself is not strictly under.
     assert!(!in_temp(Path::new("/tmpx/fno/gh")));

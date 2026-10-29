@@ -115,5 +115,4 @@ fn auto_wire_pure_contracts_hold() {
         parse_opencode_receipt(r#"{"status": "failed"}"#),
         Outcome::Failed("0 file(s) (footnote ?) -> ?".into())
     );
-
 }

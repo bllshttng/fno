@@ -74,23 +74,58 @@ fn a_config_source_denies_the_default_root_fast_path() {
     let home = dir.path().join("home");
     std::fs::create_dir_all(home.join(".fno")).unwrap();
     // No config file anywhere: the fast path may trust its sentinel stat.
-    assert!(!config_may_repoint(false, false, &cwd, Some(home.as_os_str())));
+    assert!(!config_may_repoint(
+        false,
+        false,
+        &cwd,
+        Some(home.as_os_str())
+    ));
     // A repo-level config may re-point state_dir: the fast path is denied.
     std::fs::write(cwd.join(".fno/config.toml"), "").unwrap();
-    assert!(config_may_repoint(false, false, &cwd, Some(home.as_os_str())));
+    assert!(config_may_repoint(
+        false,
+        false,
+        &cwd,
+        Some(home.as_os_str())
+    ));
     // A config or .git marker at an ANCESTOR denies a nested cwd too: the
     // root's .fno rides the chain even when the nested directory has none.
     let nested = cwd.join("src/deep");
     std::fs::create_dir_all(&nested).unwrap();
-    assert!(config_may_repoint(false, false, &nested, Some(home.as_os_str())));
+    assert!(config_may_repoint(
+        false,
+        false,
+        &nested,
+        Some(home.as_os_str())
+    ));
     // So may a global one, either env pin, and the absence of HOME. A
     // worktree cwd (a .git FILE at the root) always denies as well.
     std::fs::remove_file(cwd.join(".fno/config.toml")).unwrap();
-    assert!(!config_may_repoint(false, false, &cwd, Some(home.as_os_str())));
+    assert!(!config_may_repoint(
+        false,
+        false,
+        &cwd,
+        Some(home.as_os_str())
+    ));
     std::fs::write(home.join(".fno/settings.yaml"), "").unwrap();
-    assert!(config_may_repoint(false, false, &cwd, Some(home.as_os_str())));
-    assert!(config_may_repoint(true, false, &cwd, Some(home.as_os_str())));
-    assert!(config_may_repoint(false, true, &cwd, Some(home.as_os_str())));
+    assert!(config_may_repoint(
+        false,
+        false,
+        &cwd,
+        Some(home.as_os_str())
+    ));
+    assert!(config_may_repoint(
+        true,
+        false,
+        &cwd,
+        Some(home.as_os_str())
+    ));
+    assert!(config_may_repoint(
+        false,
+        true,
+        &cwd,
+        Some(home.as_os_str())
+    ));
     assert!(!config_may_repoint(false, false, &cwd, None));
     std::fs::write(cwd.join(".git"), "gitdir: elsewhere\n").unwrap();
     assert!(config_may_repoint(false, false, &cwd, None));

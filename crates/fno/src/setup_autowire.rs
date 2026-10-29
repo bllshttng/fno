@@ -279,9 +279,9 @@ fn pi_extension_src() -> Option<String> {
 
 fn pi_wire(agents: &Path, src: Option<&str>, run: Run) -> Outcome {
     let Some(src) = src else {
-        return Outcome::Failed(
-            format!("no plugin tree carries {PI_EXTENSION_REL}; cannot locate the pi extension source"),
-        );
+        return Outcome::Failed(format!(
+            "no plugin tree carries {PI_EXTENSION_REL}; cannot locate the pi extension source"
+        ));
     };
     if let Ok(out) = run(&[
         agents_str(agents),
