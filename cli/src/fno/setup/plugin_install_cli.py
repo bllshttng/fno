@@ -63,7 +63,7 @@ def install(
         tail = [harness, *tail]
     if not tail:
         typer.echo(
-            "usage: fno config plugin install <claude|codex|opencode|agy> [flags...]",
+            "usage: fno config plugin install <claude|codex|opencode|pi|agy|grok|zcode|footnote> [--pack] [flags...]",
             err=True,
         )
         raise typer.Exit(code=2)
