@@ -32,6 +32,23 @@ fn state_root() -> Option<PathBuf> {
     Some(crate::config_doctor::state_dir(&settings))
 }
 
+/// Whether any config source exists that could re-point `state_dir` away
+/// from the default root: the `FNO_CONFIG` pin, a repo-level settings file
+/// in `cwd`, or a global one under `home`. The fast path may only shortcut
+/// when this is false - a sentinel at the default root proves nothing about
+/// a root a config file names.
+fn config_may_repoint(fno_config: bool, cwd: &Path, home: Option<&std::ffi::OsStr>) -> bool {
+    fno_config
+        || [".fno/config.toml", ".fno/settings.yaml"]
+            .iter()
+            .any(|rel| cwd.join(rel).is_file())
+        || home.is_some_and(|home| {
+            ["config.toml", "settings.yaml"]
+                .iter()
+                .any(|name| PathBuf::from(home).join(".fno").join(name).is_file())
+        })
+}
+
 /// The front-door hook: run the migration once, never fail the command.
 pub fn run_if_needed() {
     if std::env::var("FNO_SKIP_MIGRATION").as_deref() == Ok("1")
@@ -39,13 +56,22 @@ pub fn run_if_needed() {
     {
         return;
     }
-    // The common case answers from one stat, before the config read spawns git.
-    let default_root = std::env::var_os("FNO_STATE_DIR")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno")));
-    if default_root.is_some_and(|root| root.join(SENTINEL).exists()) {
-        return;
+    // The common case answers from one stat, before the config read spawns
+    // git. The stat may only shortcut when no config source exists that could
+    // re-point state_dir away from this default root.
+    let config_may_repoint = config_may_repoint(
+        std::env::var_os("FNO_CONFIG").is_some(),
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        std::env::var_os("HOME").as_deref(),
+    );
+    if !config_may_repoint {
+        let default_root = std::env::var_os("FNO_STATE_DIR")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno")));
+        if default_root.is_some_and(|root| root.join(SENTINEL).exists()) {
+            return;
+        }
     }
     let Some(root) = state_root() else {
         return;

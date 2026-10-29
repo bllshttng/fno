@@ -65,3 +65,23 @@ fn an_internal_link_into_a_vault_enables_obsidian() {
         json!(vault.display().to_string())
     );
 }
+
+#[test]
+fn a_config_source_denies_the_default_root_fast_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("repo");
+    std::fs::create_dir_all(cwd.join(".fno")).unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".fno")).unwrap();
+    // No config file anywhere: the fast path may trust its sentinel stat.
+    assert!(!config_may_repoint(false, &cwd, Some(home.as_os_str())));
+    // A repo-level config may re-point state_dir: the fast path is denied.
+    std::fs::write(cwd.join(".fno/config.toml"), "").unwrap();
+    assert!(config_may_repoint(false, &cwd, Some(home.as_os_str())));
+    // So may a global one, the FNO_CONFIG pin, and the absence of HOME.
+    std::fs::remove_file(cwd.join(".fno/config.toml")).unwrap();
+    std::fs::write(home.join(".fno/settings.yaml"), "").unwrap();
+    assert!(config_may_repoint(false, &cwd, Some(home.as_os_str())));
+    assert!(config_may_repoint(true, &cwd, Some(home.as_os_str())));
+    assert!(!config_may_repoint(false, &cwd, None));
+}
