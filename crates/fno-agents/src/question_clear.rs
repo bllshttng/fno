@@ -637,9 +637,9 @@ mod tests {
             .iter()
             .find(|r| r.get("_event_type").and_then(Value::as_str) == Some("decision_retracted"))
             .expect("a retraction row landed");
-        assert_eq!(retraction["data"]["authority_source"], "operator");
-        assert_eq!(retraction["data"]["retracted_by"], "operator");
-        assert_eq!(retraction["data"]["attested_by"], "question-board");
+        assert_eq!(retraction["authority_source"], "operator");
+        assert_eq!(retraction["retracted_by"], "operator");
+        assert_eq!(retraction["attested_by"], "question-board");
         let decisions = graph_decisions(&req);
         let row = decisions
             .iter()
