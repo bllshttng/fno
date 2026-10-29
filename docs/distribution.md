@@ -137,6 +137,18 @@ Three channels ship through `release.yml`. The nightly is automatic, and each gr
 2. Judge it before you click: main green, no open p0, a day of your own use of the nightly. One click, and the approved job uploads `0.4.0rcN` to PyPI and creates the `v0.4.0rcN` tag and pre-release. Candidates on the same base bump `rcN` (`0.4.0rc1`, `0.4.0rc2`, ...). After a stable promotion, the next candidate opens on the next unreleased patch. Main's version can still read the released one. crates.io is stable-only. A plain `pip install` skips rc versions. `FNO_VERSION=0.4.0rcN sh fno.sh` pins one.
 3. When a candidate sits unclicked for more than a day, the workflow opens one reminder issue naming the waiting run. It closes itself once a candidate ships. A waiting candidate never stacks: the next candidate parks and the stale pending run is cancelled. The click always holds the newest commit.
 
+### The release record
+
+The lead records which sha the candidate holds, which PRs it includes, and which PRs joined later. The record lives at `<agents home>/releases/<release>.json`. A pin appends, so a moved pin stays visible:
+
+```bash
+fno-agents authorized-merge '{"op": "release-pin", "release": "v0.4.1rc1", "base_tag": "v0.4.0", "sha": "<40 hex>", "repo": "<owner/repo>", "by": "lead", "reason": "first candidate"}'
+fno-agents authorized-merge '{"op": "release-join", "release": "v0.4.1rc1", "pr": 4051, "by": "lead"}'
+fno-agents authorized-merge '{"op": "release-show", "release": "v0.4.1rc1"}'
+```
+
+The pin reads the included PRs from `git log --first-parent <base_tag>..<sha>` in the cwd (or the payload's `repo_dir`). A join refuses a PR the pin already includes. A pin also moves the sha of a live merge freeze on the same repo. It never adds a PR to the freeze. Dispatch the rc run with the record's current sha: `gh workflow run release.yml -f channel=rc -f sha=<sha>`. Draft the notes from the record: `scripts/release/draft-release-notes.py <release> --record <agents home>/releases/<release>.json`. Joiners print under "Joined after pin". A candidate the nightly opens with no lead writes no record, and its notes fall back to the tag range.
+
 ### Stable (one click)
 
 1. Promote: `gh workflow run release.yml -f channel=stable`.

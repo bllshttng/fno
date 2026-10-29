@@ -135,6 +135,8 @@ pub enum Outcome {
     Armed {
         head: String,
         merge_grant: Option<String>,
+        /// The fno merge queue, not GitHub, owns the landing.
+        queued: bool,
     },
     /// The decision cleared and the caller asked to stop there. Nothing ran.
     Authorized { head: String },
@@ -168,6 +170,9 @@ impl Outcome {
     pub fn detail(&self) -> String {
         match self {
             Outcome::Merged { head, .. } => head.clone(),
+            Outcome::Armed {
+                head, queued: true, ..
+            } => format!("{head} queued in the fno merge queue, which lands it"),
             Outcome::Armed { head, .. } | Outcome::Authorized { head } => head.clone(),
             Outcome::Held { reason }
             | Outcome::Refused { reason }
@@ -177,11 +182,6 @@ impl Outcome {
                 "the PR head moved from {expected} to {actual} between validation and the effect"
             ),
         }
-    }
-
-    /// Whether the queue entry or the merge actually happened.
-    pub fn effected(&self) -> bool {
-        matches!(self, Outcome::Merged { .. } | Outcome::Armed { .. })
     }
 
     pub fn to_json(&self) -> Value {
@@ -204,8 +204,15 @@ impl Outcome {
                     out["merge_grant"] = json!(g);
                 }
             }
-            Outcome::Armed { head, merge_grant } => {
+            Outcome::Armed {
+                head,
+                merge_grant,
+                queued,
+            } => {
                 out["head"] = json!(head);
+                if *queued {
+                    out["queued"] = json!(true);
+                }
                 if let Some(g) = merge_grant {
                     out["merge_grant"] = json!(g);
                 }
@@ -465,6 +472,18 @@ pub trait Probes {
     /// that does not read GitHub reviews inert.
     fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, _reviewed_head: &str) -> ProbeOutcome {
         ProbeOutcome::Clear
+    }
+    /// Queue this head in place of the merge. `None`: no queue owns this
+    /// base (`merge_queue.enabled` off), so the effect merges. `Some(Ok(None))`
+    /// queued; `Some(Ok(Some(reason)))` the queue ejected this head. Default
+    /// `None` keeps every impl that does not read the config merging.
+    fn merge_queue(
+        &self,
+        _cwd: &Path,
+        _facts: &PrFacts,
+        _head: &str,
+    ) -> Option<Result<Option<String>, String>> {
+        None
     }
 }
 
@@ -1482,6 +1501,7 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
             Effect::Arm => Outcome::Armed {
                 head: authorized.head.clone(),
                 merge_grant: authorized.merge_grant.clone(),
+                queued: false,
             },
             // Merging now would race the queue that already owns this PR.
             Effect::Merge => Outcome::Held {
@@ -1490,6 +1510,19 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
                      the queue merges it when checks pass"
                 ),
             },
+        };
+    }
+
+    // Every gate above still decided. The queue only changes who lands it.
+    if let Some(queued) = probes.merge_queue(cwd, &authorized.facts, &authorized.head) {
+        return match queued {
+            Ok(None) => Outcome::Armed {
+                head: authorized.head.clone(),
+                merge_grant: authorized.merge_grant.clone(),
+                queued: true,
+            },
+            Ok(Some(reason)) => Outcome::Held { reason },
+            Err(reason) => Outcome::Unknown { reason },
         };
     }
 
@@ -1517,6 +1550,7 @@ fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> 
             Effect::Arm => Outcome::Armed {
                 head: authorized.head.clone(),
                 merge_grant: authorized.merge_grant.clone(),
+                queued: false,
             },
             Effect::Merge => Outcome::Merged {
                 head: authorized.head.clone(),
@@ -2089,6 +2123,33 @@ refusing to assume no review is running"
         }
         Ok((out.status.success(), text))
     }
+    fn merge_queue(
+        &self,
+        cwd: &Path,
+        facts: &PrFacts,
+        head: &str,
+    ) -> Option<Result<Option<String>, String>> {
+        let _step = step_timer::step("merge_queue");
+        if facts.base_ref != crate::merge_queue::QUEUE_BASE || !crate::merge_queue::enabled(cwd) {
+            return None;
+        }
+        let node = pr_bound_entry(cwd, facts.number);
+        let repair = node
+            .as_ref()
+            .is_some_and(|e| node_carries_tag(e, MAIN_REPAIR_TAG));
+        let priority = node
+            .as_ref()
+            .and_then(|e| e.get("priority")?.as_str()?.strip_prefix('p')?.parse().ok())
+            .unwrap_or(2);
+        Some(crate::merge_queue::enqueue(
+            cwd,
+            facts.number,
+            head,
+            &facts.head_ref,
+            repair,
+            priority,
+        ))
+    }
 }
 
 /// Parse one `fno do pr status` stdout into both facts the door needs. An
@@ -2300,16 +2361,37 @@ pub(crate) fn node_carries_tag(entry: &Value, tag: &str) -> bool {
         .is_some_and(|tags| tags.iter().filter_map(Value::as_str).any(|t| t == tag))
 }
 
-/// The graph entry bound to this PR by its recorded `pr_number`. `None` on an
-/// unreadable graph or no bound node: callers above treat absent as "not
-/// bound", which for every gate here must hold rather than release.
+/// The graph entry bound to this PR: the node whose `pr_number` it is, else
+/// the node that lists it in `additional_prs`, as the later half of a split
+/// PR does. `None` on an unreadable graph or no bound node: callers above
+/// treat absent as "not bound", which for every gate here must hold rather
+/// than release.
 pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
     let store = GraphStore::new(&graph_path);
     let entries = backlog_api::rows(&store).ok()?;
-    entries
-        .into_iter()
-        .find(|e| e.get("pr_number").and_then(Value::as_i64) == Some(pr as i64))
+    let here = crate::pr_list::origin_slug(cwd, None).ok();
+    let at = pr_bound_index(&entries, pr, here.as_deref())?;
+    entries.into_iter().nth(at)
+}
+
+/// The pure half of [`pr_bound_entry`]. PR numbers collide across
+/// repositories, and `additional_prs` may name any of them, so a ref whose
+/// URL names a repository other than `here` belongs to that repository. A
+/// ref with no URL, or no known `here`, still binds by number.
+pub(crate) fn pr_bound_index(entries: &[Value], pr: u64, here: Option<&str>) -> Option<usize> {
+    let ours = |url: Option<&str>| match (here, crate::backlog::pr_link::repo_slug_from_url(url)) {
+        (Some(here), Some(theirs)) => theirs.eq_ignore_ascii_case(here),
+        _ => true,
+    };
+    let bound = |primary: bool| {
+        entries.iter().position(|e| {
+            crate::merge_gates::pr_refs_of(e)
+                .iter()
+                .any(|r| r.number == pr && r.primary == primary && ours(r.url.as_deref()))
+        })
+    };
+    bound(true).or_else(|| bound(false))
 }
 
 /// The main-repair exemption probe over the live graph: `None` when this
@@ -2747,6 +2829,20 @@ pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
         .is_some_and(|op| op.starts_with("freeze-"))
     {
         let out = crate::merge_freeze::run(
+            payload.get("op").and_then(Value::as_str).unwrap_or(""),
+            &payload,
+        );
+        return (0, out, String::new());
+    }
+    // The release ops write and read the release record (`release_record.rs`):
+    // `{"op": "release-pin"|"release-join"|"release-show", ...}`. A pin also
+    // moves a live freeze's sha.
+    if payload
+        .get("op")
+        .and_then(Value::as_str)
+        .is_some_and(|op| op.starts_with("release-"))
+    {
+        let out = crate::release_record::run(
             payload.get("op").and_then(Value::as_str).unwrap_or(""),
             &payload,
         );

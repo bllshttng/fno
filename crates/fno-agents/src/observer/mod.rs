@@ -1046,7 +1046,7 @@ fn run_judge(args: &[String]) -> i32 {
     }
 }
 
-/// Python `loops.loop_level`: the configured level for a named loop.
+/// The configured level for a named loop.
 /// Unconfigured or malformed fails safe to "report" (observe only) - a
 /// standing loop never upgrades its own autonomy from a config typo.
 fn loop_level(cwd: &Path, name: &str) -> String {

@@ -45,6 +45,9 @@ name: guards
 
 on:
   workflow_dispatch:
+  # merge-queue-gate.yml runs these jobs on a merge queue batch. The event
+  # it passes in is workflow_dispatch, so the PR-only jobs skip.
+  workflow_call:
   # `edited` is load-bearing for guards-pr: oos-tracked.yml triggered on
   # [opened, synchronize, reopened, edited] on purpose, because its fix path
   # IS a PR-body edit that cites a tracked node, with no
@@ -677,6 +680,13 @@ jobs:
         run: |
           bash scripts/ci/check-hook-classes.sh --self-test
           bash scripts/ci/check-hook-classes.sh
+
+      - name: Every registered hook picks a pack or mux profile
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-pack-profiles.sh --self-test
+          bash scripts/ci/check-pack-profiles.sh
 
       # From the installed-tree import crash: parents[N]/scripts joins in
       # cli/src/fno escape the package root and the wheel never ships them.

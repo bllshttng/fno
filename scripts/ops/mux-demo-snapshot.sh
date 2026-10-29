@@ -127,6 +127,10 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
   if [ -n "${FNO_DEMO_PY_SOURCE:-}" ]; then
     printf '[dev]\nsource = "%s"\n' "$FNO_DEMO_PY_SOURCE"
   fi
+  # FNO_DEMO_LAYOUT=list shoots the one-line row instead of the card.
+  if [ -n "${FNO_DEMO_LAYOUT:-}" ]; then
+    printf '[sideline]\nlayout = "%s"\n' "$FNO_DEMO_LAYOUT"
+  fi
 } >"$ROOT/config.toml"
 # The bootstrap's dev-pin reader resolves HOME/.fno/config.toml and runs
 # before FNO_CONFIG is honored, so the pin has to live at the stock HOME
@@ -575,10 +579,23 @@ write("chat-demo-broadcast", [
 ])
 
 # Questions journal: the feed's questions leg (operator_question,
-# operator_decision envelopes).
+# operator_decision envelopes). The first question carries one screenshot,
+# so the question page shows its screens row.
+import struct, zlib
+def png(path, w, h, rgb):
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+os.makedirs(f"{root}/screens", exist_ok=True)
+shot = f"{root}/screens/q-demo-a1-1-bell.png"
+png(shot, 160, 90, (40, 120, 200))
 qs = [
     {"ts": ts(4), "type": "operator_question", "source": "target",
-     "data": {"question_id": "q-demo-a1", "question": "Hold the 18:00 demo until the rate-limit shot lands?"}},
+     "data": {"question_id": "q-demo-a1", "question": "Hold the 18:00 demo until the rate-limit shot lands?",
+              "images": [shot]}},
     {"ts": ts(14), "type": "operator_question", "source": "target",
      "data": {"question_id": "q-demo-b2", "question": "Keep the demo root's mail store after the shot run?"}},
     {"ts": ts(26), "type": "operator_decision", "source": "target",
@@ -588,6 +605,14 @@ with open(f"{root}/.fno/questions.jsonl", "w") as f:
     for q in qs:
         f.write(json.dumps(q) + "\n")
 PY
+
+# FNO_DEMO_PIN=1 pins the scout row: a keep marker on its session id, the
+# file `fno agents reap --keep` writes.
+if [ -n "${FNO_DEMO_PIN:-}" ]; then
+  mkdir -p "$FNO_AGENTS_HOME/keep"
+  printf '{"session_id":"%s","name":"scout","set_at":"2026-10-28T12:00:00Z","set_by":"human"}' \
+    "${SIDS[0]}" >"$FNO_AGENTS_HOME/keep/${SIDS[0]}.json"
+fi
 
 sleep 6
 

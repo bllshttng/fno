@@ -1,0 +1,94 @@
+{
+  "state": "ok",
+  "since_days": 20000,
+  "coverage": {
+    "rows": 7,
+    "loop_join_pct": 29,
+    "transcript_pct": 14,
+    "node_linkage_pct": 71,
+    "outcome_tracked_pct": 100,
+    "ci_unparsed": 1
+  },
+  "per_outcome_class": {
+    "bounced": {
+      "n": 2,
+      "spend_usd": 8.0,
+      "median_tokens": 1000.0,
+      "median_fires": 3,
+      "median_duration_min": 30.0
+    },
+    "merged_clean": {
+      "n": 1,
+      "spend_usd": 1.5,
+      "median_tokens": null,
+      "median_fires": null,
+      "median_duration_min": null
+    },
+    "unshipped": {
+      "n": 2,
+      "spend_usd": 3.0,
+      "median_tokens": null,
+      "median_fires": 1,
+      "median_duration_min": null
+    },
+    "planned": {
+      "n": 1,
+      "spend_usd": 0.5,
+      "median_tokens": null,
+      "median_fires": null,
+      "median_duration_min": null
+    },
+    "delegated": {
+      "n": 1,
+      "spend_usd": 0.25,
+      "median_tokens": null,
+      "median_fires": null,
+      "median_duration_min": null
+    }
+  },
+  "plan_vs_build_cost": {
+    "x-4": {
+      "plan_usd": 0.5,
+      "build_usd": 0.0
+    }
+  },
+  "distribution": {
+    "loop_fires": {
+      "median": 1,
+      "p90": 3,
+      "n": 2
+    },
+    "ci_reds": {
+      "median": 1,
+      "p90": 1,
+      "n": 1
+    },
+    "tokens_total": {
+      "median": 1000.0,
+      "p90": 1000.0,
+      "n": 1
+    },
+    "duration_minutes": {
+      "median": 30.0,
+      "p90": 30.0,
+      "n": 1
+    }
+  },
+  "event_coverage": {
+    "complete": true,
+    "malformed_lines": 0,
+    "unreadable_paths": 0,
+    "paths": [
+      {
+        "path": "<CASE>/state/events.jsonl",
+        "status": "ok",
+        "malformed_lines": 0
+      },
+      {
+        "path": "<CASE>/state/events.jsonl.ephemeral",
+        "status": "missing",
+        "malformed_lines": 0
+      }
+    ]
+  }
+}

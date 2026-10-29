@@ -35,8 +35,8 @@ fn main() {
     sync_module_copy("effect_map");
     sync_module_copy("footnote_transcript");
     sync_merge_posture();
+    sync_ambient_vocab();
     sync_page_reload();
-    sync_spawn_phase();
     sync_model_reach();
     sync_registry_schema();
     sync_events_limits();
@@ -360,6 +360,26 @@ fn sync_merge_posture() {
     write_if_different(&cli_copy, &bytes);
 }
 
+/// PRODUCE the downstream copy of the ambient vocabulary.
+///
+/// The crate owns `src/ambient_vocab.toml` (`test_env.rs` `include_str!`s
+/// it), and the Python package reads a byte copy as package data so the
+/// Python `classify` service and the Rust neutralise cannot drift. The
+/// cli-ci generated-copies step is the tripwire for a hand edit to the copy.
+fn sync_ambient_vocab() {
+    println!("cargo:rerun-if-changed=src/ambient_vocab.toml");
+    let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/ambient_vocab.toml");
+    let Ok(bytes) = std::fs::read(&canonical) else {
+        return;
+    };
+    let Some(root) = repo_root() else { return };
+    let cli_copy = root.join("cli/src/fno/ambient_vocab.toml");
+    if !cli_copy.is_file() {
+        return;
+    }
+    write_if_different(&cli_copy, &bytes);
+}
+
 /// PRODUCE the downstream copy of the operator-page reload script.
 ///
 /// The crate owns `src/page_reload.js` (`lead_ledger.rs` `include_str!`s it),
@@ -374,25 +394,6 @@ fn sync_page_reload() {
     };
     let Some(root) = repo_root() else { return };
     let cli_copy = root.join("cli/src/fno/graph/page_reload.js");
-    if !cli_copy.is_file() {
-        return;
-    }
-    write_if_different(&cli_copy, &bytes);
-}
-
-/// PRODUCE the downstream copy of the spawn command-to-phase table.
-///
-/// Same shape as [`sync_merge_posture`]: the canonical TOML lives in this
-/// crate, and the Python package reads a byte copy as package data so
-/// `infer_phase` and any future Rust reader cannot drift.
-fn sync_spawn_phase() {
-    println!("cargo:rerun-if-changed=src/spawn_phase.toml");
-    let canonical = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/spawn_phase.toml");
-    let Ok(bytes) = std::fs::read(&canonical) else {
-        return;
-    };
-    let Some(root) = repo_root() else { return };
-    let cli_copy = root.join("cli/src/fno/agents/spawn_phase.toml");
     if !cli_copy.is_file() {
         return;
     }

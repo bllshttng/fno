@@ -1,0 +1,4 @@
+Usage: fno inbox notify [OPTIONS] {title} {message} COMMAND [ARGS]...
+Try 'fno inbox notify --help' for help.
+
+Error: Missing argument 'title'.

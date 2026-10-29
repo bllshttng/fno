@@ -31,7 +31,7 @@ use crate::codex_inject::ReviewStartError;
 
 /// `_CODE_PAYLOAD_PREFIXES` (`rust_runtime.py:621`): a seed opening with one
 /// of these is a code workflow payload, and needs a resolved git grant.
-const CODE_PAYLOAD_PREFIXES: [&str; 12] = [
+pub(crate) const CODE_PAYLOAD_PREFIXES: [&str; 12] = [
     "/target",
     "/execute",
     "/tdd",

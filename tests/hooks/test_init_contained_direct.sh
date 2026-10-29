@@ -115,8 +115,47 @@ fi
 exit 0
 STUB
   chmod +x "${_dir}/bin/fno"
-  # State-path stub: pins init's manifest location to the scenario space dir.
-  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
+  # The containment gate rides fno-agents since the port, so the counted
+  # pre/post verdicts move onto a thin wrapper at the pinned binary: it
+  # intercepts `target-gates check-contained` with the scenario's rcs and
+  # delegates every other command to the shared state-path double (state
+  # path, green gates, mint).
+  cat > "${_dir}/bin/fno-agents" << WRAPPER
+#!/usr/bin/env bash
+# The containment verdicts this scenario counts.
+if [[ "\$1" == "target-gates" && "\$2" == "check-contained" ]]; then
+  echo "call" >> "${_dir}/contained-calls.log"
+  _n=\$(wc -l < "${_dir}/contained-calls.log" | tr -d ' ')
+  if [[ "\$_n" == "1" ]]; then
+    _rc=${_pre_rc}
+  else
+    _rc=${_post_rc}
+  fi
+  if [[ "\$_rc" == "9" ]]; then
+    echo "stub: x-261c ships inside x-6320's PR; run \\\`/fno:target x-6320\\\`." >&2
+  fi
+  exit \$_rc
+fi
+# Commands the shared double owns: it answers these BEFORE its own PATH walk,
+# so handing them over can never bounce back here and loop the two execs.
+case "\$1 \${2:-}" in
+  "state path"|"state mint-id"|"target-gates "*)
+    exec "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "\$@" ;;
+esac
+# Anything else (executor-route, claims) goes to the next real binary on PATH,
+# skipping this wrapper's own file the way the shared double's walk does.
+_self_dir="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+_oldifs="\$IFS"
+IFS=':'
+for _d in \$PATH; do
+  IFS="\$_oldifs"
+  [[ "\$_d" == "\$_self_dir" ]] && continue
+  [[ -x "\$_d/fno-agents" ]] || continue
+  exec "\$_d/fno-agents" "\$@"
+done
+IFS="\$_oldifs"
+exit 1
+WRAPPER
   chmod +x "${_dir}/bin/fno-agents"
   mkdir -p "${_dir}/space"
 }

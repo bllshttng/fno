@@ -40,12 +40,13 @@ const DEFAULT_OLDER_THAN_DAYS: i64 = 30;
 const ARCHIVE_HELP: &str = "Usage: fno backlog archive [OPTIONS]
 
   Sweep old terminal (done/superseded) nodes into archive residency: same
-  store, but they stop answering default reads. Full contract:
+  store, but they stop answering default reads. A superseded node sweeps at
+  any age; the age gate applies to done nodes. Full contract:
   docs/architecture/backlog-graph-command-contracts.md
 
 Options:
   --apply                    Move the entries (default: dry-run, report only).
-  --older-than-days INTEGER  Only archive terminal nodes older than N days.
+  --older-than-days INTEGER  Only archive done nodes older than N days.
                              [default: 30]
   --roadmap-id TEXT          Restrict the sweep to this roadmap group.
   -h, --help                 Show this message and exit.
@@ -86,7 +87,7 @@ fn row_id(row: &Value) -> Option<&str> {
     row.get("id").and_then(Value::as_str)
 }
 
-/// Python `datetime.fromisoformat` over the shapes the store writes: a `Z`
+/// Over the shapes the store writes: a `Z`
 /// or numeric offset, a naive stamp (read as UTC), or a bare date.
 pub(crate) fn parse_ts(value: Option<&Value>) -> Option<DateTime<Utc>> {
     let text = value.and_then(Value::as_str)?.trim();
@@ -112,6 +113,14 @@ pub(crate) fn parse_ts(value: Option<&Value>) -> Option<DateTime<Utc>> {
         .ok()
         .and_then(|d| d.and_hms_opt(0, 0, 0))
         .map(|dt| dt.and_utc())
+}
+
+/// A superseded row has no age gate: its successor carries the work, so
+/// nothing reads it on the board. The hard-edge guard still holds it while
+/// an open successor names it.
+fn is_superseded(row: &Value) -> bool {
+    row.get("status").and_then(Value::as_str) == Some("superseded")
+        || truthy(row.get("superseded_by"))
 }
 
 /// done -> completed_at; superseded -> updated; created_at last, so an oddly
@@ -167,6 +176,10 @@ pub(crate) fn partition(rows: &[Value], older_than_days: i64, now: DateTime<Utc>
         }
         if row_id(row).is_some_and(|id| guard.contains(id)) {
             out.skipped.push((i, "referenced-by-open-node"));
+            continue;
+        }
+        if is_superseded(row) {
+            out.to_archive.push(i);
             continue;
         }
         match parse_ts(terminal_ts(row)) {
@@ -674,6 +687,22 @@ mod tests {
         let split = partition(&rows, 30, now());
         assert_eq!(ids(&rows, &split.to_archive), ["x-softrel", "x-softorg"]);
         assert!(split.skipped.is_empty());
+    }
+
+    #[test]
+    fn a_superseded_row_sweeps_at_any_age_unless_an_open_node_names_it() {
+        let rows = vec![
+            json!({"id": "x-sup", "status": "superseded", "superseded_by": "x-done", "updated": old(1)}),
+            json!({"id": "x-done", "status": "done", "completed_at": old(1)}),
+            json!({"id": "x-held", "status": "superseded", "updated": old(1)}),
+            json!({"id": "x-open", "plan_path": "p", "supersedes": ["x-held"]}),
+        ];
+        let split = partition(&rows, 30, now());
+        assert_eq!(ids(&rows, &split.to_archive), ["x-sup"]);
+        assert_eq!(
+            split.skipped,
+            [(1, "too-recent"), (2, "referenced-by-open-node")]
+        );
     }
 
     #[test]

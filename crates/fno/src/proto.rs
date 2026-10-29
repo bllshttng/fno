@@ -395,7 +395,9 @@ fn default_true() -> bool {
 /// v118: `ClientMsg::PaneScroll`/`PaneScrollEdge` (keyboard scroll mode,
 /// prefix+PgUp) and `Frame.history_lines` (serde default), the scroll-mode
 /// readout's denominator; floor stays 58.
-pub const PROTO_VERSION: u32 = 118;
+/// v119: `AgentRow.pinned` (serde default), the user's keep mark behind the
+/// sideline's pin star and pin-first order; floor stays 58.
+pub const PROTO_VERSION: u32 = 119;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -1116,6 +1118,10 @@ pub struct AgentRow {
     /// which degrades to the old label, never a wrong one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub held_conversation: bool,
+    /// (v119) The user pinned this session: a keep mark on its session id or
+    /// lineage, so no reaper removes it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
     /// (v47) True only when `exited` is a terminal registry status
     /// with NO positive corroboration (no confirmed-dead pid, no confirmed-
     /// gone pane) -- `agents_view::Liveness::Unmeasured`. `exited` keeps its
@@ -3048,7 +3054,8 @@ pub fn legacy_fallback_allowed() -> bool {
 /// (client.rs, NEVER-stderr rule).
 static CONFIG_WARNING: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
 
-#[allow(dead_code)]
+// Every caller sits behind cfg(not(test)), so the test leg sees no call.
+#[cfg_attr(test, allow(dead_code))]
 fn record_config_warning(msg: String, remedy: String) {
     let _ = CONFIG_WARNING.set((msg, remedy));
 }
@@ -3829,6 +3836,7 @@ mod tests {
                         exited: false,
                         dnd: false,
                         held_conversation: false,
+                        pinned: false,
                         unmeasured: false,
                         answerable: Some(AnswerablePrompt {
                             prompt: "Do you want to proceed?".into(),
@@ -3888,6 +3896,7 @@ mod tests {
                         exited: true,
                         dnd: false,
                         held_conversation: false,
+                        pinned: false,
                         unmeasured: false,
                         answerable: None,
                         attach_id: None,
@@ -4123,7 +4132,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 118);
+        assert_eq!(PROTO_VERSION, 119);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

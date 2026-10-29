@@ -448,6 +448,14 @@ pub fn run_notify_watch(
         }
     }
 
+    // Release lane: the newest finished release.yml run per repo. A failure
+    // pages once per run and mails the head lead; a pass clears the signal.
+    if signals.iter().any(|s| s == "release_run") {
+        for root in roots {
+            acted += crate::release_watch::pass(root, &path, now, min_interval_s, &mut notes);
+        }
+    }
+
     WatchOutcome {
         acted,
         skip_reason: skip,
@@ -461,7 +469,7 @@ pub struct WatchOutcome {
     pub detail: String,
 }
 
-fn verdict_label(v: Verdict) -> &'static str {
+pub(crate) fn verdict_label(v: Verdict) -> &'static str {
     match v {
         Verdict::Sent => "sent",
         Verdict::Deduped => "deduped",
@@ -642,7 +650,7 @@ fn head_commit_age_s(root: &Path, slug: &str, ref_enc: &str) -> Option<u64> {
 }
 
 /// `owner/repo` from an https or scp-form git remote url, empty when unclear.
-fn slug_from_remote(url: &str) -> String {
+pub(crate) fn slug_from_remote(url: &str) -> String {
     let mut u = url.trim().trim_end_matches(".git").trim().to_string();
     if let Some(pos) = u.find("://") {
         u = u[pos + 3..].to_string();
@@ -683,7 +691,12 @@ fn percent_encode_ref(s: &str) -> String {
 /// Run one capture command inside `cwd`, bounded by `timeout`, stdout
 /// drained on its own thread so a chatty child cannot deadlock the wait.
 /// Returns stdout regardless of exit status; the caller judges the content.
-fn run_captured(bin: &str, args: &[&str], cwd: &Path, timeout: Duration) -> Option<String> {
+pub(crate) fn run_captured(
+    bin: &str,
+    args: &[&str],
+    cwd: &Path,
+    timeout: Duration,
+) -> Option<String> {
     // The fleet budget admits before the spawn: a refused gh read takes the
     // caller's unreadable branch instead of sending the request.
     if crate::gh_budget::admit_spawn(OsStr::new(bin), args).is_some() {

@@ -268,7 +268,7 @@ const REMEDIES: &[Remedy] = &[
         "existing: agents spawn --wait; hidden agents gate-status", "low", report_only),
     remedy!("liveness", "Is this worker alive",
         "no command today: fno agents liveness <handle> -J with transcript mtime + pid and a self-row positive control (rank 2)", "medium",
-        ["help", "agents", "--all"], r"(?im)^\s*liveness\s"),
+        ["agents", "admit", "--help"], r"(?im)^\s*liveness\s"),
     remedy!("transcript", "Transcript search and tail",
         "existing: agents peek --grep with -A/--all", "low", report_only),
     remedy!("events", "Events journal query",
@@ -283,15 +283,15 @@ const REMEDIES: &[Remedy] = &[
     remedy!("pr_state", "PR state for several PRs",
         "existing: fno do pr info and fno do pr list already answer this (cause two)", "low", report_only),
     remedy!("graph", "Graph read: subtree walk or batch status",
-        "no command today: fno backlog tree <id> -J [--status !done] (rank 10)", "medium",
-        ["help", "backlog", "--all"], r"(?im)^\s*tree\s"),
+        "existing: fno backlog list in:\"<id>\" -s:done -J walks the whole subtree; fno backlog list n:\"<a>\",\"<b>\" -J reads batch status (quote ids: a bare value is a prefix match)", "low",
+        ["backlog", "list", "--help"], r"(?m)^\s*in:"),
     remedy!("fno_internal", "Import fno internals to probe one function",
         "none: one-off probe targeting code under change", "medium", report_only),
     remedy!("vault_doc", "Vault doc append", "none: vault writes", "medium", report_only),
     remedy!("config", "Config probe", "none: one-off", "medium", report_only),
     remedy!("copy_for_diff", "Copy a file at a revision to compare sides",
         "no command today: fno do show <rev>:<path> and fno do diff <rev-a> <rev-b> -- <path>, worktree-Bash safe (rank 12)", "medium",
-        ["help", "do", "--all"], r"(?im)^\s*show\s"),
+        ["do", "--help"], r"(?im)^\s*show\s"),
 ];
 
 const UNKNOWN_REMEDY: Remedy = remedy!(

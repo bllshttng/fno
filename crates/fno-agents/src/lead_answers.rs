@@ -313,10 +313,15 @@ fn peek_texts(handle: &str) -> Result<Vec<String>, String> {
 }
 
 /// The last report in a record tail, newest record winning; inside one
-/// record a RESULT line outranks a help block.
+/// record a RESULT line outranks a help block. Records the harness or
+/// control plane injected drop first: a skill body quotes every protocol
+/// tag, and neither it nor a tool result is ever the worker's report.
 fn last_report(texts: &[String]) -> Option<String> {
     let mut report: Option<String> = None;
     for text in texts {
+        if crate::session_truth::injected_record_text(text) {
+            continue;
+        }
         if let Some(l) = last_result_line(text) {
             report = Some(l);
         } else if let Some(h) = help_line(text) {
@@ -336,13 +341,15 @@ fn last_result_line(text: &str) -> Option<String> {
         .last()
 }
 
-/// One `<help ...>...</help>` block flattened to a line; an unclosed block
-/// runs to the end of the text (the tail may have cut it).
+/// One real `<help ...>...</help>` block flattened to a line; an unclosed
+/// block runs to the end of the text (the tail may have cut it). Detection
+/// is the shared distress parser, so a tag the record merely quotes - in
+/// inline code, a fence, or a bare prose mention - is not a report.
 fn help_line(text: &str) -> Option<String> {
-    let start = text.find("<help")?;
-    let end = text[start..]
+    let (start, tag_end) = crate::distress::help_open_span(text)?;
+    let end = text[tag_end..]
         .find("</help>")
-        .map(|i| start + i + "</help>".len())
+        .map(|i| tag_end + i + "</help>".len())
         .unwrap_or(text.len());
     Some(one_line(&text[start..end], REPORT_CAP_CHARS))
 }
@@ -643,7 +650,8 @@ pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<Strin
                 "  {n} on question {qid}; answer with: fno backlog decide {n} \"<ruling>\" --question-id {qid}"
             )),
             None => lines.push(format!(
-                "  question {qid}: the user answers it on the question board; if this team asked it: fno inbox outstanding clear {qid} --answer \"<answer>\" --authority role"
+                "  question {qid}: {} If this team asked it: fno inbox outstanding clear {qid} --answer \"<answer>\" --authority role",
+                crate::question_clear::chat_answer_line(&qid)
             )),
         }
     }
@@ -830,6 +838,26 @@ mod tests {
             "RESULT is one line; the prose after it is cut"
         );
         assert_eq!(last_report(&texts(&["thinking"])), None);
+    }
+
+    /// A tag the record merely quotes never reads as the worker's help: a
+    /// re-arm note in inline code, the recovery nudge's own bare `<help>`,
+    /// and a skill injection quoting the protocol whole. The worker's own
+    /// RESULT after an injected record still reads.
+    #[test]
+    fn a_quoted_nudged_or_injected_help_never_reads_as_the_report() {
+        let rearm = "Re-arming; `<help class=\"held\">` only if this wedges";
+        assert_eq!(last_report(&texts(&[rearm])), None);
+        let nudge = "control: quiet 15 min on x-9, what blocks you? continue or emit <help>. [quiet-recovery:sid:work:nudge]";
+        assert_eq!(last_report(&texts(&[nudge])), None);
+        let skill = "<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\nOn red CI emit <help class=\"stuck\" reason=\"ci\"> and stop.";
+        assert_eq!(last_report(&texts(&[skill])), None);
+        let tail = texts(&[skill, "RESULT: SUCCESS shipped"]);
+        assert_eq!(
+            last_report(&tail).as_deref(),
+            Some("RESULT: SUCCESS shipped"),
+            "the injected record drops; the worker's own RESULT reads"
+        );
     }
 
     #[test]

@@ -217,7 +217,7 @@ const REPO_META_TTL_S: u64 = 3600;
 /// `_default_branch` contract on the native merge path. A missing, stale or
 /// corrupt row (or an unreadable state dir) falls through to the live REST
 /// read, which stays the truth; a successful live read backfills the row.
-fn default_branch_cached(cwd: &Path, slug: &str, run: RunProbe) -> Option<String> {
+pub(crate) fn default_branch_cached(cwd: &Path, slug: &str, run: RunProbe) -> Option<String> {
     if let Some(root) = gh_cache::rows_root(cwd) {
         let fresh = gh_cache::read_row(
             &root,
@@ -431,7 +431,7 @@ pub(crate) fn tool_on_path(tool: &str) -> bool {
 
 /// `fno-agents pr-base-lineage-check <pr>`: the command door over `lineage`,
 /// the same verdict `fno do pr merge` obeys. One REST read fills the base
-/// ref (the Python `_base_ref` ask); a miss leaves it empty and `lineage`
+/// ref; a miss leaves it empty and `lineage`
 /// answers its own unknown for the unreadable base. Output is the Python
 /// command's exact format: stdout `base-lineage: ok|bypassed ... - <reason>`
 /// at 0, stderr `REFUSED` plus the bypass hint at 3, `unknown` at 4, and a

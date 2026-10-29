@@ -136,8 +136,8 @@ case "\$1 \$2" in
     printf '{"state":"your-move","last_message":"FNO_CAPABILITY_READY:${CAP_DIGEST}","observed_model":{"kind":"observed","model":"opus","samples":1}}\n' ;;
   "agents name")
     # Naming is the contract under test, not a scenario input: delegate to the
-    # real bridge exactly like the capability probe delegates truth.
-    exec env PYTHONPATH="${FNO_SRC}" "${FNO_PYTHON}" -m fno.cli agents name "\${@:3}" ;;
+    # real bridge, the binary's name door.
+    exec "${REAL_AGENTS_BIN}" status --name "\${@:3}" ;;
   "agents mail")
     touch "${TMP_DIR}/child-active"
     cat > .fno/target-state.md <<'CHILD'
@@ -160,11 +160,14 @@ chmod +x "${BIN_DIR}/fno"
 # The claim operations run for real: the handoff's custody release goes native
 # (the legacy Python leg is idle for global keys), so the stub must forward
 # `claim` to the real binary instead of answering it with a silent exit 0.
+# `target-gates` joins for the same reason: the manifest archive + exact
+# release IS the custody op under test, and a swallowed prepare would leave
+# the archive never written while the delegation commits.
 FIN_MARKER="${TMP_DIR}/finalize_called"
 cat > "${BIN_DIR}/fno-agents" <<AGEOF
 #!/usr/bin/env bash
 case "\$1" in
-  name-mint|name-codes|name-parse|claim)
+  name-mint|name-codes|name-parse|claim|target-gates)
     exec "${REAL_AGENTS_BIN}" "\$@" ;;
 esac
 if [[ "\$1" == "finalize" ]]; then

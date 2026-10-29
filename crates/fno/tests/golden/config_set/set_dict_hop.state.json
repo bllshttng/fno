@@ -1,0 +1,28 @@
+{
+ "agents_calls": [],
+ "claims": [],
+ "global": {
+  "loops": {
+   "nightly": {
+    "level": "assisted"
+   }
+  }
+ },
+ "global_yaml_left": false,
+ "project": null,
+ "receipts": [
+  {
+   "attester_session_id": "",
+   "attester_witness": "env_only",
+   "config_path": "<FIXTURE>/fake_home/.fno/config.toml",
+   "journal": "events.jsonl",
+   "key": "loops.nightly.level",
+   "new_value": "assisted",
+   "present_after": true,
+   "present_before": false,
+   "root_kind": "operator",
+   "scope": "global"
+  }
+ ],
+ "shared": null
+}

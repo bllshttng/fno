@@ -54,7 +54,6 @@ graph.md	cache/pages/graph.md	page	daemon
 graph.html	cache/pages/graph.html	page	daemon
 term.html	cache/pages/lead.html	page	daemon
 rundown.html	cache/pages/rundown.html	page	daemon
-fleet.html	cache/pages/fleet.html	page	daemon
 # logs/ - append-only logs; launchd fds keep writing the renamed inode.
 pr-watcher.out.log	logs/pr-watcher.out.log	append	daemon
 pr-watcher.err.log	logs/pr-watcher.err.log	append	daemon

@@ -23,6 +23,24 @@ const SIDELINE_RIGHT_SLOT_W: u16 = 6;
 /// The card edge bar: leads every card line, accent-toned on the chosen
 /// card, theme-dim on a resting one.
 const CARD_EDGE_BAR: char = '\u{258e}';
+pub(super) const PIN_STAR: char = '\u{2605}';
+pub(super) const PIN_OUTLINE: char = '\u{2606}';
+/// The cell a row's pin star sits in: a card's line 2 under the status
+/// mark, else the list gutter. Paint and click both read it.
+fn pin_star_cell<'a>(
+    drow: &DisplayRow<'a>,
+    rects: &[RtRect],
+    card: bool,
+    density: Density,
+) -> Option<(usize, &'a AgentRow)> {
+    match *drow {
+        DisplayRow::CardDetail(a) if card => {
+            Some(((rects[0].x + rects[0].width).saturating_sub(1) as usize, a))
+        }
+        DisplayRow::Agent(a) if !card || density == Density::Slim => Some((0, a)),
+        _ => None,
+    }
+}
 const CARD_COLUMNS: [Constraint; 5] = [
     Constraint::Length(5),
     Constraint::Min(22),
@@ -75,12 +93,13 @@ impl View {
         if self.sideline_layout == sideline_color::SidelineLayout::Card {
             return vec![Constraint::Length(2), Constraint::Min(8)];
         }
+        let text_w = text_w.saturating_sub(self.pin_gutter());
         // The name takes a quarter of the surplus over the fixed cells, the
         // description first (d-36438ea4); the message keeps the Fill(3)
         // surplus. Both layouts use the same rule. `Min`, not `Length`: the
         // name keeps the old yield order under deficit (names starve last),
-        // and name_w floors at 22 so the narrow rail solves as it did before
-        // the formula existed.
+        // and name_w floors at 22 (less the pin gutter) so the narrow rail
+        // solves as it did before the formula existed.
         let list_wide = self.sideline_layout == sideline_color::SidelineLayout::List
             && (self.density == Density::Extended || self.sideline_full)
             // Fixed cells and six gaps leave at least eight message columns.
@@ -98,7 +117,7 @@ impl View {
         } else {
             vec![
                 CARD_COLUMNS[0],
-                Constraint::Min(row_meter::name_w(text_w, 17, 4)),
+                Constraint::Min(row_meter::name_w(text_w, 17, 4).saturating_sub(self.pin_gutter())),
                 CARD_COLUMNS[2],
                 CARD_COLUMNS[3],
                 CARD_COLUMNS[4],
@@ -107,10 +126,31 @@ impl View {
     }
 
     pub(super) fn worker_column_rects(&self, text_w: u16) -> std::rc::Rc<[RtRect]> {
+        let gutter = self.pin_gutter();
         Layout::horizontal(self.worker_columns(text_w).iter().copied())
             .flex(Flex::Start)
             .spacing(1)
-            .split(RtRect::new(0, 0, text_w, 1))
+            .split(RtRect::new(gutter, 0, text_w.saturating_sub(gutter), 1))
+    }
+
+    /// The agent whose pin star sits under a sideline click, if any.
+    pub(super) fn pin_star_at(&self, row: u16, col: u16) -> Option<AgentRow> {
+        let i = self.sideline_row_at(row, col)?;
+        let rects = self.worker_column_rects(self.sideline_paint_w().checked_sub(1)? as u16);
+        let card = self.sideline_layout == sideline_color::SidelineLayout::Card;
+        let density = if self.sideline_full {
+            Density::Extended
+        } else {
+            self.density
+        };
+        let rows = self.painted_rows();
+        let (c, a) = pin_star_cell(rows.get(i)?, &rects, card, density)?;
+        (c == col as usize).then(|| a.clone())
+    }
+
+    /// A list row's column 0 is the pin gutter, so a pin never moves a name.
+    pub(super) fn pin_gutter(&self) -> u16 {
+        u16::from(self.sideline_layout == sideline_color::SidelineLayout::List)
     }
 
     /// Rows of chrome the full-screen sideline paints under (the tab strip),
@@ -487,7 +527,8 @@ impl View {
         // The widget area is the top slice of the column; the dock paints
         // into the same Buffer below it, before the one blit. The strip row
         // is painted AFTER this blit (it owns row 0, which the blit wipes).
-        let table_area = RtRect::new(0, 1, text_w as u16, table_h as u16);
+        let g = self.pin_gutter();
+        let table_area = RtRect::new(g, 1, (text_w as u16).saturating_sub(g), table_h as u16);
         // The selector rides the TableState's `selected`, which is what the
         // widget's render-time scroll keeps visible.
         let mut st = self
@@ -661,7 +702,7 @@ impl View {
                     Some((
                         crate::chrome::clip(
                             &format!(
-                                "{} {}",
+                                " {} {}",
                                 status_glyph(lat),
                                 card_line::slug(a, &self.backlog)
                             ),
@@ -830,6 +871,22 @@ impl View {
                     }
                 }
             }
+            // The pin star, painted after every band: filled in the accent
+            // when pinned, an outline on any highlighted row or card (chosen,
+            // cursor, hover).
+            if let Some((col, a)) = pin_star_cell(drow, &rects, card, density) {
+                if col < text_w && (a.pinned || highlit || driven) {
+                    let cell = &mut cells[r * cols + col];
+                    cell.c = if a.pinned { PIN_STAR } else { PIN_OUTLINE };
+                    if cell.bg == Color::Default {
+                        cell.fg = if a.pinned {
+                            self.theme.brand
+                        } else {
+                            crate::theme::dim_fg(&self.theme)
+                        };
+                    }
+                }
+            }
         }
         // The density button, painted LAST over the sideline's top row.
         // Overlaying is what keeps it pinned to row 0 while the rows beneath it
@@ -986,18 +1043,17 @@ impl View {
                 } else {
                     format!("{mark} ")
                 };
-                let mut suffix = if a.dnd {
+                let mut suffix = String::new();
+                if a.dnd {
                     // A machine-armed hold reads as its own state; a
                     // lead seeing [DND] thinks it armed the hold and invents
                     // a reason.
-                    if a.held_conversation {
-                        " [HELD]".to_string()
+                    suffix.push_str(if a.held_conversation {
+                        " [HELD]"
                     } else {
-                        " [DND]".to_string()
-                    }
-                } else {
-                    String::new()
-                };
+                        " [DND]"
+                    });
+                }
                 // A card names its model on line 2; the token is the list's.
                 if let Some(tok) =
                     sideline_color::deviation_token(a.harness.as_deref(), a.model.as_deref())

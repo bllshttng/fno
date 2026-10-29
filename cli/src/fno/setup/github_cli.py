@@ -55,9 +55,27 @@ def _shim_binary() -> Optional[Path]:
     return binary
 
 
+# Temp roots a fixture or a fallback shim can live under, fixed at import so
+# the verdict cannot drift with the caller's env: a scrubbed-env driver
+# floors tempfile.gettempdir() to /tmp while the fixture sits under the OS
+# temp root, and one misread wrote the durable shim a sweep deletes.
+_TEMP_BASES = (
+    os.path.realpath(tempfile.gettempdir()), tempfile.gettempdir(),
+    "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp",
+    "/var/folders", "/private/var/folders",
+)
+
+
 def _in_temp(path: Path) -> bool:
-    temp = os.path.realpath(tempfile.gettempdir())
-    return os.path.realpath(path).startswith(temp + os.sep)
+    # The path's own spellings, raw and resolved, strictly under a base: the
+    # caller's tempdir need not be the binary's, and a sibling sharing the
+    # prefix string is not under it.
+    spellings = (str(path), os.path.realpath(path))
+    return any(
+        spelling.startswith(base + os.sep)
+        for spelling in spellings
+        for base in _TEMP_BASES
+    )
 
 
 def _read_text(path: Path) -> Optional[str]:
@@ -96,6 +114,11 @@ def ensure_proxy(
         # No fno-agents to exec, so the shim would strand every gh call.
         # Degrade: leave the real gh unswrapped and let the quota policy
         # stand down for this process tree.
+        return InstallResult(proxy=resolved, delegate=resolved, changed=False)
+    if not (binary.is_file() and os.access(binary, os.X_OK)):
+        # resolve_binary checked runnable, but a sweep can delete the file
+        # between resolve and install, and a shim that execs a missing
+        # binary breaks every gh call on the machine.
         return InstallResult(proxy=resolved, delegate=resolved, changed=False)
     root = directory or github_cli_proxy_dir()
     if _in_temp(binary) and not _in_temp(root):

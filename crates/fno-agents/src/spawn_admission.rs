@@ -1,18 +1,8 @@
-//! Spawn admission: the duties the Python seam (`rust_runtime.make_context`)
-//! runs before it execs this client, ported for the in-process arm (agents
-//! port group 2, row 10): the seed refusals, the node seed rewrite,
-//! normalization, the compose and the headroom account pick.
-//!
-//! Four seam duties are not here yet and land with the client wiring: the
-//! codex git-grant refusal, `extract_existing_pane`, the worker-dir export and
-//! the codex sandbox probe. `Admission::events` are the compose's
-//! `model_vendor_mismatch` rows, for the caller to emit.
-//!
-//! [`admit`] is not on the client's spawn path yet. Python `cmd_spawn` still
-//! serves three shapes no Rust arm owns: a `--role` spawn, `--route` with an
-//! account flag, and a routed non-thread spawn (`spawn_route::route_seam`
-//! bounces the last two). The seam bounce and both Python legs stay until
-//! those shapes have an owner here.
+//! Spawn admission: the seed refusals, the node seed rewrite, normalization,
+//! the compose and the headroom account pick, run in process for every
+//! `spawn` argv by [`crate::spawn_seam::admit_spawn`] before the client parses
+//! it. `Admission::events` are the compose's `model_vendor_mismatch` rows, for
+//! the caller to emit.
 //!
 //! The goldens (`tests/golden/spawn_seam/`, captured from the live Python
 //! legs by `spawn_seam_golden_driver.py`) pin the scan projection, the
@@ -100,7 +90,7 @@ const SPAWN_VALUE_FLAGS_EXTRA: &[&str] = &[
     "--mux-session",
 ];
 
-const HARNESS_FLAGS: &[&str] = &["--harness", "-H"];
+pub(crate) const HARNESS_FLAGS: &[&str] = &["--harness", "-H"];
 const MODEL_FLAGS: &[&str] = &["--model", "-m"];
 const EFFORT_FLAGS: &[&str] = &["--effort"];
 
@@ -624,14 +614,31 @@ pub fn normalize(
         let promoted = head
             .iter()
             .any(|t| t == "--promote" || t.starts_with("--promote="));
-        let person = || {
-            let home = crate::paths::AgentsHome::from_env_opt()?;
-            crate::name_draw::pick_free_name(&home.team_names_json(), &home.registry_json()).ok()
-        };
-        let name = match minted
-            .filter(|_| !promoted)
-            .or_else(|| promoted.then(person).flatten())
+        let person = match promoted
+            .then(crate::paths::AgentsHome::from_env_opt)
+            .flatten()
         {
+            None => None,
+            Some(home) => match crate::name_draw::pick_free_name(
+                &home.team_names_json(),
+                &home.registry_json(),
+            ) {
+                Ok(name) => Some(name),
+                // A slug in its place would launch a lead the name check
+                // never saw: refuse, the way a typed name refuses.
+                Err(e) => {
+                    notes.push(format!(
+                        "fno agents spawn --promote: a lead takes a drawn person name, and the draw failed ({e}); nothing launched"
+                    ));
+                    return Normalized {
+                        argv: args.to_vec(),
+                        stderr: notes,
+                        exit: Some(2),
+                    };
+                }
+            },
+        };
+        let name = match minted.filter(|_| !promoted).or(person) {
             Some(n) => n,
             None => match mint_slug(&names) {
                 Ok(n) => n,
@@ -863,7 +870,7 @@ fn dispatch_harness(tail: &[String]) -> Option<String> {
 /// Whether the fno-arg head (up to the `--argv` payload and the bare `--`
 /// fence) carries a flag: a short as `-X`, `-X=V` or glued `-XV`, a long as
 /// `--foo` or `--foo=V`.
-fn has_flag(args: &[String], short: &str, longs: &[&str]) -> bool {
+pub(crate) fn has_flag(args: &[String], short: &str, longs: &[&str]) -> bool {
     args.iter()
         .take_while(|a| *a != "--argv" && *a != "--")
         .any(|a| {
@@ -1219,4 +1226,48 @@ fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
     out.push(account);
     out.extend_from_slice(&args[boundary..]);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A nameless `--promote` draws the lead's person name. When the shared
+    /// name ledger cannot be read, the spawn refuses; it never falls back to
+    /// a slug the name check never saw.
+    #[test]
+    fn a_nameless_promote_refuses_when_the_ledger_cannot_be_read() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("agents-home");
+        std::fs::create_dir_all(&home).unwrap();
+        crate::registry_store::seed_raw(
+            &home.join("registry.json"),
+            serde_json::json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
+                .to_string(),
+        );
+        let prior = std::env::var_os(crate::paths::HOME_ENV);
+        std::env::set_var(crate::paths::HOME_ENV, &home);
+        let argv: Vec<String> = ["spawn", "--promote", "x-aaaa", "lead it"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        crate::name_ledger::route_to_primary(Some(crate::store_remote::test_primary::dead()));
+        let refused = normalize(&argv, None, tmp.path());
+        crate::name_ledger::route_to_primary(None);
+        let drawn = normalize(&argv, None, tmp.path());
+        match prior {
+            Some(v) => std::env::set_var(crate::paths::HOME_ENV, v),
+            None => std::env::remove_var(crate::paths::HOME_ENV),
+        }
+
+        assert_eq!(refused.exit, Some(2), "{:?}", refused.stderr);
+        assert!(refused.stderr.iter().any(|l| l.contains("draw failed")));
+        let at = drawn.argv.iter().position(|t| t == "--name").unwrap();
+        let name = &drawn.argv[at + 1];
+        assert!(crate::team_names::valid_person_name(name), "{name}");
+    }
 }

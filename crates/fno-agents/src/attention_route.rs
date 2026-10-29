@@ -356,6 +356,8 @@ mod tests {
             missing: vec![],
             state: "open".into(),
             settled: false,
+            images: vec![],
+            ..Default::default()
         }
     }
 
@@ -406,6 +408,7 @@ mod tests {
             rank: None,
             live: None,
             reach: None,
+            person: None,
         });
         let routing = r.route(&it);
         assert_eq!(

@@ -182,7 +182,7 @@ fn functions_lines() -> Vec<String> {
 /// The repo root, Python `resolve_repo_root` semantics: `FNO_REPO_ROOT` env
 /// first, then `git rev-parse --show-toplevel`. None when git fails (the
 /// caller refuses rather than write to a guessed root).
-fn repo_root() -> Option<PathBuf> {
+pub(crate) fn repo_root() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("FNO_REPO_ROOT") {
         return Some(PathBuf::from(p));
     }
@@ -299,7 +299,7 @@ fn local_date() -> String {
 }
 
 /// `handoff [--session-id S | --slug S | --scope S] [--name-only]`: print the
-/// save path for a canon handoff doc (Python `paths_cli.handoff` parity). The
+/// Save path for a canon handoff doc. The
 /// filename key is the session's canonical handle (first-8) unless --slug
 /// overrides. --scope keys the doc on the role instead -- a role outlives
 /// its sessions -- and returns the newest existing doc for that scope, so a
@@ -393,7 +393,7 @@ fn handoff_out(args: &[String], cwd: &Path, home: Option<&Path>) -> Result<Strin
                 }
                 // A concurrent refresh can unlink between read_dir and stat;
                 // a vanished candidate sorts oldest and the writer recreates
-                // the file anyway (Python `_mtime` parity).
+                // the file anyway.
                 let mtime = entry
                     .metadata()
                     .and_then(|m| m.modified())

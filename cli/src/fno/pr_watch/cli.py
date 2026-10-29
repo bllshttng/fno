@@ -130,11 +130,11 @@ def _emit_tick_row(arm: str, *, interval_s: int, acted: int = 0,
 def _notify_parked(message: str) -> None:
     """Send an OS notification for a parked PR.
 
-    Calls send_notification with (title, message) -- two positional args.
+    Calls notify_operator with (title, message) -- two positional args.
     On failure, logs a warning instead of silently passing.
     """
     try:
-        send_notification("pr-watch", message)
+        notify_operator("pr-watch", message)
     except Exception as exc:
         log.warning("pr-watch: notify failed: %s", exc)
 
@@ -372,7 +372,7 @@ class ClaimAdapter:
 
 from fno.claims.core import claim_status  # noqa: E402
 from fno.config import load_settings, load_settings_for_repo  # noqa: E402
-from fno.notify._impl import send_notification  # noqa: E402
+from fno.rust_binary import notify_operator  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1569,7 +1569,7 @@ def _forward_to_binary(command: str, args: list[str]) -> None:
     binary = resolve_binary()
     if binary is None:
         typer.echo(
-            f"fno pr watch {command.replace('pr-', '')}: the fno-agents binary was not found. "
+            f"fno do pr watch {command.replace('pr-', '')}: the fno-agents binary was not found. "
             "It ships in the `pip install fno` wheel and with the plugin; "
             "reinstall fno or run `fno doctor update --rust`, or set "
             "FNO_AGENTS_BIN to its path.",
@@ -1596,71 +1596,6 @@ def heal() -> None:
     """
     argv = ["heal", "--fno-binary", _resolve_fno_binary(), "--caller", "heal"]
     _forward_to_binary("pr-watch", argv)
-
-
-# ---------------------------------------------------------------------------
-# Activation coupling entrypoints (called by `fno config set pr_watch.enabled`)
-# ---------------------------------------------------------------------------
-
-
-def ensure_watcher_activated() -> str:
-    """Install + load the global watcher if absent (idempotent, non-interactive).
-
-    The config-set hook path: it must never prompt (the interactive install
-    confirm would wedge a headless `fno config set`).  Returns the outcome
-    string from the ``fno-agents pr-watch install --ensure`` command.
-    """
-    import subprocess
-
-    from fno.rust_binary import resolve_binary
-
-    binary = resolve_binary()
-    if binary is None:
-        # No binary, no activation leg. The caller's warning names the remedy
-        # and the config write stays enabled for doctor to flag.
-        return "load-failed"
-    proc = subprocess.run(
-        [
-            str(binary), "pr-watch", "install", "--ensure",
-            "--fno-binary", _resolve_fno_binary(),
-            "--interval", str(load_settings().pr_watch.interval_seconds),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    word = proc.stdout.strip()
-    known = {"already-running", "activated", "write-failed", "load-failed"}
-    return word if word in known else "load-failed"
-
-
-def deactivate_watcher() -> str:
-    """Unload the watcher (keep the plist) when pr_watch.enabled is set false."""
-    import subprocess
-
-    from fno.rust_binary import resolve_binary
-
-    binary = resolve_binary()
-    if binary is None:
-        # No binary, no deactivation leg. The caller's warning names the remedy
-        # and the config write stays enabled for doctor to flag.
-        return "unload-failed"
-    try:
-        proc = subprocess.run(
-            [str(binary), "pr-watch", "uninstall", "--unload-only"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        # A wedged launchctl (a documented hang mode here) or an
-        # unexecutable binary degrades to the caller's loud warning.
-        return "unload-failed"
-    word = proc.stdout.strip()
-    known = {"not-installed", "already-unloaded", "unloaded", "unload-failed"}
-    return word if word in known else "unload-failed"
 
 
 # ---------------------------------------------------------------------------

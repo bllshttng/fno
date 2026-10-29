@@ -132,6 +132,9 @@ mod tests {
         // attested human name, never a session.
         assert!(decision_row["data"]["trace"]["actor_session"].is_null());
         assert_eq!(decision_row["data"]["trace"]["actor_kind"], "user");
+        // The person rides beside decided_by and never replaces it.
+        assert_eq!(decision_row["data"]["decided_by"], "test-agent");
+        assert!(decision_row["data"]["person"].is_string());
         // A lead authority keeps its session: the same rule populates the
         // field from proven session identity.
         let mut agent_req = request(&tmp, "q-open2", Some("ship it"));
@@ -393,6 +396,88 @@ mod tests {
     }
 
     #[test]
+    fn chat_attested_clear_records_the_users_words() {
+        let chat = |req: &mut ClearRequest, quote: &str| {
+            req.provenance = json!({
+                "decided_by": "agent-1",
+                "authority_source": "chat_attested",
+                "attested_by": "user in chat",
+                "quote": quote,
+            });
+            req.caller.as_mut().unwrap().ancestry_handle = Some("agent-1".to_string());
+        };
+        // AC1: an agent relays the user's chat answer to the user's question.
+        // A bare option number and a short phrase pass the evidence gate.
+        for answer in ["go narrow", "1"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut req = request(&tmp, "q-chat", Some(answer));
+            chat(&mut req, answer);
+            seed_question(&req, &ask_from("q-chat", "49a80492", "which lane?"));
+            let result = run_clear(&req);
+            assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+            let rows = graph_decisions(&req);
+            assert_eq!(rows.len(), 1, "{rows:?}");
+            assert_eq!(rows[0]["authority_source"], "chat_attested");
+            assert_eq!(rows[0]["decided_by"], "agent-1");
+            assert_eq!(rows[0]["quote"], answer);
+            let (_, closed) = crate::question_intake::question_rows(&req.index_path);
+            assert!(closed.contains("q-chat"));
+        }
+
+        // AC2 (core side): chat_attested with no words is still an agent
+        // answer, so it is refused and nothing lands.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-bare", Some("go narrow"));
+        chat(&mut req, " ");
+        seed_question(&req, &ask_from("q-bare", "49a80492", "which lane?"));
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(result.lines[0].contains("--authority chat_attested --quote"));
+        assert!(graph_decisions(&req).is_empty());
+        // AC2 (argv side): the flag front refuses a missing --quote before
+        // any identity or store read.
+        let argv = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            crate::outstanding_cmds::run_clear_cmd(&argv(&[
+                "q-1",
+                "--answer",
+                "a",
+                "--authority",
+                "chat_attested"
+            ])),
+            2
+        );
+
+        // AC3: a chat answer to a merge-grant question records, mints no
+        // grant, and says so.
+        let sha = "a29b38c37b18e737eaf850e8765920498287cabf";
+        let subject = format!("merge-grant:footnote#2739@{sha}");
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-grant", Some("Merge it now."));
+        chat(&mut req, "merge it now");
+        seed_question(
+            &req,
+            &ask("q-grant", "Merge PR 2739?", Some(&subject), Some("x-0000")),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("do not mint a merge grant")),
+            "{:?}",
+            result.lines
+        );
+        let rows = graph_decisions(&req);
+        assert!(
+            rows.iter().all(|r| r["subject"] != subject.as_str()),
+            "{rows:?}"
+        );
+        assert_eq!(rows.len(), 1, "{rows:?}");
+    }
+
+    #[test]
     fn only_the_user_or_the_asking_team_closes_a_question_asked_of_the_user() {
         // (a) An agent answers the user's question: refused, nothing written.
         let tmp = tempfile::tempdir().unwrap();
@@ -527,6 +612,102 @@ mod tests {
         };
         assert!(holds_team(&[team.clone()], "01a0cbdd"));
         assert!(!holds_team(&[team], "49a80492"));
+
+        // (i) The rung holder answers its worker's ask; (j) a denied class
+        // refuses it and names the climb.
+        for (qid, class, code) in [("q-held", "public-surface", 0), ("q-deny", "taste", 3)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut req = request(&tmp, qid, Some("C: do as asked"));
+            req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
+            req.closed_by = Some("01a0cbdd-baed-4482-9135-37ba1cb0f0d2".to_string());
+            let mut ask = ask_from(qid, "49a80492", "which lane?");
+            ask["data"]["class"] = json!(class);
+            ask["data"]["rung"] =
+                json!({"level": "lead", "holder_session": "01a0cbdd-baed-4482-9135-37ba1cb0f0d2"});
+            seed_question(&req, &ask);
+            let result = run_clear(&req);
+            assert_eq!(result.exit_code, code, "{class}: {:?}", result.lines);
+            if code == 3 {
+                assert!(
+                    result.lines[0].contains("fno inbox outstanding climb"),
+                    "{:?}",
+                    result.lines
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_scope_lead_withdraws_a_gone_workers_moot_question_and_no_other_lead_does() {
+        let lead_req = |tmp: &TempDir, qid: &str, scope: &[&str], gone: fn(&str) -> bool| {
+            let mut req = request(tmp, qid, Some("moot: ruled on the node, PR merged"));
+            req.provenance = json!({"decided_by": "1eadabcd", "authority_source": "role"});
+            req.closed_by = Some("1eadabcd-aaaa-4482-9135-37ba1cb0f0d2".to_string());
+            req.caller = Some(ClearCaller {
+                ancestry_handle: Some("1eadabcd".to_string()),
+                teamed: true,
+                teams: Vec::new(),
+                scope_nodes: Some(scope.iter().map(|s| s.to_string()).collect()),
+                asker_gone: Some(gone),
+            });
+            let mut question = ask("q-moot", "which lane?", None, Some("x-in"));
+            question["data"]["asker"] = json!("e49583f3");
+            question["data"]["session_id"] = json!("e49583f3-bbbb-4482-9135-37ba1cb0f0d2");
+            seed_question(&req, &question);
+            req
+        };
+
+        // A question filed by a stopped worker on a node in scope S: S's
+        // lead withdraws it as coordination, with no decision and no mail.
+        let tmp = tempfile::tempdir().unwrap();
+        let req = lead_req(&tmp, "q-moot", &["x-in"], |_| true);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(result.deliveries.is_empty());
+        assert!(rows(&req.decisions_path, &["operator_decision"]).is_empty());
+        let closed = rows(&req.journal_path, &["operator_question_closed"]);
+        assert_eq!(closed.len(), 1);
+        assert_eq!(
+            closed[0]["data"]["reason"],
+            "withdrawn by lead 1eadabcd: moot: ruled on the node, PR merged"
+        );
+        assert!(closed[0]["data"].get("answer").is_none());
+
+        // A lead outside S: refused, the question stays open.
+        let tmp = tempfile::tempdir().unwrap();
+        let req = lead_req(&tmp, "q-moot", &["x-other"], |_| true);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(
+            result.lines[0].contains(LEAD_WITHDRAW_LINE),
+            "{:?}",
+            result.lines
+        );
+        assert!(rows(&req.journal_path, &["operator_question_closed"]).is_empty());
+
+        // S's lead while the asker still lives and the node is open: refused.
+        let tmp = tempfile::tempdir().unwrap();
+        let req = lead_req(&tmp, "q-moot", &["x-in"], |_| false);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(rows(&req.journal_path, &["operator_question_closed"]).is_empty());
+
+        // A question with no asker session is no worker's: refused.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-anon", Some("moot"));
+        req.provenance = json!({"decided_by": "1eadabcd", "authority_source": "role"});
+        req.caller = Some(ClearCaller {
+            ancestry_handle: Some("1eadabcd".to_string()),
+            teamed: true,
+            teams: Vec::new(),
+            scope_nodes: Some(["x-in".to_string()].into_iter().collect()),
+            asker_gone: Some(|_| true),
+        });
+        let mut question = ask("q-anon", "which lane?", None, Some("x-in"));
+        question["data"]["asker"] = json!("");
+        seed_question(&req, &question);
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
     }
 
     #[test]
@@ -573,6 +754,164 @@ mod tests {
             result.lines
         );
     }
+    #[test]
+    fn a_negated_or_punctuated_retraction_answer_never_reads_affirmative() {
+        assert!(is_affirmative_retraction_answer(
+            "Retract it as a junk row."
+        ));
+        assert!(!is_affirmative_retraction_answer("Retract? No."));
+        assert!(!is_affirmative_retraction_answer("Retract nothing."));
+        assert!(!is_affirmative_retraction_answer("Do not retract it."));
+        assert!(!is_affirmative_retraction_answer("keep it for now"));
+        assert!(is_affirmative_retraction_answer("yes"));
+        // The fallback path names the action; a bare yes arms nothing there.
+        assert!(!retraction_intent_lead("yes"));
+        assert!(retraction_intent_lead("Retract it."));
+    }
+
+    #[test]
+    fn an_answered_retraction_question_retracts_the_law_in_the_same_step() {
+        // The retraction writer resolves the machine default store, so the
+        // test pins FNO_HOME/FNO_REPO_ROOT the way the law door tests do.
+        let env = crate::law_match::scope_tests::DoorEnv::new();
+        let graph = env.0.path().join("graph.json");
+        // The live law: an operator row after the lane cutover, seeded
+        // where all_decision_rows reads.
+        let law = decision("q-law", "d-2ffae9ba", "y");
+        crate::backlog::api::decision_record(&crate::backlog::api::Store::new(&graph), law)
+            .unwrap();
+
+        // (a) The stamped ask: an affirmative board answer retracts.
+        let subject = "law-retract:d-2ffae9ba";
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-retract", Some("Retract it as a junk row."));
+        req.graph = graph.clone();
+        seed_question(
+            &req,
+            &ask(
+                "q-retract",
+                "Retract the junk law d-2ffae9ba?",
+                Some(subject),
+                Some("x-aaaa"),
+            ),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("operator retraction recorded for d-2ffae9ba")),
+            "{:?}",
+            result.lines
+        );
+        let (rows, _) = crate::law_match::all_decision_rows().unwrap();
+        let retired = crate::decision_index::retirement_map(&rows);
+        assert!(
+            retired.contains_key("d-2ffae9ba"),
+            "reads retracted: {retired:?}"
+        );
+        let retraction = rows
+            .iter()
+            .find(|r| r.get("_event_type").and_then(Value::as_str) == Some("decision_retracted"))
+            .expect("a retraction row landed");
+        assert_eq!(retraction["authority_source"], "operator");
+        assert_eq!(retraction["retracted_by"], "operator");
+        assert_eq!(retraction["attested_by"], "question-board");
+        let decisions = graph_decisions(&req);
+        let row = decisions
+            .iter()
+            .find(|r| r["subject"] == subject)
+            .expect("decision at the retraction subject");
+        assert_eq!(row["authority_source"], "operator");
+        assert_eq!(row["decision"], "Retract it as a junk row.");
+
+        // (b) A hold answer records law at the subject and retracts nothing.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-hold", Some("Keep it."));
+        req.graph = graph.clone();
+        seed_question(
+            &req,
+            &ask(
+                "q-hold",
+                "Retract the junk law d-2ffae9ba?",
+                Some(subject),
+                Some("x-aaaa"),
+            ),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result.lines.iter().any(|l| l.contains("retracts nothing")),
+            "{:?}",
+            result.lines
+        );
+        let (rows, _) = crate::law_match::all_decision_rows().unwrap();
+        assert_eq!(
+            rows.iter()
+                .filter(
+                    |r| r.get("_event_type").and_then(Value::as_str) == Some("decision_retracted")
+                )
+                .count(),
+            1,
+            "the hold retracts nothing"
+        );
+
+        // (c) An agent clear is refused outright; no retraction lands.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-agent", Some("Retract it."));
+        req.graph = graph.clone();
+        req.provenance = json!({"decided_by": "agent-1", "authority_source": "agent"});
+        req.caller.as_mut().unwrap().ancestry_handle = Some("agent-1".to_string());
+        seed_question(
+            &req,
+            &ask(
+                "q-agent",
+                "Retract the junk law d-2ffae9ba?",
+                Some(subject),
+                Some("x-aaaa"),
+            ),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        let (rows, _) = crate::law_match::all_decision_rows().unwrap();
+        assert_eq!(
+            rows.iter()
+                .filter(
+                    |r| r.get("_event_type").and_then(Value::as_str) == Some("decision_retracted")
+                )
+                .count(),
+            1,
+            "an agent answer never retracts"
+        );
+
+        // (d) The fallback: a subject-less ask citing the law in its text.
+        let law2 = decision("q-law2", "d-e6084242", "the second junk law");
+        crate::backlog::api::decision_record(&crate::backlog::api::Store::new(&graph), law2)
+            .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-fallback", Some("Retract it."));
+        req.graph = graph.clone();
+        seed_question(
+            &req,
+            &ask(
+                "q-fallback",
+                "Should we retract the junk law d-e6084242?",
+                None,
+                Some("x-aaaa"),
+            ),
+        );
+        let result = run_clear(&req);
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("operator retraction recorded for d-e6084242")),
+            "{:?}",
+            result.lines
+        );
+    }
 }
 use crate::backlog::api::{self, Store};
 use crate::decision_trace::{actor_kind_from_authority, Trace};
@@ -580,6 +919,7 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -592,6 +932,12 @@ pub struct ClearCaller {
     pub ancestry_handle: Option<String>,
     /// Whether the caller's handle holds a live team.
     pub teamed: bool,
+    /// The live teams the caller holds.
+    pub teams: Vec<crate::territory::Team>,
+    /// Test seam for the scope read; `None` compiles `teams` on first need.
+    pub scope_nodes: Option<BTreeSet<String>>,
+    /// Test seam for the asker-gone read; `None` reads session liveness.
+    pub asker_gone: Option<fn(&str) -> bool>,
 }
 
 #[derive(Deserialize)]
@@ -637,6 +983,35 @@ fn agent_handle(req: &ClearRequest, caller: &ClearCaller) -> Option<String> {
         }
     }
     caller.ancestry_handle.clone()
+}
+
+/// Why an agent may not answer the row: its class (stored, else the class
+/// word why_user names) is in the asking project's questions.rules.deny,
+/// or those rules cannot be read. The rules come from the question's own
+/// cwd, never the closer's, and an unreadable config never reads as allow.
+fn denied_class(question_event: &Value) -> Option<String> {
+    let data = question_event.get("data")?;
+    let cwd = data
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    let rules = match crate::question_ladder::rules_for(&cwd) {
+        Ok(rules) => rules,
+        Err(e) => {
+            return Some(format!(
+                "unknown (the asking project's rules are unreadable: {e})"
+            ))
+        }
+    };
+    [data.get("class"), data.get("why_user")]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(crate::question_ladder::class_word)
+        .find(|class| rules.user_only(class))
+        .map(str::to_string)
 }
 
 /// The asker's own question: the full session-id pair decides, the
@@ -691,22 +1066,78 @@ fn resolve_clear_caller(req: &ClearRequest) -> ClearCaller {
         req,
         &ClearCaller {
             ancestry_handle: ancestry_handle.clone(),
-            teamed: false,
+            ..ClearCaller::default()
         },
     );
-    let teamed = handle.as_deref().is_some_and(handle_holds_live_team);
+    let teams: Vec<crate::territory::Team> = handle
+        .as_deref()
+        .and_then(|handle| {
+            crate::territory::live_teams(&crate::paths::AgentsHome::from_env().registry_json())
+                .ok()
+                .map(|teams| {
+                    teams
+                        .into_iter()
+                        .filter(|team| holds_team(std::slice::from_ref(team), handle))
+                        .collect()
+                })
+        })
+        .unwrap_or_default();
     ClearCaller {
         ancestry_handle,
-        teamed,
+        teamed: !teams.is_empty(),
+        teams,
+        scope_nodes: None,
+        asker_gone: None,
     }
 }
 
-/// Whether `handle` holds a live team in this machine's registry. A registry
-/// read error reads as no team (fail closed).
-pub(crate) fn handle_holds_live_team(handle: &str) -> bool {
-    crate::territory::live_teams(&crate::paths::AgentsHome::from_env().registry_json())
-        .map(|teams| holds_team(&teams, handle))
-        .unwrap_or(false)
+/// Whether `node` sits in a scope of a team the caller holds. A scope that
+/// does not compile holds nothing (fail closed).
+fn scope_holds(req: &ClearRequest, caller: &ClearCaller, node: &str) -> bool {
+    if let Some(seam) = &caller.scope_nodes {
+        return seam.contains(node);
+    }
+    caller.teams.iter().any(|team| {
+        crate::lead_answers::scope_node_ids(
+            &req.graph,
+            &req.repo_root,
+            &team.scope,
+            Some(i64::from(team.level)),
+        )
+        .is_ok_and(|ids| ids.contains(node))
+    })
+}
+
+/// The moot withdrawal a scope lead may make for a worker's question: the
+/// caller holds a live team whose scope holds the question's node, and the
+/// asker is gone (its session reads absent) or the node is done. Unresolved
+/// liveness never counts as gone.
+fn lead_may_withdraw(
+    req: &ClearRequest,
+    caller: &ClearCaller,
+    asker_session: Option<&str>,
+    node: Option<&str>,
+) -> bool {
+    // Only a worker's question: an identity-less ask stays the user's.
+    let (Some(node), Some(asker_session)) = (node.filter(|_| caller.teamed), asker_session) else {
+        return false;
+    };
+    if !scope_holds(req, caller, node) {
+        return false;
+    }
+    let asker_gone = match caller.asker_gone {
+        Some(seam) => seam(asker_session),
+        None => crate::claim_commands::session_is_absent(asker_session),
+    };
+    asker_gone
+        || api::node(&Store::new(&req.graph), node).is_ok_and(|found| {
+            found.is_some_and(|node| {
+                matches!(
+                    node.status,
+                    crate::backlog::model::Status::Done | crate::backlog::model::Status::Superseded
+                )
+            })
+        })
 }
 
 /// Whether `handle` holds a live team: the team-name store binds by session
@@ -719,6 +1150,8 @@ pub(crate) fn holds_team(teams: &[crate::territory::Team], handle: &str) -> bool
             .is_some_and(|session| crate::identity::canonical_handle(session) == handle)
     })
 }
+
+const LEAD_WITHDRAW_LINE: &str = "A lead whose live team scope holds the question's node withdraws it once the asker is gone or the node is done, with --answer naming the ruling.";
 
 fn default_cap() -> usize {
     crate::question_intake::QUESTION_CAP
@@ -837,29 +1270,70 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             .and_then(|data| data.get("session_id"))
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty());
+        let node = question_event
+            .get("data")
+            .and_then(|data| data.get("node"))
+            .and_then(Value::as_str);
+        // A scope lead's moot withdrawal names its ruling in --answer and
+        // closes as coordination: no decision row, no answer mail.
+        let mut lead_reason: Option<String> = None;
         if let Some(agent) = closer.as_deref() {
             let own_ask = is_own_ask(req, asker, asker_session, closer.as_deref());
+            let authority = req
+                .provenance
+                .get("authority_source")
+                .and_then(Value::as_str);
+            let quoted = req
+                .provenance
+                .get("quote")
+                .and_then(Value::as_str)
+                .is_some_and(|quote| !quote.trim().is_empty());
+            // A moot withdrawal outranks the rung: it closes as coordination,
+            // never as an answer, so the deny classes do not bar it.
+            let lead_withdraw = !own_ask
+                && req.answer.is_some()
+                && lead_may_withdraw(req, &caller, asker_session, node);
+            // The rung holder answers the row the ladder placed on it, unless
+            // the class is one only the user rules.
+            let holds_rung = !lead_withdraw
+                && crate::question_ladder::holder(&question_event["data"])
+                    .is_some_and(|holder| req.closed_by.as_deref() == Some(holder));
+            let denied = denied_class(question_event);
+            if holds_rung && req.answer.is_some() {
+                if let Some(class) = denied {
+                    refused += 1;
+                    answer.lines.push(format!(
+                        "outstanding: refused: {qid} is class {class}, and the asking project's questions.rules.deny keeps it from agents. Nothing was closed. Climb it: fno inbox outstanding climb {qid} --evidence \"<what you checked>\""
+                    ));
+                    continue;
+                }
+            }
             let allowed = if req.answer.is_some() {
-                own_ask
-                    && req
-                        .provenance
-                        .get("authority_source")
-                        .and_then(Value::as_str)
-                        == Some("role")
-                    && caller.teamed
+                (authority == Some("chat_attested") && quoted)
+                    || (own_ask && authority == Some("role") && caller.teamed)
+                    || (holds_rung && matches!(authority, Some("role") | Some("agent")))
             } else {
                 own_ask
             };
-            if !allowed {
+            if !allowed && lead_withdraw {
+                if let Some(ruling) = req.answer.as_deref() {
+                    lead_reason = Some(format!(
+                        "withdrawn by lead {agent}: {}",
+                        cut(ruling, req.cap)
+                    ));
+                }
+            }
+            if !allowed && lead_reason.is_none() {
                 refused += 1;
                 answer.lines.push(if req.answer.is_some() {
                     format!(
-                        "outstanding: refused: {qid} asks the user, and this session is agent {agent}. Nothing was closed; the question stays open. The user answers it on the question board (fno-agents state path questions) or at their own terminal: fno inbox outstanding clear {qid} --answer \"<answer>\". A teamed asker answers only its own question, with --authority role."
+                        "outstanding: refused: {qid} asks the user, and this session is agent {agent}. Nothing was closed; the question stays open. {} A teamed asker answers only its own question, with --authority role. {LEAD_WITHDRAW_LINE}",
+                        chat_answer_line(qid)
                     )
                 } else {
                     let shown = if asker.is_empty() { "the user" } else { asker };
                     format!(
-                        "outstanding: refused: {qid} was asked by {shown}, and this session is agent {agent}. Only the asker withdraws a question. Nothing was closed; the user answers it on the question board (fno-agents state path questions)."
+                        "outstanding: refused: {qid} was asked by {shown}, and this session is agent {agent}. Only the asker withdraws a question. Nothing was closed; the user answers it on the question board (fno-agents state path questions). {LEAD_WITHDRAW_LINE}"
                     )
                 });
                 continue;
@@ -881,7 +1355,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             ));
             continue;
         }
-        if let Some(text) = req.answer.as_deref() {
+        if let Some(text) = req.answer.as_deref().filter(|_| lead_reason.is_none()) {
             let text = cut(text, req.cap);
             let current = match live_decision(req, qid) {
                 Ok(current) => current,
@@ -1007,6 +1481,17 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 "outstanding: closed {qid} (decision {decision_id} {label})"
             ));
             if let Some(subject) = merge_grant_subject(question_event) {
+                if !operator_can_grant(req)
+                    && req
+                        .provenance
+                        .get("authority_source")
+                        .and_then(Value::as_str)
+                        == Some("chat_attested")
+                {
+                    answer.lines.push(format!(
+                        "outstanding: chat answers do not mint a merge grant; the user answers {subject} on the board or /command"
+                    ));
+                }
                 if operator_can_grant(req) {
                     answer.lines.push(if merge_answer_grants(question_event, &text) {
                         format!(
@@ -1018,6 +1503,29 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                             crate::merge_grant::MERGE_GRANT_DECISION
                         )
                     });
+                }
+            }
+            let stamped = retraction_subject(question_event).is_some();
+            if let Some((subject, target_id)) = retraction_subject(question_event)
+                .or_else(|| retraction_fallback(question_event))
+                .filter(|_| operator_can_grant(req))
+            {
+                if retraction_answer_grants(question_event, &text, stamped) {
+                    // The validate gate decides, first pass or resumed
+                    // repair alike: a live target writes now, an already
+                    // retired target receipts its refusal, and a partial
+                    // clear's rerun performs the retraction it once
+                    // promised.
+                    match validate_live_law_target(&target_id) {
+                        Err(reason) => answer.lines.push(format!("outstanding: {reason}")),
+                        Ok(()) => {
+                            perform_retraction(&mut answer, &qid, &subject, &target_id, &text)
+                        }
+                    }
+                } else {
+                    answer.lines.push(format!(
+                        "outstanding: law recorded at {subject} retracts nothing; the board retracts only on an affirmative retraction answer"
+                    ));
                 }
             }
             answer.closed.push(ClosedQuestion {
@@ -1063,7 +1571,9 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
         } else {
             // The reason names who retired it: the asker's own withdrawal
             // is moot; the user's reads plainly "withdrawn".
-            let withdrawn_reason = if is_own_ask(req, asker, asker_session, closer.as_deref()) {
+            let withdrawn_reason = if let Some(reason) = lead_reason.as_deref() {
+                reason
+            } else if is_own_ask(req, asker, asker_session, closer.as_deref()) {
                 "withdrawn by asker: moot"
             } else {
                 "withdrawn"
@@ -1206,15 +1716,19 @@ fn make_decision(
     // resolves an agent authority can no more mint the grant through the
     // clear door than through decide.
     let grant_subject = merge_grant_subject(question_event).filter(|_| operator_can_grant(req));
+    let retraction = retraction_subject(question_event)
+        .or_else(|| retraction_fallback(question_event))
+        .filter(|_| operator_can_grant(req));
     let affirmative = grant_subject.is_some() && merge_answer_grants(question_event, answer);
     let decision_text = if affirmative {
         crate::merge_grant::MERGE_GRANT_DECISION.to_string()
     } else {
         answer.to_string()
     };
-    let subject = match &grant_subject {
-        Some(subject) => subject.clone(),
-        None => node
+    let subject = match (&grant_subject, &retraction) {
+        (Some(subject), _) => subject.clone(),
+        (None, Some((subject, _))) => subject.clone(),
+        (None, None) => node
             .map(str::to_string)
             .unwrap_or_else(|| format!("question:{qid}")),
     };
@@ -1285,6 +1799,7 @@ fn make_decision(
         "relayed_by",
         "origin",
         "authority_source",
+        "quote",
     ] {
         if let Some(value) = req.provenance.get(key).filter(|value| !value.is_null()) {
             decision.insert(key.into(), value.clone());
@@ -1300,7 +1815,7 @@ fn make_decision(
     // operator's own surface. `decided_by` is set outright: the no-identity
     // path resolves "unattributed-caller", which must not sit on an operator
     // law row, and every attended path already resolves "operator".
-    if grant_subject.is_some() {
+    if grant_subject.is_some() || retraction.is_some() {
         decision
             .entry("authority_source")
             .or_insert(json!("operator"));
@@ -1332,6 +1847,7 @@ fn make_decision(
             }
         }
     }
+    crate::identity::stamp_person(&mut decision);
     Ok(json!({
         "ts": chrono::Utc::now().to_rfc3339(),
         "type": "operator_decision",
@@ -1389,24 +1905,249 @@ fn merge_grant_subject(question_event: &Value) -> Option<String> {
     crate::merge_grant::parse_head_grant_subject(subject).map(|_| subject.to_string())
 }
 
+/// The subject prefix a retraction question carries:
+/// `law-retract:<decision-id>`. One namespace beside `merge-grant:`, so the
+/// board answer door can name the operator action its answer performs.
+const LAW_RETRACT_SUBJECT: &str = "law-retract";
+
+/// The retraction target a question subject names, when it is one:
+/// `(subject, target_decision_id)`. One parser for the format, mirroring
+/// `parse_head_grant_subject`; the id casefolds, the way every decision-id
+/// read compares.
+fn retraction_subject(question_event: &Value) -> Option<(String, String)> {
+    let subject = question_event
+        .get("data")
+        .and_then(|data| data.get("subject"))
+        .and_then(Value::as_str)?;
+    let id = subject
+        .strip_prefix(LAW_RETRACT_SUBJECT)?
+        .strip_prefix(':')?
+        .trim();
+    let hex = id.strip_prefix("d-")?;
+    if hex.is_empty() || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((subject.to_string(), id.to_lowercase()))
+}
+
+/// The text fallback for questions asked before the retraction subject
+/// existed: the same detector the ask gate routes on (`cites_retraction`'s
+/// intent word) plus exactly one cited live law id in the question text.
+/// Reads the decision store only after the cheap intent check fires, and
+/// the minted subject is the shape a stamped ask lands at.
+fn retraction_fallback(question_event: &Value) -> Option<(String, String)> {
+    let lower = question_text(question_event).to_lowercase();
+    if !["retract", "repeal", "rescind", "revoke", "overturn"]
+        .iter()
+        .any(|word| lower.contains(word))
+    {
+        return None;
+    }
+    let (rows, _) = crate::law_match::all_decision_rows().ok()?;
+    let retired = crate::decision_index::retirement_map(&rows);
+    let mut cited: Vec<String> = Vec::new();
+    let mut from = 0usize;
+    while let Some(pos) = lower[from..].find("d-") {
+        let abs = from + pos + 2;
+        let end = lower[abs..]
+            .find(|c: char| !c.is_ascii_hexdigit())
+            .map(|p| abs + p)
+            .unwrap_or(lower.len());
+        let hex = &lower[abs..end];
+        // The id shape every minter produces: `d-` plus 4 to 8 hex (the
+        // spawn-name scan's bound, which keeps "d-" inside a longer hex run
+        // from reading as a decision).
+        if (4..=8).contains(&hex.len()) {
+            let id = format!("d-{hex}");
+            let live = rows
+                .iter()
+                .filter(|r| !crate::law_match::is_retraction_row(r))
+                .find(|r| {
+                    r.get("decision_id")
+                        .and_then(Value::as_str)
+                        .map(|v| v.eq_ignore_ascii_case(&id))
+                        == Some(true)
+                })
+                .is_some_and(|row| {
+                    crate::decision_index::is_law(row) && !retired.contains_key(&id)
+                });
+            if live && !cited.contains(&id) {
+                cited.push(id);
+            }
+        }
+        from = abs;
+    }
+    // One cited live law is the fallback's whole contract: an ambiguous
+    // question names no single target and retracts nothing.
+    if cited.len() != 1 {
+        return None;
+    }
+    let id = cited.into_iter().next()?;
+    Some((format!("{LAW_RETRACT_SUBJECT}:{id}"), id))
+}
+
 /// Does this answer on a merge-grant question record the grant? Two shapes:
 /// the closed terminal set above, or picking the question's recommended
 /// option when that option reads affirmative.
 fn merge_answer_grants(question_event: &Value, answer: &str) -> bool {
-    is_affirmative_merge_answer(answer) || picks_recommended_option(question_event, answer)
+    is_affirmative_merge_answer(answer)
+        || picks_recommended_option(question_event, answer, MERGE_OPTION_LEADS)
+}
+
+/// True when an answer on a retraction question reads as the affirmative
+/// retraction. `stamped` distinguishes the machine subject from the text
+/// fallback: the subject names the action, free text must.
+fn retraction_answer_grants(question_event: &Value, answer: &str, stamped: bool) -> bool {
+    if stamped {
+        return is_affirmative_retraction_answer(answer)
+            || picks_recommended_option(question_event, answer, RETRACT_OPTION_LEADS);
+    }
+    // The fallback asks the free text to name the action: a bare yes on a
+    // status-phrased question ("was d-X retracted?") answers the question
+    // and retracts nothing. The action word is the intent.
+    retraction_intent_lead(answer)
+        || picks_recommended_option(question_event, answer, RETRACT_OPTION_LEADS)
+}
+
+/// The intent-lead rule: an affirmative reads only when the answer opens
+/// with a retraction action word and no negation follows it. Shared by both
+/// polarity paths; the generic tail below is the stamped path's extra.
+fn retraction_intent_lead(answer: &str) -> bool {
+    let normalized = answer
+        .trim()
+        .trim_end_matches(['.', '!', '?', ';', ',', ':'])
+        .to_lowercase();
+    const NEGATIONS: [&str; 8] = [
+        "no", "not", "never", "don't", "dont", "nothing", "none", "neither",
+    ];
+    const INTENT: [&str; 5] = ["retract", "repeal", "rescind", "revoke", "overturn"];
+    for lead in INTENT {
+        if let Some(rest) = normalized.strip_prefix(lead) {
+            let rest = rest
+                .trim_start()
+                .trim_start_matches(['?', '!', '.', ',', ';', ':'])
+                .trim_start();
+            let negated = rest.starts_with("n't")
+                || NEGATIONS
+                    .iter()
+                    .any(|n| rest == *n || rest.starts_with(&format!("{n} ")));
+            if !negated {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The closed retraction vocabulary. The intent words lead the way the ask
+/// gate's `cites_retraction` words the action; a negation right after the
+/// lead word ("retract nothing", "retract? no") never reads affirmative, and the
+/// generic tail is the merge set minus the merge-only words.
+fn is_affirmative_retraction_answer(answer: &str) -> bool {
+    let normalized = answer
+        .trim()
+        .trim_end_matches(['.', '!', '?', ';', ',', ':'])
+        .to_lowercase();
+    retraction_intent_lead(answer)
+        || matches!(
+            normalized.as_str(),
+            "yes" | "y" | "approve" | "approved" | "go ahead" | "do it"
+        )
+}
+
+/// The subject path validates its target the way the retract door does: a
+/// live law row must exist for the id, or the answer records law at the
+/// subject and retracts nothing. A subject can name anything; the store
+/// decides what the retraction may land on.
+fn validate_live_law_target(target_id: &str) -> Result<(), String> {
+    let (rows, _) = crate::law_match::all_decision_rows().map_err(|e| {
+        format!("{target_id} names no verifiable target (the decision store is unreadable: {e}); nothing retracted")
+    })?;
+    let row = rows
+        .iter()
+        .filter(|r| !crate::law_match::is_retraction_row(r))
+        .find(|r| {
+            r.get("decision_id")
+                .and_then(Value::as_str)
+                .map(|v| v.eq_ignore_ascii_case(target_id))
+                == Some(true)
+        })
+        .ok_or_else(|| format!("{target_id} names no live decision; nothing retracted"))?;
+    if !crate::decision_index::is_law(row) {
+        return Err(format!(
+            "{target_id} is not a law-lane decision; nothing retracted"
+        ));
+    }
+    if crate::decision_index::retirement_map(&rows).contains_key(target_id) {
+        return Err(format!(
+            "{target_id} is already retired; nothing to retract"
+        ));
+    }
+    Ok(())
+}
+
+/// The board answer's retraction: write through the shared writer, receipt
+/// the outcome. Each partial stage names its own remedy, matching the
+/// retract door's contract: the journal is the durable floor, the index
+/// failure names `fno backlog decide-reindex`, the graph refusal says the
+/// retraction is durable in the journal and the index.
+fn perform_retraction(
+    answer: &mut ClearAnswer,
+    qid: &str,
+    subject: &str,
+    target_id: &str,
+    reason: &str,
+) {
+    let outcome = crate::law_match::write_retraction_event(&crate::law_match::RetractWrite {
+        target_decision_id: target_id.to_string(),
+        subject: subject.to_string(),
+        reason: reason.to_string(),
+        retracted_by: "operator".to_string(),
+        authority_source: "operator".to_string(),
+        attested_by: Some("question-board".to_string()),
+        relayed_by: None,
+        quote: None,
+    });
+    match outcome {
+        crate::law_match::RetractOutcome::Done => answer.lines.push(format!(
+            "outstanding: operator retraction recorded for {target_id} (the law reads RETRACTED)"
+        )),
+        crate::law_match::RetractOutcome::JournalFailed(e) => {
+            answer.exit_code = 1;
+            answer.lines.push(format!(
+                "outstanding: the decision for {qid} is recorded, but the retraction of {target_id} did not land (journal write failed: {e}); the question closed, do not re-answer"
+            ));
+        }
+        crate::law_match::RetractOutcome::IndexFailed(e) => {
+            answer.exit_code = 1;
+            answer.lines.push(format!(
+                "outstanding: {target_id} is retracted to the project journal, but the recall index write failed ({e}); run `fno backlog decide-reindex`, do not re-answer"
+            ));
+        }
+        crate::law_match::RetractOutcome::GraphRefused(e) => answer.lines.push(format!(
+            "outstanding: {target_id} is retracted, but the graph store refused ({e}); the retraction is durable in the journal and the index"
+        )),
+    }
 }
 
 /// The affirmative LEADS a board option's text may open with. Exact match is
 /// unavailable here (the option text is its own sentence), so the lead set is
 /// closed and conservative: an option that opens any other way never reads as
-/// the grant, whatever the recommendation says.
-fn is_affirmative_option_text(text: &str) -> bool {
+/// the grant, whatever the recommendation says. Per-action: the merge leads
+/// speak the merge vocabulary, the retraction leads the retraction one.
+const MERGE_OPTION_LEADS: &[&str] = &[
+    "yes", "y", "merge", "grant", "approve", "approved", "lgtm", "ship it", "go ahead", "do it",
+];
+const RETRACT_OPTION_LEADS: &[&str] = &[
+    "yes", "y", "retract", "repeal", "rescind", "revoke", "overturn", "approve", "go ahead",
+    "do it",
+];
+
+/// Whether a board option's text opens with one of the action's affirmative
+/// leads. Per-action lead sets: see `MERGE_OPTION_LEADS` / `RETRACT_OPTION_LEADS`.
+fn is_affirmative_option_text(text: &str, leads: &[&str]) -> bool {
     let normalized = text.trim().to_lowercase();
-    [
-        "yes", "y", "merge", "grant", "approve", "approved", "lgtm", "ship it", "go ahead", "do it",
-    ]
-    .iter()
-    .any(|lead| {
+    leads.iter().any(|lead| {
         normalized == *lead
             || normalized.starts_with(&format!("{lead} "))
             || normalized.starts_with(&format!("{lead},"))
@@ -1419,7 +2160,7 @@ fn is_affirmative_option_text(text: &str) -> bool {
 /// closed exact-match set can never admit; the recommendation intake
 /// validated is the asker's own affirmative, so picking it IS the grant.
 /// A recommendation whose text is not affirmative (a hold) never grants.
-fn picks_recommended_option(question_event: &Value, answer: &str) -> bool {
+fn picks_recommended_option(question_event: &Value, answer: &str, leads: &[&str]) -> bool {
     let data = question_event.get("data").unwrap_or(question_event);
     let Some(recommended) = data
         .get("context")
@@ -1454,7 +2195,7 @@ fn picks_recommended_option(question_event: &Value, answer: &str) -> bool {
     let Some(text) = text else {
         return false;
     };
-    if !is_affirmative_option_text(&text) {
+    if !is_affirmative_option_text(&text, leads) {
         return false;
     }
     let norm = |s: &str| {
@@ -1535,6 +2276,14 @@ fn question_text(question: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+/// The one line every relayed string uses to send an agent to the user:
+/// ask in chat, then record the user's own words through the clear door.
+pub(crate) fn chat_answer_line(qid: &str) -> String {
+    format!(
+        "Ask the user in chat. When they answer, record their exact words: fno inbox outstanding clear {qid} --answer \"<their answer>\" --authority chat_attested --quote \"<their words>\". They can also answer on the question board or /command."
+    )
 }
 
 fn cut(text: &str, cap: usize) -> String {

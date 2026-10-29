@@ -7,9 +7,8 @@
 //! own classifiers earlier in `decide_role`; every other leaf
 //! (`codemap`, `evals`, `test`, ...) returns None so the argv falls
 //! through to the Python wheel byte-verbatim until its family ports.
-//! `--context-audit` also falls through: the diag family owns
-//! `fno.context_audit` (epic change 23) and `context_run.rs` still spawns
-//! the Python spelling.
+//! `--context-audit` execs `fno-agents context-run --audit`: the same
+//! in-process audit `context_run.rs` reads.
 
 mod bind_canary;
 mod bundle;
@@ -36,19 +35,7 @@ pub enum Claim {
 
 /// The leaves this classifier never claims: their families port in their
 /// own children and the wheel keeps answering them.
-const FOREIGN_LEAVES: &[&str] = &[
-    "codemap",
-    "evals",
-    "test",
-    "scratch",
-    "footprint",
-    "lanes",
-    "bash-census",
-    "reclaim",
-    "route",
-    "observer",
-    "fanout",
-];
+const FOREIGN_LEAVES: &[&str] = &["codemap", "evals", "test", "route", "observer", "fanout"];
 
 pub fn classify(args: &[OsString]) -> Option<Claim> {
     if args.first()?.to_str()? != "doctor" {
@@ -107,13 +94,119 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
             }
             Some(Claim::AgentsExec("fno doctor harness-matrix", argv))
         }
+        // The diag-family leaves: pure transports onto the census op
+        // (shrink law d-fe66560a: no new fno-agents client action).
+        Some("footprint") => {
+            let mut argv = vec![OsString::from("census"), OsString::from("--footprint")];
+            for a in &args[2..] {
+                match a.to_str() {
+                    Some("--json") | Some("-J") => argv.push(a.clone()),
+                    Some("--cause-only") => argv.push(OsString::from("--cause")),
+                    _ => return None,
+                }
+            }
+            Some(Claim::AgentsExec("fno doctor footprint", argv))
+        }
+        Some("lanes") => {
+            let mut argv = vec![OsString::from("census"), OsString::from("--lanes")];
+            for a in &args[2..] {
+                match a.to_str() {
+                    Some("--json") | Some("-J") => argv.push(a.clone()),
+                    _ => return None,
+                }
+            }
+            // The lanes door never prints a lane number past a dark sensor:
+            // the census arm owns that refusal (exit 3).
+            Some(Claim::AgentsExec("fno doctor lanes", argv))
+        }
+        // Pure transports: the Rust side already owns these commands; the
+        // deleted Python legs only resolved the binary and copied flags.
+        Some("bash-census") => {
+            let mut argv = vec![OsString::from("bash-census")];
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].to_str() {
+                    Some("--allow") | Some("--json") | Some("-J") => argv.push(args[i].clone()),
+                    // The value-taking options ride with their value: a
+                    // forwarded flag without it reads as an unknown argument.
+                    Some("--days") | Some("--cwd") => {
+                        argv.push(args[i].clone());
+                        if let Some(v) = args.get(i + 1) {
+                            argv.push(v.clone());
+                        }
+                        i += 1;
+                    }
+                    _ => return None,
+                }
+                i += 1;
+            }
+            Some(Claim::AgentsExec("fno doctor bash-census", argv))
+        }
+        Some("reclaim") => {
+            let mut argv = vec![OsString::from("reclaim")];
+            for a in &args[2..] {
+                match a.to_str() {
+                    Some("--apply") | Some("-v") => argv.push(a.clone()),
+                    Some("--verbose") => argv.push(OsString::from("-v")),
+                    _ => return None,
+                }
+            }
+            Some(Claim::AgentsExec("fno doctor reclaim", argv))
+        }
+        // `scratch sweep|report ...`: identical flag spellings on the Rust
+        // side; the subcommand word routes and everything else passes
+        // through byte-verbatim.
+        Some("scratch") => {
+            match args.get(2).and_then(|a| a.to_str()) {
+                Some("sweep") | Some("report") => {}
+                _ => return None,
+            }
+            let mut argv = vec![OsString::from("scratch")];
+            argv.extend(args[2..].iter().cloned());
+            Some(Claim::AgentsExec("fno doctor scratch", argv))
+        }
         // A leading flag: native unless the context-audit family rides along.
         Some(word) if word.starts_with('-') => {
-            let context = args[1..]
+            // The context audit rides context-run --audit: a pure transport
+            // like bash-census/reclaim. Combos the deleted Python arm refused
+            // (--fix, --cost-check, --codex-hooks, --codex-bind) fall through
+            // to the wheel, which rejects them with its own exit 2.
+            let context_audit = args[1..]
                 .iter()
                 .any(|a| a.to_str() == Some("--context-audit"));
-            if context {
-                return None;
+            if context_audit {
+                let forbidden = args[1..].iter().any(|a| {
+                    matches!(
+                        a.to_str(),
+                        Some("--fix")
+                            | Some("--cost-check")
+                            | Some("--codex-hooks")
+                            | Some("--codex-bind")
+                    )
+                });
+                if forbidden {
+                    return None;
+                }
+                let mut argv = vec![OsString::from("context-run"), OsString::from("--audit")];
+                let mut i = 1;
+                while i < args.len() {
+                    match args[i].to_str() {
+                        Some("--context-audit") => {}
+                        Some("--json") | Some("-J") => argv.push(args[i].clone()),
+                        // --source and --context-budget take a value; the
+                        // audit parser reads only the space-separated form.
+                        Some("--source") | Some("--context-budget") => {
+                            argv.push(args[i].clone());
+                            if let Some(v) = args.get(i + 1) {
+                                argv.push(v.clone());
+                            }
+                            i += 1;
+                        }
+                        _ => return None,
+                    }
+                    i += 1;
+                }
+                return Some(Claim::AgentsExec("fno doctor --context-audit", argv));
             }
             let claimed = args[1..].iter().any(|a| match a.to_str() {
                 Some("--fix")
@@ -135,6 +228,49 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
         }
         // Any other leaf word: not ours until its family ports.
         Some(_) => None,
+    }
+}
+
+/// `--context-audit`: the census module is Python, so the wheel's own
+/// interpreter runs it with the whole fact set in one JSON argument.
+fn context_audit_run(
+    source: Option<String>,
+    context: &std::collections::BTreeMap<&str, String>,
+    json: bool,
+) -> i32 {
+    let Ok(budget) = context
+        .get("budget")
+        .map_or(Ok(32_768), |b| b.parse::<i64>())
+    else {
+        return usage_error("Option '--context-budget' needs a whole number");
+    };
+    let root = source.unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|d| d.display().to_string())
+            .unwrap_or_else(|_| ".".into())
+    });
+    let all = || "all".to_string();
+    let payload = serde_json::json!({
+        "root": root,
+        "host": context.get("host"),
+        "harness": context.get("harness").cloned().unwrap_or_else(all),
+        "entry": context.get("entry").cloned().unwrap_or_else(all),
+        "budget": budget,
+        "json_out": json,
+    });
+    let Some(python) = report::wheel_python() else {
+        eprintln!("fno doctor --context-audit: no fno-py interpreter found; install the fno wheel");
+        return 2;
+    };
+    match std::process::Command::new(python)
+        .args(["-m", "fno.context_audit", &payload.to_string()])
+        .status()
+    {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("fno doctor --context-audit: interpreter spawn failed: {e}");
+            2
+        }
     }
 }
 
@@ -178,7 +314,7 @@ fn stall_event_journals() -> Vec<std::path::PathBuf> {
     out
 }
 
-/// `python_json`: the report's JSON stdout keeps the Python `json.dumps`
+/// `python_json`: the report's JSON stdout keeps the
 /// byte shape the goldens froze (", " separators, ": " after keys,
 /// ensure_ascii escapes, insertion order via serde_json preserve_order).
 pub fn python_json(value: &Value) -> String {
@@ -386,6 +522,8 @@ fn run_home(args: &[String]) -> i32 {
     let mut codex_bind = false;
     let mut codex_app_server = false;
     let mut find_transcript: Option<String> = None;
+    let mut context_audit = false;
+    let mut context: std::collections::BTreeMap<&str, String> = Default::default();
     let mut i = 0;
     while i < args.len() {
         let word = args[i].as_str();
@@ -397,6 +535,7 @@ fn run_home(args: &[String]) -> i32 {
             "--codex-hooks" => codex_hooks = true,
             "--codex-bind" => codex_bind = true,
             "--codex-app-server" => codex_app_server = true,
+            "--context-audit" => context_audit = true,
             "--find-transcript" => {
                 i += 1;
                 match args.get(i) {
@@ -411,12 +550,14 @@ fn run_home(args: &[String]) -> i32 {
                     None => return usage_error("Option '--source' requires an argument"),
                 }
             }
-            // Accepted-and-ignored context arms: the Python command declared
-            // them, so a bare run with one set still answers the report.
+            // The context arms feed --context-audit; a bare report ignores them.
             "--context-harness" | "--context-entry" | "--context-budget" | "--context-host" => {
                 i += 1;
-                if args.get(i).is_none() {
-                    return usage_error(&format!("Option '{word}' requires an argument"));
+                match args.get(i) {
+                    Some(v) => {
+                        context.insert(&word[10..], v.clone());
+                    }
+                    None => return usage_error(&format!("Option '{word}' requires an argument")),
                 }
             }
             w if w.starts_with("--source=") => source = Some(w["--source=".len()..].to_string()),
@@ -426,12 +567,24 @@ fn run_home(args: &[String]) -> i32 {
             w if w.starts_with("--context-harness=")
                 || w.starts_with("--context-entry=")
                 || w.starts_with("--context-budget=")
-                || w.starts_with("--context-host=") => {}
+                || w.starts_with("--context-host=") =>
+            {
+                let (key, value) = w[10..].split_once('=').unwrap_or_default();
+                context.insert(key, value.to_string());
+            }
             other => return usage_error(&format!("Got unexpected extra argument ({other})")),
         }
         i += 1;
     }
 
+    if context_audit {
+        if fix || cost_check || codex_hooks || codex_bind {
+            return usage_error(
+                "--context-audit cannot be combined with --fix, --cost-check, --codex-hooks, or --codex-bind",
+            );
+        }
+        return context_audit_run(source, &context, json);
+    }
     // The hidden op doors the surviving Python callers read (change 4).
     if codex_app_server {
         print_json(&report::codex_app_server_report());
@@ -719,6 +872,19 @@ fn cost_check_report() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::bounded_command_for;
+
+    /// The Python CLI declares no --context-audit, so a fall-through exits 2.
+    #[test]
+    fn context_audit_is_claimed_natively() {
+        let argv: Vec<std::ffi::OsString> = ["doctor", "--context-audit", "--json"]
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect();
+        assert!(
+            super::classify(&argv).is_some(),
+            "a fall-through exits 2: the Python CLI declares no --context-audit"
+        );
+    }
 
     /// The deleted Python transport's contract (its
     /// test_doctor_timeout_kills_gate_descendants fixture): a timed-out

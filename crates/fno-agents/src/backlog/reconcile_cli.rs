@@ -57,6 +57,9 @@ retro sentinel so a later session captures follow-ups. It never
 auto-creates inbox lines or backlog nodes, never auto-resumes work, and
 never clobbers a node that is already done.
 
+A merged PR closes only the nodes its Fixes line names. An earlier wave of
+a multi-wave node merges with no such line, so the node stays open.
+
 Side effect: also runs claim GC, retiring dead claims from graph.db
 into claim_history for at most 20s. Claims it did not reach are
 reported as deferred and wait for a later run. --dry-run

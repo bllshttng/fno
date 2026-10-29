@@ -60,7 +60,7 @@ cli = typer.Typer(
     epilog=(
         "Corrections: reopen (undo done) | remove (hard delete) | unarchive | "
         "undefer | unqueue | unsupersede | unclaim. All hidden; "
-        "`fno help backlog --all` lists every command. "
+        "`fno-py help backlog --all` lists every command. "
         "JSON contract: `-J` sits before the command (`fno backlog -J get <id>`), "
         "and `get` prints one JSON document on stdout - the node object on a "
         "hit, `{\"ok\": false, \"error\": ...}` with rc 1 on a miss."
@@ -88,7 +88,7 @@ cli.command("worked", hidden=True)(_cmd_worked)
 # Node-lifecycle sub-apps folded under backlog (unit 6 of the  reorg):
 # annotate findings and carve-out records are node metadata operations. The
 # retro harvest is native (`fno backlog retro`). The old top-level spellings stay one-release shims
-# (fno.command_moves); the mounts below are the canonical homes.
+# retired at the front door (command-names.tsv); the mounts below are the canonical homes.
 from fno.annotate.cli import annotate_app as _annotate_app  # noqa: E402
 from fno.carveout.cli import carveout_app as _carveout_app  # noqa: E402
 
@@ -165,9 +165,11 @@ def _graph_callback(
         help="Output structured JSON to stdout. Diagnostics go to stderr.",
     ),
 ) -> None:
-    from fno.handoff.output import merge_json_flag
-
-    merge_json_flag(ctx, json_output)
+    # merge_json_flag's 3-line merge, inlined: the handoff module
+    # dies with the family port and this caller survives it.
+    ctx.ensure_object(dict)
+    if json_output:
+        ctx.obj["json"] = True
 
 
 def _graph_path() -> Path:
@@ -887,14 +889,12 @@ def _render_external_get(id: str, field: Optional[str], ctx: typer.Context) -> N
     try:
         node, sc = _read_external_node_and_sidecar(id)
     except _TrackerNodeNotFound:
-        from fno.handoff.output import json_mode
-
         message = (
             f"fno backlog get: no node matches '{id}' "
             "(an external backend resolves exact ids; slug/bare-hex are "
             "footnote-minted)"
         )
-        if json_mode(ctx):
+        if bool(ctx.obj and ctx.obj.get("json", False)):
             typer.echo(json.dumps({"ok": False, "error": message}))
         else:
             typer.echo(message, err=True)

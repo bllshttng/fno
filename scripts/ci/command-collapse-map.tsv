@@ -208,12 +208,10 @@ config schema	T1	config schema	10
 config set	KEEP	config set	43	deliberate readability slack for a high-traffic distinct operation
 config status-sinks	T1	config status-sinks	2
 config unset	T1	config unset	5
-context	KEEP	context	15	single-leaf group
 cost	KEEP	cost	7	single-leaf group
 delivery evaluate	KEEP	delivery evaluate	7	single-leaf group
 do ci status	T1	do ci status	0
 do delivery evaluate	T1	do delivery evaluate	7
-do phase kill-check	T1	do phase kill-check	16
 do plan brief	T1	do plan brief	4
 do plan fidelity	T1	do plan fidelity	5
 do plan folder-audit	T1	do plan folder-audit	0
@@ -252,9 +250,6 @@ do pr rebase	T1	do pr rebase	21
 do pr review-hold	T1	do pr review-hold	0
 do pr ritual	T1	do pr ritual	24
 do pr status	T1	do pr status	19
-do pr stub-manifest reconcile-finalize	T1	do pr stub-manifest reconcile-finalize	1
-do pr stub-manifest reconcile-validate	T1	do pr stub-manifest reconcile-validate	2
-do pr stub-manifest write	T1	do pr stub-manifest write	2
 do pr sync-canonical	T1	do pr sync-canonical	2
 do pr verify	T1	do pr verify	13
 do pr wait	T1	do pr wait	0
@@ -270,23 +265,8 @@ do resume receipt validate	T1	do resume receipt validate	3
 do resume receipt write	T1	do resume receipt write	2
 do review classify	T1	do review classify	8
 do review resolve-level	T1	do review resolve-level	10
-do state archive	T1	do state archive	1
-do state init	T1	do state init	3
-do state set	T1	do state set	20
-do state show	T1	do state show	7
-do target blast-check	T1	do target blast-check	3
-do target check-contained	T1	do target check-contained	4
-do target check-dispatch-hold	T1	do target check-dispatch-hold	2
-do target check-review-gate	T1	do target check-review-gate	4
-do target denominator-ratio	T1	do target denominator-ratio	2
-do target request-self-review	T1	do target request-self-review	12
-do target resolve-model	T1	do target resolve-model	2
-do target resolve-owned-identity	T1	do target resolve-owned-identity	3
-do target review-invocation	T1	do target review-invocation	4
-do target status	T1	do target status	8
 do think dispatch	T1	do think dispatch	4
 do think inspect	T1	do think inspect	7
-doctor bash-census	T1	doctor bash-census	0
 doctor bundle	T1	doctor bundle	1
 doctor codemap	T1	doctor codemap	18
 doctor evals grade	T1	doctor evals grade	11
@@ -301,22 +281,17 @@ doctor event audit	T1	doctor event audit	5
 doctor event emit	T1	doctor event emit	37
 doctor event find	T1	doctor event find	0
 event find	T1	event find	0
-doctor event fanout tick	T1	doctor event fanout tick	0
 doctor event gate-escape	T1	doctor event gate-escape	2
 doctor event gc	T1	doctor event gc	4
 doctor event push-parent	T1	doctor event push-parent	2
-doctor footprint	T1	doctor footprint	0
 doctor harness	T1	doctor harness	0
 doctor harness-matrix	T1	doctor harness-matrix	3
-doctor lanes	T1	doctor lanes	0
 doctor lint	T1	doctor lint	39
 doctor observer replay	T1	doctor observer replay	2
 doctor observer judge	T1	doctor observer judge	2
 doctor observer sweep	T1	doctor observer sweep	4
 doctor plugin-file	T1	doctor plugin-file	2
 doctor route	T1	doctor route	6
-doctor scratch report	T1	doctor scratch report	0
-doctor scratch sweep	T1	doctor scratch sweep	1
 doctor stalls	T1	doctor stalls	0
 doctor test	T1	doctor test	107
 doctor update	T1	doctor update	109
@@ -353,9 +328,7 @@ mail triage	T1	mail triage	8
 mail unread	T1	mail unread	16
 mail show	T1	mail show	2
 mail withdraw	T1	mail withdraw	2
-notify	KEEP	notify	18	single-leaf group
 paths handoff	T1	paths handoff	9
-phase kill-check	KEEP	phase kill-check	16	single-leaf group
 plan brief	T1	plan brief	4
 plan fidelity	T1	plan fidelity	5
 plan folder-audit	T1	plan folder-audit	0
@@ -378,28 +351,7 @@ pr-watch uninstall	T1	pr-watch uninstall	1
 resume receipt show	T1	resume receipt show	1
 resume receipt validate	T1	resume receipt validate	3
 resume receipt write	T1	resume receipt write	2
-scoreboard	KEEP	scoreboard	13	single-leaf group
 config plugin	T1	config plugin	0
-doctor reclaim	T1	doctor reclaim	0
-state archive	T1	state archive	1
-state init	T1	state init	3
-state set	T1	state set	20
-state show	T1	state show	7
-status-fanout tick	KEEP	status-fanout tick	4	single-leaf group
-stub-manifest reconcile-finalize	T1	stub-manifest reconcile-finalize	1
-stub-manifest reconcile-validate	T1	stub-manifest reconcile-validate	2
-stub-manifest write	T1	stub-manifest write	2
-target blast-check	T1	target blast-check	3
-target check-contained	T1	target check-contained	4
-target check-dispatch-hold	T1	target check-dispatch-hold	2
-target check-review-gate	T1	target check-review-gate	4
-target denominator-ratio	T1	target denominator-ratio	2
-target request-self-review	T1	target request-self-review	12
-target resolve-model	T1	target resolve-model	2
-target resolve-owned-identity	T1	target resolve-owned-identity	3
-target review-invocation	T1	target review-invocation	4
-target status	T1	target status	8
-test	KEEP	test	108	single-leaf group
 update	KEEP	update	88	single-leaf group
 version	KEEP	version	15	single-leaf group
 agents stale-escalate	T1	agents stale-escalate	6

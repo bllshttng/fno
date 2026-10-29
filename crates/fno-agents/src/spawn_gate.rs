@@ -17,7 +17,6 @@
 //! that bricks spawning.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -262,7 +261,7 @@ const CPU_ADMIT_SAMPLES: u32 = 2;
 /// A blind CPU read (an undecidable band or an unreadable probe) gets at most
 /// this many total samples before the gate refuses. A blind read is not
 /// evidence the fleet is over. It never holds for the whole queue budget and
-/// never admits: worst case is 3 probes of FOOTPRINT_PROBE_BUDGET plus 2 pauses.
+/// never admits: worst case is 3 footprint readings plus 2 pauses.
 const CPU_BLIND_SAMPLES: u32 = 3;
 /// spawn-gate mutex TTL: generous vs the seconds-scale check→dispatch window;
 /// PID liveness frees it instantly if the spawner dies.
@@ -1319,10 +1318,6 @@ fn review_session_gate(input: &GateInput) -> Option<Refusal> {
     )
 }
 
-/// The held keys of a [`GateGuard`], taken out before the guard drops so a
-/// cross-process transport can hand them back to the caller.
-pub type GateKeys = (Option<(String, String)>, Option<(String, String)>);
-
 /// Run the full gate for a spawn. Returns a guard to keep alive across
 /// dispatch on pass, or `Err(Refusal)` on refusal/timeout. All human-facing
 /// output goes to stderr (LD10: the stdout receipt is byte-reserved for the
@@ -2352,8 +2347,6 @@ pub(crate) struct AdmissionPayload {
     pub(crate) capacity_cores: f64,
     #[serde(default)]
     pub(crate) ceiling: f64,
-    // read only through serde: kept so the admission payload still parses
-    // when the decider sends the gap the old verdict shape carried.
     #[serde(default)]
     #[allow(dead_code)]
     pub(crate) gap: Option<String>,
@@ -2407,25 +2400,12 @@ fn held_progress_line(admission: &AdmissionPayload, waited_secs: u64) -> String 
 
 #[derive(Debug, Default, Deserialize)]
 pub struct FootprintCausePayload {
-    /// Kept only so an older admission-less payload still parses; the verdict
-    /// comes from `admission` now, never from the gap's presence.
-    #[serde(default)]
-    #[allow(dead_code)] // read only through serde: older-payload parse tolerance
-    attribution_gap: Option<String>,
     /// The Claude Code background daemon's idle pre-warm pool, for the
     /// `fno agents status` machine line.
     #[serde(default)]
     spare_pool_process_count: u64,
     #[serde(default)]
     spare_pool_cpu_cores: f64,
-    /// 1-min load average, for the status line only. It decides nothing
-    /// anywhere (LD1).
-    #[serde(default)]
-    #[allow(dead_code)] // read only through serde: display context, decides nothing
-    load_1m: Option<f64>,
-    #[serde(default)]
-    #[allow(dead_code)] // read only through serde: context on the payload, unused by the gate
-    cpu_capacity_cores: f64,
     /// The `_emit_failure` shape: when footprint cannot measure at all it
     /// still answers, carrying this key and exit 4. Its words travel into
     /// the instrument refusal (keeps that contract).
@@ -2444,9 +2424,6 @@ pub struct FootprintCausePayload {
 /// One `top` row of the footprint payload.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TopConsumer {
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub(crate) cpu_percent: f64,
     #[serde(default)]
     pub(crate) command: String,
 }
@@ -2536,35 +2513,6 @@ pub(crate) fn check_cpu_axis(prefetched: Option<&str>, probe_err: Option<&str>) 
     }
 }
 
-/// Wall-clock budget for the out-of-process footprint probe: the Python
-/// twin's 5s measurement budget plus an allowance for a ONE-module
-/// interpreter start. The allowance is not sized for a full CLI boot on
-/// purpose: the probe binary (`fno-footprint-cause`) imports only
-/// `fno.doctor_footprint` (measured 0.11s wall at load 117), where the old
-/// `fno` shim route paid a full typer-app import plus provisioning waits and
-/// timed out under exactly the load this gate exists to measure.
-const FOOTPRINT_PROBE_BUDGET: Duration = Duration::from_secs(8);
-
-/// The probe argv: the narrow console script when it resolves, else the
-/// same `--json --cause-only` reading through `fno_py_cmd()` (PATH-robust:
-///). `fno` itself is deliberately NOT a
-/// candidate: it is the Rust shim, and a gate probe must not route through
-/// its provisioning waits. The fno-py leg always yields an argv; a
-/// genuinely missing wheel surfaces as a failed read the refusal names,
-/// rather than a probe silently declared absent.
-fn footprint_probe_argv() -> Option<Vec<String>> {
-    if resolves_on_path("fno-footprint-cause") {
-        return Some(vec!["fno-footprint-cause".to_string()]);
-    }
-    let mut argv = crate::org_board::fno_py_cmd();
-    argv.extend(
-        ["doctor", "footprint", "--json", "--cause-only"]
-            .iter()
-            .map(|s| s.to_string()),
-    );
-    Some(argv)
-}
-
 /// The status footer's reading and the store keeper's path note, from ONE
 /// footprint answer, a live probe or a fresh persisted one: `(machine line,
 /// keeper note)`. Both best-effort
@@ -2644,70 +2592,15 @@ pub(crate) fn footprint_cause_raw() -> Result<String, String> {
             return Ok(first.to_string());
         }
     }
-    let argv = footprint_probe_argv().ok_or_else(|| {
-        "no footprint probe resolves on PATH (fno-footprint-cause, fno-py)".to_string()
-    })?;
-    let raw = footprint_cause_raw_with(&argv, FOOTPRINT_PROBE_BUDGET)?;
+    // The reading computes in process (the deleted fno-footprint-cause
+    // probe): one engine serves the gate and the doctor footprint command,
+    // so the two answers cannot drift and the crossing is gone.
+    let reading = crate::footprint_cause::cause_reading(false, Duration::from_secs(5))?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let payload = crate::footprint_cause::cause_payload(&reading, true, None, None, &cwd);
+    let raw = crate::footprint_cause::sorted_json(&payload);
     crate::footprint_cache::persist_footprint_cache(&raw);
     Ok(raw)
-}
-
-/// The transport, split from [`footprint_cause_raw`] so tests can pass a
-/// short budget and a script instead of loading a real machine.
-///
-/// `Err` carries WHY the probe has no answer, as text a refusal can print.
-/// A deadline miss is a fact about the probe's clock, never about the
-/// machine: printing a clock miss as if it were a CPU reading is how a
-/// healthy instrument once read as "attribution unavailable" at load 511
-/// while the same instrument, read in process, answered 3.69/12.00 in 1.6s.
-fn footprint_cause_raw_with(argv: &[String], budget: Duration) -> Result<String, String> {
-    let bin = argv[0].clone();
-    let mut child = Command::new(&argv[0])
-        .args(&argv[1..])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("footprint probe {bin} could not run: {e}"))?;
-    let deadline = Instant::now() + budget;
-    loop {
-        match child.try_wait() {
-            // The exit code is not the discriminator; the payload is. Footprint
-            // exits non-zero to report its OWN verdict (3 capacity-over, 4
-            // unknown) while still writing a complete reading to stdout, so
-            // gating on `status.success()` threw away the answer in exactly the
-            // states the gate consults it about. Measured 2026-09-04: a 3380-byte
-            // payload naming 21 unmapped bg-socket rows was discarded because the
-            // probe exited 4. A genuinely failed run writes nothing parseable and
-            // still reaches `Unreadable` through the classifier.
-            Ok(Some(_)) => {
-                let output = child
-                    .wait_with_output()
-                    .map_err(|e| format!("footprint probe {bin} could not run: {e}"))?;
-                return std::str::from_utf8(&output.stdout)
-                    .map(|s| s.to_string())
-                    .map_err(|_| format!("footprint probe {bin} wrote non-UTF-8 output"));
-            }
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let budget_s = if budget.as_secs() > 0 {
-                    format!("{}s", budget.as_secs())
-                } else {
-                    format!("{}ms", budget.as_millis())
-                };
-                return Err(format!(
-                    "footprint probe {bin} did not answer inside {budget_s}; \
-                     that is the probe's clock, not a reading of fleet CPU"
-                ));
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("footprint probe {bin} could not run: {e}"));
-            }
-        }
-    }
 }
 
 /// Take the headless worker slot claim. The claim carries `model_provider`

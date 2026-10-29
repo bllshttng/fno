@@ -37,7 +37,6 @@ def _run_py(code: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
 # Modules that must NOT appear in sys.modules after `fno --help`.
 # These are the heaviest transitive imports that the lazy refactor defers.
 _FORBIDDEN_AFTER_HELP = [
-    "fno.state.cli",
     "fno.adapters.providers.cli",
     "fno.graph.cli",
     "fno.events.cli",
@@ -113,7 +112,7 @@ _ADVERTISED_SUBCOMMANDS = [
 # which render nowhere after d-26002be8; do is unusable for the leak-check
 # (substring of "doctor"), so the hidden REAL roots worth pinning are these.
 _HIDDEN_SUBCOMMANDS = [
-    "inbox", "update",
+    "inbox",
 ]
 
 
@@ -393,16 +392,16 @@ def test_lazy_import_retries_once_when_the_tree_changed_underneath(monkeypatch):
     import typer
     from typer.testing import CliRunner
 
-    real_target = importlib.import_module("fno.state.cli")
+    real_target = importlib.import_module("fno.graph.cli")
     calls = _counting_import(
         monkeypatch,
-        "fno.state.cli",
-        [ModuleNotFoundError("gone", name="fno.state._mid_reinstall"), real_target],
+        "fno.graph.cli",
+        [ModuleNotFoundError("gone", name="fno.graph._mid_reinstall"), real_target],
     )
     monkeypatch.setattr(lg, "_module_appears_on_disk", lambda name: True)
 
     app = typer.Typer(
-        cls=make_lazy_group_cls({"state": "fno.state.cli:cli"}),
+        cls=make_lazy_group_cls({"backlog": "fno.graph.cli:cli"}),
         no_args_is_help=True,
         pretty_exceptions_enable=False,
         rich_markup_mode=None,
@@ -412,7 +411,7 @@ def test_lazy_import_retries_once_when_the_tree_changed_underneath(monkeypatch):
     def _cb() -> None:
         pass
 
-    result = CliRunner().invoke(app, ["state", "--help"])
+    result = CliRunner().invoke(app, ["backlog", "--help"])
     assert len(calls) == 2, f"expected exactly one retry, got {len(calls)} imports"
     assert result.exit_code == 0, result.output
 
@@ -428,13 +427,13 @@ def test_lazy_import_does_not_retry_when_the_module_is_really_missing(monkeypatc
 
     calls = _counting_import(
         monkeypatch,
-        "fno.state.cli",
-        [ModuleNotFoundError("gone", name="fno.state._really_gone")],
+        "fno.graph.cli",
+        [ModuleNotFoundError("gone", name="fno.graph._really_gone")],
     )
     monkeypatch.setattr(lg, "_module_appears_on_disk", lambda name: False)
 
     app = typer.Typer(
-        cls=make_lazy_group_cls({"state": "fno.state.cli:cli"}),
+        cls=make_lazy_group_cls({"backlog": "fno.graph.cli:cli"}),
         no_args_is_help=True,
         pretty_exceptions_enable=False,
         rich_markup_mode=None,
@@ -444,7 +443,7 @@ def test_lazy_import_does_not_retry_when_the_module_is_really_missing(monkeypatc
     def _cb() -> None:
         pass
 
-    result = CliRunner().invoke(app, ["state", "--help"])
+    result = CliRunner().invoke(app, ["backlog", "--help"])
     assert len(calls) == 1, f"a missing module must not be retried; got {len(calls)}"
     assert result.exit_code != 0
     combined = (result.output or "") + (result.stderr if hasattr(result, "stderr") else "")
@@ -627,7 +626,7 @@ def test_fno_py_entrypoint_is_main():
 
 def test_plain_click_action_help_exits_clean():
     """A plain-click action's --help behind the lazy group (a
-    collapsed forward or a lazy stub) prints its help and exits 0. The
+    lazy stub) prints its help and exits 0. The
     plain-click Exit used to escape typer's vendored-click main as a
     traceback ending in click.exceptions.Exit: 0."""
     from typer.testing import CliRunner
@@ -635,8 +634,7 @@ def test_plain_click_action_help_exits_clean():
     from fno import cli as fno_cli
 
     runner = CliRunner()
-    for argv in (["doctor", "test", "--help"], ["test", "--help"]):
-        result = runner.invoke(fno_cli.app, argv)
-        assert result.exit_code == 0, result.output
-        assert "Usage" in result.output
-        assert result.exception is None or isinstance(result.exception, SystemExit)
+    result = runner.invoke(fno_cli.app, ["doctor", "test", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "Usage" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)

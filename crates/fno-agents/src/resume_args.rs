@@ -230,13 +230,8 @@ pub fn reentry_argv_for_unpaned_conversion(
     }
     let registry = home.registry_json();
     let entries = crate::client_commands::read_registry_entries(&registry).ok()?;
-    let entry = crate::client_commands::resolve_entry_with_heal_scoped(
-        &entries,
-        &parsed.name,
-        &registry,
-        None,
-    )
-    .ok()?;
+    let entry =
+        crate::client_commands::resolve_entry_with_heal(&entries, &parsed.name, &registry).ok()?;
     if matches!(
         entry.get("substrate").and_then(serde_json::Value::as_str),
         Some("pane" | "thread")

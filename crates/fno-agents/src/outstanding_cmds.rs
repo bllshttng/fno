@@ -25,6 +25,7 @@ pub fn dispatch(word: &str, rest: &[String]) -> Option<i32> {
         "reindex" => Some(run_reindex(rest)),
         "clear" => Some(run_clear_cmd(rest)),
         "ask" => Some(run_ask(rest)),
+        "climb" => Some(crate::question_ladder::run_climb(rest)),
         _ => None,
     }
 }
@@ -40,16 +41,17 @@ const DELIVERY_SENDER: &str = "fno/questions";
 
 /// The clear arm: validate the authority claim, resolve provenance once,
 /// close through the clear core, then deliver every answer to its asker.
-fn run_clear_cmd(args: &[String]) -> i32 {
+pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
     let mut ids: Vec<String> = Vec::new();
     let mut answer_text: Option<String> = None;
     let mut authority: Option<String> = None;
     let mut origin: Option<String> = None;
+    let mut quote: Option<String> = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "-h" | "--help" => {
-                println!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--origin <origin>]");
+                println!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>]");
                 return 0;
             }
             "--answer" => match args.get(index + 1) {
@@ -72,6 +74,16 @@ fn run_clear_cmd(args: &[String]) -> i32 {
                     return 2;
                 }
             },
+            "--quote" => match args.get(index + 1) {
+                Some(value) => {
+                    quote = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --quote needs a value");
+                    return 2;
+                }
+            },
             "--origin" => match args.get(index + 1) {
                 Some(value) => {
                     origin = Some(value.clone());
@@ -91,17 +103,42 @@ fn run_clear_cmd(args: &[String]) -> i32 {
         index += 1;
     }
     if ids.is_empty() {
-        eprintln!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--origin <origin>]");
+        eprintln!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>]");
         return 2;
     }
     if let Some(source) = &authority {
-        if !matches!(source.as_str(), "operator" | "role" | "agent" | "beastmode") {
+        if !matches!(
+            source.as_str(),
+            "operator" | "role" | "agent" | "beastmode" | "chat_attested"
+        ) {
             eprintln!(
-                "outstanding: --authority '{}' is not one of operator, role, agent, beastmode. Nothing was closed.",
+                "outstanding: --authority '{}' is not one of operator, role, agent, beastmode, chat_attested. Nothing was closed.",
                 source
             );
             return 2;
         }
+    }
+    let quote = quote
+        .map(|q| q.trim().to_string())
+        .filter(|q| !q.is_empty());
+    let chat = authority.as_deref() == Some("chat_attested");
+    if chat && (answer_text.is_none() || quote.is_none()) {
+        eprintln!(
+            "outstanding: --authority chat_attested needs --answer and --quote \"<the user's exact words>\". Nothing was closed."
+        );
+        return 2;
+    }
+    if !chat && quote.is_some() {
+        eprintln!(
+            "outstanding: --quote rides only with --authority chat_attested. Nothing was closed."
+        );
+        return 2;
+    }
+    if chat && crate::identity::ambient_agent_handle().is_none() {
+        eprintln!(
+            "outstanding: chat_attested records a session relaying the user's chat words, and this process has no session identity. At a terminal, answer with no --authority. Nothing was closed."
+        );
+        return 2;
     }
     // The truncation note rides stderr before anything is written; the clear
     // core cuts at the cap on its side.
@@ -126,6 +163,14 @@ fn run_clear_cmd(args: &[String]) -> i32 {
                 authority.as_deref(),
                 enforced_origin.as_deref(),
             ) {
+                Ok(p) if chat => json!({
+                    "decided_by": p.decided_by,
+                    "authority_source": "chat_attested",
+                    "attested_by": "user in chat",
+                    "relayed_by": p.relayed_by,
+                    "origin": enforced_origin,
+                    "quote": quote.as_deref().map(|q| crate::law_match::text_cap(q, 2000)),
+                }),
                 Ok(p) => json!({
                     "decided_by": p.decided_by,
                     "authority_source": p.authority_source,
@@ -633,8 +678,7 @@ fn lane_path() -> PathBuf {
 
 /// The one lock-and-rewrite transaction: parse, read raw, apply the line
 /// change, atomic replace in the same directory, re-read. The bounded lock
-/// holds the lane's sidecar `<lane>.lock` for ten seconds, the same budget
-/// the Python `filelock.FileLock` took.
+/// holds the lane's sidecar `<lane>.lock` for ten seconds, the same budget.
 fn mutate_lane_at(path: &std::path::Path, action: &str, rest: &[String]) -> Result<usize, String> {
     let path = path.to_path_buf();
     if let Some(parent) = path.parent() {
@@ -818,6 +862,8 @@ fn live_law_rows() -> Vec<crate::law_match::LawRow> {
         "law".to_string(),
         "--state".to_string(),
         "live".to_string(),
+        "--limit".to_string(),
+        "0".to_string(),
         "--json".to_string(),
     ];
     let (_, stdout) = match captured_stdout(&argv, 30.0) {
@@ -926,11 +972,12 @@ fn run_ask(args: &[String]) -> i32 {
     let mut blocks: Vec<String> = Vec::new();
     let mut node: Option<String> = None;
     let mut subject: Option<String> = None;
+    let mut images: Vec<PathBuf> = Vec::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "-h" | "--help" => {
-                println!("usage: fno inbox outstanding ask [QUESTION] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>]");
+                println!("usage: fno inbox outstanding ask [QUESTION] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--image <path>]...");
                 return 0;
             }
             "--question-file" => match args.get(index + 1) {
@@ -990,6 +1037,16 @@ fn run_ask(args: &[String]) -> i32 {
                 }
                 None => {
                     eprintln!("outstanding: --subject needs a value");
+                    return 2;
+                }
+            },
+            "--image" => match args.get(index + 1) {
+                Some(value) => {
+                    images.push(PathBuf::from(value));
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --image needs a value");
                     return 2;
                 }
             },
@@ -1067,6 +1124,13 @@ fn run_ask(args: &[String]) -> i32 {
         live_law_rows()
     };
     let who = crate::backlog::birth::display_name(&crate::paths::worktree_repo_root(&cwd));
+    // Under the ladder the row sits with the asker's lead first; no lead with
+    // a session to wake is the user rung, today's behavior.
+    let rung = (!template && crate::question_ladder::ladder_on(&cwd))
+        .then(|| crate::question_ladder::place(&cwd, node.as_deref(), ident.session_id.as_deref()))
+        .flatten();
+    let wake_node = node.clone();
+    let wake_question = text.clone();
     let request = crate::question_intake::IntakeRequest {
         question: text,
         template,
@@ -1079,6 +1143,7 @@ fn run_ask(args: &[String]) -> i32 {
         cwd: Some(cwd.to_string_lossy().into_owned()),
         asker,
         laws,
+        rung: rung.clone(),
         storage_root: crate::outstanding::storage_root(&cwd),
         index_path: Some(crate::provider_cap::questions_path(&home)),
         journal_path: Some(crate::paths::events_path(&cwd)),
@@ -1086,6 +1151,9 @@ fn run_ask(args: &[String]) -> i32 {
         render_cap: None,
         op: None,
         event: None,
+        screens_dir: (!images.is_empty())
+            .then(|| crate::escalation::questions_dir(&cwd).join("screens")),
+        images,
     };
     let answer = crate::question_intake::run_intake(&request, &home);
     for line in &answer.lines {
@@ -1101,6 +1169,9 @@ fn run_ask(args: &[String]) -> i32 {
     if let Some(qid) = &answer.qid {
         if !template {
             println!("{qid}");
+        }
+        if let Some(rung) = &answer.rung {
+            crate::question_ladder::wake_holder(rung, qid, wake_node.as_deref(), &wake_question);
         }
     }
     0

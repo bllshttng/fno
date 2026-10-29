@@ -116,23 +116,6 @@ pub fn inject_no_merge(command: &str) -> String {
     parts.join(" ")
 }
 
-/// Remove the carrier from a /target-family command: the first standalone
-/// flag and the first standalone legacy token. A pathological id like
-/// `no-merger-x` is never touched (standalone tokens only), and non-family
-/// commands pass through so a prose brief's text is never mangled.
-pub fn strip_no_merge(command: &str) -> String {
-    if !is_target_family(command) {
-        return command.to_string();
-    }
-    let mut parts: Vec<&str> = command.split_whitespace().collect();
-    for token in [table().flag.as_str(), table().legacy_token.as_str()] {
-        if let Some(pos) = parts[1..].iter().position(|p| *p == token) {
-            parts.remove(pos + 1);
-        }
-    }
-    parts.join(" ")
-}
-
 /// The env posture a message dictates for the carrier env key. `Hold` covers
 /// both the ambiguous bare-token case and non-family prose (which clears
 /// nothing).
@@ -165,8 +148,7 @@ pub fn posture_action(message: &str, prior: Option<&str>) -> (EnvAction, Option<
 
 /// Apply the posture to THIS process's environment so every child spawned
 /// below inherits the carrier (the Rust spawn lane's one application point,
-/// `client::maybe_run_spawn`). The Python spawn lane applies the same
-/// verdict from the same table; both are idempotent, so a lane that runs
+/// `client::maybe_run_spawn`). It is idempotent, so a spawn that runs it
 /// twice converges instead of flip-flopping. Returns whether a loud-clear
 /// note was emitted (the caller prints it on its own stderr).
 pub fn apply_env_from_message(message: &str) -> bool {

@@ -11,15 +11,6 @@ use crate::finalize::{
     read_project_id, resolve_obsidian_vault, resolve_project_name, resolve_vault_root,
 };
 
-/// The four classes that reach the superuser. Everything else, the lead
-/// decides and logs.
-pub const CLASSES: [&str; 4] = [
-    "public-surface",
-    "irreversible",
-    "money-security",
-    "law-change",
-];
-
 const SECTION_DECIDING: &str = "What is being decided";
 const SECTION_WHY_NOW: &str = "Why it matters now";
 const SECTION_OPTIONS: &str = "Options";
@@ -37,6 +28,8 @@ const SECTION_REVERSIBLE: &str = "Reversible";
 const SECTION_COST_IF_WRONG: &str = "Cost if wrong";
 const SECTION_MEANWHILE: &str = "Meanwhile";
 const SECTION_WHY_USER: &str = "Why user";
+const SECTION_TRIED: &str = "Tried";
+const SECTION_EVIDENCE: &str = "Evidence";
 
 #[derive(Default, Clone, PartialEq, Debug)]
 pub struct EscalationOption {
@@ -72,12 +65,36 @@ pub struct Escalation {
     pub meanwhile: String,
     /// The user-only reason a reversible, recommended question still
     /// reaches the user (irreversible, money or credential, outside the
-    /// machine, product or taste). Empty reads as absent.
+    /// machine, law-change, product or taste). Empty reads as absent.
     pub why_user: String,
+    /// What the asker and each rung checked, and what it read.
+    pub tried: String,
+    pub evidence: String,
     /// The ask span this question routes (`answers_ask:` frontmatter), the
     /// pointer that links the escalate route span to the ask it answers.
     pub answers_ask: Option<String>,
+    /// `## ` headings a question page does not carry, so their text never
+    /// reaches the user.
+    pub unknown_sections: Vec<String>,
 }
+
+/// Every section heading a question page carries. The escalation-only
+/// sections parse too, but the question row never stores them.
+pub const QUESTION_SECTIONS: [&str; 13] = [
+    SECTION_OPTIONS,
+    SECTION_RECOMMENDATION,
+    SECTION_BLOCKED_BECAUSE,
+    SECTION_WHY_THESE,
+    SECTION_DOWNSIDE,
+    SECTION_UNKNOWNS,
+    SECTION_REVERSIBLE,
+    SECTION_COST_IF_WRONG,
+    SECTION_MEANWHILE,
+    SECTION_WHY_USER,
+    SECTION_TRIED,
+    SECTION_EVIDENCE,
+    "Answer",
+];
 
 /// The project's escalations directory: `<vault>/internal/<project>/escalations`
 /// when obsidian is enabled with a vault, else the space's `escalations/`.
@@ -171,6 +188,21 @@ pub(crate) fn vault_dir_with_home(cwd: &Path, home: Option<&Path>, leaf: &str) -
     crate::paths::space_dir(cwd).join(leaf)
 }
 
+/// A vault file another machine named by its own absolute path, re-rooted
+/// onto this machine's vault: the part from `internal/` on is the same in
+/// every synced copy. `None` when the path names no vault file or no vault
+/// resolves here.
+pub(crate) fn rebase_vault_path(path: &str, cwd: &Path) -> Option<PathBuf> {
+    let rel = &path[path.find("/internal/")? + 1..];
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut candidates = vec![cwd.join(".fno/config.toml")];
+    if let Some(h) = &home {
+        candidates.push(h.join(".fno/config.toml"));
+    }
+    let vault = crate::finalize::resolve_obsidian_vault(&candidates)?;
+    Some(crate::finalize::resolve_vault_root(&vault, home.as_deref())?.join(rel))
+}
+
 /// Tolerant parse: anything missing is empty/None and [`problems`] names it.
 pub fn parse(text: &str) -> Escalation {
     let mut esc = Escalation::default();
@@ -231,10 +263,17 @@ pub fn parse(text: &str) -> Escalation {
     esc.reversible = section(SECTION_REVERSIBLE);
     esc.cost_if_wrong = section(SECTION_COST_IF_WRONG);
     esc.meanwhile = section(SECTION_MEANWHILE);
+    esc.tried = section(SECTION_TRIED);
+    esc.evidence = section(SECTION_EVIDENCE);
     let why_user = section(SECTION_WHY_USER);
     if !why_user.is_empty() {
         esc.why_user = why_user;
     }
+    esc.unknown_sections = sections
+        .iter()
+        .map(|(n, _)| n.clone())
+        .filter(|n| !QUESTION_SECTIONS.contains(&n.as_str()))
+        .collect();
     esc
 }
 
@@ -245,10 +284,13 @@ fn is_numbered(line: &str) -> bool {
         && chars.next() == Some(' ')
 }
 
-/// The reasons only a user can answer, shared by the ask gate and the
-/// question sweep: a question carrying one of these in why_user survives
-/// its node closing, whatever the ask gate decided.
-pub fn why_user_is_user_only(why: &str) -> bool {
+/// The question sweep's read of why_user: a question only the user can
+/// answer survives its node closing. A class word reads through the rules;
+/// free text from before the class word was required reads by keyword.
+pub fn why_user_is_user_only(why: &str, rules: &crate::question_ladder::Rules) -> bool {
+    if let Some(class) = crate::question_ladder::class_word(why) {
+        return rules.user_only(class);
+    }
     let why = why.to_ascii_lowercase();
     [
         "irreversible",
@@ -257,6 +299,7 @@ pub fn why_user_is_user_only(why: &str) -> bool {
         "outside",
         "product",
         "taste",
+        "law-change",
     ]
     .iter()
     .any(|k| why.contains(k))
@@ -307,7 +350,7 @@ pub fn problems(e: &Escalation) -> Vec<String> {
     let mut out = Vec::new();
     if e.class.is_empty() {
         out.push("missing class".to_string());
-    } else if !CLASSES.contains(&e.class.as_str()) {
+    } else if e.class == "none" || !crate::question_ladder::CLASSES.contains(&e.class.as_str()) {
         out.push(format!("unknown class: {}", e.class));
     }
     for (name, body) in [
@@ -396,34 +439,6 @@ pub fn overdue(e: &Escalation, now: chrono::DateTime<chrono::Utc>) -> bool {
     chrono::DateTime::parse_from_rfc3339(&e.deadline)
         .map(|d| d < now)
         .unwrap_or(false)
-}
-
-/// The inverse of [`parse`], for a Rust writer.
-pub fn to_note(e: &Escalation) -> String {
-    let mut fm = String::new();
-    fm.push_str(&format!("class: {}\n", e.class));
-    fm.push_str(&format!("status: {}\n", e.status));
-    if let Some(node) = &e.node {
-        fm.push_str(&format!("node: {node}\n"));
-    }
-    fm.push_str(&format!("raised_by: {}\n", e.raised_by));
-    fm.push_str(&format!("raised_at: {}\n", e.raised_at));
-    fm.push_str(&format!("deadline: {}\n", e.deadline));
-    if let Some(n) = e.recommend {
-        fm.push_str(&format!("recommend: {n}\n"));
-    }
-    fm.push_str(&format!("on_silence: {}\n", e.on_silence));
-    let options = e
-        .options
-        .iter()
-        .enumerate()
-        .map(|(i, o)| format!("{}. {} What happens next: {}", i + 1, o.text, o.next))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "---\n{fm}---\n# {}\n\n## {SECTION_DECIDING}\n{}\n\n## {SECTION_WHY_NOW}\n{}\n\n## {SECTION_OPTIONS}\n{options}\n\n## {SECTION_RECOMMENDATION}\n{}\n\n## {SECTION_ON_DEADLINE}\n{}\n",
-        e.title, e.deciding, e.why_now, e.recommendation, e.on_deadline
-    )
 }
 
 /// Every note in the directory, path-stamped and sorted. An unreadable
@@ -539,6 +554,26 @@ The lead waits. A force push cannot be undone.
             found.iter().any(|p| p.contains("irreversible call waits")),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn a_section_no_field_reads_is_named() {
+        let esc = parse(
+            "Pick one?\n\n## Options\n1. A.\n## The table\n| a |\n## Why it matters now\nsoon\n",
+        );
+        assert_eq!(esc.unknown_sections, ["The table", "Why it matters now"]);
+    }
+
+    #[test]
+    fn a_law_change_reaches_the_user_like_the_other_user_classes() {
+        let rules = crate::question_ladder::Rules::default();
+        assert!(why_user_is_user_only(
+            "law-change: it retires two laws",
+            &rules
+        ));
+        assert!(!why_user_is_user_only("the user asked to see it", &rules));
+        assert!(why_user_is_user_only("taste", &rules));
+        assert!(!why_user_is_user_only("public-surface", &rules));
     }
 
     #[test]

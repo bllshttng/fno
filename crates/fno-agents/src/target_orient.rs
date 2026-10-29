@@ -1169,13 +1169,20 @@ pub fn report(project_root: &Path) -> String {
         .join("\n")
 }
 
-/// The `target-status` transport door: one `command_call` round-trip for the
-/// python `fno do target status` command. Request: `{"root": path, "node": id?,
-/// "plan_path": path?}`; answer: `{"lines": [["label", "value"], ...]}` in
-/// report order, so the caller renders text or `--json` byte-exactly as its
-/// twin did. Exit 3 names a bad request on stderr.
+/// The `target-status` door, two modes. The transport shape reads one
+/// `command_call` payload on stdin (`{"root": path, "node": id?,
+/// "plan_path": path?}`) and prints `{"lines": [...]}` for the caller to
+/// render. The argv shape is the deleted Python command's own surface: the
+/// front door execs `target-status [node] [--plan-path P] [--json]` and the
+/// door resolves the root itself and renders text or JSON exactly as the
+/// Python caller did (the padded `label: value` lines, or one indented JSON
+/// object). A bare shell call with a TTY stdin takes the argv mode; a piped
+/// stdin with no args keeps the transport contract. Exit 3 names a bad
+/// request on stderr; exit 2 a usage error.
 pub fn run_status(args: &[String]) -> i32 {
-    let _ = args; // the payload rides stdin, like every command_call door
+    if !args.is_empty() || std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return run_status_argv(args);
+    }
     let mut input = String::new();
     use std::io::Read as _;
     if std::io::stdin().read_to_string(&mut input).is_err() {
@@ -1208,6 +1215,56 @@ pub fn run_status(args: &[String]) -> i32 {
         .map(|(label, value)| (label.to_string(), value))
         .collect();
     println!("{}", serde_json::json!({ "lines": lines }));
+    0
+}
+
+/// The deleted Python command's render, byte-shape for byte-shape: `--json`
+/// prints one pretty JSON object of the lines (a duplicate label collapses
+/// to its last value, the Python dict build), and text pads `label:` to the
+/// longest label plus one column, then the value.
+fn run_status_argv(args: &[String]) -> i32 {
+    let mut positional: Vec<String> = Vec::new();
+    let mut plan = None;
+    let mut json = false;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--plan-path" => plan = it.next().cloned(),
+            "--json" | "-J" => json = true,
+            other if other.starts_with('-') => {
+                eprintln!("target-status: unknown flag {other}");
+                return 2;
+            }
+            other => positional.push(other.to_string()),
+        }
+    }
+    let node = positional.first().cloned();
+    let root = crate::target_gates::resolve_repo_root();
+    let lines: Vec<(String, String)> = orient_lines(&root, node, plan)
+        .into_iter()
+        .map(|(label, value)| (label.to_string(), value))
+        .collect();
+    if json {
+        let mut object = serde_json::Map::new();
+        for (label, value) in &lines {
+            object.insert(label.clone(), serde_json::Value::String(value.clone()));
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::Value::Object(object))
+                .unwrap_or_else(|_| "{}".to_string())
+        );
+    } else {
+        let width = lines
+            .iter()
+            .map(|(l, _)| l.chars().count())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        for (label, value) in &lines {
+            println!("{:<width$} {value}", format!("{label}:"), width = width + 1);
+        }
+    }
     0
 }
 

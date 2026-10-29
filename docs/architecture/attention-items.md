@@ -26,11 +26,31 @@ A machine chore whose row names the command that clears it is a `fleet_task`, no
 
 ## The ten context fields and the readiness gate
 
-The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields.
+The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields. If the row has a `person`, the `asker` object carries it: the asking machine's `fleet.owner`, else its login name. It is a display name, never proof, and no gate reads it.
 
-## Who asks: direct, by default
+## Who asks: the ladder, by default
 
-Whoever holds a user-only decision files it on the board itself, lead or worker: `fno inbox outstanding ask` (law d-fdab1af2). Nobody mails a decision up a lead to relay, because a relay hop is where asks get lost. The knob is `questions.route` in `.fno/config.toml`: `direct` (the default) or `triage` for a team that wants a triage lead. The knob routes the `fno agents org escalate` relay-mail leg. Under `direct` the question the command records stays on the board alone and the command prints the teaching line. `triage` keeps the lead's mail copy. The read lives in the fno-agents renderer (`crates/fno-agents/src/lead_escalation.rs`), so the default needs no config entry.
+A worker's question goes to its lead first, and only a lead files to the user's board, after it tries the answer itself (law d-0b7be63a). `fno inbox outstanding ask` places the row on a rung: the node's lead, its higher-up, or the least-loaded lead. The holder gets one wake. The holder answers with `fno inbox outstanding clear <qid> --authority role`, or climbs with `fno inbox outstanding climb <qid> --evidence "<what it checked>"`. Each climb adds one `via` hop. A row shows on the user's board at the user rung. A lead-rung row shows there 10 minutes after it reached its holder with no answer. So nothing a lead ignores is lost. A lead's own ask, or an ask with no live lead, starts at the user rung.
+
+The knob is `questions.route` in `.fno/config.toml`:
+
+| Value | What happens |
+|---|---|
+| `ladder` (the default) | The row sits with the asker's lead first. `fno agents org escalate` sends no relay mail. |
+| `direct` | The row goes to the user's board at once, with no rung. |
+| `triage` | As `direct`, and `fno agents org escalate` keeps the triage lead's mail copy. |
+
+An unknown value reads as `ladder`, and the escalate nudge names it. The read lives in `crates/fno-agents/src/lead_escalation.rs`, so the default needs no config entry.
+
+`questions.rules` sorts each class into one list. The intake door refuses an ask whose class the asker can decide itself:
+
+| List | Default classes | Who rules |
+|---|---|---|
+| `allow` | none | The asker decides and logs. The ask is refused. |
+| `ask` | `public-surface`, `gate-override` | The rung holder can rule. |
+| `deny` | `irreversible`, `money-security`, `outside-reach`, `taste`, `law-change` | Only the user. The holder's clear refuses and names the climb. |
+
+A class in two lists, or an unknown class word, refuses the config read. A ladder row reads ready only with `class`, `deadline`, `on_silence` and a `## Tried` section. An ask without them skips the ladder and goes to the board at once, and intake names the missing fields. A climb to the user's board refuses a row with no `## Tried`.
 
 ## Asking with context
 
@@ -41,6 +61,8 @@ The fields ride a question file handed to `--question-file`:
 recommend: 1
 answers_ask: s-1a2b3c4d
 class: irreversible
+deadline: 2026-11-01T09:00:00Z
+on_silence: wait
 ---
 Is a net-zero Python repair legal with no grant?
 
@@ -64,6 +86,12 @@ Option 1, the narrowest door: every later fix needs it.
 
 ## Not thought through
 whether a net-zero move between files counts
+
+## Tried
+read the file budget gate and the two grants it names
+
+## Evidence
+scripts/ci/check-file-budget.sh refuses any added Python line
 
 ## Reversible
 costly
@@ -91,7 +119,13 @@ outstanding: refused: a question needs <the missing sections>. Write a question 
 
 Flag options (`--options a --options b`) carry no per-option next, so the door refuses them for questions and points at the question file. The fno-agents binary can be missing on a broken install. The fallback then still records the question. It prints a NOT VISIBLE line: without the readiness gate the row can land not-ready, and the mux will not show it.
 
-A reversible question that carries a recommendation is one the asker must decide itself. The port refuses it too, with the decide door first: `fno backlog decide <node> "<ruling>"` as the asking session or its lead, then continue. It reaches the user only with a user-only reason in a `why_user:` frontmatter key. The four reasons are: irreversible, spends money or a credential, reaches outside the machine, or a product or taste call. The user sees a decide-it-yourself ruling only as a one-line FYI in the check-in, never as a question.
+The page renders only the sections above. If a question file carries another `## ` heading, the intake records the question and prints a warning that names the heading. Put a long table on its own vault page and link it from `## Why these options`.
+
+Pass a screenshot with `--image <path>`, once per file. The intake copies each file to `<questions dir>/screens/<qid>-<n>-<name>` before it records anything, and the page embeds each copy under a `## Screens` heading. The intake accepts a png, jpg, gif or webp file. It refuses any other path (`image`). A question that can clear a visual-approval hold must carry an image, or the intake refuses it (`screens`). That covers the gate's own subject, `visual approval PR <n> at <head>`, and a title that names a PR and the visual hold. The user cannot judge paint they cannot see. `fno mux serve --snapshot` has no image protocol. When its frame paints an image, it stamps the png with a `tEXt` chunk (`fno-snapshot`, `no-image-protocol`). Such a shot shows half-blocks, never the kitty image. A visual-approval ask whose every shot carries that stamp is refused (`screens_protocol`). Add one capture from a real terminal.
+
+In the mux question view, the shots show as thumbnails under the page. A terminal with the kitty graphics protocol (Ghostty, kitty, WezTerm) shows the real image. Any other terminal shows it in half-block cells. Left and right pick one, and Enter or a click on a thumbnail expands it to the whole view. Left and right step through, and Esc goes back to the page. A file that does not decode shows its name only, and Enter hands it to the open router (`mux.open_with`). An `inmux` route goes to the platform opener there, because the question view covers the in-mux viewer.
+
+A reversible question that carries a recommendation is one the asker must decide itself. The port refuses it too, with the decide door first: `fno backlog decide <node> "<ruling>"` as the asking session or its lead, then continue. It reaches the user only with a user-only reason in a `why_user:` frontmatter key. The five reasons are: irreversible, spends money or a credential, reaches outside the machine, changes a law (write `law-change`), or a product or taste call. The user sees a decide-it-yourself ruling only as a one-line FYI in the check-in, never as a question.
 
 The two trace keys name the hop the question answers. `answers_ask:` is the ask span id. Any other id reads as the ask mail's message id. The intake reads that row off the bus and re-derives the ask span. An unresolvable id still routes, only parentless. `class:` is one of public-surface, irreversible, money-security, law-change, gate-override, none. The intake turns `answers_ask:` into the escalate route span and stamps the question row's trace (docs/architecture/decision-record.md, "Traced decisions"). The ask span id also prints on every Approval: send as `mail-record: ask span <id>`.
 

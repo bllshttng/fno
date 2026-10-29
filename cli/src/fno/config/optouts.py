@@ -1,10 +1,9 @@
 """Merge-gating configuration values that require a live opt-out claim.
 
 This module is platform data: the measured key set and the raw-dict helpers
-its consumers share. The claims-backed half of the feature, the read-time
-revocation guard and the write-time lease, lives in
+its consumers share. The read-time revocation guard lives in
 ``fno.claims.optout_lease`` because this package may not import the claims
-layer.
+layer; the write-time lease is native, in the config writer.
 """
 
 from __future__ import annotations
@@ -28,13 +27,6 @@ MERGE_GATING_OPTOUT_DEFAULTS: dict[str, object] = {
     "review.optional_apps": "built-in optional reviewer list",
     "auto_merge.require_checks_pass": True,
 }
-
-
-def optout_release_command(key: str, scope_flag: str = "") -> str:
-    """The command a holder runs to release the opt-out at ``key``."""
-    if key == "review.optional_apps":
-        return f"fno config unset {key}{scope_flag}"
-    return f"fno config set {key} true{scope_flag}"
 
 
 def _raw_leaf(raw: dict[str, Any], key: str) -> tuple[bool, Any]:

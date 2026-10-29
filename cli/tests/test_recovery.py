@@ -1061,10 +1061,10 @@ class TestNotifyManualResume:
 
     def test_notify_sends_os_notification_with_command(self, monkeypatch):
         from types import SimpleNamespace
-        from fno.notify import _impl as notify_impl
+        import fno.rust_binary as rust_binary
         sent: dict = {}
-        monkeypatch.setattr(notify_impl, "send_notification",
-                            lambda title, body: sent.update(title=title, body=body) or (0, ""))
+        monkeypatch.setattr(rust_binary, "notify_operator",
+                            lambda title, body, pointer="": sent.update(title=title, body=body) or (0, ""))
         monkeypatch.setattr(recovery, "_resume_command", lambda *a: "claude --resume U-1")
         recovery._notify_manual_resume(self._cand(),
                                        SimpleNamespace(id="claude-secondary"), "U-1")

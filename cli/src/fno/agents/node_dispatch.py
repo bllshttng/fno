@@ -2,33 +2,8 @@
 
 from __future__ import annotations
 
-import dataclasses
-import sys
-from pathlib import Path
 from typing import Optional
 
-
-
-@dataclasses.dataclass
-class NodeSeed:
-    """The rendered seed for a node-driven spawn (change 1), plus the
-    launch workdir resolution change 1 moved into the spawn door."""
-
-    node_id: str
-    message: str
-    slug: Optional[str]
-    plan_path: Optional[str]
-    env: dict
-    receipt: dict
-    recorded_cwd: Optional[str]
-
-    def ensure_launch_workdir(self, harness: str) -> Optional[Path]:
-        """The launch workdir for a node-seeded spawn with no explicit cwd
-        source: the worktree ensure's answer, never the node's recorded cwd
-        (the canonical checkout for every organically filed node). A ``None``
-        answer already printed its hold line - the caller exits 2 and the node
-        stays claimable rather than launching on canonical main."""
-        return ensure_launch_workdir(self.recorded_cwd, self.node_id, harness)
 
 
 def _with_dispatch_command(row: dict) -> dict:
@@ -97,86 +72,3 @@ def node_effective_command(
     DispatchResolveError on an unanswerable node."""
     return _command_answer(row, node_id=node_id)[0]
 
-
-def render_node_seed(node: str, *, harness: Optional[str]) -> Optional[NodeSeed]:
-    """Render a node's seed (command line + brief env) for the spawn door.
-
-    Prints its own refusal and returns None when the node carries no
-    dispatch_command, or when the seed render refuses (an unanswerable lifecycle
-    or an over-budget brief) - a truncated brief is never seeded.
-    """
-    from fno.agents.harness_map import DispatchResolveError, resolve_dispatch
-    from fno.provenance.autobrief import resolve_dispatch_brief
-
-    seed_rec: Optional[dict] = find_node_row(node)
-    seed_node_id = (seed_rec or {}).get("id") or node
-    if not isinstance(seed_rec, dict) or not str(seed_rec.get("dispatch_command") or "").strip():
-        print(
-            f"refusing node-seeded spawn: node {seed_node_id} carries no "
-            "dispatch_command and no message was typed; an idle worker holds "
-            "a fleet slot and reads as alive. Encode one with `fno backlog "
-            f"update {seed_node_id} dispatch_command=<command>`.",
-            file=sys.stderr,
-        )
-        return None
-    try:
-        node_brief, node_brief_source = resolve_dispatch_brief(seed_rec)
-        resolved_seed = resolve_dispatch(
-            harness=harness,
-            node_id=str(seed_node_id),
-            command_name=str(seed_rec.get("dispatch_command")).strip(),
-            lifecycle=_command_answer(seed_rec),
-            brief=node_brief,
-            trigger="autonomous",
-        )
-    except DispatchResolveError as exc:
-        # An unanswerable lifecycle or an explicit >8KB brief (the one
-        # failure the brief chain leaves to this gate) refuses here, before
-        # any worker exists; a truncated brief is never seeded.
-        print(str(exc), file=sys.stderr)
-        return None
-    return NodeSeed(
-        node_id=str(seed_node_id),
-        message=resolved_seed["command"],
-        slug=seed_rec.get("slug"),
-        plan_path=seed_rec.get("plan_path"),
-        env=resolved_seed.get("env") or {},
-        receipt={
-            "verb_source": "declared",
-            "brief_source": node_brief_source,
-        },
-        recorded_cwd=seed_rec.get("_resolved_cwd") or seed_rec.get("cwd"),
-    )
-
-
-def ensure_launch_workdir(
-    recorded_cwd: Optional[str], node_id: str, harness: str
-) -> Optional[Path]:
-    """Resolve the launch workdir through the launch-workdir seam command (Rust);
-    the hold line on any refusal, the node id keys the resumed tree."""
-    from fno.rust_binary import CommandUnavailable, command_call
-
-    payload = {
-        "recorded_cwd": str(Path(recorded_cwd) if recorded_cwd else Path.cwd()),
-        "node": node_id,
-        "harness": harness,
-    }
-    try:
-        answer = command_call(
-            "launch-workdir",
-            payload,
-            CommandUnavailable,
-            timeout=150,
-            passthrough_stderr=True,
-        )
-    except CommandUnavailable:
-        answer = None
-    if answer is None or "hold" in answer:
-        print(
-            f"fno agents spawn: worktree ensure refused or misconfigured for "
-            f"{node_id}; holding the node rather than launching on canonical "
-            "main",
-            file=sys.stderr,
-        )
-        return None
-    return Path(answer["workdir"])

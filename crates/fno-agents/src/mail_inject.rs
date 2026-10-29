@@ -702,11 +702,31 @@ fn confirm_or_withdraw<T: crate::claude_attach::ControlTransport>(
 }
 
 /// Epoch milliseconds now, the typing-feed join key.
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+/// One quiet read, no wait: `None` when the operator is neither typing nor
+/// holding an unfinished draft and [`session_hold`] reads no hold, else the
+/// blocker that would hold a delivery. The single check
+/// [`wait_for_quiet_in`] polls; a caller that cannot budget the wait reads
+/// this once and skips instead of queueing behind a held gate.
+pub(crate) fn quiet_blocker(
+    journal: &Path,
+    registry_path: &Path,
+    projects_base: &Path,
+    session: &str,
+    now_ms: i64,
+) -> Option<String> {
+    let ts = crate::operator_witness::typing_state(journal, session, now_ms);
+    let hold = session_hold(registry_path, projects_base, session, now_ms);
+    if !ts.recent && !ts.draft {
+        return hold;
+    }
+    Some(hold.unwrap_or_else(|| "user-typing".to_string()))
 }
 
 /// The C11/C14 quiet gate: poll the recipient's typing witness and its
@@ -732,12 +752,10 @@ fn wait_for_quiet_in(
 ) -> Result<(), String> {
     let deadline = now() + budget.as_millis() as i64;
     loop {
-        let ts = crate::operator_witness::typing_state(journal, session, now());
-        let hold = session_hold(registry_path, projects_base, session, now());
-        if !ts.recent && !ts.draft && hold.is_none() {
+        let Some(blocker) = quiet_blocker(journal, registry_path, projects_base, session, now())
+        else {
             return Ok(());
-        }
-        let blocker = hold.unwrap_or_else(|| "user-typing".to_string());
+        };
         if now() >= deadline {
             return Err(blocker);
         }

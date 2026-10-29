@@ -43,12 +43,10 @@ use crate::state;
 pub struct HarnessStoreIndex {
     /// Opt OUT of walking the config-declared account roots (the
     /// `isolated_account_dirs` union) beside the ambient store. Production
-    /// leaves this false (the union is the point); the `with_roots` test
-    /// seam sets it true so a unit test never inherits the developer's real
-    /// account roots.
+    /// leaves this false (the union is the point).
     skip_account_union: bool,
     /// Resolved store roots; `None` until the first lookup resolves them from
-    /// `$HOME` (or forever, for an index built `with_roots` in tests).
+    /// `$HOME`.
     claude_root: Option<std::path::PathBuf>,
     codex_root: Option<std::path::PathBuf>,
     /// `(filename, path)` for every candidate file, or `None` until the first
@@ -59,22 +57,6 @@ pub struct HarnessStoreIndex {
 }
 
 impl HarnessStoreIndex {
-    /// Test seam: fixed roots, so the per-harness keying is unit-testable
-    /// against temp trees instead of the developer's real `~/.claude`/`~/.codex`.
-    /// (Called only from the lib test suite. Deliberately NOT gated with the
-    /// test cfg attribute: the emit-kind scanner in lib.rs truncates each file
-    /// at the first byte-level occurrence of that attribute's text, so a
-    /// mid-file gate would classify every later production emit as test-only.)
-    #[allow(dead_code)]
-    fn with_roots(claude_root: std::path::PathBuf, codex_root: std::path::PathBuf) -> Self {
-        HarnessStoreIndex {
-            claude_root: Some(claude_root),
-            codex_root: Some(codex_root),
-            skip_account_union: true,
-            ..Default::default()
-        }
-    }
-
     fn root(&self, harness: &str) -> Option<std::path::PathBuf> {
         let slot = match harness {
             "claude" => &self.claude_root,

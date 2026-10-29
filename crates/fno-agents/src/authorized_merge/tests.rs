@@ -45,6 +45,8 @@ struct Fake {
     /// read asked for.
     fno_calls: RefCell<Vec<Vec<String>>>,
     covered_head: Option<String>,
+    /// The merge queue's answer; `None` (the default) reads no queue.
+    merge_queue: Option<Result<Option<String>, String>>,
     enabled: bool,
     floor: Option<String>,
     gh_ok: bool,
@@ -381,6 +383,14 @@ impl Probes for Fake {
     }
     fn main_repair_hold(&self, _cwd: &Path, _facts: &PrFacts) -> Option<String> {
         self.main_repair.clone().flatten()
+    }
+    fn merge_queue(
+        &self,
+        _cwd: &Path,
+        _facts: &PrFacts,
+        _head: &str,
+    ) -> Option<Result<Option<String>, String>> {
+        self.merge_queue.clone()
     }
     fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String), String> {
         self.gh_calls.borrow_mut().push(args.to_vec());
@@ -1140,6 +1150,7 @@ fn an_arm_receipt_names_the_head_and_is_never_merged() {
         Outcome::Armed {
             head: "abc123".to_string(),
             merge_grant: None,
+            queued: false,
         }
     );
     let calls = fake.gh_calls.borrow();
@@ -1218,6 +1229,32 @@ fn an_immediate_merge_never_passes_auto() {
     assert_eq!(spans[0]["data"]["pr"], 7);
     assert_eq!(spans[0]["data"]["repo"], "o/r");
     assert_eq!(spans[0]["data"]["head"], "abc123");
+}
+
+#[test]
+fn a_queued_merge_runs_no_gh_merge_and_an_ejected_head_holds() {
+    let mut fake = clean();
+    fake.merge_queue = Some(Ok(None));
+    let outcome = run(&fake, &request(Effect::Merge));
+    assert_eq!(
+        outcome,
+        Outcome::Armed {
+            head: "abc123".to_string(),
+            merge_grant: None,
+            queued: true,
+        }
+    );
+    assert!(outcome.detail().contains("fno merge queue"));
+    assert!(!fake
+        .gh_calls
+        .borrow()
+        .iter()
+        .any(|call| call.get(1).map(String::as_str) == Some("merge")));
+    fake.merge_queue = Some(Ok(Some("the merge queue ejected head abc123".to_string())));
+    assert!(matches!(
+        run(&fake, &request(Effect::Merge)),
+        Outcome::Held { .. }
+    ));
 }
 
 #[test]
@@ -2122,6 +2159,41 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .into_bytes(),
     );
     assert!(!clears(&fake, &head));
+    // A board answer: the rationale cites the answered page instead of chat.
+    // The page names the PR and no head; the row carries the head.
+    fake.decisions_stdout = Some(
+        row(
+            "Approved: PR 7 at <head> as built",
+            "user answered q-board7 on the board",
+            "role",
+            "unscoped",
+        )
+        .replace("<head>", &head)
+        .into_bytes(),
+    );
+    let qdir = crate::escalation::questions_dir(&tmp);
+    std::fs::create_dir_all(&qdir).unwrap();
+    let page = |status: &str, answer: &str| {
+        format!(
+            "---\nquestion_id: q-board7\nstatus: {status}\ntitle: May PR 7 merge?\n\
+             answer: {answer}\n---\nbody\n"
+        )
+    };
+    // No page, an open page, or a rejecting answer: held.
+    assert!(!clears(&fake, &head));
+    for (status, answer) in [("open", "''"), ("answered", "2. Hold for changes")] {
+        std::fs::write(qdir.join("q-board7.md"), page(status, answer)).unwrap();
+        assert!(!clears(&fake, &head), "{status} {answer} must hold");
+    }
+    // The approving answer clears, at the row's head only.
+    std::fs::write(
+        qdir.join("q-board7.md"),
+        page("answered", "Approve as shown"),
+    )
+    .unwrap();
+    assert!(clears(&fake, &head));
+    assert!(!clears(&fake, &pushed));
+    std::fs::remove_file(qdir.join("q-board7.md")).unwrap();
     // The gate is closed again with the empty index the Fake serves by
     // default; the head-scoped grant text stays out of a held detail.
     fake.decisions_stdout = None;
@@ -2131,5 +2203,57 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         "{}",
         held.detail
     );
+    // A split: the node holds PR 6 and lists PR 7 in additional_prs. PR 7
+    // binds to it, so the approval recorded on that node clears PR 7. A row
+    // whose own pr_number is the PR still wins over a row that only lists it.
+    crate::graph_store::seed_rows(
+        &crate::org_board::scope::graph_json_path(&tmp),
+        &[
+            json!({"id": "x-lists", "status": "in_review", "additional_prs": [{"number": 6}]}),
+            json!({"id": "x-paint", "status": "in_review", "pr_number": 6,
+                   "additional_prs": [{"number": 7}]}),
+        ],
+    )
+    .unwrap();
+    let bound = |pr| {
+        crate::authorized_merge::pr_bound_entry(&tmp, pr)
+            .and_then(|e| e.get("id").and_then(Value::as_str).map(str::to_owned))
+    };
+    assert_eq!(bound(7).as_deref(), Some("x-paint"));
+    assert_eq!(bound(6).as_deref(), Some("x-paint"));
+    assert_eq!(bound(8), None);
+    // PR numbers collide across repositories: a ref whose URL names another
+    // repository never binds, primary or additional; a ref with no URL does.
+    let rows = [
+        json!({"id": "x-foreign", "pr_number": 7,
+               "pr_url": "https://github.com/o/other/pull/7"}),
+        json!({"id": "x-also-foreign", "additional_prs": [
+               {"number": 7, "url": "https://github.com/o/other/pull/7"}]}),
+        json!({"id": "x-here", "additional_prs": [
+               {"number": 7, "url": "https://github.com/O/Here/pull/7"}]}),
+    ];
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(&rows, 7, Some("o/here")),
+        Some(2)
+    );
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(&rows[..2], 7, Some("o/here")),
+        None
+    );
+    assert_eq!(
+        crate::authorized_merge::pr_bound_index(&rows, 7, None),
+        Some(0)
+    );
+    fake.decisions_stdout = Some(
+        row(
+            "Approved: PR 7 at <head> as built",
+            "user in chat: approved",
+            "role",
+            "unscoped",
+        )
+        .replace("<head>", &head)
+        .into_bytes(),
+    );
+    assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).is_none());
     std::fs::remove_dir_all(&tmp).ok();
 }

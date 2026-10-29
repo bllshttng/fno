@@ -1,0 +1,3 @@
+would repair <ROOT>/home-repair-dry/registry.json: schema_version 99 -> 43
+  calm-otter: drop future_field, future_list (empty)
+  dry run; pass --apply to perform it

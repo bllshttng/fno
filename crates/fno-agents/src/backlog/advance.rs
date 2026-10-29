@@ -38,7 +38,6 @@ pub const EVENT_SPAWNED: &str = "dispatch_spawned";
 pub const EVENT_FAILOVER: &str = "dispatch_failover";
 pub const EVENT_CLAIM_OBSERVED: &str = "dispatch_claim_observed";
 pub const EVENT_DEAD_FAILURE_LIMIT: &str = "dispatch_dead_failure_limit";
-pub const EVENT_SELECTION_DIVERGED: &str = "dispatch_selection_diverged";
 pub const EVENT_SOURCE: &str = "backlog";
 
 /// (decision, event) pairs that are legal to construct. Guards against a
@@ -300,11 +299,9 @@ pub(crate) fn gate_refusal_reason(code: i32) -> Option<&'static str> {
     }
 }
 
-/// The sandbox probe's exit code lives in the Python runtime
-/// (fno.agents.sandbox_probe.EXIT_SANDBOX_UNREACHABLE = 85); the native
-/// probe shares the constant.
+/// The sandbox probe's exit code, owned by the spawn seam.
 fn sandbox_probe_exit() -> i32 {
-    85
+    crate::spawn_seam::EXIT_SANDBOX_UNREACHABLE
 }
 
 /// The refusal sentence: the LAST `spawn-gate:` or `sandbox-probe:` line
@@ -594,90 +591,6 @@ pub fn next_node(project: Option<&str>) -> Result<Option<Value>, String> {
         None => Vec::new(),
     };
     select_read("next", &args).map(Some)
-}
-
-/// Read the independent planned-unclaimed observer receipt.
-pub fn undispatched_nodes(project: Option<&str>, mission: Option<&str>) -> Result<Value, String> {
-    let mut args: Vec<String> = Vec::new();
-    if let Some(p) = project {
-        args.push("--project".to_string());
-        args.push(p.to_string());
-    }
-    if let Some(m) = mission {
-        args.push("--mission".to_string());
-        args.push(m.to_string());
-    }
-    let receipt = select_read("undispatched", &args)?;
-    let ok = receipt.get("status").and_then(Value::as_str) == Some("ok");
-    let scanned = receipt
-        .get("entries_scanned")
-        .and_then(Value::as_i64)
-        .is_some();
-    let rows = receipt.get("rows").and_then(Value::as_array).is_some();
-    if !(ok && scanned && rows) {
-        return Err("fno backlog undispatched returned an unreadable receipt".to_string());
-    }
-    Ok(receipt)
-}
-
-/// Reapply selector-only safety guards before lane-fill recovery.
-pub fn dispatch_safe_observer(receipt: &Value) -> Result<Value, String> {
-    let rows = match receipt.get("rows").and_then(Value::as_array) {
-        Some(rows) if !rows.is_empty() => rows.clone(),
-        _ => return Ok(receipt.clone()),
-    };
-    let graph_path = super::settings::graph_path();
-    let entries = crate::graph_store::read_rows_strict(&graph_path)
-        .map_err(|e| format!("observer safety graph unreadable: {e}"))?;
-    let by_id: BTreeMap<String, Value> = entries
-        .into_iter()
-        .filter_map(|mut e| {
-            let id = e.get("id").and_then(Value::as_str)?.to_string();
-            Some((id, std::mem::take(&mut e)))
-        })
-        .collect();
-    let now_ms = now_ms_i64();
-    let staleness_days = guard_staleness_days(None);
-    let held = held_questions();
-    let mut safe: Vec<Value> = Vec::new();
-    for row in &rows {
-        let Some(id) = row.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(entry) = by_id.get(id) else {
-            continue;
-        };
-        let facts = row.get("facts").cloned().unwrap_or(Value::Null);
-        let Some(facts) = facts.as_object() else {
-            return Err(format!("observer row {id:?} has no predicate facts"));
-        };
-        if facts
-            .get("has_pr")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-            || facts
-                .get("batch_owner")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            || facts
-                .get("completed")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-        {
-            continue;
-        }
-        if crate::backlog_ready::selection_guards(entry, &by_id, now_ms, staleness_days, &held)
-            .is_some()
-        {
-            continue;
-        }
-        safe.push(row.clone());
-    }
-    let mut out = receipt.clone();
-    if let Some(obj) = out.as_object_mut() {
-        obj.insert("rows".to_string(), Value::Array(safe));
-    }
-    Ok(out)
 }
 
 pub(crate) fn now_ms_i64() -> i64 {

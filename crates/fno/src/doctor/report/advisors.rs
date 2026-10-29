@@ -476,14 +476,9 @@ const MERGE_GATING_OPTOUTS: [OptoutKey; 3] = [
     },
 ];
 
-/// The release command a holder runs to hand the opt-out back
-/// (`optout_release_command` in the deleted leg).
+/// The release command a holder runs to hand the opt-out back.
 fn optout_release_command(key: &str) -> String {
-    if key == "review.optional_apps" {
-        format!("fno config unset {key}")
-    } else {
-        format!("fno config set {key} true")
-    }
+    crate::config_cli::write::optout_release_command(key, "")
 }
 
 /// Read the opt-out instrument, distinguishing unreadable from absent; an

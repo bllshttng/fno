@@ -1,9 +1,8 @@
 """Spawn gate : global concurrency cap + free-RAM floor + queue loop.
 
-Called at the top of ``cmd_spawn`` before the substrate fan-out. Mirrors
-``crates/fno-agents/src/spawn_gate.rs`` — the two gates sit on mutually
-exclusive execution paths (the front door execs the binary for bg/headless;
-the Rust ``pane`` arm re-execs this CLI), so every spawn passes exactly one.
+Called by ``dispatch_spawn`` (mail wake) before it launches. Mirrors
+``crates/fno-agents/src/spawn_gate.rs``, which gates every ``fno agents spawn``;
+the two sit on separate paths, so every spawn passes exactly one.
 
 The gate is READ-ONLY: the ``max_live`` slot cap counts fno registry rows
 (worker provenance) and the RAM floor reads real system RAM. The claude daemon
@@ -18,13 +17,38 @@ from __future__ import annotations
 import contextvars
 import json
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn, Optional, cast
+from typing import Any, NamedTuple, NoReturn, Optional, cast
 
-from fno.footprint import Admission
+
+class Admission(NamedTuple):
+    """The CPU axis's decision, computed once and read by both gates (LD1).
+
+    ``verdict`` is ``admit`` | ``hold`` | ``undecidable`` | ``refuse``;
+    ``axis`` names what decided: the fleet's CPU share or an unreadable
+    instrument. ``reason`` is the full sentence
+    the gates print verbatim. An attribution gap widens the share to an
+    interval: ``share_low`` is the attributed share, ``share_high`` the
+    whole machine's, and ``bound`` records that the verdict read the upper
+    bound. The native census computes it; this type carries it.
+    """
+
+    verdict: str
+    axis: str
+    reason: str
+    share_low: float
+    share_high: float
+    bound: str
+    fleet_cores: float
+    machine_cores: float
+    capacity_cores: float
+    ceiling: float
+    gap: str | None = None
+    top_holder: str | None = None
 
 # THE exit-code allocation table for the gate band across both trees (this
 # file and crates/fno-agents/src/spawn_gate.rs). A value >= 64 claims its
@@ -68,29 +92,7 @@ EXIT_GATE_UNAVAILABLE = 87
 EXIT_NODE_OCCUPIED = 92
 
 
-#: The refusal reasons a caller may outlast by retrying (spawn --wait). Owned
-#: HERE because these tokens are the gate's vocabulary; the CLI imports this
-#: set rather than re-spelling it. no_wait/no_wait_mutex_held surface only
-#: when an attempt runs no_wait (spawn --wait forces that), so the CLI
-#: deadline - not this gate's 600s queue - bounds the wait.
-WAITABLE_REFUSAL_REASONS = frozenset(
-    {
-        "ram_floor", "swap_pressure",
-        "cpu_instrument_unreadable",
-        "cpu_share_undecidable", "fleet_cpu_share", "provider_cap",
-        "max_live", "no_wait", "no_wait_mutex_held",
-    }
-)
-
-QUEUE_POLL_S = 2.0
-QUEUE_PROGRESS_EVERY_S = 30.0
 QUEUE_TIMEOUT_S = 600.0
-#: LD4: hold re-sample gap and admission debounce (the macOS `ps`
-#: CPU column is a decaying average; two reads 2s apart are one sample).
-CPU_HOLD_POLL_S = 15.0
-CPU_ADMIT_SAMPLES = 2
-#: : a slow bg-socket census names its own wait instead of silence.
-SLOW_SCAN_WARN_S = 5.0
 #: The mutex claim key. Prefixed so the native leg routes it to the global
 #: root the gate writes; the old colon-less `spawn-gate` key unrouted, so
 #: `claim status`/`release --force` read `<space>/claims/spawn-gate.lock`
@@ -114,16 +116,6 @@ def _warn(msg: str) -> None:
 # ---------------------------------------------------------------------------
 # Layer 2: available RAM
 # ---------------------------------------------------------------------------
-
-def available_ram_gb() -> Optional[float]:
-    """Available system RAM in GB, or None when unreadable (guard skipped)."""
-    try:
-        import psutil
-
-        return psutil.virtual_memory().available / (1024.0**3)
-    except Exception:
-        return None
-
 
 # ---------------------------------------------------------------------------
 # Layer 1: the union live-count
@@ -429,16 +421,31 @@ def _prefetch_fleet_reading() -> tuple[Optional[Any], Optional[str]]:
     machine, so it is taken before the lock exactly as before - the band
     check that sometimes skipped it is what died.
 
-    Returns ``(reading, error)``; exactly one side is usable. A ``None``
-    reading is a REFUSAL on ``cpu_instrument``, never a skip (LD3).
+    Returns ``(payload, error)``; exactly one side is usable. A ``None``
+    payload is a REFUSAL on ``cpu_instrument``, never a skip (LD3).
     """
     try:
-        from fno.doctor_footprint import cause_reading
+        from fno.rust_binary import resolve_binary
+
+        binary = resolve_binary()
+        if binary is None:
+            return None, "footprint unavailable: the fno-agents binary was not found"
+        result = subprocess.run(
+            [str(binary), "census", "--cause", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
     except Exception as exc:  # noqa: BLE001 - an import fault is an unreadable instrument
         return None, f"footprint unavailable: {exc}"
+    if result.returncode != 0:
+        lines = (result.stderr or "").strip().splitlines()
+        tail = lines[-1] if lines else ""
+        return None, f"footprint unavailable: exit {result.returncode}{tail}"
     try:
-        return cause_reading()
-    except Exception as exc:  # noqa: BLE001
+        return json.loads(result.stdout or "{}"), None
+    except ValueError as exc:
         return None, f"footprint unavailable: {exc}"
 
 
@@ -447,18 +454,18 @@ def _cpu_axis(prefetched: object = _NOT_PREFETCHED) -> Admission:
 
     Maps an unreadable instrument to ``refuse`` on ``cpu_instrument`` (LD3:
     the sensor blinds under exactly the load it measures, and an unreadable
-    process table is itself a symptom) and otherwise hands the reading to
-    :func:`cpu_admission`, whose fleet CPU share decides alone.
+    process table is itself a symptom) and otherwise reads the admission
+    the native census already computed (one decider: the census op).
 
     Shared with the ``--explain`` preview, so a dry run answers the question
     the real spawn will.
     """
-    reading, error = (
+    payload, error = (
         _prefetch_fleet_reading()
         if prefetched is _NOT_PREFETCHED
         else cast("tuple[Optional[Any], Optional[str]]", prefetched)
     )
-    if reading is None:
+    if payload is None:
         why = (error or "the reading failed").strip()
         return Admission(
             verdict="refuse",
@@ -476,43 +483,28 @@ def _cpu_axis(prefetched: object = _NOT_PREFETCHED) -> Admission:
             ceiling=0.0,
             gap=None,
         )
-    from fno.doctor_footprint import _admission_config, cpu_admission
-
-    share_ceiling = _admission_config()
-    capacity = float(_load_cpus())
-    return cpu_admission(
-        reading,
-        capacity_cores=capacity,
-        share_ceiling=share_ceiling,
+    admission = payload.get("admission") or {}
+    return Admission(
+        verdict=str(admission.get("verdict") or "refuse"),
+        axis="fleet_cpu",
+        reason=str(admission.get("reason") or "the reading failed"),
+        share_low=float(admission.get("share_low") or 0.0),
+        share_high=float(admission.get("share_high") or 0.0),
+        bound=str(admission.get("bound") or "exact"),
+        fleet_cores=float(admission.get("fleet_cores") or 0.0),
+        machine_cores=float(admission.get("machine_cores") or 0.0),
+        capacity_cores=float(admission.get("capacity_cores") or 0.0),
+        ceiling=float(admission.get("ceiling") or 0.0),
+        gap=admission.get("gap"),
     )
 
 
 def _load_cpus() -> int:
-    """The CPU denominator for the CPU axis.
-
-    Footprint's capacity reading, which is the minimum of the affinity count,
-    the host count and the cgroup quota. Two reasons it is worth the import
-    over a bare `process_cpu_count`:
-
-    the Rust gate uses `available_parallelism`, which IS quota-aware, so an
-    affinity-only count here made the two runtimes compute different triggers
-    from one config on a quota-constrained container (2-of-32 cores gives 16
-    against 256);
-
-    and the share comparison already divides by this exact number, so a
-    different denominator for the trigger meant one check answering a
-    question the other was not asking.
-
-    It reads affinity and a cgroup file, never `ps`, so the cheap path stays
-    cheap. Falls back rather than raising: a guard must not brick the spawn
-    primitive because an import moved.
+    """The CPU denominator for the DISPLAY load snapshot (nothing gates on
+    it). The native census applies its quota-aware capacity itself; the
+    display denominator falls back to the interpreter's count.
     """
-    try:
-        from fno.doctor_footprint import _cpu_capacity_cores
-
-        return int(_cpu_capacity_cores()) or 1
-    except Exception:
-        return getattr(os, "process_cpu_count", os.cpu_count)() or 1
+    return getattr(os, "process_cpu_count", os.cpu_count)() or 1
 
 
 def _load_snapshot(max_load_per_cpu: float) -> LoadSnapshot:
@@ -733,55 +725,3 @@ def qos_wrap(argv: list[str]) -> list[str]:
         return ["/usr/bin/nice", "-n", "10"] + argv
     return argv
 
-
-def qos_demote_pid(pid: int) -> None:
-    """Best-effort post-hoc demotion of an already-running pid. Non-fatal."""
-    if not _qos_enabled():
-        return
-    import subprocess
-
-    if sys.platform == "darwin":
-        cmd = ["/usr/sbin/taskpolicy", "-b", "-p", str(pid)]
-    elif sys.platform.startswith("linux"):
-        cmd = ["/usr/bin/renice", "10", "-p", str(pid)]
-    else:
-        return
-    try:
-        rc = subprocess.run(
-            cmd, capture_output=True, timeout=10, check=False
-        ).returncode
-        if rc != 0:
-            raise RuntimeError(f"exit {rc}")
-    except Exception:
-        _warn(f"spawn-gate note: QoS demotion of pid {pid} failed (non-fatal)")
-
-
-def qos_demote_bg_worker(job_id: str, *, poll_s: float = 10.0) -> None:
-    """After a ``--substrate thread`` dispatch, poll the roster briefly for the
-    new worker's pid and demote it post-hoc. ``job_id`` is the claude bg jobId
-    (the registry ``short_id``). Bounded; one warning on miss."""
-    if not job_id or not _qos_enabled():
-        return
-    deadline = time.monotonic() + poll_s
-    while True:
-        try:
-            raw = json.loads(_roster_path().read_text(encoding="utf-8"))
-            workers = raw.get("workers", {}) if isinstance(raw, dict) else {}
-            for w in workers.values():
-                if not isinstance(w, dict):
-                    continue
-                sid = str(w.get("sessionId") or "")
-                if sid.split("-")[0] == job_id and isinstance(
-                    w.get("pid"), int
-                ):
-                    qos_demote_pid(w["pid"])
-                    return
-        except Exception:
-            pass
-        if time.monotonic() >= deadline:
-            _warn(
-                f"spawn-gate note: bg worker {job_id} pid not in roster "
-                f"within {int(poll_s)}s; QoS demotion skipped (non-fatal)"
-            )
-            return
-        time.sleep(0.5)

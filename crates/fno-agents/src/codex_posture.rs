@@ -98,17 +98,6 @@ pub struct CodexPosture {
 }
 
 impl CodexPosture {
-    /// The posture a bare `yolo` bool names, for callers that predate the
-    /// pair and for tests. `yolo` is `danger-full-access` with approvals
-    /// never; absent is the bounded default.
-    pub fn from_yolo(yolo: bool) -> Self {
-        if yolo {
-            Self::full_access()
-        } else {
-            Self::bounded()
-        }
-    }
-
     /// `danger-full-access:never` - what `--yolo` always meant on this lane.
     pub fn full_access() -> Self {
         Self {
