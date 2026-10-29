@@ -93,10 +93,19 @@ fn fold(index: &Path) -> Fold {
             Some("operator_question_closed") => &mut out.closed,
             _ => continue,
         };
-        map.entry(qid).or_insert(event);
+        // The newest row wins: a ladder climb re-appends its question.
+        map.insert(qid, event);
     }
     out
 }
+
+/// How many rungs a question row climbed; a newer count is a climb the
+/// other side has not seen.
+fn climbs(event: &Value) -> usize {
+    event["data"]["via"].as_array().map_or(0, Vec::len)
+}
+
+const CLIMBS_SQL: &str = "CAST(COALESCE(json_array_length(record, '$.data.via'), 0) AS TEXT)";
 
 fn is_own(event: &Value, machine: &str) -> bool {
     event["data"]["origin_machine"]
@@ -150,19 +159,38 @@ pub(crate) fn beat(remote: &Remote, me: &Host) -> Result<Beat, String> {
 fn publish(remote: &Remote, me: &Host) -> Result<usize, String> {
     let local = fold(&me.index());
     let reply = remote.execute(
-        "SELECT question_id FROM fleet_question WHERE machine_id = ? AND closed_at IS NULL",
+        &format!(
+            "SELECT question_id, {CLIMBS_SQL} FROM fleet_question \
+WHERE machine_id = ? AND closed_at IS NULL"
+        ),
         &[SqlValue::Text(me.machine.clone())],
     )?;
-    let on_primary: HashSet<&str> = reply
+    let on_primary: HashMap<&str, usize> = reply
         .rows
         .iter()
-        .filter_map(|r| r.first()?.text())
+        .filter_map(|r| {
+            let climbs = r
+                .get(1)
+                .and_then(SqlValue::text)
+                .and_then(|n| n.parse().ok());
+            Some((r.first()?.text()?, climbs.unwrap_or(0)))
+        })
         .collect();
     let mine = SqlValue::Text(me.machine.clone());
     let mut steps: Vec<(String, Vec<SqlValue>)> = Vec::new();
     for (qid, event) in local.asked.iter().filter(|(_, e)| is_own(e, &me.machine)) {
         let id = SqlValue::Text(qid.clone());
-        match (local.closed.get(qid), on_primary.contains(qid.as_str())) {
+        let primary_climbs = on_primary.get(qid.as_str()).copied();
+        if local.closed.get(qid).is_none() && primary_climbs.is_some_and(|n| n < climbs(event)) {
+            steps.push((
+                "UPDATE fleet_question SET record = ? \
+WHERE machine_id = ? AND question_id = ? AND closed_at IS NULL"
+                    .to_string(),
+                vec![SqlValue::Text(event.to_string()), mine.clone(), id.clone()],
+            ));
+            continue;
+        }
+        match (local.closed.get(qid), primary_climbs.is_some()) {
             (None, false) => steps.push((
                 format!(
                     "INSERT OR IGNORE INTO fleet_question \
@@ -205,8 +233,10 @@ pub(crate) fn copy_id(qid: &str, host: &str) -> String {
 /// peer hosts seen).
 fn pull(remote: &Remote, me: &Host) -> Result<(usize, usize, Vec<String>), String> {
     let reply = remote.execute(
-        "SELECT machine_id, question_id, host, closed_at, close_reason \
-FROM fleet_question WHERE machine_id != ?",
+        &format!(
+            "SELECT machine_id, question_id, host, closed_at, close_reason, {CLIMBS_SQL} \
+FROM fleet_question WHERE machine_id != ?"
+        ),
         &[SqlValue::Text(me.machine.clone())],
     )?;
     let index = me.index();
@@ -222,7 +252,12 @@ FROM fleet_question WHERE machine_id != ?",
         if !hosts.iter().any(|h| h == host) {
             hosts.push(host.to_string());
         }
-        if open && !local.asked.contains_key(&id) {
+        let remote_climbs: usize = text(5).parse().unwrap_or(0);
+        let stale = local
+            .asked
+            .get(&id)
+            .is_some_and(|copy| climbs(copy) < remote_climbs);
+        if open && (stale || !local.asked.contains_key(&id)) {
             // The record rides a second read, one row at a time: a full
             // table of records in one reply crosses the primary's reply limit.
             let Some(mut record) = fetch_record(remote, machine, qid)? else {
@@ -375,6 +410,15 @@ mod tests {
             (copy["data"]["host"].as_str(), peer_origin(&copy)),
             (Some("hostb"), Some("m-B"))
         );
+
+        // B climbs it; the climbed row replaces the primary record and A's
+        // copy follows.
+        let mut climbed = fold(&b.index()).asked["q-1"].clone();
+        climbed["data"]["via"] = json!([{"holder_name": "tomas", "evidence": "read PR 12"}]);
+        crate::provider_cap::append_questions_row(&b.index(), &climbed).unwrap();
+        assert_eq!(beat(remote, &b).unwrap().published, 1);
+        assert_eq!(beat(remote, &a).unwrap().copied, 1);
+        assert_eq!(climbs(&fold(&a.index()).asked["q-1@hostb"]), 1);
 
         // B closes it; the close publishes and A's copy follows.
         let close = json!({"ts": "2026-10-27T00:01:00Z", "type": "operator_question_closed",

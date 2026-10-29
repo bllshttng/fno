@@ -612,6 +612,29 @@ mod tests {
         };
         assert!(holds_team(&[team.clone()], "01a0cbdd"));
         assert!(!holds_team(&[team], "49a80492"));
+
+        // (i) The rung holder answers its worker's ask; (j) a denied class
+        // refuses it and names the climb.
+        for (qid, class, code) in [("q-held", "public-surface", 0), ("q-deny", "taste", 3)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut req = request(&tmp, qid, Some("C: do as asked"));
+            req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
+            req.closed_by = Some("01a0cbdd-baed-4482-9135-37ba1cb0f0d2".to_string());
+            let mut ask = ask_from(qid, "49a80492", "which lane?");
+            ask["data"]["class"] = json!(class);
+            ask["data"]["rung"] =
+                json!({"level": "lead", "holder_session": "01a0cbdd-baed-4482-9135-37ba1cb0f0d2"});
+            seed_question(&req, &ask);
+            let result = run_clear(&req);
+            assert_eq!(result.exit_code, code, "{class}: {:?}", result.lines);
+            if code == 3 {
+                assert!(
+                    result.lines[0].contains("fno inbox outstanding climb"),
+                    "{:?}",
+                    result.lines
+                );
+            }
+        }
     }
 
     #[test]
@@ -962,6 +985,35 @@ fn agent_handle(req: &ClearRequest, caller: &ClearCaller) -> Option<String> {
     caller.ancestry_handle.clone()
 }
 
+/// Why an agent may not answer the row: its class (stored, else the class
+/// word why_user names) is in the asking project's questions.rules.deny,
+/// or those rules cannot be read. The rules come from the question's own
+/// cwd, never the closer's, and an unreadable config never reads as allow.
+fn denied_class(question_event: &Value) -> Option<String> {
+    let data = question_event.get("data")?;
+    let cwd = data
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    let rules = match crate::question_ladder::rules_for(&cwd) {
+        Ok(rules) => rules,
+        Err(e) => {
+            return Some(format!(
+                "unknown (the asking project's rules are unreadable: {e})"
+            ))
+        }
+    };
+    [data.get("class"), data.get("why_user")]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(crate::question_ladder::class_word)
+        .find(|class| rules.user_only(class))
+        .map(str::to_string)
+}
+
 /// The asker's own question: the full session-id pair decides, the
 /// eight-character handle is the backstop (two same-window codex sessions
 /// can share it, identity.rs). The withdrawal gate and the self-answer
@@ -1236,20 +1288,39 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 .get("quote")
                 .and_then(Value::as_str)
                 .is_some_and(|quote| !quote.trim().is_empty());
+            // A moot withdrawal outranks the rung: it closes as coordination,
+            // never as an answer, so the deny classes do not bar it.
+            let lead_withdraw = !own_ask
+                && req.answer.is_some()
+                && lead_may_withdraw(req, &caller, asker_session, node);
+            // The rung holder answers the row the ladder placed on it, unless
+            // the class is one only the user rules.
+            let holds_rung = !lead_withdraw
+                && crate::question_ladder::holder(&question_event["data"])
+                    .is_some_and(|holder| req.closed_by.as_deref() == Some(holder));
+            let denied = denied_class(question_event);
+            if holds_rung && req.answer.is_some() {
+                if let Some(class) = denied {
+                    refused += 1;
+                    answer.lines.push(format!(
+                        "outstanding: refused: {qid} is class {class}, and the asking project's questions.rules.deny keeps it from agents. Nothing was closed. Climb it: fno inbox outstanding climb {qid} --evidence \"<what you checked>\""
+                    ));
+                    continue;
+                }
+            }
             let allowed = if req.answer.is_some() {
                 (authority == Some("chat_attested") && quoted)
                     || (own_ask && authority == Some("role") && caller.teamed)
+                    || (holds_rung && matches!(authority, Some("role") | Some("agent")))
             } else {
                 own_ask
             };
-            if !allowed && !own_ask {
+            if !allowed && lead_withdraw {
                 if let Some(ruling) = req.answer.as_deref() {
-                    if lead_may_withdraw(req, &caller, asker_session, node) {
-                        lead_reason = Some(format!(
-                            "withdrawn by lead {agent}: {}",
-                            cut(ruling, req.cap)
-                        ));
-                    }
+                    lead_reason = Some(format!(
+                        "withdrawn by lead {agent}: {}",
+                        cut(ruling, req.cap)
+                    ));
                 }
             }
             if !allowed && lead_reason.is_none() {
@@ -2035,6 +2106,7 @@ fn perform_retraction(
         authority_source: "operator".to_string(),
         attested_by: Some("question-board".to_string()),
         relayed_by: None,
+        quote: None,
     });
     match outcome {
         crate::law_match::RetractOutcome::Done => answer.lines.push(format!(
