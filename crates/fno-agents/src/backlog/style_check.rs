@@ -1459,9 +1459,23 @@ fn run_json(text: &str, surface: &str, word_cap: Option<usize>) -> i32 {
     let count = word_count(text);
     let violations = check(text, surface, word_cap);
     let report = format_violations(&violations, surface);
+    // The configured encounter cap (or the model's 80 default) rides the
+    // receipt, so the long-note advisory learns cap and count in this one
+    // spawn instead of its own in-process config read.
+    let configured_cap = super::settings::config_candidates()
+        .iter()
+        .find_map(|doc| {
+            doc.get("style")?
+                .get("word_cap")?
+                .get("encounter")?
+                .as_u64()
+        })
+        .map(|n| n as usize)
+        .unwrap_or(MESSAGE_WORD_CAP);
     let payload = serde_json::json!({
         "exception": exception,
         "word_count": count,
+        "word_cap": configured_cap,
         "violations": violations_json(&violations),
         "report": report,
     });

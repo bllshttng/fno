@@ -764,15 +764,18 @@ fn percent_encode(text: &str, safe: &str) -> String {
     out
 }
 
-/// `fno board-render` claims its name lexically, beside the other native
-/// front commands: the argv `board-render ...` never forwards to Python.
+/// `fno backlog publish --local-snapshot` claims lexically, before the
+/// backlog namespace hands over to the sibling binary: the stdin request
+/// protocol is the front binary's, and a sibling that predates the door
+/// refuses the flag as unknown.
 pub fn classify(args: &[std::ffi::OsString]) -> Option<Vec<String>> {
-    if args.first()?.to_str()? != "board-render" {
+    let head: Vec<&str> = args.iter().take(3).filter_map(|a| a.to_str()).collect();
+    if head != ["backlog", "publish", "--local-snapshot"] {
         return None;
     }
     Some(
         args.iter()
-            .skip(1)
+            .skip(3)
             .filter_map(|a| a.to_str().map(str::to_string))
             .collect(),
     )
@@ -937,8 +940,10 @@ mod tests {
     #[test]
     fn board_render_claims_its_name() {
         use std::ffi::OsString;
-        assert!(classify(&[OsString::from("board-render")]).is_some());
-        assert!(classify(&[OsString::from("board-render"), OsString::from("--x")]).is_some());
+        let door = ["backlog", "publish", "--local-snapshot"].map(OsString::from);
+        assert_eq!(classify(&door), Some(vec![]));
+        assert!(classify(&door[..2]).is_none());
+        assert!(classify(&[OsString::from("board-render")]).is_none());
         assert!(classify(&[OsString::from("mux")]).is_none());
     }
 

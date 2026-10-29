@@ -1,12 +1,11 @@
-//! parity-stage: differential
+//! parity-stage: characterization
 //! parity-oracle: fno.agents.cli.cmd_spawn
 //!
-//! Differential parity for `spawn_bare`: the bare spawn's thread seat and
-//! fence refusal, the `--wait` grammar, the gate's waitable reasons and the
-//! sandbox write policy refusal. Each `tests/golden/bare_spawn/*.json` case
-//! holds what `cmd_spawn`'s leg answered, captured by
-//! `bare_spawn_golden_driver.py`. The stage flips to characterization when the
-//! seam delete removes `cmd_spawn`.
+//! Characterization for `spawn_bare`: the bare spawn's thread seat and fence
+//! refusal, the `--wait` grammar, the gate's waitable reasons and the sandbox
+//! write policy refusal. Each `tests/golden/bare_spawn/*.json` case holds what
+//! `cmd_spawn`'s leg answered, captured by `bare_spawn_golden_driver.py` before
+//! the seam delete removed `cmd_spawn`. The driver cannot run again.
 
 use fno_agents::duration::parse_wait_secs;
 use fno_agents::harness_capabilities::HarnessContract;

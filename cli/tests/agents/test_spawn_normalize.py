@@ -81,49 +81,6 @@ def test_two_positionals_are_refused_not_guessed():
     assert "--name" in err.getvalue()
 
 
-def test_spawn_value_flags_cover_every_cmd_spawn_value_option():
-    """The normalizer's value-flag table is a hand-maintained mirror of
-    cmd_spawn's option list; a missing entry silently turns that flag's value
-    into a positional. Pin the two together so adding an option to cmd_spawn
-    without teaching the scanner fails here instead of in the field."""
-    import ast
-    import inspect
-
-    from fno.agents import cli as agents_cli
-    from fno.agents.spawn_defaults import _SPAWN_VALUE_FLAGS
-
-    tree = ast.parse(inspect.getsource(agents_cli.cmd_spawn.__wrapped__
-                                       if hasattr(agents_cli.cmd_spawn, "__wrapped__")
-                                       else agents_cli.cmd_spawn))
-    fn = tree.body[0]
-    missing = []
-    defaults = fn.args.defaults
-    for arg, default in zip(fn.args.args[len(fn.args.args) - len(defaults):], defaults):
-        if not isinstance(default, ast.Call) or getattr(default.func, "attr", "") != "Option":
-            continue
-        annotation = ast.unparse(arg.annotation) if arg.annotation else ""
-        if annotation.strip() == "bool":
-            continue  # boolean flags consume no value
-        for spelling in (e.value for e in default.args[1:] if isinstance(e, ast.Constant)):
-            if spelling not in _SPAWN_VALUE_FLAGS:
-                missing.append(f"{arg.arg} ({spelling})")
-    assert not missing, (
-        "cmd_spawn value options absent from _SPAWN_VALUE_FLAGS (their values "
-        f"would be read as positionals): {', '.join(missing)}"
-    )
-
-
-def test_existing_pane_is_removed_only_from_the_fno_spawn_head():
-    from fno.agents.spawn_defaults import extract_existing_pane
-
-    args, pane = extract_existing_pane(
-        ["spawn", "--name", "worker", "--pane=19", "work", "--", "--pane", "7"]
-    )
-
-    assert pane == 19
-    assert args == ["spawn", "--name", "worker", "work", "--", "--pane", "7"]
-
-
 # --- x-1caa: the `--` passthrough boundary at the seam ------------------------
 
 def test_passthrough_fence_tokens_are_not_prompt_positionals():

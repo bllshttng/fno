@@ -19,7 +19,7 @@ The old `fno decide` spelling remains as a one-release compatibility shim. It pr
 
 ## Two producers, both explicit
 
-`fno inbox decide` records a ruling that has no question on file. `fno outstanding clear --answer` records the answer to an open `operator_question`, because an answered question IS a decision.
+`fno inbox decide` records a ruling that has no question on file. `fno inbox outstanding clear --answer` records the answer to an open `operator_question`, because an answered question IS a decision.
 
 Both are explicit on purpose. Automatic classification of "was that a ruling?" is judgment on a truncated view, which `docs/architecture/memory-system.md` records as deprecated for cause.
 
@@ -92,7 +92,7 @@ There is no new recording gate, and none is needed. `crates/fno-agents/src/loopc
 | Store | What it is for | Path |
 |---|---|---|
 | Project journal | Durability and the project audit trail | `<canonical-repo>/.fno/events.jsonl` |
-| Decision index | Local project-policy recall | `~/.fno/decisions.jsonl` via `paths.decisions_jsonl()` |
+| Decision index | Local project-policy recall | `~/.fno/decisions.jsonl` |
 | Graph projection | The node view, for anyone reading the node | the subject node's `decisions` array |
 
 Rust readers do not read the JSONL alone. `decision_index::default_store_live` reads graph.db decisions plus the JSONL rows the db lacks. The merge keys match `_read_index`, so a ruling the db holds is never invisible to a Rust reader.
@@ -107,7 +107,7 @@ A failed PROJECTION does not fail the command at all. Both durable stores alread
 
 Agents answer by default (ruling of 2026-09-14): an agent session records coordination decisions with `fno backlog decide`. Only the `operator` authority refuses an agent session there, because the superuser lane is not an agent's to claim. An agent that rules out another node's work records the verdict where that node's readers already look.
 
-The one exception is the question clear door. `fno inbox outstanding clear` refuses every agent session on a question asked of the user. A role can clear only a question it asked itself, with `--authority role`. The question board is the user's answer lane, and the refusal names it.
+The one exception is the question clear door. `fno inbox outstanding clear` refuses every agent session on a question asked of the user. A role can clear only a question it asked itself, with `--authority role`. The question board is the user's answer lane, and the refusal names it. One exception covers a moot question. If the lead's live team scope holds the node and the asker is gone or the node is done, the lead withdraws the question. The lead names its ruling in `--answer`. The close records `withdrawn by lead <handle>: <ruling>` as coordination. It writes no decision and mails nobody. A lead outside that scope is refused. A successor lead inherits the scope, so it gets the same right.
 
 The plan frontmatter carries it. The blueprinter writes the rejected node and its reason under `consolidation.rejected`, beside the outcome. That key is the one store an agent session can still write a cross-node ruling into.
 

@@ -148,8 +148,7 @@ pub fn posture_action(message: &str, prior: Option<&str>) -> (EnvAction, Option<
 
 /// Apply the posture to THIS process's environment so every child spawned
 /// below inherits the carrier (the Rust spawn lane's one application point,
-/// `client::maybe_run_spawn`). The Python spawn lane applies the same
-/// verdict from the same table; both are idempotent, so a lane that runs
+/// `client::maybe_run_spawn`). It is idempotent, so a spawn that runs it
 /// twice converges instead of flip-flopping. Returns whether a loud-clear
 /// note was emitted (the caller prints it on its own stderr).
 pub fn apply_env_from_message(message: &str) -> bool {

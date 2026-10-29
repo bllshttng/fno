@@ -1,0 +1,6 @@
+panes compared: 4; rows with mux ref compared: 4; rows in other sessions skipped: 1
+row -> pane mismatches: 3
+  row beta pane 2: pane id is 'unresolved:spawned-name', row expects 5a6b7c8d-1e2f-4a3b-8c4d-9e0f1a2b3c4d
+  row gamma pane 3: row carries a mux ref but no session id
+  row delta pane 9: pane missing from session listing
+pane -> row mismatches: 0

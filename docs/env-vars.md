@@ -105,7 +105,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CONTROL_PLANE_SCHEDULER` | py+rs | unclear: cli/src/fno/control_plane.py:22; native twin crates/fno-agents/src/backlog/reconcile_cli.rs |
 | `FNO_CURSOR_AGENT_MODEL` | rs | unclear: crates/fno-agents/src/cursor_agent.rs:304 |
 | `FNO_DEBUG` | py | unclear: cli/src/fno/agents/mux_spawn.py:1854 |
-| `FNO_DISPATCH_ACCOUNT_ENV` | py+rs | The proven-credential carrier of a cutover spawn: a flat JSON map `accounts::launch` stages verbatim for `--dispatch-account`. Both spawn doors claim it, and a spawn without the flag refuses. |
+| `FNO_DISPATCH_ACCOUNT_ENV` | rs | The proven-credential carrier of a cutover spawn: a flat JSON map `accounts::launch` stages verbatim for `--dispatch-account`. The spawn door claims it, and a spawn without the flag refuses. |
 | `FNO_DRIVER_LIB` | rs | unclear: crates/fno-agents/src/finalize.rs:849 |
 | `FNO_DRIVER_LIB_DIR` | rs | unclear: crates/fno-agents/src/loop_target.rs:616 |
 | `FNO_E2E` | rs | unclear: crates/fno/src/client.rs:539 |
@@ -138,7 +138,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_KEEP_GOING` | rs | Forces the retro keep-going engine on or off above `keep_going.enabled`; truthy words are 1, true, yes, on. |
 | `FNO_KEEPER_ORPHAN_POLL_MS` | rs | Pane keeper poll interval in ms for the socket-dir-gone check; default 30000. Tests set it low. |
 | `FNO_KILLCHECK_GIT_BIN` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:58 |
-| `FNO_LAUNCH_ACCOUNT` | py+rs | Launch account the spawn seam stamps after it applies an account overlay: the Rust spawn arm in process, cmd_spawn on the Python lane. Cleared on a spawn with no account so a stale value never mislabels the next row. |
+| `FNO_LAUNCH_ACCOUNT` | rs | Launch account the spawn seam stamps after it applies an account overlay: the Rust spawn arm, in process. Cleared on a spawn with no account so a stale value never mislabels the next row. |
 | `FNO_LAUNCH_ACCOUNT_SOURCE` | py+rs | Provenance twin of FNO_LAUNCH_ACCOUNT: `caller` for a typed flag, `config` for an env-carried pick. |
 | `FNO_LAW_DOOR_TIMEOUT_SECONDS` | py | Law-door timeout knob in seconds; an explicit `timeout=` argument outranks it, junk falls back to 60. |
 | `FNO_LEAD_WALK_SESSION_KEY` | rs | Per-invocation key a lead walk is spawned with; tags the pass's terminal so the walk's resume guard never sees a prior lead's terminal (falls back to the manifest fno_id). |
@@ -337,7 +337,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `TARGET_ALLOW_IN_REVIEW` | rs | Set to 1, it lets follow-up scope on a node that has a PR fork a child node. It never re-runs the parent. |
 | `TARGET_CLAIM_TTL` | rs | unclear: crates/fno-agents/src/target_start.rs:1052 |
 | `TARGET_INPUT` | rs | unclear: crates/fno-agents/src/target_gates.rs:473 |
-| `TARGET_NO_MERGE` | py+rs | unclear: cli/src/fno/agents/harness_map.py:215 |
+| `TARGET_NO_MERGE` | rs | The merge-refusal carrier. The Rust spawn lane (`merge_posture::apply_env_from_message`) arms it when the command carries `--no-merge` and clears it otherwise, so every child it spawns inherits the verdict. |
 | `TARGET_PLAN_PATH` | rs | unclear: crates/fno-agents/src/target_gates.rs:474 |
 | `TARGET_SESSION_ID` | py+rs | Run id a driver pre-assigns its workers; init adopts it verbatim as session id and claim owner, and the decide door matches it against a live claim's `target-session:<id>` holder to say whether this caller holds the node. |
 | `TARGET_TRANSCRIPT_ID` | rs | The hook's claude session id under its transcript spelling; the owned-identity gate reads it when CLAUDE_CODE_SESSION_ID is absent. |

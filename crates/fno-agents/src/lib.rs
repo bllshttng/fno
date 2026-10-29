@@ -318,6 +318,7 @@ pub mod lock_queue;
 pub mod logs;
 pub mod logs_args;
 pub mod logs_client;
+pub mod look_hold;
 pub mod loop_dispatch;
 pub mod loop_lead;
 pub mod loop_readiness;
@@ -406,7 +407,9 @@ pub mod otlp_export;
 pub mod outstanding;
 pub mod outstanding_cmds;
 pub(crate) mod owner_ladder;
+pub mod pack_profile;
 pub mod pane_claim;
+pub mod pane_identity;
 pub mod pane_keeper;
 pub mod pane_loop;
 pub mod pane_rebind;
@@ -469,6 +472,7 @@ pub mod quarantine;
 pub mod question_bus;
 pub mod question_clear;
 pub mod question_intake;
+pub mod question_ladder;
 pub mod question_sweep;
 pub mod quiet_retire;
 pub mod reader_cost;
@@ -589,9 +593,11 @@ pub mod spawn_promote;
 pub mod spawn_remote;
 pub mod spawn_role;
 pub mod spawn_route;
+pub mod spawn_seam;
 pub mod spawn_transaction;
 pub(crate) mod spawn_watch;
 pub mod stability_report;
+pub(crate) mod stacked_base_stamp;
 pub mod stale_spaces;
 pub mod stalls;
 pub mod state;
@@ -1894,6 +1900,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "ci_tier_pass",
     "ci_tier_held",
     "ci_tier_wake",
+    // The look_hold arm's cancel of a paint head's CI and its rerun when the
+    // user's look clears (look_hold.rs).
+    "look_hold_cancel",
+    "look_hold_release",
     // A PR queued in place of a merge, and the merge queue arm's acts
     // (merge_queue.rs).
     "merge_queue_entry",
@@ -2056,9 +2066,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // loop that never ran. The Python tick emits nothing for this family.
     "pr_heal_tick",
     // The heal loop's acted-on rows: one flake guard staged per flapping
-    // (sha, run id, check), and one remedy row per PR the loop acted on.
+    // (sha, run id, check), one remedy row per PR the loop acted on, and
+    // one hold row per rerun deferred to a live Actions incident.
     "pr_heal_flake",
     "pr_heal_pr",
+    "pr_heal_hold",
     // Daemon startup scope declaration: sandbox home vs the operator's
     // shared home. Fleet gating and board routing key off it.
     "daemon_fleet_scope",
