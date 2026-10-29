@@ -134,7 +134,7 @@ _nested_count=${#_nested_paths[@]}
 # would block every `never` repo - the defect this helper exists to remove.
 # Fail CLOSED (empty != never).
 if [[ "$_verdict" == "canonical-protected" ]] && command -v fno >/dev/null 2>&1; then
-  _pol_line1="$( { fno agents workspace worktree policy --repo "$_root" 2>/dev/null || fno workspace worktree policy --repo "$_root" 2>/dev/null; } | head -1 | tr -d '[:space:]')"
+  _pol_line1="$( { fno agents workspace worktree policy --repo "$_root" 2>/dev/null; } | head -1 | tr -d '[:space:]')"
   if [[ "$_pol_line1" == "never" ]]; then
     _verdict="ok"
   fi

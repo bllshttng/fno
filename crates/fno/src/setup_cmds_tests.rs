@@ -16,7 +16,7 @@ fn the_claim_and_the_plan_filter() {
         Some(Cmd::Plan(oss(&["--advanced"])))
     );
     assert_eq!(
-        classify(&oss(&["setup", "post-merge"])),
+        classify(&oss(&["config", "setup", "post-merge"])),
         Some(Cmd::PostMerge(vec![]))
     );
     assert_eq!(
@@ -29,10 +29,6 @@ fn the_claim_and_the_plan_filter() {
     );
     assert_eq!(classify(&oss(&["config", "setup"])), Some(Cmd::Help));
     assert_eq!(
-        classify(&oss(&["setup", "run"])),
-        Some(Cmd::Moved("run".into()))
-    );
-    assert_eq!(
         classify(&oss(&["config", "setup", "wizard"])),
         Some(Cmd::Unknown("wizard".into()))
     );
@@ -41,6 +37,7 @@ fn the_claim_and_the_plan_filter() {
         vec!["config", "setup", "run"],
         vec!["config", "setup", "auto-wire"],
         vec!["config", "plan"],
+        vec!["setup", "run"],
     ] {
         assert_eq!(classify(&oss(&sibling)), None, "{sibling:?}");
     }

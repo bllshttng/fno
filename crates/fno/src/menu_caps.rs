@@ -9,8 +9,10 @@
 //! - `scripts/ci/command-baseline.txt`: every other Python leaf (`inbox` and
 //!   `whoami` are in no collapsed group, so the map alone misses them);
 //! - `scripts/ci/native-command-tree.txt`: the typed clap tree;
-//! - `cli/src/fno/command_moves.py`: a moved root spelling is a shim, so its
-//!   whole subtree is dropped;
+//! - `crates/fno/command-names.tsv`, compiled in: the root is its live rows
+//!   alone, so a Python or clap path under a retired root is not counted,
+//!   and its rows below the root add the names a Rust classifier claims;
+//! - `accounts_route::NATIVE_ACCOUNTS_COMMANDS`, the `config accounts` door;
 //! - `crates/fno-agents/src/bin/client.rs`: the fno-agents binary's own
 //!   top-level commands, which count the same as fno's;
 //! - and, in-process, the `agents` table in `agents_menu`. Its group is
@@ -33,7 +35,6 @@ pub const MENU_CAP: usize = 12;
 const MAP_REL: &str = "scripts/ci/command-collapse-map.tsv";
 const BASELINE_REL: &str = "scripts/ci/command-baseline.txt";
 const NATIVE_REL: &str = "scripts/ci/native-command-tree.txt";
-const MOVES_REL: &str = "cli/src/fno/command_moves.py";
 const AGENTS_SOURCE_REL: &str = "crates/fno-agents/src/bin/client.rs";
 pub const DEBT_REL: &str = "scripts/ci/menu-caps-debt.tsv";
 const COMPAT: &str = "(python compat)";
@@ -43,7 +44,6 @@ pub struct Inputs {
     pub collapse_map: String,
     pub baseline: String,
     pub native_tree: String,
-    pub command_moves: String,
     pub agents_source: String,
     pub debt: String,
 }
@@ -58,34 +58,17 @@ pub fn read_inputs(root: &Path) -> Result<Inputs, String> {
         collapse_map: read(MAP_REL)?,
         baseline: read(BASELINE_REL)?,
         native_tree: read(NATIVE_REL)?,
-        command_moves: read(MOVES_REL)?,
         agents_source: read(AGENTS_SOURCE_REL)?,
         debt: read(DEBT_REL)?,
     })
-}
-
-/// The root names `COMMAND_MOVES` holds. Zero keys is an error: an empty set
-/// would count every shim as a root.
-fn moved_roots(command_moves: &str) -> Result<BTreeSet<String>, String> {
-    let key = Regex::new(r#"(?m)^\s+"([a-z][a-z0-9-]*)": Move\("#).expect("static regex");
-    let keys: BTreeSet<String> = key
-        .captures_iter(command_moves)
-        .map(|c| c[1].to_string())
-        .collect();
-    if keys.is_empty() {
-        return Err(format!(
-            "menu-caps: {MOVES_REL} yielded no COMMAND_MOVES keys"
-        ));
-    }
-    Ok(keys)
 }
 
 fn words(path: &str) -> Vec<String> {
     path.split_whitespace().map(str::to_string).collect()
 }
 
-/// Every Python leaf path, hidden included, with moved roots dropped.
-fn python_paths(inputs: &Inputs, moved: &BTreeSet<String>) -> Vec<Vec<String>> {
+/// Every Python leaf path, hidden included, under a live root.
+fn python_paths(inputs: &Inputs, live: &BTreeSet<String>) -> Vec<Vec<String>> {
     let from_map = inputs
         .collapse_map
         .lines()
@@ -107,7 +90,7 @@ fn python_paths(inputs: &Inputs, moved: &BTreeSet<String>) -> Vec<Vec<String>> {
         .filter(|p| !p.is_empty())
         // The baseline names the sibling binary as one leaf; it is its own tree.
         .filter(|p| p.as_slice() != ["fno-agents"])
-        .filter(|p| !moved.contains(&p[0]))
+        .filter(|p| live.contains(&p[0]))
         .collect()
 }
 
@@ -219,7 +202,10 @@ fn fno_agents_commands(source: &str) -> Result<BTreeSet<String>, String> {
 /// How many distinct commands each group at the first three levels holds,
 /// keyed by its printed path.
 pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
-    let moved = moved_roots(&inputs.command_moves)?;
+    let live: BTreeSet<String> = crate::command_names::live_roots()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
     let mut children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut add = |path: &[String], from: usize, label: &dyn Fn(&[String]) -> String| {
         for i in from..path.len().min(3) {
@@ -241,7 +227,16 @@ pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
     for path in &menu {
         add(path, 0, &plain);
     }
-    for path in python_paths(inputs, &moved) {
+    let table = crate::command_names::live_paths()
+        .into_iter()
+        .map(|p| p.into_iter().map(str::to_string).collect::<Vec<_>>());
+    let accounts = crate::accounts_route::NATIVE_ACCOUNTS_COMMANDS
+        .iter()
+        .map(|c| words(&format!("config accounts {c}")));
+    for path in table.chain(accounts) {
+        add(&path, 0, &plain);
+    }
+    for path in python_paths(inputs, &live) {
         if path[0] == "agents" {
             add(&path, 1, &compat);
         } else {
@@ -249,7 +244,9 @@ pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
         }
     }
     for path in native_paths(&inputs.native_tree) {
-        add(&path, 0, &plain);
+        if live.contains(&path[0]) {
+            add(&path, 0, &plain);
+        }
     }
     for command in fno_agents_commands(&inputs.agents_source)? {
         add(&[command], 0, &|_: &[String]| "fno-agents".to_string());
@@ -415,7 +412,7 @@ mod tests {
         assert!(ok.contains("1 groups in debt: mux 21"), "{ok}");
 
         // The guard never reads a visibility cell: a hidden native row
-        // counts like a visible one, and a moved root's subtree is dropped.
+        // counts like a visible one, and a retired root's subtree is dropped.
         let mut native =
             String::from("# header\n(root)\troot\tvisible\t-\t-\nmux\tgroup\tvisible\t-\t-\n");
         for i in 0..13 {
@@ -426,7 +423,6 @@ mod tests {
             collapse_map: "current-leaf\ttier\nlead board\tT1\nwhoami x\tT1\n".into(),
             baseline: "# c\ninbox a !--hid\nfno-agents\n".into(),
             native_tree: native,
-            command_moves: "COMMAND_MOVES = {\n    \"lead\": Move(\n".into(),
             agents_source: "async fn run(args: X) { if command == \"claim\" {} if matches!(command, \"detect\" | \"top\") {} }\n\
                  fn retired_command_pointer(command: &str) { match command { \"gone\" => 1, _ => 0 } }\n\
                  let method = match command {\n    \"rows\" => {\n        match x { \"inner\" => 1 }\n    }\n}\n"
@@ -436,9 +432,11 @@ mod tests {
         let got = counts(&inputs).unwrap();
         assert_eq!(got["mux"], 13);
         assert_eq!(got.get("lead"), None);
-        assert_eq!(got["inbox"], 1);
         assert_eq!(got["fno-agents"], 7, "{got:?}");
-        assert!(got["(root)"] >= 4, "agents, inbox, mux, whoami: {got:?}");
+        // The root is the table's twelve; Rust-claimed rows count (AC1-HP).
+        assert_eq!(got["(root)"], 12, "{got:?}");
+        assert!(got["inbox"] >= 2, "{got:?}");
+        assert_eq!(got["config accounts"], 15, "{got:?}");
         assert!(got.contains_key("agents fleet"));
     }
 
